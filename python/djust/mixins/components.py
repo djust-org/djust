@@ -76,9 +76,9 @@ class ComponentMixin:
                             json_module.dumps(value)
                             state[key] = value
                         except (TypeError, ValueError):
-                            pass
+                            pass  # Value not JSON-serializable; skip
                 except (AttributeError, TypeError):
-                    pass
+                    pass  # Attribute not accessible; skip
         return state
 
     def _restore_component_state(self, component, state: dict):

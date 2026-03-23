@@ -164,11 +164,11 @@ class MemoryTracker:
 
         # Check if psutil is available
         try:
-            import psutil  # noqa: F401
+            import psutil as _psutil  # noqa: F401
 
             self.enabled = True
         except ImportError:
-            pass
+            pass  # psutil not installed; memory tracking disabled
 
     def start_tracking(self):
         """Start tracking memory usage."""

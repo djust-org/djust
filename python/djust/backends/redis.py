@@ -126,7 +126,7 @@ class RedisPresenceBackend(PresenceBackend):
                 try:
                     presences.append(json.loads(raw))
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    pass  # Skip malformed presence entries
         return presences
 
     def count(self, presence_key: str) -> int:

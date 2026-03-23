@@ -237,4 +237,6 @@ __all__ = [
     "PermissionRequiredMixin",
     # on_mount hooks
     "on_mount",
+    # Rust components (optional)
+    "rust_components",
 ]

@@ -273,7 +273,7 @@ class SerializerCache:
         try:
             self._redis_client.delete(f"djust:serializer:{cache_key}")
         except Exception:
-            pass
+            pass  # Best-effort cache eviction; Redis may be unavailable
 
     def _clear_redis(self):
         """Remove all cached serializers from Redis."""
@@ -286,7 +286,7 @@ class SerializerCache:
             if keys:
                 self._redis_client.delete(*keys)
         except Exception:
-            pass
+            pass  # Best-effort bulk cache clear; Redis may be unavailable
 
     def stats(self) -> dict[str, Any]:
         """
