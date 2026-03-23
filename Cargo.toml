@@ -31,7 +31,7 @@ regex = "1.12"
 once_cell = "1.21"
 thiserror = "2.0"
 quick-xml = "0.36"
-html5ever = "0.36"
+html5ever = "0.39"
 markup5ever_rcdom = "0.36"
 chrono = "0.4"  # DateTime handling for timesince filter
 
