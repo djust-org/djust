@@ -1325,6 +1325,16 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
     }
 
     // Try to parse as literal
+    if expr == "True" || expr == "true" {
+        return Ok(Value::Bool(true));
+    }
+    if expr == "False" || expr == "false" {
+        return Ok(Value::Bool(false));
+    }
+    if expr == "None" || expr == "none" {
+        return Ok(Value::Null);
+    }
+
     if let Ok(i) = expr.parse::<i64>() {
         return Ok(Value::Integer(i));
     }
