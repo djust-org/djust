@@ -30,10 +30,12 @@ def _clear_processor_caches(**kwargs):
 setting_changed.connect(_clear_processor_caches)
 
 try:
-    import djust.optimization.query_optimizer as _query_optimizer  # noqa: F401
-    import djust.optimization.codegen as _codegen  # noqa: F401
+    from importlib import import_module as _im
 
+    _im("djust.optimization.query_optimizer")
+    _im("djust.optimization.codegen")
     JIT_AVAILABLE = True
+    del _im
 except ImportError:
     JIT_AVAILABLE = False
 

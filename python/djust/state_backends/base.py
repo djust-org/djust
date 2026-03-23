@@ -19,9 +19,11 @@ NO_COMPRESSION_MARKER = b"\x00"  # Prefix byte for uncompressed data
 
 # Try to import zstd for compression (optional dependency)
 try:
-    import zstandard as _zstd  # noqa: F401
+    from importlib import import_module as _im
 
+    _im("zstandard")
     ZSTD_AVAILABLE = True
+    del _im
     logger.debug("zstd compression available")
 except ImportError:
     ZSTD_AVAILABLE = False
