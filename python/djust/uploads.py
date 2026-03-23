@@ -311,7 +311,7 @@ class UploadEntry:
             try:
                 os.unlink(self._temp_path)
             except OSError:
-                pass
+                pass  # Best-effort cleanup; temp file may already be removed
         self._chunks.clear()
 
 

@@ -17,6 +17,8 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["create_server", "_django_ready"]
+
 # ---------------------------------------------------------------------------
 # Django availability detection
 # ---------------------------------------------------------------------------

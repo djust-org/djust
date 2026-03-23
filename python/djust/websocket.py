@@ -30,6 +30,12 @@ from .signals import full_html_update, liveview_server_error
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
 
+__all__ = [
+    "LiveViewConsumer",
+    "_check_event_security",
+    "_ensure_handler_rate_limit",
+]
+
 try:
     from ._rust import create_session_actor, SessionActorHandle
 except ImportError:
@@ -798,7 +804,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await self._tick_task
             except asyncio.CancelledError:
-                pass
+                pass  # Expected when cancelling a running tick task during disconnect
             self._tick_task = None
 
         # Clean up actor if using actors
@@ -2369,7 +2375,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 await self._tick_task
             except asyncio.CancelledError:
-                pass
+                pass  # Expected when cancelling a running tick task
             self._tick_task = None
 
         # Clean up old view
@@ -2655,7 +2661,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 except Exception as e:
                     logger.exception("Error in tick handler: %s", e)
         except asyncio.CancelledError:
-            pass
+            pass  # Normal shutdown path when tick loop is cancelled
 
     @classmethod
     async def broadcast_reload(cls, file_path: str):

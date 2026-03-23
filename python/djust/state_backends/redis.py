@@ -319,7 +319,7 @@ class RedisStateBackend(StateBackend):
                 info = self._client.info("memory")
                 memory_usage = info.get("used_memory_human", "N/A")
             except Exception:
-                pass
+                pass  # Redis INFO may not be available; memory_usage stays None
 
             stats = {
                 "backend": "redis",
@@ -475,7 +475,7 @@ class RedisStateBackend(StateBackend):
                                 (key.decode() if isinstance(key, bytes) else key, len(data))
                             )
                     except Exception:
-                        pass
+                        pass  # Skip keys that fail to read (expired or deleted)
 
             if not sizes:
                 return {
@@ -504,7 +504,7 @@ class RedisStateBackend(StateBackend):
                         break
                 total_keys = count
             except Exception:
-                pass
+                pass  # SCAN may fail; fall back to sample-based count
 
             # Estimate total memory (extrapolate from sample)
             estimated_total = avg_bytes * total_keys

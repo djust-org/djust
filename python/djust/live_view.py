@@ -55,6 +55,20 @@ except ImportError:
     SessionActorHandle = None
     extract_template_variables = None  # noqa: F401 — fallback for re-export
 
+__all__ = [
+    "LiveView",
+    "live_view",
+    "DjangoJSONEncoder",
+    "DEFAULT_SESSION_TTL",
+    "cleanup_expired_sessions",
+    "get_session_stats",
+    "_jit_serializer_cache",
+    "_get_model_hash",
+    "clear_jit_cache",
+    "Stream",
+    "extract_template_variables",
+]
+
 
 class LiveView(
     StreamsMixin,
@@ -447,6 +461,8 @@ def live_view(template_name: Optional[str] = None, template: Optional[str] = Non
                 return view.get(request, *args, **kwargs)
             elif request.method == "POST":
                 return view.post(request, *args, **kwargs)
+
+            return None
 
         return wrapper
 
