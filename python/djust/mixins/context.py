@@ -101,6 +101,14 @@ class ContextMixin:
             for key, value in vars(cls).items():
                 if key not in _seen and key not in self.__dict__:
                     _seen.add(key)
+                    # For descriptors (LiveComponent with __get__), resolve
+                    # through the instance so __get__ returns the State dict
+                    # instead of the descriptor itself.
+                    if hasattr(value, "__get__") and hasattr(value, "__set_name__"):
+                        try:
+                            value = getattr(self, key)
+                        except Exception:
+                            pass
                     _all_items.append((key, value))
 
         for key, value in _all_items:
