@@ -267,6 +267,12 @@ class LiveViewWebSocket {
                     setCacheConfig(data.cache_config);
                 }
 
+                // Initialize optimistic UI rules from descriptor components (DEP-002)
+                if (data.optimistic_rules) {
+                    window.djust._optimisticRules = data.optimistic_rules;
+                    if (globalThis.djustDebug) console.log('[LiveView] Optimistic rules loaded:', Object.keys(data.optimistic_rules));
+                }
+
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
                     window.djust.uploads.setConfigs(data.upload_configs);

@@ -683,6 +683,12 @@ class LiveViewWebSocket {
                     setCacheConfig(data.cache_config);
                 }
 
+                // Initialize optimistic UI rules from descriptor components (DEP-002)
+                if (data.optimistic_rules) {
+                    window.djust._optimisticRules = data.optimistic_rules;
+                    if (globalThis.djustDebug) console.log('[LiveView] Optimistic rules loaded:', Object.keys(data.optimistic_rules));
+                }
+
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
                     window.djust.uploads.setConfigs(data.upload_configs);
@@ -3921,6 +3927,40 @@ async function handleEvent(eventName, params = {}) {
             continue;
         }
         serverParams[key] = params[key];
+    }
+
+    // DEP-002: Apply optimistic UI rule if one exists for this event
+    const optimisticRules = window.djust._optimisticRules || {};
+    const optimisticRule = optimisticRules[eventName];
+    if (optimisticRule && triggerElement) {
+        try {
+            // Interpolate {component_id} and {value} into the target selector
+            let selector = optimisticRule.target || '';
+            selector = selector.replace('{component_id}', serverParams.component_id || '');
+            selector = selector.replace('{value}', serverParams.value || '');
+
+            // Find the target element relative to the component container
+            const container = triggerElement.closest('[data-component-id]') || document;
+            const target = selector ? container.querySelector(selector) || triggerElement.closest(selector) : triggerElement;
+
+            if (target) {
+                const action = optimisticRule.action;
+                if (action === 'toggle_class' && optimisticRule['class']) {
+                    target.classList.toggle(optimisticRule['class']);
+                } else if (action === 'toggle_attr' && optimisticRule.attr) {
+                    if (target.hasAttribute(optimisticRule.attr)) {
+                        target.removeAttribute(optimisticRule.attr);
+                    } else {
+                        target.setAttribute(optimisticRule.attr, '');
+                    }
+                } else if (action === 'set_attr' && optimisticRule.attr) {
+                    target.setAttribute(optimisticRule.attr, optimisticRule.value || '');
+                }
+                if (globalThis.djustDebug) console.log('[LiveView:optimistic] Applied rule:', eventName, action);
+            }
+        } catch (e) {
+            if (globalThis.djustDebug) console.warn('[LiveView:optimistic] Rule failed:', e);
+        }
     }
 
     // Check client-side cache first
