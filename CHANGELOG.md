@@ -7,11 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **`True`/`False`/`None` literals resolved as empty string in custom tag args** — `get_value()` didn't recognize Python boolean/None literals, so `{% tag show_labels=False %}` produced `show_labels=` (empty string) instead of `show_labels=False`. Now handles `True`/`true`, `False`/`false`, and `None`/`none` as literal values. ([#602](https://github.com/djust-org/djust/pull/602))
-
-## [0.4.0rc3] - 2026-03-22
+## [0.4.0] - 2026-03-27
 
 ### Security
 
@@ -25,25 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`{% dj_flash %}` template tag in Rust renderer** — Registered `DjFlashTagHandler` so the flash container renders correctly when templates are processed by the Rust engine. Previously, the tag was only registered as a Django template tag and silently dropped by the Rust renderer. ([#590](https://github.com/djust-org/djust/pull/590))
 
-### Fixed
-
-- **Flash and page_metadata not delivered over HTTP POST fallback** — `put_flash()` and `page_title`/`page_meta` side-channel commands were only flushed over WebSocket. HTTP POST responses now drain `_pending_flash` and `_pending_page_metadata` and include them as `_flash` and `_page_metadata` arrays in the JSON response. ([#590](https://github.com/djust-org/djust/pull/590))
-- **Custom tag args containing lists/objects serialized as `[List]`/`[Object]`** — `Value::List` and `Value::Object` in custom tag arguments were stringified via the `Display` trait, destroying structured data before it reached Python handlers. Now serialized as JSON via `serde_json`. ([#589](https://github.com/djust-org/djust/issues/589))
-- **Django filters not applied in custom tag arguments** — `{% tag key=var|length %}` rendered the literal string instead of the computed value because arg resolution used `context.get()` (plain lookup) instead of `get_value()` (filter-aware). ([#591](https://github.com/djust-org/djust/pull/591))
-
-## [0.4.0rc2] - 2026-03-20
-
-### Added
-
 - **Navigation lifecycle events and CSS class** — `djust:navigate-start` / `djust:navigate-end` CustomEvents and `.djust-navigating` CSS class on `[dj-root]` during `dj-navigate` transitions. Enables CSS-only page transitions without monkey-patching `pageLoading`. ([#585](https://github.com/djust-org/djust/issues/585))
-
-### Fixed
-
-- **`{% if %}` inside HTML tag after `{{ variable }}` emits `<!--dj-if-->` comment** — `is_inside_html_tag()` only checked the immediately preceding token, missing tag context when `{{ variable }}` tokens appeared between the tag opening and `{% if %}`. Added `is_inside_html_tag_at()` that scans all preceding tokens. ([#580](https://github.com/djust-org/djust/issues/580))
-
-## [0.4.0rc1] - 2026-03-19
-
-### Added
 
 - **`manage.py djust_doctor` diagnostic command** -- checks Rust extension, Python/Django versions, Channels, Redis, templates, static files, routing, and ASGI server in one command. Supports `--json`, `--quiet`, `--check NAME`, and `--verbose` flags.
 
@@ -103,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`True`/`False`/`None` literals resolved as empty string in custom tag args** — `get_value()` didn't recognize Python boolean/None literals, so `{% tag show_labels=False %}` produced `show_labels=` (empty string) instead of `show_labels=False`. Now handles `True`/`true`, `False`/`false`, and `None`/`none` as literal values. ([#602](https://github.com/djust-org/djust/pull/602))
+- **Flash and page_metadata not delivered over HTTP POST fallback** — `put_flash()` and `page_title`/`page_meta` side-channel commands were only flushed over WebSocket. HTTP POST responses now drain `_pending_flash` and `_pending_page_metadata` and include them as `_flash` and `_page_metadata` arrays in the JSON response. ([#590](https://github.com/djust-org/djust/pull/590))
+- **Custom tag args containing lists/objects serialized as `[List]`/`[Object]`** — `Value::List` and `Value::Object` in custom tag arguments were stringified via the `Display` trait, destroying structured data before it reached Python handlers. Now serialized as JSON via `serde_json`. ([#589](https://github.com/djust-org/djust/issues/589))
+- **Django filters not applied in custom tag arguments** — `{% tag key=var|length %}` rendered the literal string instead of the computed value because arg resolution used `context.get()` (plain lookup) instead of `get_value()` (filter-aware). ([#591](https://github.com/djust-org/djust/pull/591))
+- **`{% if %}` inside HTML tag after `{{ variable }}` emits `<!--dj-if-->` comment** — `is_inside_html_tag()` only checked the immediately preceding token, missing tag context when `{{ variable }}` tokens appeared between the tag opening and `{% if %}`. Added `is_inside_html_tag_at()` that scans all preceding tokens. ([#580](https://github.com/djust-org/djust/issues/580))
 - **Tick/event version mismatch silently drops user input** — Server-initiated ticks could collide with user events, causing VDOM version divergence that silently discarded patches. Added server-side `asyncio.Lock` to serialize tick and event render operations, priority yielding so ticks skip during user events, client-side tick patch buffering during pending event round-trips, and monotonic event ref tracking for request/response matching. ([#560](https://github.com/djust-org/djust/issues/560))
 
 - **Focus lost during VDOM patches** — When the server pushed VDOM patches (e.g., updating a counter while the user was typing), the focused input/textarea lost focus, cursor position, selection range, and scroll position. Added `saveFocusState()` / `restoreFocusState()` around the `applyPatches()` cycle to capture and restore `activeElement`, `selectionStart`/`selectionEnd`, and `scrollTop`/`scrollLeft`. Element matching uses id → name → dj-id → positional index. Broadcast (remote) updates correctly skip focus restoration.
