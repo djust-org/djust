@@ -425,7 +425,11 @@ class LiveComponent:
         self._descriptor_attr_name = None
         self._descriptor_storage_key = None
 
-        if component_id is not None or not kwargs:
+        # Determine if this is the new descriptor pattern (has State inner class)
+        # or the legacy direct-instantiation pattern (no State class).
+        has_state_class = hasattr(type(self), "State")
+
+        if component_id is not None or not kwargs or not has_state_class:
             # Legacy instantiation path — mount immediately
             self.component_id = component_id or self._generate_id()
             self._mounted = False
