@@ -75,6 +75,27 @@ impl<'py> FromPyObject<'py> for Value {
         } else if let Ok(dict) = ob.extract::<HashMap<String, Value>>() {
             Ok(Value::Object(dict))
         } else {
+            // For arbitrary Python objects (e.g. Django model instances), try to
+            // extract public attributes from __dict__ so that template expressions
+            // like `{{ obj.name }}` or `{{ obj.path }}` work without requiring
+            // callers to manually convert to dicts.
+            if let Ok(obj_dict) = ob.getattr("__dict__") {
+                if let Ok(items) = obj_dict.extract::<HashMap<String, pyo3::Bound<'py, PyAny>>>() {
+                    let mut map = HashMap::new();
+                    for (k, v) in items {
+                        // Skip private/dunder attrs and Django's internal _state
+                        if k.starts_with('_') {
+                            continue;
+                        }
+                        if let Ok(val) = v.extract::<Value>() {
+                            map.insert(k, val);
+                        }
+                    }
+                    if !map.is_empty() {
+                        return Ok(Value::Object(map));
+                    }
+                }
+            }
             Ok(Value::String(ob.str()?.to_string()))
         }
     }

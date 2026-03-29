@@ -357,17 +357,13 @@ class TestRenderIntegration:
         assert "/items/3/" in result
 
     def test_unknown_tag_without_handler_renders_warning_comment(self):
-        """Unknown tags without handlers render as HTML comments with warning."""
+        """Unknown tags without handlers raise RuntimeError to enable Django fallback."""
         from djust._rust import render_template, clear_tag_handlers
 
         clear_tag_handlers()
 
-        result = render_template("before {% unknown_tag %} after", {})
-        # Unknown tags now render as HTML comments for debugging
-        assert "before" in result
-        assert "after" in result
-        assert "<!-- djust: unsupported tag" in result
-        assert "unknown_tag" in result
+        with pytest.raises(RuntimeError, match="Unsupported template tag.*unknown_tag"):
+            render_template("before {% unknown_tag %} after", {})
 
     def test_handler_exception_returns_error(self):
         """Handler exceptions are caught and reported."""

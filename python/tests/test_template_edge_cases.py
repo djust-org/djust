@@ -220,5 +220,78 @@ class TestRealWorldEdgeCases:
         assert "txt" not in result
 
 
+class TestRustEngineGapFixes:
+    """Regression tests for Rust template engine gaps fixed in DJU-3."""
+
+    def test_model_instance_attributes_accessible(self):
+        """Arbitrary Python object attributes are accessible via dotted path lookup.
+
+        Previously, objects that weren't dict/list/primitives fell back to str()
+        and attribute access returned empty string. Now __dict__ is extracted.
+        """
+        from djust._rust import render_template
+
+        class FakeModel:
+            def __init__(self):
+                self.title = "Hello World"
+                self.slug = "hello-world"
+                self._state = object()  # Private - should be excluded
+
+        model = FakeModel()
+        result = render_template("{{ post.title }} ({{ post.slug }})", {"post": model})
+        assert result == "Hello World (hello-world)"
+
+    def test_private_attrs_excluded_from_model_serialization(self):
+        """Private attributes (starting with _) are excluded from object serialization."""
+        from djust._rust import render_template
+
+        class FakeModel:
+            def __init__(self):
+                self.public_field = "visible"
+                self._private = "hidden"
+
+        model = FakeModel()
+        result = render_template("{{ obj.public_field }}|{{ obj._private }}", {"obj": model})
+        # public_field renders, _private is excluded and renders empty
+        assert "visible" in result
+        assert "hidden" not in result
+
+    def test_quote_escaping_in_attribute_values(self):
+        """Double quotes in template variables are escaped to &quot; in output.
+
+        This prevents breaking out of HTML attribute values.
+        """
+        from djust._rust import render_template
+
+        result = render_template(
+            '<div data-value="{{ text }}">test</div>',
+            {"text": 'say "hello"'},
+        )
+        assert "&quot;hello&quot;" in result
+        # The attribute should not be broken by unescaped quotes
+        assert 'data-value="say &quot;hello&quot;"' in result
+
+    def test_unsupported_custom_tag_raises_runtime_error(self):
+        """Unsupported template tags raise RuntimeError instead of outputting comments.
+
+        This allows Python callers to catch the error and fall back to Django's
+        template engine, which handles custom tag libraries.
+        """
+        from djust._rust import render_template
+
+        with pytest.raises(RuntimeError, match="Unsupported template tag.*unknown_custom_tag"):
+            render_template("{% unknown_custom_tag arg1 arg2 %}", {})
+
+    def test_supported_tags_still_work(self):
+        """Basic built-in tags still render correctly after the gap fixes."""
+        from djust._rust import render_template
+
+        result = render_template(
+            "{% if show %}{{ name }}{% endif %}",
+            {"show": True, "name": "World"},
+        )
+        assert result == "World"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
