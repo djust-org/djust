@@ -214,8 +214,9 @@ class TestGetTemplateDirs:
 class TestUnsupportedTagWarning:
     """Tests for unsupported template tag warning behavior."""
 
-    def test_unsupported_tag_renders_html_comment(self):
-        """Test that unsupported tags render as HTML comments."""
+    def test_unsupported_tag_raises_error(self):
+        """Test that unsupported tags raise RuntimeError to enable Django fallback."""
+        import pytest
         from djust.live_view import LiveView
 
         class MyView(LiveView):
@@ -226,8 +227,5 @@ class TestUnsupportedTagWarning:
             """
 
         view = MyView()
-        html = view.render()
-
-        # Should contain HTML comments for the unsupported tags
-        assert "<!-- djust: unsupported tag" in html
-        assert "ifchanged" in html
+        with pytest.raises(RuntimeError, match="Unsupported template tag.*ifchanged"):
+            view.render()

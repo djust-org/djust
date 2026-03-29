@@ -1380,6 +1380,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if cache_config:
             response["cache_config"] = cache_config
 
+        # Include optimistic rules from descriptor components (DEP-002)
+        optimistic_rules = self._extract_optimistic_rules()
+        if optimistic_rules:
+            response["optimistic_rules"] = optimistic_rules
+
         # Include upload configurations if view uses UploadMixin
         if hasattr(self.view_instance, "_upload_manager") and self.view_instance._upload_manager:
             upload_state = self.view_instance._upload_manager.get_upload_state()
@@ -2133,6 +2138,42 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger.debug("Could not inspect method '%s' for cache config: %s", name, e)
 
         return cache_config
+
+    def _extract_optimistic_rules(self) -> Dict[str, Any]:
+        """Extract optimistic UI rules from descriptor components (DEP-002).
+
+        Returns a dict mapping event names to their optimistic rules:
+        {
+            "accordion_toggle": {
+                "action": "toggle_class",
+                "target": "[data-value='{value}']",
+                "class": "dj-accordion-item--open"
+            }
+        }
+
+        Only includes rules for components with tier="optimistic".
+        Client-tier components are excluded (no server event at all).
+        """
+        if not self.view_instance:
+            return {}
+
+        descriptors = getattr(type(self.view_instance), "_component_descriptors", None)
+        if not descriptors:
+            return {}
+
+        rules = {}
+        for _name, descriptor in descriptors.items():
+            meta = getattr(type(descriptor), "Meta", None)
+            if meta is None:
+                continue
+            tier = getattr(meta, "tier", "server")
+            if tier != "optimistic":
+                continue
+            event = getattr(meta, "event", None)
+            rule = getattr(meta, "optimistic_rule", None)
+            if event and rule and event not in rules:
+                rules[event] = rule
+        return rules
 
     async def send_json(self, data: Dict[str, Any]):
         """Send JSON message to client with Django type support"""

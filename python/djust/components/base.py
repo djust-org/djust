@@ -6,7 +6,7 @@ reusable, reactive components with automatic performance optimization.
 """
 
 from typing import Dict, Any, Optional, Type
-from abc import ABC, abstractmethod
+from abc import ABC
 from django.utils.safestring import mark_safe
 
 
@@ -345,59 +345,59 @@ class Component(ABC):
         return self.render()
 
 
-class LiveComponent(ABC):
+class LiveComponent:
     """
     Base class for creating reusable, reactive components.
 
     Components are self-contained UI elements with their own state and event handlers.
-    They can be embedded in LiveViews or other components.
+    They can be declared as class attributes on LiveViews (descriptor pattern) or
+    instantiated in mount().
 
-    Automatic Component ID Management:
-        Components automatically receive a stable `component_id` based on the attribute
-        name used when assigning them in your LiveView. This eliminates manual ID management.
+    Descriptor Pattern (preferred)::
 
-        Example:
-            class MyView(LiveView):
-                def mount(self, request):
-                    # component_id is automatically set to "alert_success"
-                    self.alert_success = AlertComponent(
-                        message="Success!",
-                        type="success"
-                    )
+        class Accordion(LiveComponent):
+            class State(TypedState):
+                active: str = ""
+                multiple: bool = False
 
-        The framework automatically:
-        1. Sets component.component_id = "alert_success" (the attribute name)
-        2. Persists this ID across renders and WebSocket events
-        3. Includes it in HTML as data-component-id="alert_success"
-        4. Routes events back to the correct component instance
+            class Meta:
+                event = "accordion_toggle"
 
-        This means you can reference components by their attribute names in event handlers:
-            def dismiss(self, component_id: str = None):
-                if component_id and hasattr(self, component_id):
-                    getattr(self, component_id).dismiss()
+            def toggle(self, state, value="", **kwargs):
+                state.active = "" if state.active == value else value
 
-    Usage:
+        class MyView(LiveView):
+            faq = Accordion(active="q1")
+            settings = Accordion()
+
+            # self.faq.active → "q1" (typed, IDE autocomplete)
+            # accordion_toggle handler auto-registered, routed by component_id
+
+    Legacy Pattern (still supported)::
+
         class AlertComponent(LiveComponent):
             template_name = 'components/alert.html'
 
             def mount(self, **kwargs):
                 self.message = kwargs.get('message', '')
-                self.type = kwargs.get('type', 'info')
-                self.visible = True
-
-            @event_handler()
-            def dismiss(self, **kwargs):
-                self.visible = False
 
             def get_context_data(self):
-                return {
-                    'message': self.message,
-                    'type': self.type,
-                    'visible': self.visible,
-                }
+                return {'message': self.message}
 
-        # In template:
-        {{ alert.render }}
+        class MyView(LiveView):
+            def mount(self, request):
+                self.alert = AlertComponent(message="Success!")
+
+    Descriptor Protocol:
+        When declared as a class attribute, LiveComponent acts as a Python descriptor:
+        - ``__set_name__``: registers component in ``_component_descriptors`` on the owner class,
+          auto-registers event handlers
+        - ``__get__``: returns the component's State (a TypedState dict subclass) for the instance
+        - ``__set__``: accepts a plain dict and converts to the State class
+
+        The attribute name becomes the component_id. State is stored in
+        ``obj.__dict__["_component_{name}"]`` (underscore prefix excludes it from
+        djust's context pipeline; the public attribute via ``__get__`` is included).
     """
 
     # Component configuration
@@ -405,22 +405,156 @@ class LiveComponent(ABC):
     template: Optional[str] = None  # Inline template string
     component_id: Optional[str] = None
 
+    # ── Descriptor support ──
+
     def __init__(self, component_id: Optional[str] = None, **kwargs):
         """
         Initialize component.
 
+        When used as a descriptor (class attribute), kwargs are stored as defaults
+        and state is created lazily on first access. When instantiated directly
+        (legacy pattern), mount() is called immediately.
+
         Args:
             component_id: Unique identifier for this component instance
-            **kwargs: Component initialization parameters
+            **kwargs: Component initialization parameters or state defaults
         """
-        self.component_id = component_id or self._generate_id()
-        self._mounted = False
-        self._parent = None
-        self._parent_callback = None  # For parent-child communication
+        # Check if this is being used as a descriptor (no owner yet)
+        # vs direct instantiation (legacy pattern)
+        self._descriptor_defaults = kwargs
+        self._descriptor_attr_name = None
+        self._descriptor_storage_key = None
 
-        # Mount with provided kwargs
-        self.mount(**kwargs)
-        self._mounted = True
+        # Determine if this is the new descriptor pattern (has State inner class)
+        # or the legacy direct-instantiation pattern (no State class).
+        has_state_class = hasattr(type(self), "State")
+
+        if component_id is not None or not kwargs or not has_state_class:
+            # Legacy instantiation path — mount immediately
+            self.component_id = component_id or self._generate_id()
+            self._mounted = False
+            self._parent = None
+            self._parent_callback = None
+            if hasattr(self, "mount") and callable(self.mount):
+                self.mount(**kwargs)
+            self._mounted = True
+        else:
+            # Descriptor path — defer mounting, store defaults
+            self._mounted = False
+            self._parent = None
+            self._parent_callback = None
+
+    def __set_name__(self, owner, name):
+        """Called when this component is assigned as a class attribute.
+
+        Registers the component in the owner's ``_component_descriptors`` dict
+        and auto-registers event handlers if defined in ``Meta.event``.
+        """
+        self._descriptor_attr_name = name
+        self._descriptor_storage_key = f"_component_{name}"
+
+        # Build class-level registry
+        if not hasattr(owner, "_component_descriptors"):
+            owner._component_descriptors = {}
+        # Copy to avoid sharing across subclasses
+        elif "_component_descriptors" not in owner.__dict__:
+            owner._component_descriptors = dict(owner._component_descriptors)
+        owner._component_descriptors[name] = self
+
+        # Auto-register event handler on the owner class
+        meta = getattr(self.__class__, "Meta", None)
+        event_name = getattr(meta, "event", None)
+        if event_name and not hasattr(owner, event_name):
+            setattr(owner, event_name, self._make_event_handler(event_name))
+
+    def __get__(self, obj, objtype=None):
+        """Return the component's State for this view instance.
+
+        On first access, creates the State with defaults. On subsequent access,
+        returns the cached State. After djust deserialization (state becomes a
+        plain dict), rehydrates it back to the State class.
+        """
+        if obj is None:
+            return self  # Class-level access returns the descriptor
+
+        state_cls = getattr(self.__class__, "State", None)
+        if state_cls is None:
+            # No State inner class — legacy component, return self
+            return self
+
+        state = obj.__dict__.get(self._descriptor_storage_key)
+        if state is None:
+            # First access — create State with defaults
+            state = state_cls(**self._descriptor_defaults)
+            state["component_id"] = self._descriptor_attr_name
+            obj.__dict__[self._descriptor_storage_key] = state
+        elif isinstance(state, dict) and not isinstance(state, state_cls):
+            # Rehydrate from plain dict after djust deserialization
+            state = state_cls.from_dict(state)
+            state["component_id"] = self._descriptor_attr_name
+            obj.__dict__[self._descriptor_storage_key] = state
+        return state
+
+    def __set__(self, obj, value):
+        """Accept a plain dict and convert to the component's State class."""
+        state_cls = getattr(self.__class__, "State", None)
+        if state_cls is not None and isinstance(value, dict) and not isinstance(value, state_cls):
+            value = state_cls.from_dict(value)
+            if self._descriptor_attr_name:
+                value["component_id"] = self._descriptor_attr_name
+        if self._descriptor_storage_key:
+            obj.__dict__[self._descriptor_storage_key] = value
+        else:
+            # Legacy path — direct attribute set
+            obj.__dict__[self._descriptor_attr_name or "component"] = value
+
+    def _make_event_handler(self, event_name):
+        """Create an event handler that routes to the correct component instance."""
+        component_type = type(self)
+
+        def handler(view_self, value="", component_id="", **kwargs):
+            # Auto-resolve if only one instance of this component type
+            if not component_id:
+                descriptors = getattr(type(view_self), "_component_descriptors", {})
+                matches = [n for n, d in descriptors.items() if isinstance(d, component_type)]
+                if len(matches) == 1:
+                    component_id = matches[0]
+            if not component_id:
+                return
+
+            state = getattr(view_self, component_id, None)
+            if state is None:
+                return
+
+            # Find the component's action method (e.g., toggle, set, open, close)
+            # Convention: the first non-private, non-dunder method that isn't
+            # mount/render/get_context_data is the action
+            descriptor = getattr(type(view_self), component_id, None)
+            if descriptor and hasattr(descriptor, "_handle_event"):
+                descriptor._handle_event(state, value=value, **kwargs)
+
+        # Preserve the event name for djust dispatch
+        handler.__name__ = event_name
+        handler.__qualname__ = event_name
+
+        # Mark as event_handler if the decorator is available
+        try:
+            from djust.decorators import event_handler as eh_decorator
+
+            handler = eh_decorator(handler)
+        except ImportError:
+            pass
+
+        return handler
+
+    def _handle_event(self, state, **kwargs):
+        """Override in subclasses to handle events.
+
+        Args:
+            state: The TypedState instance for this component
+            **kwargs: Event parameters (value, etc.)
+        """
+        pass
 
     def _generate_id(self) -> str:
         """Generate a unique component ID"""
@@ -428,35 +562,27 @@ class LiveComponent(ABC):
 
         return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
 
-    @abstractmethod
     def mount(self, **kwargs):
         """
         Initialize component state.
 
-        This method is called when the component is created.
-        Override to set up initial state.
+        Override to set up initial state. Optional when using the descriptor
+        pattern with a State inner class.
 
         Args:
             **kwargs: Initialization parameters
         """
         pass
 
-    @abstractmethod
     def get_context_data(self) -> Dict[str, Any]:
         """
         Get template context for rendering.
 
         Returns:
-            Dictionary of context variables
-
-        Example:
-            return {
-                'title': self.title,
-                'items': self.items,
-                'count': len(self.items),
-            }
+            Dictionary of context variables.  Optional when using the descriptor
+            pattern — the State dict is used directly.
         """
-        pass
+        return {}
 
     def render(self) -> str:
         """

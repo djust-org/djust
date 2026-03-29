@@ -190,6 +190,29 @@ class RustBridgeMixin:
                 backend = get_backend()
                 backend.set(self._cache_key, self._rust_view)
 
+    def _get_template_deps(self):
+        """Build template dependency map: which context keys does the template use?
+
+        Caches the result per template content hash so it's computed only once.
+        Returns None if extraction is unavailable (no Rust backend).
+        """
+        deps = getattr(self, "_template_deps", None)
+        if deps is not None:
+            return deps
+
+        try:
+            from ..mixins.jit import _cached_extract_template_variables
+        except ImportError:
+            return None
+
+        template_content = getattr(self, "_template_content", None)
+        if not template_content:
+            return None
+
+        deps = _cached_extract_template_variables(template_content)
+        self._template_deps = deps
+        return deps
+
     def _sync_state_to_rust(self):
         """Sync Python state to Rust backend.
 
@@ -197,15 +220,28 @@ class RustBridgeMixin:
         since the last render. Rust's update_state() merges (extends), so
         unchanged keys are retained from the previous render.
 
-        Two-layer detection:
+        Three-layer detection:
           1. Instance attribute changes — snapshot-based (_changed_keys from handle_event)
-          2. Computed value changes — id() reference comparison against previous render
+          2. TypedState dirty flags — in-place dict mutation tracking
+          3. Computed value changes — id() reference comparison against previous render
         """
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
 
             full_context = self.get_context_data()
+
+            # Dependency tracking: identify which components the template uses
+            template_deps = self._get_template_deps()
+            component_descriptors = getattr(type(self), "_component_descriptors", None)
+            if template_deps and component_descriptors:
+                # Filter out descriptor components not referenced in template
+                unreferenced = set()
+                for name in component_descriptors:
+                    if name not in template_deps:
+                        unreferenced.add(name)
+                if unreferenced:
+                    full_context = {k: v for k, v in full_context.items() if k not in unreferenced}
 
             changed_keys = getattr(self, "_changed_keys", None)
             prev_refs = getattr(self, "_prev_context_refs", {})
@@ -219,6 +255,8 @@ class RustBridgeMixin:
                         context[key] = value  # instance attr changed (snapshot)
                     elif key not in prev_refs:
                         context[key] = value  # new key
+                    elif getattr(value, "_dirty", False):
+                        context[key] = value  # TypedState with dirty flag
                     elif id(value) != prev_refs.get(key):
                         context[key] = value  # different object reference
                     # else: unchanged — Rust already has it
@@ -230,14 +268,29 @@ class RustBridgeMixin:
             self._prev_context_refs = {k: id(v) for k, v in full_context.items()}
             self._changed_keys = None  # Clear
 
+            # Clear dirty flags on TypedState objects after sync
+            for value in context.values():
+                if hasattr(value, "_dirty"):
+                    object.__setattr__(value, "_dirty", False)
+
             # Detect SafeString values before serialization loses the type info
             safe_keys = []
             rendered_context = {}
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
-                    rendered_html = value.render()
-                    rendered_context[key] = {"render": str(rendered_html)}
-                    # Component.render() returns SafeString — mark as safe
+                    # Render caching: skip render if component has clean cached HTML
+                    cached = getattr(value, "_cached_html", None)
+                    if cached is not None and not getattr(value, "_dirty", True):
+                        rendered_html = cached
+                    else:
+                        rendered_html = str(value.render())
+                        # Cache for next render cycle
+                        try:
+                            object.__setattr__(value, "_cached_html", rendered_html)
+                            object.__setattr__(value, "_dirty", False)
+                        except (AttributeError, TypeError):
+                            pass  # Not all objects support attribute setting
+                    rendered_context[key] = {"render": rendered_html}
                     safe_keys.append(key)
                 elif isinstance(value, forms.Form):
                     continue
