@@ -375,6 +375,9 @@ class FormMixin:
         Args:
             field_name: Name of the field to render
             adapter: Framework adapter to use (if None, uses configured framework)
+            event_name: Override the dj-change event handler name (default: "validate_field").
+                Use this when integrating with a multi-step wizard or custom handler:
+                ``{{ form.as_live_field('first_name', event_name='update_step_field')|safe }}``
             **kwargs: Rendering options
 
         Returns:

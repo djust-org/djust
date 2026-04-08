@@ -178,7 +178,7 @@ class BaseAdapter(FrameworkAdapter):
         if field.required:
             attrs["required"] = "required"
         if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
-            attrs["dj-change"] = "validate_field"
+            attrs["dj-change"] = kwargs.get("event_name", "validate_field")
 
         if field_type == "textarea":
             return self._build_tag("textarea", attrs, escape(str(value)))
@@ -220,7 +220,7 @@ class BaseAdapter(FrameworkAdapter):
         if field.required:
             attrs["required"] = "required"
         if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
-            attrs["dj-change"] = "validate_field"
+            attrs["dj-change"] = kwargs.get("event_name", "validate_field")
 
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
         wrap_cls = f' class="{wrapper_class}"' if wrapper_class else ""
@@ -259,7 +259,7 @@ class BaseAdapter(FrameworkAdapter):
             if field.required:
                 attrs["required"] = "required"
             if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
-                attrs["dj-change"] = "validate_field"
+                attrs["dj-change"] = kwargs.get("event_name", "validate_field")
 
             html += (
                 f'<div class="{radio_wrapper}">'
