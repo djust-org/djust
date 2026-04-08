@@ -460,11 +460,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 from ..serialization import normalize_django_value
                 from ..mixins.rust_bridge import _collect_safe_keys
 
-                # Recursively detect SafeStrings in rendered context (including top-level)
-                for key, value in rendered_context.items():
-                    safe_keys.extend(_collect_safe_keys(value, key))
-
+                # Normalize first so Form/BoundField objects are converted to
+                # SafeString values before safe-key detection runs.  SafeString
+                # is a str subclass so it passes through normalize_django_value
+                # unchanged, preserving the safe marker.
                 json_compatible_context = normalize_django_value(rendered_context)
+
+                # Detect SafeStrings in normalized context (including those
+                # produced by Form/BoundField rendering above).
+                for key, value in json_compatible_context.items():
+                    safe_keys.extend(_collect_safe_keys(value, key))
 
             temp_rust.update_state(json_compatible_context)
             if safe_keys:

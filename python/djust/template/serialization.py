@@ -71,6 +71,14 @@ def serialize_value(
                     return None
             return None
 
+    # Django Form / BoundField — render to SafeString HTML so that
+    # {{ form.field_name }} produces widget HTML. Must come before dict check.
+    from djust.serialization import render_form_value
+
+    form_result = render_form_value(value)
+    if form_result is not None:
+        return form_result
+
     # Handle dict - recursively serialize
     if isinstance(value, dict):
         return {k: serialize_value(v) for k, v in value.items()}

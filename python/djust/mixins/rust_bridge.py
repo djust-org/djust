@@ -292,8 +292,14 @@ class RustBridgeMixin:
                             pass  # Not all objects support attribute setting
                     rendered_context[key] = {"render": rendered_html}
                     safe_keys.append(key)
-                elif isinstance(value, forms.Form):
-                    continue
+                elif isinstance(value, forms.BaseForm):
+                    # Render each BoundField to a SafeString dict so that
+                    # {{ form.field_name }} works in LiveView templates.
+                    from djust.serialization import render_form_value
+
+                    rendered_context[key] = render_form_value(value)
+                    for field_name in value.fields:
+                        safe_keys.append(f"{key}.{field_name}")
                 else:
                     # Recursively collect all safe keys (including nested)
                     safe_keys.extend(_collect_safe_keys(value, key))
