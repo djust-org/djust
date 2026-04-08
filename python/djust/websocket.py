@@ -1371,8 +1371,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Only include HTML if it was generated (not skipped due to pre-rendering)
         if html is not None:
             response["html"] = html
-            # Flag indicating HTML has data-dj-id attributes for ID-based patching
-            has_ids = "data-dj-id=" in html
+            # Flag indicating HTML has dj-id attributes for ID-based patching.
+            # Must match the attribute name emitted by the Rust renderer ("dj-id",
+            # not "data-dj-id"). Mirrors the equivalent check in sse.py.
+            has_ids = "dj-id=" in html
             response["has_ids"] = has_ids
 
         # Include cache configuration for handlers with @cache decorator
