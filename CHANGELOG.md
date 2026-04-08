@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sync input `.value` from attribute after innerHTML/VDOM patch** — When navigating backward in a multi-step wizard, text input values were not visually restored even though the server sent correct VDOM patches. `setAttribute('value', x)` only updates the HTML attribute (defaultValue), not the `.value` DOM property. Now syncs `.value` from the attribute in `preserveFormValues()`, broadcast patches, and `morphElement()`. Skips focused inputs, checkboxes, radios, and file inputs. ([#625](https://github.com/djust-org/djust/pull/625), fixes [#624](https://github.com/djust-org/djust/issues/624))
+
 ## [0.4.0] - 2026-03-27
 
 ### Security
