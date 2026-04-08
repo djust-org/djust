@@ -98,6 +98,26 @@ class ArticleEditView(FormMixin, LiveView):
 | `is_valid`      | bool | Result of last submission            |
 | `form_instance` | Form | Current Django Form instance         |
 
+## Multi-Step Wizards
+
+For guided multi-step forms, use `WizardMixin`:
+
+```python
+from djust import WizardMixin, LiveView
+
+class SignupWizard(WizardMixin, LiveView):
+    wizard_steps = [
+        {"name": "personal", "title": "Personal Info", "form_class": PersonalInfoForm},
+        {"name": "address",  "title": "Address",       "form_class": AddressForm},
+        {"name": "review",   "title": "Review"},
+    ]
+
+    def on_wizard_complete(self, step_data):
+        User.objects.create(**step_data["personal"])
+```
+
+See [guides/wizards.md](../guides/wizards.md) for the full wizard guide.
+
 ## Full Guide
 
 See [guides/forms.md](../guides/forms.md) for:
