@@ -413,6 +413,29 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
         return duration_iso_string(value)
 
+    # Django Form / BoundField -- render to HTML SafeString so the Rust renderer
+    # outputs widget HTML rather than "[Object]".
+    #
+    # BoundField.__str__() → BoundField.as_widget() → widget.render() → HTML.
+    # BaseForm produces a dict of {field_name: SafeString} so that templates can
+    # access individual fields via {{ form.field_name }} with dot notation.
+    #
+    # These checks must come before the FieldFile check because Form/BoundField
+    # objects do not have a `.url` attribute but the duck-typing fallback below
+    # could match other attributes incidentally.
+    try:
+        from django.forms import BaseForm
+        from django.forms.boundfield import BoundField
+        from django.utils.safestring import mark_safe
+
+        if isinstance(value, BoundField):
+            return mark_safe(str(value))
+
+        if isinstance(value, BaseForm):
+            return {name: mark_safe(str(value[name])) for name in value.fields}
+    except ImportError:
+        pass  # Django forms not available in this environment
+
     # Django FieldFile / ImageFieldFile (must check before Model)
     from django.db.models.fields.files import FieldFile
 

@@ -731,16 +731,28 @@ class DjustTemplate:
         # This replaces {% url 'name' args %} with the actual resolved URL
         resolved_template = self._resolve_url_tags(resolved_template, context_dict)
 
-        # Detect SafeString values (Django's mark_safe) before serialization
-        # loses the type info. These keys should skip auto-escaping in Rust.
-        safe_keys = list(getattr(self, "_safe_keys", None) or [])
-        for key, value in context_dict.items():
-            if isinstance(value, SafeString) and key not in safe_keys:
-                safe_keys.append(key)
-
-        # Serialize remaining context values (datetime, Decimal, UUID, FieldFile, etc.)
-        # This ensures all values are JSON-compatible for the Rust engine
+        # Serialize remaining context values (datetime, Decimal, UUID, FieldFile,
+        # Form/BoundField, etc.) so all values are JSON-compatible for Rust.
+        # Form/BoundField objects are converted to SafeString dicts here, so
+        # safe-key detection must run AFTER serialization to catch nested paths
+        # like "form.first_name".
         context_dict = serialize_context(context_dict)
+
+        # Detect SafeString values after serialization so that SafeStrings
+        # produced by Form/BoundField rendering (above) are included.
+        # Use _collect_safe_keys for recursive detection of dotted paths
+        # (e.g. "form.first_name") in addition to top-level keys.
+        safe_keys = list(getattr(self, "_safe_keys", None) or [])
+        try:
+            from djust.mixins.rust_bridge import _collect_safe_keys
+
+            for key, value in context_dict.items():
+                safe_keys.extend(k for k in _collect_safe_keys(value, key) if k not in safe_keys)
+        except ImportError:
+            # Fallback: top-level SafeString detection only
+            for key, value in context_dict.items():
+                if isinstance(value, SafeString) and key not in safe_keys:
+                    safe_keys.append(key)
 
         # Render with Rust engine (use resolved template with inheritance resolved)
         # Pass template directories to support {% include %} tags

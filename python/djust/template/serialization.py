@@ -71,6 +71,22 @@ def serialize_value(
                     return None
             return None
 
+    # Handle Django Form / BoundField -- render to SafeString HTML so that
+    # {{ form.field_name }} produces widget HTML instead of empty string / [Object].
+    # Must come before the dict check to avoid partial __dict__ extraction.
+    try:
+        from django.forms import BaseForm
+        from django.forms.boundfield import BoundField
+        from django.utils.safestring import mark_safe
+
+        if isinstance(value, BoundField):
+            return mark_safe(str(value))
+
+        if isinstance(value, BaseForm):
+            return {name: mark_safe(str(value[name])) for name in value.fields}
+    except ImportError:
+        pass  # Django forms not available in this environment
+
     # Handle dict - recursively serialize
     if isinstance(value, dict):
         return {k: serialize_value(v) for k, v in value.items()}
