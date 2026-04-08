@@ -283,6 +283,13 @@ function handleServerResponse(data, eventName, triggerElement) {
                     root.querySelectorAll('textarea').forEach(el => {
                         el.value = el.textContent || '';
                     });
+                    root.querySelectorAll('input').forEach(el => {
+                        if (el.type === 'checkbox' || el.type === 'radio') return;
+                        const attrVal = el.getAttribute('value');
+                        if (attrVal !== null && el.value !== attrVal) {
+                            el.value = attrVal;
+                        }
+                    });
                 }
             }
 
@@ -4629,6 +4636,23 @@ function preserveFormValues(container, updateFn) {
         el.value = el.textContent || '';
     });
 
+    // Sync input .value from value attribute for non-focused inputs.
+    //
+    // After innerHTML replacement or VDOM SetAttr/Replace patches,
+    // setAttribute('value', x) updates the HTML attribute (defaultValue)
+    // but NOT the .value DOM property on previously-rendered inputs.
+    // This means navigating back to a wizard step shows stale values.
+    // Setting .value here ensures the displayed value matches the server.
+    // We skip the focused element — its value is preserved above.
+    container.querySelectorAll('input').forEach(el => {
+        if (el === document.activeElement) return;
+        if (el.type === 'checkbox' || el.type === 'radio') return;
+        const attrVal = el.getAttribute('value');
+        if (attrVal !== null && el.value !== attrVal) {
+            el.value = attrVal;
+        }
+    });
+
     // Restore the focused element's value
     if (saved) {
         let el = null;
@@ -4845,6 +4869,18 @@ function morphElement(existing, desired) {
     // (.value and .textContent diverge after initial render)
     if (existing.tagName === 'TEXTAREA' && !skipValue) {
         existing.value = existing.textContent || '';
+    }
+
+    // Sync input .value from value attribute after morphing.
+    // setAttribute('value', x) only sets the HTML attribute (defaultValue),
+    // not the .value DOM property on previously-rendered inputs.
+    if (existing.tagName === 'INPUT' && !skipValue &&
+        existing.type !== 'checkbox' && existing.type !== 'radio' &&
+        existing !== document.activeElement) {
+        const attrVal = existing.getAttribute('value');
+        if (attrVal !== null && existing.value !== attrVal) {
+            existing.value = attrVal;
+        }
     }
 }
 
