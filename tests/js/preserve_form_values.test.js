@@ -280,4 +280,97 @@ describe('preserveFormValues', () => {
             expect(restored.checked).toBe(true);
         });
     });
+
+    describe('input .value syncing from value attribute (issue #624)', () => {
+        it('should sync input .value from attribute after innerHTML replacement', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input id="name" value="Alice">';
+            document.body.appendChild(container);
+
+            // Simulate wizard back-navigation: server sends a new innerHTML
+            // with the previously entered value in the value attribute
+            preserveFormValues(container, () => {
+                container.innerHTML = '<input id="name" value="Mendez">';
+            });
+
+            const input = container.querySelector('#name');
+            // .value must match the attribute, not be empty
+            expect(input.value).toBe('Mendez');
+        });
+
+        it('should sync multiple inputs after innerHTML replacement', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input id="first" value=""><input id="last" value="">';
+            document.body.appendChild(container);
+
+            preserveFormValues(container, () => {
+                container.innerHTML = '<input id="first" value="John"><input id="last" value="Doe">';
+            });
+
+            expect(container.querySelector('#first').value).toBe('John');
+            expect(container.querySelector('#last').value).toBe('Doe');
+        });
+
+        it('should skip focused input (user is actively typing)', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input id="name" value="server">';
+            document.body.appendChild(container);
+
+            const input = container.querySelector('#name');
+            input.value = 'user is typing';
+            input.focus();
+
+            preserveFormValues(container, () => {
+                container.innerHTML = '<input id="name" value="server-updated">';
+            });
+
+            const restored = container.querySelector('#name');
+            // Should have the USER's value, not the server's attribute
+            expect(restored.value).toBe('user is typing');
+        });
+
+        it('should skip checkbox and radio inputs', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input type="checkbox" id="cb" value="yes"><input type="radio" id="rd" value="opt1"><input id="text" value="hello">';
+            document.body.appendChild(container);
+
+            preserveFormValues(container, () => {
+                container.innerHTML = '<input type="checkbox" id="cb" value="yes"><input type="radio" id="rd" value="opt1"><input id="text" value="world">';
+            });
+
+            // Text input should have .value synced
+            expect(container.querySelector('#text').value).toBe('world');
+            // Checkbox/radio .value should NOT be touched by syncInputValues
+            // (they use .checked, not .value for state)
+            expect(container.querySelector('#cb').type).toBe('checkbox');
+            expect(container.querySelector('#rd').type).toBe('radio');
+        });
+
+        it('should skip file inputs (read-only .value)', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input type="file" id="upload">';
+            document.body.appendChild(container);
+
+            preserveFormValues(container, () => {
+                container.innerHTML = '<input type="file" id="upload">';
+            });
+
+            // File input should not throw or be modified
+            expect(container.querySelector('#upload').value).toBe('');
+        });
+
+        it('should not sync when value attribute is absent', () => {
+            const container = document.createElement('div');
+            container.innerHTML = '<input id="name">';
+            document.body.appendChild(container);
+
+            preserveFormValues(container, () => {
+                // No value attribute at all
+                container.innerHTML = '<input id="name">';
+            });
+
+            // Should remain empty — no attribute to sync from
+            expect(container.querySelector('#name').value).toBe('');
+        });
+    });
 });
