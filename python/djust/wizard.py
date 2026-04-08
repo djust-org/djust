@@ -73,13 +73,17 @@ logger = logging.getLogger(__name__)
 
 
 class WizardMixin:
-    """
-    Multi-step form wizard mixin for djust LiveViews.
+    """Multi-step form wizard mixin for djust LiveViews.
+
+    Place **before** LiveView in the MRO so wizard methods are found first::
+
+        class MyWizard(WizardMixin, LiveView):
+            wizard_steps = [...]
 
     See module docstring for full usage and implementation notes.
     """
 
-    wizard_steps: list = ()  # Subclasses override with a list of step dicts
+    wizard_steps: list = []  # Subclasses override with a list of step dicts
 
     @property
     def _steps(self) -> list:
