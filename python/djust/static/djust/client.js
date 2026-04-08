@@ -708,18 +708,29 @@ class LiveViewWebSocket {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
-                    reinitAfterDOMUpdate();
-                    // Set mount ready flag so dj-mounted handlers only fire
-                    // for elements added by subsequent VDOM patches, not on initial load
-                    window.djust._mountReady = true;
-                    // Trigger form recovery and dj-auto-recover after reconnect mount
-                    if (window.djust._isReconnect) {
-                        if (typeof window.djust._processFormRecovery === 'function') {
-                            window.djust._processFormRecovery();
+                    // Defer event binding and post-mount work to next frame
+                    // to avoid layout shift on pre-rendered content.
+                    // All post-mount work must run AFTER reinitAfterDOMUpdate
+                    // so event handlers are bound before form recovery fires.
+                    const postMount = () => {
+                        reinitAfterDOMUpdate();
+                        // Set mount ready flag so dj-mounted handlers only fire
+                        // for elements added by subsequent VDOM patches, not on initial load
+                        window.djust._mountReady = true;
+                        // Trigger form recovery and dj-auto-recover after reconnect mount
+                        if (window.djust._isReconnect) {
+                            if (typeof window.djust._processFormRecovery === 'function') {
+                                window.djust._processFormRecovery();
+                            }
+                            if (typeof window.djust._processAutoRecover === 'function') {
+                                window.djust._processAutoRecover();
+                            }
                         }
-                        if (typeof window.djust._processAutoRecover === 'function') {
-                            window.djust._processAutoRecover();
-                        }
+                    };
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(postMount);
+                    } else {
+                        postMount();
                     }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly

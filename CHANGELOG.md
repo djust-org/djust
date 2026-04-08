@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Layout shift on pre-rendered mount** — Deferred `reinitAfterDOMUpdate()` and post-mount work (form recovery, `_mountReady` flag) to `requestAnimationFrame` when content is pre-rendered via HTTP GET. Prevents visible flash where elements briefly render at wrong sizes during WebSocket mount. Falls back to synchronous execution in environments without `requestAnimationFrame`. ([#618](https://github.com/djust-org/djust/issues/618), [#619](https://github.com/djust-org/djust/pull/619))
+
 ## [0.4.0] - 2026-03-27
 
 ### Security
