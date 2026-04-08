@@ -329,6 +329,30 @@ class DjangoJSONEncoder(json.JSONEncoder):
 _encoder = DjangoJSONEncoder()
 
 
+def render_form_value(value):
+    """Render a Django Form or BoundField to SafeString HTML.
+
+    BoundField.__str__() delegates to as_widget() → widget.render(),
+    which returns already-safe HTML.  BaseForm is converted to a dict
+    of {field_name: SafeString} so templates can use dot notation
+    (e.g. ``{{ form.first_name }}``).
+
+    Returns the rendered value, or *None* if *value* is not a Form or
+    BoundField (caller should continue with its own logic).
+    """
+    from django.forms import BaseForm
+    from django.forms.boundfield import BoundField
+    from django.utils.safestring import mark_safe
+
+    if isinstance(value, BoundField):
+        return mark_safe(str(value))
+
+    if isinstance(value, BaseForm):
+        return {name: mark_safe(str(value[name])) for name in value.fields}
+
+    return None
+
+
 def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     """Convert Django/Python types to JSON-safe Python primitives **directly**.
 
@@ -413,28 +437,11 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
         return duration_iso_string(value)
 
-    # Django Form / BoundField -- render to HTML SafeString so the Rust renderer
-    # outputs widget HTML rather than "[Object]".
-    #
-    # BoundField.__str__() → BoundField.as_widget() → widget.render() → HTML.
-    # BaseForm produces a dict of {field_name: SafeString} so that templates can
-    # access individual fields via {{ form.field_name }} with dot notation.
-    #
-    # These checks must come before the FieldFile check because Form/BoundField
-    # objects do not have a `.url` attribute but the duck-typing fallback below
-    # could match other attributes incidentally.
-    try:
-        from django.forms import BaseForm
-        from django.forms.boundfield import BoundField
-        from django.utils.safestring import mark_safe
-
-        if isinstance(value, BoundField):
-            return mark_safe(str(value))
-
-        if isinstance(value, BaseForm):
-            return {name: mark_safe(str(value[name])) for name in value.fields}
-    except ImportError:
-        pass  # Django forms not available in this environment
+    # Django Form / BoundField — must come before FieldFile check because
+    # Form/BoundField objects don't have `.url` but duck-typing could match.
+    form_result = render_form_value(value)
+    if form_result is not None:
+        return form_result
 
     # Django FieldFile / ImageFieldFile (must check before Model)
     from django.db.models.fields.files import FieldFile

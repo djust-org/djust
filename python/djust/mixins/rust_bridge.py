@@ -295,12 +295,9 @@ class RustBridgeMixin:
                 elif isinstance(value, forms.BaseForm):
                     # Render each BoundField to a SafeString dict so that
                     # {{ form.field_name }} works in LiveView templates.
-                    # normalize_django_value would produce the same result, but
-                    # doing it here lets us collect safe_keys in the same pass.
-                    from django.utils.safestring import mark_safe
+                    from djust.serialization import render_form_value
 
-                    form_rendered = {name: mark_safe(str(value[name])) for name in value.fields}
-                    rendered_context[key] = form_rendered
+                    rendered_context[key] = render_form_value(value)
                     for field_name in value.fields:
                         safe_keys.append(f"{key}.{field_name}")
                 else:

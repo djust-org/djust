@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Render Django Form/BoundField to SafeString HTML in template context** — `{{ form.field_name }}` rendered as empty string because the Rust renderer extracted `Form.__dict__` which doesn't contain computed `BoundField` attributes. Now pre-renders Form and BoundField objects to SafeString HTML via `widget.render()` in all four code paths (serialization, template serialization, template rendering, and LiveView state sync). ([#631](https://github.com/djust-org/djust/pull/631), fixes [#621](https://github.com/djust-org/djust/issues/621))
+
 - **Correct `has_ids` attribute name in WebSocket mount response** — `websocket.py` checked for `"data-dj-id="` but the Rust renderer emits `"dj-id="` attributes. This caused `_stampDjIds()` to be skipped on pre-rendered pages, breaking VDOM patches for large content swaps (e.g. tab switching) while small patches still worked. The SSE path already had the correct check. ([#630](https://github.com/djust-org/djust/pull/630), fixes [#629](https://github.com/djust-org/djust/issues/629))
 
 - **Sync input `.value` from attribute after innerHTML/VDOM patch** — When navigating backward in a multi-step wizard, text input values were not visually restored even though the server sent correct VDOM patches. `setAttribute('value', x)` only updates the HTML attribute (defaultValue), not the `.value` DOM property. Now syncs `.value` from the attribute in `preserveFormValues()`, broadcast patches, and `morphElement()`. Skips focused inputs, checkboxes, radios, and file inputs. ([#625](https://github.com/djust-org/djust/pull/625), fixes [#624](https://github.com/djust-org/djust/issues/624))
