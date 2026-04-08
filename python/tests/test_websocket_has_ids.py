@@ -35,18 +35,19 @@ class TestHasIdsFlag:
         has_ids = "dj-id=" in html
         assert has_ids is False
 
-    def test_websocket_has_ids_false_for_data_dj_id(self):
-        """data-dj-id is NOT the attribute the Rust renderer emits — must not match."""
+    def test_websocket_has_ids_substring_match_covers_data_dj_id(self):
+        """'dj-id=' substring also matches 'data-dj-id=' — harmless false positive.
+
+        The Rust renderer never emits data-dj-id, but if it did, the check
+        would still return True (substring match). This is acceptable because
+        the important case is the OTHER direction: the old buggy check
+        "data-dj-id=" did NOT match real Rust output "dj-id=" (see regression
+        test below).
+        """
         html = '<div data-dj-id="0"><span>Hello</span></div>'
-        # The old (buggy) check was "data-dj-id=" in html — this would be True.
-        # The correct check is "dj-id=" in html — this is also True (substring match),
-        # so we verify the *correct* check, not the old buggy one.
         correct_check = "dj-id=" in html
-        old_buggy_check = "data-dj-id=" in html
-        # Both happen to match here; the point is the Rust renderer emits dj-id,
-        # not data-dj-id — so the correct string to check for is "dj-id=".
+        # Substring match means data-dj-id also triggers dj-id= — that's fine
         assert correct_check is True
-        assert old_buggy_check is True  # substring match, but wrong attribute
 
     def test_websocket_has_ids_regression_old_buggy_check_misses_rust_output(self):
         """
