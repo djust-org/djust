@@ -224,6 +224,9 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
     # .gitignore
     _write(project_dir / ".gitignore", T.GITIGNORE)
 
+    # .env.example — dev-ready environment with DEBUG=True
+    _write(project_dir / ".env.example", T.ENV_EXAMPLE % ctx)
+
     # base.html
     _write(tpl_dir / "base.html", T.BASE_HTML % ctx)
 

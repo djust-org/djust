@@ -72,9 +72,12 @@ SECRET_KEY = os.environ.get(
     "django-insecure-%(secret_key)s",
 )  # noqa: S105
 
-DEBUG = True
+# Default to False so forgetting to set DEBUG in production doesn't silently
+# disable security headers, expose stack traces, or use the insecure secret key.
+# Set DEBUG=True in your .env for local development.
+DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
 INSTALLED_APPS = [
     "daphne",
@@ -460,6 +463,18 @@ build/
 .env
 *.log
 .DS_Store
+"""
+
+ENV_EXAMPLE = """\
+# Copy to .env for local development:  cp .env.example .env
+#
+# DEBUG defaults to False for production safety.
+# Set True here for local dev (enables stack traces, debug toolbar, etc.)
+DEBUG=True
+SECRET_KEY=%(secret_key)s
+ALLOWED_HOSTS=localhost,127.0.0.1
+# DATABASE_URL=postgres://user:pass@localhost:5432/%(app_name)s
+# REDIS_URL=redis://localhost:6379/0
 """
 
 # ---------------------------------------------------------------------------
