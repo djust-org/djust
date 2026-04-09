@@ -38,34 +38,25 @@ if not settings.configured:
 class TestModelFKRendering:
     """Model instances with FK fields must render via dot notation in templates."""
 
-    def test_normalize_resolves_fk_descriptors(self):
-        """normalize_django_value resolves FK descriptors that __dict__ misses."""
+    def test_dict_extraction_loses_fk_fields(self):
+        """__dict__ extraction misses class-level descriptors — the root cause."""
 
-        # Create a minimal model-like object to test the principle
-        # (We can't easily create real Django model instances without migrations)
-        class FakeRelated:
-            first_name = "Rosa"
-            last_name = "Mendez"
+        # Django FK fields are class-level descriptors (ForwardManyToOneDescriptor).
+        # Rust's FromPyObject extracts __dict__ which only has instance attrs.
+        # This test verifies that __dict__ does NOT contain class-level attrs,
+        # demonstrating why normalize_django_value (which uses getattr) is needed.
+        class Parent:
+            class_attr = "I am a class attribute"
 
-            class _meta:
-                @staticmethod
-                def get_fields():
-                    return []
+            def __init__(self):
+                self.instance_attr = "I am an instance attribute"
 
-        class FakeModel:
-            pk = 1
-            id = 1
-            name = "Test"
-            _related = FakeRelated()
-
-            class _meta:
-                @staticmethod
-                def get_fields():
-                    return []
-
-        # __dict__ does NOT have 'related' — it's a descriptor
-        fake = FakeModel()
-        assert "_related" not in fake.__dict__ or True  # descriptors may or may not be in __dict__
+        obj = Parent()
+        assert "instance_attr" in obj.__dict__
+        assert "class_attr" not in obj.__dict__, (
+            "__dict__ must not contain class-level attributes — "
+            "this is why Rust's FromPyObject misses FK descriptors"
+        )
 
     def test_rust_renderer_with_nested_dict(self):
         """Rust renderer handles nested dicts from normalize_django_value."""

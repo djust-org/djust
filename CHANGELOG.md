@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Normalize Model instances in `render_full_template` before passing to Rust** — Django FK fields are class-level descriptors not present in `__dict__`. Rust's `FromPyObject` extracts `__dict__` which has `claimant_id=1` (raw FK int) instead of the related object. Now always calls `normalize_django_value()` on pre-serialized context so FK relationships are resolved via `getattr()` and traversable with dot notation (`{{ claim.claimant.first_name }}`). ([#639](https://github.com/djust-org/djust/pull/639))
+
 - **Render Django Form/BoundField to SafeString HTML in template context** — `{{ form.field_name }}` rendered as empty string because the Rust renderer extracted `Form.__dict__` which doesn't contain computed `BoundField` attributes. Now pre-renders Form and BoundField objects to SafeString HTML via `widget.render()` in all four code paths (serialization, template serialization, template rendering, and LiveView state sync). ([#631](https://github.com/djust-org/djust/pull/631), fixes [#621](https://github.com/djust-org/djust/issues/621))
 
 - **Correct `has_ids` attribute name in WebSocket mount response** — `websocket.py` checked for `"data-dj-id="` but the Rust renderer emits `"dj-id="` attributes. This caused `_stampDjIds()` to be skipped on pre-rendered pages, breaking VDOM patches for large content swaps (e.g. tab switching) while small patches still worked. The SSE path already had the correct check. ([#630](https://github.com/djust-org/djust/pull/630), fixes [#629](https://github.com/djust-org/djust/issues/629))
