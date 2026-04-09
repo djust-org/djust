@@ -297,6 +297,54 @@ describe('navigation', () => {
         });
     });
 
+    describe('dj-patch boolean on <a> tags (PR #640)', () => {
+        it('boolean dj-patch on <a> falls back to href', () => {
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: () => {} };
+            const { document, historyCalls } = createNavSourceEnv(
+                '<a id="tab-docs" href="?tab=documents" dj-patch>Documents</a>',
+                wsMock
+            );
+
+            document.defaultView.djust.navigation.bindDirectives();
+            document.getElementById('tab-docs').click();
+
+            expect(historyCalls.length).toBe(1);
+            const pushed = new URL(historyCalls[0].url);
+            expect(pushed.searchParams.get('tab')).toBe('documents');
+        });
+
+        it('boolean dj-patch on <a> uses href, not current URL', () => {
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: () => {} };
+            const { document, historyCalls } = createNavSourceEnv(
+                '<a id="tab-summary" href="?tab=summary" dj-patch>Summary</a>' +
+                '<a id="tab-docs" href="?tab=documents" dj-patch>Documents</a>',
+                wsMock
+            );
+
+            document.defaultView.djust.navigation.bindDirectives();
+            // Click "Documents" — should navigate to ?tab=documents, not stay on current URL
+            document.getElementById('tab-docs').click();
+
+            expect(historyCalls.length).toBe(1);
+            expect(new URL(historyCalls[0].url).searchParams.get('tab')).toBe('documents');
+        });
+
+        it('explicit dj-patch value still takes priority over href', () => {
+            const wsMock = { viewMounted: true, ws: { readyState: 1 }, sendMessage: () => {} };
+            const { document, historyCalls } = createNavSourceEnv(
+                '<a id="link" href="/ignore/" dj-patch="?filter=active">Active</a>',
+                wsMock
+            );
+
+            document.defaultView.djust.navigation.bindDirectives();
+            document.getElementById('link').click();
+
+            expect(historyCalls.length).toBe(1);
+            const pushed = new URL(historyCalls[0].url);
+            expect(pushed.searchParams.get('filter')).toBe('active');
+        });
+    });
+
     describe('_routeMap', () => {
         it('is initialized as an object', () => {
             const { window } = createEnv();
