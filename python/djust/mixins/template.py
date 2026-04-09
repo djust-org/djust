@@ -433,11 +433,20 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
             safe_keys = []
             if serialized_context is not None:
-                json_compatible_context = serialized_context
-                # Recursively detect SafeStrings in the pre-serialized context
+                # Always normalize — even "pre-serialized" context may contain
+                # Django Model instances whose FK descriptors are not in __dict__.
+                # Rust's FromPyObject extracts __dict__ which has claimant_id=1
+                # (the FK column int), not the related Claimant object.
+                # normalize_django_value resolves FK descriptors via getattr(),
+                # producing nested dicts that the Rust renderer can traverse
+                # with dot notation: {{ claim.claimant.first_name }}
+                from ..serialization import normalize_django_value
+
+                json_compatible_context = normalize_django_value(serialized_context)
+                # Recursively detect SafeStrings in the normalized context
                 from ..mixins.rust_bridge import _collect_safe_keys
 
-                for key, value in serialized_context.items():
+                for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
                 from ..components.base import Component, LiveComponent
