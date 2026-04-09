@@ -6964,7 +6964,15 @@ window.djust.getActiveStreams = getActiveStreams;
             if (el.tagName !== 'SELECT' && el.tagName !== 'INPUT') {
                 el.addEventListener('click', function (e) {
                     e.preventDefault();
-                    _executePatch(el, el.getAttribute('dj-patch'));
+                    // When dj-patch is used as a boolean attribute on <a> tags
+                    // (e.g. <a href="?tab=docs" dj-patch>), the attribute value
+                    // is "" and the navigation target is the href.  Fall back to
+                    // href so the link destination is respected.
+                    var patchValue = el.getAttribute('dj-patch');
+                    if (!patchValue && el.tagName === 'A') {
+                        patchValue = el.getAttribute('href') || '';
+                    }
+                    _executePatch(el, patchValue);
                 });
             }
         });
