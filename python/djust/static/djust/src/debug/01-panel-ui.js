@@ -1269,20 +1269,20 @@
                     padding: 1px;
                 }
 
-                .stat-item {
+                .djust-debug-panel .stat-item {
                     background: rgba(15, 23, 42, 0.8);
                     padding: 12px;
                     text-align: center;
                 }
 
-                .stat-label {
+                .djust-debug-panel .stat-label {
                     font-size: 11px;
                     color: #94a3b8;
                     margin-bottom: 4px;
                     font-weight: 500;
                 }
 
-                .stat-value {
+                .djust-debug-panel .stat-value {
                     font-size: 16px;
                     font-weight: 700;
                     color: #60a5fa;
@@ -1313,7 +1313,7 @@
                     overflow: hidden;
                 }
 
-                .summary-header {
+                .djust-debug-panel .summary-header {
                     display: flex;
                     align-items: center;
                     gap: 10px;
@@ -1322,17 +1322,17 @@
                     border-bottom: 1px solid rgba(139, 92, 246, 0.2);
                 }
 
-                .summary-icon {
+                .djust-debug-panel .summary-icon {
                     font-size: 18px;
                 }
 
-                .summary-title {
+                .djust-debug-panel .summary-title {
                     font-weight: 600;
                     font-size: 14px;
                     color: #c4b5fd;
                 }
 
-                .summary-count {
+                .djust-debug-panel .summary-count {
                     margin-left: auto;
                     padding: 2px 8px;
                     background: rgba(139, 92, 246, 0.2);
@@ -1342,18 +1342,18 @@
                     color: #a78bfa;
                 }
 
-                .summary-stats {
+                .djust-debug-panel .summary-stats {
                     display: grid;
                     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
                     gap: 12px;
                     padding: 12px 16px;
                 }
 
-                .summary-stat {
+                .djust-debug-panel .summary-stat {
                     text-align: center;
                 }
 
-                .stat-label {
+                .djust-debug-panel .stat-label {
                     font-size: 11px;
                     color: #94a3b8;
                     margin-bottom: 4px;
@@ -1361,7 +1361,7 @@
                     letter-spacing: 0.05em;
                 }
 
-                .stat-value {
+                .djust-debug-panel .stat-value {
                     font-size: 18px;
                     font-weight: 700;
                     color: #c4b5fd;
@@ -1411,7 +1411,7 @@
                     transform: rotate(90deg);
                 }
 
-                .variable-name {
+                .djust-debug-panel .variable-name {
                     font-weight: 600;
                     color: #c4b5fd;
                     font-family: 'SF Mono', Monaco, monospace;
