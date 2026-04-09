@@ -283,7 +283,6 @@ function handleServerResponse(data, eventName, triggerElement) {
                     root.querySelectorAll('textarea').forEach(el => {
                         el.value = el.textContent || '';
                     });
-                    syncInputValues(root);
                 }
             }
 
@@ -4581,29 +4580,6 @@ let _isBroadcastUpdate = false;
  *
  * Matching strategy: id → name → positional index within container.
  */
-
-/**
- * Sync input .value from value attribute for non-focused inputs.
- *
- * After innerHTML replacement or VDOM SetAttr/Replace patches,
- * setAttribute('value', x) updates the HTML attribute (defaultValue)
- * but NOT the .value DOM property on previously-rendered inputs.
- * Setting .value here ensures the displayed value matches the server.
- *
- * Skips focused inputs (user is actively typing), checkboxes, radios,
- * and file inputs (whose .value is read-only for security reasons).
- */
-function syncInputValues(container) {
-    container.querySelectorAll('input').forEach(el => {
-        if (el === document.activeElement) return;
-        if (el.type === 'checkbox' || el.type === 'radio' || el.type === 'file') return;
-        const attrVal = el.getAttribute('value');
-        if (attrVal !== null && el.value !== attrVal) {
-            el.value = attrVal;
-        }
-    });
-}
-
 function preserveFormValues(container, updateFn) {
     const active = document.activeElement;
     let saved = null;
@@ -4652,8 +4628,6 @@ function preserveFormValues(container, updateFn) {
     container.querySelectorAll('textarea').forEach(el => {
         el.value = el.textContent || '';
     });
-
-    syncInputValues(container);
 
     // Restore the focused element's value
     if (saved) {
@@ -4871,18 +4845,6 @@ function morphElement(existing, desired) {
     // (.value and .textContent diverge after initial render)
     if (existing.tagName === 'TEXTAREA' && !skipValue) {
         existing.value = existing.textContent || '';
-    }
-
-    // Sync input .value from value attribute after morphing.
-    // setAttribute('value', x) only sets the HTML attribute (defaultValue),
-    // not the .value DOM property on previously-rendered inputs.
-    if (existing.tagName === 'INPUT' && !skipValue &&
-        existing.type !== 'checkbox' && existing.type !== 'radio' &&
-        existing.type !== 'file' && existing !== document.activeElement) {
-        const attrVal = existing.getAttribute('value');
-        if (attrVal !== null && existing.value !== attrVal) {
-            existing.value = attrVal;
-        }
     }
 }
 
@@ -5125,7 +5087,6 @@ window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
 window.djust.createNodeFromVNode = createNodeFromVNode;
-window.djust.syncInputValues = syncInputValues;
 window.djust.preserveFormValues = preserveFormValues;
 window.djust.saveFocusState = saveFocusState;
 window.djust.restoreFocusState = restoreFocusState;
