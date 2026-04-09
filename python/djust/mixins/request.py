@@ -30,6 +30,18 @@ class RequestMixin:
         """Handle GET requests - initial page load"""
         t_start = time.perf_counter()
 
+        # Check login_required / permission_required (matches WebSocket path).
+        # Without this, views with login_required=True render their full HTML
+        # to unauthenticated users on the initial HTTP GET.
+        from ..auth import check_view_auth
+
+        redirect_url = check_view_auth(self, request)
+        if redirect_url:
+            from django.utils.http import urlencode
+
+            next_url = f"{redirect_url}?{urlencode({'next': request.get_full_path()})}"
+            return HttpResponseRedirect(next_url)
+
         # Initialize temporary assigns with default values before mount
         self._initialize_temporary_assigns()
 
@@ -42,6 +54,17 @@ class RequestMixin:
         t0 = time.perf_counter()
         self.mount(request, **kwargs)
         t_mount = (time.perf_counter() - t0) * 1000
+
+        # Call handle_params after mount (Phoenix parity).
+        # The WebSocket path does this in websocket.py:1261-1266, but the
+        # HTTP GET path was missing it. Without this, URL params like ?tab=X
+        # are only read after WebSocket connects, causing a content flash.
+        params = {
+            k: v[0] if isinstance(v, list) and len(v) == 1 else v for k, v in request.GET.lists()
+        }
+        uri = request.get_full_path()
+        if hasattr(self, "handle_params"):
+            self.handle_params(params, uri)
 
         # Automatically assign deterministic IDs to components based on variable names
         t0 = time.perf_counter()
