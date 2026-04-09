@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`WizardMixin` for multi-step LiveView form wizards** — General-purpose mixin managing step navigation, per-step validation, and data collection for guided form flows. Provides `next_step`, `prev_step`, `go_to_step`, `update_step_field`, `validate_field`, and `submit_wizard` event handlers. Template context includes step indicators, progress, form data/errors, and pre-rendered field HTML via `as_live_field()`. Re-validates all steps on submission to guard against tampered WebSocket replays. ([#632](https://github.com/djust-org/djust/pull/632))
 
+### Security
+
+- **Enforce `login_required` on HTTP GET path** — Views with `login_required = True` rendered full HTML to unauthenticated users on the initial HTTP GET. The WebSocket connection was correctly rejected, but the pre-rendered page content was already visible. Now calls `check_view_auth()` before `mount()` on HTTP GET and returns 302 to `LOGIN_URL`. Also calls `handle_params()` after `mount()` on HTTP GET to match the WebSocket path's behavior, preventing state flash on URL-param-dependent views. ([#636](https://github.com/djust-org/djust/pull/636), fixes [#633](https://github.com/djust-org/djust/issues/633), [#634](https://github.com/djust-org/djust/issues/634))
+
 ### Fixed
 
 - **Render Django Form/BoundField to SafeString HTML in template context** — `{{ form.field_name }}` rendered as empty string because the Rust renderer extracted `Form.__dict__` which doesn't contain computed `BoundField` attributes. Now pre-renders Form and BoundField objects to SafeString HTML via `widget.render()` in all four code paths (serialization, template serialization, template rendering, and LiveView state sync). ([#631](https://github.com/djust-org/djust/pull/631), fixes [#621](https://github.com/djust-org/djust/issues/621))
