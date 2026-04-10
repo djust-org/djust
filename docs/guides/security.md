@@ -356,6 +356,13 @@ and "decorator drift" at PR time instead of in a pentest six months later.
 See [Declarative Permissions Document](permissions-document.md) for the full
 setup guide.
 
+For the complete `djust_audit` command reference — all four modes, every
+CLI flag, CI integration snippets, and exit-code conventions — see the
+[`djust_audit` Command Guide](djust-audit.md). For the full list of every
+check ID the command can emit (A0xx static, P0xx permissions, L0xx runtime,
+plus the C0xx / S0xx / V0xx / T0xx / Q0xx codes from `manage.py check`),
+see the [Error Code Reference](error-codes.md).
+
 The audit reports every LiveView and LiveComponent with:
 
 - **Exposed state** — every public `self.xxx` attribute set in your methods, which `get_context_data()` will include in the template context. This is the data surface area of each view.

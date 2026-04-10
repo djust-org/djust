@@ -13,12 +13,27 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | S0xx | Security | `manage.py check --tag djust` (startup) |
 | T0xx | Templates | `manage.py check --tag djust` (startup) |
 | Q0xx | Code Quality | `manage.py check --tag djust` (startup) |
+| A0xx | Audit / Static Security Checks | `manage.py check --tag djust` (startup) |
+| P0xx | Permissions Document | `manage.py djust_audit --permissions permissions.yaml` |
+| L0xx | Live Runtime Probe | `manage.py djust_audit --live <url>` |
 | DJE-xxx | Runtime | During WebSocket events and VDOM diffing |
 
 Run all static checks at once:
 
 ```bash
 python manage.py check --tag djust
+```
+
+Run the runtime probe against a deployed environment:
+
+```bash
+python manage.py djust_audit --live https://staging.example.com --strict
+```
+
+Validate against a committed permissions document:
+
+```bash
+python manage.py djust_audit --permissions permissions.yaml --strict
 ```
 
 ---
@@ -691,6 +706,597 @@ if (globalThis.djustDebug) {
     console.log("Connected to", url);
 }
 ```
+
+---
+
+## Audit / Static Security Checks (A0xx)
+
+These checks were added as follow-ups to the 2026-04-10 NYC Claims penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
+
+### A001: WebSocket router missing AllowedHostsOriginValidator
+
+**Severity**: Error
+
+**What causes it**: The `"websocket"` entry in your `ProtocolTypeRouter` is not wrapped in `channels.security.websocket.AllowedHostsOriginValidator`. Any cross-origin page on the internet can open a WebSocket to your app, mount any LiveView, and dispatch events from a victim's browser (CSWSH — see [#653](https://github.com/djust-org/djust/issues/653)).
+
+**What you see**: No runtime symptom until a pentester or attacker finds it. An `A001` warning from `manage.py check` at startup.
+
+**Fix**:
+
+```python
+# asgi.py
+from channels.routing import ProtocolTypeRouter, URLRouter
+from djust.routing import DjustMiddlewareStack   # Wraps in AllowedHostsOriginValidator by default since 0.4.1
+
+application = ProtocolTypeRouter({
+    "http": get_asgi_application(),
+    "websocket": DjustMiddlewareStack(
+        URLRouter(websocket_urlpatterns)
+    ),
+})
+```
+
+Or wrap manually if you're using `channels.auth.AuthMiddlewareStack`:
+
+```python
+from channels.security.websocket import AllowedHostsOriginValidator
+
+"websocket": AllowedHostsOriginValidator(
+    AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
+),
+```
+
+**Prerequisite**: `settings.ALLOWED_HOSTS` must not contain `"*"`.
+
+---
+
+### A010: ALLOWED_HOSTS is only ["*"] in production
+
+**Severity**: Error
+
+**What causes it**: `settings.ALLOWED_HOSTS == ["*"]` with `DEBUG=False`. The wildcard disables Django's Host header defense entirely, and re-opens CSWSH because `AllowedHostsOriginValidator` reads the same setting.
+
+**Fix**: Set `ALLOWED_HOSTS` to the explicit hostnames your app serves:
+
+```python
+# settings.py
+ALLOWED_HOSTS = ["myapp.example.com", "api.example.com"]
+```
+
+---
+
+### A011: ALLOWED_HOSTS mixes "*" with explicit hosts
+
+**Severity**: Error
+
+**What causes it**: `settings.ALLOWED_HOSTS = ["myapp.example.com", "*"]`. Django accepts any Host header as soon as `"*"` is present — the explicit hostname is meaningless once the wildcard is in the list. Authors often mix them thinking they're "also allowing the explicit host for clarity."
+
+**Fix**: Remove `"*"` and keep only the explicit hostnames.
+
+---
+
+### A012: USE_X_FORWARDED_HOST=True + wildcard ALLOWED_HOSTS
+
+**Severity**: Error
+
+**What causes it**: `USE_X_FORWARDED_HOST=True` makes Django trust the `X-Forwarded-Host` header. Combined with wildcard `ALLOWED_HOSTS`, there is no validation of that header — attackers can inject any Host.
+
+**Fix**: Set `ALLOWED_HOSTS` to explicit hostnames, or set `USE_X_FORWARDED_HOST=False` if your reverse proxy is not configured to set it safely.
+
+---
+
+### A014: SECRET_KEY starts with "django-insecure-" in production
+
+**Severity**: Error
+
+**What causes it**: The Django scaffold default `SECRET_KEY` is a placeholder that starts with `"django-insecure-"`. It's meant to be replaced before deployment. An attacker who knows the value (anyone with access to the source repo) can forge session cookies and password-reset tokens.
+
+**Fix**: Generate a new key and load it from an environment variable:
+
+```python
+import os
+from django.core.management.utils import get_random_secret_key
+
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or get_random_secret_key()
+```
+
+Then set `DJANGO_SECRET_KEY` in your deployment environment.
+
+---
+
+### A020: LOGIN_REDIRECT_URL hardcoded with multi-group auth
+
+**Severity**: Warning
+
+**What causes it**: `LOGIN_REDIRECT_URL` is a single hardcoded path (e.g. `/dashboard/`) but the project uses a role-based auth model (detected via known packages like `rolepermissions`, `rules`, `guardian`, or via multiple entries in the `Group` table). All roles land on the same page after login — both a UX problem and a strong signal that per-role access control wasn't considered.
+
+**What you see**: A lower-privilege user logs in and lands on the same dashboard as a supervisor, immediately exposing any broken RBAC. This is how the NYC Claims pentest team found broken role isolation in minutes.
+
+**Fix**: Subclass `django.contrib.auth.views.LoginView` and override `get_success_url()`:
+
+```python
+from django.contrib.auth.views import LoginView
+from django.urls import reverse
+
+class RoleAwareLoginView(LoginView):
+    def get_success_url(self):
+        user = self.request.user
+        if user.groups.filter(name="Supervisor").exists():
+            return reverse("supervisor-dashboard")
+        if user.groups.filter(name="Examiner").exists():
+            return reverse("examiner-dashboard")
+        return reverse("claimant-dashboard")
+```
+
+---
+
+### A030: django.contrib.admin without brute-force protection
+
+**Severity**: Warning
+
+**What causes it**: `django.contrib.admin` is in `INSTALLED_APPS` but no known brute-force protection package is present. The stock Django admin has no built-in rate limiting or lockout.
+
+**Fix**: Install one of the recognized packages:
+
+```bash
+pip install django-axes
+```
+
+```python
+# settings.py
+INSTALLED_APPS = [
+    # ...
+    "django.contrib.admin",
+    "axes",
+]
+
+MIDDLEWARE = [
+    # ...
+    "axes.middleware.AxesMiddleware",
+]
+```
+
+Recognized packages: `axes`, `defender`, `brutebuster`, `ratelimit`, `django_ratelimit`, `django_axes`.
+
+---
+
+## Permissions Document Findings (P0xx)
+
+These codes come from `manage.py djust_audit --permissions permissions.yaml` and validate the actual code against a committed declarative permissions document. See [Declarative Permissions Document](permissions-document.md) for the full setup guide.
+
+### P001: View declared in permissions.yaml but not found in code
+
+**Severity**: Error
+
+**What causes it**: An entry in `permissions.yaml` points at a dotted view path that no longer exists in the codebase. Probably a stale declaration after a view was removed or renamed.
+
+**Fix**: Remove the stale entry from `permissions.yaml`, or restore the view if it was deleted by mistake.
+
+---
+
+### P002: View found in code but not declared in permissions.yaml
+
+**Severity**: Error (strict mode only)
+
+**What causes it**: A new LiveView was added to the codebase without a corresponding entry in `permissions.yaml`, and the document has `strict: true`.
+
+**Fix**: Add the view to `permissions.yaml` with its intended auth config:
+
+```yaml
+views:
+  myapp.views.NewView:
+    public: true  # or: login_required: true, permissions: [...]
+```
+
+---
+
+### P003: Document says public but code has auth
+
+**Severity**: Error
+
+**What causes it**: `permissions.yaml` declares `public: true` for a view but the code sets `login_required=True` or `permission_required=[...]`. Either the declaration is out of date or someone added auth to a previously public view without updating the document.
+
+**Fix**: Reconcile the two sources of truth — either remove the `public: true` and declare the actual auth config, or revert the code change if the view really should be public.
+
+---
+
+### P004: Document says auth required but code has none
+
+**Severity**: Error
+
+**What causes it**: `permissions.yaml` declares `login_required: true` or `permissions: [...]` but the code has neither `login_required=True` nor `permission_required`, and there is no custom `check_permissions()` override or dispatch-based auth mixin.
+
+**Fix**: Add the intended auth to the view class:
+
+```python
+class MyView(LiveView):
+    login_required = True
+    permission_required = ["myapp.view_something"]
+```
+
+---
+
+### P005: Permission list mismatch
+
+**Severity**: Error
+
+**What causes it**: `permissions.yaml` lists one set of permissions for a view, but the code's `permission_required` attribute has a different set. Order is not significant; the comparison is set-equality.
+
+**Fix**: Either update the document (if the code change was intentional) or revert the code (if the document is the source of truth).
+
+---
+
+### P006: object_scoping field not referenced
+
+**Severity**: Warning (currently informational)
+
+**What causes it**: `permissions.yaml` declares `object_scoping.fields: [...]` for a view but the best-effort AST check couldn't find references to those fields in `get_object()` or equivalent. This is reserved for a future AST-verified implementation; today it's documentation-only.
+
+**Fix**: Verify manually that your `get_object()` implementation scopes the query by the declared fields.
+
+---
+
+### P007: Roles declaration (informational)
+
+**Severity**: Info
+
+**What causes it**: `permissions.yaml` lists `roles: [...]` for a view. djust cannot verify Django group membership at static-analysis time, so this is treated as documentation only. The info-level finding is recorded so reviewers can see which roles are expected.
+
+**Fix**: Nothing to fix — the finding is informational. If you don't want to see these in output, filter by severity in CI.
+
+---
+
+## Live Runtime Probe Findings (L0xx)
+
+These codes come from `manage.py djust_audit --live <url>` and reflect actual runtime behavior of a deployed environment. They catch misconfigurations that static analysis cannot see — middleware correctly configured in `settings.py` but the response is stripped by nginx / ingress / proxy, or a firewall allows what settings appear to deny.
+
+### L001: Content-Security-Policy header missing
+
+**Severity**: Error
+
+**What causes it**: The live response has no `Content-Security-Policy` header. Common causes:
+1. `csp.middleware.CSPMiddleware` is not in `MIDDLEWARE` in the active settings module.
+2. An ingress / reverse proxy is stripping the header on the way out.
+3. A response middleware runs after `CSPMiddleware` and removes it.
+
+**Fix**: Verify the header appears in a dev `curl -sI http://localhost:8000/`. If it does, the reverse proxy is the culprit — check your nginx/ingress configuration for `proxy_hide_header` or CloudFront header stripping.
+
+---
+
+### L002: CSP contains 'unsafe-inline'
+
+**Severity**: Warning
+
+**What causes it**: `script-src` or `style-src` in the CSP header includes `'unsafe-inline'`, which negates most of CSP's XSS defense.
+
+**Fix**: Enable nonce-based CSP (see [#655](https://github.com/djust-org/djust/issues/655) for djust's nonce support) and drop `'unsafe-inline'`:
+
+```python
+# settings.py
+CSP_INCLUDE_NONCE_IN = ("script-src", "script-src-elem", "style-src", "style-src-elem")
+CSP_SCRIPT_SRC = ("'self'",)
+CSP_STYLE_SRC = ("'self'",)
+```
+
+---
+
+### L003: CSP contains 'unsafe-eval'
+
+**Severity**: Warning
+
+**What causes it**: `script-src` includes `'unsafe-eval'`, allowing dynamic code execution via `eval()`, `new Function()`, etc.
+
+**Fix**: Remove `'unsafe-eval'` from `CSP_SCRIPT_SRC`. If a third-party library requires it, isolate that library in an iframe with a separate CSP.
+
+---
+
+### L004: Strict-Transport-Security header missing
+
+**Severity**: Error (on HTTPS URLs only)
+
+**What causes it**: The HTTPS response has no `Strict-Transport-Security` header. HTTP URLs are exempt from this check.
+
+**Fix**:
+
+```python
+# settings.py
+SECURE_HSTS_SECONDS = 31_536_000  # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+```
+
+---
+
+### L005: HSTS max-age below 1 year
+
+**Severity**: Warning
+
+**What causes it**: `Strict-Transport-Security: max-age=...` is less than `31536000` (1 year). The HSTS preload list requires at least 1 year.
+
+**Fix**: Set `SECURE_HSTS_SECONDS = 31_536_000` (or higher) in `settings.py`.
+
+---
+
+### L006: HSTS missing 'includeSubDomains'
+
+**Severity**: Info
+
+**What causes it**: The HSTS header doesn't include `includeSubDomains`, so subdomains are not protected.
+
+**Fix**: `SECURE_HSTS_INCLUDE_SUBDOMAINS = True` in `settings.py`.
+
+---
+
+### L007: HSTS missing 'preload'
+
+**Severity**: Info
+
+**What causes it**: The HSTS header doesn't include `preload`, so the domain can't be added to the HSTS preload list.
+
+**Fix**: `SECURE_HSTS_PRELOAD = True` in `settings.py`, then submit to [hstspreload.org](https://hstspreload.org/).
+
+---
+
+### L008: X-Frame-Options header missing
+
+**Severity**: Error
+
+**What causes it**: No `X-Frame-Options` header. Your pages can be framed by any other site, enabling clickjacking.
+
+**Fix**:
+
+```python
+# settings.py
+X_FRAME_OPTIONS = "DENY"  # or "SAMEORIGIN"
+```
+
+Make sure `django.middleware.clickjacking.XFrameOptionsMiddleware` is in `MIDDLEWARE`.
+
+---
+
+### L009: X-Content-Type-Options missing or wrong value
+
+**Severity**: Error
+
+**What causes it**: The response has no `X-Content-Type-Options` header, or its value is not `nosniff`. Browsers may MIME-sniff content and render uploaded files as HTML.
+
+**Fix**: `SECURE_CONTENT_TYPE_NOSNIFF = True` in `settings.py` (this is Django's default in modern versions).
+
+---
+
+### L010: Referrer-Policy header missing
+
+**Severity**: Warning
+
+**What causes it**: No `Referrer-Policy` header. The default browser behavior may leak full URLs in the `Referer` header of outgoing requests.
+
+**Fix**: `SECURE_REFERRER_POLICY = "same-origin"` (or `"strict-origin-when-cross-origin"`).
+
+---
+
+### L011: Permissions-Policy header missing
+
+**Severity**: Warning
+
+**What causes it**: No `Permissions-Policy` header. Modern browsers allow the site to restrict access to powerful APIs (camera, microphone, geolocation, payment) — without this header, any same-origin script can request them.
+
+**Fix**: Add a middleware that emits:
+
+```
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+```
+
+---
+
+### L012: Cross-Origin-Opener-Policy missing
+
+**Severity**: Info
+
+**What causes it**: No `Cross-Origin-Opener-Policy` header. This isolates your window from cross-origin windows that open it (important for protecting against Spectre-class attacks).
+
+**Fix**: `SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"` in `settings.py`.
+
+---
+
+### L013: Cross-Origin-Resource-Policy missing
+
+**Severity**: Info
+
+**What causes it**: No `Cross-Origin-Resource-Policy` header on the response. Your resources may be embedded by arbitrary cross-origin pages.
+
+**Fix**: Set via a middleware or reverse proxy header: `Cross-Origin-Resource-Policy: same-site`.
+
+---
+
+### L014: Server header leaks version
+
+**Severity**: Warning
+
+**What causes it**: The `Server` response header contains something that looks like a version string (`nginx/1.25.3`, `Apache/2.4.58`, `Python/3.12`, `uvicorn/0.23`, etc.). Attackers can match the version to known CVEs.
+
+**Fix**: Configure your reverse proxy to suppress the version:
+
+```nginx
+# nginx
+server_tokens off;
+```
+
+---
+
+### L015: X-Powered-By header present
+
+**Severity**: Warning
+
+**What causes it**: The response includes `X-Powered-By`, typically revealing the framework/language. Useful information for attackers; not useful for anything else.
+
+**Fix**: Configure your reverse proxy to strip the header, or remove it at the application layer.
+
+---
+
+### L020: Session cookie missing HttpOnly
+
+**Severity**: Error
+
+**What causes it**: The `sessionid` (or equivalent) cookie doesn't have the `HttpOnly` attribute. JavaScript can read it via `document.cookie`, enabling session theft via XSS.
+
+**Fix**: `SESSION_COOKIE_HTTPONLY = True` (Django's default).
+
+---
+
+### L021: Session cookie missing Secure
+
+**Severity**: Error (on HTTPS URLs only)
+
+**What causes it**: On an HTTPS response, the session cookie doesn't have the `Secure` attribute. The cookie may be sent over plaintext HTTP if the user's connection is downgraded.
+
+**Fix**: `SESSION_COOKIE_SECURE = True` in `settings.py`.
+
+---
+
+### L022: Session cookie missing SameSite
+
+**Severity**: Warning
+
+**What causes it**: The session cookie has no `SameSite` attribute. Modern browsers default to `Lax` in most cases, but explicit declaration is safer.
+
+**Fix**: `SESSION_COOKIE_SAMESITE = "Lax"` (or `"Strict"`).
+
+---
+
+### L023: CSRF cookie missing HttpOnly
+
+**Severity**: Error
+
+**What causes it**: The `csrftoken` cookie doesn't have the `HttpOnly` attribute.
+
+**Fix**: `CSRF_COOKIE_HTTPONLY = True` in `settings.py`.
+
+---
+
+### L024: CSRF cookie missing Secure
+
+**Severity**: Error (on HTTPS URLs only)
+
+**What causes it**: The CSRF cookie doesn't have `Secure` on an HTTPS response.
+
+**Fix**: `CSRF_COOKIE_SECURE = True` in `settings.py`.
+
+---
+
+### L040: /.git/config publicly accessible
+
+**Severity**: Error
+
+**What causes it**: A `GET /.git/config` request returns 2xx. The entire git history of your repository is exposed, including potentially-leaked credentials in commits.
+
+**Fix**: Configure your reverse proxy to deny access to `/.git/`:
+
+```nginx
+# nginx
+location ~ /\.git { deny all; return 404; }
+```
+
+---
+
+### L041: /.env publicly accessible
+
+**Severity**: Error
+
+**What causes it**: A `GET /.env` request returns 2xx. Environment variable files typically contain secrets (database passwords, API keys).
+
+**Fix**: Never serve `.env` files from your web root. Store them outside the static root, and configure your reverse proxy to 404 the path.
+
+---
+
+### L042: Django debug toolbar exposed
+
+**Severity**: Error
+
+**What causes it**: A `GET /__debug__/` request returns 2xx in production. The Django Debug Toolbar is installed and accessible.
+
+**Fix**: Guard the debug toolbar with `DEBUG=True` and `INTERNAL_IPS`:
+
+```python
+# settings.py
+if DEBUG:
+    INSTALLED_APPS += ["debug_toolbar"]
+    MIDDLEWARE += ["debug_toolbar.middleware.DebugToolbarMiddleware"]
+    INTERNAL_IPS = ["127.0.0.1"]
+```
+
+---
+
+### L043: /robots.txt not present
+
+**Severity**: Info
+
+**What causes it**: `/robots.txt` returns 404. Not a security issue — an informational finding suggesting you add one to control crawler behavior explicitly.
+
+**Fix**: Serve a `robots.txt` at the web root if you want to set crawl rules.
+
+---
+
+### L044: /.well-known/security.txt not present (RFC 9116)
+
+**Severity**: Info
+
+**What causes it**: `/.well-known/security.txt` returns 404. RFC 9116 recommends publishing a security contact file for security researchers.
+
+**Fix**: Create `security.txt` at your web root:
+
+```
+Contact: security@example.com
+Expires: 2027-01-01T00:00:00Z
+Preferred-Languages: en
+```
+
+---
+
+### L060: WebSocket accepted cross-origin handshake (CSWSH)
+
+**Severity**: Error
+
+**What causes it**: The runtime probe opened a WebSocket handshake with `Origin: https://evil.example` and the server accepted it. This is the runtime confirmation of [#653](https://github.com/djust-org/djust/issues/653) — the static check A001 can see whether the middleware is configured, but only this runtime probe can confirm the handshake is actually rejected end-to-end.
+
+**Fix**: Wrap the WebSocket router in `AllowedHostsOriginValidator` (or use `DjustMiddlewareStack`, which does it by default since 0.4.1). See A001 above.
+
+---
+
+### L061: WebSocket probe skipped (--no-websocket-probe)
+
+**Severity**: Info
+
+**What causes it**: The probe was disabled via `--no-websocket-probe`. Recorded as info so the audit report shows which checks ran and which were skipped.
+
+---
+
+### L062: WebSocket probe skipped (websockets package not installed)
+
+**Severity**: Info
+
+**What causes it**: The `websockets` Python package is not installed, so the CSWSH probe can't run.
+
+**Fix**: `pip install websockets` if you want to enable this check. The rest of the runtime probe still runs without it.
+
+---
+
+### L090: Target URL unreachable
+
+**Severity**: Error
+
+**What causes it**: `urllib` couldn't connect to the target — DNS failure, connection refused, timeout, or similar network error.
+
+**Fix**: Verify the URL is correct, the server is running, and your network can reach it. Check for typos in the hostname or port.
+
+---
+
+### L091: Target URL returned non-2xx status
+
+**Severity**: Error
+
+**What causes it**: The target URL returned an HTTP 4xx/5xx status. The probe still inspects the response headers, but the finding is recorded so the report reflects that the main page wasn't loaded successfully.
+
+**Fix**: Investigate the application error. If the root URL requires auth, pass credentials with `--header 'Authorization: Basic ...'`.
 
 ---
 
