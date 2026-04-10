@@ -2377,9 +2377,29 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self.view_instance._force_full_html = False
                 patches = None
 
+            # Auto-detect heavy structural changes that cause VDOM drift (#641).
+            # When a url_change produces many RemoveChild/InsertChild patches
+            # (e.g. tab switching that replaces entire content areas), applying
+            # them via the patcher can leave the DOM in an inconsistent state
+            # with mismatched dj-id attributes, causing a client-side remount.
+            # Sending full HTML instead avoids this entirely.
             if patches is not None:
                 if isinstance(patches, str):
                     patches = json.loads(patches)
+                structural_ops = sum(
+                    1
+                    for p in patches
+                    if p.get("type") in ("RemoveChild", "InsertChild", "ReplaceChild")
+                )
+                if structural_ops > 5:
+                    logger.info(
+                        "handle_url_change: %d structural patches detected — "
+                        "switching to full HTML to avoid VDOM drift",
+                        structural_ops,
+                    )
+                    patches = None
+
+            if patches is not None:
                 await self._send_update(patches=patches, version=version, event_name="url_change")
             else:
                 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
