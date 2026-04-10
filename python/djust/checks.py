@@ -69,6 +69,41 @@ _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection
 _DJ_VIEW_RE = re.compile(r"dj-view")
 
 
+def _has_multiple_permission_groups(settings) -> bool:
+    """Return True if the project appears to use a role/group-based auth model.
+
+    Detects one of:
+      * ``django.contrib.auth.models.Group`` table has more than one row (runtime signal).
+      * A known role-management package is in ``INSTALLED_APPS``
+        (``rolepermissions``, ``rules``, ``django_guardian``, ``django_rules``).
+
+    Used by check ``djust.A020`` (#659) to decide whether a hardcoded
+    ``LOGIN_REDIRECT_URL`` deserves a warning about per-role redirects.
+
+    Returns False on any exception (DB not ready, etc.) — checks must never
+    raise from this helper.
+    """
+    installed = set(getattr(settings, "INSTALLED_APPS", []) or [])
+    ROLE_PACKAGES = {
+        "rolepermissions",
+        "rules",
+        "guardian",
+        "django_guardian",
+        "django_rules",
+    }
+    if installed & ROLE_PACKAGES:
+        return True
+
+    # Runtime signal — query the Group table if Django is ready. Guarded
+    # because checks run during startup and the DB may not be initialised.
+    try:
+        from django.contrib.auth.models import Group
+
+        return Group.objects.count() > 1
+    except Exception:
+        return False
+
+
 def _check_tailwind_cdn_in_production(errors):
     """Check for Tailwind CDN usage in production (performance issue)."""
     template_dirs = _get_template_dirs()
@@ -407,6 +442,7 @@ def check_configuration(app_configs, **kwargs):
     _check_manual_client_js(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
+    # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
     asgi_path = getattr(settings, "ASGI_APPLICATION", None)
     if asgi_path:
         try:
@@ -417,18 +453,21 @@ def check_configuration(app_configs, **kwargs):
             if app_map and "websocket" in app_map:
                 ws_app = app_map["websocket"]
                 # Walk the middleware chain looking for Auth/DjustMiddlewareStack
+                # AND for AllowedHostsOriginValidator (defence-in-depth to #653).
                 has_middleware = False
+                has_origin_validator = False
                 current = ws_app
                 for _ in range(10):  # bounded walk
                     cls_name = type(current).__name__
                     mod_name = type(current).__module__ or ""
+                    # #659 A001 — check for OriginValidator (any flavor)
+                    if "originvalidator" in cls_name.lower():
+                        has_origin_validator = True
                     if "auth" in cls_name.lower() or "auth" in mod_name.lower():
                         has_middleware = True
-                        break
                     if "session" in cls_name.lower() or "session" in mod_name.lower():
                         # DjustMiddlewareStack wraps SessionMiddlewareStack
                         has_middleware = True
-                        break
                     # Follow common wrapper patterns
                     inner = getattr(current, "inner", None) or getattr(current, "application", None)
                     if inner is None or inner is current:
@@ -453,8 +492,153 @@ def check_configuration(app_configs, **kwargs):
                             ),
                         )
                     )
+                if not has_origin_validator:
+                    errors.append(
+                        DjustError(
+                            "WebSocket routes are not wrapped in AllowedHostsOriginValidator; "
+                            "the app is vulnerable to Cross-Site WebSocket Hijacking (CSWSH).",
+                            hint=(
+                                "Any cross-origin page on the internet can open a WebSocket "
+                                "connection to your app, mount any LiveView, and dispatch events "
+                                "from a victim browser. Wrap the WebSocket router in "
+                                "channels.security.websocket.AllowedHostsOriginValidator "
+                                "(DjustMiddlewareStack does this by default since #653). "
+                                "Prerequisite: settings.ALLOWED_HOSTS must not contain '*'."
+                            ),
+                            id="djust.A001",
+                            fix_hint=(
+                                "Wrap your WebSocket router: "
+                                '"websocket": AllowedHostsOriginValidator(DjustMiddlewareStack(URLRouter(...))). '
+                                "Or update DjustMiddlewareStack — since djust 0.4.1 it wraps "
+                                "the origin validator by default."
+                            ),
+                        )
+                    )
         except Exception:
             pass  # Don't fail the check if ASGI app can't be introspected
+
+    # A010/A011/A012 -- ALLOWED_HOSTS wildcard footguns (#659)
+    allowed_hosts = list(getattr(settings, "ALLOWED_HOSTS", []) or [])
+    if not getattr(settings, "DEBUG", False):
+        if "*" in allowed_hosts and len(allowed_hosts) == 1:
+            errors.append(
+                DjustError(
+                    "ALLOWED_HOSTS contains only '*' in production.",
+                    hint=(
+                        "Wildcard ALLOWED_HOSTS disables Django's Host header defense "
+                        "entirely. Combined with AllowedHostsOriginValidator this also "
+                        "re-opens CSWSH (#653) because the validator reads ALLOWED_HOSTS. "
+                        "Set ALLOWED_HOSTS to explicit hostnames."
+                    ),
+                    id="djust.A010",
+                    fix_hint=(
+                        "In settings.py, set ALLOWED_HOSTS to the explicit hostnames your "
+                        "app serves (e.g. ['myapp.example.com', 'api.example.com'])."
+                    ),
+                )
+            )
+        elif "*" in allowed_hosts and len(allowed_hosts) > 1:
+            errors.append(
+                DjustError(
+                    "ALLOWED_HOSTS has '*' mixed with explicit hosts — the wildcard makes "
+                    "the other entries meaningless.",
+                    hint=(
+                        "Django accepts any Host header as soon as '*' is present, so "
+                        "listing 'myapp.example.com' alongside '*' is a common footgun — "
+                        "the explicit host is ignored. Remove '*' and keep only the "
+                        "explicit hostnames."
+                    ),
+                    id="djust.A011",
+                    fix_hint=(
+                        "In settings.py, remove '*' from ALLOWED_HOSTS and keep only the "
+                        "explicit hostnames."
+                    ),
+                )
+            )
+        if getattr(settings, "USE_X_FORWARDED_HOST", False) and "*" in allowed_hosts:
+            errors.append(
+                DjustError(
+                    "USE_X_FORWARDED_HOST=True combined with wildcard ALLOWED_HOSTS enables "
+                    "Host header injection.",
+                    hint=(
+                        "USE_X_FORWARDED_HOST makes Django trust the X-Forwarded-Host header, "
+                        "which attackers control. With wildcard ALLOWED_HOSTS there is no "
+                        "validation. Set ALLOWED_HOSTS to explicit hostnames."
+                    ),
+                    id="djust.A012",
+                )
+            )
+
+    # A014 -- SECRET_KEY still has the insecure scaffold prefix in production
+    secret_key = getattr(settings, "SECRET_KEY", "") or ""
+    if not getattr(settings, "DEBUG", False) and secret_key.startswith("django-insecure-"):
+        errors.append(
+            DjustError(
+                "SECRET_KEY starts with 'django-insecure-' in production.",
+                hint=(
+                    "The scaffold default SECRET_KEY is a placeholder meant to be replaced "
+                    "before deployment. An attacker who knows the value (anyone with access "
+                    "to the source repo) can forge session cookies and password-reset tokens."
+                ),
+                id="djust.A014",
+                fix_hint=(
+                    "Generate a new SECRET_KEY with "
+                    '`python -c "from django.core.management.utils import get_random_secret_key; '
+                    'print(get_random_secret_key())"` and load it from an environment variable.'
+                ),
+            )
+        )
+
+    # A020 -- LOGIN_REDIRECT_URL is a single hardcoded path but the project has roles
+    login_redirect = getattr(settings, "LOGIN_REDIRECT_URL", None)
+    if isinstance(login_redirect, str) and _has_multiple_permission_groups(settings):
+        errors.append(
+            DjustWarning(
+                "LOGIN_REDIRECT_URL is a single hardcoded path (%r) but the project has "
+                "multiple auth groups/permissions. All roles will be redirected to the "
+                "same page after login — both a UX problem and a strong signal that "
+                "per-role access control wasn't considered." % login_redirect,
+                hint=(
+                    "Use a custom LoginView.get_success_url() that picks a role-appropriate "
+                    "landing URL, OR handle routing in the view layer with a redirect based "
+                    "on request.user's group/permissions."
+                ),
+                id="djust.A020",
+                fix_hint=(
+                    "Subclass django.contrib.auth.views.LoginView and override get_success_url() "
+                    "to return a role-specific path based on request.user."
+                ),
+            )
+        )
+
+    # A030 -- django.contrib.admin without brute-force protection
+    if "django.contrib.admin" in installed:
+        brute_force_packages = {
+            "axes",
+            "defender",
+            "brutebuster",
+            "ratelimit",
+            "django_ratelimit",
+            "django_axes",
+        }
+        if not any(app in brute_force_packages for app in installed):
+            errors.append(
+                DjustWarning(
+                    "django.contrib.admin is installed but no brute-force protection package "
+                    "was detected in INSTALLED_APPS.",
+                    hint=(
+                        "The Django admin has no built-in rate limiting. Without a package "
+                        "like django-axes, /admin/ is vulnerable to credential brute-force. "
+                        "Install one of: django-axes, django-defender, django-brutebuster, "
+                        "django-ratelimit."
+                    ),
+                    id="djust.A030",
+                    fix_hint=(
+                        "Install django-axes: `pip install django-axes`, then add 'axes' to "
+                        "INSTALLED_APPS and 'axes.middleware.AxesMiddleware' to MIDDLEWARE."
+                    ),
+                )
+            )
 
     # S004 -- DEBUG=True with non-localhost ALLOWED_HOSTS
     if getattr(settings, "DEBUG", False):
