@@ -247,9 +247,19 @@ class DashboardView(LiveView):
 
 ~~**Reconnection backoff with jitter**~~ ✅ — Exponential backoff with random jitter (AWS full-jitter strategy). Min 500ms, max 30s, 10 attempts. Reconnection banner with attempt count, `data-dj-reconnect-attempt` attribute and `--dj-reconnect-attempt` CSS custom property on `<body>`.
 
-### Milestone: v0.4.1 — JS Commands & Interaction Polish
+### Milestone: v0.4.1 — Security Hardening, JS Commands & Interaction Polish
 
-**Goal**: Close the biggest DX gap vs Phoenix (JS Commands) and ship the remaining quick wins that didn't fit in v0.4.0's bug-fix focus.
+**Goal**: Close the biggest DX gap vs Phoenix (JS Commands), ship the remaining quick wins that didn't fit in v0.4.0's bug-fix focus, and fix three security findings from a 2026-04-10 penetration test (#653, #654, #655). **The security items are the most urgent — #653 in particular affects every djust deployment by default and should ship first.**
+
+#### Security hardening (from pentest findings 2026-04-10)
+
+**Reject cross-origin WebSocket connections by default (#653, CSWSH)** — ⚠️ **High priority.** `djust.websocket.LiveViewConsumer.connect()` calls `self.accept()` without validating the `Origin` header, and no djust helper (`DjustMiddlewareStack`, `live_session`, the scaffold `asgi.py` template) wraps the router in `channels.security.websocket.AllowedHostsOriginValidator`. Every djust application is vulnerable to Cross-Site WebSocket Hijacking by default — any page on the internet can mount a LiveView in a victim's browser, dispatch events, and read VDOM patches back. Demonstrated against a live deployment via `websockets.connect(TARGET, origin="https://evil.example")`. Three complementary fixes: (1) Add an Origin check to `LiveViewConsumer.connect()` that rejects with `close(code=4403)` when the Origin host is not in `settings.ALLOWED_HOSTS` (empty Origin is allowed to keep curl/test scripts working). (2) Update `DjustMiddlewareStack` in `djust/routing.py` to wrap in `AllowedHostsOriginValidator` by default, with an opt-out kwarg for apps that truly need cross-origin access. (3) Update the `ASGI_PY` template in `djust/scaffolding/templates.py` to include origin validation in generated `asgi.py` files. Release notes must call out the interaction with `ALLOWED_HOSTS = ["*"]` (the validator respects `*` as explicit opt-out). ~40 lines Python. *CWE-346, CWE-942, OWASP WSTG-INPV-11. This is the single highest-impact security fix in v0.4.1.*
+
+**Gate VDOM patch timing/performance metadata behind `DEBUG` (#654)** — Every `patch` response from `LiveViewConsumer` currently includes `timing` (handler/render/total ms) and `performance` (full nested timing tree with handler names, phase names, durations, and warnings) — unconditionally, regardless of `settings.DEBUG`. This leaks server-side code path structure to any client including unauthenticated cross-origin attackers (see #653). Enables timing-based code path differentiation (DB hit vs cache miss, valid vs invalid CSRF), internal structure disclosure, and load-based DoS timing. Fix: gate both emissions on `settings.DEBUG or getattr(settings, "DJUST_EXPOSE_TIMING", False)` in `djust/websocket.py` around lines 629-640 and line 719. Keep the existing behavior in debug mode so the browser debug panel still gets its data. Add a test asserting that `timing`/`performance` keys are absent from patch responses when `DEBUG=False`. ~15 lines Python + test. *Medium severity alone, but paired with #653 this becomes a real reconnaissance primitive.*
+
+**Nonce-based CSP support — drop `'unsafe-inline'` from `script-src` / `style-src` (#655)** — Low priority enhancement. djust apps currently must allow `'unsafe-inline'` in `CSP_SCRIPT_SRC` and `CSP_STYLE_SRC` because djust's client runtime bootstrap and `djust-theming`'s dynamic `<style>` injection don't carry CSP nonces. This negates most of CSP's XSS defense. Three changes: (1) `djust-theming` — inline `<style>` tags emitted for theme variables accept and render a nonce from `request.csp_nonce` when `django-csp` middleware is active. (2) djust client runtime — wherever the bootstrap `<script>` is emitted (likely a `{% djust_client %}` template tag or the theme head), apply the same nonce. (3) Scaffold `settings.py` defaults — once nonces are supported, update the generated CSP settings to use `CSP_INCLUDE_NONCE_IN = ("script-src", "script-src-elem", "style-src", "style-src-elem")` and drop `'unsafe-inline'`. Requires `django-csp>=4.0`. Document the upgrade path for existing apps in release notes. ~30 lines Python across djust + djust-theming + scaffold templates. *Hardening, not a live vulnerability — but closes the biggest remaining CSP gap for djust apps handling sensitive data.*
+
+#### Feature / polish work
 
 **JS Commands (`dj.push`, `dj.show`, `dj.hide`, `dj.toggle`, `dj.addClass`, `dj.removeClass`, `dj.transition`, `dj.dispatch`, `dj.focus`, `dj.set_attr`, `dj.remove_attr`)** — Moved from v0.4.0 to give the core bug fixes room to ship. This is still the single biggest DX gap vs Phoenix LiveView. See v0.4.0 section for full design notes. *Ship this as a fast follow — ideally within 2-3 weeks of v0.4.0.*
 
@@ -707,6 +717,9 @@ Open questions that inform future direction:
 | **Multi-step wizard** | — | **`react-hook-form`** | **Not started** | **v0.5.1** |
 | **Paste event handling** | — | **`onPaste`** | **Not started** | **v0.4.1** |
 | **Standalone `{% live_input %}` template tag** | — | — | **Not started (restart — see #652 design notes)** | **v0.4.1** |
+| **WebSocket Origin validation (CSWSH fix)** | `check_origin/2` | — | **Not started (#653, high)** | **v0.4.1** |
+| **Gate `timing`/`performance` on DEBUG** | — | — | **Not started (#654, medium)** | **v0.4.1** |
+| **Nonce-based CSP support** | — | React nonce | **Not started (#655, low)** | **v0.4.1** |
 | **Scroll into view** | — | **`scrollIntoView`** | **Not started** | **v0.4.0** |
 | **WS compression** | **Built-in (Cowboy)** | — | **Not started** | **v0.6.0** |
 | **Runtime layout switching** | **Runtime layouts (1.1)** | — | **Not started** | **v0.6.0** |
