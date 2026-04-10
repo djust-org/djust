@@ -247,9 +247,19 @@ class DashboardView(LiveView):
 
 ~~**Reconnection backoff with jitter**~~ ✅ — Exponential backoff with random jitter (AWS full-jitter strategy). Min 500ms, max 30s, 10 attempts. Reconnection banner with attempt count, `data-dj-reconnect-attempt` attribute and `--dj-reconnect-attempt` CSS custom property on `<body>`.
 
-### Milestone: v0.4.1 — JS Commands & Interaction Polish
+### Milestone: v0.4.1 — Security Hardening, JS Commands & Interaction Polish
 
-**Goal**: Close the biggest DX gap vs Phoenix (JS Commands) and ship the remaining quick wins that didn't fit in v0.4.0's bug-fix focus.
+**Goal**: Close the biggest DX gap vs Phoenix (JS Commands), ship the remaining quick wins that didn't fit in v0.4.0's bug-fix focus, and fix three security findings from a 2026-04-10 penetration test (#653, #654, #655). **The security items are the most urgent — #653 in particular affects every djust deployment by default and should ship first.**
+
+#### Security hardening (from pentest findings 2026-04-10)
+
+**Reject cross-origin WebSocket connections by default (#653, CSWSH)** — ⚠️ **High priority.** `djust.websocket.LiveViewConsumer.connect()` calls `self.accept()` without validating the `Origin` header, and no djust helper (`DjustMiddlewareStack`, `live_session`, the scaffold `asgi.py` template) wraps the router in `channels.security.websocket.AllowedHostsOriginValidator`. Every djust application is vulnerable to Cross-Site WebSocket Hijacking by default — any page on the internet can mount a LiveView in a victim's browser, dispatch events, and read VDOM patches back. Demonstrated against a live deployment via `websockets.connect(TARGET, origin="https://evil.example")`. Three complementary fixes: (1) Add an Origin check to `LiveViewConsumer.connect()` that rejects with `close(code=4403)` when the Origin host is not in `settings.ALLOWED_HOSTS` (empty Origin is allowed to keep curl/test scripts working). (2) Update `DjustMiddlewareStack` in `djust/routing.py` to wrap in `AllowedHostsOriginValidator` by default, with an opt-out kwarg for apps that truly need cross-origin access. (3) Update the `ASGI_PY` template in `djust/scaffolding/templates.py` to include origin validation in generated `asgi.py` files. Release notes must call out the interaction with `ALLOWED_HOSTS = ["*"]` (the validator respects `*` as explicit opt-out). ~40 lines Python. *CWE-346, CWE-942, OWASP WSTG-INPV-11. This is the single highest-impact security fix in v0.4.1.*
+
+**Gate VDOM patch timing/performance metadata behind `DEBUG` (#654)** — Every `patch` response from `LiveViewConsumer` currently includes `timing` (handler/render/total ms) and `performance` (full nested timing tree with handler names, phase names, durations, and warnings) — unconditionally, regardless of `settings.DEBUG`. This leaks server-side code path structure to any client including unauthenticated cross-origin attackers (see #653). Enables timing-based code path differentiation (DB hit vs cache miss, valid vs invalid CSRF), internal structure disclosure, and load-based DoS timing. Fix: gate both emissions on `settings.DEBUG or getattr(settings, "DJUST_EXPOSE_TIMING", False)` in `djust/websocket.py` around lines 629-640 and line 719. Keep the existing behavior in debug mode so the browser debug panel still gets its data. Add a test asserting that `timing`/`performance` keys are absent from patch responses when `DEBUG=False`. ~15 lines Python + test. *Medium severity alone, but paired with #653 this becomes a real reconnaissance primitive.*
+
+**Nonce-based CSP support — drop `'unsafe-inline'` from `script-src` / `style-src` (#655)** — Low priority enhancement. djust apps currently must allow `'unsafe-inline'` in `CSP_SCRIPT_SRC` and `CSP_STYLE_SRC` because djust's client runtime bootstrap and `djust-theming`'s dynamic `<style>` injection don't carry CSP nonces. This negates most of CSP's XSS defense. Three changes: (1) `djust-theming` — inline `<style>` tags emitted for theme variables accept and render a nonce from `request.csp_nonce` when `django-csp` middleware is active. (2) djust client runtime — wherever the bootstrap `<script>` is emitted (likely a `{% djust_client %}` template tag or the theme head), apply the same nonce. (3) Scaffold `settings.py` defaults — once nonces are supported, update the generated CSP settings to use `CSP_INCLUDE_NONCE_IN = ("script-src", "script-src-elem", "style-src", "style-src-elem")` and drop `'unsafe-inline'`. Requires `django-csp>=4.0`. Document the upgrade path for existing apps in release notes. ~30 lines Python across djust + djust-theming + scaffold templates. *Hardening, not a live vulnerability — but closes the biggest remaining CSP gap for djust apps handling sensitive data.*
+
+#### Feature / polish work
 
 **JS Commands (`dj.push`, `dj.show`, `dj.hide`, `dj.toggle`, `dj.addClass`, `dj.removeClass`, `dj.transition`, `dj.dispatch`, `dj.focus`, `dj.set_attr`, `dj.remove_attr`)** — Moved from v0.4.0 to give the core bug fixes room to ship. This is still the single biggest DX gap vs Phoenix LiveView. See v0.4.0 section for full design notes. *Ship this as a fast follow — ideally within 2-3 weeks of v0.4.0.*
 
@@ -260,6 +270,34 @@ class DashboardView(LiveView):
 **`page_loading` option on `dj.push` (Phoenix 1.0 parity)** — Phoenix 1.0 recommends `JS.push("event", page_loading: true)` to trigger the page loading indicator during event processing. This bridges the gap between navigation-level loading bars (`dj-page-loading`) and per-event scoped loading — when an event triggers a heavy operation that affects the whole page, show the top loading bar. API: `dj.push('generate_report', {page_loading: true})` triggers `dj-page-loading` elements during the event round-trip. ~15 lines JS.
 
 **`dj-paste` — Paste event handling** — Fire a server event when the user pastes content (text, images, files) into an element. `<textarea dj-paste="handle_paste">`. The client extracts paste payload: plain text via `clipboardData.getData('text/plain')`, images via `clipboardData.files` (auto-routed to `UploadMixin` if an upload slot is configured), and rich HTML via `getData('text/html')`. Sends structured params: `{"text": "...", "html": "...", "has_files": true}`. Use cases: paste images into chat (Slack/Discord-style), paste formatted text into rich editors, paste CSV data into tables, paste code snippets with language detection. Currently requires a `dj-hook` for every paste target. ~40 lines JS. *Every chat app and content editor needs paste handling. Combined with `UploadMixin` for image paste, this is the complete clipboard-to-server pipeline.*
+
+**Standalone `{% live_input %}` template tag for non-form state** — `FormMixin.as_live_field()` and `WizardMixin.as_live_field()` render form fields with proper CSS classes and `dj-input`/`dj-change` bindings for views backed by a Django `Form` class. But non-form views — modals, inline panels, settings pages, search boxes, filter bars, toggles, anywhere state lives directly on view attributes — have no equivalent ergonomic helper. Developers write raw `<input class="form-input" dj-input="set_x" value="{{ x }}">` by hand, forget the class, or use inconsistent event bindings. This is the 80% of UI state that doesn't need a full `forms.Form`.
+
+*PR #652 explored an initial implementation by overloading the existing `{% live_field %}` tag with a field-type string as its first argument, dispatching to a standalone path when the first arg is a known type. On review we decided that design has several problems worth fixing before shipping, so that PR is closed and the work will restart cleanly for v0.4.1.*
+
+**Design notes for the clean-slate implementation** (captured from the PR #652 review so we don't re-discover them):
+
+1. **New tag, not an overload.** Use a dedicated `{% live_input %}` (or `{% live_state %}`) tag instead of overloading `{% live_field %}`. The existing `{% live_field %}` stays as the Form-based path that expects `(view, field_name)`. A new tag name makes the call site visually unambiguous at the template and decouples the supported field-type set from argument-dispatch logic — adding a new type is a dict entry, not a change to parsing heuristics.
+
+2. **Explicit event override.** Accept an `event=` kwarg so the caller can opt into `dj-input` (per-keystroke), `dj-change` (blur/selection), or `dj-blur`. Default sensibly per type (`text/textarea` → `dj-input`, `select` → `dj-change`), but never force the caller to bail out of the tag just because they want debounced text or a validate-on-blur select. Pairs naturally with `debounce=`/`throttle=` kwargs that forward to `dj-debounce`/`dj-throttle` attributes already supported in 0.4.0.
+
+3. **Single source of HTML building.** Don't reimplement the escape-by-hand attribute builder. `frameworks.py` has `_build_tag(tag, attrs, content)` which centralises attribute escaping via `django.utils.html.escape`. Either import it directly or promote it to a shared `djust._html` module. Two escape paths is how XSS regressions happen.
+
+4. **Field-type registry, not a hardcoded set.** Define field types as a dict of `{name: render_fn}` so adding a new type (`checkbox`, `number`, `date`, `datetime-local`, `hidden`, `radio`, `range`, `color`) is a one-line registration. Each render function takes `(handler, value, css_class, **kwargs)` and returns an HTML string. First-class types at launch: `text`, `textarea`, `select`, `password`, `email`, `number`, `url`, `tel`, `checkbox`, `radio`, `hidden`. Use cases mapped to types documented in the guide.
+
+5. **Emit `name` attribute by default.** Derive from the handler name or accept an explicit `name=` kwarg. Without a `name`, no-JS form submission doesn't work as a fallback, which is a hidden degradation for users on slow connections / JS failures.
+
+6. **CSS class resolution.** Use `config.get_framework_class("field_class")` (already used by the Form-based path) so Bootstrap/Tailwind/Plain configs are honoured. Fall back to `"form-input"` only if config lookup fails. Narrow the exception catch in the fallback — `except (ImportError, AttributeError)` not bare `Exception`.
+
+7. **XSS test matrix.** Every field type needs a test that injects `<script>alert(1)</script>` into (a) the value, (b) custom kwargs (placeholder, aria-label, title), and (c) choice labels for `select`/`radio`. This is cheap and catches 99% of future regressions.
+
+8. **User-facing documentation.** `docs/website/guides/forms.md` (or a new `guides/state-bound-fields.md`) with a full example showing: a modal with a `{% live_input %}` subject + body + type-select, the corresponding event handlers (`set_subject`, `set_body`, `set_type`), and when to reach for `{% live_input %}` vs `FormMixin` vs `WizardMixin`.
+
+9. **Integration with `dj-debounce`/`dj-throttle` shipped in 0.4.0.** `{% live_input "text" handler="search" debounce="300" %}` should just work by passing `dj-debounce="300"` through.
+
+10. **Conservative decision on `data-field_name`.** The Form-based path emits `data-field_name="..."` so a single validate handler can serve many fields. The standalone path has one handler per field, so `data-field_name` is not strictly needed — but worth documenting the omission so users migrating from `FormMixin` know what changes.
+
+*Ships the ergonomic primitive developers actually want for the 80% of UI state that doesn't need a Django Form — toggles, search inputs, inline editors, modal fields.*
 
 **Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, `dj-scroll-into-view`, `dj-copy`, `dj-auto-recover`, `dj-debounce`/`dj-throttle`, and `live_title`/document metadata shipped in v0.4.0.)
 
@@ -678,6 +716,10 @@ Open questions that inform future direction:
 | **Virtual/windowed lists** | — | **`react-window`** | **Not started** | **v0.5.0** |
 | **Multi-step wizard** | — | **`react-hook-form`** | **Not started** | **v0.5.1** |
 | **Paste event handling** | — | **`onPaste`** | **Not started** | **v0.4.1** |
+| **Standalone `{% live_input %}` template tag** | — | — | **Not started (restart — see #652 design notes)** | **v0.4.1** |
+| **WebSocket Origin validation (CSWSH fix)** | `check_origin/2` | — | **Not started (#653, high)** | **v0.4.1** |
+| **Gate `timing`/`performance` on DEBUG** | — | — | **Not started (#654, medium)** | **v0.4.1** |
+| **Nonce-based CSP support** | — | React nonce | **Not started (#655, low)** | **v0.4.1** |
 | **Scroll into view** | — | **`scrollIntoView`** | **Not started** | **v0.4.0** |
 | **WS compression** | **Built-in (Cowboy)** | — | **Not started** | **v0.6.0** |
 | **Runtime layout switching** | **Runtime layouts (1.1)** | — | **Not started** | **v0.6.0** |
