@@ -172,11 +172,22 @@ def live_session(
     return result
 
 
-def get_route_map_script() -> str:
+def get_route_map_script(request: Any = None) -> str:
     """
-    Return a <script> tag that populates window.djust._routeMap.
+    Return a ``<script>`` tag that populates ``window.djust._routeMap``.
 
-    Include this in your base template (or use the {% djust_route_map %} tag).
+    Include this in your base template (or use the ``{% djust_route_map %}``
+    tag, which passes the current request automatically).
+
+    Args:
+        request: An optional Django ``HttpRequest``. When set and
+            ``request.csp_nonce`` is available (django-csp with
+            ``CSP_INCLUDE_NONCE_IN``), the emitted ``<script>`` carries a
+            ``nonce`` attribute so apps can drop ``'unsafe-inline'`` from
+            their CSP ``script-src`` (see #655). When no nonce is
+            available, the script is emitted without a nonce attribute —
+            backward compatible with apps still allowing
+            ``'unsafe-inline'``.
     """
     import json
 
@@ -190,6 +201,16 @@ def get_route_map_script() -> str:
         return ""
 
     route_json = json.dumps(all_routes)
+    # CSP nonce support (#655)
+    from .utils import get_csp_nonce
+
+    nonce = get_csp_nonce(request)
+    if nonce:
+        return format_html(
+            '<script nonce="{}">window.djust=window.djust||{{}};window.djust._routeMap={};</script>',
+            nonce,
+            mark_safe(route_json),  # json.dumps escapes <, >, quotes; data is developer-defined
+        )
     return format_html(
         "<script>window.djust=window.djust||{{}};window.djust._routeMap={};</script>",
         mark_safe(route_json),  # json.dumps escapes <, >, quotes; data is developer-defined

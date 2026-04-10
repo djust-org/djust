@@ -273,6 +273,63 @@ self.push_event("debug", {"contact": model_to_dict(self.contact)})
 - **Don't skip authorization in `mount()`** — LiveView prevents data *serialization* leaks, not *access control* bugs
 - **Don't enable `event_security = "open"`** in production — it allows calling any public method via WebSocket
 
+## Content Security Policy (CSP) with nonces
+
+djust emits a small number of inline `<script>` and `<style>` tags during
+render — the handler metadata bootstrap, the `live_session` route map, and
+the PWA template tags (`djust_sw_register`, `djust_offline_indicator`,
+`djust_offline_styles`). Until #655 these required `'unsafe-inline'` in
+`CSP_SCRIPT_SRC` and `CSP_STYLE_SRC`, which negates most of CSP's XSS
+defense. As of v0.4.1 every djust-emitted inline tag picks up
+`request.csp_nonce` when one is available and renders a `nonce="..."`
+attribute, so apps can switch to strict nonce-based CSP.
+
+### Setup
+
+1. Install [django-csp](https://django-csp.readthedocs.io/) 4.0 or later:
+   ```bash
+   pip install 'django-csp>=4.0'
+   ```
+
+2. Add `csp.middleware.CSPMiddleware` to `MIDDLEWARE` in `settings.py`.
+
+3. Configure `CSP_INCLUDE_NONCE_IN` to cover the directives djust uses for
+   inline content:
+   ```python
+   # settings.py
+   CSP_INCLUDE_NONCE_IN = (
+       "script-src",
+       "script-src-elem",
+       "style-src",
+       "style-src-elem",
+   )
+
+   # Drop 'unsafe-inline' — nonces cover what djust emits:
+   CSP_SCRIPT_SRC = ("'self'",)
+   CSP_SCRIPT_SRC_ELEM = ("'self'",)
+   CSP_STYLE_SRC = ("'self'",)
+   CSP_STYLE_SRC_ELEM = ("'self'",)
+   ```
+
+4. Make sure you're rendering templates with a `RequestContext` (Django's
+   default via `render()` / `TemplateResponse` — no changes needed unless
+   you construct a bare `Context` manually). The djust PWA template tags
+   and the handler metadata injector both read `request.csp_nonce` from
+   the active request, which django-csp populates automatically.
+
+### Caveats
+
+- **VDOM patches** (the incremental updates sent over the WebSocket after
+  initial page load) do not currently carry nonces. If your app injects
+  fresh `<script>` or `<style>` blocks via VDOM patches — uncommon, since
+  most dynamic content is attribute and text updates — those will still
+  need `'unsafe-inline'`. This is tracked as a follow-up to #655.
+- **Third-party JS that djust doesn't emit** (Google Analytics, Stripe,
+  etc.) is outside djust's scope. Add their domains or hashes to your
+  CSP directly.
+- **User-generated inline content** (e.g. rich-text editors that allow
+  `style=` attributes) is application responsibility, not framework.
+
 ## Auditing Your Application
 
 Use `djust_audit` to review what your application exposes:

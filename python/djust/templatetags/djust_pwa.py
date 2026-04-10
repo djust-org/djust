@@ -23,7 +23,21 @@ from django.conf import settings
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 
+from ..utils import get_csp_nonce
+
 register = template.Library()
+
+
+def _nonce_attr(context) -> str:
+    """Return ``' nonce="..."'`` if the context's request has a CSP nonce, else ``''``.
+
+    Used by the PWA inline-script/style tags so apps can drop ``'unsafe-inline'``
+    from their CSP when django-csp is configured with ``CSP_INCLUDE_NONCE_IN``
+    (see #655).
+    """
+    request = context.get("request") if context else None
+    nonce = get_csp_nonce(request)
+    return f' nonce="{nonce}"' if nonce else ""
 
 
 @register.simple_tag
@@ -110,12 +124,14 @@ def djust_pwa_manifest(
     return format_html("{}\n{}", theme_meta, manifest_link)
 
 
-@register.simple_tag
-def djust_sw_register(sw_url=None, scope="/"):
+@register.simple_tag(takes_context=True)
+def djust_sw_register(context, sw_url=None, scope="/"):
     """
     Generate JavaScript to register the service worker.
 
     Args:
+        context: Template context (used to read ``request.csp_nonce`` for
+            nonce-based CSP — see #655). Injected automatically by Django.
         sw_url: URL to the service worker (default: "/sw.js" or STATIC_URL/sw.js)
         scope: Service worker scope (default: "/")
 
@@ -135,7 +151,9 @@ def djust_sw_register(sw_url=None, scope="/"):
     safe_sw_url = json.dumps(sw_url)
     safe_scope = json.dumps(scope)
 
-    script = """<script>
+    nonce_attr = _nonce_attr(context)  # #655
+
+    script = """<script%s>
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
         navigator.serviceWorker.register(%s, { scope: %s })
@@ -165,12 +183,13 @@ if ('serviceWorker' in navigator) {
             });
     });
 }
-</script>""" % (safe_sw_url, safe_scope)
+</script>""" % (nonce_attr, safe_sw_url, safe_scope)
     return mark_safe(script)
 
 
-@register.simple_tag
+@register.simple_tag(takes_context=True)
 def djust_offline_indicator(
+    context,
     online_text="Online",
     offline_text="Offline",
     online_class="djust-status-online",
@@ -227,8 +246,15 @@ def djust_offline_indicator(
         display_text,
     )
 
-    indicator_css = """<style>
-.djust-offline-indicator {
+    # #655: nonce the inline <style> so apps can drop 'unsafe-inline' from CSP.
+    nonce_attr = _nonce_attr(context)
+    indicator_css = (
+        (
+            """<style%s>
+.djust-offline-indicator {"""
+            % nonce_attr
+        )
+        + """
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -259,12 +285,13 @@ def djust_offline_indicator(
     background-color: #ef4444;
 }
 </style>"""
+    )
 
     return mark_safe(indicator_html + "\n" + indicator_css)
 
 
-@register.simple_tag
-def djust_offline_styles():
+@register.simple_tag(takes_context=True)
+def djust_offline_styles(context):
     """
     Include CSS styles for offline-related directives.
 
@@ -272,14 +299,25 @@ def djust_offline_styles():
     - .djust-online / .djust-offline body classes
     - dj-offline-show / dj-offline-hide / dj-offline-disable directives
 
+    The emitted ``<style>`` carries ``request.csp_nonce`` when available
+    (django-csp with ``CSP_INCLUDE_NONCE_IN``) so apps can drop
+    ``'unsafe-inline'`` from their CSP ``style-src`` (see #655).
+
     Example:
         {% load djust_pwa %}
         <head>
             {% djust_offline_styles %}
         </head>
     """
-    styles = """<style>
-/* Offline/Online body classes */
+    # #655: nonce the inline <style> so apps can drop 'unsafe-inline' from CSP.
+    nonce_attr = _nonce_attr(context)
+    styles = (
+        (
+            """<style%s>
+/* Offline/Online body classes */"""
+            % nonce_attr
+        )
+        + """
 body.djust-offline [dj-offline-hide],
 body:not(.djust-online) [dj-offline-hide] {
     display: none !important;
@@ -343,6 +381,7 @@ body.djust-offline .djust-queued-indicator.has-queued {
     justify-content: center;
 }
 </style>"""
+    )
     return mark_safe(styles)
 
 
