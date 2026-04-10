@@ -375,18 +375,88 @@ class Command(BaseCommand):
             action="store_true",
             help="Include template variable sub-paths for exposed state (requires Rust extension)",
         )
+        parser.add_argument(
+            "--permissions",
+            type=str,
+            dest="permissions_path",
+            help=(
+                "Path to a YAML permissions document (e.g. permissions.yaml). "
+                "Validates every LiveView's auth config against the document "
+                "and reports deviations (#657)."
+            ),
+        )
+        parser.add_argument(
+            "--strict",
+            action="store_true",
+            help=(
+                "Exit non-zero on any --permissions finding (including "
+                "undeclared views). Intended for CI."
+            ),
+        )
+        parser.add_argument(
+            "--dump-permissions",
+            action="store_true",
+            dest="dump_permissions",
+            help=(
+                "Print a starter permissions.yaml seeded from the discovered "
+                "views and exit. Review each entry before committing."
+            ),
+        )
 
     def handle(self, *args, **options):
         json_output = options.get("json_output", False)
         app_label = options.get("app_label")
         verbose = options.get("verbose", False)
+        permissions_path = options.get("permissions_path")
+        strict = options.get("strict", False)
+        dump_permissions = options.get("dump_permissions", False)
 
         audits = self._collect_audits(app_label, verbose)
 
+        # --dump-permissions: print a starter YAML and exit
+        if dump_permissions:
+            from djust.permissions import (
+                PermissionsDocumentError,
+                dump_starter_document,
+            )
+
+            try:
+                self.stdout.write(dump_starter_document(audits))
+            except PermissionsDocumentError as exc:
+                self.stderr.write(self.style.ERROR(str(exc)))
+                raise SystemExit(1) from exc
+            return
+
+        # --permissions: validate against a committed permissions document
+        findings = []
+        if permissions_path:
+            findings = self._run_permissions_check(audits, permissions_path)
+
         if json_output:
-            self._output_json(audits)
+            self._output_json(audits, findings=findings)
         else:
-            self._output_pretty(audits)
+            self._output_pretty(audits, findings=findings)
+
+        # --strict: fail CI on any finding
+        if strict and findings:
+            # ERROR / WARN findings fail; INFO alone does not.
+            has_failures = any(f.severity in ("error", "warning") for f in findings)
+            if has_failures:
+                raise SystemExit(1)
+
+    def _run_permissions_check(self, audits, path):
+        """Load a permissions document and compare it against the audits."""
+        from djust.permissions import PermissionsDocument, PermissionsDocumentError
+
+        try:
+            doc = PermissionsDocument.load(path)
+        except (FileNotFoundError, PermissionsDocumentError) as exc:
+            self.stderr.write(self.style.ERROR(f"permissions document error: {exc}"))
+            raise SystemExit(2) from exc
+
+        # Build {dotted_name: auth_info} map from the audits
+        actual = {a["class"]: (a.get("auth") or {}) for a in audits}
+        return doc.compare_all(actual)
 
     def _collect_audits(self, app_label, verbose):
         """Discover and audit all LiveView and LiveComponent subclasses."""
@@ -422,7 +492,7 @@ class Command(BaseCommand):
 
         return audits
 
-    def _output_json(self, audits):
+    def _output_json(self, audits, findings=None):
         """Output audit results as JSON."""
         view_count = sum(1 for a in audits if a["type"] == "LiveView")
         component_count = sum(1 for a in audits if a["type"] == "LiveComponent")
@@ -439,9 +509,17 @@ class Command(BaseCommand):
                 "unprotected_with_state": unprotected,
             },
         }
+        if findings:
+            output["permissions_findings"] = [f.to_dict() for f in findings]
+            output["summary"]["permissions_errors"] = sum(
+                1 for f in findings if f.severity == "error"
+            )
+            output["summary"]["permissions_warnings"] = sum(
+                1 for f in findings if f.severity == "warning"
+            )
         self.stdout.write(json.dumps(output, indent=2))
 
-    def _output_pretty(self, audits):
+    def _output_pretty(self, audits, findings=None):
         """Output audit results with formatted terminal display."""
         if not audits:
             self.stdout.write(self.style.SUCCESS("No LiveViews or LiveComponents found."))
@@ -587,6 +665,33 @@ class Command(BaseCommand):
                             self.stdout.write("        %s" % desc)
                 else:
                     self.stdout.write("    Handlers:   (none)")
+
+        # Permissions findings (#657)
+        if findings:
+            self.stdout.write("")
+            self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+            self.stdout.write(self.style.MIGRATE_HEADING("  Permissions document findings"))
+            self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+            errors = [f for f in findings if f.severity == "error"]
+            warnings = [f for f in findings if f.severity == "warning"]
+            infos = [f for f in findings if f.severity == "info"]
+            for f in errors:
+                self.stdout.write(self.style.ERROR(f.format_line()))
+            for f in warnings:
+                self.stdout.write(self.style.WARNING(f.format_line()))
+            for f in infos:
+                self.stdout.write(f.format_line())
+            self.stdout.write("")
+            self.stdout.write(
+                "  %d error%s, %d warning%s, %d info"
+                % (
+                    len(errors),
+                    "s" if len(errors) != 1 else "",
+                    len(warnings),
+                    "s" if len(warnings) != 1 else "",
+                    len(infos),
+                )
+            )
 
         # Summary
         self.stdout.write("")

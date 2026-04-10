@@ -343,7 +343,18 @@ python manage.py djust_audit --json
 
 # Include template variable sub-paths (e.g. contacts → id, name, email)
 python manage.py djust_audit --verbose
+
+# Validate against a committed permissions.yaml (declarative RBAC, #657)
+python manage.py djust_audit --permissions permissions.yaml --strict
 ```
+
+For production apps with role-based access control, also commit a
+`permissions.yaml` at your project root that declares the expected auth
+configuration for every LiveView, and run `djust_audit --permissions` in CI.
+The document is an auditable artifact that catches "forgot the decorator"
+and "decorator drift" at PR time instead of in a pentest six months later.
+See [Declarative Permissions Document](permissions-document.md) for the full
+setup guide.
 
 The audit reports every LiveView and LiveComponent with:
 
