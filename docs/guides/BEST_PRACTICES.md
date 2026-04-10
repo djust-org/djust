@@ -1015,18 +1015,28 @@ application = get_asgi_application()  # Only handles HTTP!
 import os
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
-from djust.routing import websocket_urlpatterns
+from djust.routing import DjustMiddlewareStack
+from myproject.routing import websocket_urlpatterns
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": AllowedHostsOriginValidator(
+    # DjustMiddlewareStack wraps in channels.security.websocket.AllowedHostsOriginValidator
+    # by default (CSWSH defense, #653). Make sure settings.ALLOWED_HOSTS does NOT contain
+    # '*' in production. If you use channels.auth, substitute AuthMiddlewareStack wrapped
+    # in AllowedHostsOriginValidator(...).
+    "websocket": DjustMiddlewareStack(
         URLRouter(websocket_urlpatterns)
     ),
 })
 ```
+
+**Security note:** As of #653, `DjustMiddlewareStack` wraps its inner application in
+`channels.security.websocket.AllowedHostsOriginValidator` by default, preventing
+Cross-Site WebSocket Hijacking (CSWSH). `LiveViewConsumer.connect()` also enforces
+the same check at the consumer level (defense in depth). Make sure
+`settings.ALLOWED_HOSTS` does NOT contain `*` in production.
 
 **Related:**
 - System check: `djust.C003` warns if WebSocket routing isn't configured

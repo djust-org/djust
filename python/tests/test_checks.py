@@ -3,6 +3,8 @@
 import textwrap
 from unittest.mock import patch
 
+from django.test import override_settings
+
 from djust.checks import _DOC_DJUST_EVENT_RE
 
 
@@ -1848,17 +1850,69 @@ class TestDjustMiddlewareStack:
         assert callable(DMS)
 
     def test_wraps_with_session_middleware(self):
-        """DjustMiddlewareStack wraps inner app with SessionMiddlewareStack."""
+        """DjustMiddlewareStack still wraps inner app with SessionMiddlewareStack.
+
+        Since #653 the outer type is AllowedHostsOriginValidator by default, so
+        we walk inward through common wrapper attribute names to find the
+        session middleware layer.
+        """
         from djust.routing import DjustMiddlewareStack
 
         class MockInnerApp:
             pass
 
         result = DjustMiddlewareStack(MockInnerApp)
-        # SessionMiddlewareStack returns a middleware instance that has .inner
-        cls_name = type(result).__name__
-        mod_name = type(result).__module__ or ""
-        assert "session" in cls_name.lower() or "session" in mod_name.lower()
+        node = result
+        found_session = False
+        for _ in range(5):
+            cls_name = type(node).__name__
+            mod_name = type(node).__module__ or ""
+            if "session" in cls_name.lower() or "session" in mod_name.lower():
+                found_session = True
+                break
+            inner = getattr(node, "inner", None) or getattr(node, "application", None)
+            if inner is None or inner is node:
+                break
+            node = inner
+        assert found_session, (
+            "Expected SessionMiddlewareStack in the wrapped stack, "
+            f"outer type is {type(result).__name__}"
+        )
+
+    def test_wraps_with_origin_validator_by_default(self):
+        """DjustMiddlewareStack wraps in OriginValidator by default (#653)."""
+        # ``AllowedHostsOriginValidator`` is a factory function that reads
+        # ``settings.ALLOWED_HOSTS`` at call time and returns an
+        # ``OriginValidator`` instance. Check the instance type.
+        from channels.security.websocket import OriginValidator
+
+        from djust.routing import DjustMiddlewareStack
+
+        class MockInnerApp:
+            pass
+
+        with override_settings(ALLOWED_HOSTS=["example.com"]):
+            result = DjustMiddlewareStack(MockInnerApp)
+        assert isinstance(result, OriginValidator), (
+            "DjustMiddlewareStack should wrap in an OriginValidator by default; "
+            f"got {type(result).__name__}"
+        )
+
+    def test_validate_origin_opt_out(self):
+        """validate_origin=False skips the OriginValidator wrap (#653)."""
+        from channels.security.websocket import OriginValidator
+
+        from djust.routing import DjustMiddlewareStack
+
+        class MockInnerApp:
+            pass
+
+        with override_settings(ALLOWED_HOSTS=["example.com"]):
+            result = DjustMiddlewareStack(MockInnerApp, validate_origin=False)
+        assert not isinstance(result, OriginValidator), (
+            "DjustMiddlewareStack(..., validate_origin=False) should NOT wrap in "
+            f"an OriginValidator; got {type(result).__name__}"
+        )
 
 
 # ---------------------------------------------------------------------------

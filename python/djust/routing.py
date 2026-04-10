@@ -14,14 +14,26 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 
-def DjustMiddlewareStack(inner: Any) -> Any:
+def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     """
     ASGI middleware stack for djust that doesn't require django.contrib.auth.
 
     Use this instead of ``channels.auth.AuthMiddlewareStack`` when your app
     doesn't need authentication. It wraps the inner application with session
-    middleware only, so ``request.session`` works but ``request.user`` will
-    not be populated.
+    middleware (so ``request.session`` works, but ``request.user`` is not
+    populated) and, by default, with
+    ``channels.security.websocket.AllowedHostsOriginValidator`` to prevent
+    Cross-Site WebSocket Hijacking (CSWSH, #653).
+
+    Args:
+        inner: The ASGI application to wrap (typically a ``URLRouter``).
+        validate_origin: When True (the default), the returned stack will
+            also wrap ``inner`` in ``AllowedHostsOriginValidator``, which
+            rejects WebSocket handshakes whose ``Origin`` header is not in
+            ``settings.ALLOWED_HOSTS``. Set to False to opt out — NOT
+            recommended; only use this for non-browser clients that you
+            control end-to-end, or when an upstream proxy already strips
+            hostile Origin headers.
 
     Example::
 
@@ -36,7 +48,15 @@ def DjustMiddlewareStack(inner: Any) -> Any:
     """
     from channels.sessions import SessionMiddlewareStack
 
-    return SessionMiddlewareStack(inner)
+    stack = SessionMiddlewareStack(inner)
+    if validate_origin:
+        # Lazy import keeps the top-level import surface of djust.routing
+        # stable (channels.security is importable whenever channels itself
+        # is, so the import cost is only paid when the stack is built).
+        from channels.security.websocket import AllowedHostsOriginValidator
+
+        stack = AllowedHostsOriginValidator(stack)
+    return stack
 
 
 def live_session(
