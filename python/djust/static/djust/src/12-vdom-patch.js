@@ -1377,19 +1377,52 @@ function applyPatches(patches) {
     const patchGroups = groupPatchesByParent(patches);
 
     for (const [, group] of patchGroups) {
-        // Optimization: Use DocumentFragment for consecutive InsertChild on same parent
-        const insertPatches = group.filter(p => p.type === 'InsertChild');
+        // Phase order within a group MUST match the top-level phase order:
+        // RemoveChild → MoveChild → InsertChild → other.
+        //
+        // Previously the batching code below ran InsertChild patches (via
+        // DocumentFragment) BEFORE iterating `group` for the RemoveChild
+        // patches — violating phase order. That breaks when a comment/text
+        // child without a dj-id needs removal: the index-based fallback
+        // resolves to the just-inserted content instead of the old child,
+        // and the wrong node gets deleted.  See regression fixtures for
+        // NYC Claims tab switches (#641).
+        //
+        // Fix: apply all non-Insert patches individually FIRST, then batch
+        // the consecutive inserts, then apply any remaining inserts that
+        // were too small to batch.  _sortPatches has already sorted the
+        // removes within the group by descending index.
+        const nonInsertPatches = [];
+        const insertPatches = [];
+        for (const patch of group) {
+            if (patch.type === 'InsertChild') insertPatches.push(patch);
+            else nonInsertPatches.push(patch);
+        }
 
+        // 1. Apply non-insert patches (RemoveChild, MoveChild, SetAttr, etc.)
+        //    in their existing sorted order.  RemoveChild patches are
+        //    descending-index-sorted by _sortPatches, so they're safe to
+        //    apply sequentially without index drift.
+        for (const patch of nonInsertPatches) {
+            if (applySinglePatch(patch)) {
+                successCount++;
+            } else {
+                failedCount++;
+            }
+        }
+
+        // 2. Batch consecutive inserts via DocumentFragment where possible.
+        //    At this point the DOM is in the "post-remove" state, so index
+        //    fallback for ref_d=None inserts lines up with what the server
+        //    computed against the new VDOM.
+        const batchedInserts = new Set();
         if (insertPatches.length >= 3) {
-            // Group only consecutive inserts (can't batch non-consecutive indices)
             const consecutiveGroups = groupConsecutiveInserts(insertPatches);
 
             for (const consecutiveGroup of consecutiveGroups) {
-                // Only batch if we have 3+ consecutive inserts
                 if (consecutiveGroup.length < 3) continue;
 
                 const firstPatch = consecutiveGroup[0];
-                // Use ID-based resolution for parent node
                 const parentNode = getNodeByPath(firstPatch.path, firstPatch.d);
 
                 if (parentNode) {
@@ -1400,9 +1433,9 @@ function applyPatches(patches) {
                             const newChild = createNodeFromVNode(patch.node, svgContext);
                             fragment.appendChild(newChild);
                             successCount++;
+                            batchedInserts.add(patch);
                         }
 
-                        // Insert fragment at the first index position
                         const children = getSignificantChildren(parentNode);
                         const firstIndex = consecutiveGroup[0].index;
                         const refChild = children[firstIndex];
@@ -1412,25 +1445,19 @@ function applyPatches(patches) {
                         } else {
                             parentNode.appendChild(fragment);
                         }
-
-                        // Mark these patches as processed
-                        const processedSet = new Set(consecutiveGroup);
-                        for (let i = group.length - 1; i >= 0; i--) {
-                            if (processedSet.has(group[i])) {
-                                group.splice(i, 1);
-                            }
-                        }
                     } catch (error) {
                         console.error('[LiveView] Batch insert failed, falling back to individual patches:', error.message);
-                        // On failure, patches remain in group for individual processing
-                        successCount -= consecutiveGroup.length;  // Undo count
+                        successCount -= consecutiveGroup.length;  // undo count
+                        for (const patch of consecutiveGroup) batchedInserts.delete(patch);
                     }
                 }
             }
         }
 
-        // Apply remaining patches individually
-        for (const patch of group) {
+        // 3. Apply any insert patches that weren't batched (non-consecutive
+        //    groups or group size < 3) individually.
+        for (const patch of insertPatches) {
+            if (batchedInserts.has(patch)) continue;
             if (applySinglePatch(patch)) {
                 successCount++;
             } else {

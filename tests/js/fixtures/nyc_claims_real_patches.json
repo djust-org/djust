@@ -1,0 +1,2715 @@
+{
+  "claim_id": 17,
+  "renders": [
+    {
+      "tab": "summary",
+      "version": 1,
+      "html": "<div dj-id=\"0\" dj-root=\"\" dj-view=\"apps.claims.views.ClaimDetailView\"><div class=\"claim-header\" dj-id=\"1\"><h1 dj-id=\"2\">2026PI000011</h1><span class=\"badge badge-filed\" dj-id=\"3\">Filed</span><!--dj-if--></div><!--dj-if--><div class=\"claim-meta\" dj-id=\"4\" style=\"margin-top:-1rem;margin-bottom:1.5rem;\"><span dj-id=\"5\">Division: <strong dj-id=\"6\">PI \u2014 Personal Injury</strong></span><span dj-id=\"7\">Filed: <strong dj-id=\"8\">2026-04-07</strong></span><span dj-id=\"9\">Type: <strong dj-id=\"a\">Motor Vehicle Accident (Pi)</strong></span><span dj-id=\"b\">Examiner: <strong dj-id=\"c\">Unassigned</strong></span></div><div class=\"tab-bar\" dj-id=\"d\"><a class=\"tab-item active\" dj-id=\"e\" dj-patch=\"\" href=\"?tab=summary\">Summary</a><a class=\"tab-item \" dj-id=\"f\" dj-patch=\"\" href=\"?tab=documents\">Documents</a><a class=\"tab-item \" dj-id=\"g\" dj-patch=\"\" href=\"?tab=investigation\">Investigation</a><a class=\"tab-item \" dj-id=\"h\" dj-patch=\"\" href=\"?tab=communications\">Communications</a><a class=\"tab-item \" dj-id=\"i\" dj-patch=\"\" href=\"?tab=settlement\">Settlement</a><a class=\"tab-item \" dj-id=\"j\" dj-patch=\"\" href=\"?tab=audit\">Audit Trail</a></div><div class=\"tab-content\" dj-id=\"k\"><div class=\"detail-grid\" dj-id=\"l\"><div class=\"detail-section\" dj-id=\"m\"><h3 dj-id=\"n\">Claimant</h3><div class=\"detail-row\" dj-id=\"o\"><span class=\"detail-label\" dj-id=\"p\">Name</span><span class=\"detail-value\" dj-id=\"q\">Diego Morales</span></div><div class=\"detail-row\" dj-id=\"r\"><span class=\"detail-label\" dj-id=\"s\">Phone</span><span class=\"detail-value\" dj-id=\"t\">212-555-0923</span></div><div class=\"detail-row\" dj-id=\"u\"><span class=\"detail-label\" dj-id=\"v\">Email</span><span class=\"detail-value\" dj-id=\"w\">dmorales@test.com</span></div><div class=\"detail-row\" dj-id=\"x\"><span class=\"detail-label\" dj-id=\"y\">Address</span><span class=\"detail-value\" dj-id=\"z\">542 West 153rd Street</span></div><div class=\"detail-row\" dj-id=\"A\"><span class=\"detail-label\" dj-id=\"B\">City Employee</span><span class=\"detail-value\" dj-id=\"C\">No</span></div></div><div class=\"detail-section\" dj-id=\"D\"><h3 dj-id=\"E\">Incident</h3><div class=\"detail-row\" dj-id=\"F\"><span class=\"detail-label\" dj-id=\"G\">Date</span><span class=\"detail-value\" dj-id=\"H\">2026-04-05</span></div><!--dj-if--><div class=\"detail-row\" dj-id=\"I\"><span class=\"detail-label\" dj-id=\"J\">Borough</span><span class=\"detail-value\" dj-id=\"K\">Manhattan</span></div><div class=\"detail-row\" dj-id=\"L\"><span class=\"detail-label\" dj-id=\"M\">Location</span><span class=\"detail-value\" dj-id=\"N\">West 153rd Street near Broadway, Washington Heights</span></div><div class=\"detail-row\" dj-id=\"O\"><span class=\"detail-label\" dj-id=\"P\">Manner</span><span class=\"detail-value\" dj-id=\"Q\">Fell into open utility excavation left unbarricaded overnight by City contractor</span></div></div><div class=\"detail-section\" dj-id=\"R\"><h3 dj-id=\"S\">Attorney</h3><p class=\"empty-state\" dj-id=\"T\">No attorney on file.</p></div><div class=\"detail-section\" dj-id=\"U\"><h3 dj-id=\"V\">Medical Information</h3><p class=\"empty-state\" dj-id=\"W\">No medical information.</p></div><div class=\"detail-section\" dj-id=\"X\"><h3 dj-id=\"Y\">Witnesses</h3><p class=\"empty-state\" dj-id=\"Z\">No witnesses on file.</p></div><div class=\"detail-section\" dj-id=\"10\"><h3 dj-id=\"11\">Claim Details</h3><div class=\"detail-row\" dj-id=\"12\"><span class=\"detail-label\" dj-id=\"13\">Area</span><span class=\"detail-value\" dj-id=\"14\">Tort</span></div><div class=\"detail-row\" dj-id=\"15\"><span class=\"detail-label\" dj-id=\"16\">Filing Method</span><span class=\"detail-value\" dj-id=\"17\">eClaim Portal</span></div><div class=\"detail-row\" dj-id=\"18\"><span class=\"detail-label\" dj-id=\"19\">Amount Claimed</span><span class=\"detail-value\" dj-id=\"1a\">20100</span></div><div class=\"detail-row\" dj-id=\"1b\"><span class=\"detail-label\" dj-id=\"1c\">Created</span><span class=\"detail-value\" dj-id=\"1d\">2026-04-10T03:29:39.921695+00:00</span></div><div class=\"detail-row\" dj-id=\"1e\"><span class=\"detail-label\" dj-id=\"1f\">Updated</span><span class=\"detail-value\" dj-id=\"1g\">2026-04-10T03:29:39.921700+00:00</span></div></div></div><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--></div></div>",
+      "patches": null
+    },
+    {
+      "tab": "documents",
+      "version": 2,
+      "html": "<div dj-id=\"0\" dj-root=\"\" dj-view=\"apps.claims.views.ClaimDetailView\"><div class=\"claim-header\" dj-id=\"1\"><h1 dj-id=\"2\">2026PI000011</h1><span class=\"badge badge-filed\" dj-id=\"3\">Filed</span><!--dj-if--></div><!--dj-if--><div class=\"claim-meta\" dj-id=\"4\" style=\"margin-top:-1rem;margin-bottom:1.5rem;\"><span dj-id=\"5\">Division: <strong dj-id=\"6\">PI \u2014 Personal Injury</strong></span><span dj-id=\"7\">Filed: <strong dj-id=\"8\">2026-04-07</strong></span><span dj-id=\"9\">Type: <strong dj-id=\"a\">Motor Vehicle Accident (Pi)</strong></span><span dj-id=\"b\">Examiner: <strong dj-id=\"c\">Unassigned</strong></span></div><div class=\"tab-bar\" dj-id=\"d\"><a class=\"tab-item \" dj-id=\"e\" dj-patch=\"\" href=\"?tab=summary\">Summary</a><a class=\"tab-item active\" dj-id=\"f\" dj-patch=\"\" href=\"?tab=documents\">Documents</a><a class=\"tab-item \" dj-id=\"g\" dj-patch=\"\" href=\"?tab=investigation\">Investigation</a><a class=\"tab-item \" dj-id=\"h\" dj-patch=\"\" href=\"?tab=communications\">Communications</a><a class=\"tab-item \" dj-id=\"i\" dj-patch=\"\" href=\"?tab=settlement\">Settlement</a><a class=\"tab-item \" dj-id=\"j\" dj-patch=\"\" href=\"?tab=audit\">Audit Trail</a></div><div class=\"tab-content\" dj-id=\"k\"><!--dj-if--><h3 dj-id=\"1C\">Documents</h3><p class=\"empty-state\" dj-id=\"1D\">No documents uploaded.</p><h3 dj-id=\"1E\" style=\"margin-top:1.5rem;\">Document Checklist</h3><p class=\"empty-state\" dj-id=\"1F\">No checklist items.</p><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--></div></div>",
+      "patches": [
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            0
+          ],
+          "d": "e",
+          "key": "class",
+          "value": "tab-item "
+        },
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            1
+          ],
+          "d": "f",
+          "key": "class",
+          "value": "tab-item active"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 0,
+          "child_d": "l"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 0,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 1
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 1,
+          "node": {
+            "tag": "h3",
+            "attrs": {
+              "dj-id": "1C"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "Documents",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "1C"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 2
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 2,
+          "node": {
+            "tag": "p",
+            "attrs": {
+              "class": "empty-state",
+              "dj-id": "1D"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "No documents uploaded.",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "1D"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 3
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 3,
+          "node": {
+            "tag": "h3",
+            "attrs": {
+              "dj-id": "1E",
+              "style": "margin-top:1.5rem;"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "Document Checklist",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "1E"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 4
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 4,
+          "node": {
+            "tag": "p",
+            "attrs": {
+              "dj-id": "1F",
+              "class": "empty-state"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "No checklist items.",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "1F"
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 6,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 7,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 8,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        }
+      ]
+    },
+    {
+      "tab": "investigation",
+      "version": 3,
+      "html": "<div dj-id=\"0\" dj-root=\"\" dj-view=\"apps.claims.views.ClaimDetailView\"><div class=\"claim-header\" dj-id=\"1\"><h1 dj-id=\"2\">2026PI000011</h1><span class=\"badge badge-filed\" dj-id=\"3\">Filed</span><!--dj-if--></div><!--dj-if--><div class=\"claim-meta\" dj-id=\"4\" style=\"margin-top:-1rem;margin-bottom:1.5rem;\"><span dj-id=\"5\">Division: <strong dj-id=\"6\">PI \u2014 Personal Injury</strong></span><span dj-id=\"7\">Filed: <strong dj-id=\"8\">2026-04-07</strong></span><span dj-id=\"9\">Type: <strong dj-id=\"a\">Motor Vehicle Accident (Pi)</strong></span><span dj-id=\"b\">Examiner: <strong dj-id=\"c\">Unassigned</strong></span></div><div class=\"tab-bar\" dj-id=\"d\"><a class=\"tab-item \" dj-id=\"e\" dj-patch=\"\" href=\"?tab=summary\">Summary</a><a class=\"tab-item \" dj-id=\"f\" dj-patch=\"\" href=\"?tab=documents\">Documents</a><a class=\"tab-item active\" dj-id=\"g\" dj-patch=\"\" href=\"?tab=investigation\">Investigation</a><a class=\"tab-item \" dj-id=\"h\" dj-patch=\"\" href=\"?tab=communications\">Communications</a><a class=\"tab-item \" dj-id=\"i\" dj-patch=\"\" href=\"?tab=settlement\">Settlement</a><a class=\"tab-item \" dj-id=\"j\" dj-patch=\"\" href=\"?tab=audit\">Audit Trail</a></div><div class=\"tab-content\" dj-id=\"k\"><!--dj-if--><!--dj-if--><p class=\"empty-state\" dj-id=\"1D\">No investigation record. Investigation workflow will be started when the claim is assigned.</p><!--dj-if--><!--dj-if--><!--dj-if--></div></div>",
+      "patches": [
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            1
+          ],
+          "d": "f",
+          "key": "class",
+          "value": "tab-item "
+        },
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            2
+          ],
+          "d": "g",
+          "key": "class",
+          "value": "tab-item active"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 1,
+          "child_d": "1C"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 1,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "SetText",
+          "path": [
+            4,
+            2,
+            0
+          ],
+          "text": "No investigation record. Investigation workflow will be started when the claim is assigned."
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 3,
+          "child_d": "1E"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 3,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 4,
+          "child_d": "1F"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 4,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 8
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 7
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 6
+        }
+      ]
+    },
+    {
+      "tab": "summary",
+      "version": 4,
+      "html": "<div dj-id=\"0\" dj-root=\"\" dj-view=\"apps.claims.views.ClaimDetailView\"><div class=\"claim-header\" dj-id=\"1\"><h1 dj-id=\"2\">2026PI000011</h1><span class=\"badge badge-filed\" dj-id=\"3\">Filed</span><!--dj-if--></div><!--dj-if--><div class=\"claim-meta\" dj-id=\"4\" style=\"margin-top:-1rem;margin-bottom:1.5rem;\"><span dj-id=\"5\">Division: <strong dj-id=\"6\">PI \u2014 Personal Injury</strong></span><span dj-id=\"7\">Filed: <strong dj-id=\"8\">2026-04-07</strong></span><span dj-id=\"9\">Type: <strong dj-id=\"a\">Motor Vehicle Accident (Pi)</strong></span><span dj-id=\"b\">Examiner: <strong dj-id=\"c\">Unassigned</strong></span></div><div class=\"tab-bar\" dj-id=\"d\"><a class=\"tab-item active\" dj-id=\"e\" dj-patch=\"\" href=\"?tab=summary\">Summary</a><a class=\"tab-item \" dj-id=\"f\" dj-patch=\"\" href=\"?tab=documents\">Documents</a><a class=\"tab-item \" dj-id=\"g\" dj-patch=\"\" href=\"?tab=investigation\">Investigation</a><a class=\"tab-item \" dj-id=\"h\" dj-patch=\"\" href=\"?tab=communications\">Communications</a><a class=\"tab-item \" dj-id=\"i\" dj-patch=\"\" href=\"?tab=settlement\">Settlement</a><a class=\"tab-item \" dj-id=\"j\" dj-patch=\"\" href=\"?tab=audit\">Audit Trail</a></div><div class=\"tab-content\" dj-id=\"k\"><div class=\"detail-grid\" dj-id=\"2n\"><div class=\"detail-section\" dj-id=\"2o\"><h3 dj-id=\"2p\">Claimant</h3><div class=\"detail-row\" dj-id=\"2q\"><span class=\"detail-label\" dj-id=\"2r\">Name</span><span class=\"detail-value\" dj-id=\"2s\">Diego Morales</span></div><div class=\"detail-row\" dj-id=\"2t\"><span class=\"detail-label\" dj-id=\"2u\">Phone</span><span class=\"detail-value\" dj-id=\"2v\">212-555-0923</span></div><div class=\"detail-row\" dj-id=\"2w\"><span class=\"detail-label\" dj-id=\"2x\">Email</span><span class=\"detail-value\" dj-id=\"2y\">dmorales@test.com</span></div><div class=\"detail-row\" dj-id=\"2z\"><span class=\"detail-label\" dj-id=\"2A\">Address</span><span class=\"detail-value\" dj-id=\"2B\">542 West 153rd Street</span></div><div class=\"detail-row\" dj-id=\"2C\"><span class=\"detail-label\" dj-id=\"2D\">City Employee</span><span class=\"detail-value\" dj-id=\"2E\">No</span></div></div><div class=\"detail-section\" dj-id=\"2F\"><h3 dj-id=\"2G\">Incident</h3><div class=\"detail-row\" dj-id=\"2H\"><span class=\"detail-label\" dj-id=\"2I\">Date</span><span class=\"detail-value\" dj-id=\"2J\">2026-04-05</span></div><!--dj-if--><div class=\"detail-row\" dj-id=\"2K\"><span class=\"detail-label\" dj-id=\"2L\">Borough</span><span class=\"detail-value\" dj-id=\"2M\">Manhattan</span></div><div class=\"detail-row\" dj-id=\"2N\"><span class=\"detail-label\" dj-id=\"2O\">Location</span><span class=\"detail-value\" dj-id=\"2P\">West 153rd Street near Broadway, Washington Heights</span></div><div class=\"detail-row\" dj-id=\"2Q\"><span class=\"detail-label\" dj-id=\"2R\">Manner</span><span class=\"detail-value\" dj-id=\"2S\">Fell into open utility excavation left unbarricaded overnight by City contractor</span></div></div><div class=\"detail-section\" dj-id=\"2T\"><h3 dj-id=\"2U\">Attorney</h3><p class=\"empty-state\" dj-id=\"2V\">No attorney on file.</p></div><div class=\"detail-section\" dj-id=\"2W\"><h3 dj-id=\"2X\">Medical Information</h3><p class=\"empty-state\" dj-id=\"2Y\">No medical information.</p></div><div class=\"detail-section\" dj-id=\"2Z\"><h3 dj-id=\"30\">Witnesses</h3><p class=\"empty-state\" dj-id=\"31\">No witnesses on file.</p></div><div class=\"detail-section\" dj-id=\"32\"><h3 dj-id=\"33\">Claim Details</h3><div class=\"detail-row\" dj-id=\"34\"><span class=\"detail-label\" dj-id=\"35\">Area</span><span class=\"detail-value\" dj-id=\"36\">Tort</span></div><div class=\"detail-row\" dj-id=\"37\"><span class=\"detail-label\" dj-id=\"38\">Filing Method</span><span class=\"detail-value\" dj-id=\"39\">eClaim Portal</span></div><div class=\"detail-row\" dj-id=\"3a\"><span class=\"detail-label\" dj-id=\"3b\">Amount Claimed</span><span class=\"detail-value\" dj-id=\"3c\">20100</span></div><div class=\"detail-row\" dj-id=\"3d\"><span class=\"detail-label\" dj-id=\"3e\">Created</span><span class=\"detail-value\" dj-id=\"3f\">2026-04-10T03:29:39.921695+00:00</span></div><div class=\"detail-row\" dj-id=\"3g\"><span class=\"detail-label\" dj-id=\"3h\">Updated</span><span class=\"detail-value\" dj-id=\"3i\">2026-04-10T03:29:39.921700+00:00</span></div></div></div><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--></div></div>",
+      "patches": [
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            0
+          ],
+          "d": "e",
+          "key": "class",
+          "value": "tab-item active"
+        },
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            2
+          ],
+          "d": "g",
+          "key": "class",
+          "value": "tab-item "
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 0
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 0,
+          "node": {
+            "tag": "div",
+            "attrs": {
+              "dj-id": "2n",
+              "class": "detail-grid"
+            },
+            "children": [
+              {
+                "tag": "div",
+                "attrs": {
+                  "class": "detail-section",
+                  "dj-id": "2o"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "2p"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Claimant",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2p"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "2q",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "2r"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Name",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2r"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "2s"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Diego Morales",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2s"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2q"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "2t"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "2u"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Phone",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2u"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "2v"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "212-555-0923",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2v"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2t"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "2w",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2x",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Email",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2x"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2y",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "dmorales@test.com",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2y"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2w"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "2z",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "2A"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Address",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2A"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2B",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "542 West 153rd Street",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2B"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2z"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "2C",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "2D"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "City Employee",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2D"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "2E"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "No",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2E"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2C"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "2o"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "dj-id": "2F",
+                  "class": "detail-section"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "2G"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Incident",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2G"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "2H"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2I",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Date",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2I"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2J",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "2026-04-05",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2J"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2H"
+                  },
+                  {
+                    "tag": "#comment",
+                    "attrs": {},
+                    "children": [],
+                    "text": "dj-if",
+                    "key": null
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "2K",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2L",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Borough",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2L"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2M",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Manhattan",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2M"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2K"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "2N"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2O",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Location",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2O"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2P",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "West 153rd Street near Broadway, Washington Heights",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2P"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2N"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "2Q",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "2R",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Manner",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2R"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "2S"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Fell into open utility excavation left unbarricaded overnight by City contractor",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "2S"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2Q"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "2F"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "class": "detail-section",
+                  "dj-id": "2T"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "2U"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Attorney",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2U"
+                  },
+                  {
+                    "tag": "p",
+                    "attrs": {
+                      "class": "empty-state",
+                      "dj-id": "2V"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "No attorney on file.",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2V"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "2T"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "dj-id": "2W",
+                  "class": "detail-section"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "2X"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Medical Information",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2X"
+                  },
+                  {
+                    "tag": "p",
+                    "attrs": {
+                      "dj-id": "2Y",
+                      "class": "empty-state"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "No medical information.",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "2Y"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "2W"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "dj-id": "2Z",
+                  "class": "detail-section"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "30"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Witnesses",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "30"
+                  },
+                  {
+                    "tag": "p",
+                    "attrs": {
+                      "dj-id": "31",
+                      "class": "empty-state"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "No witnesses on file.",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "31"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "2Z"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "class": "detail-section",
+                  "dj-id": "32"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "33"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Claim Details",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "33"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "34",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "35"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Area",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "35"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "36",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Tort",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "36"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "34"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "37",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "38",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Filing Method",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "38"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "39",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "eClaim Portal",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "39"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "37"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "3a",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "3b"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Amount Claimed",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "3b"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "3c",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "20100",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "3c"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "3a"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "3d",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "3e",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Created",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "3e"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "3f"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "2026-04-10T03:29:39.921695+00:00",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "3f"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "3d"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "3g",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "3h",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Updated",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "3h"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "3i"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "2026-04-10T03:29:39.921700+00:00",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "3i"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "3g"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "32"
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "2n"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 2,
+          "child_d": "1D"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 2,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        }
+      ]
+    },
+    {
+      "tab": "documents",
+      "version": 5,
+      "html": "<div dj-id=\"0\" dj-root=\"\" dj-view=\"apps.claims.views.ClaimDetailView\"><div class=\"claim-header\" dj-id=\"1\"><h1 dj-id=\"2\">2026PI000011</h1><span class=\"badge badge-filed\" dj-id=\"3\">Filed</span><!--dj-if--></div><!--dj-if--><div class=\"claim-meta\" dj-id=\"4\" style=\"margin-top:-1rem;margin-bottom:1.5rem;\"><span dj-id=\"5\">Division: <strong dj-id=\"6\">PI \u2014 Personal Injury</strong></span><span dj-id=\"7\">Filed: <strong dj-id=\"8\">2026-04-07</strong></span><span dj-id=\"9\">Type: <strong dj-id=\"a\">Motor Vehicle Accident (Pi)</strong></span><span dj-id=\"b\">Examiner: <strong dj-id=\"c\">Unassigned</strong></span></div><div class=\"tab-bar\" dj-id=\"d\"><a class=\"tab-item \" dj-id=\"e\" dj-patch=\"\" href=\"?tab=summary\">Summary</a><a class=\"tab-item active\" dj-id=\"f\" dj-patch=\"\" href=\"?tab=documents\">Documents</a><a class=\"tab-item \" dj-id=\"g\" dj-patch=\"\" href=\"?tab=investigation\">Investigation</a><a class=\"tab-item \" dj-id=\"h\" dj-patch=\"\" href=\"?tab=communications\">Communications</a><a class=\"tab-item \" dj-id=\"i\" dj-patch=\"\" href=\"?tab=settlement\">Settlement</a><a class=\"tab-item \" dj-id=\"j\" dj-patch=\"\" href=\"?tab=audit\">Audit Trail</a></div><div class=\"tab-content\" dj-id=\"k\"><!--dj-if--><h3 dj-id=\"3E\">Documents</h3><p class=\"empty-state\" dj-id=\"3F\">No documents uploaded.</p><h3 dj-id=\"3G\" style=\"margin-top:1.5rem;\">Document Checklist</h3><p class=\"empty-state\" dj-id=\"3H\">No checklist items.</p><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--></div></div>",
+      "patches": [
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            0
+          ],
+          "d": "e",
+          "key": "class",
+          "value": "tab-item "
+        },
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            1
+          ],
+          "d": "f",
+          "key": "class",
+          "value": "tab-item active"
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 0,
+          "child_d": "2n"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 0,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 1
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 1,
+          "node": {
+            "tag": "h3",
+            "attrs": {
+              "dj-id": "3E"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "Documents",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "3E"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 2
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 2,
+          "node": {
+            "tag": "p",
+            "attrs": {
+              "dj-id": "3F",
+              "class": "empty-state"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "No documents uploaded.",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "3F"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 3
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 3,
+          "node": {
+            "tag": "h3",
+            "attrs": {
+              "dj-id": "3G",
+              "style": "margin-top:1.5rem;"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "Document Checklist",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "3G"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 4
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 4,
+          "node": {
+            "tag": "p",
+            "attrs": {
+              "class": "empty-state",
+              "dj-id": "3H"
+            },
+            "children": [
+              {
+                "tag": "#text",
+                "attrs": {},
+                "children": [],
+                "text": "No checklist items.",
+                "key": null
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "3H"
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 6,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 7,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 8,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        }
+      ]
+    },
+    {
+      "tab": "summary",
+      "version": 6,
+      "html": "<div dj-id=\"0\" dj-root=\"\" dj-view=\"apps.claims.views.ClaimDetailView\"><div class=\"claim-header\" dj-id=\"1\"><h1 dj-id=\"2\">2026PI000011</h1><span class=\"badge badge-filed\" dj-id=\"3\">Filed</span><!--dj-if--></div><!--dj-if--><div class=\"claim-meta\" dj-id=\"4\" style=\"margin-top:-1rem;margin-bottom:1.5rem;\"><span dj-id=\"5\">Division: <strong dj-id=\"6\">PI \u2014 Personal Injury</strong></span><span dj-id=\"7\">Filed: <strong dj-id=\"8\">2026-04-07</strong></span><span dj-id=\"9\">Type: <strong dj-id=\"a\">Motor Vehicle Accident (Pi)</strong></span><span dj-id=\"b\">Examiner: <strong dj-id=\"c\">Unassigned</strong></span></div><div class=\"tab-bar\" dj-id=\"d\"><a class=\"tab-item active\" dj-id=\"e\" dj-patch=\"\" href=\"?tab=summary\">Summary</a><a class=\"tab-item \" dj-id=\"f\" dj-patch=\"\" href=\"?tab=documents\">Documents</a><a class=\"tab-item \" dj-id=\"g\" dj-patch=\"\" href=\"?tab=investigation\">Investigation</a><a class=\"tab-item \" dj-id=\"h\" dj-patch=\"\" href=\"?tab=communications\">Communications</a><a class=\"tab-item \" dj-id=\"i\" dj-patch=\"\" href=\"?tab=settlement\">Settlement</a><a class=\"tab-item \" dj-id=\"j\" dj-patch=\"\" href=\"?tab=audit\">Audit Trail</a></div><div class=\"tab-content\" dj-id=\"k\"><div class=\"detail-grid\" dj-id=\"43\"><div class=\"detail-section\" dj-id=\"44\"><h3 dj-id=\"45\">Claimant</h3><div class=\"detail-row\" dj-id=\"46\"><span class=\"detail-label\" dj-id=\"47\">Name</span><span class=\"detail-value\" dj-id=\"48\">Diego Morales</span></div><div class=\"detail-row\" dj-id=\"49\"><span class=\"detail-label\" dj-id=\"4a\">Phone</span><span class=\"detail-value\" dj-id=\"4b\">212-555-0923</span></div><div class=\"detail-row\" dj-id=\"4c\"><span class=\"detail-label\" dj-id=\"4d\">Email</span><span class=\"detail-value\" dj-id=\"4e\">dmorales@test.com</span></div><div class=\"detail-row\" dj-id=\"4f\"><span class=\"detail-label\" dj-id=\"4g\">Address</span><span class=\"detail-value\" dj-id=\"4h\">542 West 153rd Street</span></div><div class=\"detail-row\" dj-id=\"4i\"><span class=\"detail-label\" dj-id=\"4j\">City Employee</span><span class=\"detail-value\" dj-id=\"4k\">No</span></div></div><div class=\"detail-section\" dj-id=\"4l\"><h3 dj-id=\"4m\">Incident</h3><div class=\"detail-row\" dj-id=\"4n\"><span class=\"detail-label\" dj-id=\"4o\">Date</span><span class=\"detail-value\" dj-id=\"4p\">2026-04-05</span></div><!--dj-if--><div class=\"detail-row\" dj-id=\"4q\"><span class=\"detail-label\" dj-id=\"4r\">Borough</span><span class=\"detail-value\" dj-id=\"4s\">Manhattan</span></div><div class=\"detail-row\" dj-id=\"4t\"><span class=\"detail-label\" dj-id=\"4u\">Location</span><span class=\"detail-value\" dj-id=\"4v\">West 153rd Street near Broadway, Washington Heights</span></div><div class=\"detail-row\" dj-id=\"4w\"><span class=\"detail-label\" dj-id=\"4x\">Manner</span><span class=\"detail-value\" dj-id=\"4y\">Fell into open utility excavation left unbarricaded overnight by City contractor</span></div></div><div class=\"detail-section\" dj-id=\"4z\"><h3 dj-id=\"4A\">Attorney</h3><p class=\"empty-state\" dj-id=\"4B\">No attorney on file.</p></div><div class=\"detail-section\" dj-id=\"4C\"><h3 dj-id=\"4D\">Medical Information</h3><p class=\"empty-state\" dj-id=\"4E\">No medical information.</p></div><div class=\"detail-section\" dj-id=\"4F\"><h3 dj-id=\"4G\">Witnesses</h3><p class=\"empty-state\" dj-id=\"4H\">No witnesses on file.</p></div><div class=\"detail-section\" dj-id=\"4I\"><h3 dj-id=\"4J\">Claim Details</h3><div class=\"detail-row\" dj-id=\"4K\"><span class=\"detail-label\" dj-id=\"4L\">Area</span><span class=\"detail-value\" dj-id=\"4M\">Tort</span></div><div class=\"detail-row\" dj-id=\"4N\"><span class=\"detail-label\" dj-id=\"4O\">Filing Method</span><span class=\"detail-value\" dj-id=\"4P\">eClaim Portal</span></div><div class=\"detail-row\" dj-id=\"4Q\"><span class=\"detail-label\" dj-id=\"4R\">Amount Claimed</span><span class=\"detail-value\" dj-id=\"4S\">20100</span></div><div class=\"detail-row\" dj-id=\"4T\"><span class=\"detail-label\" dj-id=\"4U\">Created</span><span class=\"detail-value\" dj-id=\"4V\">2026-04-10T03:29:39.921695+00:00</span></div><div class=\"detail-row\" dj-id=\"4W\"><span class=\"detail-label\" dj-id=\"4X\">Updated</span><span class=\"detail-value\" dj-id=\"4Y\">2026-04-10T03:29:39.921700+00:00</span></div></div></div><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--><!--dj-if--></div></div>",
+      "patches": [
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            0
+          ],
+          "d": "e",
+          "key": "class",
+          "value": "tab-item active"
+        },
+        {
+          "type": "SetAttr",
+          "path": [
+            3,
+            1
+          ],
+          "d": "f",
+          "key": "class",
+          "value": "tab-item "
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 0
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 0,
+          "node": {
+            "tag": "div",
+            "attrs": {
+              "class": "detail-grid",
+              "dj-id": "43"
+            },
+            "children": [
+              {
+                "tag": "div",
+                "attrs": {
+                  "class": "detail-section",
+                  "dj-id": "44"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "45"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Claimant",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "45"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "46"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "47",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Name",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "47"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "48"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Diego Morales",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "48"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "46"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "49",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4a",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Phone",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4a"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4b",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "212-555-0923",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4b"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "49"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4c",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "4d"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Email",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4d"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4e",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "dmorales@test.com",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4e"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4c"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "4f"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "4g"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Address",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4g"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "4h"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "542 West 153rd Street",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4h"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4f"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "4i"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "4j"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "City Employee",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4j"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "4k"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "No",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4k"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4i"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "44"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "class": "detail-section",
+                  "dj-id": "4l"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "4m"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Incident",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4m"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4n",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4o",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Date",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4o"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4p",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "2026-04-05",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4p"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4n"
+                  },
+                  {
+                    "tag": "#comment",
+                    "attrs": {},
+                    "children": [],
+                    "text": "dj-if",
+                    "key": null
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4q",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "4r"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Borough",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4r"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4s",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Manhattan",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4s"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4q"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4t",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-label",
+                          "dj-id": "4u"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Location",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4u"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4v",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "West 153rd Street near Broadway, Washington Heights",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4v"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4t"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4w",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4x",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Manner",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4x"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "4y"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Fell into open utility excavation left unbarricaded overnight by City contractor",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4y"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4w"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "4l"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "dj-id": "4z",
+                  "class": "detail-section"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "4A"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Attorney",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4A"
+                  },
+                  {
+                    "tag": "p",
+                    "attrs": {
+                      "dj-id": "4B",
+                      "class": "empty-state"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "No attorney on file.",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4B"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "4z"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "dj-id": "4C",
+                  "class": "detail-section"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "4D"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Medical Information",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4D"
+                  },
+                  {
+                    "tag": "p",
+                    "attrs": {
+                      "class": "empty-state",
+                      "dj-id": "4E"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "No medical information.",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4E"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "4C"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "class": "detail-section",
+                  "dj-id": "4F"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "4G"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Witnesses",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4G"
+                  },
+                  {
+                    "tag": "p",
+                    "attrs": {
+                      "dj-id": "4H",
+                      "class": "empty-state"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "No witnesses on file.",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4H"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "4F"
+              },
+              {
+                "tag": "div",
+                "attrs": {
+                  "dj-id": "4I",
+                  "class": "detail-section"
+                },
+                "children": [
+                  {
+                    "tag": "h3",
+                    "attrs": {
+                      "dj-id": "4J"
+                    },
+                    "children": [
+                      {
+                        "tag": "#text",
+                        "attrs": {},
+                        "children": [],
+                        "text": "Claim Details",
+                        "key": null
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4J"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "4K"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4L",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Area",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4L"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "4M"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Tort",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4M"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4K"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4N",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4O",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Filing Method",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4O"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "4P"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "eClaim Portal",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4P"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4N"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "class": "detail-row",
+                      "dj-id": "4Q"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4R",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Amount Claimed",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4R"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4S",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "20100",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4S"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4Q"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4T",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4U",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Created",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4U"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "class": "detail-value",
+                          "dj-id": "4V"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "2026-04-10T03:29:39.921695+00:00",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4V"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4T"
+                  },
+                  {
+                    "tag": "div",
+                    "attrs": {
+                      "dj-id": "4W",
+                      "class": "detail-row"
+                    },
+                    "children": [
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4X",
+                          "class": "detail-label"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "Updated",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4X"
+                      },
+                      {
+                        "tag": "span",
+                        "attrs": {
+                          "dj-id": "4Y",
+                          "class": "detail-value"
+                        },
+                        "children": [
+                          {
+                            "tag": "#text",
+                            "attrs": {},
+                            "children": [],
+                            "text": "2026-04-10T03:29:39.921700+00:00",
+                            "key": null
+                          }
+                        ],
+                        "text": null,
+                        "key": null,
+                        "djust_id": "4Y"
+                      }
+                    ],
+                    "text": null,
+                    "key": null,
+                    "djust_id": "4W"
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "4I"
+              }
+            ],
+            "text": null,
+            "key": null,
+            "djust_id": "43"
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 1,
+          "child_d": "3E"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 1,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 2,
+          "child_d": "3F"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 2,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 3,
+          "child_d": "3G"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 3,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "index": 4,
+          "child_d": "3H"
+        },
+        {
+          "type": "InsertChild",
+          "path": [
+            4
+          ],
+          "index": 4,
+          "node": {
+            "tag": "#comment",
+            "attrs": {},
+            "children": [],
+            "text": "dj-if",
+            "key": null
+          }
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 8
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 7
+        },
+        {
+          "type": "RemoveChild",
+          "path": [
+            4
+          ],
+          "d": "k",
+          "index": 6
+        }
+      ]
+    }
+  ]
+}

@@ -125,25 +125,19 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
     });
 
     /**
-     * Known fragility: batched inserts run BEFORE the removes in the same
-     * parent group (phase-order violation in client.js:1379-1440). This is
-     * currently latent because Rust's monotonic ID counter never produces
-     * new IDs that collide with ones still in the DOM.
+     * Post-fix invariant: the batching path applies RemoveChild patches
+     * BEFORE the batched inserts, so even if new children reuse IDs that
+     * old children currently hold, the old ones are gone by the time the
+     * new ones are created and no collision can occur at insert time.
      *
-     * This test locks in that invariant by demonstrating what would happen
-     * if it were violated: if new children collide with old ones, the
-     * subsequent removes (by ID) delete the newly-inserted content and
-     * leave the stale content behind. Result: the 7 new "docs" are wiped
-     * and the 8 old "cards" partially survive.
-     *
-     * This test exists as a landmine alarm for anyone tempted to reset the
-     * counter in render_with_diff() or introduce ID reuse. If this test
-     * starts asserting the CORRECT outcome (doc1..doc7 survive), it means
-     * either the batching order was fixed or someone made collisions safe
-     * — at which point the test should be updated to assert the new
-     * invariant explicitly.
+     * Before the fix (#641 / #642), client.js:1379-1440 ran batched
+     * inserts ahead of the removes in the same parent group. With
+     * colliding IDs, the new docs were inserted in front of the
+     * still-present old cards, and the subsequent querySelector-based
+     * removes found the new docs first and deleted them, leaving
+     * corrupted state.
      */
-    it('DOCUMENTS FRAGILITY: colliding IDs in batched insert cause data loss', () => {
+    it('colliding IDs still apply correctly (remove-before-insert batching order)', () => {
         const parent = buildParent(['1','2','3','4','5','6','7','8']);
         for (let i = 0; i < 8; i++) {
             parent.children[i].textContent = 'card' + (i + 1);
@@ -160,8 +154,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
                 ref_d: null,
             });
         }
-        // Simulate what reset_id_counter() would produce: new IDs collide
-        // with old IDs that are still present in the DOM at apply time.
+        // New children reuse IDs 1..7 that old children currently hold
         for (let i = 0; i < 7; i++) {
             patches.push({
                 type: 'InsertChild',
@@ -176,13 +169,9 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
         applyPatches(patches);
 
         const texts = currentText(parent);
-        // The batched inserts prepend 7 new docs with colliding IDs 1..7.
-        // The subsequent removes find those new docs by ID (first match)
-        // and delete them, leaving the original cards. This is the
-        // catastrophic failure mode that reset_id_counter() would enable.
-        expect(texts).toEqual(['card1','card2','card3','card4','card5','card6','card7']);
-        // (Target behavior if the batching order were fixed:
-        //  expect(texts).toEqual(['doc1','doc2',...,'doc7']); )
+        // Post-fix: all 8 old cards are removed first, then the 7 new
+        // docs are batch-inserted into the empty parent — no collision.
+        expect(texts).toEqual(['doc1','doc2','doc3','doc4','doc5','doc6','doc7']);
     });
 
     /**
