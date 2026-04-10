@@ -16,6 +16,45 @@ def is_model_list(value: Any) -> bool:
     return isinstance(value, list) and len(value) > 0 and isinstance(value[0], models.Model)
 
 
+def get_csp_nonce(request: Any) -> str:
+    """
+    Extract the CSP nonce from a Django request, if one is set.
+
+    Returns the value of ``request.csp_nonce`` (set by ``django-csp``'s
+    middleware when ``CSP_INCLUDE_NONCE_IN`` covers the relevant directive),
+    or an empty string when:
+
+      * ``request`` is ``None`` (call site doesn't have one, e.g. management
+        command context or a unit test);
+      * ``request`` is a dict (this happens when a djust template tag takes
+        a context and the context isn't a full ``RequestContext``);
+      * ``django-csp`` is not installed or not configured;
+      * the attribute simply isn't set.
+
+    The empty-string fallback is the key backward-compatibility contract:
+    callers that format ``nonce="{nonce}"`` into their output get
+    ``nonce=""`` when no nonce is available, which is equivalent to no
+    nonce attribute at all under CSP's matching rules. Callers that want
+    to skip the attribute entirely should check ``if nonce:`` first.
+
+    See issue #655 (nonce-based CSP support).
+
+    Args:
+        request: A Django ``HttpRequest``, a template ``RequestContext``
+            object with a ``request`` attribute, or ``None``.
+
+    Returns:
+        The nonce string, or ``""`` when no nonce is available.
+    """
+    if request is None:
+        return ""
+    # Support callers that pass a template Context instead of a request
+    inner = getattr(request, "request", None)
+    if inner is not None and hasattr(inner, "csp_nonce"):
+        return str(getattr(inner, "csp_nonce", "") or "")
+    return str(getattr(request, "csp_nonce", "") or "")
+
+
 class BackendRegistry:
     """
     Generic singleton-style registry for lazily-initialised backends.

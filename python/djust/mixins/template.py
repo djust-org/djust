@@ -179,19 +179,22 @@ class TemplateMixin:
         html = self._hydrate_react_components(html)
 
         # Inject handler metadata for client-side decorators
-        html = self._inject_handler_metadata(html)
+        html = self._inject_handler_metadata(html, request=request)
 
         # Reset temporary assigns and streams to free memory after rendering
         self._reset_temporary_assigns()
 
         return html
 
-    def _inject_handler_metadata(self, html: str) -> str:
+    def _inject_handler_metadata(self, html: str, request=None) -> str:
         """
         Inject handler metadata script into HTML.
 
         Adds a <script> tag that sets window.handlerMetadata with
-        decorator metadata for all handlers.
+        decorator metadata for all handlers. When ``request.csp_nonce`` is
+        set (django-csp with ``CSP_INCLUDE_NONCE_IN``), the emitted script
+        carries the nonce so apps can drop ``'unsafe-inline'`` from
+        ``CSP_SCRIPT_SRC`` (see #655).
         """
         # Extract metadata
         metadata = self._extract_handler_metadata()
@@ -203,9 +206,20 @@ class TemplateMixin:
 
         logger.debug("[LiveView] Injecting handler metadata script for %s handlers", len(metadata))
 
+        # CSP nonce support (#655): if a nonce is available on the request,
+        # emit a nonce attribute so apps can drop 'unsafe-inline' from their
+        # CSP script-src directive. Fall through to no-nonce output when
+        # django-csp is not installed or the request doesn't carry one —
+        # backward compatible with apps still using 'unsafe-inline'.
+        req = request if request is not None else getattr(self, "request", None)
+        from ..utils import get_csp_nonce
+
+        nonce = get_csp_nonce(req)
+        nonce_attr = f' nonce="{nonce}"' if nonce else ""
+
         # Build script tag
         script = f"""
-<script>
+<script{nonce_attr}>
 // Handler metadata for client-side decorators
 window.handlerMetadata = window.handlerMetadata || {{}};
 Object.assign(window.handlerMetadata, {json.dumps(metadata)});
@@ -486,7 +500,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             html = temp_rust.render()
 
             html = self._hydrate_react_components(html)
-            html = self._inject_handler_metadata(html)
+            html = self._inject_handler_metadata(html, request=request)
 
             return html
         else:
