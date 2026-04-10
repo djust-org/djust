@@ -16,6 +16,7 @@ import inspect
 import json
 import logging
 import textwrap
+from typing import Dict
 
 from django.core.management.base import BaseCommand
 
@@ -402,6 +403,54 @@ class Command(BaseCommand):
                 "views and exit. Review each entry before committing."
             ),
         )
+        parser.add_argument(
+            "--live",
+            type=str,
+            dest="live_url",
+            help=(
+                "Runtime security-header probe: fetch the given URL and "
+                "validate HSTS, CSP, X-Frame-Options, cookies, plus probe "
+                "publicly-accessible .git/.env and CSWSH defense (#661). "
+                "Exit code 1 on any error finding, 0 otherwise."
+            ),
+        )
+        parser.add_argument(
+            "--paths",
+            nargs="+",
+            dest="live_paths",
+            help=(
+                "Additional paths or URLs to include in --live mode "
+                "(e.g. '/auth/login/' '/api/'). Relative paths are joined "
+                "against --live."
+            ),
+        )
+        parser.add_argument(
+            "--no-websocket-probe",
+            action="store_true",
+            dest="no_websocket_probe",
+            help="Skip the WebSocket CSWSH probe in --live mode.",
+        )
+        parser.add_argument(
+            "--header",
+            action="append",
+            dest="live_headers",
+            default=[],
+            help=(
+                "Extra HTTP header to send with --live requests, in "
+                "'Name: Value' format. Repeatable. Use for staging "
+                "environments behind basic auth or bearer tokens."
+            ),
+        )
+        parser.add_argument(
+            "--skip-path-probes",
+            action="store_true",
+            dest="skip_path_probes",
+            help=(
+                "Skip the information-disclosure path probes "
+                "(/.git/config, /.env, /__debug__/). Useful behind WAFs "
+                "that would 403 every request."
+            ),
+        )
 
     def handle(self, *args, **options):
         json_output = options.get("json_output", False)
@@ -410,6 +459,12 @@ class Command(BaseCommand):
         permissions_path = options.get("permissions_path")
         strict = options.get("strict", False)
         dump_permissions = options.get("dump_permissions", False)
+        live_url = options.get("live_url")
+
+        # --live: runtime probe (#661). Mutually informative with other modes
+        # but runs independently — no LiveView collection needed.
+        if live_url:
+            return self._run_live_audit(options)
 
         audits = self._collect_audits(app_label, verbose)
 
@@ -443,6 +498,92 @@ class Command(BaseCommand):
             has_failures = any(f.severity in ("error", "warning") for f in findings)
             if has_failures:
                 raise SystemExit(1)
+
+    def _run_live_audit(self, options):
+        """Run the --live runtime probe and return the command exit code."""
+        from djust.audit_live import run_live_audit
+
+        live_url = options["live_url"]
+        paths = options.get("live_paths") or None
+        no_ws_probe = options.get("no_websocket_probe", False)
+        skip_path_probes = options.get("skip_path_probes", False)
+        extra_header_lines = options.get("live_headers") or []
+        json_output = options.get("json_output", False)
+        strict = options.get("strict", False)
+
+        # Parse repeatable --header 'Name: Value' args
+        extra_headers: Dict[str, str] = {}
+        for line in extra_header_lines:
+            if ":" not in line:
+                self.stderr.write(
+                    self.style.ERROR(f"--header value must be 'Name: Value' — got {line!r}")
+                )
+                raise SystemExit(2)
+            name, _, value = line.partition(":")
+            extra_headers[name.strip()] = value.strip()
+
+        report = run_live_audit(
+            target=live_url,
+            paths=paths,
+            extra_headers=extra_headers or None,
+            probe_websocket=not no_ws_probe,
+            skip_path_probes=skip_path_probes,
+        )
+
+        if json_output:
+            self.stdout.write(json.dumps(report.to_dict(), indent=2))
+        else:
+            self._output_live_pretty(report)
+
+        # Exit code: strict mode fails on warnings too
+        if strict and (report.errors or report.warnings):
+            raise SystemExit(1)
+        if report.errors:
+            raise SystemExit(1)
+        return
+
+    def _output_live_pretty(self, report):
+        """Pretty-print a LiveAuditReport to the terminal."""
+        line = "=" * 50
+        self.stdout.write("")
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(self.style.MIGRATE_HEADING("  djust_audit --live runtime probe"))
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(f"  Target:  {report.target}")
+        self.stdout.write(f"  Pages:   {report.pages_fetched} fetched")
+        self.stdout.write("")
+
+        errors = [f for f in report.findings if f.severity == "error"]
+        warnings_ = [f for f in report.findings if f.severity == "warning"]
+        infos = [f for f in report.findings if f.severity == "info"]
+
+        if errors:
+            self.stdout.write(self.style.ERROR("  ERRORS:"))
+            for f in errors:
+                self.stdout.write(self.style.ERROR("  " + f.format_line()))
+            self.stdout.write("")
+        if warnings_:
+            self.stdout.write(self.style.WARNING("  WARNINGS:"))
+            for f in warnings_:
+                self.stdout.write(self.style.WARNING("  " + f.format_line()))
+            self.stdout.write("")
+        if infos:
+            self.stdout.write("  INFO:")
+            for f in infos:
+                self.stdout.write("  " + f.format_line())
+            self.stdout.write("")
+
+        if not report.findings:
+            self.stdout.write(
+                self.style.SUCCESS("  No findings — target passes all runtime checks.")
+            )
+
+        self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+        self.stdout.write(
+            f"  Summary: {report.errors} error(s), "
+            f"{report.warnings} warning(s), {report.infos} info"
+        )
+        self.stdout.write("")
 
     def _run_permissions_check(self, audits, path):
         """Load a permissions document and compare it against the audits."""
