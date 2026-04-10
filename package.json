@@ -12,7 +12,7 @@
     "lint:fix": "eslint python/djust/static/djust/ --fix"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.4",
     "@vitest/ui": "^4.1.0",
     "eslint": "^10.0.3",
     "eslint-plugin-security": "^4.0.0",
