@@ -360,10 +360,27 @@ class PerformanceTracker:
         return None
 
     def track_context_size(self, context: Dict[str, Any]):
-        """Track the size of the context data."""
+        """Track the size of the context data.
+
+        Uses key count and shallow getsizeof instead of str(context) to avoid
+        triggering QuerySet.__repr__() which evaluates the queryset — a
+        SynchronousOnlyOperation when called from the async websocket path.
+        See: https://github.com/djust-org/djust/issues/649
+        """
         import sys
 
-        self.context_size = sys.getsizeof(str(context))  # Rough estimate
+        # Shallow estimate: size of the dict itself + sum of value sizes.
+        # Do NOT call str(context) — it triggers __repr__ on every value,
+        # which evaluates lazy QuerySets and hits the DB in async context.
+        try:
+            total = sys.getsizeof(context)
+            for v in context.values():
+                # getsizeof on a QuerySet returns the object size (~200 bytes),
+                # NOT the size of its results — safe in async context.
+                total += sys.getsizeof(v)
+            self.context_size = total
+        except Exception:
+            self.context_size = 0
 
     def track_patches(self, patch_count: int, patches: Optional[List[Dict[str, Any]]] = None):
         """Track the number of patches generated and provide actionable recommendations.
