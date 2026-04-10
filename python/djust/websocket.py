@@ -46,6 +46,91 @@ except ImportError:
 _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 
 
+def _is_allowed_origin(origin: Optional[bytes]) -> bool:
+    """
+    Check whether a WebSocket Origin header is allowed under settings.ALLOWED_HOSTS.
+
+    Policy:
+      * Missing/empty Origin header -> ALLOW. Non-browser clients (curl, Python
+        WebsocketCommunicator, native mobile) do not send an Origin header, and
+        blocking them would break legitimate integrations and every existing
+        test that uses WebsocketCommunicator without explicit headers.
+        Browsers always send Origin on cross-origin WS handshakes, so a CSWSH
+        attacker cannot forge a missing header from a victim's browser.
+      * Non-ASCII / malformed Origin -> REJECT. Malformed headers are never
+        legitimate.
+      * Otherwise extract the host (stripping scheme, port, brackets, path) and
+        compare against settings.ALLOWED_HOSTS using Django's own
+        django.http.request.validate_host() so wildcard (".example.com", "*")
+        semantics match Django's HTTP layer exactly.
+
+    This helper is defense-in-depth: DjustMiddlewareStack also wraps routers
+    in channels.security.websocket.AllowedHostsOriginValidator by default, but
+    the consumer-level check still protects apps that route directly to
+    LiveViewConsumer without going through DjustMiddlewareStack.
+
+    Note on userinfo smuggling: a hostile string like
+    ``https://evil.example@target.com/`` parses via ``urlparse`` to
+    ``hostname="target.com"`` (RFC 3986 — "evil.example" is the userinfo).
+    This is safe because RFC 6454 §7 explicitly forbids browsers from
+    serializing userinfo in the ``Origin`` header, so a real victim browser
+    will never actually send such a string. Even if an attacker constructed
+    one by hand outside a browser, the extracted host is "target.com" — the
+    attacker's claim is effectively "I'm on target.com", and that's what we
+    check against ALLOWED_HOSTS. There's no cross-host authority gain.
+
+    Similarly, a hostile string like ``https://target.com.evil.com/`` parses
+    to ``hostname="target.com.evil.com"``, which Django's ``validate_host``
+    correctly rejects when ``target.com`` is listed as an exact entry in
+    ALLOWED_HOSTS.
+
+    See #653 (CSWSH pentest finding, 2026-04-10).
+    """
+    if not origin:
+        return True  # non-browser client
+    try:
+        origin_str = origin.decode("ascii")
+    except (UnicodeDecodeError, AttributeError):
+        return False
+
+    # Parse the origin into a host (no scheme, no port, no path).
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(origin_str)
+    except ValueError:
+        return False
+
+    host = parsed.hostname  # urlparse strips scheme, port, brackets, and path
+    if host is None:
+        # "null" origin (sandboxed iframes, file://) or an unparseable value.
+        # Reject conservatively: a browser that sends "null" is not on an
+        # allowed host by any definition.
+        return False
+
+    # urlparse strips the brackets from IPv6 literals, but Django's
+    # ALLOWED_HOSTS / get_host() stores IPv6 addresses WITH brackets
+    # (e.g. "[::1]"). Re-add them so validate_host() matches correctly.
+    if ":" in host:
+        match_host = f"[{host.lower()}]"
+    else:
+        match_host = host.lower()
+
+    from django.conf import settings
+    from django.http.request import validate_host
+
+    allowed_hosts = list(getattr(settings, "ALLOWED_HOSTS", []) or [])
+    if not allowed_hosts:
+        # Match Django's HTTP layer: in DEBUG, fall back to localhost variants.
+        # In production, refuse rather than fail-open.
+        if getattr(settings, "DEBUG", False):
+            allowed_hosts = [".localhost", "127.0.0.1", "[::1]"]
+        else:
+            return False
+
+    return validate_host(match_host, allowed_hosts)
+
+
 def _snapshot_assigns(view_instance):
     """Snapshot public assigns (non-underscore attributes) by deep copy.
 
@@ -736,6 +821,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         """Handle WebSocket connection"""
+        # CSWSH defense (#653): reject the handshake if the Origin header is
+        # not in settings.ALLOWED_HOSTS *before* calling self.accept(). This
+        # is defense in depth on top of DjustMiddlewareStack's
+        # AllowedHostsOriginValidator wrap — the consumer-level check still
+        # protects apps that route directly to LiveViewConsumer.
+        headers = dict(self.scope.get("headers", []))
+        origin = headers.get(b"origin")
+        if not _is_allowed_origin(origin):
+            # decode(errors="replace") never raises on bytes, so no try/except
+            # is needed — the "if origin else ''" guard covers the None case.
+            origin_repr = origin.decode("ascii", errors="replace") if origin else ""
+            logger.warning(
+                "WebSocket connection rejected: disallowed Origin %s",
+                sanitize_for_log(origin_repr),
+            )
+            await self.close(code=4403)
+            return
+
         await self.accept()
 
         # Generate session ID
