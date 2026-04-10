@@ -35,6 +35,18 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
             control end-to-end, or when an upstream proxy already strips
             hostile Origin headers.
 
+    Note:
+        ``channels.security.websocket.AllowedHostsOriginValidator`` snapshots
+        ``settings.ALLOWED_HOSTS`` at the moment this function runs (i.e. at
+        ASGI-application construction time). If you change ``ALLOWED_HOSTS``
+        at runtime (e.g. via ``django.test.override_settings`` in tests),
+        only the consumer-level ``_is_allowed_origin`` check in
+        ``LiveViewConsumer.connect()`` will see the new value; the
+        middleware-level validator will keep using the value it captured
+        when the stack was built. This matters for tests — prefer the
+        consumer-level check over asserting on the middleware in
+        override-settings tests.
+
     Example::
 
         from djust.routing import DjustMiddlewareStack

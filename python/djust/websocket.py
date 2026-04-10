@@ -69,6 +69,21 @@ def _is_allowed_origin(origin: Optional[bytes]) -> bool:
     the consumer-level check still protects apps that route directly to
     LiveViewConsumer without going through DjustMiddlewareStack.
 
+    Note on userinfo smuggling: a hostile string like
+    ``https://evil.example@target.com/`` parses via ``urlparse`` to
+    ``hostname="target.com"`` (RFC 3986 — "evil.example" is the userinfo).
+    This is safe because RFC 6454 §7 explicitly forbids browsers from
+    serializing userinfo in the ``Origin`` header, so a real victim browser
+    will never actually send such a string. Even if an attacker constructed
+    one by hand outside a browser, the extracted host is "target.com" — the
+    attacker's claim is effectively "I'm on target.com", and that's what we
+    check against ALLOWED_HOSTS. There's no cross-host authority gain.
+
+    Similarly, a hostile string like ``https://target.com.evil.com/`` parses
+    to ``hostname="target.com.evil.com"``, which Django's ``validate_host``
+    correctly rejects when ``target.com`` is listed as an exact entry in
+    ALLOWED_HOSTS.
+
     See #653 (CSWSH pentest finding, 2026-04-10).
     """
     if not origin:
@@ -814,10 +829,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         headers = dict(self.scope.get("headers", []))
         origin = headers.get(b"origin")
         if not _is_allowed_origin(origin):
-            try:
-                origin_repr = origin.decode("ascii", errors="replace") if origin else ""
-            except Exception:
-                origin_repr = "<undecodable>"
+            # decode(errors="replace") never raises on bytes, so no try/except
+            # is needed — the "if origin else ''" guard covers the None case.
+            origin_repr = origin.decode("ascii", errors="replace") if origin else ""
             logger.warning(
                 "WebSocket connection rejected: disallowed Origin %s",
                 sanitize_for_log(origin_repr),

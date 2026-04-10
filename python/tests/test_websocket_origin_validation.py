@@ -62,6 +62,36 @@ class TestIsAllowedOriginUnit:
         # No scheme, no host — urlparse returns hostname=None.
         assert _is_allowed_origin(b"just-a-string") is False
 
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    def test_scheme_only_origin_rejected(self):
+        """``https://`` with no host (scheme only) is rejected."""
+        # urlparse("https://").hostname is None, so we fall through to False.
+        assert _is_allowed_origin(b"https://") is False
+        assert _is_allowed_origin(b"http://") is False
+
+    @override_settings(ALLOWED_HOSTS=["target.com"])
+    def test_userinfo_in_origin_not_exploitable(self):
+        """Userinfo in Origin does not smuggle a different host.
+
+        RFC 6454 §7 forbids browsers from serializing userinfo in the
+        ``Origin`` header, so a real browser never sends this. Even if an
+        attacker hand-crafts such an Origin outside a browser, urlparse
+        extracts the host portion ("target.com") — the userinfo
+        ("evil.example") is ignored, so the attacker's "claim" is still
+        "I am on target.com", which is what we check against ALLOWED_HOSTS.
+        Either way there is no cross-host authority gain.
+        """
+        # userinfo "evil.example" + host "target.com" -> host is target.com
+        assert _is_allowed_origin(b"https://evil.example@target.com/") is True
+        # userinfo "target.com" + host "evil.example" -> host is evil.example
+        assert _is_allowed_origin(b"https://target.com@evil.example/") is False
+
+    @override_settings(ALLOWED_HOSTS=["target.com"])
+    def test_subdomain_confusion_rejected(self):
+        """``target.com.evil.com`` is NOT treated as ``target.com``."""
+        assert _is_allowed_origin(b"https://target.com.evil.com/") is False
+        assert _is_allowed_origin(b"https://evil.com.target.com/") is False
+
     @override_settings(ALLOWED_HOSTS=["*"])
     def test_wildcard_allows_anything(self):
         """`*` in ALLOWED_HOSTS allows any origin (matches Django HTTP semantics)."""
