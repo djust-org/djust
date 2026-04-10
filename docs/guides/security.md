@@ -264,6 +264,7 @@ self.push_event("debug", {"contact": model_to_dict(self.contact)})
 - **Use `@rate_limit`** on expensive operations (search, export, bulk actions)
 - **Validate handler parameters** — don't trust client-provided values
 - **Keep `DEBUG=False` in production** — debug payloads expose variable values
+- **Leave `DJUST_EXPOSE_TIMING=False` in production** — VDOM patch timing and performance metadata are useful for local dev and staging profiling, but cross-origin observers can use them to differentiate code paths (DB hit vs cache miss, valid vs invalid CSRF) by comparing handler durations. When `DEBUG=False` the framework hides these fields by default; set `DJUST_EXPOSE_TIMING = True` only in staging environments where you need the timing data and have network-level access control. ([#654](https://github.com/djust-org/djust/issues/654))
 
 ### Don't
 

@@ -131,6 +131,35 @@ def _is_allowed_origin(origin: Optional[bytes]) -> bool:
     return validate_host(match_host, allowed_hosts)
 
 
+def _should_expose_timing() -> bool:
+    """
+    Whether VDOM patch responses may include server-side timing/performance data.
+
+    Returns True if either:
+      * ``settings.DEBUG`` is True (development), OR
+      * ``settings.DJUST_EXPOSE_TIMING`` is True (opt-in for staging/profiling).
+
+    Returns False in production by default. The gating is load-bearing:
+    timing/performance metadata enables side-channel attacks (code-path
+    differentiation by handler duration, internal handler/phase name
+    disclosure, load-based DoS scheduling) when combined with CSWSH (#653).
+    In debug mode the browser debug panel still receives timing via the
+    ``_attach_debug_payload`` helper, which has its own DEBUG gate — this
+    check only controls the *top-level* ``response["timing"]`` /
+    ``response["performance"]`` fields that are visible to every client.
+
+    Helper form (not a module constant) so ``django.test.override_settings``
+    works at runtime — the function reads settings each call.
+
+    See #654 (pentest finding 2026-04-10).
+    """
+    from django.conf import settings
+
+    return bool(
+        getattr(settings, "DEBUG", False) or getattr(settings, "DJUST_EXPOSE_TIMING", False)
+    )
+
+
 def _snapshot_assigns(view_instance):
     """Snapshot public assigns (non-underscore attributes) by deep copy.
 
@@ -719,10 +748,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Include HTML if provided (e.g., patch compression fallback)
                 if html:
                     response["html"] = html
-                if timing:
-                    response["timing"] = timing
-                if performance:
-                    response["performance"] = performance
+                # #654: gate timing/performance on DEBUG or DJUST_EXPOSE_TIMING so
+                # production clients (including unauthenticated cross-origin
+                # observers under CSWSH) don't see server-side code-path timings.
+                # The browser debug panel is unaffected — it receives timing via
+                # _attach_debug_payload which has its own DEBUG gate.
+                if _should_expose_timing():
+                    if timing:
+                        response["timing"] = timing
+                    if performance:
+                        response["performance"] = performance
                 if reset_form:
                     response["reset_form"] = True
                 if cache_request_id:
