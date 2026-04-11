@@ -131,6 +131,16 @@ navigation:
         file: guides/hooks.md
         order: 6
         level: intermediate
+      - title: JS Commands
+        slug: js-commands
+        file: guides/js-commands.md
+        order: 6.5
+        level: intermediate
+      - title: Paste Events
+        slug: dj-paste
+        file: guides/dj-paste.md
+        order: 6.6
+        level: intermediate
       - title: Model Binding
         slug: model-binding
         file: guides/model-binding.md

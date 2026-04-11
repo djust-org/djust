@@ -41,7 +41,14 @@ How to build specific features.
 | **[Flash Messages](guides/flash-messages.md)**         | Transient notifications with `put_flash` (Phoenix-style)  |
 | **[Presence](guides/presence.md)**                     | Track online users, live cursors, typing indicators       |
 | **[Uploads](guides/uploads.md)**                       | Chunked binary file uploads via WebSocket                 |
+| **[Paste Events](guides/dj-paste.md)**                 | `dj-paste` — structured clipboard payloads + upload routing |
 | **[Loading States](guides/loading-states.md)**         | Spinners, skeleton screens, disabled states               |
+
+### Client-Side Commands
+
+|                                                        |                                                           |
+| ------------------------------------------------------ | --------------------------------------------------------- |
+| **[JS Commands](guides/js-commands.md)**               | `show`, `hide`, `toggle`, `add_class`, `transition`, `push`, … — client-side DOM ops with Phoenix LV 1.0 parity |
 
 ### Navigation
 
