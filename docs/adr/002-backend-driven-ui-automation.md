@@ -1240,6 +1240,22 @@ Prior art worth studying:
 - **Codecademy / Pluralsight** — interactive course platforms. Each has built custom infrastructure for instructor-led driving. This proposal generalizes their approach.
 - **OpenAI function calling / Anthropic tool use** — the LLM API shapes that `get_handler_schema` maps to. Well-standardized at this point; supporting both is mechanical.
 
+## Review decisions (2026-04-11)
+
+Feedback from initial review has been incorporated:
+
+| Open question | Decision | Follow-up |
+|---|---|---|
+| **Phase 1 scope (push_commands + wait_for_event + TutorialMixin for v0.4.2)** | Confirmed as-is. Ship the foundation first even though AI is the headline — the AI layer sits on top of these primitives and shipping them separately lets us get real-world feedback before the LLM integration lands. | Proceed to implementation ticket breakdown. |
+| **LLM provider abstraction (one API for OpenAI + Anthropic + local)** | Confirmed worth the extra design week. Provider lock-in is a strategic risk we shouldn't take. | See [ADR-003](003-llm-provider-abstraction.md). |
+| **Speech-to-text default (Web Speech API vs Whisper)** | Stay flexible. Ship both paths as equal-weight options with documentation helping app authors choose. No hardcoded default. | Documented in ADR-002 Phase 5. No separate ADR needed. |
+| **Undo for LLM-driven actions** | Worth exploring further before committing to an approach. The naive "snapshot all state" approach has cost and complexity concerns that deserve their own design pass. | See [ADR-004](004-undo-for-llm-driven-actions.md). |
+| **Default narrator/assistant bubble UI** | Ship a default. Honour the active framework config (Bootstrap / Tailwind / plain) so it looks native without custom CSS. Apps can override with a `{% tutorial_bubble %}` / `{% assistant_bubble %}` template tag that renders a custom overlay. | Implementation detail of Phases 3 and 5. |
+| **Consent envelope for remote control** | Warrants its own ADR — the security surface is too large to bury in a sub-section. | See [ADR-005](005-consent-envelope-for-remote-control.md). |
+
+The decision table above is binding for the implementation: Phase 1 proceeds on the scope and primitives described above; Phases 4-5 proceed once [ADR-003](003-llm-provider-abstraction.md), [ADR-004](004-undo-for-llm-driven-actions.md), and [ADR-005](005-consent-envelope-for-remote-control.md) are themselves accepted.
+
 ## Changelog
 
 - **2026-04-11**: Initial draft. Proposed.
+- **2026-04-11**: Review decisions recorded. Phase 1 scope confirmed. Follow-up ADRs spun out for LLM provider abstraction (ADR-003), undo (ADR-004), and consent envelope (ADR-005). Still Proposed; will move to Accepted once the three sub-ADRs land.
