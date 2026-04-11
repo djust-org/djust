@@ -16,6 +16,7 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | A0xx | Audit / Static Security Checks | `manage.py check --tag djust` (startup) |
 | P0xx | Permissions Document | `manage.py djust_audit --permissions permissions.yaml` |
 | L0xx | Live Runtime Probe | `manage.py djust_audit --live <url>` |
+| X0xx | AST Anti-Pattern Scanner | `manage.py djust_audit --ast` |
 | DJE-xxx | Runtime | During WebSocket events and VDOM diffing |
 
 Run all static checks at once:
@@ -1297,6 +1298,203 @@ Preferred-Languages: en
 **What causes it**: The target URL returned an HTTP 4xx/5xx status. The probe still inspects the response headers, but the finding is recorded so the report reflects that the main page wasn't loaded successfully.
 
 **Fix**: Investigate the application error. If the root URL requires auth, pass credentials with `--header 'Authorization: Basic ...'`.
+
+---
+
+## AST Anti-Pattern Scanner Findings (X0xx)
+
+These findings are emitted by `manage.py djust_audit --ast`, which walks your Python source and Django templates looking for five specific security anti-patterns. Every pattern here was either a live vulnerability or a near-miss in the 2026-04-10 pentest of NYC Claims. The checks are intentionally narrow: false positives are worse than missed findings for a linter that runs on every push.
+
+Suppress a single finding with `# djust: noqa X001` on the offending line (or `{# djust: noqa X006 #}` inside a template). Bare `# djust: noqa` suppresses every djust.X finding on that line.
+
+Run:
+
+```bash
+python manage.py djust_audit --ast                              # scan cwd
+python manage.py djust_audit --ast --ast-path src/              # scan a directory
+python manage.py djust_audit --ast --json                       # machine-readable
+python manage.py djust_audit --ast --strict                     # fail on warnings too
+python manage.py djust_audit --ast --ast-exclude vendor legacy/ # skip paths
+python manage.py djust_audit --ast --ast-no-templates           # .py only
+```
+
+### X001: Possible IDOR — object lookup by URL param without auth scoping
+
+**Severity**: Error
+
+**What causes it**: A view class whose name ends in `DetailView`/`EditView` (or which inherits from `LiveView`, `DetailView`, `UpdateView`, `DeleteView`, `FormView`) calls `Model.objects.get(pk=self.kwargs["pk"])` without a sibling `.filter(owner=request.user)` (or `user=`, `tenant=`, `organization=`, `team=`, `created_by=`, `author=`, `workspace=`) scoping the queryset, and without calling `check_permissions` or `has_perm`.
+
+**What you see**:
+
+```
+ERROR [djust.X001] /path/crm/views.py:42:8 Possible IDOR — object lookup by URL param without auth scoping (ContactDetailView.get_object: add .filter(owner=request.user) or override check_permissions() to scope by owner)
+```
+
+**Fix**: Scope the queryset by the authenticated user or the tenant the user belongs to:
+
+```python
+class ContactDetailView(LiveView):
+    def mount(self, request, pk):
+        self.contact = Contact.objects.filter(
+            owner=request.user
+        ).get(pk=pk)
+```
+
+Or override `check_permissions()` with an explicit membership check and add `# djust: noqa X001` on the `.get()` call if the scoping is implicit (e.g. the tenant filter sits inside a helper manager).
+
+---
+
+### X002: Event handler mutates state without a permission check
+
+**Severity**: Warning
+
+**What causes it**: A method decorated with `@event_handler` contains a call to `.create()`, `.update()`, `.delete()`, `.bulk_create()`, `.bulk_update()`, or `.save()`, and **neither** of the following is true:
+
+- The enclosing class sets `login_required = True` or `permission_required = "..."` in the class body.
+- The handler itself is wrapped in `@permission_required("...")`, `@login_required`, `@user_passes_test(...)`, `@staff_member_required`, or `@superuser_required`.
+
+**What you see**:
+
+```
+WARN [djust.X002] /path/projects/views.py:87:4 Event handler mutates state without a permission check (ProjectView.delete_project: add @permission_required('projects.delete_project'), set login_required=True on the view, or override check_permissions())
+```
+
+**Fix**: Add class-level auth or a handler decorator:
+
+```python
+class ProjectView(LiveView):
+    login_required = True
+    permission_required = "projects.manage_projects"
+
+    @event_handler
+    def delete_project(self, project_id: int):
+        Project.objects.filter(pk=project_id).delete()
+```
+
+Or the more granular form:
+
+```python
+@permission_required("projects.delete_project")
+@event_handler
+def delete_project(self, project_id: int):
+    Project.objects.filter(pk=project_id).delete()
+```
+
+---
+
+### X003: SQL string formatting in raw()/extra()/execute() — SQLi risk
+
+**Severity**: Error
+
+**What causes it**: A call to `.raw(...)`, `.extra(...)`, `cursor.execute(...)`, or `cursor.executemany(...)` passes a query built with an f-string, a `.format()` call, or a `"..." % ...` binary-op. Any of those interpolate Python values directly into the SQL string, bypassing Django's ORM parameter binding.
+
+**What you see**:
+
+```
+ERROR [djust.X003] /path/reports/queries.py:19:11 SQL string formatting in raw()/extra()/execute() — SQLi risk (.raw(...) with interpolated string)
+```
+
+**Fix**: Use parametrised queries — pass the values as a second argument and leave `%s` placeholders in the SQL:
+
+```python
+# BAD
+Thing.objects.raw(f"SELECT * FROM thing WHERE name = '{name}'")
+
+# GOOD
+Thing.objects.raw("SELECT * FROM thing WHERE name = %s", [name])
+
+# GOOD (cursor)
+cursor.execute("SELECT * FROM t WHERE name = %s", [name])
+```
+
+---
+
+### X004: Open redirect — request data fed to redirect without is_safe_url
+
+**Severity**: Error
+
+**What causes it**: A function contains `HttpResponseRedirect(request.GET[...])` (or `request.POST`, `request.GET.get(...)`, etc.) and the enclosing function does not call `url_has_allowed_host_and_scheme` or `is_safe_url` anywhere inside it. The scanner looks for the guard at the same function scope — moving the check into a helper works, but add `# djust: noqa X004` on the redirect line so reviewers can see the intent.
+
+**What you see**:
+
+```
+ERROR [djust.X004] /path/auth/views.py:55:15 Open redirect — request data fed to redirect without is_safe_url (post_login: wrap the target in url_has_allowed_host_and_scheme() before redirecting)
+```
+
+**Fix**: Validate the URL before redirecting:
+
+```python
+from django.utils.http import url_has_allowed_host_and_scheme
+
+def post_login(request):
+    target = request.GET.get("next", "/")
+    if not url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        target = "/"
+    return HttpResponseRedirect(target)
+```
+
+---
+
+### X005: mark_safe() with interpolated value — XSS risk
+
+**Severity**: Error
+
+**What causes it**: `django.utils.safestring.mark_safe(...)` or `SafeString(...)` is called with an argument that is an f-string, a `.format()` call, or a `"..." % ...` binary-op. Whatever gets interpolated becomes trusted HTML — if any piece of it is user-controlled, that's stored XSS.
+
+**What you see**:
+
+```
+ERROR [djust.X005] /path/views.py:72:15 mark_safe() with interpolated value — XSS risk (mark_safe(...) wraps an interpolated string)
+```
+
+**Fix**: Use `django.utils.html.format_html()` instead — it behaves like `.format()` but escapes every substitution:
+
+```python
+from django.utils.html import format_html, escape
+
+# BAD
+return mark_safe(f"<b>{name}</b>")
+
+# GOOD
+return format_html("<b>{}</b>", name)
+
+# ALSO GOOD
+return mark_safe(f"<b>{escape(name)}</b>")
+```
+
+---
+
+### X006: Template uses |safe on a view variable
+
+**Severity**: Warning
+
+**What causes it**: A `.html` template contains `{{ variable|safe }}`. The scanner flags every instance as "worth reviewing" — sometimes `|safe` is correct (rendering stored HTML that the author wrote in a CMS that already sanitizes it), but it is also the most common XSS foot-gun in Django apps.
+
+**What you see**:
+
+```
+WARN [djust.X006] /path/templates/blog/post.html:14:4 Template uses |safe on a view variable ({{ body|safe }})
+```
+
+**Fix**: Remove `|safe` if the value is user-controlled. If the value is a short snippet you control, wrap it in `format_html()` on the view side and pass a `SafeString` instead. Suppress the finding with `{# djust: noqa X006 #}` on the same line if you have verified the HTML is already sanitised by bleach / nh3.
+
+---
+
+### X007: Template uses {% autoescape off %}
+
+**Severity**: Warning
+
+**What causes it**: A `.html` template opens an `{% autoescape off %}` block. That disables Django's default auto-escaping for every `{{ var }}` inside the block — one forgotten `|escape` turns into stored XSS.
+
+**What you see**:
+
+```
+WARN [djust.X007] /path/templates/emails/body.html:3:0 Template uses {% autoescape off %}
+```
+
+**Fix**: Remove the `{% autoescape off %}` block. If you really need unescaped output (rendering pre-escaped content from a trusted source), prefer an explicit `{{ var|safe }}` on the one variable that needs it — then X006 documents the exception — instead of a block that silently bypasses escaping for everything inside. Suppress with `{# djust: noqa X007 #}` on the block opener line if the exception is intentional.
 
 ---
 
