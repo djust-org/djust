@@ -395,12 +395,54 @@
     // Exports
     // ========================================================================
 
+    /**
+     * Route a FileList obtained from `ClipboardEvent.clipboardData.files`
+     * (the `dj-paste` flow) through the same upload pipeline used by
+     * file-input and drag-drop uploads. Expects the target element to
+     * have a `dj-upload="<slot_name>"` attribute whose slot has been
+     * configured via `setUploadConfigs`.
+     *
+     * Returns a promise that resolves once every pasted file has been
+     * uploaded (or rejected client-side). Errors for individual files
+     * are dispatched as `djust:upload:error` events; they do not throw.
+     */
+    async function queueClipboardFiles(element, fileList) {
+        if (!fileList || fileList.length === 0) return;
+        const uploadName = element && element.getAttribute && element.getAttribute('dj-upload');
+        if (!uploadName) return;
+
+        const config = uploadConfigs[uploadName];
+        const files = Array.from(fileList);
+
+        await showPreviews(uploadName, files);
+
+        if (!isWSConnected()) {
+            console.error('[Upload] WebSocket not connected');
+            return;
+        }
+
+        for (const file of files) {
+            if (config && file.size > config.max_file_size) {
+                window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                    detail: { file: file.name, error: 'File too large' }
+                }));
+                continue;
+            }
+            try {
+                await uploadFile(liveViewWS, uploadName, file, config);
+            } catch (err) {
+                console.error('[Upload] Paste upload failed: %s %o', String(file.name), err);
+            }
+        }
+    }
+
     window.djust.uploads = {
         setConfigs: setUploadConfigs,
         handleProgress: handleUploadProgress,
         bindHandlers: bindUploadHandlers,
         cancelUpload: (ref) => cancelUpload(liveViewWS, ref),
         activeUploads: activeUploads,
+        queueClipboardFiles: queueClipboardFiles,
     };
 
 })();
