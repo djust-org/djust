@@ -218,10 +218,138 @@ Most "chain didn't do anything" issues are selector mismatches or `push_commands
 
 `push_commands` is **Phase 1a** of the backend-driven UI story in [ADR-002](../adr/002-backend-driven-ui-automation.md). Two more primitives land in the same v0.4.2 release on top of this one:
 
-- **Phase 1b: [`wait_for_event`](server-driven-ui.md#waiting-for-the-user)** — `await self.wait_for_event("button_clicked", timeout=60)` inside a `@background` handler. Lets you suspend until the user actually performs an action. Required for correct tutorial flows.
+- **Phase 1b: `wait_for_event`** — see [Waiting for the user](#waiting-for-the-user) below.
 - **Phase 1c: [`TutorialMixin`](tutorials.md)** — a declarative state machine for guided tours. Describe the tour as a list of `TutorialStep` entries (target, message, wait-for event, optional on-enter/on-exit chains) and call `start_tutorial()`. The mixin handles step ordering, highlight cleanup, timeout handling, and skip/cancel. Zero boilerplate.
 
 After v0.4.2, Phase 4 (multi-user broadcast, consent envelope) and Phase 5 (LLM-driven `AssistantMixin`) extend the primitive into multi-user and AI-driven scenarios. See [ADR-002](../adr/002-backend-driven-ui-automation.md) for the full roadmap.
+
+## Waiting for the user
+
+`push_commands` sends chains to the client, but by itself it doesn't know how to pause a background task until the user actually does something. That's what `await self.wait_for_event(...)` is for — it's the async primitive that makes "highlight this button, wait for the user to click it, then move on" work declaratively.
+
+```python
+from djust.decorators import event_handler, background
+from djust.js import JS
+
+class Onboarding(LiveView):
+    tour_running: bool = False
+
+    @event_handler
+    @background
+    async def start_tour(self, **kwargs):
+        self.tour_running = True
+
+        # Step 1: highlight the create button
+        self.push_commands(
+            JS.add_class("tour-highlight", to="#btn-new-project")
+              .focus("#btn-new-project")
+        )
+
+        # Suspend until the user clicks it (which fires create_project)
+        try:
+            result = await self.wait_for_event("create_project", timeout=60)
+        except TimeoutError:
+            self.tour_running = False
+            self.push_commands(JS.remove_class("tour-highlight", to="#btn-new-project"))
+            return
+
+        # User clicked — clean up the highlight and advance
+        self.push_commands(JS.remove_class("tour-highlight", to="#btn-new-project"))
+        self.project_name = result.get("name", "")
+
+        # Step 2: continue the tour...
+
+    @event_handler
+    def create_project(self, name: str, **kwargs):
+        """Called when the user clicks the highlighted button."""
+        Project.objects.create(name=name, owner=self.request.user)
+```
+
+### Signature
+
+```python
+async def wait_for_event(
+    self,
+    name: str,
+    *,
+    timeout: Optional[float] = None,
+    predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
+) -> Dict[str, Any]:
+```
+
+- **`name`** — the name of the event handler to wait for. Must match a method decorated with `@event_handler`. Any call to that handler resolves the waiter (unless a predicate filters it out).
+- **`timeout`** — optional seconds to wait. Raises `asyncio.TimeoutError` when exceeded. `None` (the default) waits indefinitely.
+- **`predicate`** — optional callable that takes the handler's kwargs dict and returns `True` to resolve or `False` to keep waiting. Useful for "wait for the user to click *this specific* button" when multiple events might fire the same handler with different arguments.
+- **Returns** — the kwargs dict that was passed to the matching handler.
+
+### Predicate examples
+
+```python
+# Wait for the user to submit a form with a specific project id
+result = await self.wait_for_event(
+    "submit_form",
+    predicate=lambda kw: kw.get("project_id") == 42,
+    timeout=30,
+)
+
+# Wait for any "save" event from a draft whose status is "ready"
+result = await self.wait_for_event(
+    "save",
+    predicate=lambda kw: kw.get("status") == "ready",
+)
+
+# Wait for a click with no filter — first click wins
+result = await self.wait_for_event("next_step")
+```
+
+A predicate that raises is treated as "no match" and logged — a buggy predicate can't crash the event pipeline or deadlock your background task.
+
+### Concurrency
+
+Multiple background tasks can wait on the same event name simultaneously. When that event fires, **every** waiter whose predicate matches resolves with the same kwargs dict. This lets you build fan-out patterns like "three tutorial branches all waiting on the user's next action" without manual coordination.
+
+Waiters for different event names are fully independent — notifying `event_a` never resolves a waiter for `event_b`.
+
+### Timeouts and cleanup
+
+When a waiter times out, the framework removes it from the registry automatically — no stale waiters accumulate over the life of a view. When the view disconnects (WebSocket close, tab navigation, browser crash), the framework cancels **all** pending waiters on that view. Any `@background` task currently awaiting a waiter will unblock with `asyncio.CancelledError`, giving it a chance to clean up (remove highlights, persist partial state, emit analytics).
+
+### Integration with `push_commands`
+
+The two primitives compose naturally. The pattern for any guided flow is:
+
+1. Push a chain that sets up the UI state (highlight, narrate, focus)
+2. Await a waiter for the event you want the user to trigger
+3. On resolution: push a chain that cleans up the UI state and sets up the next step
+4. Repeat
+
+```python
+@event_handler
+@background
+async def run_multi_step_tour(self, **kwargs):
+    for step in self.tour_steps:
+        # Setup
+        self.push_commands(
+            JS.add_class("highlight", to=step["target"])
+              .dispatch("tour:narrate", detail={"text": step["message"]})
+        )
+        # Wait for user action or timeout
+        try:
+            await self.wait_for_event(step["expect"], timeout=step.get("timeout", 60))
+        except TimeoutError:
+            self.push_commands(JS.remove_class("highlight", to=step["target"]))
+            return  # User abandoned the tour
+        # Cleanup + advance
+        self.push_commands(JS.remove_class("highlight", to=step["target"]))
+```
+
+This is exactly the state machine `TutorialMixin` will formalize in Phase 1c — a list of steps, setup/wait/cleanup per step, skip/cancel handling — without the boilerplate.
+
+### Limitations
+
+- **Component events are not currently notified.** If a `LiveComponent` fires a handler, the parent `LiveView`'s waiters don't resolve. This is intentional for v0.4.2 scope — component-event waiting is uncommon and adds complexity. File a follow-up if you hit a case where it matters.
+- **Actor-mode views bypass the dispatch hook.** Views running under the experimental Rust actor system (`use_actors = True`) don't notify waiters yet. The non-actor path is the default and is fully supported.
+- **`wait_for_event` requires the handler to actually run server-side.** If the client fires an event that fails validation (missing params, auth error, etc.), the handler never executes and the waiter never resolves — only the timeout will unblock it.
 
 ## See also
 

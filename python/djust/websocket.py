@@ -959,6 +959,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception as e:
                 logger.warning("Error cleaning up uploads: %s", e)
 
+        # Cancel any pending wait_for_event waiters (ADR-002 Phase 1b).
+        # @background tasks awaiting on a waiter unblock with CancelledError
+        # and can clean up themselves — without this they'd leak the Future.
+        if self.view_instance and hasattr(self.view_instance, "_cancel_all_waiters"):
+            try:
+                self.view_instance._cancel_all_waiters(reason="view_disconnect")
+            except Exception as e:
+                logger.warning("Error cancelling waiters: %s", e)
+
         # Clean up embedded child views
         if self.view_instance and hasattr(self.view_instance, "_child_views"):
             try:
@@ -1774,6 +1783,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         timing["handler"] = (
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms
+
+                        # ADR-002 Phase 1b: resolve any pending wait_for_event
+                        # waiters on the target view whose event_name matches.
+                        # Runs AFTER the handler completes so new waiters
+                        # created during this call aren't self-notified.
+                        # No-op if the view doesn't have any pending waiters.
+                        if hasattr(target_view, "_notify_waiters"):
+                            try:
+                                target_view._notify_waiters(event_name, coerced_params or {})
+                            except Exception as exc:
+                                logger.warning(
+                                    "Waiter notification for %r failed: %s",
+                                    event_name,
+                                    exc,
+                                )
 
                         # Auto-detect unchanged state: if no public assigns were
                         # reassigned, auto-skip the render (eliminates DJE-053).
