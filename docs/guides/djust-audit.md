@@ -1,7 +1,7 @@
 # `djust_audit` — Security Audit Command
 
 `djust_audit` is djust's all-in-one security and configuration audit tool.
-It runs as a Django management command and operates in four modes:
+It runs as a Django management command and operates in five modes:
 
 1. **Default mode** — introspect every LiveView and LiveComponent in the
    project and report what they expose, what decorators protect them, and
@@ -14,6 +14,10 @@ It runs as a Django management command and operates in four modes:
 4. **`--live <url>` mode** — fetch a running deployment and verify
    security headers, cookies, information-disclosure paths, and WebSocket
    CSWSH defense ([L0xx codes](error-codes.md#live-runtime-probe-findings-l0xx)).
+5. **`--ast` mode** — walk your Python source and templates looking for
+   five security anti-patterns (IDOR, unauthenticated mutation, SQL
+   string formatting, open redirects, unsafe `mark_safe`/`|safe`). Emits
+   stable [X0xx codes](error-codes.md#ast-anti-pattern-scanner-findings-x0xx).
 
 The configuration-level static checks (A0xx codes) also run via Django's
 normal check pipeline (`manage.py check --tag djust`) — `djust_audit`
@@ -59,6 +63,18 @@ python manage.py djust_audit --live https://app.example.com \
 # Runtime probe — environments without WebSocket support
 python manage.py djust_audit --live https://app.example.com \
     --no-websocket-probe
+
+# AST anti-pattern scan
+python manage.py djust_audit --ast
+
+# AST scan, specific root, exclude vendored paths, JSON for CI
+python manage.py djust_audit --ast \
+    --ast-path src/ \
+    --ast-exclude vendor third_party legacy/ \
+    --strict --json > ast-report.json
+
+# AST scan — Python only (skip templates)
+python manage.py djust_audit --ast --ast-no-templates
 ```
 
 ## CLI flags
@@ -76,6 +92,10 @@ python manage.py djust_audit --live https://app.example.com \
 | `--header 'Name: Value'` | repeatable | Extra HTTP header for `--live` requests (e.g. staging basic auth). |
 | `--no-websocket-probe` | switch | Skip the CSWSH handshake check. |
 | `--skip-path-probes` | switch | Skip `/.git/`, `/.env`, `/__debug__/` probes (for WAF-protected environments). |
+| `--ast` | switch | Run the AST anti-pattern scanner (#660). |
+| `--ast-path <path>` | str | Root directory for `--ast` (default: current working directory). |
+| `--ast-exclude <path> [...]` | list | Path prefixes (relative to `--ast-path`) to skip during `--ast` scanning. |
+| `--ast-no-templates` | switch | Skip `.html` template files in `--ast` mode (Python only). |
 
 ## Modes explained
 
@@ -172,6 +192,62 @@ installed, the probe is skipped with an INFO-level finding (`L062`)
 instead of failing the audit. Install with `pip install websockets` to
 enable it.
 
+### `--ast`: static anti-pattern scanner
+
+The AST scanner walks your project's Python source and Django templates
+looking for five specific security anti-patterns. Every pattern it
+looks for was either a live vulnerability or a near-miss in the
+2026-04-10 pentest — so the checks are intentionally narrow rather
+than trying to catch every possible bug. False positives are worse
+than missed findings for a linter that runs on every push.
+
+**What it checks** (full reference: [X0xx codes](error-codes.md#ast-anti-pattern-scanner-findings-x0xx)):
+
+- **X001 — IDOR** — `Model.objects.get(pk=...)` inside a DetailView /
+  LiveView without a sibling `.filter(owner=request.user)` or
+  `check_permissions` override.
+- **X002 — Unauthenticated state-mutating handler** — an
+  `@event_handler` that writes to the DB (`create`, `update`,
+  `delete`, `save`) without any permission check (class-level
+  `login_required`, `permission_required`, `@permission_required`,
+  etc.).
+- **X003 — SQL string formatting** — `.raw()` / `.extra()` /
+  `cursor.execute()` with an f-string, a `.format()` call, or a
+  `"..." % ...` binary-op.
+- **X004 — Open redirect** — `HttpResponseRedirect(...)` /
+  `redirect(...)` fed directly from `request.GET` / `request.POST`
+  without an `url_has_allowed_host_and_scheme` /
+  `is_safe_url` guard in the same function.
+- **X005 — Unsafe `mark_safe`** — `mark_safe(...)` / `SafeString(...)`
+  wrapping an f-string, a `.format()` call, or a `%` binary-op.
+- **X006 / X007** — a light regex scan of `.html` files that flags
+  `{{ var|safe }}` and `{% autoescape off %}` blocks for review.
+
+**Suppression**: add `# djust: noqa X001` (or the relevant code) on
+the offending line. Bare `# djust: noqa` suppresses every `djust.X`
+finding on the line. Templates use `{# djust: noqa X006 #}`.
+
+**Dependencies**: zero new runtime deps. The scanner uses the
+stdlib `ast` module for Python and a handful of regular
+expressions for templates.
+
+**Limitations**:
+
+- The scanner cannot follow values across function calls. If the user
+  input is sanitised in a helper two files away, that's invisible
+  here — annotate with `# djust: noqa` and move on.
+- P005 only catches `mark_safe`/`SafeString` on the immediate argument.
+  Multi-step construction (build a string into a variable then pass
+  it) slips through.
+- P003 only scans the first positional argument; `.extra(where=[...])`
+  with kwargs is not inspected.
+- Templates are scanned by regex, not by Django's template compiler —
+  inline tags and comments that look like `{{ var|safe }}` inside
+  strings will be matched.
+
+These are intentional scope limits; the goal is a 2-second CI check
+that catches the common mistakes, not a full data-flow analyser.
+
 #### Security of the tool itself
 
 `fetch()` validates the URL scheme to `http`/`https` only and rejects
@@ -181,7 +257,7 @@ schemes.
 
 ## CI integration
 
-A typical CI job runs all four modes:
+A typical CI job runs all five modes:
 
 ```yaml
 # .github/workflows/security.yml
@@ -209,6 +285,14 @@ jobs:
           python manage.py djust_audit \
             --permissions permissions.yaml \
             --strict --json > permissions-report.json
+
+      # Anti-pattern scan — X0xx
+      - name: AST anti-pattern scan
+        run: |
+          python manage.py djust_audit \
+            --ast --ast-path src/ \
+            --ast-exclude vendor legacy/ \
+            --strict --json > ast-report.json
 
   runtime:
     needs: static

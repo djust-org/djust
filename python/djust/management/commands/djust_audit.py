@@ -15,6 +15,7 @@ import ast
 import inspect
 import json
 import logging
+import os
 import textwrap
 from typing import Dict
 
@@ -451,6 +452,45 @@ class Command(BaseCommand):
                 "that would 403 every request."
             ),
         )
+        parser.add_argument(
+            "--ast",
+            action="store_true",
+            dest="ast_mode",
+            help=(
+                "Run the AST security anti-pattern scanner (#660). Walks "
+                "user Python and template files looking for IDOR, missing "
+                "auth on state-mutating handlers, SQL string formatting, "
+                "open redirects, and mark_safe/|safe abuse. Emits stable "
+                "X001-X007 finding codes."
+            ),
+        )
+        parser.add_argument(
+            "--ast-path",
+            type=str,
+            dest="ast_path",
+            default=None,
+            help=(
+                "Root directory for the AST scanner (default: the current "
+                "working directory). Only used with --ast."
+            ),
+        )
+        parser.add_argument(
+            "--ast-exclude",
+            nargs="+",
+            dest="ast_exclude",
+            default=[],
+            help=(
+                "Path prefixes (relative to --ast-path) to exclude from "
+                "scanning. Useful for vendored code, generated files, and "
+                "third-party packages."
+            ),
+        )
+        parser.add_argument(
+            "--ast-no-templates",
+            action="store_true",
+            dest="ast_no_templates",
+            help="Skip template (.html) scanning in --ast mode.",
+        )
 
     def handle(self, *args, **options):
         json_output = options.get("json_output", False)
@@ -460,11 +500,17 @@ class Command(BaseCommand):
         strict = options.get("strict", False)
         dump_permissions = options.get("dump_permissions", False)
         live_url = options.get("live_url")
+        ast_mode = options.get("ast_mode", False)
 
         # --live: runtime probe (#661). Mutually informative with other modes
         # but runs independently — no LiveView collection needed.
         if live_url:
             return self._run_live_audit(options)
+
+        # --ast: static anti-pattern scanner (#660). Runs independently of
+        # LiveView introspection — walks source files on disk.
+        if ast_mode:
+            return self._run_ast_audit(options)
 
         audits = self._collect_audits(app_label, verbose)
 
@@ -498,6 +544,76 @@ class Command(BaseCommand):
             has_failures = any(f.severity in ("error", "warning") for f in findings)
             if has_failures:
                 raise SystemExit(1)
+
+    def _run_ast_audit(self, options):
+        """Run the AST security anti-pattern scanner (#660)."""
+        from djust.audit_ast import run_ast_audit
+
+        root = options.get("ast_path") or os.getcwd()
+        exclude = options.get("ast_exclude") or []
+        include_templates = not options.get("ast_no_templates", False)
+        json_output = options.get("json_output", False)
+        strict = options.get("strict", False)
+
+        report = run_ast_audit(
+            root=root,
+            include_templates=include_templates,
+            exclude=exclude,
+        )
+
+        if json_output:
+            self.stdout.write(json.dumps(report.to_dict(), indent=2))
+        else:
+            self._output_ast_pretty(report, root)
+
+        # Exit code mirrors --live / --permissions semantics:
+        #   strict mode: any error or warning fails
+        #   normal mode: only errors fail
+        if strict and (report.errors or report.warnings):
+            raise SystemExit(1)
+        if report.errors:
+            raise SystemExit(1)
+        return
+
+    def _output_ast_pretty(self, report, root):
+        """Pretty-print an ASTAuditReport to the terminal."""
+        line = "=" * 50
+        self.stdout.write("")
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(self.style.MIGRATE_HEADING("  djust_audit --ast anti-pattern scanner"))
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(f"  Root:    {root}")
+        self.stdout.write(f"  Files:   {report.files_scanned} scanned")
+        self.stdout.write("")
+
+        errors = report.errors
+        warnings_ = report.warnings
+        infos = report.infos
+
+        if errors:
+            self.stdout.write(self.style.ERROR("  ERRORS:"))
+            for f in errors:
+                self.stdout.write(self.style.ERROR("  " + f.format_line()))
+            self.stdout.write("")
+        if warnings_:
+            self.stdout.write(self.style.WARNING("  WARNINGS:"))
+            for f in warnings_:
+                self.stdout.write(self.style.WARNING("  " + f.format_line()))
+            self.stdout.write("")
+        if infos:
+            self.stdout.write("  INFO:")
+            for f in infos:
+                self.stdout.write("  " + f.format_line())
+            self.stdout.write("")
+
+        if not report.findings:
+            self.stdout.write(self.style.SUCCESS("  No findings — source passes all AST checks."))
+
+        self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+        self.stdout.write(
+            f"  Summary: {len(errors)} error(s), {len(warnings_)} warning(s), {len(infos)} info"
+        )
+        self.stdout.write("")
 
     def _run_live_audit(self, options):
         """Run the --live runtime probe and return the command exit code."""
