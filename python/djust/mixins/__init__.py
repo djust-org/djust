@@ -20,6 +20,7 @@ from .navigation import NavigationMixin
 from .async_work import AsyncWorkMixin
 from .flash import FlashMixin
 from .page_metadata import PageMetadataMixin
+from .waiters import WaiterMixin
 from ..streaming import StreamingMixin
 
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "AsyncWorkMixin",
     "FlashMixin",
     "PageMetadataMixin",
+    "WaiterMixin",
 ]
