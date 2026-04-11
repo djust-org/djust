@@ -463,28 +463,247 @@ Status quo plus four new packages. Uniform treatment of all features.
 1. **Should `djust-auth` / `djust-tenants` / `djust-theming` eventually graduate out of the djust-team organization entirely and become purely community-maintained Django packages?** Maybe. They're already structurally Django-generic. If they develop a user base that's majority plain-Django, it might make sense to move them to a neutral organization. Not urgent; revisit when they're 1.0.
 2. **Is there a size threshold at which a core submodule should be extracted into a separate package?** In this ADR, "large size" is one of the five axes but it's fuzzy. A concrete threshold would be useful. My lean: no submodule should exceed ~15,000 LOC within core. If `djust.generative` ever grows past that, it graduates to a separate package. This is a soft guideline, not a hard rule.
 3. **Should `djust-experimental` have the same submodule / extras pattern?** Maybe. Today it's a separate package because experiments need their own release cadence. But an "experimental" namespace within core could serve the same purpose (`djust.experimental.<feature>`) while being easier to find. My lean: leave it as-is for now; reconsider if the experimental package accumulates more than a handful of features.
-4. **What happens to this taxonomy if djust becomes the framework behind djust Studio (per the internal monetization plan)?** Studio introduces a new category: user-facing applications that end users build. Those are definitely separate from the framework, but the boundary between "framework primitives" and "Studio internals" may need clarification. Revisit once Studio has a design.
+4. **What happens to this taxonomy if djust ships a hosted app-builder product?** A hosted product would introduce a new category: user-facing applications that end users build themselves. Those are definitely separate from the framework, but the boundary between "framework primitives" and "product internals" may need clarification. Revisit when such a product has a design.
 5. **Do third-party extension authors need guidance?** Yes, but not as an ADR. A short developer-facing doc ("should my djust extension be a separate package?") that cites this ADR and walks through the taxonomy would be helpful. File as a follow-up documentation task.
 6. **Should internal dependency relationships between submodules be enforced?** E.g. should `djust.generative.mixin` be allowed to import from `djust.consent.envelope`? In principle yes (they're in the same package), but uncontrolled cross-submodule imports make future package splits harder. My lean: adopt an import-linter rule that submodules can only import from a defined set of peers, enforced in CI. File as a follow-up.
 
+## Revision after review (2026-04-11, same day)
+
+The original analysis above was too conservative about existing packages. On review, the arguments for keeping `djust-auth`, `djust-tenants`, `djust-theming`, and `djust-components` separate do not hold up when examined individually. The taxonomy itself (the five axes) stays — but the scoring for those four packages changes, and so does the recommendation.
+
+### What the original analysis got wrong
+
+**1. "Django-generic" was a theoretical audience for `djust-auth` and `djust-tenants`.**
+
+The original argument: these packages only depend on `django>=4.2`, so plain Django users can consume them, so they should stay separate. Technically true. But:
+
+- `djust-auth` is a repository in a `djust-org` GitHub organization with a `djust-` PyPI name. A Django user searching for auth libraries hits `django-allauth`, `django-axes`, `django-two-factor-auth`, and about thirty others with Django-forward branding before landing on `djust-auth`. The plain-Django audience is near-zero in practice.
+- The same is true for `djust-tenants`.
+- A *property* that a package has (Django-generic) is different from a *usage pattern* that exists (plain Django users actually consuming it). The original analysis conflated them.
+
+The right question isn't "could a plain Django user use this?" — it's "is there a measurable plain Django audience whose needs would be regressed by folding into core?" For these two packages, the answer is almost certainly no.
+
+**2. "Large size" for `djust-theming` and `djust-components` wasn't load-bearing.**
+
+The original argument: theming (~37K LOC) and components (~64K LOC) were too large to merge into core. But "large" relative to what?
+
+- Core djust is already ~79K LOC.
+- Django itself is ~400K LOC. `scikit-learn` is ~700K. `boto3` is ~500K.
+- The real costs of large packages are install weight, grep noise, and pip resolution time. Install weight is solved by the extras pattern. Grep noise is solved by subdirectory organization. Pip resolution time is not meaningfully affected by packages under 200K LOC in 2026.
+
+The size concern was real but the *cost* it was trying to prevent didn't survive scrutiny.
+
+**3. "Release cadence" was a workflow concern misframed as a structural one.**
+
+The original argument: theming and components need independent release cadence. But djust core can ship patch releases (`djust 0.5.1`) that bump a theming or components bugfix without touching anything else. The "independent cadence" argument was really "we don't want to cut a core release for every theming fix" — which is a workflow preference, not a framework-architecture constraint.
+
+Monorepo teams ship this pattern every day. If anything, coordinated releases *reduce* user-facing coordination cost because version-compatibility matrices collapse to one dimension.
+
+**4. Independent test suites and CI were a hidden cost I didn't count.**
+
+Each of the four packages currently ships its own test suite, its own CI pipeline, its own release-drafter, its own CodeQL config, its own dependabot setup. That's four parallel pipelines doing the same work four times, plus four release processes a maintainer has to keep in their head.
+
+Merging gets all of this for free: one test runner, one CI matrix, one release train, one security review, one dependabot config. I didn't weigh these merge benefits at all in the original analysis.
+
+**5. Documentation fragmentation was another hidden cost.**
+
+Theming has its own docs site, components has its own, the main djust docs reference them as external. Cross-references between framework features and components (or theming) have to go across site boundaries, which is friction for readers and fragility for link maintenance.
+
+One consolidated docs site (the current `djust.org` documentation) with unified search, unified navigation, and unified cross-references is strictly better.
+
+### Revised scoring for existing packages
+
+Same five axes. Different verdicts for four packages:
+
+| Package | A1 (agnostic) | A2 (deps) | A3 (cadence) | A4 (security) | A5 (size) | Original verdict | **Revised verdict** |
+|---|---|---|---|---|---|---|---|
+| `djust-auth` | theoretical only | — | — | — | — (670 LOC) | Separate | **Fold into `djust.auth`** |
+| `djust-tenants` | theoretical only | — | — | — | — (1.9K LOC) | Separate | **Fold into `djust.tenants`** |
+| `djust-theming` | weak | — | weak | — | medium (37.6K LOC) | Separate | **Fold into `djust.theming`** |
+| `djust-components` | — | — | weak | — | large (64.2K LOC) | Separate | **Fold into `djust.components`** |
+| `djust-admin` | — | — | — | — | small (2.3K LOC) | Separate (application) | **Still separate as application** |
+| `djust-create` | — | ✓ | ✓ | — | — | Separate (tooling) | **Still separate as tooling** |
+| `djust-scaffold` | — | — | ✓ | — | — | Separate (tooling) | **Still separate as tooling** |
+| `djust-monitor` | — | ✓ | ✓ | ✓ | — | Separate (application + deps) | **Still separate as application** |
+| `djust-monitor-client` | ✓ | — | — | — | — | Separate | **Still separate (pairs with server)** |
+| `djust-experimental` | — | — | ✓ | — | — | Separate (experimental) | **Still separate** |
+
+Four packages fold into core. One stays as an application. Five stay as tooling, applications, or experimental sandboxes. The package count drops from ~18 to ~14; the four that fold are the exact ones a new djust user would expect to get in a single install command.
+
+### What the folded structure looks like
+
+```
+python/djust/
+├── __init__.py
+├── live_view.py              # existing core runtime
+├── websocket.py
+├── vdom.py
+├── event_handlers.py
+├── ... (rest of existing core)
+
+├── auth/                     # formerly djust-auth (670 LOC)
+├── tenants/                  # formerly djust-tenants (1.9K LOC)
+├── theming/                  # formerly djust-theming (37.6K LOC)
+├── components/               # formerly djust-components (64.2K LOC)
+
+├── server_driven/            # ADR-002 Phase 1
+├── tutorials/                # ADR-002 Phase 3
+├── consent/                  # ADR-005
+├── assistant/                # ADRs 003, 004, 002 Phase 5
+│   └── providers/
+└── generative/               # ADR-006
+    └── stdlib/
+```
+
+Ten top-level subpackages: four absorbed from existing runtime packages, five new from the AI cluster, one reserved for experimental work that graduates later. The existing `djust-admin`, `djust-create`, `djust-scaffold`, `djust-monitor`, `djust-monitor-client`, and `djust-experimental` packages stay separate under the revised taxonomy.
+
+`pyproject.toml` extras become:
+
+```toml
+[project.optional-dependencies]
+# AI cluster extras (from the AI feature work)
+assistant-openai    = ["openai>=1.50"]
+assistant-anthropic = ["anthropic>=0.40"]
+assistant-all       = ["djust[assistant-openai,assistant-anthropic]"]
+assistant-whisper   = ["openai-whisper>=20240930", "torch>=2.0"]
+ai                  = ["djust[assistant-all,assistant-whisper]"]
+
+# New: runtime extras absorbing existing packages
+auth                = []                               # no new deps — pure Python
+auth-oauth          = ["django-allauth>=0.60"]         # formerly djust-auth[oauth]
+tenants             = []                               # no new deps
+tenants-redis       = ["redis>=5.0"]                   # formerly djust-tenants[redis]
+tenants-postgres    = ["psycopg[binary]>=3.1"]         # formerly djust-tenants[postgres]
+theming             = []                               # CSS-heavy, not dep-heavy
+components          = ["markdown>=3.0", "nh3>=0.2"]    # formerly djust-components' hard deps
+
+# Convenience bundles
+standard            = ["djust[auth,tenants,theming,components]"]
+all                 = ["djust[standard,ai]"]
+```
+
+Install patterns:
+
+```bash
+pip install djust                    # lean core only, no extras
+pip install djust[standard]          # typical djust app bundle
+pip install djust[all]               # everything including AI
+pip install djust[auth,tenants]      # explicit minimal selection
+pip install djust[ai]                # AI cluster only
+```
+
+### What doesn't fold and why
+
+**`djust-admin` stays separate.** It's a Django admin replacement — a first-party *application* that runs on top of djust. Applications have deployment concerns, branding, templates, static assets, and product docs that shouldn't be entangled with framework code. The next time someone asks "is djust an application framework or a Django admin replacement?" we'd have to pick one answer. Keep it separate lets djust-admin evolve as a product while djust core evolves as infrastructure.
+
+**`djust-create` and `djust-scaffold` stay separate.** CLI tooling belongs in tool packages, not runtime packages. This is consistent across the Python ecosystem — Django's runtime library doesn't ship `django-admin startproject` as part of the core library module, it ships it as a separate CLI entry point. Could conceivably merge the two tooling packages with each other (`djust-create` + `djust-scaffold` → `djust-tools`) but that's a separate cleanup, not part of this revision.
+
+**`djust-monitor` stays separate.** It's an observability service — a separate deployable with its own dashboard, storage, and runtime. Same pattern as `grafana-agent` + `grafana`. The client library (`djust-monitor-client`) *could* fold into core as `djust[monitor-client]` since it's a thin metric emitter that's framework-ish in character, but the server stays separate either way. Leaving the client alone for now to avoid scope creep.
+
+**`djust-experimental` stays separate.** The whole point is instability outside core's release guarantees. Merging would force us to extend stability guarantees to features that aren't ready. Features graduate out of `djust-experimental` via ADR when they stabilize.
+
+**Applications stay separate.** `djust.org`, `djust-chat`, `djust-crm`, `djust-notes`, `djustlive`, and `examples.djust.org` are products built on djust, not framework pieces. They live in their own repos because they have their own deployment, branding, release schedules, and lifecycles.
+
+### Migration plan
+
+This is real refactoring work. Being honest about the cost:
+
+**Phase 1 — `djust-auth` and `djust-tenants` (~2-3 days, v0.5.0).** Small packages, minimal test surface, straightforward moves. This is the proving ground for the migration process.
+
+- Move `djust-auth/src/djust_auth/` → `djust/python/djust/auth/`
+- Move `djust-tenants/src/djust_tenants/` → `djust/python/djust/tenants/`
+- Update imports: rename `djust_auth` → `djust.auth`, `djust_tenants` → `djust.tenants`
+- Move tests into core's test suite; unify fixtures
+- Update `djust/pyproject.toml` with new extras (`auth`, `auth-oauth`, `tenants`, `tenants-redis`, `tenants-postgres`)
+- Cut final versions of standalone `djust-auth 0.4.0` and `djust-tenants 0.4.0` as thin compatibility shims: each module re-exports from the new location and emits `DeprecationWarning` on import
+- Document in CHANGELOG
+
+**Phase 2 — `djust-theming` (~1-2 weeks, v0.5.1).** Medium-size move (37.6K LOC, 139 Python files). Real work but tractable.
+
+- Move `djust-theming/djust_theming/` → `djust/python/djust/theming/`
+- Update Django app config (`djust_theming.apps.DjustThemingConfig` → `djust.theming.apps.DjustThemingConfig`)
+- Migrate CSS generator, design tokens, component CSS generator, gallery, context processors, template tags
+- Test migration is the biggest chunk — theming has a substantial test suite that all needs to keep passing
+- Add `theming` extra to core's `pyproject.toml`
+- Compatibility shim on `djust-theming 0.5.0`
+
+**Phase 3 — `djust-components` (~2-3 weeks, v0.5.2).** Largest move (64.2K LOC, 307 Python files). Most substantial phase.
+
+- Move `djust-components/components/` → `djust/python/djust/components/`
+- The `component_showcase/` directory is a demo app, not framework code — move it to `examples.djust.org` or delete
+- CSS assets, icon libraries, template tag registration all need coordinated migration
+- Test migration is the long pole
+- Add `components` extra to core's `pyproject.toml` with its `markdown`, `nh3` deps
+- Compatibility shim on `djust-components 0.5.0`
+
+**Phase 4 — compatibility sunset (v0.6.0).** After one full minor cycle of compatibility:
+
+- Archive the standalone `djust-auth`, `djust-tenants`, `djust-theming`, `djust-components` packages on PyPI (don't delete — users can still install them, but no new versions)
+- Update their READMEs to direct new users to `pip install djust[auth]` / `djust[tenants]` / `djust[theming]` / `djust[components]`
+- Remove the compat shims from the codebase
+- Final release of each standalone as a "migration notice only" package
+
+**Total effort**: ~4-6 weeks of focused work spread across the v0.5.x release train. Not trivial, but much less than most refactoring projects of this scope because the source code itself doesn't need to change — it's just being relocated and renamespaced.
+
+### Benefits this unlocks
+
+Three things that fall out of consolidation that the original analysis didn't weigh:
+
+1. **Tests unify.** Each folded package currently has its own test suite that can't see core's fixtures, mock helpers, or test harness. Merging means components' tests get access to `LiveViewTestClient`, theming's tests get access to core's template-rendering fixtures, and everything runs in one `make test` invocation. Fewer tests duplicated; integration coverage naturally improves.
+2. **CI collapses.** Four separate CI pipelines → one. Release drafter, CodeQL, dependabot, security audit — configured once, applied uniformly.
+3. **Documentation consolidates.** Theming's docs, components' docs, auth's docs, and core's docs become one navigation tree with unified search and cross-references that actually work.
+
+### What about the Django-generic audience?
+
+For `djust-auth` and `djust-tenants`, the original argument was that folding breaks plain Django users. Under the revised plan, those users get a compat shim:
+
+```python
+# final djust-auth 0.4.0 release (compat shim)
+# djust_auth/__init__.py
+import warnings
+warnings.warn(
+    "djust-auth has been merged into the core djust package. "
+    "Install 'djust[auth]' instead. Imports from 'djust_auth' continue to work "
+    "in this version but will be removed in v0.6.0.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+from djust.auth import *  # noqa: F401,F403
+```
+
+Plain Django users install `djust` (which is MIT-licensed, pure Python, no heavy deps without extras) and get the auth module. They pay the cost of one extra pip install versus before, but they get more: the module is part of a coherent framework, better tested, better documented, and maintained with the rest of the runtime.
+
+For `djust-theming`, the same pattern. The plain-Django audience is small but nonzero, and they're well-served by a compat shim period followed by a clean migration.
+
+### Why this revision is binding, not just suggested
+
+The cost of leaving this half-done (some packages folded, some not; or folded for new features but not existing ones) is worse than either of the pure alternatives. A half-consolidated state is harder to reason about than either "everything separate" or "all runtime features in core." If we're going to fold AI features into core as submodules, consistency demands applying the same rule to comparable existing packages.
+
 ## Decision
 
-**Recommendation**: accept this ADR as Proposed, apply immediately to the AI feature cluster implementation (Phase 1 of ADR-002 starts now for v0.4.2).
+**Recommendation**: accept this ADR as Proposed, including the revision section above. Apply immediately to:
+
+1. **The AI feature cluster (v0.4.2 onward)** — all ADR-002 through ADR-006 features ship in core submodules with optional extras. Starts as soon as Phase 1 of ADR-002 is scheduled.
+2. **`djust-auth` and `djust-tenants` (v0.5.0)** — fold into `djust.auth` and `djust.tenants`, ship compat shims, deprecation cycle.
+3. **`djust-theming` (v0.5.1)** — fold into `djust.theming`, ship compat shim, deprecation cycle.
+4. **`djust-components` (v0.5.2)** — fold into `djust.components`, ship compat shim, deprecation cycle.
+5. **Compat sunset (v0.6.0)** — remove shims, archive standalone packages.
 
 ### Binding decisions
 
 1. All ADR-002 through ADR-006 features ship in core djust under `djust.server_driven/`, `djust.tutorials/`, `djust.consent/`, `djust.assistant/`, and `djust.generative/` submodules.
 2. Vendor SDKs (OpenAI, Anthropic, Whisper) are optional extras in core's `pyproject.toml`, not separate packages.
-3. No existing packages move. No existing packages are renamed. No existing packages are split.
-4. New Django-generic packages may continue to exist in the djust workspace but must have their Django-generic nature prominently documented.
-5. Future runtime features default to core submodules. Creating a new separate package for a djust-dependent feature requires its own ADR.
+3. `djust-auth`, `djust-tenants`, `djust-theming`, and `djust-components` fold into core as optional extras over the v0.5.x release train per the migration plan.
+4. `djust-admin`, `djust-create`, `djust-scaffold`, `djust-monitor`, `djust-monitor-client`, `djust-experimental`, and all application repos stay separate.
+5. Future runtime features default to core submodules. Creating a new separate package for a djust-dependent feature requires its own ADR justifying the split.
 
 ### Non-binding guidance
 
-- `djust-auth`, `djust-tenants`, and `djust-theming` get README disclaimers in v0.5.0 clarifying that they're Django packages.
-- Submodules should stay under ~15,000 LOC within core; larger subtrees should be reviewed for extraction.
+- The folded subpackages should each be reviewed against a soft ~15,000 LOC ceiling within core. `djust.components` will exceed this at ~64K LOC — that's expected and acceptable for a content-heavy subpackage, but new large additions should be considered for extraction.
 - Third-party extension authors get a short developer-facing doc explaining the taxonomy, not an ADR.
+- Do not start the migration (Phase 1 of the folding plan) until ADR-002 Phase 1 has shipped in v0.4.2 and the AI cluster work has real usage data. The two projects should not compete for review bandwidth.
 
 ## Changelog
 
-- **2026-04-11**: Initial draft. Proposed. Written after auditing the 18-package workspace and finding that the existing splits are mostly defensible, while the proposed AI-feature splits would have been mistakes.
+- **2026-04-11**: Initial draft. Proposed. Written after auditing the 18-package workspace.
+- **2026-04-11**: Revised same-day after review feedback. Original analysis was too conservative; `djust-auth`, `djust-tenants`, `djust-theming`, and `djust-components` will fold into core as optional extras across v0.5.x. Taxonomy rule unchanged; scoring corrected; migration plan added.

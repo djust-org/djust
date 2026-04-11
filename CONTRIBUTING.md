@@ -382,10 +382,6 @@ Beyond code contributions, there are many ways to support djust:
 
 ### Financial Support
 - 💜 [GitHub Sponsors](https://github.com/sponsors/johnrtipton) - Monthly support from $5/month
-- 🚀 Premium offerings (coming soon) - Help fund development by using our SaaS kits, components, or managed hosting
-- 🏢 Enterprise support - Priority support contracts help sustain the project
-
-For details on how revenue supports development, see [MONETIZATION.md](MONETIZATION.md).
 
 ### Non-Financial Support
 - ⭐ Star the repository on GitHub
