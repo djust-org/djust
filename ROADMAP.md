@@ -315,6 +315,18 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **Remaining v0.4.0 quick wins** — Any items from the v0.4.0 quick wins list that didn't ship in the initial release ship here. (`dj-lock`, `dj-mounted`, `dj-shortcut`, `dj-click-away`, window/document event scoping, connection CSS, `dj-cloak`, `dj-page-loading`, `dj-scroll-into-view`, `dj-copy`, `dj-auto-recover`, `dj-debounce`/`dj-throttle`, and `live_title`/document metadata shipped in v0.4.0.)
 
+### Milestone: v0.4.2 — Backend-Driven UI (Phase 1) & Carry-Over Fixes
+
+**Goal**: Land the MVP of backend-driven UI automation (`push_commands`, `wait_for_event`, `TutorialMixin`) so server-side Python can declaratively drive the browser through guided flows. Pick up the two fix PRs that were deferred from v0.4.1 on release day (#637 scaffold DEBUG default, #619 layout-shift on pre-rendered mount). Ship the dependabot batch that's been queued behind v0.4.1.
+
+**Backend-Driven UI Phase 1 — tutorials and server-initiated exec ([ADR-002](docs/adr/002-backend-driven-ui-automation.md))** — Introduces three framework primitives built on top of v0.4.1's JS Commands: (1) `self.push_commands(chain)` — a one-line server-side helper that pushes a `JSChain` to the current session for immediate execution via a new `djust:exec` auto-executor hook. (2) `await self.wait_for_event(name, timeout, predicate)` — pause a `@background` handler until the user performs a specific action, with optional filter and timeout. (3) `TutorialMixin` + `TutorialStep` dataclass — a declarative state machine for guided tours (highlight, narrate, wait-for-user-action, auto-advance), zero custom JS required. Ships with a default `{% tutorial_bubble %}` template tag that honours the active framework config. First worked example on djust.org is a 7-step homepage tour. Phase 2 (multi-user broadcast, consent envelope) lands in v0.5.x, Phase 3 (LLM-driven `AssistantMixin`) in v0.5.x after that. See `docs/adr/002-backend-driven-ui-automation.md` for the full design, use cases, AI-integration brainstorm, and security model. *~4 weeks of focused work. The biggest story v0.4.2 could ship; every later phase builds on this foundation.*
+
+**#637 — Scaffold defaults `DEBUG=False` and generates `.env.example`** — Rebased and cleaned up: the original PR bundled scaffold changes with stale `client.js` edits that would regress #625 and stale `debug-panel.js` edits that duplicate #633. Ship only the scaffold slice (`generator.py` + `templates.py` + new `.env.example` template), close the original PR as superseded. Fails-safe default complements the A014/A001 static checks from #666.
+
+**#619 — Defer `reinitAfterDOMUpdate` via `requestAnimationFrame` to prevent layout shift on pre-rendered mount** — Rebase onto current main, rebuild `client.js` from `src/03-websocket.js`. Fix itself is well-designed (wraps post-mount closure, rAF with sync fallback, preserves ordering invariant so form recovery still runs after event binding). Includes 148 lines of regression tests.
+
+**Dependabot batch carry-over** — Vitest 4.1.0 → 4.1.4, jsdom 29.0.1 → 29.0.2, happy-dom, tokio 1.50 → 1.51, indexmap 2.13.0 → 2.13.1, proptest, uuid, html5ever, release-drafter, github-script, astral-sh/setup-uv. Batch-process as a single "ci: bump deps" PR with the full test suite gating the merge.
+
 ### Milestone: v0.5.0 — Async Loading, Core Components & Streams
 
 **Goal**: Ship the async data loading and core component primitives that production apps need. Scope intentionally trimmed — DX features (testing, error overlay, computed state) moved to v0.5.1.
