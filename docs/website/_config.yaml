@@ -136,6 +136,11 @@ navigation:
         file: guides/js-commands.md
         order: 6.5
         level: intermediate
+      - title: Server-Driven UI
+        slug: server-driven-ui
+        file: guides/server-driven-ui.md
+        order: 6.55
+        level: intermediate
       - title: Paste Events
         slug: dj-paste
         file: guides/dj-paste.md

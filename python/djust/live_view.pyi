@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, Optional
 
 from django.views import View
 
+from .js import JSChain
 from .mixins.navigation import NavigationMixin
 from .mixins.push_events import PushEventMixin
 from .mixins.streams import StreamsMixin
@@ -60,6 +61,7 @@ class LiveView(
 
     # PushEventMixin methods
     def push_event(self, event: str, payload: Optional[Dict[str, Any]] = None) -> None: ...
+    def push_commands(self, chain: JSChain) -> None: ...
 
     # StreamsMixin methods
     def stream(
