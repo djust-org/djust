@@ -3143,6 +3143,86 @@ function bindLiveViewEvents() {
             });
         }
 
+        // Handle dj-paste events
+        // Extracts structured clipboard payload (plain text, rich HTML, files)
+        // and sends it to the server as a single event call.
+        const pasteHandler = element.getAttribute('dj-paste');
+        if (pasteHandler && !_isHandlerBound(element, 'paste')) {
+            _markHandlerBound(element, 'paste');
+            const parsedPaste = parseEventHandler(pasteHandler);
+            element.addEventListener('paste', async (e) => {
+                // dj-lock: skip if already locked
+                if (_checkAndLock(element)) return;
+
+                // dj-confirm: show confirmation dialog before sending event
+                if (!checkDjConfirm(element)) {
+                    return; // User cancelled
+                }
+
+                const clipboardData = e.clipboardData || window.clipboardData;
+                if (!clipboardData) {
+                    // No clipboard data available — let the default paste happen
+                    return;
+                }
+
+                // Build structured payload: text, html, and file metadata.
+                // The actual file bytes are NOT sent in this event — that would
+                // blow the WS frame budget. Instead, set a dj-upload slot on
+                // the element and UploadMixin will pick up any files from the
+                // clipboard files list via the existing upload pipeline.
+                let text = '';
+                let html = '';
+                const files = [];
+                try {
+                    text = clipboardData.getData('text/plain') || '';
+                } catch (err) { /* older browsers */ }
+                try {
+                    html = clipboardData.getData('text/html') || '';
+                } catch (err) { /* older browsers */ }
+                if (clipboardData.files) {
+                    for (let i = 0; i < clipboardData.files.length; i++) {
+                        const f = clipboardData.files[i];
+                        files.push({
+                            name: f.name || 'clipboard-paste',
+                            type: f.type || '',
+                            size: f.size || 0,
+                        });
+                    }
+                }
+
+                // If the element has an upload slot configured, route pasted
+                // files through the upload pipeline (image paste → chat, etc).
+                // We route BEFORE sending the server event so the handler can
+                // react to both the metadata and the pending upload in one tick.
+                if (files.length > 0 && window.djust && window.djust.uploads && element.getAttribute('dj-upload')) {
+                    try {
+                        await window.djust.uploads.queueClipboardFiles(element, clipboardData.files);
+                    } catch (err) {
+                        if (globalThis.djustDebug) console.log('[LiveView] dj-paste: upload route failed', err);
+                    }
+                }
+
+                const params = {
+                    text: text,
+                    html: html,
+                    has_files: files.length > 0,
+                    files: files,
+                };
+                if (parsedPaste.args.length > 0) {
+                    params._args = parsedPaste.args;
+                }
+
+                // Suppress the default paste only when the element opts in
+                // with dj-paste-suppress. Otherwise let the browser also
+                // insert into the input so hybrid UIs still feel natural.
+                if (element.hasAttribute('dj-paste-suppress')) {
+                    e.preventDefault();
+                }
+
+                await handleEvent(parsedPaste.name, params);
+            });
+        }
+
         // Handle dj-keydown / dj-keyup events
         ['keydown', 'keyup'].forEach(eventType => {
             const keyHandler = element.getAttribute(`dj-${eventType}`);
@@ -6295,12 +6375,54 @@ if (document.readyState === 'loading') {
     // Exports
     // ========================================================================
 
+    /**
+     * Route a FileList obtained from `ClipboardEvent.clipboardData.files`
+     * (the `dj-paste` flow) through the same upload pipeline used by
+     * file-input and drag-drop uploads. Expects the target element to
+     * have a `dj-upload="<slot_name>"` attribute whose slot has been
+     * configured via `setUploadConfigs`.
+     *
+     * Returns a promise that resolves once every pasted file has been
+     * uploaded (or rejected client-side). Errors for individual files
+     * are dispatched as `djust:upload:error` events; they do not throw.
+     */
+    async function queueClipboardFiles(element, fileList) {
+        if (!fileList || fileList.length === 0) return;
+        const uploadName = element && element.getAttribute && element.getAttribute('dj-upload');
+        if (!uploadName) return;
+
+        const config = uploadConfigs[uploadName];
+        const files = Array.from(fileList);
+
+        await showPreviews(uploadName, files);
+
+        if (!isWSConnected()) {
+            console.error('[Upload] WebSocket not connected');
+            return;
+        }
+
+        for (const file of files) {
+            if (config && file.size > config.max_file_size) {
+                window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                    detail: { file: file.name, error: 'File too large' }
+                }));
+                continue;
+            }
+            try {
+                await uploadFile(liveViewWS, uploadName, file, config);
+            } catch (err) {
+                console.error('[Upload] Paste upload failed: %s %o', String(file.name), err);
+            }
+        }
+    }
+
     window.djust.uploads = {
         setConfigs: setUploadConfigs,
         handleProgress: handleUploadProgress,
         bindHandlers: bindUploadHandlers,
         cancelUpload: (ref) => cancelUpload(liveViewWS, ref),
         activeUploads: activeUploads,
+        queueClipboardFiles: queueClipboardFiles,
     };
 
 })();
