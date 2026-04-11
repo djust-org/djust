@@ -1255,6 +1255,8 @@ Feedback from initial review has been incorporated:
 
 The decision table above is binding for the implementation: Phase 1 proceeds on the scope and primitives described above; Phases 4-5 proceed once [ADR-003](003-llm-provider-abstraction.md), [ADR-004](004-undo-for-llm-driven-actions.md), and [ADR-005](005-consent-envelope-for-remote-control.md) are themselves accepted.
 
+A fifth follow-up ADR, [ADR-006](006-ai-generated-uis-with-capture-and-promote.md), extends this line of work from "AI drives a dev-defined UI" to "AI composes UIs from a vetted component library, with captured designs becoming first-class persistent views." It targets v0.6.0 and depends on `AssistantMixin` from Phase 5 of this ADR landing first.
+
 ## Changelog
 
 - **2026-04-11**: Initial draft. Proposed.
