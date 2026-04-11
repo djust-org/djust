@@ -107,6 +107,16 @@ function _createHookInstance(hookDef, el) {
         instance._eventHandlers[eventName].push(callback);
     };
 
+    // js(): programmable JS Commands from hook callbacks (Phoenix 1.0 parity).
+    // Returns a fresh JSChain bound (via exec()) to this hook's element.
+    // Usage inside a hook method:
+    //   this.js().show('#modal').addClass('active', {to: '#overlay'}).exec();
+    instance.js = function() {
+        return (window.djust.js && window.djust.js.chain)
+            ? window.djust.js.chain()
+            : null;
+    };
+
     return instance;
 }
 

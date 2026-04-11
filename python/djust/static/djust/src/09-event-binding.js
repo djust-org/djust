@@ -205,12 +205,29 @@ function bindLiveViewEvents() {
                 if (_checkAndLock(element)) return;
 
                 // Read attribute at fire time so morphElement attribute updates take effect
-                const parsed = parseEventHandler(element.getAttribute('dj-click') || '');
+                const rawClickValue = element.getAttribute('dj-click') || '';
 
-                // dj-confirm: show confirmation dialog before sending event
+                // dj-confirm: show confirmation dialog before executing commands/events
                 if (!checkDjConfirm(element)) {
                     return; // User cancelled
                 }
+
+                // JS Commands: synchronously check whether the attribute is a
+                // JSON command chain. If so, fire-and-forget the chain (push
+                // ops still round-trip, but we don't block the rest of this
+                // handler on them). A plain event name falls through to the
+                // normal dj-click path without adding an `await` boundary,
+                // so synchronous expectations on dj-disable-with and friends
+                // continue to hold.
+                if (window.djust.js) {
+                    const _ops = window.djust.js._parseCommandValue(rawClickValue);
+                    if (_ops) {
+                        window.djust.js._executeOps(_ops, element);
+                        return;
+                    }
+                }
+
+                const parsed = parseEventHandler(rawClickValue);
 
                 // dj-disable-with: disable and show loading text
                 _applyDisableWith(element);
