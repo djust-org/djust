@@ -9,7 +9,6 @@ Demonstrates:
 - Serialization hardening (set, Decimal, date)
 """
 
-import asyncio
 from datetime import date
 from decimal import Decimal
 
@@ -24,14 +23,18 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
     """
     Showcase of v0.4.2 features — a single LiveView that demonstrates
     each headline feature in an interactive section.
+
+    Note: TutorialMixin comes FIRST in the base list. This is required
+    because Django's View.__init__ doesn't call super().__init__(),
+    so mixins listed after LiveView never get initialized. The V010
+    system check (#691) catches wrong ordering at startup.
     """
 
     template_name = "demos/whats_new_042.html"
 
-    # Tour steps as CLASS attribute (not instance) so the state serializer
-    # doesn't try to serialize TutorialStep objects. The mixin reads
-    # self.tutorial_steps which falls through to the class via normal
-    # Python attribute lookup.
+    # Tour steps as a class attribute. TutorialMixin.__init_subclass__
+    # automatically migrates this to _tutorial_steps so the context
+    # serializer never sees non-serializable TutorialStep objects (#694).
     tutorial_steps = [
         TutorialStep(
             target="#section-push-commands",
@@ -76,7 +79,6 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
         self.count = 0
         self.highlight_active = False
         self.confirmed = False
-        self.tour_finished = False
 
         # v0.4.2 fix: private attrs now survive events (#627)
         self._internal_counter = 0
@@ -101,9 +103,8 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
         """Server pushes a JS command chain to highlight an element."""
         self.highlight_active = not self.highlight_active
         if self.highlight_active:
-            chain = (
-                JS.add_class("demo-highlight", to="#highlight-target")
-                .dispatch("demo:flash", detail={"text": "Highlighted from Python!"})
+            chain = JS.add_class("demo-highlight", to="#highlight-target").dispatch(
+                "demo:flash", detail={"text": "Highlighted from Python!"}
             )
         else:
             chain = JS.remove_class("demo-highlight", to="#highlight-target")
@@ -119,7 +120,12 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
     @event_handler
     @background
     async def run_wait_demo(self, **kwargs):
-        """Demonstrates wait_for_event: pauses until user clicks confirm."""
+        """Demonstrates wait_for_event: pauses until user clicks confirm.
+
+        This is an async @background handler — #692 fix ensures the
+        coroutine is properly awaited. #693 fix ensures push_commands
+        reach the client mid-task via flush_push_events().
+        """
         self.confirmed = False
         self.count = 0
 
@@ -128,9 +134,11 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
 
         self.count += 1
         self.push_commands(
-            JS.add_class("demo-success", to="#wait-result")
-            .dispatch("demo:flash", detail={"text": "Confirmed!"})
+            JS.add_class("demo-success", to="#wait-result").dispatch(
+                "demo:flash", detail={"text": "Confirmed!"}
+            )
         )
+        await self.flush_push_events()
 
     # -- State demos --
 
@@ -155,8 +163,4 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
         if isinstance(self.example_set, list):
             self.example_set = set(self.example_set)
         ctx["set_display"] = sorted(self.example_set)
-        # Remove TutorialStep objects from context — they're not
-        # JSON-serializable and the state serializer converts them
-        # to strings, breaking the mixin on subsequent events.
-        ctx.pop("tutorial_steps", None)
         return ctx
