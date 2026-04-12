@@ -227,6 +227,12 @@ class TutorialMixin:
         if step.on_enter is not None:
             self.push_commands(step.on_enter)
 
+        # Flush push events immediately so the client sees the
+        # highlight + narrate before we block on the wait phase.
+        # Without this, push_commands inside a @background task queue
+        # up but never reach the client until the entire tour finishes.
+        await self._flush_pending_push_events()
+
         # 3. Wait phase
         await self._wait_for_step(step)
 
@@ -237,6 +243,9 @@ class TutorialMixin:
         # 5. Default cleanup chain
         cleanup = JS.remove_class(self._tutorial_active_class, to=step.target)
         self.push_commands(cleanup)
+
+        # Flush cleanup commands before advancing to the next step
+        await self._flush_pending_push_events()
 
         self._tutorial_active_target = None
         self._tutorial_active_class = None

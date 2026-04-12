@@ -20,7 +20,7 @@ from djust.tutorials import TutorialMixin, TutorialStep
 from djust_shared.views import BaseViewWithNavbar
 
 
-class WhatsNew042View(BaseViewWithNavbar, TutorialMixin):
+class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
     """
     Showcase of v0.4.2 features — a single LiveView that demonstrates
     each headline feature in an interactive section.
@@ -28,7 +28,10 @@ class WhatsNew042View(BaseViewWithNavbar, TutorialMixin):
 
     template_name = "demos/whats_new_042.html"
 
-    # -- TutorialMixin tour steps (Phase 1c) --
+    # Tour steps as CLASS attribute (not instance) so the state serializer
+    # doesn't try to serialize TutorialStep objects. The mixin reads
+    # self.tutorial_steps which falls through to the class via normal
+    # Python attribute lookup.
     tutorial_steps = [
         TutorialStep(
             target="#section-push-commands",
@@ -149,5 +152,11 @@ class WhatsNew042View(BaseViewWithNavbar, TutorialMixin):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["internal_counter"] = self._internal_counter
+        if isinstance(self.example_set, list):
+            self.example_set = set(self.example_set)
         ctx["set_display"] = sorted(self.example_set)
+        # Remove TutorialStep objects from context — they're not
+        # JSON-serializable and the state serializer converts them
+        # to strings, breaking the mixin on subsequent events.
+        ctx.pop("tutorial_steps", None)
         return ctx

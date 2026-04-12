@@ -588,8 +588,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         error = None
 
         try:
-            # Execute callback in thread pool
+            # Execute callback in thread pool (standard sync path).
+            # After execution, check if the result is a coroutine —
+            # this happens when @background wraps an async def handler
+            # (like TutorialMixin.start_tutorial). In that case, the
+            # sync_to_async thread returns the unawaited coroutine,
+            # which we then await on the event loop.
+            import inspect
+
             result = await sync_to_async(callback)(*args, **kwargs)
+            if inspect.iscoroutine(result):
+                result = await result
 
             # Check if task was cancelled during execution
             if hasattr(self.view_instance, "_async_cancelled"):
@@ -1173,6 +1182,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             # Store reference to WS consumer for streaming support
             self.view_instance._ws_consumer = self
+
+            # Wire push-event flush callback so @background handlers
+            # (like TutorialMixin.start_tutorial) can send push_commands
+            # to the client mid-execution without waiting for the handler
+            # to return. See PushEventMixin._flush_pending_push_events.
+            if hasattr(self.view_instance, "_push_events_flush_callback"):
+                self.view_instance._push_events_flush_callback = self._flush_push_events
 
             # Store client timezone for local time rendering
             self.view_instance.client_timezone = None

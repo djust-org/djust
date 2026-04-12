@@ -13,7 +13,7 @@ Also provides ``push_commands()`` for server-initiated JS Command
 execution — see ADR-002 Phase 1a.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from djust.js import JSChain
@@ -30,6 +30,14 @@ class PushEventMixin:
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._pending_push_events: List[Tuple[str, Dict[str, Any]]] = []
+        # Async callback for flushing push events from background tasks.
+        # Set by the WebSocket consumer during mount so that @background
+        # handlers (like TutorialMixin.start_tutorial) can push events
+        # to the client mid-execution without waiting for the handler
+        # to return. Without this, push_commands() calls inside a
+        # background task queue up but never reach the client until the
+        # entire task completes.
+        self._push_events_flush_callback: Optional[Any] = None
 
     def push_event(self, event: str, payload: Dict[str, Any] = None) -> None:
         """
@@ -106,6 +114,20 @@ class PushEventMixin:
                 f"Build one with djust.js.JS.<op>(...).<op>(...) and pass the result."
             )
         self.push_event("djust:exec", {"ops": chain.ops})
+
+    async def _flush_pending_push_events(self) -> None:
+        """
+        Flush pending push events immediately via the consumer callback.
+
+        Called by TutorialMixin (and any other @background handler) to
+        send queued push_commands/push_event to the client mid-task
+        rather than waiting for the handler to return.
+
+        No-op if no flush callback is registered (e.g. in tests or
+        HTTP fallback mode).
+        """
+        if self._push_events_flush_callback is not None and self._pending_push_events:
+            await self._push_events_flush_callback()
 
     def _drain_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """
