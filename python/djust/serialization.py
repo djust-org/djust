@@ -67,6 +67,14 @@ class DjangoJSONEncoder(json.JSONEncoder):
         if isinstance(obj, (Component, LiveComponent, BaseComponent, BaseLiveComponent)):
             return str(obj)  # Calls __str__() which calls render()
 
+        # Handle set/frozenset → sorted list (#626)
+        if isinstance(obj, (set, frozenset)):
+            try:
+                return sorted(obj)
+            except TypeError:
+                # Elements aren't comparable (mixed types) — return unsorted
+                return list(obj)
+
         # Handle datetime types
         if isinstance(obj, (datetime, date, time)):
             return obj.isoformat()
@@ -406,6 +414,14 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
 
     if isinstance(value, (list, tuple)):
         return [normalize_django_value(item, _depth) for item in value]
+
+    # set/frozenset → sorted list (#626)
+    if isinstance(value, (set, frozenset)):
+        try:
+            items = sorted(value)
+        except TypeError:
+            items = list(value)
+        return [normalize_django_value(item, _depth) for item in items]
 
     # Django lazy translation strings (Promise) -- must be before str check
     # since Promise is not a str subclass

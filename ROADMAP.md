@@ -54,9 +54,9 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~Pre-rendered WS reconnect drops `_private` attributes (#611)~~ ✅ | ~~State loss on reconnect after HTTP GET pre-render — related to #627~~ | v0.4.2 |
 | ~~**P1**~~ | ~~VDOM patcher calls element methods on text nodes (#622)~~ ✅ | ~~`setAttribute`/`appendChild` crash on `#text` nodes — breaks conditional rendering~~ | v0.4.2 |
 | ~~**P1**~~ | ~~`as_live_field()` ignores `widget.attrs` (#683)~~ ✅ | ~~Form fields lose `type`, `placeholder`, `pattern` — forms DX broken~~ | v0.4.2 |
-| **P2** | `form.cleaned_data` Python types serialized to null (#628) | `date`, `Decimal`, `UUID` in cleaned_data become `null` in public state | v0.4.2 |
-| **P2** | `set()` not JSON-serializable as public state (#626) | `set` in view state crashes serialization — common Python type | v0.4.2 |
-| **P2** | `dict` state deserialized as `list` after Rust sync (#612) | Round-trip through Rust state sync corrupts dict → list | v0.4.2 |
+| ~~**P2**~~ | ~~`form.cleaned_data` Python types serialized to null (#628)~~ ✅ | ~~`date`, `Decimal`, `UUID` in cleaned_data become `null` in public state~~ | v0.4.2 |
+| ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
+| ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
 | ~~**P2**~~ | ~~Debug panel SVG attributes double-escaped (#613)~~ ✅ | ~~`viewBox`, `path d` attributes rendered garbled in the debug toolbar~~ | v0.4.2 |
 | **P3** | docs: `data-*` attribute naming convention undocumented (#623) | How `data-foo-bar` maps to `foo_bar` event params — every new user asks | v0.4.2 |
@@ -368,11 +368,11 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **✅ #683 — `as_live_field()` ignores `widget.attrs` (type, placeholder, pattern)** — Shipped. `BaseAdapter._merge_widget_attrs()` now merges `field.widget.attrs` into the rendered HTML for all field types (input, textarea, select, checkbox, radio), with djust-specific attributes taking precedence. Branch: `fix/as-live-field-widget-attrs-683`.
 
-**#628 — `form.cleaned_data` Python types (date, Decimal) serialized to null** — When `form.cleaned_data` values like `datetime.date`, `Decimal`, `UUID` are stored in public view state, the JSON serializer can't handle them and silently serializes to `null`. Developers see form data "vanish" after validation. Part of the serialization hardening cluster with #626 and #612. Branch: `fix/cleaned-data-types-628`. *Extend the JSON encoder with `date`/`Decimal`/`UUID` support.*
+~~**#628 — `form.cleaned_data` Python types (date, Decimal) serialized to null**~~ ✅ — Fixed: `DjangoJSONEncoder` and `normalize_django_value()` already handled these types; added 10 regression tests to lock in the behavior. Branch: `fix/serialization-hardening`.
 
-**#626 — `set()` not JSON-serializable as public LiveView state** — Storing a Python `set()` in public view state crashes serialization because `json.dumps` doesn't handle sets. Common pattern: `self.selected_ids = set()`. Branch: `fix/set-serialization-626`. *Extend the JSON encoder to serialize `set` as sorted `list`.*
+~~**#626 — `set()` not JSON-serializable as public LiveView state**~~ ✅ — Fixed: extended both `DjangoJSONEncoder.default()` and `normalize_django_value()` to serialize `set`/`frozenset` as sorted lists. 11 regression tests. Branch: `fix/serialization-hardening`.
 
-**#612 — `dict` state attributes deserialized as `list` after Rust state sync** — Round-trip through the Rust state synchronization boundary corrupts `dict` values into `list` (likely MessagePack or similar binary format treating dict as array of pairs). Branch: `fix/dict-deser-list-612`. *Rust-side fix in `crates/djust_core/` serialization.*
+~~**#612 — `dict` state attributes deserialized as `list` after Rust state sync**~~ ✅ — Fixed: replaced `#[serde(untagged)]` derived `Deserialize` on `Value` with a custom visitor-based implementation that uses `visit_map`/`visit_seq` to correctly distinguish maps from arrays in MessagePack. 4 Rust + 1 Python regression tests. Branch: `fix/serialization-hardening`.
 
 **✅ #617 — VDOM patcher should handle `autofocus` on inserted elements** — Shipped. The patcher now detects `autofocus` on newly inserted elements after each patch cycle and calls `.focus()` explicitly. Branch: `fix/vdom-patcher-text-nodes-autofocus`.
 
