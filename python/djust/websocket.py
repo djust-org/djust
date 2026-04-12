@@ -588,17 +588,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         error = None
 
         try:
-            # Execute callback in thread pool (standard sync path).
-            # After execution, check if the result is a coroutine —
-            # this happens when @background wraps an async def handler
-            # (like TutorialMixin.start_tutorial). In that case, the
-            # sync_to_async thread returns the unawaited coroutine,
-            # which we then await on the event loop.
+            # Async callbacks (from @background on async def handlers)
+            # are called directly on the event loop. Sync callbacks are
+            # dispatched to a thread via sync_to_async. The legacy
+            # inspect.iscoroutine fallback handles callbacks created
+            # before the @background decorator gained native async
+            # detection (v0.4.2+).
+            import asyncio as _asyncio
             import inspect
 
-            result = await sync_to_async(callback)(*args, **kwargs)
-            if inspect.iscoroutine(result):
-                result = await result
+            if _asyncio.iscoroutinefunction(callback):
+                result = await callback(*args, **kwargs)
+            else:
+                result = await sync_to_async(callback)(*args, **kwargs)
+                if inspect.iscoroutine(result):
+                    result = await result
 
             # Check if task was cancelled during execution
             if hasattr(self.view_instance, "_async_cancelled"):
@@ -1819,6 +1823,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Snapshot public assigns before the handler to detect
                         # unchanged state and auto-skip the render cycle.
                         pre_assigns = _snapshot_assigns(self.view_instance)
+                        # Identity snapshot: {attr: id(value)} for the
+                        # push_commands-only auto-skip (#700). Immune to
+                        # deep-copy sentinel issues on non-copyable objects.
+                        pre_identity = {
+                            k: id(v)
+                            for k, v in self.view_instance.__dict__.items()
+                            if not k.startswith("_")
+                        }
 
                         # Call handler with tracking (supports both sync and async handlers)
                         handler_start = time.perf_counter()
@@ -1869,6 +1881,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 self.view_instance._changed_keys = _compute_changed_keys(
                                     pre_assigns, post_assigns
                                 )
+
+                        # #700: push_commands-only handlers auto-skip render.
+                        # When a handler only calls push_commands() / push_event()
+                        # without changing real state, a VDOM re-render is wasted
+                        # work (and can cause morphdom recovery during tours).
+                        # The assigns snapshot above may report false positives
+                        # for views with non-copyable public attrs (querysets,
+                        # file handles) because the sentinel objects always differ.
+                        # When push events are pending, check if the *identity*
+                        # of each public attr is unchanged — if so, the handler
+                        # didn't touch any state and we can safely skip.
+                        if not skip_render and not force_html:
+                            pending = getattr(self.view_instance, "_pending_push_events", None)
+                            if pending:
+                                post_identity = {
+                                    k: id(v)
+                                    for k, v in self.view_instance.__dict__.items()
+                                    if not k.startswith("_")
+                                }
+                                if pre_identity == post_identity:
+                                    skip_render = True
+                                    logger.debug(
+                                        "[djust] Auto-skipping render for '%s' "
+                                        "— push_commands only, no state changed",
+                                        event_name,
+                                    )
 
                         if skip_render:
                             self.view_instance._skip_render = False

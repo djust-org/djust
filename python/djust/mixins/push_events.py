@@ -30,13 +30,11 @@ class PushEventMixin:
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._pending_push_events: List[Tuple[str, Dict[str, Any]]] = []
-        # Async callback for flushing push events from background tasks.
-        # Set by the WebSocket consumer during mount so that @background
-        # handlers (like TutorialMixin.start_tutorial) can push events
-        # to the client mid-execution without waiting for the handler
-        # to return. Without this, push_commands() calls inside a
-        # background task queue up but never reach the client until the
-        # entire task completes.
+        # Legacy stored callback — kept for backward compatibility but
+        # flush_push_events() now prefers the dynamic lookup via
+        # _ws_consumer._flush_push_events (set during mount/reconnect).
+        # This eliminates the need to re-wire the callback on reconnect
+        # (#698).
         self._push_events_flush_callback: Optional[Any] = None
 
     def push_event(self, event: str, payload: Dict[str, Any] = None) -> None:
@@ -125,7 +123,12 @@ class PushEventMixin:
         that makes ``TutorialMixin``'s per-step highlights arrive in real
         time instead of all at once when the task completes (#693).
 
-        No-op if no flush callback is registered (e.g. in tests or
+        Resolves the flush callback dynamically from ``_ws_consumer`` so
+        that it works after WebSocket reconnects without needing to
+        re-wire a stored callback (#698).  Falls back to the legacy
+        ``_push_events_flush_callback`` for backward compatibility.
+
+        No-op if no consumer/callback is available (e.g. in tests or
         HTTP fallback mode).
 
         Usage::
@@ -139,7 +142,17 @@ class PushEventMixin:
                 self.push_event("step", {"n": 2})
                 await self.flush_push_events()   # client sees step 2 NOW
         """
-        if self._push_events_flush_callback is not None and self._pending_push_events:
+        if not self._pending_push_events:
+            return
+        # Prefer dynamic lookup via _ws_consumer — always current, even
+        # after reconnect (#698).
+        consumer = getattr(self, "_ws_consumer", None)
+        flush_fn = getattr(consumer, "_flush_push_events", None)
+        if flush_fn is not None:
+            await flush_fn()
+            return
+        # Legacy path: stored callback (pre-v0.4.2 wiring).
+        if self._push_events_flush_callback is not None:
             await self._push_events_flush_callback()
 
     # Backward-compatible private alias used by TutorialMixin and tests.
