@@ -110,11 +110,38 @@ class TutorialMixin:
         return self._tutorial_steps
 
     # Instance state — initialized in __init__ via super().
+    # These use _ prefix to avoid triggering VDOM re-renders when the
+    # tour background task changes them. Templates that need these values
+    # should access them via get_context_data (which the mixin populates).
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.tutorial_running: bool = False
-        self.tutorial_current_step: int = -1
-        self.tutorial_total_steps: int = len(self._tutorial_steps)
+        self._tutorial_running: bool = False
+        self._tutorial_current_step: int = -1
+        self._tutorial_total_steps: int = len(self._tutorial_steps)
+
+    @property
+    def tutorial_running(self) -> bool:
+        return self._tutorial_running
+
+    @tutorial_running.setter
+    def tutorial_running(self, value: bool) -> None:
+        self._tutorial_running = value
+
+    @property
+    def tutorial_current_step(self) -> int:
+        return self._tutorial_current_step
+
+    @tutorial_current_step.setter
+    def tutorial_current_step(self, value: int) -> None:
+        self._tutorial_current_step = value
+
+    @property
+    def tutorial_total_steps(self) -> int:
+        return self._tutorial_total_steps
+
+    @tutorial_total_steps.setter
+    def tutorial_total_steps(self, value: int) -> None:
+        self._tutorial_total_steps = value
         # Internal: track the active step's target selector + class so
         # cancel/skip paths know what to clean up.
         self._tutorial_active_target: Optional[str] = None
