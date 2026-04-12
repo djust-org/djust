@@ -141,6 +141,11 @@ navigation:
         file: guides/server-driven-ui.md
         order: 6.55
         level: intermediate
+      - title: Guided Tours
+        slug: tutorials
+        file: guides/tutorials.md
+        order: 6.57
+        level: intermediate
       - title: Paste Events
         slug: dj-paste
         file: guides/dj-paste.md
