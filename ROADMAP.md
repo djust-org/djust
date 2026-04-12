@@ -50,6 +50,17 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~Scaffold `DEBUG=False` default + `.env.example`~~ ✅ (#637) | ~~Security-adjacent carry-over; fails-safe default complements A014 static check~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Defer `reinitAfterDOMUpdate` for pre-rendered mount~~ ✅ (#619) | ~~Visible layout-flash bugfix carried over from v0.4.1~~ | v0.4.2 |
 | ~~**P3**~~ | ~~Dependabot batch carry-over (v0.4.2)~~ ✅ | ~~Vitest/jsdom/tokio/indexmap/etc. — single "ci: bump deps" PR~~ | v0.4.2 |
+| **P1** | Private `_` attributes wiped between WebSocket events (#627) | Core state management broken — any `_private` attr is lost after each event | v0.4.2 |
+| **P1** | Pre-rendered WS reconnect drops `_private` attributes (#611) | State loss on reconnect after HTTP GET pre-render — related to #627 | v0.4.2 |
+| **P1** | VDOM patcher calls element methods on text nodes (#622) | `setAttribute`/`appendChild` crash on `#text` nodes — breaks conditional rendering | v0.4.2 |
+| **P1** | `as_live_field()` ignores `widget.attrs` (#683) | Form fields lose `type`, `placeholder`, `pattern` — forms DX broken | v0.4.2 |
+| **P2** | `form.cleaned_data` Python types serialized to null (#628) | `date`, `Decimal`, `UUID` in cleaned_data become `null` in public state | v0.4.2 |
+| **P2** | `set()` not JSON-serializable as public state (#626) | `set` in view state crashes serialization — common Python type | v0.4.2 |
+| **P2** | `dict` state deserialized as `list` after Rust sync (#612) | Round-trip through Rust state sync corrupts dict → list | v0.4.2 |
+| **P2** | VDOM patcher should handle `autofocus` on inserted elements (#617) | Dynamically inserted inputs don't receive focus even with `autofocus` attr | v0.4.2 |
+| **P2** | Debug panel SVG attributes double-escaped (#613) | `viewBox`, `path d` attributes rendered garbled in the debug toolbar | v0.4.2 |
+| **P3** | docs: `data-*` attribute naming convention undocumented (#623) | How `data-foo-bar` maps to `foo_bar` event params — every new user asks | v0.4.2 |
+| **P3** | chore: reduce system check noise — T002, V008, C003 (#603) | Noisy checks on every `manage.py` invocation annoy developers | v0.4.2 |
 | **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
 | **P2** | Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2) | Unified CSS/theming story with core; compat shim for plain-Django users | v0.5.1 |
 | **P2** | Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3) | Largest fold — 64K LOC — dedicated release window in v0.5.2 | v0.5.2 |
@@ -331,9 +342,9 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ### Milestone: v0.4.2 — Backend-Driven UI (Phase 1) & Carry-Over Fixes
 
-*Goal:* Land the MVP of backend-driven UI automation (`push_commands`, `wait_for_event`, `TutorialMixin`) so server-side Python can declaratively drive the browser through guided flows. Pick up the two fix PRs that were deferred from v0.4.1 on release day (#637 scaffold DEBUG default, #619 layout-shift on pre-rendered mount). Ship the dependabot batch that's been queued behind v0.4.1.
+*Goal:* Land the MVP of backend-driven UI automation (`push_commands`, `wait_for_event`, `TutorialMixin`) so server-side Python can declaratively drive the browser through guided flows. Fix the open bug backlog: state management bugs (#627, #611), VDOM patcher issues (#622, #617), serialization hardening (#628, #626, #612), forms (#683), debug panel (#613). Clean up docs (#623) and noisy system checks (#603). Ship the dependabot batch and carry-over fixes from v0.4.1.
 
-*Execution order (important — these have dependencies):* Ship the Backend-Driven UI sub-tasks **1a → 1b → 1c in order** because each depends on the previous. The two carry-over bugfixes (#637, #619) and the dependabot batch are independent of the BDUI track and can ship in any order or in parallel. Pipeline runners should use `/pipeline-run --feature "push_commands"` (or similar) to target sub-tasks directly rather than `--all`, because `--all` would pick them in declaration order, which happens to match dependency order here — but the ordering should be explicit, not accidental.
+*Execution order:* The BDUI features shipped first as 1a → 1b → 1c (dependency chain). The remaining bug fixes, docs, and chores are independent — pipeline runners can use `--all --group` to batch related issues (e.g. the serialization cluster #628/#626/#612 ships as one PR, the state management pair #627/#611 ships as one PR).
 
 **✅ `push_commands(chain)` + client-side `djust:exec` auto-executor ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 1a)** — Shipped. The foundation primitive for every backend-driven UI feature in ADRs 002-006. Adds `self.push_commands(chain)` as a one-line server-side helper that pushes a `JSChain` (v0.4.1) to the current session for immediate execution. Paired with a new ~40-line `djust:exec` auto-executor (framework-provided, no hook needed) registered automatically on every page — users don't write any client code to consume it. In single-user mode the chain is sent via `push_event("djust:exec", {"ops": chain.ops})` over the current WebSocket; presence-group broadcasting lands later in Phase 4. The client auto-executor calls `window.djust.js._executeOps(ops, null)` from v0.4.1's JS Commands module on every payload. Includes: 1 Python module (`djust/server_driven/mixin.py`), 1 JS module (`python/djust/static/djust/src/27-exec-listener.js`), test harness for push-commands round-trip, and one worked example on djust.org's counter demo ("drive it from the server" button that runs a 5-step narration + highlight tour). Branch: `feat/push-commands-server-driven`. *~20 lines Python + 15 lines JS + ~50 lines tests + 1 docs page. Tiny feature, biggest leverage — unblocks everything else.*
 
@@ -346,6 +357,30 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 **✅ #619 — Defer `reinitAfterDOMUpdate` via `requestAnimationFrame` on pre-rendered mount** — Shipped. Carry-over bugfix from v0.4.1. Independent of the BDUI track; can ship in parallel. Rebase onto current main, edit `python/djust/static/djust/src/03-websocket.js` to wrap the post-mount block in a `requestAnimationFrame` callback (with synchronous fallback when rAF is unavailable for JSDOM tests), preserve the ordering invariant so form recovery still runs after event binding is complete, rebuild `client.js`. Includes 148-line regression test file `tests/js/mount-deferred-reinit.test.js`. Fixes visible layout-flash on pre-rendered HTTP GET content. Branch: `fix/defer-reinit-after-dom-update-619`. *~30 lines JS (source) + rebuild + 148 lines tests. 1-2 days.*
 
 **✅ Dependabot batch carry-over** — Shipped. Independent chore work that was held behind the v0.4.1 release. Ship as a single "ci: bump deps" PR: Vitest 4.1.0 → 4.1.4, `@vitest/ui` + `@vitest/coverage-v8` to match, jsdom 29.0.1 → 29.0.2, happy-dom, tokio 1.50 → 1.51, indexmap 2.13.0 → 2.13.1, proptest, uuid, html5ever, release-drafter, github-script, astral-sh/setup-uv. Full test suite gates the merge. Branch: `chore/dependabot-batch-v042`. *15 deps in one PR. 1 day.*
+
+#### Open issues added to v0.4.2
+
+**#627 — Private `_` attributes wiped between WebSocket events** — Core state management bug. Any attribute starting with `_` (the documented convention for private/internal state) is lost after each event dispatch. Likely caused by the state serialization/deserialization round-trip stripping attributes whose names start with underscore. Related to #611. Branch: `fix/private-attr-wiped-627`. *Investigation needed — may be serialization filter, mount-replay, or Rust sync boundary.*
+
+**#611 — Pre-rendered WS reconnect drops `_private` attributes, skipping `mount()`** — On pages pre-rendered via HTTP GET, the WebSocket reconnect path skips `mount()` (because the content is already rendered), but also drops all `_private` attributes that were set during the HTTP mount. This means any internal state (`_db_connection`, `_cache`, `_user_prefs`) is silently lost after the WS handshake completes. Related to #627 — may share a root cause in the state serialization path. Branch: `fix/prerender-private-attrs-611`.
+
+**#622 — VDOM patcher calls element methods on text nodes** — The VDOM diff patcher calls `setAttribute()`, `appendChild()`, or other DOM element methods on `#text` nodes, which don't have those methods. Crashes conditional rendering when a text node sits where an element is expected (common in `{% if %}` blocks that switch between text and elements). Branch: `fix/vdom-text-node-methods-622`. *Rust-side fix in `crates/djust_vdom/`.*
+
+**#683 — `as_live_field()` ignores `widget.attrs` (type, placeholder, pattern)** — The `as_live_field` template filter renders Django form fields for live binding but drops any `widget.attrs` the field's widget defines. Fields lose their `type="email"`, `placeholder`, `pattern`, `min`/`max`, and any custom HTML attributes. Branch: `fix/as-live-field-widget-attrs-683`. *Python fix in the form rendering path.*
+
+**#628 — `form.cleaned_data` Python types (date, Decimal) serialized to null** — When `form.cleaned_data` values like `datetime.date`, `Decimal`, `UUID` are stored in public view state, the JSON serializer can't handle them and silently serializes to `null`. Developers see form data "vanish" after validation. Part of the serialization hardening cluster with #626 and #612. Branch: `fix/cleaned-data-types-628`. *Extend the JSON encoder with `date`/`Decimal`/`UUID` support.*
+
+**#626 — `set()` not JSON-serializable as public LiveView state** — Storing a Python `set()` in public view state crashes serialization because `json.dumps` doesn't handle sets. Common pattern: `self.selected_ids = set()`. Branch: `fix/set-serialization-626`. *Extend the JSON encoder to serialize `set` as sorted `list`.*
+
+**#612 — `dict` state attributes deserialized as `list` after Rust state sync** — Round-trip through the Rust state synchronization boundary corrupts `dict` values into `list` (likely MessagePack or similar binary format treating dict as array of pairs). Branch: `fix/dict-deser-list-612`. *Rust-side fix in `crates/djust_core/` serialization.*
+
+**#617 — VDOM patcher should handle `autofocus` on inserted elements** — Dynamically inserted `<input autofocus>` elements don't receive focus after a VDOM patch. The browser only honours `autofocus` on initial page load — the patcher needs to detect the attribute on newly inserted elements and call `.focus()` explicitly. Branch: `fix/vdom-autofocus-617`. *JS fix in the client-side patcher + rebuild.*
+
+**#613 — Debug panel SVG attributes double-escaped** — SVG attributes like `viewBox` and `path d` in the debug toolbar are double-escaped (`&amp;` rendered as `&amp;amp;`), making SVG icons garbled. Branch: `fix/debug-svg-escape-613`. *Python or JS fix depending on whether escaping happens server- or client-side.*
+
+**#623 — docs: `data-*` attribute naming convention for event handler params not documented** — How `data-foo-bar` on an element maps to `foo_bar` in the handler's kwargs isn't documented anywhere. Every new user asks about this. Branch: `docs/data-attr-naming-623`. *Docs-only — add to the Events guide.*
+
+**#603 — chore: reduce system check noise — T002, V008, C003** — These three system checks fire on every `manage.py` invocation and are noisy for projects that deliberately don't use the features they check for. Reduce severity from WARNING to INFO, or add a config toggle to suppress known-intentional skips. Branch: `chore/check-noise-603`.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
