@@ -5,7 +5,8 @@
 
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyList};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -17,7 +18,13 @@ pub use context::Context;
 pub use errors::{DjangoRustError, Result};
 
 /// A value that can be used in Django templates
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Uses a custom `Deserialize` implementation instead of `#[serde(untagged)]`
+/// to correctly distinguish maps from arrays during MessagePack deserialization.
+/// With `#[serde(untagged)]`, `rmp_serde` could deserialize a msgpack map as
+/// `List` because the untagged deserializer tries variants in declaration order
+/// and msgpack maps can be reinterpreted as sequences of pairs (#612).
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Value {
     Null,
@@ -27,6 +34,112 @@ pub enum Value {
     String(String),
     List(Vec<Value>),
     Object(HashMap<String, Value>),
+}
+
+/// Custom Deserialize that uses the deserializer's type hints to distinguish
+/// maps from sequences, fixing dict→list corruption in MessagePack round-trips (#612).
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ValueVisitor;
+
+        impl<'de> Visitor<'de> for ValueVisitor {
+            type Value = Value;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON/MessagePack value")
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::Null)
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> std::result::Result<Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Deserialize::deserialize(deserializer)
+            }
+
+            fn visit_bool<E>(self, v: bool) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::Bool(v))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::Integer(v))
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::Integer(v as i64))
+            }
+
+            fn visit_f64<E>(self, v: f64) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::Float(v))
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::String(v.to_owned()))
+            }
+
+            fn visit_string<E>(self, v: String) -> std::result::Result<Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Value::String(v))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element()? {
+                    items.push(item);
+                }
+                Ok(Value::List(items))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut obj = HashMap::new();
+                while let Some((key, value)) = map.next_entry()? {
+                    obj.insert(key, value);
+                }
+                Ok(Value::Object(obj))
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 impl Value {
