@@ -5,6 +5,7 @@ These decorators make LiveView code more elegant and explicit by marking
 event handlers, reactive state, and computed properties.
 """
 
+import asyncio
 import functools
 import warnings
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional
@@ -513,7 +514,7 @@ def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
 
 def background(func: F) -> F:
     """
-    Run event handler in background thread after flushing current state.
+    Run event handler in background after flushing current state.
 
     The decorator wraps the entire handler to run via start_async(),
     allowing immediate UI feedback (loading states) while the handler
@@ -524,6 +525,11 @@ def background(func: F) -> F:
     are visible immediately. When the handler completes, the view re-renders
     and patches are sent.
 
+    Both sync and async def handlers are supported.  For async handlers,
+    the decorator creates a native async closure so ``_run_async_work``
+    can ``await`` it directly on the event loop instead of routing through
+    ``sync_to_async`` (#697).
+
     Usage:
         class MyView(LiveView):
             @event_handler
@@ -532,6 +538,14 @@ def background(func: F) -> F:
                 '''Entire method runs in background thread.'''
                 self.generating = True
                 self.content = call_llm(prompt)  # slow operation
+                self.generating = False
+
+            @event_handler
+            @background
+            async def generate_async(self, prompt: str = "", **kwargs):
+                '''Async handlers are also supported.'''
+                self.generating = True
+                self.content = await call_llm_async(prompt)
                 self.generating = False
 
             def handle_async_result(self, name: str, result=None, error=None):
@@ -546,22 +560,28 @@ def background(func: F) -> F:
         def auto_save(self, **kwargs):
             # Debounced and runs in background
             self.save_draft()
-
-    Note: The handler should be a regular (non-async) function. It will
-    be executed in a thread pool via sync_to_async in the consumer.
     """
 
-    @functools.wraps(func)
-    def wrapper(self, *args, **kwargs):
-        # Create a closure that captures the current arguments
-        def _async_callback():
-            return func(self, *args, **kwargs)
+    if asyncio.iscoroutinefunction(func):
+        # Async handler: closure is itself async so _run_async_work can
+        # detect it via iscoroutinefunction and await it directly.
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            async def _async_callback():
+                return await func(self, *args, **kwargs)
 
-        # Use function name as task name for cancellation/tracking
-        task_name = func.__name__
+            task_name = func.__name__
+            self.start_async(_async_callback, name=task_name)
 
-        # Schedule the callback via start_async
-        self.start_async(_async_callback, name=task_name)
+    else:
+        # Sync handler: plain closure, run in thread via sync_to_async.
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            def _async_callback():
+                return func(self, *args, **kwargs)
+
+            task_name = func.__name__
+            self.start_async(_async_callback, name=task_name)
 
     # Add metadata for introspection
     _add_decorator_metadata(wrapper, "background", True)

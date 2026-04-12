@@ -1,8 +1,10 @@
-"""Tests for @background with async def handlers (#692).
+"""Tests for @background with async def handlers (#692, #697).
 
 Verifies that @background correctly handles both sync and async def
-handlers.  The workaround in ``_run_async_work`` detects unawaited
-coroutine returns and awaits them — these tests prove that path works.
+handlers.  #692 added a workaround in ``_run_async_work`` to detect
+unawaited coroutine returns.  #697 upgraded the ``@background``
+decorator itself to detect ``asyncio.iscoroutinefunction`` and create
+a native async closure, eliminating the workaround for new code.
 """
 
 from __future__ import annotations
@@ -199,3 +201,84 @@ class TestCoroutineDetection:
 
         with pytest.raises(ValueError, match="boom"):
             await _AsyncRunner.run_callback(bad_fn)
+
+
+class TestBackgroundNativeAsyncDetection:
+    """#697: @background should natively detect async def handlers.
+
+    The decorator should use asyncio.iscoroutinefunction to create an
+    async closure, so _run_async_work can call it directly on the event
+    loop instead of routing through sync_to_async first.
+    """
+
+    def test_async_handler_closure_is_coroutinefunction(self):
+        """The closure for an async handler is itself a coroutine function."""
+        view = _FakeView()
+
+        @event_handler
+        @background
+        async def do_work(self, **kwargs):
+            self._results.append("async_native")
+
+        do_work(view)
+        callback = view._scheduled[0][1]
+        assert asyncio.iscoroutinefunction(callback)
+
+    def test_sync_handler_closure_is_not_coroutinefunction(self):
+        """The closure for a sync handler is NOT a coroutine function."""
+        view = _FakeView()
+
+        @event_handler
+        @background
+        def do_work(self, **kwargs):
+            self._results.append("sync")
+
+        do_work(view)
+        callback = view._scheduled[0][1]
+        assert not asyncio.iscoroutinefunction(callback)
+
+    @pytest.mark.asyncio
+    async def test_native_async_closure_executes_correctly(self):
+        """Awaiting the async closure runs the handler body."""
+        view = _FakeView()
+
+        @event_handler
+        @background
+        async def do_work(self, **kwargs):
+            await asyncio.sleep(0)
+            self._results.append("native_async_done")
+
+        do_work(view)
+        callback = view._scheduled[0][1]
+        await callback()
+        assert "native_async_done" in view._results
+
+    @pytest.mark.asyncio
+    async def test_native_async_closure_propagates_exceptions(self):
+        """Exceptions from async handlers propagate through the closure."""
+        view = _FakeView()
+
+        @event_handler
+        @background
+        async def do_work(self, **kwargs):
+            raise ValueError("async boom")
+
+        do_work(view)
+        callback = view._scheduled[0][1]
+        with pytest.raises(ValueError, match="async boom"):
+            await callback()
+
+    @pytest.mark.asyncio
+    async def test_native_async_closure_return_value(self):
+        """The async closure preserves the handler's return value."""
+        view = _FakeView()
+
+        @event_handler
+        @background
+        async def do_work(self, **kwargs):
+            return 42
+
+        do_work(view)
+        callback = view._scheduled[0][1]
+        result = await callback()
+        assert result == 42
