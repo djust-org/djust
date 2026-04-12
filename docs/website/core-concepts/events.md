@@ -66,7 +66,7 @@ class MyView(LiveView):
 <button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
 ```
 
-`data-*` attributes are converted: `data-item-id` → `item_id`.
+`data-*` attributes are converted: `data-item-id` → `item_id`. See [Data Attribute Naming Convention](#data-attribute-naming-convention) for full details.
 
 ### Input
 
@@ -471,6 +471,102 @@ Key behavior:
 - Serializes form field values and `data-*` attributes from the container element
 - Multiple independent `dj-auto-recover` elements can coexist on the same page
 - Use for complex state (drag positions, canvas state, multi-step wizard progress) that form replay cannot restore
+
+## Data Attribute Naming Convention
+
+When you add `data-*` attributes to an element with a `dj-click` (or any `dj-*` event), djust automatically extracts them and passes them as keyword arguments to your Python handler. The conversion follows two rules:
+
+1. **The `data-` prefix is stripped** — `data-item-id` becomes `item-id`
+2. **Dashes become underscores** — `item-id` becomes `item_id`
+
+So `data-item-id="5"` arrives in your handler as `item_id="5"`.
+
+### Basic example
+
+```html
+<button dj-click="delete" data-item-id="{{ item.id }}" data-category="{{ item.category }}">
+    Delete
+</button>
+```
+
+```python
+@event_handler()
+def delete(self, item_id: int = 0, category: str = "", **kwargs):
+    # data-item-id="5"      → item_id=5   (coerced to int via type hint)
+    # data-category="draft"  → category="draft"
+    self.items = [i for i in self.items if i["id"] != item_id]
+```
+
+### Type coercion
+
+All `data-*` values are strings in HTML. djust provides two ways to coerce them:
+
+**Python type hints (server-side)** — add a type annotation to the handler parameter. djust inspects the annotation and coerces the string value automatically:
+
+```python
+@event_handler()
+def update(self, count: int = 0, price: float = 0.0, enabled: bool = False, **kwargs):
+    # data-count="42"     → count=42
+    # data-price="19.99"  → price=19.99
+    # data-enabled="true" → enabled=True
+    pass
+```
+
+Supported Python types: `int`, `float`, `bool`, `str`, `list`, `List[T]`, `Optional[T]`.
+
+**Type-hint suffixes (client-side)** — append a colon and type to the attribute name to coerce *before* sending to the server:
+
+```html
+<button dj-click="update"
+        data-count:int="42"
+        data-price:float="19.99"
+        data-enabled:bool="true"
+        data-tags:json='["a", "b"]'
+        data-items:list="a,b,c">
+    Update
+</button>
+```
+
+| Suffix | Converts to | Example |
+|--------|------------|---------|
+| `:int` / `:integer` | Number (integer) | `data-count:int="42"` → `42` |
+| `:float` / `:number` | Number (float) | `data-price:float="19.99"` → `19.99` |
+| `:bool` / `:boolean` | Boolean | `data-active:bool="true"` → `true` |
+| `:json` / `:object` / `:array` | Parsed JSON | `data-config:json='{"a":1}'` → `{"a": 1}` |
+| `:list` | Comma-separated array | `data-tags:list="a,b,c"` → `["a", "b", "c"]` |
+
+Both approaches work together: client-side suffixes convert before sending, and Python type hints coerce on arrival. If you use both, the Python coercion acts on the already-converted value.
+
+### The `dj-value-*` alternative
+
+`dj-value-*` attributes work the same way as `data-*` but take precedence when both are present. They match Phoenix LiveView's `phx-value-*` convention:
+
+```html
+<button dj-click="select" dj-value-item-id:int="{{ item.id }}">
+    Select
+</button>
+```
+
+`dj-value-item-id` → `item_id` (same dash-to-underscore rule). The `dj-value-*` form is preferred for event parameters because it avoids collisions with third-party libraries that also use `data-*` attributes.
+
+### Internal attributes are excluded
+
+djust skips its own internal `data-*` attributes so they don't leak into your handler kwargs:
+
+- `data-liveview-*`, `data-live-*`, `data-djust-*` — framework internals
+- `data-loading`, `data-component-id` — component machinery
+- `data-key` — VDOM list diffing key
+
+### Quick reference
+
+| HTML attribute | Python kwarg | Notes |
+|---|---|---|
+| `data-item-id="5"` | `item_id="5"` | Dashes → underscores |
+| `data-item-id:int="5"` | `item_id=5` | Client-side coercion |
+| `data-user-name="Jo"` | `user_name="Jo"` | Multi-word names |
+| `data-x="1"` | `x="1"` | Single-char names work |
+| `data-dj-preset="dark"` | `preset="dark"` | `dj_` prefix stripped |
+| `dj-value-section="hero"` | `section="hero"` | `dj-value-*` form |
 
 ## Next Steps
 

@@ -3659,3 +3659,128 @@ class TestV009OnMountValidation:
         finally:
             del cls
             _force_gc()
+
+
+# ---------------------------------------------------------------------------
+# suppress_checks config (#603)
+# ---------------------------------------------------------------------------
+
+
+class TestSuppressChecks:
+    """DJUST_CONFIG['suppress_checks'] silences noisy informational checks."""
+
+    def test_suppress_c003_info_via_djust_config(self, settings):
+        """C003 Info (daphne missing) suppressed when listed in suppress_checks."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+        settings.DJUST_CONFIG = {"suppress_checks": ["C003"]}
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c003 = [e for e in errors if e.id == "djust.C003"]
+        assert len(c003) == 0, "C003 Info should be suppressed"
+
+    def test_suppress_c003_warning_still_fires(self, settings):
+        """C003 Warning (daphne misordered) is NOT suppressed — only the Info variant is gated."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "daphne", "djust"]
+        settings.DJUST_CONFIG = {"suppress_checks": ["C003"]}
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c003 = [e for e in errors if e.id == "djust.C003"]
+        # The Warning variant (daphne after staticfiles) should still fire because
+        # it indicates a real misconfiguration, not just a missing optional dep.
+        assert len(c003) == 1
+        assert "before" in c003[0].msg
+
+    def test_suppress_with_fully_qualified_id(self, settings):
+        """Both 'C003' and 'djust.C003' are accepted in suppress_checks."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.C003"]}
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c003 = [e for e in errors if e.id == "djust.C003"]
+        assert len(c003) == 0
+
+    def test_suppress_via_liveview_config(self, settings):
+        """suppress_checks works from LIVEVIEW_CONFIG as well."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+        settings.LIVEVIEW_CONFIG = {"suppress_checks": ["C003"]}
+        # Ensure DJUST_CONFIG is not set so LIVEVIEW_CONFIG is the source
+        if hasattr(settings, "DJUST_CONFIG"):
+            delattr(settings, "DJUST_CONFIG")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c003 = [e for e in errors if e.id == "djust.C003"]
+        assert len(c003) == 0
+
+    def test_suppress_v008(self, tmp_path, settings):
+        """V008 is completely skipped when suppressed."""
+        settings.DJUST_CONFIG = {"suppress_checks": ["V008"]}
+
+        view_file = tmp_path / "views.py"
+        view_file.write_text(
+            textwrap.dedent(
+                """\
+                from djust import LiveView
+
+                class MyView(LiveView):
+                    template_name = "t.html"
+
+                    def mount(self, request, **kwargs):
+                        self.data = CustomClass()
+                """
+            )
+        )
+
+        from djust.checks import _check_non_primitive_assignments_in_mount
+
+        errors = []
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            _check_non_primitive_assignments_in_mount(errors)
+
+        v008 = [e for e in errors if e.id == "djust.V008"]
+        assert len(v008) == 0, "V008 should be suppressed"
+
+    def test_no_suppress_by_default(self, settings):
+        """Without suppress_checks, noisy checks still fire (backward compat)."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+        # Clear any existing suppress config
+        if hasattr(settings, "DJUST_CONFIG"):
+            delattr(settings, "DJUST_CONFIG")
+        if hasattr(settings, "LIVEVIEW_CONFIG"):
+            delattr(settings, "LIVEVIEW_CONFIG")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c003 = [e for e in errors if e.id == "djust.C003"]
+        assert len(c003) == 1, "C003 should fire by default"
+
+    def test_suppress_case_insensitive(self, settings):
+        """suppress_checks is case-insensitive."""
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+        settings.DJUST_CONFIG = {"suppress_checks": ["c003"]}
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c003 = [e for e in errors if e.id == "djust.C003"]
+        assert len(c003) == 0
