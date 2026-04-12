@@ -292,18 +292,36 @@ class LiveViewWebSocket {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
-                    reinitAfterDOMUpdate();
-                    // Set mount ready flag so dj-mounted handlers only fire
-                    // for elements added by subsequent VDOM patches, not on initial load
-                    window.djust._mountReady = true;
-                    // Trigger form recovery and dj-auto-recover after reconnect mount
-                    if (window.djust._isReconnect) {
-                        if (typeof window.djust._processFormRecovery === 'function') {
-                            window.djust._processFormRecovery();
+                    // FIX #619: Defer reinitAfterDOMUpdate() to the next animation
+                    // frame on pre-rendered mounts. Calling it synchronously here
+                    // forces the browser to recalc layout mid-paint, which causes
+                    // a visible flash on pages where the pre-rendered content has
+                    // large elements (e.g. big dashboard stats) — the elements
+                    // briefly render at the wrong size before settling. Deferring
+                    // to the next frame lets the browser finish its current paint
+                    // first. Form recovery + _mountReady must run AFTER reinit so
+                    // handlers are bound when recovery fires, so the whole block
+                    // moves into the rAF callback. Falls back to a synchronous call
+                    // when requestAnimationFrame isn't available (JSDOM tests).
+                    const runPostMount = () => {
+                        reinitAfterDOMUpdate();
+                        // Set mount ready flag so dj-mounted handlers only fire
+                        // for elements added by subsequent VDOM patches, not on initial load
+                        window.djust._mountReady = true;
+                        // Trigger form recovery and dj-auto-recover after reconnect mount
+                        if (window.djust._isReconnect) {
+                            if (typeof window.djust._processFormRecovery === 'function') {
+                                window.djust._processFormRecovery();
+                            }
+                            if (typeof window.djust._processAutoRecover === 'function') {
+                                window.djust._processAutoRecover();
+                            }
                         }
-                        if (typeof window.djust._processAutoRecover === 'function') {
-                            window.djust._processAutoRecover();
-                        }
+                    };
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(runPostMount);
+                    } else {
+                        runPostMount();
                     }
                 } else if (data.html) {
                     // No pre-rendered content - use server HTML directly
