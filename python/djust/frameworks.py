@@ -121,6 +121,33 @@ class BaseAdapter(FrameworkAdapter):
     # --- shared private helpers ---
 
     @staticmethod
+    def _merge_widget_attrs(field: forms.Field, attrs: Dict[str, Any]) -> None:
+        """Merge ``field.widget.attrs`` into *attrs* without overriding existing keys.
+
+        Widget-defined attributes (``type``, ``placeholder``, ``pattern``,
+        ``min``, ``max``, custom ``data-*``, etc.) are applied first so that
+        djust-specific attributes (``dj-change``, ``class``, ``name``, …)
+        always take precedence.
+
+        Boolean HTML attributes (``True``/``False``) and ``None`` values are
+        handled downstream by ``_build_tag`` / ``build_tag`` — we just pass
+        them through unchanged.
+        """
+        widget_attrs = getattr(field, "widget", None)
+        if widget_attrs is None:
+            return
+        widget_attrs = getattr(widget_attrs, "attrs", None)
+        if not widget_attrs:
+            return
+        for key, value in widget_attrs.items():
+            if key not in attrs:
+                # Skip None / False — these mean "attribute not present".
+                # True is kept so _build_tag can render it as a boolean attr.
+                if value is None or value is False:
+                    continue
+                attrs[key] = value
+
+    @staticmethod
     def _get_field_type(field: forms.Field) -> str:
         # Check EmailField before CharField (EmailField inherits from CharField)
         if isinstance(field, forms.EmailField):
@@ -183,12 +210,20 @@ class BaseAdapter(FrameworkAdapter):
             attrs["data-field_name"] = field_name
 
         if field_type == "textarea":
+            # Merge widget.attrs (placeholder, rows, cols, etc.) — existing
+            # keys (name, id, class, dj-change) take precedence.
+            self._merge_widget_attrs(field, attrs)
             return self._build_tag("textarea", attrs, escape(str(value)))
         elif field_type == "select":
+            self._merge_widget_attrs(field, attrs)
             return self._render_select(field, field_name, value, has_errors, attrs)
         else:
             attrs["type"] = field_type
             attrs["value"] = str(value) if value else ""
+            # Merge widget.attrs (placeholder, pattern, min, max, etc.) —
+            # existing keys (type, value, name, id, class, dj-change) take
+            # precedence over widget defaults.
+            self._merge_widget_attrs(field, attrs)
             return self._build_tag("input", attrs)
 
     def _render_select(
@@ -225,6 +260,9 @@ class BaseAdapter(FrameworkAdapter):
             attrs["dj-change"] = kwargs.get("event_name", "validate_field")
             # Pass field_name so event handler knows which field changed
             attrs["data-field_name"] = field_name
+
+        # Merge widget.attrs before building the tag
+        self._merge_widget_attrs(field, attrs)
 
         label_text = kwargs.get("label", field.label or field_name.replace("_", " ").title())
         wrap_cls = f' class="{wrapper_class}"' if wrapper_class else ""
@@ -266,6 +304,8 @@ class BaseAdapter(FrameworkAdapter):
                 attrs["dj-change"] = kwargs.get("event_name", "validate_field")
             # Pass field_name so event handler knows which field changed
             attrs["data-field_name"] = field_name
+            # Merge widget.attrs (data-*, custom classes, etc.)
+            self._merge_widget_attrs(field, attrs)
 
             html += (
                 f'<div class="{radio_wrapper}">'
