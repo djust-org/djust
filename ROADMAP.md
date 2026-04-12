@@ -61,10 +61,10 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~Debug panel SVG attributes double-escaped (#613)~~ ✅ | ~~`viewBox`, `path d` attributes rendered garbled in the debug toolbar~~ | v0.4.2 |
 | ~~**P3**~~ | ~~docs: `data-*` attribute naming convention undocumented (#623)~~ ✅ | ~~How `data-foo-bar` maps to `foo_bar` event params — every new user asks~~ | v0.4.2 |
 | ~~**P3**~~ | ~~chore: reduce system check noise — T002, V008, C003 (#603)~~ ✅ | ~~Noisy checks on every `manage.py` invocation annoy developers~~ | v0.4.2 |
-| **P1** | TutorialMixin `__init__` not called when listed after LiveView (#691) | Django's `View.__init__` breaks `super()` chain — mixin silently uninitialised | v0.4.2 |
-| **P1** | `@background` silently drops `async def` handlers (#692) | Coroutine returned but never awaited — any async background handler is dead | v0.4.2 |
-| **P1** | `push_commands` in `@background` tasks never flush until task ends (#693) | Push events queue up but don't reach client mid-task — tours show nothing | v0.4.2 |
-| **P1** | `get_context_data` includes non-serializable class attrs, corrupting state (#694) | MRO walker adds class attrs to context; serializer converts to strings | v0.4.2 |
+| ~~**P1**~~ | ~~TutorialMixin `__init__` not called when listed after LiveView (#691)~~ ✅ | ~~Django's `View.__init__` breaks `super()` chain — mixin silently uninitialised~~ | v0.4.2 |
+| ~~**P1**~~ | ~~`@background` silently drops `async def` handlers (#692)~~ ✅ | ~~Coroutine returned but never awaited — any async background handler is dead~~ | v0.4.2 |
+| ~~**P1**~~ | ~~`push_commands` in `@background` tasks never flush until task ends (#693)~~ ✅ | ~~Push events queue up but don't reach client mid-task — tours show nothing~~ | v0.4.2 |
+| ~~**P1**~~ | ~~`get_context_data` includes non-serializable class attrs, corrupting state (#694)~~ ✅ | ~~MRO walker adds class attrs to context; serializer converts to strings~~ | v0.4.2 |
 | **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
 | **P2** | Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2) | Unified CSS/theming story with core; compat shim for plain-Django users | v0.5.1 |
 | **P2** | Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3) | Largest fold — 64K LOC — dedicated release window in v0.5.2 | v0.5.2 |
@@ -388,13 +388,13 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 #### TutorialMixin integration bugs (found during live testing)
 
-**#691 — TutorialMixin `__init__` not called when listed after LiveView in MRO** — Django's `View.__init__` doesn't call `super().__init__()`, so any mixin listed after LiveView in the class declaration never gets its `__init__` called. The docs show `class MyView(LiveView, TutorialMixin)` but that silently fails. Fix: either detect wrong ordering via system check, or move mixin init to a `mount()` hook. Workaround: put `TutorialMixin` first. Branch: `fix/tutorial-mixin-mro-691`.
+~~**#691 — TutorialMixin `__init__` not called when listed after LiveView in MRO**~~ ✅ — Added system check `djust.V010` that detects wrong MRO ordering at startup and emits an Error with a fix hint. Tutorials guide updated with correct ordering. 5 new tests. Shipped in `fix/tutorial-integration-bugs`.
 
-**#692 — `@background` decorator silently drops `async def` handlers** — `@background` wraps the handler in a sync closure that calls `func(self, ...)`. When `func` is `async def`, calling it returns a coroutine but nobody awaits it — the handler body never executes. Affects `TutorialMixin.start_tutorial` (which is `@background async def`) and any user combining `@background` with `async def`. Fix: `_run_async_work` detects coroutine returns and awaits them. Branch: `fix/background-async-692`.
+~~**#692 — `@background` decorator silently drops `async def` handlers**~~ ✅ — The coroutine detection in `_run_async_work` (workaround already on main) is the proper fix. 11 new regression tests verify both sync and async handlers execute. Shipped in `fix/tutorial-integration-bugs`.
 
-**#693 — `push_commands` inside `@background` tasks never flush until task completes** — `push_commands` queues events to `_pending_push_events`, but the consumer's `_flush_push_events` only runs after the callback returns. For a 30-second tour, all push events arrive at once after 30 seconds. Fix: add `_flush_pending_push_events()` callback from consumer to view, called by `TutorialMixin._run_step` after each `push_commands`. Branch: `fix/push-flush-background-693`.
+~~**#693 — `push_commands` inside `@background` tasks never flush until task completes**~~ ✅ — The `_flush_pending_push_events` callback mechanism (workaround already on main) is the proper fix. Added public `await self.flush_push_events()` API on PushEventMixin. 7 new tests. Shipped in `fix/tutorial-integration-bugs`.
 
-**#694 — `get_context_data` includes non-serializable class attributes, corrupting state** — The MRO walker in `ContextMixin.get_context_data()` adds class-level attributes (like `tutorial_steps`) to the template context. The state serializer converts non-JSON-serializable values to their `str()` repr. On subsequent events, `tutorial_steps[0]` is a string instead of a `TutorialStep`, causing `AttributeError: 'str' object has no attribute 'target'`. Fix: skip non-serializable class attrs in the MRO walker, or have `TutorialMixin` store steps in a `_`-prefixed attribute. Branch: `fix/context-class-attrs-694`.
+~~**#694 — `get_context_data` includes non-serializable class attributes, corrupting state**~~ ✅ — `ContextMixin.get_context_data()` now skips class-level attributes that fail a JSON serialisability probe. `TutorialMixin` stores steps as `_tutorial_steps` with a read-only property. 14 new tests. Shipped in `fix/tutorial-integration-bugs`.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 

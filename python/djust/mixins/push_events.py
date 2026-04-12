@@ -115,19 +115,37 @@ class PushEventMixin:
             )
         self.push_event("djust:exec", {"ops": chain.ops})
 
-    async def _flush_pending_push_events(self) -> None:
+    async def flush_push_events(self) -> None:
         """
         Flush pending push events immediately via the consumer callback.
 
-        Called by TutorialMixin (and any other @background handler) to
-        send queued push_commands/push_event to the client mid-task
-        rather than waiting for the handler to return.
+        Public API for ``@background`` handlers that need to send
+        ``push_commands`` / ``push_event`` to the client mid-task rather
+        than waiting for the handler to return.  This is the mechanism
+        that makes ``TutorialMixin``'s per-step highlights arrive in real
+        time instead of all at once when the task completes (#693).
 
         No-op if no flush callback is registered (e.g. in tests or
         HTTP fallback mode).
+
+        Usage::
+
+            @event_handler
+            @background
+            async def long_running(self, **kwargs):
+                self.push_event("step", {"n": 1})
+                await self.flush_push_events()   # client sees step 1 NOW
+                await asyncio.sleep(5)
+                self.push_event("step", {"n": 2})
+                await self.flush_push_events()   # client sees step 2 NOW
         """
         if self._push_events_flush_callback is not None and self._pending_push_events:
             await self._push_events_flush_callback()
+
+    # Backward-compatible private alias used by TutorialMixin and tests.
+    async def _flush_pending_push_events(self) -> None:
+        """Alias for :meth:`flush_push_events` — kept for internal use."""
+        await self.flush_push_events()
 
     def _drain_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """

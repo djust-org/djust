@@ -182,7 +182,7 @@ class TestTutorialLifecycle:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
         # After the run, state is reset
         assert view.tutorial_running is False
@@ -196,7 +196,7 @@ class TestTutorialLifecycle:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -232,7 +232,7 @@ class TestTutorialLifecycle:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -252,7 +252,7 @@ class TestTutorialLifecycle:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         # Start once
         await _call(view.start_tutorial)  # schedules background tour
         await asyncio.sleep(0.02)
@@ -283,7 +283,7 @@ class TestWaitForEventIntegration:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
 
         await _call(view.start_tutorial)  # schedules background tour
         # Let the tour start and enter step 0
@@ -309,7 +309,7 @@ class TestWaitForEventIntegration:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         # Tour should have completed both steps despite step 0 timing out
@@ -330,7 +330,7 @@ class TestWaitForEventIntegration:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
 
         await _call(view.start_tutorial)  # schedules background tour
         await asyncio.sleep(0.05)
@@ -362,7 +362,7 @@ class TestSkipAndCancel:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _call(view.start_tutorial)  # schedules background tour
         await asyncio.sleep(0.02)
 
@@ -389,7 +389,7 @@ class TestSkipAndCancel:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _call(view.start_tutorial)  # schedules background tour
         await asyncio.sleep(0.02)
 
@@ -436,7 +436,7 @@ class TestOnEnterOnExit:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -460,7 +460,7 @@ class TestOnEnterOnExit:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -483,7 +483,7 @@ class TestHighlightClass:
             tutorial_steps = [TutorialStep(target="#a", message="Hi.", timeout=0.02)]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -503,7 +503,7 @@ class TestHighlightClass:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -525,7 +525,7 @@ class TestNarrateEvent:
             tutorial_steps = [TutorialStep(target="#a", message="Hi.", timeout=0.02)]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
@@ -546,7 +546,7 @@ class TestNarrateEvent:
             ]
 
         view = V()
-        view.tutorial_total_steps = len(V.tutorial_steps)
+        view.tutorial_total_steps = len(view.tutorial_steps)
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()

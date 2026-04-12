@@ -11,7 +11,7 @@ from djust import LiveView
 from djust.tutorials import TutorialMixin, TutorialStep
 
 
-class OnboardingView(LiveView, TutorialMixin):
+class OnboardingView(TutorialMixin, LiveView):
     template_name = "onboarding.html"
 
     tutorial_steps = [
@@ -61,6 +61,22 @@ That's the entire tour. Click "Take the tour" and the framework:
 
 Zero custom JavaScript. Zero client-side state.
 
+## MRO ordering: `TutorialMixin` must come first
+
+Always list `TutorialMixin` **before** `LiveView` in your class bases:
+
+```python
+# Correct
+class MyView(TutorialMixin, LiveView):
+    ...
+
+# Wrong — TutorialMixin.__init__ is never called
+class MyView(LiveView, TutorialMixin):
+    ...
+```
+
+Django's `View.__init__` does not call `super().__init__()`, so any mixin listed after a View-derived class never gets initialised. If you get the order wrong, the `djust.V010` system check will catch it at startup with a clear error message.
+
 ## How it works
 
 ### The state machine
@@ -89,7 +105,7 @@ Every push happens via `self.push_commands(JSChain)`, which ships the chain thro
 ### State and events exposed by the mixin
 
 ```python
-class YourView(LiveView, TutorialMixin):
+class YourView(TutorialMixin, LiveView):
     # Three instance attributes the mixin manages for you:
     tutorial_running: bool          # True while a tour is active
     tutorial_current_step: int      # 0-based index, or -1 if not running
@@ -269,7 +285,7 @@ Apps using djust-theming get the bubble styled automatically via the `config.get
 Every step auto-advances after a few seconds — no user input required. Good for "look at this quickly":
 
 ```python
-class DemoView(LiveView, TutorialMixin):
+class DemoView(TutorialMixin, LiveView):
     tutorial_steps = [
         TutorialStep(target="#feature-1", message="First feature.", timeout=3.0),
         TutorialStep(target="#feature-2", message="Second feature.", timeout=3.0),
@@ -282,7 +298,7 @@ class DemoView(LiveView, TutorialMixin):
 Each step waits for the user to actually perform the action. The tour is paced by the user, not a clock:
 
 ```python
-class OnboardingView(LiveView, TutorialMixin):
+class OnboardingView(TutorialMixin, LiveView):
     tutorial_steps = [
         TutorialStep(
             target="#btn-new-project",
@@ -338,7 +354,7 @@ tutorial_steps = [
 For more complex flows, override `start_tutorial` or call `_run_step` directly:
 
 ```python
-class AdaptiveTutorial(LiveView, TutorialMixin):
+class AdaptiveTutorial(TutorialMixin, LiveView):
     tutorial_steps = []  # not used directly
 
     @event_handler
