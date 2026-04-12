@@ -40,6 +40,16 @@ def tutorial_bubble(
     """
     Render the tutorial narration bubble container element.
 
+    .. important::
+
+        The bubble **must be placed outside** the ``dj-root`` container.
+        If placed inside, morphdom recovery (which replaces the entire
+        ``dj-root`` content on patch failure) will destroy the bubble
+        mid-tour, causing the tour to silently disappear. The bubble's
+        Skip/Close buttons use ``onclick`` → ``tour:hide`` (not
+        ``dj-click``), so they work correctly outside the LiveView
+        container.
+
     The element is a floating ``<div>`` that starts hidden and becomes
     visible when the tutorial dispatches a ``tour:narrate`` (or custom)
     CustomEvent. The client-side listener in ``src/28-tutorial-bubble.js``

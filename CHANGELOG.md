@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **Tutorial bubble must be placed outside `dj-root` ([#699](https://github.com/djust-org/djust/issues/699))** — If the `{% tutorial_bubble %}` tag is placed inside the `dj-root` container, morphdom recovery (which replaces the entire `dj-root` content on patch failure) destroys the bubble mid-tour, causing it to silently disappear. The tutorials guide now has a dedicated "Bubble Placement" section explaining the requirement, why it exists, and correct/incorrect examples. The simplest-possible example at the top of the guide is updated to show the bubble outside `dj-root`. The `tutorial_bubble` template tag docstring is also updated with this requirement.
+
 - **`data-*` attribute naming convention documented in Events guide ([#623](https://github.com/djust-org/djust/issues/623))** — How `data-foo-bar` on an HTML element maps to `foo_bar` in the event handler's kwargs was undocumented. The Events guide now has a dedicated "Data Attribute Naming Convention" section covering: the dash-to-underscore rule, client-side type-hint suffixes (`:int`, `:float`, `:bool`, `:json`, `:list`), server-side Python type-hint coercion, the `dj-value-*` alternative, which internal `data-*` attributes are excluded, and a quick-reference table.
 
 ### Changed
