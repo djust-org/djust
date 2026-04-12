@@ -55,6 +55,10 @@ class RequestMixin:
         self.mount(request, **kwargs)
         t_mount = (time.perf_counter() - t0) * 1000
 
+        # Snapshot user-defined _private attrs (set in mount) before render
+        # cycle adds framework-internal attrs.
+        self._snapshot_user_private_attrs()
+
         # Call handle_params after mount (Phoenix parity).
         # The WebSocket path does this in websocket.py:1261-1266, but the
         # HTTP GET path was missing it. Without this, URL params like ?tab=X
@@ -111,6 +115,12 @@ class RequestMixin:
         _cached = self._cached_context or {}
         _session_state = {k: v for k, v in _cached.items() if not isinstance(v, LiveComponent)}
         request.session[view_key] = normalize_django_value(_session_state)
+
+        # Persist user-defined _private attributes so they survive reconnects
+        private_state = self._get_private_state()
+        if private_state:
+            request.session[f"{view_key}__private"] = normalize_django_value(private_state)
+
         t0_sc = time.perf_counter()
         self._save_components_to_session(request, _cached)
         t_save_components = (time.perf_counter() - t0_sc) * 1000
@@ -234,6 +244,11 @@ class RequestMixin:
                 if not key.startswith("_") and not callable(value):
                     safe_setattr(self, key, value, allow_private=False)
 
+            # Restore user-defined _private attributes
+            private_state = request.session.get(f"{view_key}__private", {})
+            if private_state:
+                self._restore_private_state(private_state)
+
             self._initialize_temporary_assigns()
 
             # Run on_mount hooks (auth guards, etc.) before mount
@@ -243,6 +258,7 @@ class RequestMixin:
 
             if not saved_state:
                 self.mount(request, **kwargs)
+                self._snapshot_user_private_attrs()
             else:
                 pass
 
@@ -298,6 +314,16 @@ class RequestMixin:
                 else:
                     handler()
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
+
+            # Persist user-defined _private attributes BEFORE get_context_data()
+            # because get_context_data() sets render-cycle internals that we
+            # don't want to accidentally capture.
+            private_state = self._get_private_state()
+            if private_state:
+                request.session[f"{view_key}__private"] = normalize_django_value(private_state)
+            else:
+                # Clean up if no private attrs remain
+                request.session.pop(f"{view_key}__private", None)
 
             # Save updated state back to session
             updated_context = self.get_context_data()
