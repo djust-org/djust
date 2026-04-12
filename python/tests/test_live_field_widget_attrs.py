@@ -237,3 +237,51 @@ class BooleanWidgetAttrTest(TestCase):
         adapter = PlainAdapter()
         html = adapter.render_field(Form2().fields["f"], "f", "", [])
         self.assertNotIn("disabled", html)
+
+
+class WidgetTypeOverrideTest(TestCase):
+    """Widget attrs type= overrides the inferred field type (#683 re-open).
+
+    Django's documented pattern for setting input type is:
+        forms.CharField(widget=forms.TextInput(attrs={"type": "tel"}))
+
+    _get_field_type() must check widget.attrs["type"] before falling
+    back to the class-based inference (CharField → "text").
+    """
+
+    def test_type_tel_from_widget_attrs(self):
+        class PhoneForm(forms.Form):
+            phone = forms.CharField(
+                widget=forms.TextInput(attrs={"type": "tel", "placeholder": "(212) 555-0100"})
+            )
+
+        adapter = PlainAdapter()
+        html = adapter.render_field(PhoneForm().fields["phone"], "phone", "", [])
+        self.assertIn('type="tel"', html)
+        self.assertNotIn('type="text"', html)
+
+    def test_type_url_from_widget_attrs(self):
+        class UrlForm(forms.Form):
+            website = forms.CharField(widget=forms.TextInput(attrs={"type": "url"}))
+
+        adapter = Bootstrap5Adapter()
+        html = adapter.render_field(UrlForm().fields["website"], "website", "", [])
+        self.assertIn('type="url"', html)
+
+    def test_type_search_from_widget_attrs(self):
+        class SearchForm(forms.Form):
+            q = forms.CharField(widget=forms.TextInput(attrs={"type": "search"}))
+
+        adapter = PlainAdapter()
+        html = adapter.render_field(SearchForm().fields["q"], "q", "", [])
+        self.assertIn('type="search"', html)
+
+    def test_inferred_type_still_works_without_override(self):
+        """CharField without type in widget.attrs still renders type=text."""
+
+        class SimpleForm(forms.Form):
+            name = forms.CharField()
+
+        adapter = PlainAdapter()
+        html = adapter.render_field(SimpleForm().fields["name"], "name", "", [])
+        self.assertIn('type="text"', html)

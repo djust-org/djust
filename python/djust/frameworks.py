@@ -149,6 +149,20 @@ class BaseAdapter(FrameworkAdapter):
 
     @staticmethod
     def _get_field_type(field: forms.Field) -> str:
+        # If the widget has an explicit input_type that differs from the
+        # default for its class, honour it. Django moves type= from
+        # widget attrs into widget.input_type during __init__, so
+        # TextInput(attrs={"type": "tel"}) sets input_type="tel" and
+        # removes "type" from attrs.
+        widget = field.widget
+        widget_type = getattr(widget, "input_type", None)
+        if widget_type:
+            # Check if this is a user override (not just the widget's default).
+            # Compare against the widget class's default input_type.
+            default_type = getattr(type(widget), "input_type", None)
+            if widget_type != default_type:
+                return widget_type
+
         # Check EmailField before CharField (EmailField inherits from CharField)
         if isinstance(field, forms.EmailField):
             return "email"
