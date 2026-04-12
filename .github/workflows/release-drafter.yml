@@ -1,10 +1,15 @@
 name: Release Drafter
 
+# release-drafter is intentionally only wired to `push` on main:
+# v7+ validates `target_commitish` against the GitHub releases API and
+# rejects pull request refs (`refs/pull/<n>/merge`), which is what
+# `github.ref` resolves to under a `pull_request` trigger. v6 silently
+# tolerated this; v7 does not. And philosophically, release-drafter is
+# meant to track changes that have *landed* on the release branch, not
+# comment on in-flight PRs — the push trigger is the correct fit.
 on:
   push:
     branches: [main]
-  pull_request:
-    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read
@@ -17,7 +22,7 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
-      - uses: release-drafter/release-drafter@v6
+      - uses: release-drafter/release-drafter@v7
         with:
           config-name: release-drafter.yml
         env:
