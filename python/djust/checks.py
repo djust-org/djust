@@ -1085,6 +1085,9 @@ def check_liveviews(app_configs, **kwargs):
                             )
                         )
 
+    # V010 -- TutorialMixin listed after LiveView in MRO (#691)
+    _check_tutorial_mixin_mro(errors, LiveView)
+
     # V006 -- service instance in mount() (AST-based scan of project files)
     _check_service_instances_in_mount(errors)
 
@@ -1092,6 +1095,80 @@ def check_liveviews(app_configs, **kwargs):
     _check_non_primitive_assignments_in_mount(errors)
 
     return errors
+
+
+def _check_tutorial_mixin_mro(errors, LiveView):
+    """V010 (Error): Detect TutorialMixin listed after LiveView in the MRO.
+
+    Django's ``View.__init__`` does not call ``super().__init__()``, so any
+    mixin listed after a ``View``-derived class in the bases tuple never gets
+    its ``__init__`` called.  When ``TutorialMixin`` is listed after
+    ``LiveView``, its instance state (``tutorial_running``, signals, etc.) is
+    never initialised and the tour silently fails at runtime.
+
+    Fires ``djust.V010`` as an **Error** because the class is guaranteed to
+    break at runtime — not a style issue.
+
+    See: https://github.com/djust-org/djust/issues/691
+    """
+    if _is_check_suppressed("djust.V010"):
+        return
+
+    try:
+        from djust.tutorials.mixin import TutorialMixin
+    except ImportError:
+        return
+
+    from django.views import View
+
+    for cls in _walk_subclasses(LiveView):
+        module = getattr(cls, "__module__", "") or ""
+        if module.startswith("djust.") or module.startswith("djust_"):
+            if "test" not in module and "example" not in module:
+                continue
+
+        if TutorialMixin not in cls.__mro__:
+            continue
+
+        # Check that TutorialMixin appears before any View-derived class
+        # in the *direct bases* (not the full MRO). If a user writes
+        # ``class MyView(LiveView, TutorialMixin)``, TutorialMixin.__init__
+        # is unreachable because View.__init__ breaks the super() chain.
+        bases = cls.__bases__
+        tutorial_idx = None
+        view_idx = None
+        for i, base in enumerate(bases):
+            if tutorial_idx is None and issubclass(base, TutorialMixin):
+                tutorial_idx = i
+            if view_idx is None and issubclass(base, View):
+                view_idx = i
+
+        if tutorial_idx is not None and view_idx is not None and tutorial_idx > view_idx:
+            cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+            cls_file = ""
+            cls_line = None
+            try:
+                cls_file = inspect.getfile(cls)
+                cls_line = inspect.getsourcelines(cls)[1]
+            except (OSError, TypeError):
+                pass
+            errors.append(
+                DjustError(
+                    "%s: TutorialMixin must be listed before LiveView in bases." % cls_label,
+                    hint=(
+                        "Change `class %s(LiveView, TutorialMixin)` to "
+                        "`class %s(TutorialMixin, LiveView)`. Django's View.__init__ "
+                        "does not call super().__init__(), so mixins listed after "
+                        "LiveView never get initialised." % (cls.__qualname__, cls.__qualname__)
+                    ),
+                    id="djust.V010",
+                    fix_hint=(
+                        "Reorder bases: `class %s(TutorialMixin, LiveView):`" % cls.__qualname__
+                    ),
+                    file_path=cls_file,
+                    line_number=cls_line,
+                )
+            )
 
 
 def _check_service_instances_in_mount(errors):

@@ -30,7 +30,7 @@ class TutorialMixin:
         from djust import LiveView
         from djust.tutorials import TutorialMixin, TutorialStep
 
-        class OnboardingView(LiveView, TutorialMixin):
+        class OnboardingView(TutorialMixin, LiveView):
             template_name = "onboarding.html"
             tutorial_steps = [
                 TutorialStep(
@@ -77,18 +77,44 @@ class TutorialMixin:
     """
 
     # Class-level default — override in subclasses with your tour.
-    tutorial_steps: List[TutorialStep] = []
+    # Stored with a ``_`` prefix so ContextMixin's MRO walker doesn't
+    # pick it up and try to serialize TutorialStep objects (#694).
+    # The public ``tutorial_steps`` property provides read access.
+    _tutorial_steps: List[TutorialStep] = []
 
     # Default highlight class if a step doesn't specify one. Apps can
     # override this at the class level to change the default look.
     default_highlight_class: str = "tour-highlight"
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        """Move ``tutorial_steps`` to ``_tutorial_steps`` at class creation.
+
+        If a subclass defines ``tutorial_steps`` (the documented public
+        name), migrate it to ``_tutorial_steps`` so the MRO walker in
+        ``ContextMixin`` never sees non-serializable ``TutorialStep``
+        objects in the template context (#694).
+        """
+        super().__init_subclass__(**kwargs)
+        if "tutorial_steps" in cls.__dict__:
+            cls._tutorial_steps = cls.__dict__["tutorial_steps"]
+            # Remove the public name from class dict so it doesn't
+            # appear in the MRO walker's class-level scan.
+            try:
+                delattr(cls, "tutorial_steps")
+            except AttributeError:
+                pass
+
+    @property
+    def tutorial_steps(self) -> List[TutorialStep]:
+        """Read-only access to the step list."""
+        return self._tutorial_steps
 
     # Instance state — initialized in __init__ via super().
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.tutorial_running: bool = False
         self.tutorial_current_step: int = -1
-        self.tutorial_total_steps: int = len(self.tutorial_steps)
+        self.tutorial_total_steps: int = len(self._tutorial_steps)
         # Internal: track the active step's target selector + class so
         # cancel/skip paths know what to clean up.
         self._tutorial_active_target: Optional[str] = None

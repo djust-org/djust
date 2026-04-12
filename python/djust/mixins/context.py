@@ -2,6 +2,7 @@
 ContextMixin - Context data management for LiveView.
 """
 
+import json
 import logging
 from typing import Any, Dict
 
@@ -38,6 +39,29 @@ try:
     del _im
 except ImportError:
     JIT_AVAILABLE = False
+
+
+def _is_json_serializable(value: Any) -> bool:
+    """Return True if *value* can survive a JSON round-trip.
+
+    Used to filter class-level attributes out of template context when
+    they are not serializable (#694).  Primitive types, dicts, and lists
+    are checked structurally; everything else goes through a fast
+    ``json.dumps`` probe.
+    """
+    # Fast path for common types
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_json_serializable(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_json_serializable(v) for k, v in value.items())
+    # Fallback: try encoding — catches dataclasses, custom objects, etc.
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 class ContextMixin:
@@ -111,6 +135,9 @@ class ContextMixin:
                             pass
                     _all_items.append((key, value))
 
+        # Collect keys that came from class-level attrs (not instance __dict__)
+        _class_level_keys = _seen
+
         for key, value in _all_items:
             if key.startswith("_"):
                 continue
@@ -123,6 +150,16 @@ class ContextMixin:
                     self._register_component(value)
                 context[key] = value
             elif not isinstance(value, _SKIP_TYPES):
+                # For class-level attributes, skip values that are not
+                # JSON-serializable (#694). Prevents non-serializable objects
+                # (e.g. TutorialStep dataclasses) from being converted to
+                # their str() repr by the serializer, which corrupts state.
+                # Django QuerySets and Models are exempt — they have their
+                # own serialization pipeline (JIT / normalize_django_value).
+                if key in _class_level_keys:
+                    if not isinstance(value, (QuerySet, models.Model)) and not is_model_list(value):
+                        if not _is_json_serializable(value):
+                            continue
                 context[key] = value
 
         # JIT auto-serialization for QuerySets and Models
