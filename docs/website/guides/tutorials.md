@@ -399,7 +399,15 @@ Set `window.djustDebug = true` in the browser console to see verbose logs from t
 
 A few real constraints worth knowing:
 
-- **LiveComponent events don't propagate to parent waiters.** A step's `wait_for` must match a handler on the LiveView itself, not on an embedded LiveComponent. The component-event propagation is tracked as a follow-up.
+- **LiveComponent events propagate to parent waiters automatically.** A step's `wait_for` matches handlers on either the LiveView itself *or* any embedded `LiveComponent`. When a component handler fires, the framework notifies the parent view's waiter registry with the handler's kwargs — plus an injected `component_id` key so a predicate can disambiguate events from multiple component instances:
+
+  ```python
+  # Wait for a click specifically on the project-form component
+  await self.wait_for_event(
+      "save",
+      predicate=lambda kw: kw.get("component_id") == "project_form",
+  )
+  ```
 - **Actor-mode views bypass the dispatch hook.** Tours don't work on views running under `use_actors = True`. The non-actor path is the default and is fully supported.
 - **Handlers that fail parameter validation don't run** — meaning a waiter on them never resolves via the handler path, only via timeout. Make sure your `wait_for` handlers have matching client-side call shapes (the inline `dj-click="handler_name(args)"` syntax works fine).
 - **Tours are single-user.** A tour running on user A's session doesn't affect user B. For instructor-led multi-user tours (one instructor drives many students), wait for Phase 4 (`broadcast_commands` + consent envelope) in v0.5.x.

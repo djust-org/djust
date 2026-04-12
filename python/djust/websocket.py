@@ -1735,6 +1735,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     timing["handler"] = (
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
+
+                    # ADR-002 Phase 1b/1c follow-up: propagate component events
+                    # to parent LiveView waiters. Without this, a tutorial step
+                    # that uses `wait_for="component_handler"` on a LiveView
+                    # mixing in TutorialMixin would never advance if the matching
+                    # handler lives on an embedded LiveComponent rather than the
+                    # view itself. The notify pass runs AFTER the component
+                    # handler completes so any waiters the handler itself
+                    # created aren't self-resolved. Apps that need to
+                    # disambiguate between identically-named events on
+                    # different components can use the waiter's `predicate`
+                    # argument to filter by `component_id` (which is always
+                    # present in the kwargs dict below).
+                    notify_kwargs = dict(coerced_event_data or {})
+                    notify_kwargs.setdefault("component_id", component_id)
+                    if hasattr(self.view_instance, "_notify_waiters"):
+                        try:
+                            self.view_instance._notify_waiters(event_name, notify_kwargs)
+                        except Exception as exc:
+                            logger.warning(
+                                "Waiter notification for component event %r on %s failed: %s",
+                                event_name,
+                                component_id,
+                                exc,
+                            )
                 else:
                     # Use target_view for handler lookup (may be an embedded child)
                     # Security checks (shared with actor and component paths)
