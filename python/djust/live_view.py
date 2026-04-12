@@ -245,6 +245,80 @@ class LiveView(
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
 
+        # Track user-defined _private attr names (populated by
+        # _snapshot_user_private_attrs after mount, or _restore_private_state).
+        self._user_private_keys: set = set()
+
+        # Snapshot framework-set attrs so we can distinguish them from
+        # user-defined _private attrs set in mount() or event handlers.
+        self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
+
+    def _snapshot_user_private_attrs(self) -> None:
+        """Snapshot current _-prefixed attrs as user-defined private state names.
+
+        Called after mount() completes. Any ``_``-prefixed attr that exists now
+        but was NOT present after ``__init__`` is a user-defined private attr.
+        Later render-cycle attrs won't be included because they haven't been
+        set yet.
+        """
+        framework = getattr(self, "_framework_attrs", frozenset())
+        # Exclude the tracking attrs themselves — they are infrastructure, not
+        # user state, and must never leak into the persisted private state.
+        meta_attrs = {"_framework_attrs", "_user_private_keys"}
+        self._user_private_keys: set = {
+            k
+            for k in self.__dict__
+            if k.startswith("_") and k not in framework and k not in meta_attrs
+        }
+
+    def _get_private_state(self) -> Dict[str, Any]:
+        """Return serializable user-defined _private attributes (not framework internals).
+
+        Only persists attrs tracked in ``_user_private_keys`` — a set populated
+        by ``_snapshot_user_private_attrs()`` (after mount) and
+        ``_restore_private_state()``. Event handlers that add NEW private attrs
+        should add the name to ``self._user_private_keys`` directly, e.g.
+        ``self._user_private_keys.add('_name')``, or the attr will not be
+        persisted in subsequent save cycles.
+
+        Non-serializable values (locks, file handles, etc.) are silently skipped.
+        """
+        result: Dict[str, Any] = {}
+        user_keys = getattr(self, "_user_private_keys", set())
+        for key in user_keys:
+            if key not in self.__dict__:
+                continue
+            value = self.__dict__[key]
+            # Skip callables (bound methods, lambdas stored as attrs)
+            if callable(value):
+                continue
+            # Attempt serialization — skip if not possible
+            try:
+                json.dumps(value, cls=DjangoJSONEncoder)
+                result[key] = value
+            except (TypeError, ValueError, OverflowError):
+                logger.debug(
+                    "Skipping non-serializable private attr %s.%s (%s)",
+                    type(self).__name__,
+                    key,
+                    type(value).__name__,
+                )
+                continue
+        return result
+
+    def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
+        """Restore previously-saved private attributes onto this instance."""
+        framework = getattr(self, "_framework_attrs", frozenset())
+        meta_attrs = {"_framework_attrs", "_user_private_keys"}
+        for key, value in private_state.items():
+            if key.startswith("_") and key not in framework and key not in meta_attrs:
+                setattr(self, key, value)
+                # Track restored attrs as user-defined so they persist
+                # through subsequent save cycles.
+                user_keys = getattr(self, "_user_private_keys", None)
+                if user_keys is not None:
+                    user_keys.add(key)
+
     def handle_tick(self):
         """Override for periodic server-side updates. Called every tick_interval ms."""
         pass

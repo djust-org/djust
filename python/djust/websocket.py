@@ -1361,6 +1361,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     for key, value in saved_state.items():
                         safe_setattr(self.view_instance, key, value, allow_private=False)
 
+                    # Restore user-defined _private attributes (mirrors HTTP POST path)
+                    private_state = await request.session.aget(f"{view_key}__private", {})
+                    if private_state:
+                        await sync_to_async(self.view_instance._restore_private_state)(
+                            private_state
+                        )
+
                     await sync_to_async(self.view_instance._initialize_temporary_assigns)()
                     await sync_to_async(self.view_instance._assign_component_ids)()
 
@@ -1394,6 +1401,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Run synchronous view operations in a thread pool
                 await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
+                self.view_instance._snapshot_user_private_attrs()
         except Exception as e:
             response = handle_exception(
                 e,
