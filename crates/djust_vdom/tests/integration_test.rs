@@ -604,3 +604,60 @@ fn test_whitespace_filtered_outside_pre() {
     assert_eq!(vdom.children[0].tag, "span");
     assert_eq!(vdom.children[1].tag, "span");
 }
+
+#[test]
+fn test_script_content_not_escaped_on_roundtrip() {
+    // Regression test for #613: HTML parse -> to_html() must not HTML-escape
+    // text inside <script> elements.  JavaScript code contains `<`, `>`, `&`
+    // which are raw text in a <script> block per the HTML spec.
+    let html = r#"<div><script>window.X = {a: 1 < 2 && 3 > 2, b: "x&y"};</script><p>hi</p></div>"#;
+    let vdom = parse_html(html).unwrap();
+    let output = vdom.to_html();
+
+    // The script content must appear verbatim — no &lt; / &amp; / &gt;
+    assert!(
+        output.contains(r#"window.X = {a: 1 < 2 && 3 > 2, b: "x&y"};"#),
+        "Script text must survive roundtrip without HTML escaping. Got: {}",
+        output
+    );
+    // But the <p> text outside the script should still be normal
+    assert!(output.contains(">hi<"), "Normal text should be preserved");
+}
+
+#[test]
+fn test_style_content_not_escaped_on_roundtrip() {
+    let html = r#"<div><style>.a > .b { content: "x&y"; }</style></div>"#;
+    let vdom = parse_html(html).unwrap();
+    let output = vdom.to_html();
+
+    assert!(
+        output.contains(r#".a > .b { content: "x&y"; }"#),
+        "Style text must survive roundtrip without HTML escaping. Got: {}",
+        output
+    );
+}
+
+#[test]
+fn test_svg_attributes_preserved_on_roundtrip() {
+    // Regression test for #613: SVG attributes like viewBox and path d
+    // must not be double-escaped during parse -> to_html() roundtrip.
+    let html = r#"<div><svg viewBox="0 0 16 16" fill="none" stroke="currentColor"><path d="M8 1L2 9H6L5 15L14 7H9L10 1H8Z" stroke-linejoin="round"/><circle cx="8" cy="8" r="7"/></svg></div>"#;
+    let vdom = parse_html(html).unwrap();
+    let output = vdom.to_html();
+
+    assert!(
+        output.contains(r#"viewBox="0 0 16 16""#),
+        "viewBox must be preserved. Got: {}",
+        output
+    );
+    assert!(
+        output.contains(r#"d="M8 1L2 9H6L5 15L14 7H9L10 1H8Z""#),
+        "path d must be preserved. Got: {}",
+        output
+    );
+    assert!(
+        output.contains(r#"cx="8""#),
+        "circle cx must be preserved. Got: {}",
+        output
+    );
+}
