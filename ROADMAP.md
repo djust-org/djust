@@ -52,12 +52,12 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P3**~~ | ~~Dependabot batch carry-over (v0.4.2)~~ ✅ | ~~Vitest/jsdom/tokio/indexmap/etc. — single "ci: bump deps" PR~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Private `_` attributes wiped between WebSocket events (#627)~~ ✅ | ~~Core state management broken — any `_private` attr is lost after each event~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Pre-rendered WS reconnect drops `_private` attributes (#611)~~ ✅ | ~~State loss on reconnect after HTTP GET pre-render — related to #627~~ | v0.4.2 |
-| **P1** | VDOM patcher calls element methods on text nodes (#622) | `setAttribute`/`appendChild` crash on `#text` nodes — breaks conditional rendering | v0.4.2 |
+| ~~**P1**~~ | ~~VDOM patcher calls element methods on text nodes (#622)~~ ✅ | ~~`setAttribute`/`appendChild` crash on `#text` nodes — breaks conditional rendering~~ | v0.4.2 |
 | **P1** | `as_live_field()` ignores `widget.attrs` (#683) | Form fields lose `type`, `placeholder`, `pattern` — forms DX broken | v0.4.2 |
 | **P2** | `form.cleaned_data` Python types serialized to null (#628) | `date`, `Decimal`, `UUID` in cleaned_data become `null` in public state | v0.4.2 |
 | **P2** | `set()` not JSON-serializable as public state (#626) | `set` in view state crashes serialization — common Python type | v0.4.2 |
 | **P2** | `dict` state deserialized as `list` after Rust sync (#612) | Round-trip through Rust state sync corrupts dict → list | v0.4.2 |
-| **P2** | VDOM patcher should handle `autofocus` on inserted elements (#617) | Dynamically inserted inputs don't receive focus even with `autofocus` attr | v0.4.2 |
+| ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
 | **P2** | Debug panel SVG attributes double-escaped (#613) | `viewBox`, `path d` attributes rendered garbled in the debug toolbar | v0.4.2 |
 | **P3** | docs: `data-*` attribute naming convention undocumented (#623) | How `data-foo-bar` maps to `foo_bar` event params — every new user asks | v0.4.2 |
 | **P3** | chore: reduce system check noise — T002, V008, C003 (#603) | Noisy checks on every `manage.py` invocation annoy developers | v0.4.2 |
@@ -364,7 +364,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **✅ #611 — Pre-rendered WS reconnect drops `_private` attributes, skipping `mount()`** — Shipped (same PR as #627 — shared root cause). The reconnect path in `RequestMixin._restore_session_state()` now restores private attrs from the `_private_state` session key before the view resumes. Branch: `fix/private-attr-preservation`.
 
-**#622 — VDOM patcher calls element methods on text nodes** — The VDOM diff patcher calls `setAttribute()`, `appendChild()`, or other DOM element methods on `#text` nodes, which don't have those methods. Crashes conditional rendering when a text node sits where an element is expected (common in `{% if %}` blocks that switch between text and elements). Branch: `fix/vdom-text-node-methods-622`. *Rust-side fix in `crates/djust_vdom/`.*
+**✅ #622 — VDOM patcher calls element methods on text nodes** — Shipped. The patcher now guards all 5 affected patch types (setAttribute, removeAttribute, appendChild, removeChild, replaceChild) with an `isElement()` check, skipping gracefully on text/comment nodes. Branch: `fix/vdom-patcher-text-nodes-autofocus`.
 
 **#683 — `as_live_field()` ignores `widget.attrs` (type, placeholder, pattern)** — The `as_live_field` template filter renders Django form fields for live binding but drops any `widget.attrs` the field's widget defines. Fields lose their `type="email"`, `placeholder`, `pattern`, `min`/`max`, and any custom HTML attributes. Branch: `fix/as-live-field-widget-attrs-683`. *Python fix in the form rendering path.*
 
@@ -374,7 +374,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **#612 — `dict` state attributes deserialized as `list` after Rust state sync** — Round-trip through the Rust state synchronization boundary corrupts `dict` values into `list` (likely MessagePack or similar binary format treating dict as array of pairs). Branch: `fix/dict-deser-list-612`. *Rust-side fix in `crates/djust_core/` serialization.*
 
-**#617 — VDOM patcher should handle `autofocus` on inserted elements** — Dynamically inserted `<input autofocus>` elements don't receive focus after a VDOM patch. The browser only honours `autofocus` on initial page load — the patcher needs to detect the attribute on newly inserted elements and call `.focus()` explicitly. Branch: `fix/vdom-autofocus-617`. *JS fix in the client-side patcher + rebuild.*
+**✅ #617 — VDOM patcher should handle `autofocus` on inserted elements** — Shipped. The patcher now detects `autofocus` on newly inserted elements after each patch cycle and calls `.focus()` explicitly. Branch: `fix/vdom-patcher-text-nodes-autofocus`.
 
 **#613 — Debug panel SVG attributes double-escaped** — SVG attributes like `viewBox` and `path d` in the debug toolbar are double-escaped (`&amp;` rendered as `&amp;amp;`), making SVG icons garbled. Branch: `fix/debug-svg-escape-613`. *Python or JS fix depending on whether escaping happens server- or client-side.*
 
