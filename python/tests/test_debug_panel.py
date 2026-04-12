@@ -546,5 +546,83 @@ class TestAttachDebugPayload:
         assert "_debug" not in response
 
 
+class TestDebugPanelSvgEscaping:
+    """Regression tests for #613: SVG double-escaping in debug panel."""
+
+    def test_debug_panel_js_svg_icons_not_escaped(self):
+        """Verify that SVG viewBox and path d attributes in debug-panel.js
+        are raw (not HTML-escaped or JSON-double-escaped)."""
+        import os
+
+        panel_js_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "djust",
+            "static",
+            "djust",
+            "debug-panel.js",
+        )
+        with open(panel_js_path) as f:
+            js_content = f.read()
+
+        # Tab icon SVGs must contain raw viewBox values (not escaped)
+        assert (
+            'viewBox="0 0 16 16"' in js_content
+        ), "SVG viewBox must not be escaped in debug-panel.js"
+        # Path d attributes must not have escaped quotes
+        assert 'd="M8 1L2 9H6L5' in js_content, "SVG path d must not be escaped in debug-panel.js"
+        # Must NOT contain double-escaped patterns
+        assert (
+            "&amp;" not in js_content or js_content.count("&amp;") <= 1
+        ), "debug-panel.js should not contain double-escaped HTML entities"
+
+    def test_debug_info_json_not_double_escaped(self):
+        """Verify that DJUST_DEBUG_INFO JSON injection doesn't double-escape."""
+
+        class MyView(LiveView):
+            template_name = "test.html"
+            name = "O'Brien & Sons"  # Contains characters that need escaping
+
+            @event_handler
+            def handler(self):
+                pass
+
+        view = MyView()
+        debug_info = view.get_debug_info()
+
+        # The JSON should contain the raw value (json.dumps handles escaping)
+        json_str = json.dumps(debug_info)
+
+        # json.dumps escapes ' to \u0027 or leaves it as-is (single quotes
+        # don't need escaping in JSON), and & to just & (not &amp;)
+        assert "&amp;" not in json_str, "json.dumps should not produce HTML entities"
+
+    def test_vdom_roundtrip_preserves_svg_attributes(self):
+        """SVG attributes must survive the Rust VDOM parse -> to_html cycle."""
+        try:
+            from djust._rust import RustView
+        except ImportError:
+            pytest.skip("Rust extension not available")
+
+        # Template with inline SVG — this goes through the Rust VDOM pipeline
+        template = (
+            "<div dj-root>"
+            '<svg viewBox="0 0 24 24" fill="none">'
+            '<path d="M12 2L2 7L12 12L22 7L12 2Z"/>'
+            '<circle cx="12" cy="12" r="10"/>'
+            "</svg>"
+            "</div>"
+        )
+        rv = RustView(template, [])
+        rv.update_state({})
+        html, _, _ = rv.render_with_diff()
+
+        # viewBox must be preserved exactly
+        assert 'viewBox="0 0 24 24"' in html, f"viewBox must survive VDOM roundtrip. Got: {html}"
+        # path d must be preserved exactly
+        assert (
+            'd="M12 2L2 7L12 12L22 7L12 2Z"' in html
+        ), f"path d must survive VDOM roundtrip. Got: {html}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

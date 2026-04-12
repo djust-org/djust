@@ -602,3 +602,54 @@ describe('Debug Panel — Search functionality (#454)', () => {
         expect(html).toContain('Replace');
     });
 });
+
+describe('Debug Panel — SVG icons not double-escaped (#613)', () => {
+    let panel;
+
+    beforeEach(() => {
+        panel = createPanel();
+    });
+
+    afterEach(() => {
+        panel.destroy();
+    });
+
+    it('tab icon SVGs have correct viewBox attribute in DOM', () => {
+        // The tab buttons are created by renderTabButtons() which sets innerHTML
+        // with the icon SVGs. Verify the SVG elements have correct attributes.
+        const svgs = panel.panel.querySelectorAll('.djust-tab-icon svg');
+        expect(svgs.length).toBeGreaterThan(0);
+        for (const svg of svgs) {
+            const viewBox = svg.getAttribute('viewBox');
+            expect(viewBox).toBe('0 0 16 16');
+            // viewBox must NOT start with a quote character (double-escape symptom)
+            expect(viewBox).not.toMatch(/^"/);
+            expect(viewBox).not.toContain('&amp;');
+            expect(viewBox).not.toContain('&quot;');
+        }
+    });
+
+    it('tab icon SVGs have correct path d attribute in DOM', () => {
+        const paths = panel.panel.querySelectorAll('.djust-tab-icon svg path');
+        expect(paths.length).toBeGreaterThan(0);
+        for (const path of paths) {
+            const d = path.getAttribute('d');
+            expect(d).toBeTruthy();
+            // d must start with a valid SVG path command, not a quote
+            expect(d).toMatch(/^[MmZzLlHhVvCcSsQqTtAa]/);
+            expect(d).not.toContain('&amp;');
+            expect(d).not.toContain('&quot;');
+        }
+    });
+
+    it('panel header SVGs have correct viewBox attribute', () => {
+        // The panel header buttons (export, import, clear, settings, close)
+        // also contain SVGs set via innerHTML
+        const headerSvgs = panel.panel.querySelectorAll('.djust-panel-controls svg');
+        expect(headerSvgs.length).toBeGreaterThan(0);
+        for (const svg of headerSvgs) {
+            const viewBox = svg.getAttribute('viewBox');
+            expect(viewBox).toBe('0 0 16 16');
+        }
+    });
+});

@@ -186,9 +186,25 @@ impl VNode {
     /// Serialize the VNode back to HTML string.
     /// This includes dj-id attributes for reliable patch targeting.
     pub fn to_html(&self) -> String {
+        self._to_html(false)
+    }
+
+    /// Internal serialization with raw-text context tracking.
+    ///
+    /// `in_raw_text` is true when the parent element is `<script>` or
+    /// `<style>`, whose text content must NOT be HTML-escaped per the
+    /// HTML spec (they are "raw text elements").
+    fn _to_html(&self, in_raw_text: bool) -> String {
         if self.is_text() {
-            // Text nodes: escape HTML entities
-            return html_escape(&self.text.clone().unwrap_or_default());
+            let text = self.text.clone().unwrap_or_default();
+            // Raw text elements (<script>, <style>) must not have their
+            // text content HTML-escaped — the browser treats the bytes
+            // literally, so escaping `&` to `&amp;` would corrupt JS/CSS
+            // code and cause double-escaping bugs (#613).
+            if in_raw_text {
+                return text;
+            }
+            return html_escape(&text);
         }
 
         if self.is_comment() {
@@ -204,6 +220,9 @@ impl VNode {
             "source", "track", "wbr",
         ];
         let is_void = void_elements.contains(&self.tag.as_str());
+
+        // Raw text elements whose children must not be HTML-escaped
+        let is_raw_text = matches!(self.tag.as_str(), "script" | "style");
 
         // Opening tag
         html.push('<');
@@ -225,9 +244,10 @@ impl VNode {
         } else {
             html.push('>');
 
-            // Children
+            // Children — propagate raw-text context so text nodes inside
+            // <script>/<style> are emitted verbatim.
             for child in &self.children {
-                html.push_str(&child.to_html());
+                html.push_str(&child._to_html(is_raw_text));
             }
 
             // Closing tag
@@ -453,5 +473,62 @@ mod tests {
         let node = VNode::text("Hello World");
         assert!(node.is_text());
         assert_eq!(node.text, Some("Hello World".to_string()));
+    }
+
+    #[test]
+    fn test_to_html_escapes_normal_text() {
+        let node = VNode::element("div").with_child(VNode::text("a < b & c > d"));
+        let html = node.to_html();
+        assert!(html.contains("a &lt; b &amp; c &gt; d"));
+    }
+
+    #[test]
+    fn test_to_html_no_escape_script_content() {
+        // Regression test for #613: text inside <script> must NOT be HTML-escaped.
+        // JavaScript code like `if (a < b && c > d)` would break if `<` became `&lt;`.
+        let script =
+            VNode::element("script").with_child(VNode::text("if (a < b && c > d) { x = '&'; }"));
+        let html = script.to_html();
+        assert!(
+            html.contains("if (a < b && c > d) { x = '&'; }"),
+            "Script text must not be HTML-escaped, got: {}",
+            html
+        );
+        assert!(!html.contains("&lt;"), "Script text must not contain &lt;");
+        assert!(
+            !html.contains("&amp;"),
+            "Script text must not contain &amp;"
+        );
+    }
+
+    #[test]
+    fn test_to_html_no_escape_style_content() {
+        // <style> is also a raw text element
+        let style = VNode::element("style").with_child(VNode::text(".foo > .bar { color: red; }"));
+        let html = style.to_html();
+        assert!(
+            html.contains(".foo > .bar { color: red; }"),
+            "Style text must not be HTML-escaped, got: {}",
+            html
+        );
+    }
+
+    #[test]
+    fn test_to_html_svg_attrs_not_double_escaped() {
+        // SVG attribute values must survive parse -> to_html() without double-escaping
+        let svg = VNode::element("svg")
+            .with_attr("viewBox", "0 0 16 16")
+            .with_child(VNode::element("path").with_attr("d", "M8 1L2 9H6L5 15L14 7H9L10 1H8Z"));
+        let html = svg.to_html();
+        assert!(
+            html.contains("viewBox=\"0 0 16 16\""),
+            "viewBox must not be escaped, got: {}",
+            html
+        );
+        assert!(
+            html.contains("d=\"M8 1L2 9H6L5 15L14 7H9L10 1H8Z\""),
+            "path d must not be escaped, got: {}",
+            html
+        );
     }
 }
