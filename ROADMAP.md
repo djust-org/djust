@@ -50,8 +50,8 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~Scaffold `DEBUG=False` default + `.env.example`~~ ✅ (#637) | ~~Security-adjacent carry-over; fails-safe default complements A014 static check~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Defer `reinitAfterDOMUpdate` for pre-rendered mount~~ ✅ (#619) | ~~Visible layout-flash bugfix carried over from v0.4.1~~ | v0.4.2 |
 | ~~**P3**~~ | ~~Dependabot batch carry-over (v0.4.2)~~ ✅ | ~~Vitest/jsdom/tokio/indexmap/etc. — single "ci: bump deps" PR~~ | v0.4.2 |
-| **P1** | Private `_` attributes wiped between WebSocket events (#627) | Core state management broken — any `_private` attr is lost after each event | v0.4.2 |
-| **P1** | Pre-rendered WS reconnect drops `_private` attributes (#611) | State loss on reconnect after HTTP GET pre-render — related to #627 | v0.4.2 |
+| ~~**P1**~~ | ~~Private `_` attributes wiped between WebSocket events (#627)~~ ✅ | ~~Core state management broken — any `_private` attr is lost after each event~~ | v0.4.2 |
+| ~~**P1**~~ | ~~Pre-rendered WS reconnect drops `_private` attributes (#611)~~ ✅ | ~~State loss on reconnect after HTTP GET pre-render — related to #627~~ | v0.4.2 |
 | **P1** | VDOM patcher calls element methods on text nodes (#622) | `setAttribute`/`appendChild` crash on `#text` nodes — breaks conditional rendering | v0.4.2 |
 | **P1** | `as_live_field()` ignores `widget.attrs` (#683) | Form fields lose `type`, `placeholder`, `pattern` — forms DX broken | v0.4.2 |
 | **P2** | `form.cleaned_data` Python types serialized to null (#628) | `date`, `Decimal`, `UUID` in cleaned_data become `null` in public state | v0.4.2 |
@@ -360,9 +360,9 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 #### Open issues added to v0.4.2
 
-**#627 — Private `_` attributes wiped between WebSocket events** — Core state management bug. Any attribute starting with `_` (the documented convention for private/internal state) is lost after each event dispatch. Likely caused by the state serialization/deserialization round-trip stripping attributes whose names start with underscore. Related to #611. Branch: `fix/private-attr-wiped-627`. *Investigation needed — may be serialization filter, mount-replay, or Rust sync boundary.*
+**✅ #627 — Private `_` attributes wiped between WebSocket events** — Shipped. Root cause: session save used `get_context_data()` output which strips `_`-prefixed attrs. Fix adds `_get_private_state()`/`_restore_private_state()` helpers and wires them into session persistence. 20 new regression tests. Branch: `fix/private-attr-preservation`.
 
-**#611 — Pre-rendered WS reconnect drops `_private` attributes, skipping `mount()`** — On pages pre-rendered via HTTP GET, the WebSocket reconnect path skips `mount()` (because the content is already rendered), but also drops all `_private` attributes that were set during the HTTP mount. This means any internal state (`_db_connection`, `_cache`, `_user_prefs`) is silently lost after the WS handshake completes. Related to #627 — may share a root cause in the state serialization path. Branch: `fix/prerender-private-attrs-611`.
+**✅ #611 — Pre-rendered WS reconnect drops `_private` attributes, skipping `mount()`** — Shipped (same PR as #627 — shared root cause). The reconnect path in `RequestMixin._restore_session_state()` now restores private attrs from the `_private_state` session key before the view resumes. Branch: `fix/private-attr-preservation`.
 
 **#622 — VDOM patcher calls element methods on text nodes** — The VDOM diff patcher calls `setAttribute()`, `appendChild()`, or other DOM element methods on `#text` nodes, which don't have those methods. Crashes conditional rendering when a text node sits where an element is expected (common in `{% if %}` blocks that switch between text and elements). Branch: `fix/vdom-text-node-methods-622`. *Rust-side fix in `crates/djust_vdom/`.*
 
