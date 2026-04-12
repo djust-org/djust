@@ -77,7 +77,7 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
 
         # Public state
         self.count = 0
-        self.highlight_active = False
+        self._highlight_active = False
         self.confirmed = False
 
         # v0.4.2 fix: private attrs now survive events (#627)
@@ -100,9 +100,12 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
 
     @event_handler
     def highlight_demo(self, **kwargs):
-        """Server pushes a JS command chain to highlight an element."""
-        self.highlight_active = not self.highlight_active
-        if self.highlight_active:
+        """Server pushes a JS command chain to highlight an element.
+        Skip re-render since the effect is entirely client-side via
+        push_commands — no template state changes to render."""
+        self._skip_render = True
+        self._highlight_active = not self._highlight_active
+        if self._highlight_active:
             chain = JS.add_class("demo-highlight", to="#highlight-target").dispatch(
                 "demo:flash", detail={"text": "Highlighted from Python!"}
             )

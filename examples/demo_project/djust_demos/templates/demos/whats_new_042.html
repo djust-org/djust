@@ -160,9 +160,9 @@
 {% endblock %}
 
 {% block content %}
-<div dj-root>
-    {{ hero|safe }}
+{{ hero|safe }}
 
+<div dj-root>
     <section style="padding: 2rem 0 4rem;">
         <div class="container mx-auto px-4" style="max-width: 900px;">
 
@@ -207,11 +207,8 @@
                 </p>
 
                 <div id="wait-result" style="padding: 1rem; border-radius: 8px; border: 1px solid #cbd5e1; margin-bottom: 1rem; text-align: center; transition: all 0.3s;">
-                    {% if confirmed %}
-                        <span style="color: #16a34a; font-weight: 600;">✓ Confirmed! The background task continued.</span>
-                    {% else %}
-                        <span style="color: var(--color-text-muted, #64748b);">Waiting for user confirmation...</span>
-                    {% endif %}
+                    <span style="color: #16a34a; font-weight: 600; {% if not confirmed %}display:none{% endif %}">✓ Confirmed! The background task continued.</span>
+                    <span style="color: var(--color-text-muted, #64748b); {% if confirmed %}display:none{% endif %}">Waiting for user confirmation...</span>
                 </div>
 
                 <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
@@ -246,12 +243,7 @@
 
                 <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center;">
                     <span style="font-size: 0.875rem; color: var(--color-text-muted, #64748b);">
-                        Tour status:
-                        {% if tutorial_running %}
-                            Step {{ tutorial_current_step|add:1 }} of {{ tutorial_total_steps }}
-                        {% else %}
-                            Not running
-                        {% endif %}
+                        The bubble and progress are rendered by the framework — check the bubble in the bottom-right corner.
                     </span>
                 </div>
             </div>
@@ -298,22 +290,24 @@
                 </div>
             </div>
 
-            {{ back_btn|safe }}
         </div>
     </section>
 
-    <!-- Tutorial bubble (inline instead of template tag to avoid Rust engine limitation) -->
-    <div id="dj-tutorial-bubble" class="dj-tutorial-bubble" dj-update="ignore"
-         data-event="tour:narrate" data-default-position="bottom" data-visible="false"
-         role="status" aria-live="polite">
-        <p class="dj-tutorial-bubble__text"></p>
-        <div class="dj-tutorial-bubble__progress">
-            <span class="dj-tutorial-bubble__step"></span>
-        </div>
-        <div class="dj-tutorial-bubble__actions">
-            <button type="button" class="dj-tutorial-bubble__skip" dj-click="skip_tutorial">Skip</button>
-            <button type="button" class="dj-tutorial-bubble__cancel" dj-click="cancel_tutorial">Close</button>
-        </div>
+</div>
+
+{{ back_btn|safe }}
+
+<!-- Tutorial bubble OUTSIDE dj-root so morphdom recovery can't wipe it -->
+<div id="dj-tutorial-bubble" class="dj-tutorial-bubble" dj-update="ignore"
+     data-event="tour:narrate" data-default-position="bottom" data-visible="false"
+     role="status" aria-live="polite">
+    <p class="dj-tutorial-bubble__text"></p>
+    <div class="dj-tutorial-bubble__progress">
+        <span class="dj-tutorial-bubble__step"></span>
+    </div>
+    <div class="dj-tutorial-bubble__actions">
+        <button type="button" class="dj-tutorial-bubble__skip" dj-click="skip_tutorial">Skip</button>
+        <button type="button" class="dj-tutorial-bubble__cancel" dj-click="cancel_tutorial">Close</button>
     </div>
 </div>
 {% endblock %}
