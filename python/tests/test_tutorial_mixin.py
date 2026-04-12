@@ -200,7 +200,7 @@ class TestTutorialLifecycle:
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
-        assert len(events) == 2
+        assert len(events) == 3  # setup + cleanup + tour:hide
         # Setup: add_class + dispatch + focus
         setup_name, setup_payload = events[0]
         assert setup_name == "djust:exec"
@@ -222,6 +222,12 @@ class TestTutorialLifecycle:
         assert cleanup_ops[0][0] == "remove_class"
         assert cleanup_ops[0][1]["to"] == "#step1"
 
+        # Final event is the tour:hide dispatch
+        hide_name, hide_payload = events[-1]
+        assert hide_name == "djust:exec"
+        assert hide_payload["ops"][0][0] == "dispatch"
+        assert hide_payload["ops"][0][1]["event"] == "tour:hide"
+
     @pytest.mark.asyncio
     async def test_multi_step_progresses_in_order(self):
         class V(_View):
@@ -236,13 +242,19 @@ class TestTutorialLifecycle:
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
-        # 3 steps * 2 events per step (setup + cleanup)
-        assert len(events) == 6
+        # 3 steps * 2 events per step (setup + cleanup) + 1 tour:hide
+        assert len(events) == 7
 
         # Every setup event should reference the right target in order
         setups = [e for e in events if e[1]["ops"][0][0] == "add_class"]
         targets = [s[1]["ops"][0][1]["to"] for s in setups]
         assert targets == ["#a", "#b", "#c"]
+
+        # Final event is the tour:hide dispatch
+        hide_name, hide_payload = events[-1]
+        assert hide_name == "djust:exec"
+        assert hide_payload["ops"][0][0] == "dispatch"
+        assert hide_payload["ops"][0][1]["event"] == "tour:hide"
 
     @pytest.mark.asyncio
     async def test_idempotent_start_while_running(self, caplog):
@@ -315,8 +327,14 @@ class TestWaitForEventIntegration:
         # Tour should have completed both steps despite step 0 timing out
         assert view.tutorial_running is False
         events = view._drain_push_events()
-        # 2 steps * 2 events each
-        assert len(events) == 4
+        # 2 steps * 2 events each + 1 tour:hide
+        assert len(events) == 5
+
+        # Final event is the tour:hide dispatch
+        hide_name, hide_payload = events[-1]
+        assert hide_name == "djust:exec"
+        assert hide_payload["ops"][0][0] == "dispatch"
+        assert hide_payload["ops"][0][1]["event"] == "tour:hide"
 
     @pytest.mark.asyncio
     async def test_wait_for_without_timeout_waits_indefinitely(self):
@@ -440,12 +458,18 @@ class TestOnEnterOnExit:
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
-        # Setup chain, on_enter chain, cleanup chain
-        assert len(events) == 3
+        # Setup chain, on_enter chain, cleanup chain + 1 tour:hide
+        assert len(events) == 4
         # on_enter should appear between setup (add_class) and cleanup (remove_class)
         on_enter_event = events[1]
         assert on_enter_event[1]["ops"][0][0] == "dispatch"
         assert on_enter_event[1]["ops"][0][1]["event"] == "custom:setup"
+
+        # Final event is the tour:hide dispatch
+        hide_name, hide_payload = events[-1]
+        assert hide_name == "djust:exec"
+        assert hide_payload["ops"][0][0] == "dispatch"
+        assert hide_payload["ops"][0][1]["event"] == "tour:hide"
 
     @pytest.mark.asyncio
     async def test_on_exit_pushed_before_cleanup(self):
@@ -464,11 +488,17 @@ class TestOnEnterOnExit:
         await _run_tour_to_completion(view)
 
         events = view._drain_push_events()
-        # Setup chain, on_exit chain, cleanup chain
-        assert len(events) == 3
+        # Setup chain, on_exit chain, cleanup chain + 1 tour:hide
+        assert len(events) == 4
         on_exit_event = events[1]
         assert on_exit_event[1]["ops"][0][0] == "dispatch"
         assert on_exit_event[1]["ops"][0][1]["event"] == "custom:teardown"
+
+        # Final event is the tour:hide dispatch
+        hide_name, hide_payload = events[-1]
+        assert hide_name == "djust:exec"
+        assert hide_payload["ops"][0][0] == "dispatch"
+        assert hide_payload["ops"][0][1]["event"] == "tour:hide"
 
 
 # ---------------------------------------------------------------------------

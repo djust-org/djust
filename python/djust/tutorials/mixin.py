@@ -199,6 +199,13 @@ class TutorialMixin:
             self.tutorial_current_step = -1
             self._tutorial_skip_signal = None
             self._tutorial_cancel_signal = None
+            # Hide the bubble when the tour ends (whether completed,
+            # cancelled, or errored). The bubble listens for tour:hide.
+            try:
+                self.push_commands(JS.dispatch("tour:hide"))
+                await self._flush_pending_push_events()
+            except Exception as exc:
+                logger.debug("Tutorial hide push failed: %s", exc)
 
     @event_handler
     def skip_tutorial(self, **kwargs) -> None:
@@ -217,11 +224,17 @@ class TutorialMixin:
     @event_handler
     def cancel_tutorial(self, **kwargs) -> None:
         """
-        Abort the tour entirely.
+        Abort the tour entirely, or dismiss the bubble if the tour
+        already ended.
 
         Signals both the skip and cancel events so the current step
-        unblocks and the loop exits on the next iteration.
+        unblocks and the loop exits on the next iteration. Also always
+        hides the bubble via push_commands so the Close button works
+        even after the tour completes naturally.
         """
+        # Always hide the bubble — the Close button should work even
+        # after the tour ends naturally.
+        self.push_commands(JS.dispatch("tour:hide"))
         if not self.tutorial_running:
             return
         if self._tutorial_cancel_signal is not None:
