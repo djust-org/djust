@@ -134,4 +134,73 @@ describe('VDOM patch error messages', () => {
         // Should include parent element info
         expect(pathWarn).toMatch(/parent:/);
     });
+
+    it('does not throw when SetAttr targets a text node (#622)', () => {
+        const { dom, errors } = createDom();
+
+        // path [0, 0] resolves to the text node inside <p id="child0">
+        const patches = [
+            { type: 'SetAttr', path: [0, 0], key: 'class', value: 'active' }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+
+        // Should fail gracefully (returned false), not throw
+        expect(result).toBe(false);
+        // Should NOT have a JS error from setAttribute on text node
+        const thrownError = errors.find(e => e.includes('Error applying patch'));
+        expect(thrownError).toBeUndefined();
+    });
+
+    it('does not throw when RemoveAttr targets a text node (#622)', () => {
+        const { dom, errors } = createDom();
+
+        const patches = [
+            { type: 'RemoveAttr', path: [0, 0], key: 'class' }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+        expect(result).toBe(false);
+        const thrownError = errors.find(e => e.includes('Error applying patch'));
+        expect(thrownError).toBeUndefined();
+    });
+
+    it('does not throw when InsertChild targets a text node (#622)', () => {
+        const { dom, errors } = createDom();
+
+        const patches = [
+            { type: 'InsertChild', path: [0, 0], index: 0, node: { tag: 'span', attrs: {}, children: [] } }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+        expect(result).toBe(false);
+        const thrownError = errors.find(e => e.includes('Error applying patch'));
+        expect(thrownError).toBeUndefined();
+    });
+
+    it('does not throw when RemoveChild targets a text node (#622)', () => {
+        const { dom, errors } = createDom();
+
+        const patches = [
+            { type: 'RemoveChild', path: [0, 0], index: 0 }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+        expect(result).toBe(false);
+        const thrownError = errors.find(e => e.includes('Error applying patch'));
+        expect(thrownError).toBeUndefined();
+    });
+
+    it('does not throw when MoveChild targets a text node (#622)', () => {
+        const { dom, errors } = createDom();
+
+        const patches = [
+            { type: 'MoveChild', path: [0, 0], from: 0, to: 1 }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+        expect(result).toBe(false);
+        const thrownError = errors.find(e => e.includes('Error applying patch'));
+        expect(thrownError).toBeUndefined();
+    });
 });

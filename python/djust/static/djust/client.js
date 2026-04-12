@@ -5352,6 +5352,11 @@ function applySinglePatch(patch) {
             }
 
             case 'SetAttr': {
+                // Guard: element-only methods (setAttribute) don't exist on text/comment nodes (#622)
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    return false;
+                }
                 // Sanitize key to prevent prototype pollution
                 const attrKey = String(patch.key);
                 if (UNSAFE_KEYS.includes(attrKey)) break;
@@ -5374,6 +5379,11 @@ function applySinglePatch(patch) {
             }
 
             case 'RemoveAttr': {
+                // Guard: element-only methods (removeAttribute) don't exist on text/comment nodes (#622)
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    return false;
+                }
                 const removeKey = String(patch.key);
                 // Never remove dj-* event handler attributes — defense in depth
                 // against VDOM path mismatches from conditional rendering.
@@ -5392,6 +5402,11 @@ function applySinglePatch(patch) {
             }
 
             case 'InsertChild': {
+                // Guard: element-only methods (querySelector, tagName) don't exist on text/comment nodes (#622)
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    return false;
+                }
                 const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
                 // Guard: <select> only accepts <option>/<optgroup> as direct children.
                 // When an adjacent {% if %} block expands, the server may resolve the
@@ -5438,6 +5453,11 @@ function applySinglePatch(patch) {
             }
 
             case 'RemoveChild': {
+                // Guard: element-only methods (querySelector, tagName) don't exist on text/comment nodes (#622)
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    return false;
+                }
                 let child = null;
                 if (patch.child_d) {
                     // ID-based resolution: find child by dj-id (resilient to index shifts)
@@ -5463,6 +5483,11 @@ function applySinglePatch(patch) {
             }
 
             case 'MoveChild': {
+                // Guard: element-only methods (querySelector) don't exist on text/comment nodes (#622)
+                if (node.nodeType !== 1) {
+                    if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
+                    return false;
+                }
                 let child;
                 if (patch.child_d) {
                     // ID-based resolution: find direct child by dj-id (resilient to index shifts)
@@ -5532,12 +5557,28 @@ function applyPatches(patches) {
         }
         if (failedCount > 0) {
             console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
+            // Still handle autofocus even when some patches failed (#617)
+            if (!focusState || !focusState.id) {
+                const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+                if (autoFocusEl && document.activeElement !== autoFocusEl) {
+                    autoFocusEl.focus();
+                }
+            }
             restoreFocusState(focusState);
             return false;
         }
         // Update hooks and model bindings after DOM patches
         updateHooks();
         bindModelElements();
+        // Handle autofocus on dynamically inserted elements (#617)
+        // Browser only honors autofocus on initial page load, so we
+        // manually focus the first element with autofocus after a patch.
+        if (!focusState || !focusState.id) {
+            const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+            if (autoFocusEl && document.activeElement !== autoFocusEl) {
+                autoFocusEl.focus();
+            }
+        }
         restoreFocusState(focusState);
         return true;
     }
@@ -5641,6 +5682,13 @@ function applyPatches(patches) {
 
     if (failedCount > 0) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
+        // Still handle autofocus even when some patches failed (#617)
+        if (!focusState || !focusState.id) {
+            const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+            if (autoFocusEl && document.activeElement !== autoFocusEl) {
+                autoFocusEl.focus();
+            }
+        }
         restoreFocusState(focusState);
         return false;
     }
@@ -5648,6 +5696,16 @@ function applyPatches(patches) {
     // Update hooks and model bindings after DOM patches
     updateHooks();
     bindModelElements();
+
+    // Handle autofocus on dynamically inserted elements (#617)
+    // Browser only honors autofocus on initial page load, so we
+    // manually focus the first element with autofocus after a patch.
+    if (!focusState || !focusState.id) {
+        const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+        if (autoFocusEl && document.activeElement !== autoFocusEl) {
+            autoFocusEl.focus();
+        }
+    }
 
     restoreFocusState(focusState);
     return true;
