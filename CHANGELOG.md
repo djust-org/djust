@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`release-drafter/release-drafter` v6 → v7 + drop `pull_request` trigger** — v7 validates `target_commitish` against the GitHub releases API and rejects `refs/pull/<n>/merge` refs, which is what `github.ref` resolves to under a `pull_request` trigger. v6 silently tolerated this; v7 does not, causing every PR to fail with `Validation Failed: target_commitish invalid`. The fix is to drop the `pull_request` trigger — release-drafter is designed to track changes that have *landed* on the release branch, not comment on in-flight PRs, so `push: branches: [main]` is the right fit. Aligns with how Phoenix, Elixir, GitHub CLI, and other major projects wire release-drafter. Resolves the v7 bump that was deferred out of the v0.4.2 dependabot batch (#680).
+
+
 - **Dependency batch carry-over (v0.4.2)** — Drains the dependabot backlog that was held behind the v0.4.1 release. Single consolidated PR so one CI run catches any inter-dep interactions:
   - **npm**: `vitest` / `@vitest/ui` / `@vitest/coverage-v8` 4.0.18 → 4.1.4 (patches + new test runner features), `jsdom` 29.0.1 → 29.0.2, `happy-dom` 20.8.4 → 20.8.9. Full JS suite remains green (1111 tests).
   - **Cargo**: `tokio` 1.50 → 1.51 (workspace), `uuid` 1.22 → 1.23, `proptest` 1.10 → 1.11 (djust_vdom), `indexmap` 2.13.0 → 2.14.0 (transitive pickup via cargo update). `cargo check --workspace` clean; `cargo test -p djust_vdom` passes all 42 proptest-driven tests on the new 1.11 runtime.
   - **GitHub Actions**: `actions/github-script` v8 → v9 (two workflows), `astral-sh/setup-uv` v6 → v7 (test workflow). Workflow syntax unchanged.
-  - **Intentionally deferred**: `html5ever` 0.36 → 0.39 is a 3-minor-version jump that likely has breaking API changes for the Rust VDOM parser. `release-drafter/release-drafter` v6 → v7 fails with `Validation Failed: target_commitish invalid` on pull_request events — v7 changed how it resolves the commitish and rejects `refs/pull/<n>/merge` refs that v6 silently tolerated. Both deferred to their own investigation PRs rather than bundling the risk into this chore batch.
+  - **Intentionally deferred**: `html5ever` 0.36 → 0.39 is a 3-minor-version jump that requires a matching `markup5ever_rcdom` 0.39 release which has not yet been published to crates.io (only git snapshots exist in the html5ever workspace). Using git deps in our published workspace would break `cargo publish` and leak unreleased upstream state, so this stays deferred until upstream publishes. `release-drafter/release-drafter` v6 → v7 was also deferred out of this chore batch because of a `target_commitish` validation incompatibility — shipped as a separate follow-up PR alongside this one.
 
   Closes 13 open dependabot PRs as superseded (#581, #582, #604, #606, #607, #609, #615, #616, #644, #645, #646, #647, #648).
 
