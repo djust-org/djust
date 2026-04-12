@@ -59,8 +59,8 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
 | ~~**P2**~~ | ~~Debug panel SVG attributes double-escaped (#613)~~ ✅ | ~~`viewBox`, `path d` attributes rendered garbled in the debug toolbar~~ | v0.4.2 |
-| **P3** | docs: `data-*` attribute naming convention undocumented (#623) | How `data-foo-bar` maps to `foo_bar` event params — every new user asks | v0.4.2 |
-| **P3** | chore: reduce system check noise — T002, V008, C003 (#603) | Noisy checks on every `manage.py` invocation annoy developers | v0.4.2 |
+| ~~**P3**~~ | ~~docs: `data-*` attribute naming convention undocumented (#623)~~ ✅ | ~~How `data-foo-bar` maps to `foo_bar` event params — every new user asks~~ | v0.4.2 |
+| ~~**P3**~~ | ~~chore: reduce system check noise — T002, V008, C003 (#603)~~ ✅ | ~~Noisy checks on every `manage.py` invocation annoy developers~~ | v0.4.2 |
 | **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
 | **P2** | Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2) | Unified CSS/theming story with core; compat shim for plain-Django users | v0.5.1 |
 | **P2** | Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3) | Largest fold — 64K LOC — dedicated release window in v0.5.2 | v0.5.2 |
@@ -378,9 +378,9 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **✅ #613 — Debug panel SVG attributes double-escaped** — Shipped. The Rust VDOM's `to_html()` was HTML-escaping text inside `<script>`/`<style>` raw text elements, corrupting JS/CSS code on roundtrip. Fix: `_to_html(in_raw_text)` skips escaping for raw text element children. Branch: `fix/debug-svg-escape-613`.
 
-**#623 — docs: `data-*` attribute naming convention for event handler params not documented** — How `data-foo-bar` on an element maps to `foo_bar` in the handler's kwargs isn't documented anywhere. Every new user asks about this. Branch: `docs/data-attr-naming-623`. *Docs-only — add to the Events guide.*
+~~**#623 — docs: `data-*` attribute naming convention for event handler params not documented**~~ ✅ — Documented in Events guide: dash-to-underscore rule, type-hint suffixes, `dj-value-*` alternative, quick-reference table. Shipped in `chore/docs-and-checks-cleanup`.
 
-**#603 — chore: reduce system check noise — T002, V008, C003** — These three system checks fire on every `manage.py` invocation and are noisy for projects that deliberately don't use the features they check for. Reduce severity from WARNING to INFO, or add a config toggle to suppress known-intentional skips. Branch: `chore/check-noise-603`.
+~~**#603 — chore: reduce system check noise — T002, V008, C003**~~ ✅ — Added `suppress_checks` config key to `DJUST_CONFIG`/`LIVEVIEW_CONFIG`. Accepts short (`"T002"`) or qualified (`"djust.T002"`) IDs, case-insensitive. Only Info-level variants are suppressible. 7 new tests. Shipped in `chore/docs-and-checks-cleanup`.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 

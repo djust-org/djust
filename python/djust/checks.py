@@ -69,6 +69,49 @@ _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection
 _DJ_VIEW_RE = re.compile(r"dj-view")
 
 
+def _is_check_suppressed(check_id: str) -> bool:
+    """Return True if the user has suppressed *check_id* via settings.
+
+    Users can add ``suppress_checks`` to ``DJUST_CONFIG`` (or
+    ``LIVEVIEW_CONFIG``) to silence informational checks that are noisy for
+    projects that deliberately don't use the checked feature::
+
+        # settings.py
+        DJUST_CONFIG = {
+            "suppress_checks": ["T002", "V008", "C003"],
+        }
+
+    Both short IDs (``"T002"``) and fully-qualified IDs (``"djust.T002"``)
+    are accepted; comparison is case-insensitive.
+    """
+    try:
+        from django.conf import settings
+
+        suppressed = (
+            getattr(settings, "DJUST_CONFIG", {}).get("suppress_checks")
+            or getattr(settings, "LIVEVIEW_CONFIG", {}).get("suppress_checks")
+            or []
+        )
+    except Exception:
+        return False
+
+    if not suppressed:
+        return False
+
+    # Normalise: accept "T002" or "djust.T002", case-insensitive
+    normalised = set()
+    for item in suppressed:
+        item_lower = str(item).lower()
+        normalised.add(item_lower)
+        # Also add/remove the "djust." prefix so either form matches
+        if item_lower.startswith("djust."):
+            normalised.add(item_lower[len("djust.") :])
+        else:
+            normalised.add("djust." + item_lower)
+
+    return check_id.lower() in normalised
+
+
 def _has_multiple_permission_groups(settings) -> bool:
     """Return True if the project appears to use a role/group-based auth model.
 
@@ -410,11 +453,12 @@ def check_configuration(app_configs, **kwargs):
                     ),
                 )
             )
-    elif not has_daphne:
+    elif not has_daphne and not _is_check_suppressed("djust.C003"):
         errors.append(
             DjustInfo(
                 "'daphne' is not in INSTALLED_APPS.",
-                hint="Consider adding 'daphne' to INSTALLED_APPS for ASGI support.",
+                hint="Consider adding 'daphne' to INSTALLED_APPS for ASGI support. "
+                "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['C003']}.",
                 id="djust.C003",
                 fix_hint="Add `'daphne'` to the beginning of INSTALLED_APPS in your Django settings file.",
             )
@@ -1139,8 +1183,12 @@ def _check_non_primitive_assignments_in_mount(errors):
     are stored in LiveView state. This check helps catch these at development time
     before they cause runtime AttributeError on deserialization.
 
-    Users can suppress with # noqa: V008 if they know the type is serializable.
+    Users can suppress with # noqa: V008 if they know the type is serializable,
+    or globally with DJUST_CONFIG = {'suppress_checks': ['V008']}.
     """
+    if _is_check_suppressed("djust.V008"):
+        return
+
     app_dirs = _get_project_app_dirs()
     if not app_dirs:
         return
@@ -1656,14 +1704,17 @@ def check_templates(app_configs, **kwargs):
         has_djust_root = _DJ_ROOT_RE.search(content)
         if (has_dj_attrs or has_djust_view) and not has_djust_root:
             # Check if it extends a base template (in which case root is likely in the base)
-            if not re.search(r"\{%\s*extends\s+", content):
+            if not re.search(r"\{%\s*extends\s+", content) and not _is_check_suppressed(
+                "djust.T002"
+            ):
                 errors.append(
                     DjustInfo(
                         "%s -- LiveView template does not have explicit 'dj-root' attribute. "
                         "This is OK — dj-root is auto-inferred from dj-view." % relpath,
                         hint=(
                             "You can optionally add dj-root for clarity: "
-                            '<div dj-root dj-view="myapp.views.MyView">'
+                            '<div dj-root dj-view="myapp.views.MyView">. '
+                            "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['T002']}."
                         ),
                         id="djust.T002",
                         file_path=filepath,
