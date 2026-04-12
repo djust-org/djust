@@ -42,12 +42,15 @@ class OnboardingView(TutorialMixin, LiveView):
 <!-- onboarding.html -->
 {% load djust_tutorials %}
 
-<button dj-click="start_tutorial">Take the tour</button>
+<div dj-root dj-view="myapp.views.OnboardingView">
+    <button dj-click="start_tutorial">Take the tour</button>
 
-<nav id="nav-dashboard">...</nav>
-<button id="btn-new-project">New project</button>
-<form id="project-form">...</form>
+    <nav id="nav-dashboard">...</nav>
+    <button id="btn-new-project">New project</button>
+    <form id="project-form">...</form>
+</div>
 
+<!-- Bubble MUST be outside dj-root (see Bubble Placement below) -->
 {% tutorial_bubble %}
 ```
 
@@ -277,6 +280,43 @@ The framework doesn't ship CSS — styling is the app's responsibility. Here's a
 ```
 
 Apps using djust-theming get the bubble styled automatically via the `config.get_framework_class()` integration (coming as a follow-up).
+
+## Bubble placement
+
+The `{% tutorial_bubble %}` tag **must be placed outside the `dj-root` container**, not inside it.
+
+### Why
+
+When a VDOM patch fails, djust's morphdom recovery replaces the **entire** content of the `dj-root` element with a fresh server render. If the bubble is inside `dj-root`, the recovery wipe destroys it mid-step — the tour silently disappears and the user sees nothing. Because the bubble is marked `dj-update="ignore"`, it survives normal patches, but morphdom recovery bypasses `dj-update` attributes entirely.
+
+### How the bubble still works outside the LiveView container
+
+The bubble's Skip and Close buttons use plain `onclick` handlers that dispatch a `tour:hide` CustomEvent on `document`. They don't use `dj-click` (which requires being inside a `dj-root`), so they work correctly from anywhere in the DOM. The `tour:narrate` event that drives the bubble is also dispatched with `bubbles: true` and caught at `document` level.
+
+### Correct placement
+
+```html
+<div dj-root dj-view="myapp.views.OnboardingView">
+    <button dj-click="start_tutorial">Take the tour</button>
+    <nav id="nav-dashboard">...</nav>
+    <!-- All LiveView content inside dj-root -->
+</div>
+
+<!-- Bubble OUTSIDE dj-root — survives morphdom recovery -->
+{% tutorial_bubble %}
+```
+
+### Incorrect placement
+
+```html
+<div dj-root dj-view="myapp.views.OnboardingView">
+    <button dj-click="start_tutorial">Take the tour</button>
+    <nav id="nav-dashboard">...</nav>
+
+    <!-- WRONG: morphdom recovery will wipe this -->
+    {% tutorial_bubble %}
+</div>
+```
 
 ## Patterns
 

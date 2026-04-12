@@ -67,7 +67,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~`get_context_data` includes non-serializable class attrs, corrupting state (#694)~~ ✅ | ~~MRO walker adds class attrs to context; serializer converts to strings~~ | v0.4.2 |
 | **P1** | `@background` should natively support `async def` handlers (#697) | Coroutine detection is a fragile workaround — decorator should handle it properly | v0.4.2 |
 | **P2** | `_flush_pending_push_events` callback not wired on WS reconnect (#698) | Push commands in background tasks may silently queue after reconnect | v0.4.2 |
-| **P3** | docs: tutorial bubble must be outside `dj-root` (#699) | Morphdom recovery wipes bubble if inside LiveView container — undocumented | v0.4.2 |
+| ~~**P3**~~ | ~~docs: tutorial bubble must be outside `dj-root` (#699)~~ ✅ | ~~Morphdom recovery wipes bubble if inside LiveView container — undocumented~~ | ~~v0.4.2~~ |
 | **P2** | push_commands-only handlers should auto-skip VDOM re-render (#700) | Unnecessary re-renders cause patch failures + morphdom recovery during tours | v0.4.2 |
 | **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
 | **P2** | Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2) | Unified CSS/theming story with core; compat shim for plain-Django users | v0.5.1 |
