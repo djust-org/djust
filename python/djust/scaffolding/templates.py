@@ -72,9 +72,16 @@ SECRET_KEY = os.environ.get(
     "django-insecure-%(secret_key)s",
 )  # noqa: S105
 
-DEBUG = True
+# Fails safe: defaults to False when the env var is unset so production
+# deployments don't accidentally ship with full tracebacks and lax security.
+# Copy ``.env.example`` to ``.env`` for local development.
+DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
+]
 
 INSTALLED_APPS = [
     "daphne",
@@ -460,6 +467,42 @@ build/
 .env
 *.log
 .DS_Store
+"""
+
+# ---------------------------------------------------------------------------
+# .env.example — committed template for developer environment variables
+# ---------------------------------------------------------------------------
+#
+# Scaffolded projects default ``DEBUG=False`` and narrow ``ALLOWED_HOSTS``
+# in settings.py so unconfigured production deployments fail safe. Local
+# development picks the values up from ``.env`` via python-dotenv or
+# whatever process runner the developer uses. This template is written to
+# disk as ``.env.example`` — the developer copies it to ``.env`` once.
+
+ENV_EXAMPLE = """\
+# %(display_name)s — local development environment variables.
+#
+# Copy this file to ``.env`` for local development:
+#
+#     cp .env.example .env
+#
+# ``.env`` is listed in ``.gitignore`` — never commit real secrets.
+# Production deployments should set these via the hosting platform
+# (systemd unit, Docker env, Fly.io secrets, Heroku config vars, etc.)
+# rather than shipping a ``.env`` file.
+
+# Enable Django debug mode and verbose error pages. Must be False in
+# production — the scaffolded settings.py defaults to False when unset.
+DEBUG=True
+
+# Django secret key. The scaffolded settings.py falls back to an
+# ``django-insecure-<random>`` default for local bootstrap, but you
+# should set a real one here (and a different one in production).
+SECRET_KEY=%(secret_key)s
+
+# Comma-separated list of hostnames Django will accept. The scaffolded
+# settings.py defaults to ``localhost,127.0.0.1`` when unset.
+ALLOWED_HOSTS=localhost,127.0.0.1
 """
 
 # ---------------------------------------------------------------------------
