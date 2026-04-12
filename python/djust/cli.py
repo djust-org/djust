@@ -421,9 +421,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-{secret_key}")  # noqa: S105
 
-DEBUG = True
+# Fails safe: defaults to False when the env var is unset so production
+# deployments don't accidentally ship with full tracebacks and lax security.
+# Copy ``.env.example`` to ``.env`` for local development.
+DEBUG = os.environ.get("DEBUG", "False").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
+]
 
 INSTALLED_APPS = [
     "daphne",
@@ -540,6 +547,59 @@ urlpatterns = [
 
     # __init__.py
     _write(os.path.join(package_dir, "__init__.py"), "")
+
+    # .gitignore — ensures .env (secrets) is never committed
+    _write(
+        os.path.join(project_dir, ".gitignore"),
+        """__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+db.sqlite3
+db.sqlite3-journal
+staticfiles/
+*.egg-info/
+dist/
+build/
+.eggs/
+.env
+*.log
+.DS_Store
+""",
+    )
+
+    # .env.example — committed template the developer copies to .env for
+    # local dev. settings.py reads DEBUG / SECRET_KEY / ALLOWED_HOSTS from
+    # the environment with fail-safe defaults, so an unconfigured deploy
+    # runs with DEBUG=False rather than full stack traces.
+    _write(
+        os.path.join(project_dir, ".env.example"),
+        f"""# {name} — local development environment variables.
+#
+# Copy this file to ``.env`` for local development:
+#
+#     cp .env.example .env
+#
+# ``.env`` is listed in ``.gitignore`` — never commit real secrets.
+# Production deployments should set these via the hosting platform
+# (systemd unit, Docker env, Fly.io secrets, Heroku config vars, etc.)
+# rather than shipping a ``.env`` file.
+
+# Enable Django debug mode and verbose error pages. Must be False in
+# production — the scaffolded settings.py defaults to False when unset.
+DEBUG=True
+
+# Django secret key. The scaffolded settings.py falls back to an
+# ``django-insecure-<random>`` default for local bootstrap, but you
+# should set a real one here (and a different one in production).
+SECRET_KEY={secret_key}
+
+# Comma-separated list of hostnames Django will accept. The scaffolded
+# settings.py defaults to ``localhost,127.0.0.1`` when unset.
+ALLOWED_HOSTS=localhost,127.0.0.1
+""",
+    )
 
     # templates directory
     os.makedirs(os.path.join(project_dir, "templates"))
