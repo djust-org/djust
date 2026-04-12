@@ -49,7 +49,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P0**~~ | ~~`TutorialMixin` + `{% tutorial_bubble %}`~~ ✅ ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 1c) | ~~Declarative guided tours with zero custom JS — v0.4.2 headline feature~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Scaffold `DEBUG=False` default + `.env.example`~~ ✅ (#637) | ~~Security-adjacent carry-over; fails-safe default complements A014 static check~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Defer `reinitAfterDOMUpdate` for pre-rendered mount~~ ✅ (#619) | ~~Visible layout-flash bugfix carried over from v0.4.1~~ | v0.4.2 |
-| **P3** | Dependabot batch carry-over (v0.4.2) | Vitest/jsdom/tokio/indexmap/etc. — single "ci: bump deps" PR | v0.4.2 |
+| ~~**P3**~~ | ~~Dependabot batch carry-over (v0.4.2)~~ ✅ | ~~Vitest/jsdom/tokio/indexmap/etc. — single "ci: bump deps" PR~~ | v0.4.2 |
 | **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
 | **P2** | Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2) | Unified CSS/theming story with core; compat shim for plain-Django users | v0.5.1 |
 | **P2** | Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3) | Largest fold — 64K LOC — dedicated release window in v0.5.2 | v0.5.2 |
@@ -345,7 +345,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **✅ #619 — Defer `reinitAfterDOMUpdate` via `requestAnimationFrame` on pre-rendered mount** — Shipped. Carry-over bugfix from v0.4.1. Independent of the BDUI track; can ship in parallel. Rebase onto current main, edit `python/djust/static/djust/src/03-websocket.js` to wrap the post-mount block in a `requestAnimationFrame` callback (with synchronous fallback when rAF is unavailable for JSDOM tests), preserve the ordering invariant so form recovery still runs after event binding is complete, rebuild `client.js`. Includes 148-line regression test file `tests/js/mount-deferred-reinit.test.js`. Fixes visible layout-flash on pre-rendered HTTP GET content. Branch: `fix/defer-reinit-after-dom-update-619`. *~30 lines JS (source) + rebuild + 148 lines tests. 1-2 days.*
 
-**Dependabot batch carry-over** — Independent chore work that was held behind the v0.4.1 release. Ship as a single "ci: bump deps" PR: Vitest 4.1.0 → 4.1.4, `@vitest/ui` + `@vitest/coverage-v8` to match, jsdom 29.0.1 → 29.0.2, happy-dom, tokio 1.50 → 1.51, indexmap 2.13.0 → 2.13.1, proptest, uuid, html5ever, release-drafter, github-script, astral-sh/setup-uv. Full test suite gates the merge. Branch: `chore/dependabot-batch-v042`. *15 deps in one PR. 1 day.*
+**✅ Dependabot batch carry-over** — Shipped. Independent chore work that was held behind the v0.4.1 release. Ship as a single "ci: bump deps" PR: Vitest 4.1.0 → 4.1.4, `@vitest/ui` + `@vitest/coverage-v8` to match, jsdom 29.0.1 → 29.0.2, happy-dom, tokio 1.50 → 1.51, indexmap 2.13.0 → 2.13.1, proptest, uuid, html5ever, release-drafter, github-script, astral-sh/setup-uv. Full test suite gates the merge. Branch: `chore/dependabot-batch-v042`. *15 deps in one PR. 1 day.*
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
