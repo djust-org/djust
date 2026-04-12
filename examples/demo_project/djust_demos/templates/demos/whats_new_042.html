@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+
+{% block title %}What's New in v0.4.2 - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .feature-section {
+        padding: 2rem;
+        margin-bottom: 2rem;
+        border-radius: var(--radius-lg, 12px);
+        border: 1px solid var(--color-border, #e2e8f0);
+        background: var(--color-bg-elevated, #fff);
+    }
+    .feature-section h3 {
+        font-size: 1.5rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: var(--color-text, #1e293b);
+    }
+    .feature-section .subtitle {
+        color: var(--color-text-muted, #64748b);
+        margin-bottom: 1.5rem;
+        font-size: 0.9375rem;
+    }
+    .feature-label {
+        display: inline-block;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        margin-bottom: 1rem;
+    }
+    .label-phase1a { background: #dbeafe; color: #1e40af; }
+    .label-phase1b { background: #dcfce7; color: #166534; }
+    .label-phase1c { background: #f3e8ff; color: #6b21a8; }
+    .label-bugfix  { background: #fef3c7; color: #92400e; }
+
+    .demo-highlight {
+        outline: 3px solid #6366f1;
+        outline-offset: 4px;
+        border-radius: 4px;
+        transition: outline 0.3s ease;
+    }
+    .demo-success {
+        background: #dcfce7 !important;
+        border-color: #16a34a !important;
+        transition: background 0.3s ease;
+    }
+
+    .code-inline {
+        font-family: 'SF Mono', 'Fira Code', monospace;
+        font-size: 0.875rem;
+        background: #f1f5f9;
+        padding: 0.125rem 0.5rem;
+        border-radius: 4px;
+        color: #0f172a;
+    }
+
+    .btn-demo {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.625rem 1.25rem;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.875rem;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: all 0.15s ease;
+    }
+    .btn-demo-primary {
+        background: #3b82f6;
+        color: white;
+    }
+    .btn-demo-primary:hover { background: #2563eb; }
+    .btn-demo-secondary {
+        background: white;
+        color: #334155;
+        border-color: #cbd5e1;
+    }
+    .btn-demo-secondary:hover { background: #f8fafc; }
+    .btn-demo-success {
+        background: #16a34a;
+        color: white;
+    }
+    .btn-demo-success:hover { background: #15803d; }
+    .btn-demo-purple {
+        background: #7c3aed;
+        color: white;
+    }
+    .btn-demo-purple:hover { background: #6d28d9; }
+
+    .state-display {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }
+    .state-card {
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid var(--color-border, #e2e8f0);
+        background: #f8fafc;
+        text-align: center;
+    }
+    .state-card .label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--color-text-muted, #64748b);
+        margin-bottom: 0.25rem;
+    }
+    .state-card .value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--color-text, #1e293b);
+        font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .tour-highlight {
+        outline: 3px solid #6366f1;
+        outline-offset: 4px;
+        border-radius: 4px;
+        transition: outline 0.2s ease;
+    }
+
+    .dj-tutorial-bubble {
+        position: fixed;
+        bottom: 2rem;
+        right: 2rem;
+        padding: 16px 20px;
+        background: #1e293b;
+        color: white;
+        border-radius: 12px;
+        max-width: 360px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        z-index: 10000;
+        display: none;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+    .dj-tutorial-bubble[data-visible="true"] { display: block; }
+    .dj-tutorial-bubble__text { margin: 0 0 8px 0; }
+    .dj-tutorial-bubble__progress { font-size: 11px; opacity: 0.7; margin-bottom: 8px; }
+    .dj-tutorial-bubble__actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .dj-tutorial-bubble__actions button {
+        background: transparent; color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        padding: 4px 12px; border-radius: 4px;
+        cursor: pointer; font-size: 12px;
+    }
+    .dj-tutorial-bubble__actions button:hover { background: rgba(255,255,255,0.1); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div dj-root>
+    {{ hero|safe }}
+
+    <section style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 900px;">
+
+            <!-- Tour Button -->
+            <div style="text-align: center; margin-bottom: 2rem;">
+                <button dj-click="start_tutorial" class="btn-demo btn-demo-purple">
+                    🎯 Take the v0.4.2 Tour
+                </button>
+                <p style="color: var(--color-text-muted, #64748b); font-size: 0.875rem; margin-top: 0.5rem;">
+                    Guided tour driven entirely by Python — zero custom JavaScript
+                </p>
+            </div>
+
+            <!-- Section 1: push_commands (Phase 1a) -->
+            <div id="section-push-commands" class="feature-section">
+                <span class="feature-label label-phase1a">Phase 1a</span>
+                <h3>push_commands — Server-Driven UI</h3>
+                <p class="subtitle">
+                    Your Python code pushes JS command chains to the browser for immediate execution.
+                    No custom JavaScript, no hooks, no client-side state.
+                </p>
+
+                <div id="highlight-target" style="padding: 1.5rem; border-radius: 8px; border: 2px dashed #cbd5e1; text-align: center; margin-bottom: 1rem; transition: all 0.3s;">
+                    <p style="margin: 0; font-weight: 600;">This element is controlled from Python</p>
+                    <p style="margin: 0.5rem 0 0; color: var(--color-text-muted, #64748b); font-size: 0.875rem;">
+                        <code class="code-inline">JS.add_class("demo-highlight", to="#highlight-target")</code>
+                    </p>
+                </div>
+
+                <button id="btn-highlight-demo" dj-click="highlight_demo" class="btn-demo btn-demo-primary">
+                    ⚡ Toggle Highlight from Server
+                </button>
+            </div>
+
+            <!-- Section 2: wait_for_event (Phase 1b) -->
+            <div id="section-wait-for" class="feature-section">
+                <span class="feature-label label-phase1b">Phase 1b</span>
+                <h3>wait_for_event — Async Primitives</h3>
+                <p class="subtitle">
+                    Background tasks pause until the user acts — no polling, no timers.
+                    <code class="code-inline">await self.wait_for_event("confirmed")</code>
+                </p>
+
+                <div id="wait-result" style="padding: 1rem; border-radius: 8px; border: 1px solid #cbd5e1; margin-bottom: 1rem; text-align: center; transition: all 0.3s;">
+                    {% if confirmed %}
+                        <span style="color: #16a34a; font-weight: 600;">✓ Confirmed! The background task continued.</span>
+                    {% else %}
+                        <span style="color: var(--color-text-muted, #64748b);">Waiting for user confirmation...</span>
+                    {% endif %}
+                </div>
+
+                <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                    <button dj-click="run_wait_demo" class="btn-demo btn-demo-primary">
+                        ▶ Start Background Task
+                    </button>
+                    <button dj-click="confirm_action" class="btn-demo btn-demo-success">
+                        ✓ Confirm
+                    </button>
+                </div>
+            </div>
+
+            <!-- Section 3: TutorialMixin (Phase 1c) -->
+            <div id="section-tutorial" class="feature-section">
+                <span class="feature-label label-phase1c">Phase 1c</span>
+                <h3>TutorialMixin — Declarative Guided Tours</h3>
+                <p class="subtitle">
+                    Declare your tour as a list of <code class="code-inline">TutorialStep</code> dataclasses.
+                    The framework handles highlights, narration, progression, skip, cancel, and cleanup.
+                </p>
+
+                <div style="padding: 1rem; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0;">
+                    <pre style="margin: 0; font-size: 0.8125rem; color: #334155; overflow-x: auto;"><code>tutorial_steps = [
+    TutorialStep(target="#section-push-commands",
+                 message="push_commands drives the browser...",
+                 timeout=4.0),
+    TutorialStep(target="#btn-highlight-demo",
+                 message="Try clicking this button...",
+                 wait_for="highlight_demo"),
+]</code></pre>
+                </div>
+
+                <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center;">
+                    <span style="font-size: 0.875rem; color: var(--color-text-muted, #64748b);">
+                        Tour status:
+                        {% if tutorial_running %}
+                            Step {{ tutorial_current_step|add:1 }} of {{ tutorial_total_steps }}
+                        {% else %}
+                            Not running
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <!-- Section 4: Bug Fixes -->
+            <div id="section-state" class="feature-section">
+                <span class="feature-label label-bugfix">Bug Fixes</span>
+                <h3>State Management & Serialization</h3>
+                <p class="subtitle">
+                    11 bugs fixed — private attributes survive events, set/Decimal/date serialize correctly,
+                    VDOM patcher handles text nodes and autofocus, debug panel SVG renders properly.
+                </p>
+
+                <div class="state-display">
+                    <div class="state-card">
+                        <div class="label">Public Counter</div>
+                        <div class="value">{{ count }}</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="label">Private _counter</div>
+                        <div class="value">{{ internal_counter }}</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="label">set() type</div>
+                        <div class="value" style="font-size: 1rem;">{{ set_display }}</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="label">Decimal</div>
+                        <div class="value">{{ example_decimal }}</div>
+                    </div>
+                    <div class="state-card">
+                        <div class="label">date</div>
+                        <div class="value" style="font-size: 1rem;">{{ example_date }}</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 1rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                    <button dj-click="increment_private" class="btn-demo btn-demo-secondary">
+                        +1 Both Counters
+                    </button>
+                    <button dj-click="add_to_set" class="btn-demo btn-demo-secondary">
+                        Add to Set
+                    </button>
+                </div>
+            </div>
+
+            {{ back_btn|safe }}
+        </div>
+    </section>
+
+    <!-- Tutorial bubble (inline instead of template tag to avoid Rust engine limitation) -->
+    <div id="dj-tutorial-bubble" class="dj-tutorial-bubble" dj-update="ignore"
+         data-event="tour:narrate" data-default-position="bottom" data-visible="false"
+         role="status" aria-live="polite">
+        <p class="dj-tutorial-bubble__text"></p>
+        <div class="dj-tutorial-bubble__progress">
+            <span class="dj-tutorial-bubble__step"></span>
+        </div>
+        <div class="dj-tutorial-bubble__actions">
+            <button type="button" class="dj-tutorial-bubble__skip" dj-click="skip_tutorial">Skip</button>
+            <button type="button" class="dj-tutorial-bubble__cancel" dj-click="cancel_tutorial">Close</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
