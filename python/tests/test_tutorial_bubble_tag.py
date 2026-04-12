@@ -54,8 +54,10 @@ class TestTutorialBubbleTag:
 
     def test_includes_skip_and_cancel_buttons(self, render):
         out = render("{% load djust_tutorials %}{% tutorial_bubble %}")
-        assert 'dj-click="skip_tutorial"' in out
-        assert 'dj-click="cancel_tutorial"' in out
+        assert "dj-tutorial-bubble__skip" in out
+        assert "dj-tutorial-bubble__cancel" in out
+        # Buttons use onclick to dispatch tour:hide (works outside dj-root)
+        assert "tour:hide" in out
 
     def test_includes_text_and_progress_elements(self, render):
         out = render("{% load djust_tutorials %}{% tutorial_bubble %}")

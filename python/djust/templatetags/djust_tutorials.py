@@ -104,9 +104,9 @@ def tutorial_bubble(
         "</div>"
         '<div class="dj-tutorial-bubble__actions">'
         '<button type="button" class="dj-tutorial-bubble__skip"'
-        ' dj-click="skip_tutorial">Skip</button>'
+        " onclick=\"document.dispatchEvent(new CustomEvent('tour:hide'))\">Skip</button>"
         '<button type="button" class="dj-tutorial-bubble__cancel"'
-        ' dj-click="cancel_tutorial">Close</button>'
+        " onclick=\"document.dispatchEvent(new CustomEvent('tour:hide'))\">Close</button>"
         "</div>"
         "</div>",
         css_class,
