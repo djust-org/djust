@@ -140,7 +140,10 @@ class WhatsNew042View(BaseViewWithNavbar, TutorialMixin):
 
     @event_handler
     def add_to_set(self, **kwargs):
-        """Adds a value to the set. v0.4.2 fix: set() now serializes."""
+        """Adds a value to the set. v0.4.2 fix: set() now serializes.
+        Note: set round-trips through JSON as a list, so we coerce back."""
+        if isinstance(self.example_set, list):
+            self.example_set = set(self.example_set)
         self.example_set.add(len(self.example_set) + 1)
 
     def get_context_data(self, **kwargs):
