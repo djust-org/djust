@@ -69,6 +69,11 @@ jobs:
   # Python tests - runs in parallel with pytest-xdist
   python-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13', '3.14']
+    name: python-tests (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v6
 
@@ -89,10 +94,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '${{ matrix.python-version }}'
+          allow-prereleases: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
