@@ -55,6 +55,10 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~VDOM patcher calls element methods on text nodes (#622)~~ ✅ | ~~`setAttribute`/`appendChild` crash on `#text` nodes — breaks conditional rendering~~ | v0.4.2 |
 | ~~**P1**~~ | ~~`as_live_field()` ignores `widget.attrs` (#683)~~ ✅ | ~~Form fields lose `type`, `placeholder`, `pattern` — forms DX broken~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`form.cleaned_data` Python types serialized to null (#628)~~ ✅ | ~~`date`, `Decimal`, `UUID` in cleaned_data become `null` in public state~~ | v0.4.2 |
+| **P0** | `{% csrf_token %}` renders `CSRF_TOKEN_NOT_PROVIDED` in Rust engine (#696) | Poisons client.js CSRF lookup — HTTP fallback always 403. Workaround: remove tag | v0.4.3 |
+| **P0** | HTTP fallback replaces page with logged-out render (#705) | `dj-submit`/`dj-click` POST loses session context — page goes blank | v0.4.3 |
+| **P1** | WebSocket 404 with django-tenants (#706) | ProtocolTypeRouter routes WS to HTTP handler — LiveView non-functional | v0.4.3 |
+| **P1** | Rust engine HTML-escapes content in `<script>` tags (#707) | Breaks JSON embedding pattern — `&quot;` instead of `"` | v0.4.3 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -400,6 +404,18 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 ~~**#693 — `push_commands` inside `@background` tasks never flush until task completes**~~ ✅ — The `_flush_pending_push_events` callback mechanism (workaround already on main) is the proper fix. Added public `await self.flush_push_events()` API on PushEventMixin. 7 new tests. Shipped in `fix/tutorial-integration-bugs`.
 
 ~~**#694 — `get_context_data` includes non-serializable class attributes, corrupting state**~~ ✅ — `ContextMixin.get_context_data()` now skips class-level attributes that fail a JSON serialisability probe. `TutorialMixin` stores steps as `_tutorial_steps` with a read-only property. 14 new tests. Shipped in `fix/tutorial-integration-bugs`.
+
+### Milestone: v0.4.3 — HTTP Fallback & Template Engine Fixes
+
+*Goal:* Fix critical bugs found during djustlive.com production deployment that make djust unusable without WebSocket. These are all P0/P1 blockers for any real-world deployment behind proxies, with django-tenants, or where WebSocket connectivity is unreliable.
+
+**#696 — `{% csrf_token %}` renders as literal `CSRF_TOKEN_NOT_PROVIDED`** — The Rust template engine handles `{% csrf_token %}` by outputting a placeholder string when no CSRF context is available. `client.js` reads this from the hidden input (line 125 of `11-event-handler.js`) before falling through to the cookie, so the HTTP fallback always sends `X-CSRFToken: CSRF_TOKEN_NOT_PROVIDED` → Django returns 403. Fix: either render nothing (let client fall through to cookie) or inject the real token from Python context before Rust rendering.
+
+**#705 — HTTP fallback POST replaces page with logged-out render** — When WebSocket is unavailable, `dj-submit`/`dj-click` events fall back to HTTP POST. The POST handler creates a fresh LiveView instance without the user's session context. The response HTML replaces `dj-root` content with a logged-out version of the page. Fix: restore session/auth context in the HTTP fallback POST handler, or return patches instead of full HTML.
+
+**#706 — WebSocket 404 with django-tenants** — `ProtocolTypeRouter` should route WebSocket connections to the `websocket` branch, but requests arrive as `"http"` scope type and go through Django's URL router (which returns 404 for `/ws/live/`). Likely caused by nginx HTTP/2 backend protocol or django-tenants ASGI middleware intercepting before protocol routing.
+
+**#707 — Rust engine HTML-escapes `<script>` tag content** — Content inside `<script type="application/json">` tags is auto-escaped (`"` → `&quot;`), breaking the standard Django pattern of embedding JSON data for JavaScript. Fix: detect `<script>` context in the Rust renderer and skip HTML escaping.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
