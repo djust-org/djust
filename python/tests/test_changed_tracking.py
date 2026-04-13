@@ -540,6 +540,42 @@ class TestDerivedContextSubObjectSync:
         # count is an int (immutable, same id) — should not be sent
         assert "count" not in second_call
 
+    def test_derived_synced_when_parent_not_in_context(self, mock_request):
+        """Bug from #703 re-open: changed_keys contains instance attr names
+        that may not appear in the context dict. The fix must look up the
+        changed value from self.__dict__, not from full_context."""
+
+        class PrivateParentView(LiveView):
+            template = "<div dj-root>{{ claimant.first_name }}</div>"
+
+            def mount(self, request, **kwargs):
+                # _step_data is private — won't appear in context
+                self._step_data = {"claimant": {"first_name": "Alice"}}
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                # Derived var from private parent
+                context["claimant"] = self._step_data.get("claimant", {})
+                return context
+
+        view = PrivateParentView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        view._sync_state_to_rust()
+
+        # Mutate nested dict via private parent
+        view._step_data["claimant"]["first_name"] = "Bob"
+        view._changed_keys = {"_step_data"}
+
+        view._sync_state_to_rust()
+        second_call = mock_rust.update_state.call_args[0][0]
+
+        # claimant must be synced even though _step_data isn't in context
+        assert "claimant" in second_call
+
     def test_unchanged_parent_does_not_cascade(self, mock_request):
         """When parent is NOT in _changed_keys, derived var is not force-synced."""
         view = DerivedContextView()

@@ -277,7 +277,11 @@ class RustBridgeMixin:
                 changed_sub_ids = set()
                 if changed_keys:
                     for key in changed_keys:
-                        val = full_context.get(key)
+                        # Look up from instance attrs (not context dict) because
+                        # changed_keys contains instance attr names which may not
+                        # appear directly in the template context. Also check
+                        # full_context in case the attr was renamed/derived.
+                        val = getattr(self, key, None) or full_context.get(key)
                         if val is not None:
                             _collect_sub_ids(val, changed_sub_ids)
 
