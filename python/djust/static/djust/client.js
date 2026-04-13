@@ -4145,6 +4145,9 @@ async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {
+        // Read CSRF token from hidden input first, fall back to cookie.
+        // Skip the hidden input if its value is empty — the Rust engine
+        // renders "" when no csrf_token is in the template context (#696).
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value
             || document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/)?.[1]
             || '';
