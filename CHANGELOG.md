@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Derived context vars synced when parent instance attr mutated in-place ([#703](https://github.com/djust-org/djust/issues/703))** — `_sync_state_to_rust()` now collects `id()`s of all sub-objects reachable from changed instance attrs and includes any derived context var whose `id()` appears in that set. Previously, context vars computed in `get_context_data()` that returned sub-objects of a mutated dict (e.g., `wizard_step_data.get("person", {})`) were skipped because their `id()` was unchanged, causing templates to render stale data. Depth-capped at 8 with cycle detection. 9 new regression tests.
+
 - **`as_live_field()` now respects `widget.input_type` override for `type` attribute ([#683](https://github.com/djust-org/djust/issues/683) re-open)** — The initial #683 fix merged `widget.attrs` but `type` was still ignored because Django moves `type=` from `attrs` into `widget.input_type` during widget `__init__`. `_get_field_type()` now checks `widget.input_type` against the widget class's default and uses the override when they differ (e.g. `TextInput(attrs={"type": "tel"})` sets `input_type="tel"`). 4 new regression tests covering `type="tel"`, `type="url"`, `type="search"`, and the default `type="text"` fallback.
 
 ### Added

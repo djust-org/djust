@@ -69,7 +69,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~`_flush_pending_push_events` callback not wired on WS reconnect (#698)~~ ✅ | ~~Push commands in background tasks may silently queue after reconnect~~ | v0.4.2 |
 | ~~**P3**~~ | ~~docs: tutorial bubble must be outside `dj-root` (#699)~~ ✅ | ~~Morphdom recovery wipes bubble if inside LiveView container — undocumented~~ | v0.4.2 |
 | ~~**P2**~~ | ~~push_commands-only handlers should auto-skip VDOM re-render (#700)~~ ✅ | ~~Unnecessary re-renders cause patch failures + morphdom recovery during tours~~ | v0.4.2 |
-| **P1** | Derived context vars stale under incremental Rust sync (#703) | `id()` optimization skips sub-objects of mutated dicts — templates render stale data | v0.4.2 |
+| ~~**P1**~~ | ~~Derived context vars stale under incremental Rust sync (#703)~~ ✅ | ~~`id()` optimization skips sub-objects of mutated dicts — templates render stale data~~ | v0.4.2 |
 | **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
 | **P2** | Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2) | Unified CSS/theming story with core; compat shim for plain-Django users | v0.5.1 |
 | **P2** | Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3) | Largest fold — 64K LOC — dedicated release window in v0.5.2 | v0.5.2 |
