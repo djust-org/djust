@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from django.test import RequestFactory
 
 from djust import LiveView
+from djust.mixins.rust_bridge import _collect_sub_ids
 from djust.websocket import _snapshot_assigns, _compute_changed_keys
 
 
@@ -381,3 +382,182 @@ class TestContextAlwaysComplete:
         for key in ("a", "b", "c"):
             assert key in ctx1
             assert key in ctx2
+
+
+# ---------------------------------------------------------------------------
+# _collect_sub_ids helper
+# ---------------------------------------------------------------------------
+
+
+class TestCollectSubIds:
+    """Unit tests for the _collect_sub_ids helper."""
+
+    def test_flat_dict(self):
+        """Collects id of dict and its values."""
+        inner = {"a": 1}
+        d = {"key": inner}
+        collected = set()
+        _collect_sub_ids(d, collected)
+        assert id(d) in collected
+        assert id(inner) in collected
+
+    def test_nested_list(self):
+        """Collects ids through lists."""
+        inner = [1, 2]
+        outer = {"items": inner}
+        collected = set()
+        _collect_sub_ids(outer, collected)
+        assert id(inner) in collected
+
+    def test_circular_reference_does_not_hang(self):
+        """Self-referencing dict terminates without error."""
+        d = {}
+        d["self"] = d
+        collected = set()
+        _collect_sub_ids(d, collected)  # should not hang
+        assert id(d) in collected
+
+    def test_depth_limit_respected(self):
+        """Nesting deeper than 8 levels is not traversed."""
+        # Build a chain of 12 nested dicts
+        leaf = {"leaf": True}
+        current = leaf
+        for _ in range(12):
+            current = {"child": current}
+
+        collected = set()
+        _collect_sub_ids(current, collected)
+        # The leaf at depth 13 should NOT be collected (depth cap is 8)
+        assert id(leaf) not in collected
+
+    def test_empty_value(self):
+        """Non-container scalar doesn't recurse but is collected."""
+        collected = set()
+        _collect_sub_ids(42, collected)
+        assert id(42) in collected
+
+
+# ---------------------------------------------------------------------------
+# Derived context sub-object sync (#703)
+# ---------------------------------------------------------------------------
+
+
+class DerivedContextView(LiveView):
+    """View that exposes a sub-object of a mutated dict as a derived context var."""
+
+    template = "<div dj-root>{{ person_data.first_name }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.wizard_step_data = {}
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Returns the same inner dict object — same id() — on every call
+        context["person_data"] = self.wizard_step_data.get("person", {})
+        return context
+
+
+class DerivedListView(LiveView):
+    """View that exposes a list element sub-object as a derived context var."""
+
+    template = "<div dj-root>{{ first_item.name }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.items = [{"name": "original"}]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["first_item"] = self.items[0] if self.items else {}
+        return context
+
+
+class TestDerivedContextSubObjectSync:
+    """Test that derived context vars sharing sub-objects with changed attrs are synced."""
+
+    def test_derived_dict_synced_when_parent_mutated_in_place(self, mock_request):
+        """Core bug: person_data shares an inner dict with wizard_step_data."""
+        view = DerivedContextView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        # First render — sends everything
+        view._sync_state_to_rust()
+
+        # Simulate in-place mutation (like a form validation handler)
+        view.wizard_step_data["person"] = {"first_name": "Alice"}
+        view._changed_keys = {"wizard_step_data"}
+
+        view._sync_state_to_rust()
+        second_call = mock_rust.update_state.call_args[0][0]
+
+        # Both the parent AND the derived var must be synced
+        assert "wizard_step_data" in second_call
+        assert "person_data" in second_call
+
+    def test_derived_list_element_synced_when_parent_mutated(self, mock_request):
+        """List element sub-object synced when parent list item is mutated."""
+        view = DerivedListView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        # First render
+        view._sync_state_to_rust()
+
+        # Mutate the inner dict in-place
+        view.items[0]["name"] = "updated"
+        view._changed_keys = {"items"}
+
+        view._sync_state_to_rust()
+        second_call = mock_rust.update_state.call_args[0][0]
+
+        assert "items" in second_call
+        assert "first_item" in second_call
+
+    def test_no_overhead_when_changed_keys_empty(self, mock_request):
+        """When _changed_keys is None/empty, changed_sub_ids stays empty — no extra work.
+
+        We use CounterView (immutable int state) to avoid the dict id() instability
+        that mutable containers introduce through normalize_django_value.
+        """
+        view = CounterView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        # First render
+        view._sync_state_to_rust()
+
+        # No changes — simulate a server push with no _changed_keys
+        view._changed_keys = None
+        view._sync_state_to_rust()
+        second_call = mock_rust.update_state.call_args[0][0]
+
+        # count is an int (immutable, same id) — should not be sent
+        assert "count" not in second_call
+
+    def test_unchanged_parent_does_not_cascade(self, mock_request):
+        """When parent is NOT in _changed_keys, derived var is not force-synced."""
+        view = DerivedContextView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        # First render
+        view.wizard_step_data["person"] = {"first_name": "Bob"}
+        view._sync_state_to_rust()
+
+        # Mark some other key as changed, not wizard_step_data
+        view._changed_keys = {"some_other_key"}
+        view.some_other_key = "new"
+
+        view._sync_state_to_rust()
+        second_call = mock_rust.update_state.call_args[0][0]
+
+        # person_data should NOT be in second_call since its parent didn't change
+        assert "person_data" not in second_call

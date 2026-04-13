@@ -84,6 +84,30 @@ def _collect_safe_keys(
     return safe_keys
 
 
+def _collect_sub_ids(value, collected, visited=None, depth=0):
+    """Collect id() of all objects reachable from *value* (dicts, lists, tuples).
+
+    Used by ``_sync_state_to_rust`` to detect derived context variables that
+    share an inner object with a changed instance attribute.  Depth-capped at
+    8 and cycle-safe via a *visited* set.
+    """
+    if depth > 8:
+        return
+    if visited is None:
+        visited = set()
+    value_id = id(value)
+    if value_id in visited:
+        return
+    visited.add(value_id)
+    collected.add(value_id)
+    if isinstance(value, dict):
+        for v in value.values():
+            _collect_sub_ids(v, collected, visited, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            _collect_sub_ids(v, collected, visited, depth + 1)
+
+
 class RustBridgeMixin:
     """Rust integration: _initialize_rust_view, _sync_state_to_rust."""
 
@@ -248,6 +272,15 @@ class RustBridgeMixin:
 
             # Determine which context to send to Rust
             if prev_refs:
+                # Collect sub-object ids from changed values so derived context
+                # vars that share an inner object are detected (see #703).
+                changed_sub_ids = set()
+                if changed_keys:
+                    for key in changed_keys:
+                        val = full_context.get(key)
+                        if val is not None:
+                            _collect_sub_ids(val, changed_sub_ids)
+
                 # Incremental: only send values that actually changed
                 context = {}
                 for key, value in full_context.items():
@@ -259,6 +292,8 @@ class RustBridgeMixin:
                         context[key] = value  # TypedState with dirty flag
                     elif id(value) != prev_refs.get(key):
                         context[key] = value  # different object reference
+                    elif changed_sub_ids and id(value) in changed_sub_ids:
+                        context[key] = value  # sub-object of a changed value (#703)
                     # else: unchanged — Rust already has it
             else:
                 # First render: send everything
