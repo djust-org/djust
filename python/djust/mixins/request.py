@@ -212,6 +212,9 @@ class RequestMixin:
         from ..components.base import Component, LiveComponent
 
         try:
+            # Ensure self.request is set for context processors and
+            # _sync_state_to_rust csrf_token injection (#705).
+            self.request = request
             data = json.loads(request.body)
             # Support both formats:
             # 1. Standard: {"event": "name", "params": {...}}
@@ -333,10 +336,28 @@ class RequestMixin:
 
             self._save_components_to_session(request, updated_context)
 
+            # Apply context processors so the render includes auth context
+            # (user, perms, messages, etc.). Without this, template conditionals
+            # like {% if user.is_authenticated %} evaluate to false and the HTTP
+            # fallback returns logged-out HTML. Fixes #705.
+            _processor_context = self._apply_context_processors({}, request)
+            _processor_keys = []
+            for _cp_key, _cp_value in _processor_context.items():
+                if not hasattr(self, _cp_key):
+                    _processor_keys.append(_cp_key)
+                    setattr(self, _cp_key, _cp_value)
+
             # Render with diff to get patches
             t0_render = time.perf_counter()
             html, patches_json, version = self.render_with_diff(request)
             t_render_ms = (time.perf_counter() - t0_render) * 1000
+
+            # Clean up temporary context processor attributes
+            for _cp_key in _processor_keys:
+                try:
+                    delattr(self, _cp_key)
+                except AttributeError:
+                    pass
 
             import json as json_module
 
