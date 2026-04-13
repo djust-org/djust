@@ -344,16 +344,23 @@ fn render_node_with_loader<L: TemplateLoader>(
         }
 
         Node::CsrfToken => {
-            // Render CSRF token hidden input
-            // Get token from context (should be provided by Django)
+            // Render CSRF token hidden input if a real token is available.
+            // When no token is in context (e.g., LiveView re-render without
+            // request context), render nothing so client.js falls through to
+            // reading the CSRF cookie instead. Previously rendered a
+            // "CSRF_TOKEN_NOT_PROVIDED" placeholder that poisoned client.js's
+            // CSRF lookup, causing HTTP fallback 403 errors. (#696)
             let token = context
                 .get("csrf_token")
                 .map(|v| v.to_string())
-                .unwrap_or_else(|| "CSRF_TOKEN_NOT_PROVIDED".to_string());
+                .filter(|t| !t.is_empty());
 
-            Ok(format!(
-                "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{token}\">"
-            ))
+            match token {
+                Some(t) => Ok(format!(
+                    "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{t}\">"
+                )),
+                None => Ok(String::new()),
+            }
         }
 
         Node::Static(path) => {
@@ -1695,12 +1702,21 @@ mod tests {
     }
 
     #[test]
-    fn test_csrf_token_tag_without_token() {
+    fn test_csrf_token_tag_without_token_renders_empty() {
+        // #696: When no CSRF token is in context, render nothing so
+        // client.js falls through to reading the CSRF cookie instead.
         let tokens = tokenize("{% csrf_token %}").unwrap();
         let nodes = parse(&tokens).unwrap();
         let context = Context::new();
         let result = render_nodes(&nodes, &context).unwrap();
-        assert!(result.contains("CSRF_TOKEN_NOT_PROVIDED"));
+        assert!(
+            result.is_empty(),
+            "Expected empty output without csrf_token in context, got: {result}"
+        );
+        assert!(
+            !result.contains("CSRF_TOKEN_NOT_PROVIDED"),
+            "Must not contain placeholder"
+        );
     }
 
     #[test]

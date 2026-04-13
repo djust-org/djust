@@ -255,6 +255,21 @@ class RustBridgeMixin:
 
             full_context = self.get_context_data()
 
+            # Ensure csrf_token is available for {% csrf_token %} tag (#696).
+            # get_context_data() doesn't run context processors, so csrf_token
+            # is missing from the LiveView re-render context. Without it, the
+            # Rust engine renders nothing (after the #696 fix), which is safe
+            # but suboptimal — the hidden input won't be in re-rendered HTML.
+            if "csrf_token" not in full_context:
+                request = getattr(self, "request", None)
+                if request is not None:
+                    try:
+                        from django.middleware.csrf import get_token
+
+                        full_context["csrf_token"] = get_token(request)
+                    except Exception:
+                        pass  # CSRF unavailable — Rust engine will render empty
+
             # Dependency tracking: identify which components the template uses
             template_deps = self._get_template_deps()
             component_descriptors = getattr(type(self), "_component_descriptors", None)
