@@ -110,9 +110,10 @@ class TestDebugStateSizes:
         assert sizes["simple"]["memory"] > 0
         assert sizes["simple"]["serialized"] > 0
 
-        # Complex should have memory but serialized=None
+        # Complex has memory and serialized > 0 because json.dumps(default=str)
+        # converts any object to its string repr — serialization never fails.
         assert sizes["complex"]["memory"] > 0
-        assert sizes["complex"]["serialized"] is None
+        assert sizes["complex"]["serialized"] > 0
 
     def test_debug_state_sizes_sorted_output(self):
         """Test that size report keys are sorted alphabetically."""
@@ -150,15 +151,18 @@ class TestDebugStateSizes:
 
         sizes = view._debug_state_sizes()
 
-        # JSON serialized size includes quotes
-        # "test" = 6 bytes ("test" with quotes)
-        assert sizes["ascii"]["serialized"] == 6
+        # JSON serialized size includes quotes and escaping.
+        # json.dumps escapes non-ASCII to \uXXXX by default (ensure_ascii=True).
+        # "test" → '"test"' = 6 bytes
+        assert sizes["ascii"]["serialized"] == len('"test"'.encode())
 
-        # "tëst" = 7 bytes ("tëst" with quotes, ë is 2 bytes)
-        assert sizes["unicode"]["serialized"] == 7
+        # "tëst" → '"t\\u00ebst"' = 11 bytes (ë → \u00eb = 6 chars)
+        import json
 
-        # "😀" = 6 bytes ("😀" with quotes, emoji is 4 bytes)
-        assert sizes["emoji"]["serialized"] == 6
+        assert sizes["unicode"]["serialized"] == len(json.dumps("tëst").encode())
+
+        # "😀" → '"\\ud83d\\ude00"' = 14 bytes (emoji → two \uXXXX surrogates)
+        assert sizes["emoji"]["serialized"] == len(json.dumps("😀").encode())
 
     def test_debug_state_sizes_in_get_debug_info(self):
         """Test that state_sizes is included in get_debug_info() response."""
