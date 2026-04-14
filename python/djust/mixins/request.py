@@ -25,6 +25,31 @@ logger = logging.getLogger(__name__)
 class RequestMixin:
     """HTTP handling: get, post."""
 
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _processor_context(self, request):
+        """Temporarily inject context processor output as instance attributes.
+
+        Used by both GET and POST paths to ensure auth context (user, perms,
+        messages) is available during template rendering. Cleanup is guaranteed
+        via the context manager pattern. (#717)
+        """
+        processor_output = self._apply_context_processors({}, request)
+        injected_keys = []
+        for key, value in processor_output.items():
+            if not hasattr(self, key):
+                injected_keys.append(key)
+                setattr(self, key, value)
+        try:
+            yield processor_output
+        finally:
+            for key in injected_keys:
+                try:
+                    delattr(self, key)
+                except AttributeError:
+                    pass
+
     @method_decorator(ensure_csrf_cookie)
     def get(self, request, *args, **kwargs):
         """Handle GET requests - initial page load"""
@@ -340,27 +365,11 @@ class RequestMixin:
             # (user, perms, messages, etc.). Without this, template conditionals
             # like {% if user.is_authenticated %} evaluate to false and the HTTP
             # fallback returns logged-out HTML. Fixes #705.
-            _processor_context = self._apply_context_processors({}, request)
-            _processor_keys = []
-            for _cp_key, _cp_value in _processor_context.items():
-                if not hasattr(self, _cp_key):
-                    _processor_keys.append(_cp_key)
-                    setattr(self, _cp_key, _cp_value)
-
-            # Render with diff to get patches — wrap in try/finally so
-            # context processor attributes are cleaned up even if render
-            # raises (#711).
-            try:
+            # Unified via _processor_context context manager (#717).
+            with self._processor_context(request):
                 t0_render = time.perf_counter()
                 html, patches_json, version = self.render_with_diff(request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
-            finally:
-                # Clean up temporary context processor attributes
-                for _cp_key in _processor_keys:
-                    try:
-                        delattr(self, _cp_key)
-                    except AttributeError:
-                        pass
 
             import json as json_module
 

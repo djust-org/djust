@@ -268,7 +268,10 @@ class RustBridgeMixin:
 
                         full_context["csrf_token"] = get_token(request)
                     except Exception:
-                        pass  # CSRF unavailable — Rust engine will render empty
+                        logging.getLogger("djust.rust_bridge").warning(
+                            "Failed to inject csrf_token into Rust context",
+                            exc_info=True,
+                        )
 
             # Inject DATE_FORMAT / TIME_FORMAT from Django settings so the
             # Rust |date and |time filters honour the project's configured
