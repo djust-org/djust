@@ -59,9 +59,9 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P0**~~ | ~~HTTP fallback replaces page with logged-out render (#705)~~ ✅ | ~~`dj-submit`/`dj-click` POST loses session context — page goes blank~~ | v0.4.3 |
 | ~~**P1**~~ | ~~WebSocket 404 with django-tenants (#706)~~ | ~~Nginx config issue, not framework bug — closed~~ | v0.4.3 |
 | ~~**P1**~~ | ~~Rust engine HTML-escapes content in `<script>` tags (#707)~~ | ~~By design — `\|safe` and `\|json_script` handle this — closed~~ | v0.4.3 |
-| **P2** | Wrap HTTP fallback context cleanup in try/finally (#711) | Tech-debt from PR #710 review — exception safety | v0.4.3 |
-| **P2** | Add regression test for HTTP fallback auth (#712) | Tech-debt from PR #710 review — missing test coverage | v0.4.3 |
-| **P2** | Rust renderer: honor Django DATE_FORMAT settings (#713) | `\|date` filter ignores Django settings | v0.4.3 |
+| ~~**P2**~~ | ~~Wrap HTTP fallback context cleanup in try/finally (#711)~~ ✅ | ~~Tech-debt from PR #710 review — exception safety~~ | v0.4.3 |
+| ~~**P2**~~ | ~~Add regression test for HTTP fallback auth (#712)~~ ✅ | ~~Tech-debt from PR #710 review — missing test coverage~~ | v0.4.3 |
+| ~~**P2**~~ | ~~Rust renderer: honor Django DATE_FORMAT settings (#713)~~ ✅ | ~~`\|date` filter ignores Django settings~~ | v0.4.3 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -420,11 +420,11 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**#707 — Rust engine HTML-escapes `<script>` tag content**~~ — Closed as by-design. `|safe` and `|json_script` filters already handle this. Documented in issue comments.
 
-**#711 — tech-debt: wrap HTTP fallback context processor cleanup in try/finally** — From PR #710 review. If `render_with_diff()` raises, temporary attrs cleanup is skipped. Low risk but should be wrapped for correctness.
+~~**#711 — tech-debt: wrap HTTP fallback context processor cleanup in try/finally**~~ ✅ — Wrapped render_with_diff() in try/finally so cleanup always runs. Merged as PR #714.
 
-**#712 — tech-debt: add regression test for authenticated HTTP fallback render** — From PR #710 review. fix: PR merged without a regression test proving the bug is fixed. Need test that verifies authenticated user context survives HTTP fallback POST.
+~~**#712 — tech-debt: add regression test for authenticated HTTP fallback render**~~ ✅ — 4 new tests: auth POST, anonymous POST, attr cleanup, cleanup-on-error. Merged as PR #714.
 
-**#713 — Rust renderer: honor Django DATE_FORMAT/DATETIME_FORMAT settings** — The Rust template engine ignores Django's `DATE_FORMAT` and `DATETIME_FORMAT` settings when rendering date/datetime values via `|date` and `|time` filters.
+~~**#713 — Rust renderer: honor Django DATE_FORMAT/DATETIME_FORMAT settings**~~ ✅ — New `apply_filter_with_context()` checks context for format settings. Python injects Django settings into Rust context. Merged as PR #714.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
