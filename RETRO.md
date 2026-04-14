@@ -18,11 +18,11 @@ issue or be explicitly closed with a reason.
 | 6 | Run ruff locally before first commit attempt | Retro v0.4.3 | — | Closed | Process reminder — not a code change |
 | 7 | try/finally for context processor cleanup | PR #710 | #711 | Closed | Fixed in PR #714 |
 | 8 | Regression test for authenticated HTTP fallback | PR #710 | #712 | Closed | Fixed in PR #714 |
-| 9 | Use `filters::html_escape()` instead of manual `.replace()` chain in CSRF tag | PR #721 | #722 | Open | renderer.rs:370 duplicates existing utility; shared fn also escapes single quotes |
-| 10 | Move `from contextlib import contextmanager` to module-level import | PR #721 | #723 | Open | Class-body import in request.py:28 is unconventional |
-| 11 | Wire `_processor_context` into GET path or fix docstring | PR #721 | #724 | Open | Docstring says "both GET and POST" but only POST uses it |
-| 12 | Add negative test for `|date` filter (invalid date input) | PR #720 | #725 | Open | Happy-path tests only; no test for "2026-13-45" or "not-a-date" |
-| 13 | Document `|date` filter Django compatibility gaps | PR #720 | #726 | Open | Only handles RFC 3339 + YYYY-MM-DD; Django accepts epoch ints, date objects, etc. |
+| 9 | Use `filters::html_escape()` instead of manual `.replace()` chain in CSRF tag | PR #721 | #722 | Closed | Fixed in PR #727 |
+| 10 | Move `from contextlib import contextmanager` to module-level import | PR #721 | #723 | Closed | Fixed in PR #727 |
+| 11 | Wire `_processor_context` into GET path or fix docstring | PR #721 | #724 | Closed | Docstring fixed in PR #727 |
+| 12 | Add negative test for `|date` filter (invalid date input) | PR #720 | #725 | Closed | 4 negative tests in PR #727 |
+| 13 | Document `|date` filter Django compatibility gaps | PR #720 | #726 | Closed | Doc comment in PR #727 |
 
 ---
 

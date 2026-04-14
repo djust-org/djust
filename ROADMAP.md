@@ -68,11 +68,11 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~Log warning for bare `except` in rust_bridge.py (#716)~~ ✅ | ~~Logging with exc_info added in PR #721~~ | v0.4.3 |
 | ~~**P2**~~ | ~~Unify GET/POST context processor pattern (#717)~~ ✅ | ~~`_processor_context` context manager in PR #721~~ | v0.4.3 |
 | ~~**P2**~~ | ~~Python integration test for DATE_FORMAT injection (#718)~~ ✅ | ~~4 tests in PR #721~~ | v0.4.3 |
-| **P3** | Use `filters::html_escape()` for CSRF token (#722) | renderer.rs duplicates existing utility | v0.4.3 |
-| **P3** | Move contextmanager import to module level (#723) | Class-body import in request.py is unconventional | v0.4.3 |
-| **P3** | Wire `_processor_context` into GET path or fix docstring (#724) | Docstring/implementation mismatch | v0.4.3 |
-| **P3** | Add negative test for `\|date` filter (#725) | No test for invalid date input | v0.4.3 |
-| **P2** | Document `\|date` filter Django compatibility gaps (#726) | Only handles 2 of ~5 Django date input types | v0.4.3 |
+| ~~**P3**~~ | ~~Use `filters::html_escape()` for CSRF token (#722)~~ ✅ | ~~Deduplicated in PR #727~~ | v0.4.3 |
+| ~~**P3**~~ | ~~Move contextmanager import to module level (#723)~~ ✅ | ~~Fixed in PR #727~~ | v0.4.3 |
+| ~~**P3**~~ | ~~Wire `_processor_context` into GET path or fix docstring (#724)~~ ✅ | ~~Docstring fixed in PR #727~~ | v0.4.3 |
+| ~~**P3**~~ | ~~Add negative test for `\|date` filter (#725)~~ ✅ | ~~4 negative tests in PR #727~~ | v0.4.3 |
+| ~~**P2**~~ | ~~Document `\|date` filter Django compatibility gaps (#726)~~ ✅ | ~~Doc comment added in PR #727~~ | v0.4.3 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -449,15 +449,15 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**#718 — Python integration test for DATE_FORMAT settings injection**~~ ✅ — 4 tests in `test_date_format_injection.py`: injection, TIME_FORMAT, explicit override, no-op without Rust view. Merged as PR #721.
 
-**#722 — tech-debt: use `filters::html_escape()` for CSRF token** — renderer.rs:370 duplicates existing utility; shared fn also escapes single quotes.
+~~**#722 — tech-debt: use `filters::html_escape()` for CSRF token**~~ ✅ — Replaced manual `.replace()` chain with shared `filters::html_escape()`. Merged as PR #727.
 
-**#723 — tech-debt: move contextmanager import to module level** — Class-body import in request.py:28 is unconventional.
+~~**#723 — tech-debt: move contextmanager import to module level**~~ ✅ — Moved from class body to module-level import. Merged as PR #727.
 
-**#724 — tech-debt: wire `_processor_context` into GET path or fix docstring** — Docstring says "both GET and POST" but only POST uses it.
+~~**#724 — tech-debt: wire `_processor_context` into GET path or fix docstring**~~ ✅ — Fixed docstring to say "POST (HTTP fallback) path". Merged as PR #727.
 
-**#725 — tech-debt: add negative test for `|date` filter** — Happy-path tests only; no test for invalid input like "2026-13-45".
+~~**#725 — tech-debt: add negative test for `|date` filter**~~ ✅ — 4 tests: invalid date, non-date string, empty string, partial date. Merged as PR #727.
 
-**#726 — tech-debt: document `|date` filter Django compatibility gaps** — Only handles RFC 3339 + YYYY-MM-DD; Django accepts epoch ints, date objects, etc.
+~~**#726 — tech-debt: document `|date` filter Django compatibility gaps**~~ ✅ — Doc comment on `format_date()` listing supported vs unsupported input types. Merged as PR #727.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
