@@ -62,7 +62,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~Wrap HTTP fallback context cleanup in try/finally (#711)~~ ✅ | ~~Tech-debt from PR #710 review — exception safety~~ | v0.4.3 |
 | ~~**P2**~~ | ~~Add regression test for HTTP fallback auth (#712)~~ ✅ | ~~Tech-debt from PR #710 review — missing test coverage~~ | v0.4.3 |
 | ~~**P2**~~ | ~~Rust renderer: honor Django DATE_FORMAT settings (#713)~~ ✅ | ~~`\|date` filter ignores Django settings~~ | v0.4.3 |
-| **P1** | Incremental Rust state sync skips derived context vars (#703) | In-place mutation of nested dicts causes stale Rust state — template shows blank | v0.4.3 |
+| ~~**P1**~~ | ~~Incremental Rust state sync skips derived context vars (#703)~~ ✅ | ~~Already fixed in 94d37692 + 97f7b7aa — `_collect_sub_ids` cascades detection~~ | v0.4.3 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -427,7 +427,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**#713 — Rust renderer: honor Django DATE_FORMAT/DATETIME_FORMAT settings**~~ ✅ — New `apply_filter_with_context()` checks context for format settings. Python injects Django settings into Rust context. Merged as PR #714.
 
-**#703 — Incremental Rust state sync silently skips derived context vars** — When a public instance attr (e.g. `wizard_step_data`) is mutated in-place via nested dict assignment, derived context vars (e.g. `person_data = wizard_step_data.get("person", {})`) are skipped by `_sync_state_to_rust` because their `id()` is unchanged. Rust retains stale values. Fix: when `changed_keys` is non-empty, send full context to Rust (no incremental filtering). Found in NYC Comptroller Claims wizard.
+~~**#703 — Incremental Rust state sync silently skips derived context vars**~~ ✅ — Already fixed in commits `94d37692` and `97f7b7aa` (same day as issue filing). `_collect_sub_ids()` cascades change detection to nested sub-objects. Verified with reproduction script.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
