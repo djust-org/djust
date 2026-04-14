@@ -645,12 +645,23 @@ fn format_filesize(bytes: i64) -> String {
     }
 }
 
+/// Format a datetime or date string using Django-style format codes.
+///
+/// Supported input formats:
+/// - RFC 3339 datetime: "2026-04-14T12:00:00Z", "2026-04-14T12:00:00+05:00"
+/// - ISO 8601 date only: "2026-04-14" (DateField values — pinned to midnight UTC)
+///
+/// Not yet supported (Django's `|date` filter accepts these in Python):
+/// - Python datetime.date / datetime.datetime objects (handled before Rust via serialization)
+/// - Epoch timestamps as integers
+/// - Locale-specific string formats (e.g., "March 15, 2026")
+///
+/// Note: bare date inputs pinned to midnight UTC will show "00:00" for time format
+/// codes like "H:i". This matches Django's behavior with DateField values.
 fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
-    // Parse ISO datetime string. Try full datetime first, then fall back
-    // to date-only parsing for DateField values like "2026-03-15" (#719).
     let dt = DateTime::parse_from_rfc3339(datetime_str)
         .or_else(|_| {
-            // Try date-only: "2026-03-15" → midnight UTC
+            // Try date-only: "2026-03-15" → midnight UTC (#719)
             chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d")
                 .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset())
         })
@@ -1730,6 +1741,27 @@ mod tests {
 
         let result = apply_filter("date", &value, Some("F j")).unwrap();
         assert_eq!(result.to_string(), "March 15");
+    }
+
+    #[test]
+    fn test_date_filter_invalid_input() {
+        // #725: Invalid date strings return original value (Django convention),
+        // not an error. The date filter gracefully degrades.
+        let invalid_date = Value::String("2026-13-45".to_string());
+        let result = apply_filter("date", &invalid_date, Some("Y-m-d")).unwrap();
+        assert_eq!(result.to_string(), "2026-13-45");
+
+        let not_a_date = Value::String("not-a-date".to_string());
+        let result = apply_filter("date", &not_a_date, Some("Y-m-d")).unwrap();
+        assert_eq!(result.to_string(), "not-a-date");
+
+        let empty = Value::String("".to_string());
+        let result = apply_filter("date", &empty, Some("Y-m-d")).unwrap();
+        assert_eq!(result.to_string(), "");
+
+        let partial = Value::String("2026-03".to_string());
+        let result = apply_filter("date", &partial, Some("Y-m-d")).unwrap();
+        assert_eq!(result.to_string(), "2026-03");
     }
 
     #[test]

@@ -5,6 +5,7 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 import json
 import logging
 import time
+from contextlib import contextmanager
 
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.utils.decorators import method_decorator
@@ -25,15 +26,13 @@ logger = logging.getLogger(__name__)
 class RequestMixin:
     """HTTP handling: get, post."""
 
-    from contextlib import contextmanager
-
     @contextmanager
     def _processor_context(self, request):
         """Temporarily inject context processor output as instance attributes.
 
-        Used by both GET and POST paths to ensure auth context (user, perms,
-        messages) is available during template rendering. Cleanup is guaranteed
-        via the context manager pattern. (#717)
+        Used by the POST (HTTP fallback) path to ensure auth context (user,
+        perms, messages) is available during template rendering. Cleanup is
+        guaranteed via the context manager pattern. (#717)
         """
         processor_output = self._apply_context_processors({}, request)
         injected_keys = []
