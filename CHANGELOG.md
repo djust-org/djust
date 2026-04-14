@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3rc1] - 2026-04-14
+
+### Fixed
+
+- **`{% csrf_token %}` no longer renders poisoned `CSRF_TOKEN_NOT_PROVIDED` placeholder ([#696](https://github.com/djust-org/djust/issues/696))** — The Rust template engine now renders an empty string when no CSRF token is in context (instead of a placeholder that poisoned client.js's CSRF lookup). Python LiveView `_sync_state_to_rust()` now injects the real token from `get_token(request)`. Three-layer defense-in-depth fix merged as PR #708.
+
+- **HTTP fallback POST no longer replaces page with logged-out render ([#705](https://github.com/djust-org/djust/issues/705))** — The POST handler now applies `_apply_context_processors()` before `render_with_diff()` so auth context (user, perms, messages) is available during re-render. Context processor attributes are cleaned up in a try/finally block. Merged as PR #710 + #714.
+
+- **Rust `|date` and `|time` filters honor Django `DATE_FORMAT`/`TIME_FORMAT` settings ([#713](https://github.com/djust-org/djust/issues/713))** — New `apply_filter_with_context()` checks the template context for format settings when no explicit format argument is given. Python injects Django settings into the Rust context during `_sync_state_to_rust()`. Merged as PR #714.
+
+### Changed
+
+- **Pre-existing test fixes** — `test_debug_state_sizes` corrected for `json.dumps(default=str)` behavior and `\uXXXX` escaping. `navigation.test.js` suppresses happy-dom/undici WebSocket mock `dispatchEvent` incompatibility.
+
 ## [0.4.2] - 2026-04-13
 
 ### Fixed
