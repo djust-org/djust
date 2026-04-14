@@ -646,8 +646,14 @@ fn format_filesize(bytes: i64) -> String {
 }
 
 fn format_date(datetime_str: &str, format_str: &str) -> Result<String> {
-    // Parse ISO datetime string
+    // Parse ISO datetime string. Try full datetime first, then fall back
+    // to date-only parsing for DateField values like "2026-03-15" (#719).
     let dt = DateTime::parse_from_rfc3339(datetime_str)
+        .or_else(|_| {
+            // Try date-only: "2026-03-15" → midnight UTC
+            chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d")
+                .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset())
+        })
         .map_err(|e| DjangoRustError::TemplateError(format!("Invalid datetime format: {e}")))?;
 
     // Convert common Django format codes to output
@@ -1708,6 +1714,22 @@ mod tests {
         let value = Value::String(noon_str);
         let result = apply_filter("time", &value, Some("P")).unwrap();
         assert_eq!(result.to_string(), "noon");
+    }
+
+    #[test]
+    fn test_date_filter_datefield_bare_date() {
+        // #719: DateField serializes to "2026-03-15" (no time component).
+        // The |date filter must handle this by parsing as NaiveDate.
+        let value = Value::String("2026-03-15".to_string());
+
+        let result = apply_filter("date", &value, Some("N j, Y")).unwrap();
+        assert_eq!(result.to_string(), "Mar. 15, 2026");
+
+        let result = apply_filter("date", &value, Some("Y-m-d")).unwrap();
+        assert_eq!(result.to_string(), "2026-03-15");
+
+        let result = apply_filter("date", &value, Some("F j")).unwrap();
+        assert_eq!(result.to_string(), "March 15");
     }
 
     #[test]
