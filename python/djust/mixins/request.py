@@ -347,17 +347,20 @@ class RequestMixin:
                     _processor_keys.append(_cp_key)
                     setattr(self, _cp_key, _cp_value)
 
-            # Render with diff to get patches
-            t0_render = time.perf_counter()
-            html, patches_json, version = self.render_with_diff(request)
-            t_render_ms = (time.perf_counter() - t0_render) * 1000
-
-            # Clean up temporary context processor attributes
-            for _cp_key in _processor_keys:
-                try:
-                    delattr(self, _cp_key)
-                except AttributeError:
-                    pass
+            # Render with diff to get patches — wrap in try/finally so
+            # context processor attributes are cleaned up even if render
+            # raises (#711).
+            try:
+                t0_render = time.perf_counter()
+                html, patches_json, version = self.render_with_diff(request)
+                t_render_ms = (time.perf_counter() - t0_render) * 1000
+            finally:
+                # Clean up temporary context processor attributes
+                for _cp_key in _processor_keys:
+                    try:
+                        delattr(self, _cp_key)
+                    except AttributeError:
+                        pass
 
             import json as json_module
 

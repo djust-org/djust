@@ -1,11 +1,20 @@
 //! Django-compatible template filters
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use djust_core::{DjangoRustError, Result, Value};
+use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
+    apply_filter_with_context(filter_name, value, arg, None)
+}
+
+pub fn apply_filter_with_context(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+) -> Result<Value> {
     match filter_name {
         "upper" => Ok(Value::String(value.to_string().to_uppercase())),
         "lower" => Ok(Value::String(value.to_string().to_lowercase())),
@@ -220,8 +229,21 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
         }
         "date" => {
             // date filter: formats datetime with format string
-            // Supports common Django/strftime format codes
-            let format_str = arg.unwrap_or("N j, Y"); // Default: "Nov. 13, 2025"
+            // Supports common Django/strftime format codes.
+            // When no format arg is given, check context for DATE_FORMAT
+            // (injected from Django settings) before falling back to the
+            // hardcoded default (#713).
+            let default_format = if arg.is_none() {
+                context
+                    .and_then(|ctx| ctx.get("DATE_FORMAT"))
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+            } else {
+                None
+            };
+            let format_str = arg.or(default_format).unwrap_or("N j, Y"); // Default: "Nov. 13, 2025"
             let datetime_str = value.to_string();
             match format_date(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
@@ -229,8 +251,21 @@ pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Resu
             }
         }
         "time" => {
-            // time filter: formats time with format string
-            let format_str = arg.unwrap_or("P"); // Default: "2:30 p.m."
+            // time filter: formats time with format string.
+            // When no format arg is given, check context for TIME_FORMAT
+            // (injected from Django settings) before falling back to the
+            // hardcoded default (#713).
+            let default_format = if arg.is_none() {
+                context
+                    .and_then(|ctx| ctx.get("TIME_FORMAT"))
+                    .and_then(|v| match v {
+                        Value::String(s) => Some(s.as_str()),
+                        _ => None,
+                    })
+            } else {
+                None
+            };
+            let format_str = arg.or(default_format).unwrap_or("P"); // Default: "2:30 p.m."
             let datetime_str = value.to_string();
             match format_time(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
@@ -1673,6 +1708,56 @@ mod tests {
         let value = Value::String(noon_str);
         let result = apply_filter("time", &value, Some("P")).unwrap();
         assert_eq!(result.to_string(), "noon");
+    }
+
+    #[test]
+    fn test_date_filter_uses_context_date_format() {
+        use chrono::TimeZone;
+        use std::collections::HashMap;
+
+        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
+        let value = Value::String(dt.to_rfc3339());
+
+        // With DATE_FORMAT in context and no explicit arg, should use context format
+        let ctx = Context::from_dict(HashMap::from([(
+            "DATE_FORMAT".to_string(),
+            Value::String("Y-m-d".to_string()),
+        )]));
+        let result = apply_filter_with_context("date", &value, None, Some(&ctx)).unwrap();
+        assert_eq!(result.to_string(), "2025-11-13");
+
+        // With explicit arg, should ignore context DATE_FORMAT
+        let result = apply_filter_with_context("date", &value, Some("N j, Y"), Some(&ctx)).unwrap();
+        assert_eq!(result.to_string(), "Nov. 13, 2025");
+
+        // Without context, falls back to default (N j, Y)
+        let result = apply_filter_with_context("date", &value, None, None).unwrap();
+        assert_eq!(result.to_string(), "Nov. 13, 2025");
+    }
+
+    #[test]
+    fn test_time_filter_uses_context_time_format() {
+        use chrono::TimeZone;
+        use std::collections::HashMap;
+
+        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
+        let value = Value::String(dt.to_rfc3339());
+
+        // With TIME_FORMAT in context and no explicit arg, should use context format
+        let ctx = Context::from_dict(HashMap::from([(
+            "TIME_FORMAT".to_string(),
+            Value::String("H:i".to_string()),
+        )]));
+        let result = apply_filter_with_context("time", &value, None, Some(&ctx)).unwrap();
+        assert_eq!(result.to_string(), "14:30");
+
+        // With explicit arg, should ignore context TIME_FORMAT
+        let result = apply_filter_with_context("time", &value, Some("P"), Some(&ctx)).unwrap();
+        assert_eq!(result.to_string(), "2:30 p.m.");
+
+        // Without context, falls back to default (P)
+        let result = apply_filter_with_context("time", &value, None, None).unwrap();
+        assert_eq!(result.to_string(), "2:30 p.m.");
     }
 
     #[test]
