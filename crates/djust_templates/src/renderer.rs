@@ -366,9 +366,16 @@ fn render_node_with_loader<L: TemplateLoader>(
                 .filter(|t| !t.is_empty());
 
             match token {
-                Some(t) => Ok(format!(
-                    "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{t}\">"
-                )),
+                Some(t) => {
+                    let escaped = t
+                        .replace('&', "&amp;")
+                        .replace('"', "&quot;")
+                        .replace('<', "&lt;")
+                        .replace('>', "&gt;");
+                    Ok(format!(
+                        "<input type=\"hidden\" name=\"csrfmiddlewaretoken\" value=\"{escaped}\">"
+                    ))
+                }
                 None => Ok(String::new()),
             }
         }
