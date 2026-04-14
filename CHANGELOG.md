@@ -7,19 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.3rc1] - 2026-04-14
+## [0.4.3] - 2026-04-14
 
 ### Fixed
 
 - **`{% csrf_token %}` no longer renders poisoned `CSRF_TOKEN_NOT_PROVIDED` placeholder ([#696](https://github.com/djust-org/djust/issues/696))** — The Rust template engine now renders an empty string when no CSRF token is in context (instead of a placeholder that poisoned client.js's CSRF lookup). Python LiveView `_sync_state_to_rust()` now injects the real token from `get_token(request)`. Three-layer defense-in-depth fix merged as PR #708.
 
-- **HTTP fallback POST no longer replaces page with logged-out render ([#705](https://github.com/djust-org/djust/issues/705))** — The POST handler now applies `_apply_context_processors()` before `render_with_diff()` so auth context (user, perms, messages) is available during re-render. Context processor attributes are cleaned up in a try/finally block. Merged as PR #710 + #714.
+- **HTTP fallback POST no longer replaces page with logged-out render ([#705](https://github.com/djust-org/djust/issues/705))** — The POST handler now applies `_apply_context_processors()` before `render_with_diff()` so auth context (user, perms, messages) is available during re-render. Context processor cleanup uses `_processor_context()` context manager for guaranteed cleanup. Merged as PR #710 + #714 + #721.
 
 - **Rust `|date` and `|time` filters honor Django `DATE_FORMAT`/`TIME_FORMAT` settings ([#713](https://github.com/djust-org/djust/issues/713))** — New `apply_filter_with_context()` checks the template context for format settings when no explicit format argument is given. Python injects Django settings into the Rust context during `_sync_state_to_rust()`. Merged as PR #714.
 
+- **Rust `|date` filter now works on `DateField` values ([#719](https://github.com/djust-org/djust/issues/719))** — The `|date` filter previously only parsed RFC 3339 datetime strings. `DateField` values (bare dates like "2026-03-15") are now parsed via a `NaiveDate` fallback pinned to midnight UTC. Merged as PR #720.
+
+- **CSRF token value HTML-escaped in Rust renderer ([#722](https://github.com/djust-org/djust/issues/722))** — The CSRF hidden input now uses the shared `filters::html_escape()` utility (escaping &, ", <, >, and single quotes) instead of a manual `.replace()` chain that missed single quotes. Defense-in-depth. Merged as PR #727.
+
+- **Bare `except: pass` in CSRF injection now logs a warning ([#716](https://github.com/djust-org/djust/issues/716))** — The CSRF token injection in `_sync_state_to_rust()` previously swallowed all exceptions silently. Now logs via `djust.rust_bridge` logger with `exc_info=True`. Merged as PR #721.
+
 ### Changed
 
+- **Context processor cleanup refactored to `_processor_context()` context manager ([#717](https://github.com/djust-org/djust/issues/717))** — Replaced the manual try/finally in the HTTP fallback POST handler with a reusable `@contextmanager` that guarantees cleanup of temporarily injected view attributes. Merged as PR #721 + #727.
+
 - **Pre-existing test fixes** — `test_debug_state_sizes` corrected for `json.dumps(default=str)` behavior and `\uXXXX` escaping. `navigation.test.js` suppresses happy-dom/undici WebSocket mock `dispatchEvent` incompatibility.
+
+### Added
+
+- **Python integration tests for DATE_FORMAT settings injection ([#718](https://github.com/djust-org/djust/issues/718))** — 4 tests verifying `_sync_state_to_rust` injects DATE_FORMAT/TIME_FORMAT from Django settings. Merged as PR #721.
+
+- **Negative tests for `|date` filter invalid input ([#725](https://github.com/djust-org/djust/issues/725))** — 4 Rust tests covering invalid dates, non-date strings, empty strings, and partial dates (filter returns original value per Django convention). Merged as PR #727.
+
+- **`format_date()` doc comment documenting Django compatibility ([#726](https://github.com/djust-org/djust/issues/726))** — Documents supported input formats (RFC 3339, YYYY-MM-DD) and unsupported types (epoch ints, locale strings). Merged as PR #727.
 
 ## [0.4.2] - 2026-04-13
 
