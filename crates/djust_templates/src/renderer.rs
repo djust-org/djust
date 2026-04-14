@@ -52,9 +52,14 @@ fn render_node_with_loader<L: TemplateLoader>(
         Node::Variable(var_name, filter_specs) => {
             let mut value = context.get(var_name).cloned().unwrap_or(Value::Null);
 
-            // Apply filters
+            // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             for (filter_name, arg) in filter_specs {
-                value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
+                value = filters::apply_filter_with_context(
+                    filter_name,
+                    &value,
+                    arg.as_deref(),
+                    Some(context),
+                )?;
             }
 
             let text = value.to_string();
@@ -98,7 +103,12 @@ fn render_node_with_loader<L: TemplateLoader>(
             let mut value = get_value(expr, context)?;
 
             for (filter_name, arg) in filters {
-                value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
+                value = filters::apply_filter_with_context(
+                    filter_name,
+                    &value,
+                    arg.as_deref(),
+                    Some(context),
+                )?;
             }
 
             let text = value.to_string();
@@ -1302,7 +1312,12 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
                 (filter_part, None)
             };
 
-            value = filters::apply_filter(filter_name, &value, arg.as_deref())?;
+            value = filters::apply_filter_with_context(
+                filter_name,
+                &value,
+                arg.as_deref(),
+                Some(context),
+            )?;
         }
 
         return Ok(value);

@@ -270,6 +270,17 @@ class RustBridgeMixin:
                     except Exception:
                         pass  # CSRF unavailable — Rust engine will render empty
 
+            # Inject DATE_FORMAT / TIME_FORMAT from Django settings so the
+            # Rust |date and |time filters honour the project's configured
+            # formats when no explicit format argument is given (#713).
+            from django.conf import settings as _dj_settings
+
+            for _fmt_key in ("DATE_FORMAT", "TIME_FORMAT"):
+                if _fmt_key not in full_context:
+                    _fmt_val = getattr(_dj_settings, _fmt_key, None)
+                    if _fmt_val is not None:
+                        full_context[_fmt_key] = _fmt_val
+
             # Dependency tracking: identify which components the template uses
             template_deps = self._get_template_deps()
             component_descriptors = getattr(type(self), "_component_descriptors", None)
