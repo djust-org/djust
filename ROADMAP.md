@@ -77,6 +77,10 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~Skip `to_html()` for unchanged VDOM subtrees~~ ✅ | ~~Solved by cached_html in PR #735~~ | v0.4.5 |
 | ~~**P2**~~ | ~~Reduce Python→Rust serialization overhead~~ ✅ | ~~Fast path for primitives, PR #736~~ | v0.4.5 |
 | ~~**P3**~~ | ~~WebSocket close race on TurboNav (#732)~~ ✅ | ~~Fixed in PR #734~~ | v0.4.5 |
+| **P1** | Per-node template dependency map (#737 phase 1) | Foundation for partial render — compute which context vars each template node uses | v0.4.5 |
+| **P1** | Changed keys bridge Python→Rust (#737 phase 2) | Pass _changed_keys to Rust so it knows which context vars changed | v0.4.5 |
+| **P0** | Partial template render + VDOM splice (#737 phase 3) | Skip unchanged nodes, parse only changed fragments — saves ~13ms | v0.4.5 |
+| **P2** | Lazy context via dependency map (#737 phase 4) | Only compute context for keys the changed template regions need | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -474,6 +478,14 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 ~~**Reduce Python→Rust serialization overhead**~~ ✅ — Fast path for primitives: skip `_collect_safe_keys()` recursion and `normalize_django_value()` traversal for int/float/bool/None/str. Direct SafeString check for strings. Merged as PR #736.
 
 ~~**WebSocket close race on TurboNav (#732)**~~ ✅ — Suppress onerror when `_intentionalDisconnect` is true; don't call `close()` on CONNECTING websockets. Merged as PR #734.
+
+**Per-node template dependency map (#737 phase 1)** — Compute `HashSet<String>` of context variable dependencies per top-level template AST node at parse time. Store in `Template` struct alongside `nodes`. Uses existing `extract_template_variables()` logic scoped to each node subtree. Pure addition, no behavior change.
+
+**Changed keys bridge Python→Rust (#737 phase 2)** — Pass `_changed_keys` from `_sync_state_to_rust()` into a new `set_changed_keys()` method on `RustLiveViewBackend`. Store as `Option<HashSet<String>>` for use during partial render. Bridge plumbing only.
+
+**Partial template render + VDOM splice (#737 phase 3)** — Cache per-node rendered HTML in `RustLiveViewBackend`. On re-render, skip nodes whose deps don't intersect `changed_keys`. Parse only changed HTML fragments through html5ever, splice into old VDOM. Expected savings: template render 1.4ms→0.1ms, html5ever parse 12ms→~0.5ms. ~13ms total savings.
+
+**Lazy context via dependency map (#737 phase 4)** — Expose the per-node dependency map to Python. In `_sync_state_to_rust()`, use it to only compute/send context for keys that changed template regions actually need. Reduces Python `get_context_data()` overhead.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
