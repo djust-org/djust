@@ -107,9 +107,12 @@ describe('dj-copy', () => {
         window.djust.bindLiveViewEvents();
 
         const link = document.querySelector('[dj-copy]');
+        const root = document.querySelector('[dj-root]');
 
+        // With event delegation, preventDefault is called by the root-level
+        // handler. Listen on the root (after the delegated handler) to verify.
         let defaultPrevented = false;
-        link.addEventListener('click', (e) => {
+        root.addEventListener('click', (e) => {
             defaultPrevented = e.defaultPrevented;
         });
 

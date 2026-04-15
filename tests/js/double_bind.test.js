@@ -55,22 +55,21 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         extraElements = [];
     });
 
-    it('bindLiveViewEvents attaches click listener to VDOM-created elements', () => {
-        // createNodeFromVNode must NOT pre-mark elements as bound.
-        // bindLiveViewEvents() must attach the listener on first call.
+    it('bindLiveViewEvents installs delegated click listener on root (not per-element)', () => {
+        // With event delegation, bindLiveViewEvents installs ONE click listener
+        // on the root element, not per-element listeners.
         const elem = window.djust.createNodeFromVNode({
             tag: 'button',
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b-new-1' },
             children: [{ tag: '', attrs: {}, children: [], text: 'Delete' }],
         });
 
-        // Insert into DOM so querySelectorAll finds it — without this the test passes
-        // trivially because bindLiveViewEvents() never sees the detached element.
-        window.document.body.appendChild(elem);
+        // Insert into DOM so delegation can find it via closest().
+        const root = window.document.getElementById('root');
+        root.appendChild(elem);
         extraElements.push(elem);
 
-        // Wrap addEventListener AFTER insertion so we only count calls made by
-        // bindLiveViewEvents(), not any calls made during createNodeFromVNode.
+        // No per-element click listeners should be added
         let addEventCount = 0;
         const origAddEvent = elem.addEventListener.bind(elem);
         elem.addEventListener = function(type, ...args) {
@@ -78,18 +77,17 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             return origAddEvent(type, ...args);
         };
 
-        // First call: element is in DOM and unbound — should bind it exactly once.
         window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(1);
+        // With delegation, no per-element click listeners — count stays 0
+        expect(addEventCount).toBe(0);
 
-        // Second call: WeakMap prevents double-binding — count must not increase.
-        window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(1);
+        // But the root should have a delegated listener (verified by _djustDelegated flag)
+        expect(root._djustDelegated).toBe(true);
     });
 
-    it('bindLiveViewEvents binds click handler on VDOM-inserted elements exactly once', () => {
-        // createNodeFromVNode no longer pre-marks elements; bindLiveViewEvents
-        // is responsible for binding and deduplicating via WeakMap.
+    it('VDOM-inserted elements are handled by delegation without per-element listeners', () => {
+        // With event delegation, replaced elements are automatically handled
+        // by the root-level listener — no per-element binding needed.
         const newBtn = window.djust.createNodeFromVNode({
             tag: 'button',
             attrs: { 'dj-click': 'delete_todo(1)', 'data-dj-id': 'b2' },
@@ -106,13 +104,13 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             return origAddEvent(type, ...args);
         };
 
-        // First call: should bind the listener (count = 1)
+        // Delegation means no per-element click listeners are added
         window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(1);
+        expect(addEventCount).toBe(0);
 
-        // Second call: element already bound via WeakMap, no double-bind (count stays 1)
+        // Multiple calls still don't add per-element listeners
         window.djust.bindLiveViewEvents();
-        expect(addEventCount).toBe(1);
+        expect(addEventCount).toBe(0);
     });
 
     it('bindLiveViewEvents does not double-bind elements already in the DOM', () => {
@@ -136,7 +134,7 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         expect(addEventCount).toBe(countAfterFirst);
     });
 
-    it('binds handlers for other event types (submit, change) without double-binding', () => {
+    it('submit and change events use delegation — no per-element listeners added', () => {
         const form = window.djust.createNodeFromVNode({
             tag: 'form', attrs: { 'dj-submit': 'save' }, children: [],
         });
@@ -144,10 +142,10 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             tag: 'input', attrs: { 'dj-change': 'validate', type: 'text', name: 'email' }, children: [],
         });
 
-        // Insert into DOM — without this, querySelectorAll never finds the elements
-        // and the counts trivially stay 0 regardless of WeakMap deduplication.
-        window.document.body.appendChild(form);
-        window.document.body.appendChild(input);
+        // Insert into DOM inside the root so delegation finds them
+        const root = window.document.getElementById('root');
+        root.appendChild(form);
+        root.appendChild(input);
         extraElements.push(form, input);
 
         // Verify attributes are set correctly
@@ -168,15 +166,18 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             return origInputAdd(type, ...args);
         };
 
-        // First call: elements are in DOM and unbound — should bind each once.
+        // With delegation, no per-element submit/change listeners are added
         window.djust.bindLiveViewEvents();
-        expect(submitCount).toBe(1);
-        expect(changeCount).toBe(1);
+        expect(submitCount).toBe(0);
+        expect(changeCount).toBe(0);
 
-        // Second call: WeakMap prevents double-binding — counts must not increase.
+        // Multiple calls still don't add per-element listeners
         window.djust.bindLiveViewEvents();
-        expect(submitCount).toBe(1);
-        expect(changeCount).toBe(1);
+        expect(submitCount).toBe(0);
+        expect(changeCount).toBe(0);
+
+        // Root has delegated listeners installed
+        expect(root._djustDelegated).toBe(true);
     });
 
     it('createNodeFromVNode sets dj-click as DOM attribute', () => {

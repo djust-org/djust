@@ -132,7 +132,7 @@ describe('Event listener deduplication (issue #315)', () => {
             expect(bindCount).toBe(0);
         });
 
-        it('element inserted via createNodeFromVNode gets bound by bindLiveViewEvents', () => {
+        it('VDOM-inserted elements use delegation — no per-element click listeners', () => {
             const root = window.document.getElementById('root');
 
             const newBtn = window.djust.createNodeFromVNode({
@@ -149,14 +149,17 @@ describe('Event listener deduplication (issue #315)', () => {
                 return origAdd(type, ...args);
             };
 
-            // First call should bind it
+            // With delegation, no per-element click listeners are added
             window.djust.bindLiveViewEvents();
-            expect(bindCount).toBe(1);
+            expect(bindCount).toBe(0);
 
-            // Subsequent calls must not double-bind
+            // Multiple calls still add no per-element listeners
             window.djust.bindLiveViewEvents();
             window.djust.bindLiveViewEvents();
-            expect(bindCount).toBe(1);
+            expect(bindCount).toBe(0);
+
+            // Root has delegation installed
+            expect(root._djustDelegated).toBe(true);
         });
     });
 
