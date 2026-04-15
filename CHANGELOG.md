@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4rc1] - 2026-04-15
+
 ### Fixed
 
 - **VDOM patch path traversal skips regular HTML comments ([#729](https://github.com/djust-org/djust/issues/729))** — The JS patcher was counting all HTML comment nodes during path traversal, but the Rust VDOM parser only preserves `<!--dj-if-->` placeholders. This caused every page with HTML comments in `dj-root` to fail VDOM patching and fall back to full HTML recovery.
