@@ -668,15 +668,27 @@ async function _handleDjKeyboard(element, e, eventType) {
 
 /**
  * Install ONE delegated listener per DOM event type on the given root element.
- * Idempotent — checks root._djustDelegated to avoid double-installing.
+ * Idempotent — uses AbortController to tear down old listeners before
+ * installing new ones, preventing double-firing after TurboNav navigation.
  * @param {HTMLElement} root - The LiveView root element to delegate from
  */
 function installDelegatedListeners(root) {
-    if (root._djustDelegated) return;
-    root._djustDelegated = true;
+    // Tear down previous delegated listeners (if any) to prevent double-firing
+    // after TurboNav morphs the page content while preserving the root element.
+    if (root._djustDelegateAbort) {
+        root._djustDelegateAbort.abort();
+    }
+    var controller = new AbortController();
+    root._djustDelegateAbort = controller;
+    var opts = { signal: controller.signal };
+
+    // Helper: addEventListener with abort signal for clean teardown
+    function on(event, handler) {
+        root.addEventListener(event, handler, opts);
+    }
 
     // click → dj-copy (client-only) first, then dj-click
-    root.addEventListener('click', function(e) {
+    on('click', function(e) {
         var copyEl = e.target.closest('[dj-copy]');
         if (copyEl) {
             _handleDjCopy(copyEl, e);
@@ -692,7 +704,7 @@ function installDelegatedListeners(root) {
     });
 
     // submit → dj-submit
-    root.addEventListener('submit', function(e) {
+    on('submit', function(e) {
         var submitEl = e.target.closest('[dj-submit]');
         if (submitEl) {
             _handleDjSubmit(submitEl, e);
@@ -700,7 +712,7 @@ function installDelegatedListeners(root) {
     });
 
     // change → dj-change
-    root.addEventListener('change', function(e) {
+    on('change', function(e) {
         var changeEl = e.target.closest('[dj-change]');
         if (changeEl) {
             // Rate-limit per element using WeakMap
@@ -711,7 +723,7 @@ function installDelegatedListeners(root) {
     });
 
     // input → dj-input (with smart rate limiting)
-    root.addEventListener('input', function(e) {
+    on('input', function(e) {
         var inputEl = e.target.closest('[dj-input]');
         if (inputEl) {
             // Get or create rate-limited wrapper for this element
@@ -773,7 +785,7 @@ function installDelegatedListeners(root) {
     });
 
     // keydown → dj-keydown
-    root.addEventListener('keydown', function(e) {
+    on('keydown', function(e) {
         var keyEl = e.target.closest('[dj-keydown]');
         if (keyEl) {
             var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
@@ -783,7 +795,7 @@ function installDelegatedListeners(root) {
     });
 
     // keyup → dj-keyup
-    root.addEventListener('keyup', function(e) {
+    on('keyup', function(e) {
         var keyEl = e.target.closest('[dj-keyup]');
         if (keyEl) {
             var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
@@ -803,7 +815,7 @@ function installDelegatedListeners(root) {
     });
 
     // paste → dj-paste
-    root.addEventListener('paste', function(e) {
+    on('paste', function(e) {
         var pasteEl = e.target.closest('[dj-paste]');
         if (pasteEl) {
             _handleDjPaste(pasteEl, e);
@@ -811,7 +823,7 @@ function installDelegatedListeners(root) {
     });
 
     // focusin → dj-focus (focusin bubbles, focus doesn't)
-    root.addEventListener('focusin', function(e) {
+    on('focusin', function(e) {
         var focusEl = e.target.closest('[dj-focus]');
         if (focusEl) {
             _handleDjFocus(focusEl, e);
@@ -819,7 +831,7 @@ function installDelegatedListeners(root) {
     });
 
     // focusout → dj-blur (focusout bubbles, blur doesn't)
-    root.addEventListener('focusout', function(e) {
+    on('focusout', function(e) {
         var blurEl = e.target.closest('[dj-blur]');
         if (blurEl) {
             _handleDjBlur(blurEl, e);

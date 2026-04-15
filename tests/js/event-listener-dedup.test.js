@@ -159,7 +159,7 @@ describe('Event listener deduplication (issue #315)', () => {
             expect(bindCount).toBe(0);
 
             // Root has delegation installed
-            expect(root._djustDelegated).toBe(true);
+            expect(root._djustDelegateAbort).toBeTruthy();
         });
     });
 

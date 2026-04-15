@@ -81,8 +81,8 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         // With delegation, no per-element click listeners — count stays 0
         expect(addEventCount).toBe(0);
 
-        // But the root should have a delegated listener (verified by _djustDelegated flag)
-        expect(root._djustDelegated).toBe(true);
+        // But the root should have a delegated listener (verified by _djustDelegateAbort flag)
+        expect(root._djustDelegateAbort).toBeTruthy();
     });
 
     it('VDOM-inserted elements are handled by delegation without per-element listeners', () => {
@@ -177,7 +177,7 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
         expect(changeCount).toBe(0);
 
         // Root has delegated listeners installed
-        expect(root._djustDelegated).toBe(true);
+        expect(root._djustDelegateAbort).toBeTruthy();
     });
 
     it('createNodeFromVNode sets dj-click as DOM attribute', () => {
