@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 
 
+def fast_json_loads(s):
+    """Parse JSON string using orjson if available, stdlib json otherwise."""
+    if HAS_ORJSON:
+        import orjson
+
+        return orjson.loads(s)
+    return json.loads(s)
+
+
 class DjangoJSONEncoder(json.JSONEncoder):
     """
     Custom JSON encoder that handles common Django and Python types.

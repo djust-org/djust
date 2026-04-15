@@ -72,6 +72,14 @@ window.addEventListener('turbo:load', function(_event) {
 function reinitLiveViewForTurboNav() {
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
+    // Reset scoped delegation so new page's scoped listeners get registered
+    if (typeof _scopedDelegationInstalled !== 'undefined') {
+        _scopedDelegationInstalled = false;
+    }
+    if (typeof _scopedRegistry !== 'undefined') {
+        _scopedRegistry.clear();
+    }
+
     // Disconnect existing WebSocket
     if (liveViewWS) {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');

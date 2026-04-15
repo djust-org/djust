@@ -1398,9 +1398,9 @@ function applyPatches(patches) {
             restoreFocusState(focusState);
             return false;
         }
-        // Update hooks and model bindings after DOM patches
-        updateHooks();
-        bindModelElements();
+        // Note: updateHooks() and bindModelElements() are called by
+        // reinitAfterDOMUpdate() in the response handler — not here,
+        // to avoid double-scanning the DOM.
         // Handle autofocus on dynamically inserted elements (#617)
         // Browser only honors autofocus on initial page load, so we
         // manually focus the first element with autofocus after a patch.
@@ -1524,9 +1524,9 @@ function applyPatches(patches) {
         return false;
     }
 
-    // Update hooks and model bindings after DOM patches
-    updateHooks();
-    bindModelElements();
+    // Note: updateHooks() and bindModelElements() are called by
+    // reinitAfterDOMUpdate() in the response handler — not here,
+    // to avoid double-scanning the DOM.
 
     // Handle autofocus on dynamically inserted elements (#617)
     // Browser only honors autofocus on initial page load, so we

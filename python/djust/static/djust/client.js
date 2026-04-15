@@ -105,6 +105,14 @@ window.addEventListener('turbo:load', function(_event) {
 function reinitLiveViewForTurboNav() {
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
+    // Reset scoped delegation so new page's scoped listeners get registered
+    if (typeof _scopedDelegationInstalled !== 'undefined') {
+        _scopedDelegationInstalled = false;
+    }
+    if (typeof _scopedRegistry !== 'undefined') {
+        _scopedRegistry.clear();
+    }
+
     // Disconnect existing WebSocket
     if (liveViewWS) {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
@@ -2728,6 +2736,155 @@ function _normalizeKeyName(name) {
     return keyMap[lower] || name;
 }
 
+// ============================================================================
+// Scoped Event Delegation (dj-window-*, dj-document-*)
+// ============================================================================
+// Install ONE listener per event type on window/document. When the event fires,
+// dispatch to registered declaring elements. Elements are registered by scanning
+// the DOM once at install time. Re-scanning happens on TurboNav navigation or
+// when bindLiveViewEvents() is called after DOM changes.
+
+// Registry: Map<"prefix:evtType", Set<{element, attrName, handler, requiredKey}>>
+var _scopedRegistry = new Map();
+var _scopedDelegationInstalled = false;
+
+/**
+ * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
+ * and register them in the scoped registry for delegated dispatch.
+ */
+function _scanScopedElements() {
+    var scopedPrefixes = ['dj-window-', 'dj-document-'];
+    var scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    var root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
+
+    // Clear stale entries (elements removed from DOM)
+    _scopedRegistry.forEach(function(entries, key) {
+        entries.forEach(function(entry) {
+            if (!document.contains(entry.element)) {
+                entries.delete(entry);
+            }
+        });
+    });
+
+    // Scan ALL elements in the LiveView root (only way to find dotted attr names).
+    // This runs once at mount and on TurboNav — NOT after every patch.
+    var allElements = root.querySelectorAll('*');
+    allElements.forEach(function(element) {
+        for (var ai = 0; ai < element.attributes.length; ai++) {
+            var attrName = element.attributes[ai].name;
+            for (var pi = 0; pi < scopedPrefixes.length; pi++) {
+                var prefix = scopedPrefixes[pi];
+                if (!attrName.startsWith(prefix)) continue;
+
+                // Find which event type this is (e.g. 'keydown' from 'dj-window-keydown.escape')
+                var rest = attrName.slice(prefix.length); // 'keydown' or 'keydown.escape'
+                var evtType = null;
+                for (var ei = 0; ei < scopedEventTypes.length; ei++) {
+                    if (rest === scopedEventTypes[ei] || rest.startsWith(scopedEventTypes[ei] + '.')) {
+                        evtType = scopedEventTypes[ei];
+                        break;
+                    }
+                }
+                if (!evtType) continue;
+
+                var registryKey = prefix + evtType;
+                if (!_scopedRegistry.has(registryKey)) {
+                    _scopedRegistry.set(registryKey, new Set());
+                }
+
+                var suffix = rest.slice(evtType.length); // '' or '.escape'
+                var requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
+                var parsed = parseEventHandler(element.attributes[ai].value);
+
+                // Check if already registered (prevent duplicates)
+                var entries = _scopedRegistry.get(registryKey);
+                var alreadyRegistered = false;
+                entries.forEach(function(entry) {
+                    if (entry.element === element && entry.attrName === attrName) {
+                        alreadyRegistered = true;
+                    }
+                });
+                if (alreadyRegistered) continue;
+
+                entries.add({
+                    element: element,
+                    attrName: attrName,
+                    parsed: parsed,
+                    requiredKey: requiredKey,
+                });
+            }
+        }
+    });
+}
+
+/**
+ * Install delegated listeners on window/document for scoped events.
+ * Called once — listeners dispatch to the registry.
+ */
+function _installScopedDelegation() {
+    if (_scopedDelegationInstalled) return;
+    _scopedDelegationInstalled = true;
+
+    // Scan DOM once at install time to populate the registry
+    _scanScopedElements();
+
+    var scopedTargets = [
+        { prefix: 'dj-window-', target: window },
+        { prefix: 'dj-document-', target: document },
+    ];
+    var scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+
+    for (var ti = 0; ti < scopedTargets.length; ti++) {
+        var prefix = scopedTargets[ti].prefix;
+        var target = scopedTargets[ti].target;
+
+        for (var ei = 0; ei < scopedEventTypes.length; ei++) {
+            var evtType = scopedEventTypes[ei];
+            if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
+
+            (function(prefix, target, evtType) {
+                var registryKey = prefix + evtType;
+
+                target.addEventListener(evtType, function(e) {
+                    var entries = _scopedRegistry.get(registryKey);
+                    if (!entries || entries.size === 0) return;
+
+                    entries.forEach(function(entry) {
+                        // Skip elements removed from DOM
+                        if (!document.contains(entry.element)) return;
+
+                        // Key filtering
+                        if (entry.requiredKey && e.key !== entry.requiredKey) return;
+
+                        var params = extractTypedParams(entry.element);
+                        addEventContext(params, entry.element);
+
+                        if (evtType === 'keydown' || evtType === 'keyup') {
+                            params.key = e.key;
+                            params.code = e.code;
+                        } else if (evtType === 'click') {
+                            params.clientX = e.clientX;
+                            params.clientY = e.clientY;
+                        } else if (evtType === 'scroll') {
+                            params.scrollY = window.scrollY;
+                            params.scrollX = window.scrollX;
+                        } else if (evtType === 'resize') {
+                            params.innerWidth = window.innerWidth;
+                            params.innerHeight = window.innerHeight;
+                        }
+
+                        if (entry.parsed.args.length > 0) {
+                            params._args = entry.parsed.args;
+                        }
+
+                        handleEvent(entry.parsed.name, params);
+                    });
+                }, evtType === 'scroll' || evtType === 'resize' ? { passive: true } : false);
+            })(prefix, target, evtType);
+        }
+    }
+}
+
 /**
  * Add component and embedded view context to event params.
  * Extracts component_id and view_id from the element's ancestry.
@@ -3505,90 +3662,15 @@ function bindLiveViewEvents(scope) {
     // Scoped listeners: dj-window-*, dj-document-*, dj-click-away, dj-shortcut
     // ================================================================
 
-    // Sweep orphaned scoped listeners (elements removed from DOM by conditional rendering)
-    _sweepOrphanedScopedListeners();
-
     // --- Feature 1: dj-window-* and dj-document-* event scoping ---
-    const scopedPrefixes = [
-        { prefix: 'dj-window-', target: window },
-        { prefix: 'dj-document-', target: document },
-    ];
-    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    // Delegated approach: install ONE listener per event type on window/document.
+    // When the event fires, find declaring elements via querySelectorAll('[dj-window-keydown]')
+    // and dispatch to matching handlers. This avoids querySelectorAll('*') entirely.
+    _installScopedDelegation();
 
-    // Collect elements with dj-window-*/dj-document-* attributes.
-    // These have dynamic attribute names (e.g. dj-window-keydown.escape)
-    // that CSS selectors can't match, so we scan all elements within root.
-    // This is a small scan since most pages have 0-5 scoped listener elements.
-    const scopedElements = root.querySelectorAll('*');
-    for (const { prefix, target } of scopedPrefixes) {
-        for (const evtType of scopedEventTypes) {
-            // scroll and resize only make sense on window
-            if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
-
-            const attrBase = prefix + evtType;
-            // Scan elements for attributes starting with this prefix+eventType
-            // (covers both exact matches and key-modifier variants like dj-window-keydown.escape)
-            scopedElements.forEach(element => {
-                for (const attr of element.attributes) {
-                    if (!attr.name.startsWith(attrBase)) continue;
-                    const bindType = attr.name; // e.g. 'dj-window-keydown' or 'dj-window-keydown.escape'
-                    if (_isHandlerBound(element, bindType)) continue;
-                    _markHandlerBound(element, bindType);
-
-                    // Parse handler name and optional key modifier
-                    const attrValue = attr.value;
-                    const suffix = attr.name.slice(attrBase.length); // '' or '.escape'
-                    const requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
-
-                    // Parse handler name (supports handler(args) syntax)
-                    const parsed = parseEventHandler(attrValue);
-
-                    const scopedHandler = async (e) => {
-                        // Key filtering for keydown/keyup
-                        if (requiredKey && e.key !== requiredKey) return;
-
-                        // Build params from the declaring element
-                        const params = extractTypedParams(element);
-                        addEventContext(params, element);
-
-                        // Add event-specific params
-                        if (evtType === 'keydown' || evtType === 'keyup') {
-                            params.key = e.key;
-                            params.code = e.code;
-                        } else if (evtType === 'click') {
-                            params.clientX = e.clientX;
-                            params.clientY = e.clientY;
-                        } else if (evtType === 'scroll') {
-                            params.scrollY = window.scrollY;
-                            params.scrollX = window.scrollX;
-                        } else if (evtType === 'resize') {
-                            params.innerWidth = window.innerWidth;
-                            params.innerHeight = window.innerHeight;
-                        }
-
-                        if (parsed.args.length > 0) {
-                            params._args = parsed.args;
-                        }
-
-                        await handleEvent(parsed.name, params);
-                    };
-
-                    // Apply default throttle for scroll/resize
-                    let finalHandler = scopedHandler;
-                    if (evtType === 'scroll' || evtType === 'resize') {
-                        const throttleMs = parseInt(element.getAttribute('data-throttle'), 10) || 150;
-                        finalHandler = throttle(scopedHandler, throttleMs);
-                    } else if (element.hasAttribute('data-debounce')) {
-                        finalHandler = debounce(scopedHandler, parseInt(element.getAttribute('data-debounce'), 10));
-                    } else if (element.hasAttribute('data-throttle')) {
-                        finalHandler = throttle(scopedHandler, parseInt(element.getAttribute('data-throttle'), 10));
-                    }
-
-                    _addScopedListener(element, target, evtType, finalHandler, false);
-                }
-            });
-        }
-    }
+    // Sweep orphaned scoped listeners (click-away, shortcut) for elements
+    // removed from DOM by conditional rendering
+    _sweepOrphanedScopedListeners();
 
     // --- Feature 2: dj-click-away ---
     document.querySelectorAll('[dj-click-away]').forEach(element => {
@@ -3688,7 +3770,6 @@ function bindLiveViewEvents(scope) {
 
         _addScopedListener(element, document, 'keydown', shortcutHandler, false);
     });
-
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
     globalLoadingManager.scanAndRegister();
@@ -5744,9 +5825,9 @@ function applyPatches(patches) {
             restoreFocusState(focusState);
             return false;
         }
-        // Update hooks and model bindings after DOM patches
-        updateHooks();
-        bindModelElements();
+        // Note: updateHooks() and bindModelElements() are called by
+        // reinitAfterDOMUpdate() in the response handler — not here,
+        // to avoid double-scanning the DOM.
         // Handle autofocus on dynamically inserted elements (#617)
         // Browser only honors autofocus on initial page load, so we
         // manually focus the first element with autofocus after a patch.
@@ -5870,9 +5951,9 @@ function applyPatches(patches) {
         return false;
     }
 
-    // Update hooks and model bindings after DOM patches
-    updateHooks();
-    bindModelElements();
+    // Note: updateHooks() and bindModelElements() are called by
+    // reinitAfterDOMUpdate() in the response handler — not here,
+    // to avoid double-scanning the DOM.
 
     // Handle autofocus on dynamically inserted elements (#617)
     // Browser only honors autofocus on initial page load, so we

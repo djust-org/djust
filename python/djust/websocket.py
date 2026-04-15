@@ -10,7 +10,7 @@ import msgpack
 from typing import Any, Dict, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .serialization import DjangoJSONEncoder
+from .serialization import DjangoJSONEncoder, fast_json_loads
 from .validation import validate_handler_params
 from .profiler import profiler
 from .security import handle_exception, sanitize_for_log
@@ -624,7 +624,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
 
             if patches is not None:
-                patch_list = json.loads(patches) if patches else []
+                patch_list = fast_json_loads(patches) if patches else []
                 await self._send_update(
                     patches=patch_list,
                     version=version,
@@ -676,7 +676,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )()
 
                     if patches is not None:
-                        patch_list = json.loads(patches) if patches else []
+                        patch_list = fast_json_loads(patches) if patches else []
                         await self._send_update(
                             patches=patch_list,
                             version=version,
@@ -840,6 +840,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.conf import settings
 
         if not getattr(settings, "DEBUG", False):
+            return
+
+        # The debug payload (dir() + getattr + json.dumps per attribute) adds
+        # ~2-5ms per event. Skip it when the debug panel is explicitly closed.
+        # Default is True (backward compat) — panel sends debug_panel_close
+        # to opt out of the overhead.
+        if not getattr(self, "_debug_panel_active", True):
             return
         if not self.view_instance:
             return
@@ -1071,6 +1078,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_cursor_move(data)
             elif msg_type == "request_html":
                 await self.handle_request_html(data)
+            elif msg_type == "debug_panel_open":
+                self._debug_panel_active = True
+            elif msg_type == "debug_panel_close":
+                self._debug_panel_active = False
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -1664,7 +1675,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if patches:
                     # Parse patches JSON string to list
                     if isinstance(patches, str):
-                        patches = json.loads(patches)
+                        patches = fast_json_loads(patches)
                 else:
                     # No patches - send full HTML update
                     logger.info(
@@ -2006,7 +2017,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     patch_list = None  # Initialize for later use
                                     # patches can be: JSON string with patches, "[]" for empty, or None
                                     if patches is not None:
-                                        patch_list = json.loads(patches) if patches else []
+                                        patch_list = fast_json_loads(patches) if patches else []
                                         tracker.track_patches(len(patch_list), patch_list)
                                         profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing["render"] = (
@@ -2558,7 +2569,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Parse patches if they're a JSON string
                 try:
                     if isinstance(patches, str):
-                        patches = json.loads(patches)
+                        patches = fast_json_loads(patches)
                 except (json.JSONDecodeError, ValueError) as e:
                     hotreload_logger.error("Failed to parse patches JSON: %s", e)
                     await self.send_json(
@@ -2634,7 +2645,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             if patches is not None:
                 if isinstance(patches, str):
-                    patches = json.loads(patches)
+                    patches = fast_json_loads(patches)
                 await self._send_update(patches=patches, version=version, event_name="url_change")
             else:
                 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
@@ -2848,7 +2859,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 if patches is not None:
                     if isinstance(patches, str):
-                        patches = json.loads(patches)
+                        patches = fast_json_loads(patches)
                     await self._send_update(
                         patches=patches,
                         version=version,
@@ -2947,7 +2958,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         if patches is not None:
                             if isinstance(patches, str):
-                                patches = json.loads(patches)
+                                patches = fast_json_loads(patches)
                             await self._send_update(
                                 patches=patches,
                                 version=version,
