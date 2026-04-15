@@ -73,6 +73,10 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P3**~~ | ~~Wire `_processor_context` into GET path or fix docstring (#724)~~ ✅ | ~~Docstring fixed in PR #727~~ | v0.4.3 |
 | ~~**P3**~~ | ~~Add negative test for `\|date` filter (#725)~~ ✅ | ~~4 negative tests in PR #727~~ | v0.4.3 |
 | ~~**P2**~~ | ~~Document `\|date` filter Django compatibility gaps (#726)~~ ✅ | ~~Doc comment added in PR #727~~ | v0.4.3 |
+| **P1** | Cache VDOM subtrees for `dj-update="ignore"` sections | Skip html5ever re-parse of unchanged sections (~10ms savings) | v0.4.5 |
+| **P2** | Skip `to_html()` for unchanged VDOM subtrees | Avoid re-serializing static HTML (~3ms savings) | v0.4.5 |
+| **P2** | Reduce Python→Rust serialization overhead | Cache safe_keys, eliminate JSON round-trip (~5ms savings) | v0.4.5 |
+| **P3** | WebSocket close race on TurboNav (#732) | Cosmetic console error on non-LiveView → LiveView navigation | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -458,6 +462,21 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 ~~**#725 — tech-debt: add negative test for `|date` filter**~~ ✅ — 4 tests: invalid date, non-date string, empty string, partial date. Merged as PR #727.
 
 ~~**#726 — tech-debt: document `|date` filter Django compatibility gaps**~~ ✅ — Doc comment on `format_date()` listing supported vs unsupported input types. Merged as PR #727.
+
+### Milestone: v0.4.5 — Server-Side Render Performance
+
+*Goal:* Reduce server-side render overhead from ~45ms to ~25ms for large pages (304KB HTML, 17 sections). The client side is now optimized (5ms) — the remaining bottleneck is the Rust html5ever parse (19ms), HTML serialization (6ms), and Python overhead (17ms).
+
+**Cache VDOM subtrees for `dj-update="ignore"` sections** — html5ever re-parses 304KB of HTML on every event, even though `dj-update="ignore"` sections never change. After first render, cache the VDOM subtree for these sections. On re-render, splice the cached subtree into the new VDOM instead of re-parsing. Saves ~10ms parse + ~3ms serialize per event. Requires coordination between the template renderer and VDOM parser.
+
+**Skip `to_html()` serialization for unchanged VDOM subtrees** — `to_html()` serializes the entire VDOM back to HTML with dj-id attributes on every event (6ms). With VDOM tree hashing or dirty flags, unchanged subtrees could reuse cached HTML strings.
+
+**Reduce Python→Rust serialization overhead** — The gap between Rust total (21ms) and server total (42ms) is ~21ms of Python overhead: `_sync_state_to_rust()` context building, `normalize_django_value()` traversal, `json.loads(patches)` round-trip, `sync_to_async` thread hop. Targets:
+- Cache `_collect_safe_keys()` results for unchanged context keys
+- Pass patches as pre-parsed Python list from Rust via PyO3 (eliminate JSON round-trip)
+- Reduce `normalize_django_value()` traversal for unchanged context
+
+**WebSocket close race on TurboNav (#732)** — Cosmetic: navigating from non-LiveView to LiveView page produces a WebSocket error in the console. Guard `disconnect()` to check `readyState` before closing.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
