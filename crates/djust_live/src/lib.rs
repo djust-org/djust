@@ -22,7 +22,10 @@ use dashmap::DashMap;
 use djust_core::{Context, Value};
 use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::Template;
-use djust_vdom::{diff, parse_html, parse_html_continue, reset_id_counter, sync_ids, VNode};
+use djust_vdom::{
+    cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
+    splice_ignore_subtrees, sync_ids, VNode,
+};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
@@ -219,6 +222,13 @@ impl RustLiveViewBackend {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
+        // Optimization: splice old VDOM subtrees for dj-update="ignore" nodes.
+        // This makes the diff see identical subtrees (zero patches) and
+        // preserves cached HTML for to_html() (skip serialization).
+        if let Some(old_vdom) = &self.last_vdom {
+            splice_ignore_subtrees(old_vdom, &mut new_vdom);
+        }
+
         // Phase 3: VDOM diff
         let t_diff_start = Instant::now();
         let patches =
@@ -253,6 +263,10 @@ impl RustLiveViewBackend {
             total_ms,
             html_len: html.len(),
         });
+
+        // Cache HTML for dj-update="ignore" subtrees so subsequent
+        // to_html() calls skip serialization for those sections.
+        cache_ignore_subtree_html(&mut new_vdom);
 
         self.last_vdom = Some(new_vdom);
         self.version += 1;
@@ -297,6 +311,11 @@ impl RustLiveViewBackend {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
+        // Splice old VDOM subtrees for dj-update="ignore" nodes
+        if let Some(old_vdom) = &self.last_vdom {
+            splice_ignore_subtrees(old_vdom, &mut new_vdom);
+        }
+
         // Phase 3: VDOM diff
         let t_diff_start = Instant::now();
         let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
@@ -332,6 +351,8 @@ impl RustLiveViewBackend {
             total_ms,
             html_len: html.len(),
         });
+
+        cache_ignore_subtree_html(&mut new_vdom);
 
         self.last_vdom = Some(new_vdom);
         self.version += 1;

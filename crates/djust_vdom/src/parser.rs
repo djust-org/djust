@@ -375,6 +375,7 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                             text: Some(comment_text),
                             key: None,
                             djust_id: None,
+                            cached_html: None,
                         };
                         children.push(comment_vnode);
                     }

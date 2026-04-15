@@ -125,6 +125,10 @@ pub struct VNode {
     /// Stored in DOM as data-d attribute for O(1) querySelector lookup
     #[serde(skip_serializing_if = "Option::is_none")]
     pub djust_id: Option<String>,
+    /// Cached HTML string for to_html() — set on dj-update="ignore" subtrees
+    /// to avoid re-serializing unchanged content on every render.
+    #[serde(skip)]
+    pub cached_html: Option<String>,
 }
 
 impl VNode {
@@ -136,6 +140,7 @@ impl VNode {
             text: None,
             key: None,
             djust_id: None,
+            cached_html: None,
         }
     }
 
@@ -147,6 +152,7 @@ impl VNode {
             text: Some(content.into()),
             key: None,
             djust_id: None,
+            cached_html: None,
         }
     }
 
@@ -195,6 +201,11 @@ impl VNode {
     /// `<style>`, whose text content must NOT be HTML-escaped per the
     /// HTML spec (they are "raw text elements").
     fn _to_html(&self, in_raw_text: bool) -> String {
+        // Use cached HTML if available (set on dj-update="ignore" subtrees)
+        if let Some(ref cached) = self.cached_html {
+            return cached.clone();
+        }
+
         if self.is_text() {
             let text = self.text.clone().unwrap_or_default();
             // Raw text elements (<script>, <style>) must not have their
@@ -257,6 +268,47 @@ impl VNode {
         }
 
         html
+    }
+}
+
+/// Splice old VDOM subtrees into a new VDOM for `dj-update="ignore"` nodes.
+///
+/// After parsing a new render, this function walks both old and new VDOM trees
+/// in parallel. When it finds a node with `dj-update="ignore"` in the new tree,
+/// it replaces the new node's children with the old node's children (preserving
+/// IDs and cached HTML). This means:
+/// - The diff step sees identical subtrees → zero patches for ignored sections
+/// - `to_html()` uses `cached_html` → skip serialization for ignored sections
+pub fn splice_ignore_subtrees(old: &VNode, new: &mut VNode) {
+    if old.tag != new.tag {
+        return;
+    }
+    if new.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
+        // Replace the new subtree's children with old's (preserving IDs + cache)
+        new.children = old.children.clone();
+        new.djust_id = old.djust_id.clone();
+        new.cached_html = old.cached_html.clone();
+        return;
+    }
+    // Recurse into children by position
+    let len = old.children.len().min(new.children.len());
+    for i in 0..len {
+        splice_ignore_subtrees(&old.children[i], &mut new.children[i]);
+    }
+}
+
+/// Cache the HTML serialization for all `dj-update="ignore"` subtrees in a VDOM tree.
+/// Call this after the first render so subsequent `to_html()` calls can skip
+/// serialization for these static sections.
+pub fn cache_ignore_subtree_html(node: &mut VNode) {
+    if node.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
+        if node.cached_html.is_none() {
+            node.cached_html = Some(node._to_html(false));
+        }
+        return; // Don't recurse — entire subtree is cached
+    }
+    for child in &mut node.children {
+        cache_ignore_subtree_html(child);
     }
 }
 
