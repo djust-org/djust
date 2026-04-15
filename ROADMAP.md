@@ -80,7 +80,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~Per-node template dependency map (#737 phase 1)~~ ✅ | ~~Foundation for partial render — compute which context vars each template node uses, PR #738~~ | v0.4.5 |
 | ~~**P1**~~ | ~~Changed keys bridge Python→Rust (#737 phase 2)~~ ✅ | ~~Pass _changed_keys to Rust so it knows which context vars changed, PR #738~~ | v0.4.5 |
 | ~~**P0**~~ | ~~Partial template render + VDOM splice (#737 phase 3)~~ ✅ | ~~Skip unchanged nodes, parse only changed fragments — template render 1.4ms→0.1ms, PR #738~~ | v0.4.5 |
-| **P2** | Lazy context via dependency map (#737 phase 4) | Only compute context for keys the changed template regions need | v0.4.5 |
+| ~~**P2**~~ | ~~Lazy context via dependency map (#737 phase 4)~~ ✅ | ~~Investigation: already optimized — incremental sync only sends changed keys, SafeString scan skips unchanged~~ | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -485,7 +485,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**Partial template render + VDOM splice (#737 phase 3)**~~ ✅ — `render_nodes_partial()` skips unchanged nodes, `render_nodes_collecting()` populates cache on first render. Template render 1.4ms→0.1ms. Merged as PR #738.
 
-**Lazy context via dependency map (#737 phase 4)** — Expose the per-node dependency map to Python. In `_sync_state_to_rust()`, use it to only compute/send context for keys that changed template regions actually need. Reduces Python `get_context_data()` overhead.
+~~**Lazy context via dependency map (#737 phase 4)**~~ ✅ — Investigation complete: the incremental sync in `_sync_state_to_rust()` already only sends changed keys to Rust (3-layer detection at lines 299-330), and SafeString/normalization scanning only runs on the changed subset. `get_context_data()` is user code that can't be lazily evaluated without API changes. The 20ms Python overhead is dominated by `get_context_data()`, `sync_to_async`, and Django session access — none of which benefit from the dep map. Closed as already optimized.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
