@@ -3462,8 +3462,11 @@ function installDelegatedListeners(root) {
 function bindLiveViewEvents(scope) {
     const root = scope || getLiveViewRoot() || document;
 
-    // Install delegated listeners ONCE on the LiveView root
-    const liveRoot = getLiveViewRoot();
+    // Install delegated listeners on the LiveView root element.
+    // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
+    // fallback — body persists across TurboNav page swaps, causing duplicate
+    // events when navigating away from a LiveView page and back.
+    const liveRoot = document.querySelector('[dj-view]') || document.querySelector('[dj-root]');
     if (liveRoot) installDelegatedListeners(liveRoot);
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
