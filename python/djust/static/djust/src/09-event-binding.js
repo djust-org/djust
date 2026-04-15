@@ -898,7 +898,12 @@ function bindLiveViewEvents(scope) {
     // Collect elements with dj-window-*/dj-document-* attributes.
     // These have dynamic attribute names (e.g. dj-window-keydown.escape)
     // that CSS selectors can't match, so we scan all elements within root.
-    // This is a small scan since most pages have 0-5 scoped listener elements.
+    // Scoped listeners are static (set in template HTML, not dynamically added),
+    // so we only need to scan on initial mount, not after every VDOM patch.
+    if (window._djustScopedListenersBound) {
+        // Already scanned — skip the expensive querySelectorAll('*')
+    } else {
+    window._djustScopedListenersBound = true;
     const scopedElements = root.querySelectorAll('*');
     for (const { prefix, target } of scopedPrefixes) {
         for (const evtType of scopedEventTypes) {
@@ -1068,6 +1073,7 @@ function bindLiveViewEvents(scope) {
 
         _addScopedListener(element, document, 'keydown', shortcutHandler, false);
     });
+    } // end scoped listeners guard
 
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.

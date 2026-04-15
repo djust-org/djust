@@ -10,7 +10,7 @@ import msgpack
 from typing import Any, Dict, Optional
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .serialization import DjangoJSONEncoder
+from .serialization import DjangoJSONEncoder, fast_json_loads
 from .validation import validate_handler_params
 from .profiler import profiler
 from .security import handle_exception, sanitize_for_log
@@ -624,7 +624,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
 
             if patches is not None:
-                patch_list = json.loads(patches) if patches else []
+                patch_list = fast_json_loads(patches) if patches else []
                 await self._send_update(
                     patches=patch_list,
                     version=version,
@@ -676,7 +676,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )()
 
                     if patches is not None:
-                        patch_list = json.loads(patches) if patches else []
+                        patch_list = fast_json_loads(patches) if patches else []
                         await self._send_update(
                             patches=patch_list,
                             version=version,
@@ -1664,7 +1664,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if patches:
                     # Parse patches JSON string to list
                     if isinstance(patches, str):
-                        patches = json.loads(patches)
+                        patches = fast_json_loads(patches)
                 else:
                     # No patches - send full HTML update
                     logger.info(
@@ -2006,7 +2006,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     patch_list = None  # Initialize for later use
                                     # patches can be: JSON string with patches, "[]" for empty, or None
                                     if patches is not None:
-                                        patch_list = json.loads(patches) if patches else []
+                                        patch_list = fast_json_loads(patches) if patches else []
                                         tracker.track_patches(len(patch_list), patch_list)
                                         profiler.record(profiler.OP_DIFF, 0)  # Mark diff occurred
                         timing["render"] = (
@@ -2558,7 +2558,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Parse patches if they're a JSON string
                 try:
                     if isinstance(patches, str):
-                        patches = json.loads(patches)
+                        patches = fast_json_loads(patches)
                 except (json.JSONDecodeError, ValueError) as e:
                     hotreload_logger.error("Failed to parse patches JSON: %s", e)
                     await self.send_json(
@@ -2634,7 +2634,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             if patches is not None:
                 if isinstance(patches, str):
-                    patches = json.loads(patches)
+                    patches = fast_json_loads(patches)
                 await self._send_update(patches=patches, version=version, event_name="url_change")
             else:
                 html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
@@ -2848,7 +2848,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 if patches is not None:
                     if isinstance(patches, str):
-                        patches = json.loads(patches)
+                        patches = fast_json_loads(patches)
                     await self._send_update(
                         patches=patches,
                         version=version,
@@ -2947,7 +2947,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         if patches is not None:
                             if isinstance(patches, str):
-                                patches = json.loads(patches)
+                                patches = fast_json_loads(patches)
                             await self._send_update(
                                 patches=patches,
                                 version=version,

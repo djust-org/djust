@@ -105,6 +105,9 @@ window.addEventListener('turbo:load', function(_event) {
 function reinitLiveViewForTurboNav() {
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
+    // Reset scoped listener flag so new page's scoped listeners get bound
+    window._djustScopedListenersBound = false;
+
     // Disconnect existing WebSocket
     if (liveViewWS) {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');
@@ -3518,7 +3521,12 @@ function bindLiveViewEvents(scope) {
     // Collect elements with dj-window-*/dj-document-* attributes.
     // These have dynamic attribute names (e.g. dj-window-keydown.escape)
     // that CSS selectors can't match, so we scan all elements within root.
-    // This is a small scan since most pages have 0-5 scoped listener elements.
+    // Scoped listeners are static (set in template HTML, not dynamically added),
+    // so we only need to scan on initial mount, not after every VDOM patch.
+    if (window._djustScopedListenersBound) {
+        // Already scanned — skip the expensive querySelectorAll('*')
+    } else {
+    window._djustScopedListenersBound = true;
     const scopedElements = root.querySelectorAll('*');
     for (const { prefix, target } of scopedPrefixes) {
         for (const evtType of scopedEventTypes) {
@@ -3688,6 +3696,7 @@ function bindLiveViewEvents(scope) {
 
         _addScopedListener(element, document, 'keydown', shortcutHandler, false);
     });
+    } // end scoped listeners guard
 
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
@@ -5744,9 +5753,9 @@ function applyPatches(patches) {
             restoreFocusState(focusState);
             return false;
         }
-        // Update hooks and model bindings after DOM patches
-        updateHooks();
-        bindModelElements();
+        // Note: updateHooks() and bindModelElements() are called by
+        // reinitAfterDOMUpdate() in the response handler — not here,
+        // to avoid double-scanning the DOM.
         // Handle autofocus on dynamically inserted elements (#617)
         // Browser only honors autofocus on initial page load, so we
         // manually focus the first element with autofocus after a patch.
@@ -5870,9 +5879,9 @@ function applyPatches(patches) {
         return false;
     }
 
-    // Update hooks and model bindings after DOM patches
-    updateHooks();
-    bindModelElements();
+    // Note: updateHooks() and bindModelElements() are called by
+    // reinitAfterDOMUpdate() in the response handler — not here,
+    // to avoid double-scanning the DOM.
 
     // Handle autofocus on dynamically inserted elements (#617)
     // Browser only honors autofocus on initial page load, so we
