@@ -73,8 +73,8 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P3**~~ | ~~Wire `_processor_context` into GET path or fix docstring (#724)~~ ✅ | ~~Docstring fixed in PR #727~~ | v0.4.3 |
 | ~~**P3**~~ | ~~Add negative test for `\|date` filter (#725)~~ ✅ | ~~4 negative tests in PR #727~~ | v0.4.3 |
 | ~~**P2**~~ | ~~Document `\|date` filter Django compatibility gaps (#726)~~ ✅ | ~~Doc comment added in PR #727~~ | v0.4.3 |
-| **P1** | Cache VDOM subtrees for `dj-update="ignore"` sections | Skip html5ever re-parse of unchanged sections (~10ms savings) | v0.4.5 |
-| **P2** | Skip `to_html()` for unchanged VDOM subtrees | Avoid re-serializing static HTML (~3ms savings) | v0.4.5 |
+| ~~**P1**~~ | ~~Cache VDOM subtrees for `dj-update="ignore"` sections~~ ✅ | ~~Rust serialize 5.8ms→0.7ms, PR #735~~ | v0.4.5 |
+| ~~**P2**~~ | ~~Skip `to_html()` for unchanged VDOM subtrees~~ ✅ | ~~Solved by cached_html in PR #735~~ | v0.4.5 |
 | **P2** | Reduce Python→Rust serialization overhead | Cache safe_keys, eliminate JSON round-trip (~5ms savings) | v0.4.5 |
 | ~~**P3**~~ | ~~WebSocket close race on TurboNav (#732)~~ ✅ | ~~Fixed in PR #734~~ | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
@@ -467,9 +467,9 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 *Goal:* Reduce server-side render overhead from ~45ms to ~25ms for large pages (304KB HTML, 17 sections). The client side is now optimized (5ms) — the remaining bottleneck is the Rust html5ever parse (19ms), HTML serialization (6ms), and Python overhead (17ms).
 
-**Cache VDOM subtrees for `dj-update="ignore"` sections** — html5ever re-parses 304KB of HTML on every event, even though `dj-update="ignore"` sections never change. After first render, cache the VDOM subtree for these sections. On re-render, splice the cached subtree into the new VDOM instead of re-parsing. Saves ~10ms parse + ~3ms serialize per event. Requires coordination between the template renderer and VDOM parser.
+~~**Cache VDOM subtrees for `dj-update="ignore"` sections**~~ ✅ — `splice_ignore_subtrees()` reuses old VDOM children for ignored nodes; `cache_ignore_subtree_html()` caches HTML for `to_html()` skip. Rust serialize: 5.8ms → 0.7ms. Merged as PR #735.
 
-**Skip `to_html()` serialization for unchanged VDOM subtrees** — `to_html()` serializes the entire VDOM back to HTML with dj-id attributes on every event (6ms). With VDOM tree hashing or dirty flags, unchanged subtrees could reuse cached HTML strings.
+~~**Skip `to_html()` serialization for unchanged VDOM subtrees**~~ ✅ — Solved by the `cached_html` field on VNode, populated by `cache_ignore_subtree_html()`. Merged as PR #735.
 
 **Reduce Python→Rust serialization overhead** — The gap between Rust total (21ms) and server total (42ms) is ~21ms of Python overhead: `_sync_state_to_rust()` context building, `normalize_django_value()` traversal, `json.loads(patches)` round-trip, `sync_to_async` thread hop. Targets:
 - Cache `_collect_safe_keys()` results for unchanged context keys
