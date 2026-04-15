@@ -4331,9 +4331,13 @@ function getNodeByPath(path, djustId = null) {
                 // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
                 return (/[^ \t\n\r\f]/.test(child.textContent));
             }
-            // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
-            // placeholders and counts them when computing child indices (#559).
-            if (child.nodeType === Node.COMMENT_NODE) return true;
+            // Only include <!--dj-if--> placeholder comments — the Rust VDOM
+            // parser preserves these for diffing stability (#559) but drops
+            // all other HTML comments. Regular comments (<!-- Hero Section -->
+            // etc.) must be excluded to keep path indices aligned.
+            if (child.nodeType === Node.COMMENT_NODE) {
+                return child.textContent.trim() === 'dj-if';
+            }
             return false;
         });
 
