@@ -2,6 +2,7 @@
 
 use crate::lexer::Token;
 use djust_core::{DjangoRustError, Result};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub enum Node {
@@ -913,6 +914,33 @@ pub fn extract_template_variables(
     }
 
     Ok(variables)
+}
+
+/// Extract per-node dependency sets from a list of AST nodes.
+///
+/// Returns one `HashSet<String>` per node, containing the top-level context
+/// variable names that node depends on.  Text nodes yield an empty set,
+/// `Include` and `CustomTag` nodes get a `"*"` wildcard because their
+/// dependencies cannot be statically determined.
+pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
+    nodes
+        .iter()
+        .map(|node| {
+            let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+            extract_from_nodes(std::slice::from_ref(node), &mut variables);
+            let mut deps: HashSet<String> = variables.into_keys().collect();
+
+            // Include nodes may depend on any variable — mark as wildcard
+            if matches!(node, Node::Include { .. }) {
+                deps.insert("*".to_string());
+            }
+            // CustomTag / BlockCustomTag nodes may also have unpredictable deps
+            if matches!(node, Node::CustomTag { .. } | Node::BlockCustomTag { .. }) {
+                deps.insert("*".to_string());
+            }
+            deps
+        })
+        .collect()
 }
 
 /// Recursively extract variable paths from AST nodes

@@ -102,6 +102,10 @@ pub struct RustLiveViewBackend {
     safe_keys: HashSet<String>,
     /// Per-phase timing from the last render_with_diff() call
     last_render_timing: Option<RenderTiming>,
+    /// Per-node HTML cache for partial template rendering
+    node_html_cache: Vec<String>,
+    /// Context keys that changed since the last render (None = full render)
+    changed_keys: Option<HashSet<String>>,
 }
 
 #[pymethods]
@@ -122,6 +126,26 @@ impl RustLiveViewBackend {
                 .collect(),
             safe_keys: HashSet::new(),
             last_render_timing: None,
+            node_html_cache: Vec::new(),
+            changed_keys: None,
+        }
+    }
+
+    /// Tell Rust which context keys changed since the last render.
+    ///
+    /// When set, `render_with_diff` / `render_binary_diff` will only re-render
+    /// template nodes whose dependencies overlap these keys.
+    /// Set or merge changed context keys for the next render cycle.
+    /// Called from Python after _sync_state_to_rust() detects which keys changed.
+    /// Merges with any previously set keys (supports multiple sync calls before render).
+    fn set_changed_keys(&mut self, keys: Vec<String>) {
+        match &mut self.changed_keys {
+            Some(existing) => {
+                existing.extend(keys);
+            }
+            None => {
+                self.changed_keys = Some(keys.into_iter().collect());
+            }
         }
     }
 
@@ -150,6 +174,7 @@ impl RustLiveViewBackend {
     /// This allows dynamic templates to change without losing diffing capability
     fn update_template(&mut self, new_template_source: String) {
         self.template_source = new_template_source;
+        self.node_html_cache = Vec::new(); // Invalidate partial render cache
     }
 
     /// Get current state
@@ -163,6 +188,10 @@ impl RustLiveViewBackend {
 
     /// Render the template and return HTML
     fn render(&mut self) -> PyResult<String> {
+        // Invalidate partial render cache — render() bypasses the diff pipeline
+        // so the cache would be stale for the next render_with_diff() call.
+        self.node_html_cache = Vec::new();
+
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
             cached.clone()
@@ -206,10 +235,32 @@ impl RustLiveViewBackend {
             context.mark_safe(key.clone());
         }
 
-        // Phase 1: Template render
+        // Phase 1: Template render (partial if cache available)
         let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
-        let html = template_arc.render_with_loader(&context, &loader)?;
+
+        let html = if !self.node_html_cache.is_empty()
+            && self.changed_keys.is_some()
+            && !template_arc.uses_extends()
+        {
+            // Partial render: only re-render nodes whose deps changed
+            let changed = self.changed_keys.take().unwrap_or_default();
+            let (html, fragments, _changed_indices) = template_arc.render_with_loader_partial(
+                &context,
+                &loader,
+                &changed,
+                &self.node_html_cache,
+            )?;
+            self.node_html_cache = fragments;
+            html
+        } else {
+            // Full render: first render or no change info
+            self.changed_keys = None;
+            let (html, fragments) =
+                template_arc.render_with_loader_collecting(&context, &loader)?;
+            self.node_html_cache = fragments;
+            html
+        };
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Phase 2: HTML parse to VDOM
@@ -295,10 +346,30 @@ impl RustLiveViewBackend {
             context.mark_safe(key.clone());
         }
 
-        // Phase 1: Template render
+        // Phase 1: Template render (partial if cache available)
         let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
-        let html = template_arc.render_with_loader(&context, &loader)?;
+
+        let html = if !self.node_html_cache.is_empty()
+            && self.changed_keys.is_some()
+            && !template_arc.uses_extends()
+        {
+            let changed = self.changed_keys.take().unwrap_or_default();
+            let (html, fragments, _changed_indices) = template_arc.render_with_loader_partial(
+                &context,
+                &loader,
+                &changed,
+                &self.node_html_cache,
+            )?;
+            self.node_html_cache = fragments;
+            html
+        } else {
+            self.changed_keys = None;
+            let (html, fragments) =
+                template_arc.render_with_loader_collecting(&context, &loader)?;
+            self.node_html_cache = fragments;
+            html
+        };
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Phase 2: HTML parse to VDOM
@@ -364,6 +435,8 @@ impl RustLiveViewBackend {
     fn reset(&mut self) {
         self.last_vdom = None;
         self.version = 0;
+        self.node_html_cache = Vec::new();
+        self.changed_keys = None;
         // Reset ID counter so next render starts fresh
         reset_id_counter();
     }
@@ -428,6 +501,8 @@ impl RustLiveViewBackend {
             template_dirs: Vec::new(),
             safe_keys: HashSet::new(),
             last_render_timing: None,
+            node_html_cache: Vec::new(),
+            changed_keys: None,
         })
     }
 

@@ -7,6 +7,7 @@ use djust_components::Component;
 use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashSet;
 
 /// Regex for {% spaceless %}: matches whitespace between > and <
 static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
@@ -30,6 +31,63 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
     Ok(output)
 }
 
+/// Render all nodes and return full HTML plus per-node fragments.
+///
+/// Used on the first render to populate the per-node HTML cache.
+pub fn render_nodes_collecting<L: TemplateLoader>(
+    nodes: &[Node],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<(String, Vec<String>)> {
+    let mut full_output = String::new();
+    let mut fragments = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let frag = render_node_with_loader(node, context, loader)?;
+        full_output.push_str(&frag);
+        fragments.push(frag);
+    }
+    Ok((full_output, fragments))
+}
+
+/// Partial render: only re-render nodes whose deps overlap `changed_keys`.
+///
+/// Returns `(full_html, new_fragments, changed_indices)`.
+/// Nodes whose deps are disjoint from `changed_keys` reuse their cached HTML.
+pub fn render_nodes_partial<L: TemplateLoader>(
+    nodes: &[Node],
+    node_deps: &[HashSet<String>],
+    context: &Context,
+    loader: Option<&L>,
+    changed_keys: &HashSet<String>,
+    node_html_cache: &[String],
+) -> Result<(String, Vec<String>, Vec<usize>)> {
+    let mut full_output = String::new();
+    let mut fragments = Vec::with_capacity(nodes.len());
+    let mut changed_indices = Vec::new();
+
+    for (i, node) in nodes.iter().enumerate() {
+        let needs_render = if let Some(deps) = node_deps.get(i) {
+            deps.contains("*")
+                || i >= node_html_cache.len()
+                || deps.iter().any(|dep| changed_keys.contains(dep))
+        } else {
+            true
+        };
+
+        if needs_render {
+            let html = render_node_with_loader(node, context, loader)?;
+            full_output.push_str(&html);
+            fragments.push(html);
+            changed_indices.push(i);
+        } else {
+            full_output.push_str(&node_html_cache[i]);
+            fragments.push(node_html_cache[i].clone());
+        }
+    }
+
+    Ok((full_output, fragments, changed_indices))
+}
+
 /// No-op loader for when no loader is provided
 struct NoOpLoader;
 
@@ -41,7 +99,7 @@ impl TemplateLoader for NoOpLoader {
     }
 }
 
-fn render_node_with_loader<L: TemplateLoader>(
+pub fn render_node_with_loader<L: TemplateLoader>(
     node: &Node,
     context: &Context,
     loader: Option<&L>,
