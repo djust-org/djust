@@ -203,4 +203,100 @@ describe('VDOM patch error messages', () => {
         const thrownError = errors.find(e => e.includes('Error applying patch'));
         expect(thrownError).toBeUndefined();
     });
+
+    it('skips regular HTML comments in path traversal (only counts dj-if comments)', () => {
+        // Regression test: the Rust VDOM parser drops regular HTML comments
+        // but preserves <!--dj-if--> placeholders. The JS patcher must match
+        // this behavior when computing child indices, otherwise paths computed
+        // by the Rust diff point to wrong nodes.
+        const dom = new JSDOM(
+            '<!DOCTYPE html><html><body>' +
+            '<div dj-root dj-liveview-root dj-view="test.View">' +
+            '<!-- Hero Section -->' +
+            '<section id="hero">Hero</section>' +
+            '<!-- Main Content -->' +
+            '<main id="content"><div id="counter">0</div></main>' +
+            '</div></body></html>',
+            { url: 'http://localhost', runScripts: 'dangerously' }
+        );
+
+        if (!dom.window.CSS) dom.window.CSS = {};
+        if (!dom.window.CSS.escape) {
+            dom.window.CSS.escape = (v) => String(v).replace(/([^\w-])/g, '\\$1');
+        }
+        dom.window.DEBUG_MODE = false;
+        dom.window.console.warn = () => {};
+        dom.window.console.error = () => {};
+        dom.window.console.log = () => {};
+
+        const sentMessages = [];
+        dom.window.WebSocket = class MockWebSocket {
+            constructor() {
+                this.readyState = 1;
+                this._sent = sentMessages;
+                Promise.resolve().then(() => { if (this.onopen) this.onopen({}); });
+            }
+            send(msg) { this._sent.push(JSON.parse(msg)); }
+            close() {}
+        };
+
+        dom.window.eval(clientCode);
+
+        // Rust VDOM sees: [0]=<section>, [1]=<main> (comments dropped)
+        // Path [1, 0, 0] should reach the text "0" inside #counter
+        const patches = [
+            { type: 'SetText', path: [1, 0, 0], text: '1' }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+        expect(result).toBe(true);
+
+        const counter = dom.window.document.getElementById('counter');
+        expect(counter.textContent).toBe('1');
+    });
+
+    it('still counts dj-if placeholder comments in path traversal', () => {
+        const dom = new JSDOM(
+            '<!DOCTYPE html><html><body>' +
+            '<div dj-root dj-liveview-root dj-view="test.View">' +
+            '<!--dj-if-->' +
+            '<p id="visible">shown</p>' +
+            '</div></body></html>',
+            { url: 'http://localhost', runScripts: 'dangerously' }
+        );
+
+        if (!dom.window.CSS) dom.window.CSS = {};
+        if (!dom.window.CSS.escape) {
+            dom.window.CSS.escape = (v) => String(v).replace(/([^\w-])/g, '\\$1');
+        }
+        dom.window.DEBUG_MODE = false;
+        dom.window.console.warn = () => {};
+        dom.window.console.error = () => {};
+        dom.window.console.log = () => {};
+
+        const sentMessages = [];
+        dom.window.WebSocket = class MockWebSocket {
+            constructor() {
+                this.readyState = 1;
+                this._sent = sentMessages;
+                Promise.resolve().then(() => { if (this.onopen) this.onopen({}); });
+            }
+            send(msg) { this._sent.push(JSON.parse(msg)); }
+            close() {}
+        };
+
+        dom.window.eval(clientCode);
+
+        // <!--dj-if--> counts as child [0], <p> is child [1]
+        // Path [1, 0] should reach the text "shown" inside <p>
+        const patches = [
+            { type: 'SetText', path: [1, 0], text: 'updated' }
+        ];
+
+        const result = dom.window.applyPatches(patches);
+        expect(result).toBe(true);
+
+        const p = dom.window.document.getElementById('visible');
+        expect(p.textContent).toBe('updated');
+    });
 });
