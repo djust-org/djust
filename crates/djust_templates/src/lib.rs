@@ -12,6 +12,7 @@ use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 pub mod filters;
 pub mod inheritance;
@@ -35,6 +36,14 @@ static VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]+)\}\}").unwr
 #[allow(dead_code)]
 static TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{%([^%]+)%\}").unwrap());
 
+/// Cached result of `{% extends %}` inheritance resolution.
+/// Stored in `OnceLock` on `Template` — computed once on first render,
+/// shared across all sessions via `Arc<Template>` in `TEMPLATE_CACHE`.
+struct ResolvedInheritance {
+    final_nodes: Vec<Node>,
+    final_node_deps: Vec<HashSet<String>>,
+}
+
 /// A compiled Django template
 #[pyclass]
 pub struct Template {
@@ -42,6 +51,8 @@ pub struct Template {
     source: String,
     /// Per-node dependency sets for partial rendering optimisation.
     node_deps: Vec<HashSet<String>>,
+    /// Lazily resolved inheritance: final merged nodes + deps for `{% extends %}` templates.
+    resolved: OnceLock<ResolvedInheritance>,
 }
 
 impl Template {
@@ -54,6 +65,7 @@ impl Template {
             nodes,
             source: source.to_string(),
             node_deps,
+            resolved: OnceLock::new(),
         })
     }
 
@@ -69,6 +81,44 @@ impl Template {
             .any(|node| matches!(node, Node::Extends(_)))
     }
 
+    /// Resolve `{% extends %}` inheritance and cache the final merged nodes.
+    /// No-op for templates without `{% extends %}`.
+    /// Thread-safe: `OnceLock` ensures only one thread resolves.
+    pub fn resolve_inheritance<L: TemplateLoader>(&self, loader: &L) -> Result<()> {
+        if !self.uses_extends() || self.resolved.get().is_some() {
+            return Ok(());
+        }
+        let chain = build_inheritance_chain(self.nodes.clone(), loader, 10)?;
+        let root_nodes = chain.get_root_nodes();
+        let final_nodes = chain.apply_block_overrides(root_nodes);
+        let final_node_deps = parser::extract_per_node_deps(&final_nodes);
+        // OnceLock::set returns Err if already set (race), which is fine
+        let _ = self.resolved.set(ResolvedInheritance {
+            final_nodes,
+            final_node_deps,
+        });
+        Ok(())
+    }
+
+    /// Get the effective nodes for rendering.
+    /// Returns resolved final nodes if inheritance was resolved, original nodes otherwise.
+    fn effective_nodes(&self) -> &[Node] {
+        if let Some(resolved) = self.resolved.get() {
+            &resolved.final_nodes
+        } else {
+            &self.nodes
+        }
+    }
+
+    /// Get the effective node deps for partial rendering.
+    fn effective_node_deps(&self) -> &[HashSet<String>] {
+        if let Some(resolved) = self.resolved.get() {
+            &resolved.final_node_deps
+        } else {
+            &self.node_deps
+        }
+    }
+
     pub fn render(&self, context: &Context) -> Result<String> {
         self.render_with_loader(context, &NoOpTemplateLoader)
     }
@@ -79,12 +129,12 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<(String, Vec<String>)> {
-        renderer::render_nodes_collecting(&self.nodes, context, Some(loader))
+        renderer::render_nodes_collecting(self.effective_nodes(), context, Some(loader))
     }
 
     /// Partial render: re-render only nodes whose deps intersect `changed_keys`.
     ///
-    /// Falls back to a full collecting render when the template uses `{% extends %}`.
+    /// Falls back to a full collecting render when `{% extends %}` hasn't been resolved.
     /// Returns `(full_html, new_fragment_cache, changed_node_indices)`.
     pub fn render_with_loader_partial<L: TemplateLoader>(
         &self,
@@ -93,8 +143,8 @@ impl Template {
         changed_keys: &HashSet<String>,
         node_html_cache: &[String],
     ) -> Result<(String, Vec<String>, Vec<usize>)> {
-        if self.uses_extends() {
-            // Fall back to full render for templates using inheritance
+        if self.uses_extends() && self.resolved.get().is_none() {
+            // Extends not yet resolved — fall back to full render
             let (html, fragments) =
                 renderer::render_nodes_collecting(&self.nodes, context, Some(loader))?;
             let changed: Vec<usize> = (0..fragments.len()).collect();
@@ -102,8 +152,8 @@ impl Template {
         }
 
         renderer::render_nodes_partial(
-            &self.nodes,
-            &self.node_deps,
+            self.effective_nodes(),
+            self.effective_node_deps(),
             context,
             Some(loader),
             changed_keys,
@@ -117,24 +167,19 @@ impl Template {
         context: &Context,
         loader: &L,
     ) -> Result<String> {
+        // Use cached resolved nodes if available
+        if let Some(resolved) = self.resolved.get() {
+            return render_nodes_with_loader(&resolved.final_nodes, context, Some(loader));
+        }
+
         // Check if template uses inheritance
-        let uses_extends = self
-            .nodes
-            .iter()
-            .any(|node| matches!(node, Node::Extends(_)));
-
-        if uses_extends {
-            // Build inheritance chain
+        if self.uses_extends() {
+            // Build inheritance chain (not cached — call resolve_inheritance() first)
             let chain = build_inheritance_chain(self.nodes.clone(), loader, 10)?;
-
-            // Get root template nodes with block overrides applied
             let root_nodes = chain.get_root_nodes();
             let final_nodes = chain.apply_block_overrides(root_nodes);
-
-            // Render the merged template with loader for {% include %} support
             render_nodes_with_loader(&final_nodes, context, Some(loader))
         } else {
-            // No inheritance, render with loader for {% include %} support
             render_nodes_with_loader(&self.nodes, context, Some(loader))
         }
     }
