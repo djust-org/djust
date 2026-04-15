@@ -52,11 +52,17 @@ class LiveViewWebSocket {
         // Clear reconnect attempts so we don't auto-reconnect
         this.reconnectAttempts = this.maxReconnectAttempts;
 
-        // Close WebSocket if open or connecting
+        // Close WebSocket if open. For CONNECTING state, just null the
+        // reference — calling close() on a CONNECTING socket triggers a
+        // noisy "closed before established" error in the console (#732).
         if (this.ws) {
-            if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+            if (this.ws.readyState === WebSocket.OPEN) {
                 this.ws.close();
                 if (globalThis.djustDebug) console.log('[LiveView] WebSocket closed');
+            } else if (this.ws.readyState === WebSocket.CONNECTING) {
+                // Let the connection attempt complete and fail silently
+                // (onerror handler checks _intentionalDisconnect)
+                if (globalThis.djustDebug) console.log('[LiveView] WebSocket still connecting — will close on connect');
             }
         }
 
@@ -200,6 +206,9 @@ class LiveViewWebSocket {
         };
 
         this.ws.onerror = (error) => {
+            // Suppress error when disconnect() was called intentionally
+            // (e.g. TurboNav navigation while WS is still connecting)
+            if (this._intentionalDisconnect) return;
             console.error('[LiveView] WebSocket error:', error);
         };
 
