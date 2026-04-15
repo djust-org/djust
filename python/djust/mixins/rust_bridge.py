@@ -398,6 +398,12 @@ class RustBridgeMixin:
             if safe_keys:
                 self._rust_view.mark_safe_keys(safe_keys)
 
+            # Tell Rust which context keys changed for partial rendering.
+            # Only call when there are actual changes — an empty list would tell
+            # Rust "nothing changed" and it would return fully cached HTML.
+            if prev_refs and context:
+                self._rust_view.set_changed_keys(list(context.keys()))
+
             # Mark static assigns as sent — subsequent syncs will skip them
             if getattr(self, "static_assigns", None) and not getattr(
                 self, "_static_assigns_sent", False

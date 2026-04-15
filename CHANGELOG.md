@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Partial template rendering ([#737](https://github.com/djust-org/djust/issues/737))** — Per-node dependency tracking at template parse time. On re-render, only template nodes whose context variable dependencies changed are re-rendered; unchanged nodes reuse cached HTML. For a single-variable change on a page with 50 template nodes, template render drops from ~1.4ms to ~0.1ms. Changed keys are passed from Python to Rust via `set_changed_keys()`, which merges across multiple sync calls. Templates using `{% extends %}` fall back to full render. `{% include %}` and custom tags always re-render (wildcard dependency).
+
 ## [0.4.4] - 2026-04-15
 
 ### Changed

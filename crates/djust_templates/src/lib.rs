@@ -11,7 +11,7 @@ use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub mod filters;
 pub mod inheritance;
@@ -40,21 +40,75 @@ static TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{%([^%]+)%\}").unwrap
 pub struct Template {
     nodes: Vec<Node>,
     source: String,
+    /// Per-node dependency sets for partial rendering optimisation.
+    node_deps: Vec<HashSet<String>>,
 }
 
 impl Template {
     pub fn new(source: &str) -> Result<Self> {
         let tokens = lexer::tokenize(source)?;
         let nodes = parser::parse(&tokens)?;
+        let node_deps = parser::extract_per_node_deps(&nodes);
 
         Ok(Self {
             nodes,
             source: source.to_string(),
+            node_deps,
         })
+    }
+
+    /// Per-node dependency sets (top-level context variable names each node uses).
+    pub fn node_deps(&self) -> &[HashSet<String>] {
+        &self.node_deps
+    }
+
+    /// Returns `true` if this template uses `{% extends %}` inheritance.
+    pub fn uses_extends(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| matches!(node, Node::Extends(_)))
     }
 
     pub fn render(&self, context: &Context) -> Result<String> {
         self.render_with_loader(context, &NoOpTemplateLoader)
+    }
+
+    /// Render all nodes, returning full HTML and per-node fragment cache.
+    pub fn render_with_loader_collecting<L: TemplateLoader>(
+        &self,
+        context: &Context,
+        loader: &L,
+    ) -> Result<(String, Vec<String>)> {
+        renderer::render_nodes_collecting(&self.nodes, context, Some(loader))
+    }
+
+    /// Partial render: re-render only nodes whose deps intersect `changed_keys`.
+    ///
+    /// Falls back to a full collecting render when the template uses `{% extends %}`.
+    /// Returns `(full_html, new_fragment_cache, changed_node_indices)`.
+    pub fn render_with_loader_partial<L: TemplateLoader>(
+        &self,
+        context: &Context,
+        loader: &L,
+        changed_keys: &HashSet<String>,
+        node_html_cache: &[String],
+    ) -> Result<(String, Vec<String>, Vec<usize>)> {
+        if self.uses_extends() {
+            // Fall back to full render for templates using inheritance
+            let (html, fragments) =
+                renderer::render_nodes_collecting(&self.nodes, context, Some(loader))?;
+            let changed: Vec<usize> = (0..fragments.len()).collect();
+            return Ok((html, fragments, changed));
+        }
+
+        renderer::render_nodes_partial(
+            &self.nodes,
+            &self.node_deps,
+            context,
+            Some(loader),
+            changed_keys,
+            node_html_cache,
+        )
     }
 
     /// Render with a custom template loader for inheritance and {% include %} support
@@ -356,5 +410,132 @@ mod tests {
         assert!(result.contains("<li>B</li>"));
         assert!(result.contains("<li>C</li>"));
         assert!(result.contains("</ul>"));
+    }
+
+    // ── Partial rendering tests ──────────────────────────────────────
+
+    #[test]
+    fn test_extract_per_node_deps() {
+        let source = "Hello {{ name }}! {% if active %}Active{% endif %}{% for item in items %}{{ item }}{% endfor %}";
+        let template = Template::new(source).unwrap();
+        let deps = template.node_deps();
+
+        // Node 0: Text("Hello ") — no deps
+        assert!(deps[0].is_empty(), "Text node should have no deps");
+        // Node 1: Variable("name") — deps = {"name"}
+        assert!(
+            deps[1].contains("name"),
+            "Variable node should depend on 'name'"
+        );
+        // Node 2: Text("! ") — no deps
+        assert!(deps[2].is_empty());
+        // Node 3: If { condition: "active" ... } — deps include "active"
+        assert!(deps[3].contains("active"));
+        // Node 4: For { iterable: "items" ... } — deps include "items"
+        assert!(deps[4].contains("items"));
+    }
+
+    #[test]
+    fn test_render_nodes_collecting() {
+        let source = "<p>{{ greeting }}</p> <span>{{ name }}</span>";
+        let template = Template::new(source).unwrap();
+
+        let mut context = Context::new();
+        context.set("greeting".to_string(), Value::String("Hello".to_string()));
+        context.set("name".to_string(), Value::String("World".to_string()));
+
+        let (full, fragments) = template
+            .render_with_loader_collecting(&context, &NoOpTemplateLoader)
+            .unwrap();
+
+        // Fragments should concatenate to full HTML
+        let concatenated: String = fragments.iter().cloned().collect();
+        assert_eq!(full, concatenated);
+        assert!(full.contains("Hello"));
+        assert!(full.contains("World"));
+    }
+
+    #[test]
+    fn test_render_nodes_partial_skips_unchanged() {
+        let source = "<p>{{ greeting }}</p><span>{{ name }}</span>";
+        let template = Template::new(source).unwrap();
+
+        let mut context = Context::new();
+        context.set("greeting".to_string(), Value::String("Hello".to_string()));
+        context.set("name".to_string(), Value::String("World".to_string()));
+
+        // First: full collecting render to populate cache
+        let (_full, fragments) = template
+            .render_with_loader_collecting(&context, &NoOpTemplateLoader)
+            .unwrap();
+
+        // Now change only "name"
+        context.set("name".to_string(), Value::String("Rust".to_string()));
+        let changed_keys: HashSet<String> = ["name".to_string()].into_iter().collect();
+
+        let (partial_html, new_fragments, changed_indices) = template
+            .render_with_loader_partial(&context, &NoOpTemplateLoader, &changed_keys, &fragments)
+            .unwrap();
+
+        // The output should contain the new name
+        assert!(partial_html.contains("Rust"));
+        // The greeting node should NOT have been re-rendered (not in changed_indices)
+        // Text nodes and the greeting variable node should be skipped
+        // Only the name variable node should be in changed_indices
+        assert!(
+            !changed_indices.is_empty(),
+            "At least one node should have been re-rendered"
+        );
+        // The "greeting" variable node (index 1) should NOT be in changed_indices
+        assert!(
+            !changed_indices.contains(&1),
+            "greeting node should be cached, not re-rendered"
+        );
+
+        // Verify the partial render matches what a full render would produce
+        let full_html = template
+            .render_with_loader(&context, &NoOpTemplateLoader)
+            .unwrap();
+        assert_eq!(partial_html, full_html);
+
+        // Verify new_fragments concatenate to the full output
+        let concatenated: String = new_fragments.iter().cloned().collect();
+        assert_eq!(partial_html, concatenated);
+    }
+
+    #[test]
+    fn test_partial_render_text_nodes_never_rerender() {
+        let source = "Static text {{ dynamic }}";
+        let template = Template::new(source).unwrap();
+
+        let mut context = Context::new();
+        context.set("dynamic".to_string(), Value::String("v1".to_string()));
+
+        let (_full, fragments) = template
+            .render_with_loader_collecting(&context, &NoOpTemplateLoader)
+            .unwrap();
+
+        context.set("dynamic".to_string(), Value::String("v2".to_string()));
+        let changed_keys: HashSet<String> = ["dynamic".to_string()].into_iter().collect();
+
+        let (_html, _new_frags, changed_indices) = template
+            .render_with_loader_partial(&context, &NoOpTemplateLoader, &changed_keys, &fragments)
+            .unwrap();
+
+        // Text node (index 0) should NOT be re-rendered
+        assert!(
+            !changed_indices.contains(&0),
+            "Text node should never re-render"
+        );
+    }
+
+    #[test]
+    fn test_uses_extends() {
+        let plain = Template::new("<p>Hello</p>").unwrap();
+        assert!(!plain.uses_extends());
+
+        let extending =
+            Template::new("{% extends \"base.html\" %}{% block content %}X{% endblock %}").unwrap();
+        assert!(extending.uses_extends());
     }
 }

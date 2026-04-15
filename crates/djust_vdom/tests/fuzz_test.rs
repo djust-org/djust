@@ -166,6 +166,7 @@ fn arb_fully_keyed_inner(
                         text: None,
                         key: Some(key.clone()),
                         djust_id: None,
+                        cached_html: None,
                     })
                     .boxed()
                 } else {
@@ -189,6 +190,7 @@ fn arb_fully_keyed_inner(
                                 text: None,
                                 key: Some(key.clone()),
                                 djust_id: None,
+                                cached_html: None,
                             }
                         })
                         .boxed()
