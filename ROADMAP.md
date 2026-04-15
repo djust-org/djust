@@ -76,7 +76,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P1** | Cache VDOM subtrees for `dj-update="ignore"` sections | Skip html5ever re-parse of unchanged sections (~10ms savings) | v0.4.5 |
 | **P2** | Skip `to_html()` for unchanged VDOM subtrees | Avoid re-serializing static HTML (~3ms savings) | v0.4.5 |
 | **P2** | Reduce Python→Rust serialization overhead | Cache safe_keys, eliminate JSON round-trip (~5ms savings) | v0.4.5 |
-| **P3** | WebSocket close race on TurboNav (#732) | Cosmetic console error on non-LiveView → LiveView navigation | v0.4.5 |
+| ~~**P3**~~ | ~~WebSocket close race on TurboNav (#732)~~ ✅ | ~~Fixed in PR #734~~ | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |
@@ -476,7 +476,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 - Pass patches as pre-parsed Python list from Rust via PyO3 (eliminate JSON round-trip)
 - Reduce `normalize_django_value()` traversal for unchanged context
 
-**WebSocket close race on TurboNav (#732)** — Cosmetic: navigating from non-LiveView to LiveView page produces a WebSocket error in the console. Guard `disconnect()` to check `readyState` before closing.
+~~**WebSocket close race on TurboNav (#732)**~~ ✅ — Suppress onerror when `_intentionalDisconnect` is true; don't call `close()` on CONNECTING websockets. Merged as PR #734.
 
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
