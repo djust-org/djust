@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Remove double `updateHooks()`/`bindModelElements()` scanning** — These were called in both `applyPatches()` and `reinitAfterDOMUpdate()`, scanning the full DOM twice per patch cycle. Removed from `applyPatches()`. Saves ~5ms per event.
+
+- **Skip scoped listener scan after first mount** — The `querySelectorAll('*')` scan for `dj-window-*`/`dj-document-*` elements now only runs once at mount time, not after every patch. Saves ~10ms per event on large pages.
+
+- **Use `orjson.loads()` for patch JSON parsing** — 2-3x faster than stdlib `json.loads()` when orjson is installed. Falls back gracefully.
+
+- **Gate debug payload behind panel open state** — `get_debug_update()` (dir + getattr + json.dumps per attribute) only runs when the debug panel is actually open, not on every event in DEBUG mode. Saves ~2-5ms per event.
+
 ## [0.4.4rc1] - 2026-04-15
 
 ### Fixed
