@@ -1995,6 +1995,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     # VDOM diffing, even though they share one thread hop.
                                     batch_node.metadata["context_prep_ms"] = ctx_ms
                                     batch_node.metadata["vdom_diff_ms"] = diff_ms
+                                    # Per-phase Rust timing (template render, HTML parse, VDOM diff, serialize)
+                                    rust_timing = getattr(
+                                        self.view_instance, "_rust_render_timing", None
+                                    )
+                                    if rust_timing:
+                                        batch_node.metadata["rust_timing"] = rust_timing
                                     tracker.track_context_size(context)
 
                                     patch_list = None  # Initialize for later use

@@ -541,6 +541,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         result = self._rust_view.render_with_diff()
         html, patches_json, version = result
 
+        # Capture per-phase Rust timing (render, parse, diff, serialize)
+        self._rust_render_timing = self._rust_view.get_render_timing()
+
         logger.debug(
             "[LiveView] Rendered HTML length: %d chars, starts with: %s...",
             len(html),
