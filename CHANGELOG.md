@@ -7,15 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-04-15
+
 ### Changed
 
 - **Remove double `updateHooks()`/`bindModelElements()` scanning** — These were called in both `applyPatches()` and `reinitAfterDOMUpdate()`, scanning the full DOM twice per patch cycle. Removed from `applyPatches()`. Saves ~5ms per event.
 
-- **Skip scoped listener scan after first mount** — The `querySelectorAll('*')` scan for `dj-window-*`/`dj-document-*` elements now only runs once at mount time, not after every patch. Saves ~10ms per event on large pages.
+- **Delegated scoped listeners (dj-window-*, dj-document-*)** — Replaced `querySelectorAll('*')` full DOM scan with a registry-based delegation pattern. Scoped elements are scanned once at mount time and registered in a Map. Event listeners on window/document dispatch to the registry. Handles dotted attribute variants (dj-window-keydown.escape).
 
 - **Use `orjson.loads()` for patch JSON parsing** — 2-3x faster than stdlib `json.loads()` when orjson is installed. Falls back gracefully.
 
-- **Gate debug payload behind panel open state** — `get_debug_update()` (dir + getattr + json.dumps per attribute) only runs when the debug panel is actually open, not on every event in DEBUG mode. Saves ~2-5ms per event.
+- **Gate debug payload behind panel open state** — `get_debug_update()` (dir + getattr + json.dumps per attribute) only runs when the debug panel is actually open, not on every event in DEBUG mode. Saves ~2-5ms per event. Panel sends `debug_panel_open`/`debug_panel_close` WS messages on toggle.
 
 ## [0.4.4rc1] - 2026-04-15
 
