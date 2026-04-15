@@ -2809,7 +2809,8 @@ function _applyDisableWith(element) {
 const _inputRateLimitState = new WeakMap();
 const _changeRateLimitState = new WeakMap();
 const _clickRateLimitState = new WeakMap();
-const _keyboardRateLimitState = new WeakMap();
+const _keydownRateLimitState = new WeakMap();
+const _keyupRateLimitState = new WeakMap();
 
 // Helper: Extract field name from element attributes
 // Priority: data-field (explicit) > name (standard) > id (fallback)
@@ -3409,28 +3410,18 @@ function installDelegatedListeners(root) {
         var keyEl = e.target.closest('[dj-keydown]');
         if (keyEl) {
             var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
-            var wrapped = _getOrCreateRateLimitedHandler(_keyboardRateLimitState, keyEl, 'keydown', rawHandler);
+            var wrapped = _getOrCreateRateLimitedHandler(_keydownRateLimitState, keyEl, 'keydown', rawHandler);
             wrapped(e);
         }
     });
 
-    // keyup → dj-keyup
+    // keyup → dj-keyup (separate WeakMap from keydown to avoid handler collision)
     on('keyup', function(e) {
         var keyEl = e.target.closest('[dj-keyup]');
         if (keyEl) {
             var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
-            // keyup shares the keyboard state map but different element keys won't collide
-            // since WeakMap is keyed by element object
-            var state = _keyboardRateLimitState.get(keyEl);
-            if (!state) {
-                var wrappedKu = _applyRateLimitAttrs(keyEl, rawHandler);
-                if (wrappedKu === rawHandler && window.djust.rateLimit) {
-                    wrappedKu = window.djust.rateLimit.wrapWithRateLimit(keyEl, 'keyup', rawHandler);
-                }
-                _keyboardRateLimitState.set(keyEl, { wrapped: wrappedKu });
-                state = _keyboardRateLimitState.get(keyEl);
-            }
-            state.wrapped(e);
+            var wrapped = _getOrCreateRateLimitedHandler(_keyupRateLimitState, keyEl, 'keyup', rawHandler);
+            wrapped(e);
         }
     });
 
@@ -7225,9 +7216,14 @@ window.djust.getActiveStreams = getActiveStreams;
         // Scroll to top on navigation (or to anchor if present)
         var hash = newUrl.hash;
         if (hash) {
-            var target = document.querySelector(hash);
-            if (target) {
-                target.scrollIntoView({ behavior: 'instant' });
+            try {
+                var target = document.querySelector(hash);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'instant' });
+                }
+            } catch (_e) {
+                // Malformed hash (e.g. "#foo[bar]") — fall through to scroll top
+                window.scrollTo({ top: 0, behavior: 'instant' });
             }
         } else {
             window.scrollTo({ top: 0, behavior: 'instant' });

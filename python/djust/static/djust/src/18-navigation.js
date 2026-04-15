@@ -81,9 +81,14 @@
         // Scroll to top on navigation (or to anchor if present)
         var hash = newUrl.hash;
         if (hash) {
-            var target = document.querySelector(hash);
-            if (target) {
-                target.scrollIntoView({ behavior: 'instant' });
+            try {
+                var target = document.querySelector(hash);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'instant' });
+                }
+            } catch (_e) {
+                // Malformed hash (e.g. "#foo[bar]") — fall through to scroll top
+                window.scrollTo({ top: 0, behavior: 'instant' });
             }
         } else {
             window.scrollTo({ top: 0, behavior: 'instant' });
