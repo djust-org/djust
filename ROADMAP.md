@@ -75,7 +75,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P2**~~ | ~~Document `\|date` filter Django compatibility gaps (#726)~~ ✅ | ~~Doc comment added in PR #727~~ | v0.4.3 |
 | ~~**P1**~~ | ~~Cache VDOM subtrees for `dj-update="ignore"` sections~~ ✅ | ~~Rust serialize 5.8ms→0.7ms, PR #735~~ | v0.4.5 |
 | ~~**P2**~~ | ~~Skip `to_html()` for unchanged VDOM subtrees~~ ✅ | ~~Solved by cached_html in PR #735~~ | v0.4.5 |
-| **P2** | Reduce Python→Rust serialization overhead | Cache safe_keys, eliminate JSON round-trip (~5ms savings) | v0.4.5 |
+| ~~**P2**~~ | ~~Reduce Python→Rust serialization overhead~~ ✅ | ~~Fast path for primitives, PR #736~~ | v0.4.5 |
 | ~~**P3**~~ | ~~WebSocket close race on TurboNav (#732)~~ ✅ | ~~Fixed in PR #734~~ | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
@@ -471,10 +471,7 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**Skip `to_html()` serialization for unchanged VDOM subtrees**~~ ✅ — Solved by the `cached_html` field on VNode, populated by `cache_ignore_subtree_html()`. Merged as PR #735.
 
-**Reduce Python→Rust serialization overhead** — The gap between Rust total (21ms) and server total (42ms) is ~21ms of Python overhead: `_sync_state_to_rust()` context building, `normalize_django_value()` traversal, `json.loads(patches)` round-trip, `sync_to_async` thread hop. Targets:
-- Cache `_collect_safe_keys()` results for unchanged context keys
-- Pass patches as pre-parsed Python list from Rust via PyO3 (eliminate JSON round-trip)
-- Reduce `normalize_django_value()` traversal for unchanged context
+~~**Reduce Python→Rust serialization overhead**~~ ✅ — Fast path for primitives: skip `_collect_safe_keys()` recursion and `normalize_django_value()` traversal for int/float/bool/None/str. Direct SafeString check for strings. Merged as PR #736.
 
 ~~**WebSocket close race on TurboNav (#732)**~~ ✅ — Suppress onerror when `_intentionalDisconnect` is true; don't call `close()` on CONNECTING websockets. Merged as PR #734.
 
