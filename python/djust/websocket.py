@@ -841,6 +841,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         if not getattr(settings, "DEBUG", False):
             return
+
+        # The debug payload (dir() + getattr + json.dumps per attribute) adds
+        # ~2-5ms per event. Only compute it when the debug panel is open.
+        # The panel sends a 'debug_panel_open' message to activate this.
+        if not getattr(self, "_debug_panel_active", False):
+            return
         if not self.view_instance:
             return
 
@@ -1071,6 +1077,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_cursor_move(data)
             elif msg_type == "request_html":
                 await self.handle_request_html(data)
+            elif msg_type == "debug_panel_open":
+                self._debug_panel_active = True
+            elif msg_type == "debug_panel_close":
+                self._debug_panel_active = False
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
