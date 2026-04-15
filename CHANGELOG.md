@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Partial template rendering ([#737](https://github.com/djust-org/djust/issues/737))** — Per-node dependency tracking at template parse time. On re-render, only template nodes whose context variable dependencies changed are re-rendered; unchanged nodes reuse cached HTML. For a single-variable change on a page with 50 template nodes, template render drops from ~1.4ms to ~0.1ms. Changed keys are passed from Python to Rust via `set_changed_keys()`, which merges across multiple sync calls. Templates using `{% extends %}` fall back to full render. `{% include %}` and custom tags always re-render (wildcard dependency).
+- **Partial template rendering ([#737](https://github.com/djust-org/djust/issues/737))** — Per-node dependency tracking at template parse time. On re-render, only template nodes whose context variable dependencies changed are re-rendered; unchanged nodes reuse cached HTML. For a single-variable change on a page with 50 template nodes, template render drops from ~1.4ms to ~0.1ms. Changed keys are passed from Python to Rust via `set_changed_keys()`, which merges across multiple sync calls. `{% include %}` and custom tags always re-render (wildcard dependency).
+
+- **`{% extends %}` inheritance resolution caching** — Templates using `{% extends %}` now participate in partial rendering. Inheritance is resolved once via `OnceLock<ResolvedInheritance>` on the `Template` struct (shared via `TEMPLATE_CACHE`). Final merged nodes and their deps are cached, so subsequent renders skip both chain building and static parent nodes. Combined with partial rendering, extends templates go from full re-render (~14ms Rust) to partial render of changed nodes only (~0.02ms Rust).
+
+- **Text-only VDOM fast path** — When all changed template fragments are plain text (no HTML tags), skip both html5ever parsing and VDOM diffing entirely. The old VDOM is mutated in-place via a fragment→text-node map built on first render, and SetText patches are produced directly. For counter-style updates: parse phase drops from ~12ms to ~0.001ms.
 
 ## [0.4.4] - 2026-04-15
 

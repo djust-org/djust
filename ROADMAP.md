@@ -81,6 +81,8 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~Changed keys bridge Python→Rust (#737 phase 2)~~ ✅ | ~~Pass _changed_keys to Rust so it knows which context vars changed, PR #738~~ | v0.4.5 |
 | ~~**P0**~~ | ~~Partial template render + VDOM splice (#737 phase 3)~~ ✅ | ~~Skip unchanged nodes, parse only changed fragments — template render 1.4ms→0.1ms, PR #738~~ | v0.4.5 |
 | ~~**P2**~~ | ~~Lazy context via dependency map (#737 phase 4)~~ ✅ | ~~Investigation: already optimized — incremental sync only sends changed keys, SafeString scan skips unchanged~~ | v0.4.5 |
+| ~~**P0**~~ | ~~Extends inheritance resolution caching (#737 phase 3b)~~ ✅ | ~~OnceLock on Template for resolved nodes — extends templates use partial render, Rust 14ms→0.02ms~~ | v0.4.5 |
+| ~~**P1**~~ | ~~Text-only VDOM fast path (#737 phase 3b)~~ ✅ | ~~Skip html5ever + diff for text changes — parse 12ms→0.001ms, in-place VDOM mutation~~ | v0.4.5 |
 | ~~**P2**~~ | ~~`set()` not JSON-serializable as public state (#626)~~ ✅ | ~~`set` in view state crashes serialization — common Python type~~ | v0.4.2 |
 | ~~**P2**~~ | ~~`dict` state deserialized as `list` after Rust sync (#612)~~ ✅ | ~~Round-trip through Rust state sync corrupts dict → list~~ | v0.4.2 |
 | ~~**P2**~~ | ~~VDOM patcher should handle `autofocus` on inserted elements (#617)~~ ✅ | ~~Dynamically inserted inputs don't receive focus even with `autofocus` attr~~ | v0.4.2 |

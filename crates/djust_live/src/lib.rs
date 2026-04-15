@@ -24,7 +24,7 @@ use djust_templates::inheritance::FilesystemTemplateLoader;
 use djust_templates::Template;
 use djust_vdom::{
     cache_ignore_subtree_html, diff, parse_html, parse_html_continue, reset_id_counter,
-    splice_ignore_subtrees, sync_ids, VNode,
+    splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, VNode,
 };
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -92,6 +92,9 @@ pub struct RustLiveViewBackend {
     template_source: String,
     state: HashMap<String, Value>,
     last_vdom: Option<VNode>,
+    /// Cached HTML from the last render, used for text-only fast path detection.
+    /// Not serialized — transient cache that's rebuilt on next render.
+    last_html: Option<String>,
     /// Version number incremented on each render, used for VDOM synchronization
     version: u64,
     /// Unix timestamp when this view was last serialized (for session age tracking)
@@ -106,6 +109,9 @@ pub struct RustLiveViewBackend {
     node_html_cache: Vec<String>,
     /// Context keys that changed since the last render (None = full render)
     changed_keys: Option<HashSet<String>>,
+    /// Maps template node index → (VDOM path, djust_id) for text-only fragments.
+    /// Built after first render by matching fragment text to VDOM text nodes.
+    fragment_text_map: Option<HashMap<usize, (Vec<usize>, String)>>,
 }
 
 #[pymethods]
@@ -117,6 +123,7 @@ impl RustLiveViewBackend {
             template_source,
             state: HashMap::new(),
             last_vdom: None,
+            last_html: None,
             version: 0,
             timestamp: 0.0, // Will be set on first serialization
             template_dirs: template_dirs
@@ -128,6 +135,7 @@ impl RustLiveViewBackend {
             last_render_timing: None,
             node_html_cache: Vec::new(),
             changed_keys: None,
+            fragment_text_map: None,
         }
     }
 
@@ -175,6 +183,8 @@ impl RustLiveViewBackend {
     fn update_template(&mut self, new_template_source: String) {
         self.template_source = new_template_source;
         self.node_html_cache = Vec::new(); // Invalidate partial render cache
+        self.last_html = None; // Invalidate text fast path cache
+        self.fragment_text_map = None; // Invalidate fragment→VDOM map
     }
 
     /// Get current state
@@ -191,6 +201,7 @@ impl RustLiveViewBackend {
         // Invalidate partial render cache — render() bypasses the diff pipeline
         // so the cache would be stale for the next render_with_diff() call.
         self.node_html_cache = Vec::new();
+        self.last_html = None; // Invalidate text fast path cache
 
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
@@ -239,51 +250,133 @@ impl RustLiveViewBackend {
         let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
 
-        let html = if !self.node_html_cache.is_empty()
-            && self.changed_keys.is_some()
-            && !template_arc.uses_extends()
-        {
-            // Partial render: only re-render nodes whose deps changed
-            let changed = self.changed_keys.take().unwrap_or_default();
-            let (html, fragments, _changed_indices) = template_arc.render_with_loader_partial(
-                &context,
-                &loader,
-                &changed,
-                &self.node_html_cache,
-            )?;
-            self.node_html_cache = fragments;
-            html
-        } else {
-            // Full render: first render or no change info
-            self.changed_keys = None;
-            let (html, fragments) =
-                template_arc.render_with_loader_collecting(&context, &loader)?;
-            self.node_html_cache = fragments;
-            html
-        };
+        // Resolve {% extends %} inheritance once (cached on Template via OnceLock)
+        if template_arc.uses_extends() {
+            template_arc.resolve_inheritance(&loader)?;
+        }
+
+        // Track old fragments for text-fast-path comparison
+        let old_node_cache = self.node_html_cache.clone();
+        let (html, changed_indices) =
+            if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
+                // Partial render: only re-render nodes whose deps changed
+                let changed = self.changed_keys.take().unwrap_or_default();
+                let (html, fragments, changed_indices) = template_arc.render_with_loader_partial(
+                    &context,
+                    &loader,
+                    &changed,
+                    &self.node_html_cache,
+                )?;
+                self.node_html_cache = fragments;
+                (html, changed_indices)
+            } else {
+                // Full render: first render or no change info
+                self.changed_keys = None;
+                let (html, fragments) =
+                    template_arc.render_with_loader_collecting(&context, &loader)?;
+                self.node_html_cache = fragments;
+                (html, vec![])
+            };
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Phase 2: HTML parse to VDOM
+        // Text-fast-path: if ALL changed fragments are plain text (no HTML tags),
+        // skip html5ever + diff entirely and produce SetText patches directly.
         let t_parse_start = Instant::now();
-        let mut new_vdom = if self.last_vdom.is_some() {
-            parse_html_continue(&html)
+        let text_fast_path = if !changed_indices.is_empty() && self.last_vdom.is_some() {
+            // Check if all changed fragments are plain text
+            let mut all_text = true;
+            let mut text_changes: Vec<(usize, String, String)> = Vec::new();
+            for &idx in &changed_indices {
+                let old_frag = old_node_cache.get(idx).map(|s| s.as_str()).unwrap_or("");
+                let new_frag = self
+                    .node_html_cache
+                    .get(idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                if old_frag != new_frag {
+                    // Check if both fragments are plain text (no HTML tags)
+                    if old_frag.contains('<') || new_frag.contains('<') {
+                        all_text = false;
+                        break;
+                    }
+                    text_changes.push((idx, old_frag.to_string(), new_frag.to_string()));
+                }
+            }
+            if all_text && !text_changes.is_empty() {
+                // Use the fragment text map to produce patches directly.
+                // First verify all fragments have mappings, then apply.
+                if let Some(ref frag_map) = self.fragment_text_map {
+                    let all_mapped = text_changes
+                        .iter()
+                        .all(|(idx, _, _)| frag_map.contains_key(idx));
+                    if all_mapped {
+                        let mut vdom = self.last_vdom.take().unwrap();
+                        let mut patches = Vec::new();
+                        for (idx, _old_text, new_text) in &text_changes {
+                            let (path, djust_id) = frag_map.get(idx).unwrap();
+                            if let Some(node) = get_vdom_node_mut(&mut vdom, path) {
+                                node.text = Some(new_text.clone());
+                                node.cached_html = None;
+                            }
+                            let d = if djust_id.is_empty() {
+                                None
+                            } else {
+                                Some(djust_id.clone())
+                            };
+                            patches.push(djust_vdom::Patch::SetText {
+                                path: path.clone(),
+                                d,
+                                text: new_text.clone(),
+                            });
+                        }
+                        Some((vdom, patches))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         } else {
-            parse_html(&html)
-        }
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
+            None
+        };
 
-        // Optimization: splice old VDOM subtrees for dj-update="ignore" nodes.
-        // This makes the diff see identical subtrees (zero patches) and
-        // preserves cached HTML for to_html() (skip serialization).
-        if let Some(old_vdom) = &self.last_vdom {
-            splice_ignore_subtrees(old_vdom, &mut new_vdom);
-        }
+        let (mut new_vdom, patches, parse_ms, diff_ms) = if let Some((vdom, text_patches)) =
+            text_fast_path
+        {
+            let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
+            let patches_json =
+                if text_patches.is_empty() {
+                    Some("[]".to_string())
+                } else {
+                    Some(serde_json::to_string(&text_patches).map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
+                    })?)
+                };
+            (vdom, patches_json, parse_ms, 0.0)
+        } else {
+            // Full html5ever parse
+            let new_vdom = if self.last_vdom.is_some() {
+                parse_html_continue(&html)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+            } else {
+                parse_html(&html)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+            };
+            let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Phase 3: VDOM diff
-        let t_diff_start = Instant::now();
-        let patches =
+            // Splice ignore subtrees
+            let mut new_vdom = new_vdom;
             if let Some(old_vdom) = &self.last_vdom {
+                splice_ignore_subtrees(old_vdom, &mut new_vdom);
+            }
+
+            // VDOM diff
+            let t_diff_start = Instant::now();
+            let patches = if let Some(old_vdom) = &self.last_vdom {
                 let patches = diff(old_vdom, &new_vdom);
                 sync_ids(old_vdom, &mut new_vdom);
                 if !patches.is_empty() {
@@ -296,7 +389,9 @@ impl RustLiveViewBackend {
             } else {
                 None
             };
-        let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
+            let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
+            (new_vdom, patches, parse_ms, diff_ms)
+        };
 
         // Phase 4: HTML serialization
         let t_serial_start = Instant::now();
@@ -319,8 +414,19 @@ impl RustLiveViewBackend {
         // to_html() calls skip serialization for those sections.
         cache_ignore_subtree_html(&mut new_vdom);
 
+        // Cache the rendered HTML for text-only fast path on next render
+        self.last_html = Some(html);
+
         self.last_vdom = Some(new_vdom);
         self.version += 1;
+
+        // Build fragment→VDOM text node map for text-fast-path on subsequent renders.
+        // Match each plain-text fragment to a VDOM text node by content.
+        if self.fragment_text_map.is_none() && !self.node_html_cache.is_empty() {
+            if let Some(ref vdom) = self.last_vdom {
+                self.fragment_text_map = Some(build_fragment_text_map(&self.node_html_cache, vdom));
+            }
+        }
 
         Ok((hydrated_html, patches, self.version))
     }
@@ -373,13 +479,29 @@ impl RustLiveViewBackend {
         let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Phase 2: HTML parse to VDOM
+        // Try text-only fast path: mutate old VDOM in-place if only text changed.
+        // Falls back to html5ever if structural changes detected.
         let t_parse_start = Instant::now();
-        let mut new_vdom = if self.last_vdom.is_some() {
+        let mut new_vdom = if let (Some(ref old_html), Some(_)) = (&self.last_html, &self.last_vdom)
+        {
+            let old_html = old_html.clone();
+            let mut vdom = self.last_vdom.take().unwrap();
+            if try_text_only_vdom_update_inplace(&mut vdom, &old_html, &html) {
+                vdom
+            } else {
+                // Structural change — fall back to full html5ever parse.
+                // Store the old vdom back temporarily for the diff phase.
+                self.last_vdom = Some(vdom);
+                parse_html_continue(&html)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+            }
+        } else if self.last_vdom.is_some() {
             parse_html_continue(&html)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
         } else {
             parse_html(&html)
-        }
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?
+        };
         let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
         // Splice old VDOM subtrees for dj-update="ignore" nodes
@@ -425,6 +547,9 @@ impl RustLiveViewBackend {
 
         cache_ignore_subtree_html(&mut new_vdom);
 
+        // Cache the rendered HTML for text-only fast path on next render
+        self.last_html = Some(html);
+
         self.last_vdom = Some(new_vdom);
         self.version += 1;
 
@@ -434,9 +559,11 @@ impl RustLiveViewBackend {
     /// Reset the view state
     fn reset(&mut self) {
         self.last_vdom = None;
+        self.last_html = None;
         self.version = 0;
         self.node_html_cache = Vec::new();
         self.changed_keys = None;
+        self.fragment_text_map = None;
         // Reset ID counter so next render starts fresh
         reset_id_counter();
     }
@@ -496,6 +623,7 @@ impl RustLiveViewBackend {
             template_source: serializable.template_source,
             state: serializable.state,
             last_vdom: serializable.last_vdom,
+            last_html: None, // Transient cache — rebuilt on next render
             version: serializable.version,
             timestamp: serializable.timestamp,
             template_dirs: Vec::new(),
@@ -503,6 +631,7 @@ impl RustLiveViewBackend {
             last_render_timing: None,
             node_html_cache: Vec::new(),
             changed_keys: None,
+            fragment_text_map: None,
         })
     }
 
@@ -1761,6 +1890,60 @@ fn python_to_json(_py: Python, value: &Bound<'_, PyAny>) -> PyResult<serde_json:
         Ok(s) => Ok(serde_json::Value::String(s.to_string())),
         Err(_) => Ok(serde_json::Value::Null),
     }
+}
+
+/// Build a map from template node index to VDOM text node path.
+/// For each fragment that's plain text (no HTML tags), find the matching
+/// text node in the VDOM by walking it depth-first and matching content.
+fn build_fragment_text_map(
+    fragments: &[String],
+    vdom: &VNode,
+) -> HashMap<usize, (Vec<usize>, String)> {
+    let mut map = HashMap::new();
+
+    // Collect all text nodes from the VDOM with their paths
+    let mut text_nodes: Vec<(Vec<usize>, String, String)> = Vec::new(); // (path, text, djust_id)
+    collect_vdom_text_nodes(vdom, &mut vec![], &mut text_nodes);
+
+    for (idx, frag) in fragments.iter().enumerate() {
+        // Only map text-only fragments (no HTML tags)
+        if frag.contains('<') || frag.is_empty() {
+            continue;
+        }
+        // Find the first matching text node
+        for (path, text, djust_id) in &text_nodes {
+            if text == frag {
+                map.insert(idx, (path.clone(), djust_id.clone()));
+                break;
+            }
+        }
+    }
+
+    map
+}
+
+fn collect_vdom_text_nodes(
+    node: &VNode,
+    current_path: &mut Vec<usize>,
+    entries: &mut Vec<(Vec<usize>, String, String)>,
+) {
+    if let Some(ref text) = node.text {
+        let djust_id = node.djust_id.clone().unwrap_or_default();
+        entries.push((current_path.clone(), text.clone(), djust_id));
+    }
+    for (i, child) in node.children.iter().enumerate() {
+        current_path.push(i);
+        collect_vdom_text_nodes(child, current_path, entries);
+        current_path.pop();
+    }
+}
+
+fn get_vdom_node_mut<'a>(vdom: &'a mut VNode, path: &[usize]) -> Option<&'a mut VNode> {
+    let mut node = vdom;
+    for &idx in path {
+        node = node.children.get_mut(idx)?;
+    }
+    Some(node)
 }
 
 #[pyfunction(name = "extract_template_variables")]
