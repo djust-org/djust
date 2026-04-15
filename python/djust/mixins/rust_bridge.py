@@ -341,9 +341,13 @@ class RustBridgeMixin:
                 if hasattr(value, "_dirty"):
                     object.__setattr__(value, "_dirty", False)
 
-            # Detect SafeString values before serialization loses the type info
+            # Detect SafeString values before serialization loses the type info.
+            # Fast path: skip _collect_safe_keys for JSON-native primitives
+            # (int, float, bool, str, None) which can never contain SafeString.
+            _JSON_PRIMITIVES = (int, float, bool, type(None))
             safe_keys = []
             rendered_context = {}
+            needs_normalize = False
             for key, value in context.items():
                 if isinstance(value, (Component, LiveComponent)):
                     # Render caching: skip render if component has clean cached HTML
@@ -360,20 +364,35 @@ class RustBridgeMixin:
                             pass  # Not all objects support attribute setting
                     rendered_context[key] = {"render": rendered_html}
                     safe_keys.append(key)
+                    needs_normalize = True
                 elif isinstance(value, forms.BaseForm):
-                    # Render each BoundField to a SafeString dict so that
-                    # {{ form.field_name }} works in LiveView templates.
                     from djust.serialization import render_form_value
 
                     rendered_context[key] = render_form_value(value)
                     for field_name in value.fields:
                         safe_keys.append(f"{key}.{field_name}")
+                    needs_normalize = True
+                elif isinstance(value, _JSON_PRIMITIVES):
+                    # Fast path: primitives are JSON-native and can't be SafeString
+                    rendered_context[key] = value
+                elif isinstance(value, str):
+                    # Strings: check SafeString directly (no recursion needed)
+                    from django.utils.safestring import SafeString
+
+                    if isinstance(value, SafeString):
+                        safe_keys.append(key)
+                    rendered_context[key] = value
                 else:
-                    # Recursively collect all safe keys (including nested)
+                    # Complex types (dict, list, etc.): full scan
                     safe_keys.extend(_collect_safe_keys(value, key))
                     rendered_context[key] = value
+                    needs_normalize = True
 
-            json_compatible_context = normalize_django_value(rendered_context)
+            # Skip normalize_django_value when context only has JSON-native types
+            if needs_normalize:
+                json_compatible_context = normalize_django_value(rendered_context)
+            else:
+                json_compatible_context = rendered_context
 
             self._rust_view.update_state(json_compatible_context)
             if safe_keys:
