@@ -188,6 +188,10 @@ impl RustLiveViewBackend {
 
     /// Render the template and return HTML
     fn render(&mut self) -> PyResult<String> {
+        // Invalidate partial render cache — render() bypasses the diff pipeline
+        // so the cache would be stale for the next render_with_diff() call.
+        self.node_html_cache = Vec::new();
+
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
             cached.clone()
