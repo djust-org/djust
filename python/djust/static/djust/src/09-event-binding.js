@@ -897,21 +897,17 @@ function bindLiveViewEvents(scope) {
 
     // Collect elements with dj-window-*/dj-document-* attributes.
     // These have dynamic attribute names (e.g. dj-window-keydown.escape)
-    // that CSS selectors can't match, so we scan all elements within root.
-    // Scoped listeners are static (set in template HTML, not dynamically added),
-    // so we only need to scan on initial mount, not after every VDOM patch.
-    if (window._djustScopedListenersBound) {
-        // Already scanned — skip the expensive querySelectorAll('*')
-    } else {
-    window._djustScopedListenersBound = true;
-    const scopedElements = root.querySelectorAll('*');
+    // that CSS selectors can't match (dots in attr names confuse the parser),
+    // so we scan all elements within root. The _isHandlerBound check inside
+    // the loop prevents double-binding, so this is safe to run repeatedly.
+    var scopedElements = root.querySelectorAll('*');
     for (const { prefix, target } of scopedPrefixes) {
         for (const evtType of scopedEventTypes) {
             // scroll and resize only make sense on window
             if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
 
             const attrBase = prefix + evtType;
-            // Scan elements for attributes starting with this prefix+eventType
+            // Scan matched elements for attributes starting with this prefix+eventType
             // (covers both exact matches and key-modifier variants like dj-window-keydown.escape)
             scopedElements.forEach(element => {
                 for (const attr of element.attributes) {
@@ -1073,8 +1069,6 @@ function bindLiveViewEvents(scope) {
 
         _addScopedListener(element, document, 'keydown', shortcutHandler, false);
     });
-    } // end scoped listeners guard
-
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
     globalLoadingManager.scanAndRegister();

@@ -72,9 +72,6 @@ window.addEventListener('turbo:load', function(_event) {
 function reinitLiveViewForTurboNav() {
     if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Reinitializing LiveView...');
 
-    // Reset scoped listener flag so new page's scoped listeners get bound
-    window._djustScopedListenersBound = false;
-
     // Disconnect existing WebSocket
     if (liveViewWS) {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Disconnecting existing WebSocket');

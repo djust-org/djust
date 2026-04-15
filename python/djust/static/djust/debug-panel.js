@@ -3816,26 +3816,12 @@
 
             this.renderTabContent();
             this.saveState();
-
-            // Tell the server to start sending debug payloads
-            if (window.djust && window.djust.liveViewInstance && window.djust.liveViewInstance.ws) {
-                try {
-                    window.djust.liveViewInstance.ws.send(JSON.stringify({ type: 'debug_panel_open' }));
-                } catch (_e) { /* WS not ready */ }
-            }
         }
 
         close() {
             this.state.isOpen = false;
             this.panel.setAttribute('style', 'display: none !important;');
             this.saveState();
-
-            // Tell the server to stop sending debug payloads
-            if (window.djust && window.djust.liveViewInstance && window.djust.liveViewInstance.ws) {
-                try {
-                    window.djust.liveViewInstance.ws.send(JSON.stringify({ type: 'debug_panel_close' }));
-                } catch (_e) { /* WS not ready */ }
-            }
         }
 
         toggle() {

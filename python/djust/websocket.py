@@ -843,9 +843,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         # The debug payload (dir() + getattr + json.dumps per attribute) adds
-        # ~2-5ms per event. Only compute it when the debug panel is open.
-        # The panel sends a 'debug_panel_open' message to activate this.
-        if not getattr(self, "_debug_panel_active", False):
+        # ~2-5ms per event. Skip it when the debug panel is explicitly closed.
+        # Default is True (backward compat) — panel sends debug_panel_close
+        # to opt out of the overhead.
+        if not getattr(self, "_debug_panel_active", True):
             return
         if not self.view_instance:
             return
