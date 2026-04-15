@@ -78,6 +78,22 @@
         const method = data.replace ? 'replaceState' : 'pushState';
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
+        // Scroll to top on navigation (or to anchor if present)
+        var hash = newUrl.hash;
+        if (hash) {
+            try {
+                var target = document.querySelector(hash);
+                if (target) {
+                    target.scrollIntoView({ behavior: 'instant' });
+                }
+            } catch (_e) {
+                // Malformed hash (e.g. "#foo[bar]") — fall through to scroll top
+                window.scrollTo({ top: 0, behavior: 'instant' });
+            }
+        } else {
+            window.scrollTo({ top: 0, behavior: 'instant' });
+        }
+
         // Clear the prefetch set so links on the new view are re-eligible for prefetching
         window.djust._prefetch?.clear();
 

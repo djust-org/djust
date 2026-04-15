@@ -72,6 +72,17 @@ struct SerializableViewState {
     timestamp: f64, // Unix timestamp for session age tracking
 }
 
+/// Per-phase timing from render_with_diff()
+#[derive(Debug, Clone)]
+struct RenderTiming {
+    render_ms: f64,
+    parse_ms: f64,
+    diff_ms: f64,
+    serialize_ms: f64,
+    total_ms: f64,
+    html_len: usize,
+}
+
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
@@ -86,6 +97,8 @@ pub struct RustLiveViewBackend {
     template_dirs: Vec<PathBuf>,
     /// Keys whose values should skip auto-escaping (SafeString from Python)
     safe_keys: HashSet<String>,
+    /// Per-phase timing from the last render_with_diff() call
+    last_render_timing: Option<RenderTiming>,
 }
 
 #[pymethods]
@@ -105,6 +118,7 @@ impl RustLiveViewBackend {
                 .map(PathBuf::from)
                 .collect(),
             safe_keys: HashSet::new(),
+            last_render_timing: None,
         }
     }
 
@@ -170,6 +184,10 @@ impl RustLiveViewBackend {
     /// Render and compute diff from last render
     /// Returns a tuple of (html, patches_json, version)
     fn render_with_diff(&mut self) -> PyResult<(String, Option<String>, u64)> {
+        use std::time::Instant;
+
+        let t_start = Instant::now();
+
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
             cached.clone()
@@ -185,19 +203,24 @@ impl RustLiveViewBackend {
             context.mark_safe(key.clone());
         }
 
-        // Use template loader for {% include %} support
+        // Phase 1: Template render
+        let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
         let html = template_arc.render_with_loader(&context, &loader)?;
+        let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Parse new HTML to VDOM
+        // Phase 2: HTML parse to VDOM
+        let t_parse_start = Instant::now();
         let mut new_vdom = if self.last_vdom.is_some() {
             parse_html_continue(&html)
         } else {
             parse_html(&html)
         }
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Compute diff if we have a previous render
+        // Phase 3: VDOM diff
+        let t_diff_start = Instant::now();
         let patches =
             if let Some(old_vdom) = &self.last_vdom {
                 let patches = diff(old_vdom, &new_vdom);
@@ -212,9 +235,24 @@ impl RustLiveViewBackend {
             } else {
                 None
             };
+        let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Serialize VDOM back to HTML with dj-id attributes
+        // Phase 4: HTML serialization
+        let t_serial_start = Instant::now();
         let hydrated_html = new_vdom.to_html();
+        let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
+
+        let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Store timing for Python to read
+        self.last_render_timing = Some(RenderTiming {
+            render_ms,
+            parse_ms,
+            diff_ms,
+            serialize_ms,
+            total_ms,
+            html_len: html.len(),
+        });
 
         self.last_vdom = Some(new_vdom);
         self.version += 1;
@@ -224,6 +262,10 @@ impl RustLiveViewBackend {
 
     /// Render and return patches as MessagePack bytes
     fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<PyObject>, u64)> {
+        use std::time::Instant;
+
+        let t_start = Instant::now();
+
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
             cached.clone()
@@ -239,41 +281,57 @@ impl RustLiveViewBackend {
             context.mark_safe(key.clone());
         }
 
-        // Use template loader for {% include %} support
+        // Phase 1: Template render
+        let t_render_start = Instant::now();
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
         let html = template_arc.render_with_loader(&context, &loader)?;
+        let render_ms = t_render_start.elapsed().as_secs_f64() * 1000.0;
 
-        // IMPORTANT: Use parse_html_continue() for subsequent renders to avoid ID collisions
+        // Phase 2: HTML parse to VDOM
+        let t_parse_start = Instant::now();
         let mut new_vdom = if self.last_vdom.is_some() {
             parse_html_continue(&html)
         } else {
             parse_html(&html)
         }
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
+        // Phase 3: VDOM diff
+        let t_diff_start = Instant::now();
         let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
             let patches = diff(old_vdom, &new_vdom);
-            // Sync old IDs to matched new VDOM elements (see render_with_diff)
             sync_ids(old_vdom, &mut new_vdom);
             if !patches.is_empty() {
                 let bytes = rmp_serde::to_vec(&patches)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
                 Some(PyBytes::new(py, &bytes).into())
             } else {
-                // 0-change diff: return empty msgpack array so Python can
-                // distinguish "no changes" from "first render" (which is None).
                 let empty: Vec<djust_vdom::Patch> = Vec::new();
                 let bytes = rmp_serde::to_vec(&empty)
                     .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
                 Some(PyBytes::new(py, &bytes).into())
             }
         } else {
-            // First render — no previous VDOM to diff against
             None
         };
+        let diff_ms = t_diff_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Serialize VDOM back to HTML with dj-id attributes for reliable patch targeting
+        // Phase 4: HTML serialization
+        let t_serial_start = Instant::now();
         let hydrated_html = new_vdom.to_html();
+        let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
+
+        let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+        self.last_render_timing = Some(RenderTiming {
+            render_ms,
+            parse_ms,
+            diff_ms,
+            serialize_ms,
+            total_ms,
+            html_len: html.len(),
+        });
 
         self.last_vdom = Some(new_vdom);
         self.version += 1;
@@ -348,6 +406,22 @@ impl RustLiveViewBackend {
             timestamp: serializable.timestamp,
             template_dirs: Vec::new(),
             safe_keys: HashSet::new(),
+            last_render_timing: None,
+        })
+    }
+
+    /// Get per-phase timing from the last render_with_diff() call.
+    /// Returns a dict with render_ms, parse_ms, diff_ms, serialize_ms, total_ms, html_len.
+    fn get_render_timing(&self) -> Option<HashMap<String, f64>> {
+        self.last_render_timing.as_ref().map(|t| {
+            let mut m = HashMap::new();
+            m.insert("render_ms".to_string(), t.render_ms);
+            m.insert("parse_ms".to_string(), t.parse_ms);
+            m.insert("diff_ms".to_string(), t.diff_ms);
+            m.insert("serialize_ms".to_string(), t.serialize_ms);
+            m.insert("total_ms".to_string(), t.total_ms);
+            m.insert("html_len".to_string(), t.html_len as f64);
+            m
         })
     }
 

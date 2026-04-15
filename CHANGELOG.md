@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM patch path traversal skips regular HTML comments ([#729](https://github.com/djust-org/djust/issues/729))** — The JS patcher was counting all HTML comment nodes during path traversal, but the Rust VDOM parser only preserves `<!--dj-if-->` placeholders. This caused every page with HTML comments in `dj-root` to fail VDOM patching and fall back to full HTML recovery.
+
+- **Scroll to top on `dj-navigate` live_redirect** — `handleLiveRedirect()` now scrolls to the top of the page (or to anchor if URL has a hash) after `pushState`.
+
+### Changed
+
+- **Event delegation replaces per-element binding ([#730](https://github.com/djust-org/djust/issues/730))** — `bindLiveViewEvents()` no longer scans the DOM after every VDOM patch. Instead, one listener per event type is installed on the `dj-root` element via delegation (`e.target.closest('[dj-click]')`). This reduces client-side post-patch handling from ~56ms to ~30ms on large pages. Per-element rate limiting preserved via WeakMap.
+
+### Added
+
+- **Per-phase Rust timing in `render_with_diff()` ([#730](https://github.com/djust-org/djust/issues/730))** — Instrumentation measuring template render, html5ever parse, VDOM diff, and HTML serialization. Exposed to Python via `get_render_timing()` and propagated to WebSocket response performance metadata.
+
 ## [0.4.3] - 2026-04-14
 
 ### Fixed
