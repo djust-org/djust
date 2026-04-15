@@ -2799,19 +2799,27 @@ function _applyDisableWith(element) {
     element.disabled = true;
 }
 
-function bindLiveViewEvents() {
+function bindLiveViewEvents(scope) {
+    const root = scope || document;
+
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
-        window.djust.uploads.bindHandlers();
+        window.djust.uploads.bindHandlers(scope);
     }
 
     // Bind navigation directives (dj-patch, dj-navigate)
     if (window.djust.navigation) {
-        window.djust.navigation.bindDirectives();
+        window.djust.navigation.bindDirectives(scope);
     }
 
-    // Find all interactive elements
-    const allElements = document.querySelectorAll('*');
+    // Find interactive elements via targeted attribute selectors instead of
+    // scanning all elements. This is O(interactive) instead of O(all_elements).
+    const djSelector = '[dj-click],[dj-change],[dj-input],[dj-submit],' +
+        '[dj-focus],[dj-blur],[dj-keydown],[dj-keyup],[dj-mouseenter],' +
+        '[dj-mouseleave],[dj-scroll],[dj-mounted],[dj-paste],[dj-poll],' +
+        '[dj-viewport-enter],[dj-viewport-leave],[dj-disable-with],' +
+        '[dj-copy],[dj-click-away],[dj-shortcut],[dj-auto-recover]';
+    const allElements = root.querySelectorAll(djSelector);
     allElements.forEach(element => {
         // Handle dj-click events
         const clickHandler = element.getAttribute('dj-click');
@@ -3358,17 +3366,20 @@ function bindLiveViewEvents() {
     ];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
 
-    // Collect all elements that have any dj-window-* or dj-document-* attributes
-    // by scanning once through allElements (already queried above).
+    // Collect elements with dj-window-*/dj-document-* attributes.
+    // These have dynamic attribute names (e.g. dj-window-keydown.escape)
+    // that CSS selectors can't match, so we scan all elements within root.
+    // This is a small scan since most pages have 0-5 scoped listener elements.
+    const scopedElements = root.querySelectorAll('*');
     for (const { prefix, target } of scopedPrefixes) {
         for (const evtType of scopedEventTypes) {
             // scroll and resize only make sense on window
             if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
 
             const attrBase = prefix + evtType;
-            // Scan all elements for attributes starting with this prefix+eventType
+            // Scan elements for attributes starting with this prefix+eventType
             // (covers both exact matches and key-modifier variants like dj-window-keydown.escape)
-            allElements.forEach(element => {
+            scopedElements.forEach(element => {
                 for (const attr of element.attributes) {
                     if (!attr.name.startsWith(attrBase)) continue;
                     const bindType = attr.name; // e.g. 'dj-window-keydown' or 'dj-window-keydown.escape'
@@ -3644,14 +3655,23 @@ function clearOptimisticState(eventName) {
 // will scroll again — correct behavior for newly inserted content.
 const _scrolledElements = new WeakSet();
 
-function reinitAfterDOMUpdate() {
+function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
-    bindLiveViewEvents();
+    bindLiveViewEvents(scope);
+    if (window.djust.mountHooks) {
+        // updateHooks scans for [dj-hook] — scope it too
+        const hookRoot = scope || getLiveViewRoot();
+        hookRoot.querySelectorAll('[dj-hook]').forEach(el => {
+            // Delegate to the hook system's per-element logic
+            if (window.djust.mountHooks) window.djust.mountHooks(el);
+        });
+    }
     updateHooks();
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
-    document.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+    const scrollRoot = scope || document;
+    scrollRoot.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
         if (_scrolledElements.has(el)) return;
         _scrolledElements.add(el);
 
