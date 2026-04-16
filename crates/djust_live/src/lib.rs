@@ -112,6 +112,32 @@ pub struct RustLiveViewBackend {
     /// Maps template node index → (VDOM path, djust_id) for text-only fragments.
     /// Built after first render by matching fragment text to VDOM text nodes.
     fragment_text_map: Option<HashMap<usize, (Vec<usize>, String)>>,
+    /// Flat list of every VDOM text node paired with its byte range in the
+    /// pre-hydration HTML. Sorted by `html_start`. Used by the text-region
+    /// fast path to O(log N) locate which text node owns a given byte
+    /// offset, skipping the per-event linear scan of HTML + VDOM walk.
+    ///
+    /// Built after each full html5ever parse; cleared when the VDOM
+    /// structure is invalidated (update_template, clear_state, full
+    /// re-render where `last_vdom` is replaced). Subsequent fast-path
+    /// renders don't modify the index because they only change text
+    /// content, not text-node positions or count.
+    text_node_index: Option<Vec<TextNodeEntry>>,
+}
+
+#[derive(Clone, Debug)]
+struct TextNodeEntry {
+    /// Byte offset in the pre-hydration HTML where this text node begins.
+    html_start: usize,
+    /// Byte offset where the HTML text run ends (exclusive).
+    html_end: usize,
+    /// VDOM path to this text node.
+    path: Vec<usize>,
+    /// Decoded text content as stored in the VDOM (may differ from the
+    /// raw HTML bytes if the source had entities like `&amp;`).
+    text: String,
+    /// dj-id of the enclosing element (empty for un-ided text nodes).
+    djust_id: String,
 }
 
 #[pymethods]
@@ -136,6 +162,7 @@ impl RustLiveViewBackend {
             node_html_cache: Vec::new(),
             changed_keys: None,
             fragment_text_map: None,
+            text_node_index: None,
         }
     }
 
@@ -185,6 +212,7 @@ impl RustLiveViewBackend {
         self.node_html_cache = Vec::new(); // Invalidate partial render cache
         self.last_html = None; // Invalidate text fast path cache
         self.fragment_text_map = None; // Invalidate fragment→VDOM map
+        self.text_node_index = None; // Invalidate text-region fast-path index
     }
 
     /// Get current state
@@ -202,6 +230,7 @@ impl RustLiveViewBackend {
         // so the cache would be stale for the next render_with_diff() call.
         self.node_html_cache = Vec::new();
         self.last_html = None; // Invalidate text fast path cache
+        self.text_node_index = None; // Invalidate text-region fast-path index
 
         // Get template from cache or parse and cache it
         let template_arc = if let Some(cached) = TEMPLATE_CACHE.get(&self.template_source) {
@@ -349,14 +378,27 @@ impl RustLiveViewBackend {
         // FULL old and new HTML is still a single text span. Common for
         // a value change inside a `{% for %}` loop body — the whole
         // loop re-renders, but the actual byte diff is tiny.
+        // Borrow-split trick: take the index out so we can pass it mutably
+        // while also borrowing self.last_vdom / self.last_html. Replaced
+        // at the end of this block regardless of hit/miss.
         let text_region_fast_path: Option<(VNode, Vec<djust_vdom::Patch>)> =
-            match (&text_fast_path, &self.last_vdom, &self.last_html) {
-                (None, Some(old_vdom), Some(old_html)) => {
-                    try_text_region_fast_path(old_html, &html, old_vdom)
+            if text_fast_path.is_none() {
+                if let (Some(old_vdom), Some(old_html), Some(mut index)) = (
+                    self.last_vdom.as_ref(),
+                    self.last_html.as_ref(),
+                    self.text_node_index.take(),
+                ) {
+                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index);
+                    self.text_node_index = Some(index);
+                    result
+                } else {
+                    None
                 }
-                _ => None,
+            } else {
+                None
             };
 
+        let mut took_full_parse = false;
         let (mut new_vdom, patches, parse_ms, diff_ms) =
             if let Some((vdom, text_patches)) = text_fast_path {
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
@@ -379,6 +421,7 @@ impl RustLiveViewBackend {
                 };
                 (vdom, patches_json, parse_ms, 0.0)
             } else {
+                took_full_parse = true;
                 // Full html5ever parse
                 let new_vdom = if self.last_vdom.is_some() {
                     parse_html_continue(&html).map_err(|e| {
@@ -448,6 +491,18 @@ impl RustLiveViewBackend {
         if self.fragment_text_map.is_none() && !self.node_html_cache.is_empty() {
             if let Some(ref vdom) = self.last_vdom {
                 self.fragment_text_map = Some(build_fragment_text_map(&self.node_html_cache, vdom));
+            }
+        }
+
+        // Rebuild the text-region fast-path index whenever we just went
+        // through the full html5ever parse (structure may have changed)
+        // or no index exists yet. Fast-path renders only change text
+        // CONTENT — positions and count stay stable — so the old index
+        // remains valid and we skip the rebuild.
+        if took_full_parse || self.text_node_index.is_none() {
+            if let (Some(ref html_str), Some(ref vdom)) = (&self.last_html, &self.last_vdom) {
+                let index = build_text_node_index(html_str, vdom);
+                self.text_node_index = if index.is_empty() { None } else { Some(index) };
             }
         }
 
@@ -587,6 +642,7 @@ impl RustLiveViewBackend {
         self.node_html_cache = Vec::new();
         self.changed_keys = None;
         self.fragment_text_map = None;
+        self.text_node_index = None;
         // Reset ID counter so next render starts fresh
         reset_id_counter();
     }
@@ -655,6 +711,7 @@ impl RustLiveViewBackend {
             node_html_cache: Vec::new(),
             changed_keys: None,
             fragment_text_map: None,
+            text_node_index: None,
         })
     }
 
@@ -1931,7 +1988,13 @@ fn try_text_region_fast_path(
     old_html: &str,
     new_html: &str,
     old_vdom: &VNode,
+    text_node_index: &mut [TextNodeEntry],
 ) -> Option<(VNode, Vec<djust_vdom::Patch>)> {
+    // Without an index we can't resolve pfx → VDOM path cheaply. The
+    // caller should have built one after the previous full-parse render.
+    if text_node_index.is_empty() {
+        return None;
+    }
     let old_bytes = old_html.as_bytes();
     let new_bytes = new_html.as_bytes();
     let old_len = old_bytes.len();
@@ -1991,18 +2054,7 @@ fn try_text_region_fast_path(
         return None;
     }
 
-    // Locate which text node (in document order) contains the byte
-    // position `pfx`. `pfx` may sit anywhere INSIDE a text node — not
-    // necessarily right after a `>` — because whitespace shared between
-    // old and new pushes the common prefix past the tag close.
-    let (ordinal, text_node_html_start) = find_text_node_at_pos(old_html, pfx)?;
-
-    // Compute where in the text node (byte offset within its HTML text)
-    // the diff starts. We'll replace `old_mid` with `new_mid` at that
-    // offset in the VDOM text node's content.
-    let offset_in_text = pfx - text_node_html_start;
-
-    // After-region boundary: the char right after the diff must still be
+    // After-region boundary: the char right after the diff must be
     // inside the same text node (not open-tag), otherwise multiple text
     // nodes are affected. If the byte at `after_idx` is '<', we're
     // cleanly at the text/tag boundary — valid. If it's something else
@@ -2013,11 +2065,40 @@ fn try_text_region_fast_path(
         return None;
     }
 
-    // Collect all text nodes in document order with paths + ids.
-    let mut text_nodes: Vec<(Vec<usize>, String, String)> = Vec::new();
-    collect_vdom_text_nodes(old_vdom, &mut vec![], &mut text_nodes);
+    // Binary-search the pre-built text-node index for the entry whose
+    // HTML byte range contains `pfx`. The index is sorted by
+    // `html_start`, so we find the last entry with `html_start <= pfx`
+    // and confirm it covers the position.
+    let entry_idx = {
+        use std::cmp::Ordering;
+        match text_node_index.binary_search_by(|e| {
+            if pfx < e.html_start {
+                Ordering::Greater
+            } else if pfx >= e.html_end {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        }) {
+            Ok(i) => i,
+            Err(_) => return None, // pfx falls inside a tag, outside any text node
+        }
+    };
+    let entry = &text_node_index[entry_idx];
 
-    let (path, old_text, djust_id) = text_nodes.get(ordinal)?.clone();
+    // Compute where in the text node (byte offset within its HTML text)
+    // the diff starts.
+    let offset_in_text = pfx - entry.html_start;
+
+    // Diff span must fit entirely within this text node in HTML terms.
+    if pfx + old_mid.len() > entry.html_end {
+        return None;
+    }
+
+    let path = entry.path.clone();
+    let old_text = entry.text.clone();
+    let djust_id = entry.djust_id.clone();
+    let old_html_end = entry.html_end;
 
     // Entity-decoded text in the VDOM may differ from the raw HTML
     // bytes. Validate that the byte-offset we computed matches actual
@@ -2049,6 +2130,20 @@ fn try_text_region_fast_path(
         node.cached_html = None;
     }
 
+    // Keep the index in sync for subsequent fast-path renders: the
+    // changed entry grows/shrinks by (new_mid - old_mid) bytes, and
+    // every downstream entry's HTML range shifts by the same amount.
+    let new_html_end = old_html_end + new_mid.len() - old_mid.len();
+    text_node_index[entry_idx].text = new_text.clone();
+    text_node_index[entry_idx].html_end = new_html_end;
+    if new_mid.len() != old_mid.len() {
+        let delta_add = new_mid.len() as isize - old_mid.len() as isize;
+        for e in &mut text_node_index[entry_idx + 1..] {
+            e.html_start = (e.html_start as isize + delta_add) as usize;
+            e.html_end = (e.html_end as isize + delta_add) as usize;
+        }
+    }
+
     let d = if djust_id.is_empty() {
         None
     } else {
@@ -2062,90 +2157,58 @@ fn try_text_region_fast_path(
     Some((new_vdom, vec![patch]))
 }
 
-/// Find which text node contains byte position `pos` in an HTML string.
-///
-/// Returns `Some((text_node_ordinal, text_node_byte_start))` where
-/// `text_node_ordinal` is the 0-indexed position of this text node in
-/// document order (matching the VDOM's text-node ordering) and
-/// `text_node_byte_start` is the byte offset in the HTML where the text
-/// node's content begins.
-///
-/// The ordering must match `collect_vdom_text_nodes`. The VDOM parser
-/// FILTERS whitespace-only text nodes that appear OUTSIDE of whitespace-
-/// preserving elements (`<pre>`, `<code>`, `<textarea>`, `<script>`,
-/// `<style>`). This scanner applies the same filter, tracking a depth
-/// counter of open whitespace-preserving elements.
-///
-/// Returns `None` if the math can't be trusted (e.g. inside `<script>`
-/// where entity handling differs, or past end-of-string).
-fn find_text_node_at_pos(html: &str, pos: usize) -> Option<(usize, usize)> {
-    let bytes = html.as_bytes();
-    if pos > bytes.len() {
-        return None;
-    }
+fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
+    slice.len() >= prefix.len()
+        && slice
+            .iter()
+            .zip(prefix.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
 
-    // Tag names whose text content must NOT be whitespace-filtered.
-    // Must mirror `preserve_whitespace` in djust_vdom::parser.
+/// Scan `html` and return the byte ranges of each text node that would
+/// survive the VDOM parser's whitespace filter, in document order.
+///
+/// The returned vector mirrors the count and order of `collect_vdom_text_nodes`
+/// so the Nth entry here corresponds to the Nth VDOM text node.
+///
+/// Special handling:
+/// - Whitespace-preserving elements (`<pre>`, `<code>`, `<textarea>`):
+///   all text inside them counts, including whitespace-only runs.
+/// - Raw-text elements (`<script>`, `<style>`): the entire body is one
+///   text node, and `<` inside is literal (not a tag). We skip to the
+///   matching close tag as a single unit.
+/// - Comments and doctypes: ignored.
+///
+/// Returns `None` on unterminated tags or other malformed input.
+fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
     fn is_preserve_tag(name: &[u8]) -> bool {
         name.eq_ignore_ascii_case(b"pre")
             || name.eq_ignore_ascii_case(b"code")
             || name.eq_ignore_ascii_case(b"textarea")
-            || name.eq_ignore_ascii_case(b"script")
-            || name.eq_ignore_ascii_case(b"style")
+    }
+    fn is_raw_text_tag(name: &[u8]) -> bool {
+        name.eq_ignore_ascii_case(b"script") || name.eq_ignore_ascii_case(b"style")
     }
 
-    let mut count: usize = 0;
+    let bytes = html.as_bytes();
+    let mut runs = Vec::new();
     let mut i = 0;
-    let mut current_text_start: Option<usize> = None;
     let mut preserve_depth: usize = 0;
-    // We also need to remember, when we eventually close a text run, whether
-    // it should be counted. That depends on the preserve_depth AT THE TIME
-    // the text was emitted — which is the same value throughout the run
-    // (depth can only change via tags, which terminate the run).
+    let mut current_start: Option<usize> = None;
     let mut current_preserve = false;
 
     while i < bytes.len() {
         let b = bytes[i];
         if b == b'<' {
-            // Check script/style — html5ever handles raw-text elements
-            // differently (no nested tokenization of `<` inside them). If
-            // we see one we'd miscount, so bail.
-            //
-            // Actually we handle script/style via preserve_depth below,
-            // but their body contents can contain literal `<` that look
-            // like tags to our naive scanner. Safer to bail here.
-            if starts_with_ci(&bytes[i..], b"<script") || starts_with_ci(&bytes[i..], b"<style") {
-                return None;
-            }
-
-            // Close any in-progress text run FIRST, then decide if it
-            // should count (it does iff preserve was active OR it had
-            // non-whitespace content).
-            if let Some(start) = current_text_start.take() {
+            // Close any in-progress text run first.
+            if let Some(start) = current_start.take() {
                 let run = &bytes[start..i];
                 let all_ws = run.iter().all(|&c| c.is_ascii_whitespace());
                 if !all_ws || current_preserve {
-                    // This run counts. Check if `pos` falls within it.
-                    if pos >= start && pos <= i {
-                        // pos landed in this text run. We just incremented
-                        // `count` before, so count-1 is our ordinal.
-                        return Some((count - 1, start));
-                    }
-                } else {
-                    // Whitespace-only run that got filtered — our prior
-                    // increment was premature; undo it.
-                    count -= 1;
-                    // If pos fell in a run that doesn't exist in the
-                    // VDOM, we can't map it. Bail rather than return
-                    // wrong answer.
-                    if pos >= start && pos < i {
-                        return None;
-                    }
+                    runs.push((start, i));
                 }
             }
 
-            // Parse the tag. Determine if it's open/close/self-closing
-            // and whether it affects preserve_depth.
             let tag_end = {
                 let mut j = i + 1;
                 while j < bytes.len() && bytes[j] != b'>' {
@@ -2154,18 +2217,14 @@ fn find_text_node_at_pos(html: &str, pos: usize) -> Option<(usize, usize)> {
                 j
             };
             if tag_end >= bytes.len() {
-                return None; // unterminated tag
+                return None;
             }
-
-            // Comments, doctype, CDATA — skip, no preserve-depth change.
-            // Per the parser, `<!--dj-if-->` comments produce a comment
-            // VNode (not a text node), so they don't affect text counts.
             let tag_body = &bytes[i + 1..tag_end];
             if !tag_body.is_empty() && tag_body[0] == b'!' {
+                // Comment / doctype / CDATA — no text-node effect.
                 i = tag_end + 1;
                 continue;
             }
-
             let is_close = !tag_body.is_empty() && tag_body[0] == b'/';
             let name_start = if is_close { 1 } else { 0 };
             let name_end = tag_body[name_start..]
@@ -2175,52 +2234,102 @@ fn find_text_node_at_pos(html: &str, pos: usize) -> Option<(usize, usize)> {
                 .unwrap_or(tag_body.len());
             let tag_name = &tag_body[name_start..name_end];
 
+            if !is_close && is_raw_text_tag(tag_name) {
+                // Raw-text element: body is a single text node. Find the
+                // matching close tag and record the range between `>`
+                // and `</tag>` as one run. `<` inside is literal.
+                let body_start = tag_end + 1;
+                let close_needle_upper = {
+                    let mut v = b"</".to_vec();
+                    v.extend(tag_name.iter().map(|c| c.to_ascii_lowercase()));
+                    v
+                };
+                let mut search_pos = body_start;
+                let close_at = loop {
+                    if search_pos >= bytes.len() {
+                        return None; // unterminated raw-text element
+                    }
+                    if bytes[search_pos] == b'<'
+                        && starts_with_ci(&bytes[search_pos..], &close_needle_upper)
+                    {
+                        break search_pos;
+                    }
+                    search_pos += 1;
+                };
+                // Only emit a run if non-empty.
+                if close_at > body_start {
+                    runs.push((body_start, close_at));
+                }
+                // Skip past the close tag: find '>' after close_at.
+                let mut k = close_at;
+                while k < bytes.len() && bytes[k] != b'>' {
+                    k += 1;
+                }
+                i = k.saturating_add(1);
+                continue;
+            }
+
             if is_preserve_tag(tag_name) {
                 if is_close {
                     preserve_depth = preserve_depth.saturating_sub(1);
                 } else {
-                    // Self-closing `<pre/>` doesn't open a new scope, but
-                    // that's rare; treat as open for simplicity.
                     preserve_depth += 1;
                 }
             }
-
             i = tag_end + 1;
             continue;
         }
 
-        // Text byte — start a new text run if we don't have one.
-        if current_text_start.is_none() {
-            current_text_start = Some(i);
+        if current_start.is_none() {
+            current_start = Some(i);
             current_preserve = preserve_depth > 0;
-            // Tentatively count this run; we'll decrement if it turns
-            // out to be whitespace-only and non-preserved.
-            count += 1;
         }
         i += 1;
     }
 
-    // Handle trailing text run (diff goes to end of string).
-    if let Some(start) = current_text_start {
+    // Trailing run (document ends with text, no closing tag).
+    if let Some(start) = current_start {
         let run = &bytes[start..i];
         let all_ws = run.iter().all(|&c| c.is_ascii_whitespace());
         if !all_ws || current_preserve {
-            if pos >= start && pos <= i {
-                return Some((count - 1, start));
-            }
-        } else if pos >= start && pos <= i {
-            return None;
+            runs.push((start, i));
         }
     }
-    None
+
+    Some(runs)
 }
 
-fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
-    slice.len() >= prefix.len()
-        && slice
-            .iter()
-            .zip(prefix.iter())
-            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+/// Build the sorted `(html_start, html_end, path, text, djust_id)` index
+/// used by `try_text_region_fast_path`. Returns empty if HTML and VDOM
+/// text-node counts don't agree (e.g. due to `<script>`/`<style>` in
+/// the document, which the scanner refuses to count).
+fn build_text_node_index(html: &str, vdom: &VNode) -> Vec<TextNodeEntry> {
+    let Some(runs) = scan_html_text_runs(html) else {
+        return Vec::new();
+    };
+
+    let mut vdom_nodes: Vec<(Vec<usize>, String, String)> = Vec::new();
+    collect_vdom_text_nodes(vdom, &mut vec![], &mut vdom_nodes);
+
+    // Counts must match for the 1:1 positional mapping to hold. If they
+    // don't, silently bail — subsequent fast-path checks will see an
+    // empty index and fall through to full parse.
+    if runs.len() != vdom_nodes.len() {
+        return Vec::new();
+    }
+
+    runs.into_iter()
+        .zip(vdom_nodes)
+        .map(
+            |((html_start, html_end), (path, text, djust_id))| TextNodeEntry {
+                html_start,
+                html_end,
+                path,
+                text,
+                djust_id,
+            },
+        )
+        .collect()
 }
 
 fn build_fragment_text_map(
