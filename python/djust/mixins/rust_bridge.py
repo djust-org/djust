@@ -256,22 +256,26 @@ class RustBridgeMixin:
             full_context = self.get_context_data()
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
-            # get_context_data() doesn't run context processors, so csrf_token
-            # is missing from the LiveView re-render context. Without it, the
-            # Rust engine renders nothing (after the #696 fix), which is safe
-            # but suboptimal — the hidden input won't be in re-rendered HTML.
+            # Cache it to avoid creating a new string object each call,
+            # which would cause the change tracker to see it as "changed".
             if "csrf_token" not in full_context:
-                request = getattr(self, "request", None)
-                if request is not None:
-                    try:
-                        from django.middleware.csrf import get_token
+                cached_csrf = getattr(self, "_cached_csrf_token", None)
+                if cached_csrf is not None:
+                    full_context["csrf_token"] = cached_csrf
+                else:
+                    request = getattr(self, "request", None)
+                    if request is not None:
+                        try:
+                            from django.middleware.csrf import get_token
 
-                        full_context["csrf_token"] = get_token(request)
-                    except Exception:
-                        logging.getLogger("djust.rust_bridge").warning(
-                            "Failed to inject csrf_token into Rust context",
-                            exc_info=True,
-                        )
+                            token = get_token(request)
+                            self._cached_csrf_token = token
+                            full_context["csrf_token"] = token
+                        except Exception:
+                            logging.getLogger("djust.rust_bridge").warning(
+                                "Failed to inject csrf_token into Rust context",
+                                exc_info=True,
+                            )
 
             # Inject DATE_FORMAT / TIME_FORMAT from Django settings so the
             # Rust |date and |time filters honour the project's configured
@@ -401,8 +405,22 @@ class RustBridgeMixin:
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a
             # previous set_changed_keys call with meaningful keys.
+            # Exclude framework-internal keys that change id() every call
+            # but don't affect template output (they'd cause unnecessary
+            # re-renders of nodes that depend on these keys).
+            _FRAMEWORK_KEYS = frozenset(
+                {
+                    "csrf_token",
+                    "kwargs",
+                    "temporary_assigns",
+                    "DATE_FORMAT",
+                    "TIME_FORMAT",
+                }
+            )
             if prev_refs and context:
-                self._rust_view.set_changed_keys(list(context.keys()))
+                user_changed = [k for k in context if k not in _FRAMEWORK_KEYS]
+                if user_changed:
+                    self._rust_view.set_changed_keys(user_changed)
 
             # Mark static assigns as sent — subsequent syncs will skip them
             if getattr(self, "static_assigns", None) and not getattr(
