@@ -303,32 +303,33 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
         }
 
         NodeData::Element { name, attrs, .. } => {
-            let tag = name.local.to_string();
-            let mut vnode = VNode::element(tag.clone());
+            let tag_ref = &*name.local;
+            let tag = tag_ref.to_string();
+            let is_svg = is_svg_element(tag_ref);
 
             // Generate compact unique ID for this element
             let djust_id = next_djust_id();
             parser_trace!("Assigned ID '{}' to <{}>", djust_id, tag);
-            vnode.djust_id = Some(djust_id.clone());
 
-            // Convert attributes and extract dj-key/data-key for keyed diffing
-            let mut attributes = HashMap::new();
+            // Pre-size attributes HashMap: most elements have 1-2 attrs + dj-id
+            let attrs_borrow = attrs.borrow();
+            let mut attributes = HashMap::with_capacity(attrs_borrow.len() + 1);
             let mut key: Option<String> = None;
 
             // Add dj-id attribute for client-side querySelector lookup
-            attributes.insert("dj-id".to_string(), djust_id);
+            attributes.insert("dj-id".to_string(), djust_id.clone());
 
-            for attr in attrs.borrow().iter() {
-                let attr_name_lower = attr.name.local.to_string();
-                // Normalize SVG attributes to preserve camelCase (html5ever lowercases everything)
-                let attr_name = if is_svg_element(&tag) {
-                    normalize_svg_attribute(&attr_name_lower).to_string()
+            for attr in attrs_borrow.iter() {
+                let attr_name_lower = &*attr.name.local;
+                // Normalize SVG attributes to preserve camelCase
+                let attr_name = if is_svg {
+                    normalize_svg_attribute(attr_name_lower).to_string()
                 } else {
-                    attr_name_lower.clone()
+                    attr_name_lower.to_string()
                 };
                 let attr_value = attr.value.to_string();
 
-                // Extract dj-key or data-key for efficient list diffing (explicit opt-in only)
+                // Extract dj-key or data-key for efficient list diffing
                 if (attr_name_lower == "dj-key" || attr_name_lower == "data-key")
                     && !attr_value.is_empty()
                     && key.is_none()
@@ -336,30 +337,26 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                     key = Some(attr_value.clone());
                 }
 
-                // Don't overwrite our generated dj-id if template already has one
+                // Don't overwrite our generated dj-id
                 if attr_name_lower == "dj-id" {
                     continue;
                 }
 
                 attributes.insert(attr_name, attr_value);
             }
-            vnode.attrs = attributes;
 
-            // Use dj-key or data-key when explicitly set. The id= attribute is NOT used
-            // as a key — developers must opt in with dj-key="..." for keyed diffing.
-            vnode.key = key;
-            if vnode.key.is_some() {
-                parser_trace!("  Element <{}> has key: {:?}", tag, vnode.key);
+            // Use dj-key or data-key when explicitly set
+            if key.is_some() {
+                parser_trace!("  Element <{}> has key: {:?}", tag, key);
             }
 
             // Convert children
             let mut children = Vec::new();
 
             // Check if this element preserves whitespace
-            let preserve_whitespace = matches!(
-                tag.to_lowercase().as_str(),
-                "pre" | "code" | "textarea" | "script" | "style"
-            );
+            // tag is already lowercase from html5ever
+            let preserve_whitespace =
+                matches!(tag_ref, "pre" | "code" | "textarea" | "script" | "style");
 
             for child in handle.children.borrow().iter() {
                 // Check for special placeholder comments (e.g., <!--dj-if-->)
@@ -406,31 +403,16 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                     children.push(child_vnode);
                 }
             }
-            vnode.children = children;
 
-            // Debug: log final child count for form elements
-            if tag == "form" {
-                eprintln!(
-                    "[Parser] Form element has {} children after filtering",
-                    vnode.children.len()
-                );
-                for (i, child) in vnode.children.iter().enumerate() {
-                    if child.is_text() {
-                        eprintln!(
-                            "  [{}] Text: {:?}",
-                            i,
-                            child
-                                .text
-                                .as_ref()
-                                .map(|t| t.chars().take(20).collect::<String>())
-                        );
-                    } else {
-                        eprintln!("  [{}] Element: <{}>", i, child.tag);
-                    }
-                }
-            }
-
-            Ok(vnode)
+            Ok(VNode {
+                tag,
+                attrs: attributes,
+                children,
+                text: None,
+                key,
+                djust_id: Some(djust_id),
+                cached_html: None,
+            })
         }
 
         NodeData::Document => {
