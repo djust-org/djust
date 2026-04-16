@@ -417,8 +417,12 @@ class RustBridgeMixin:
                     "TIME_FORMAT",
                 }
             )
+            # Also exclude temporary_assigns keys — they're reset to new
+            # objects after each render, always getting new id().
+            _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
+            _skip_keys = _FRAMEWORK_KEYS | _temp_assigns
             if prev_refs and context:
-                user_changed = [k for k in context if k not in _FRAMEWORK_KEYS]
+                user_changed = [k for k in context if k not in _skip_keys]
                 if user_changed:
                     self._rust_view.set_changed_keys(user_changed)
 
