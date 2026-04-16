@@ -37,11 +37,36 @@ static VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]+)\}\}").unwr
 static TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{%([^%]+)%\}").unwrap());
 
 /// Cached result of `{% extends %}` inheritance resolution.
-/// Stored in `OnceLock` on `Template` — computed once on first render,
-/// shared across all sessions via `Arc<Template>` in `TEMPLATE_CACHE`.
 struct ResolvedInheritance {
     final_nodes: Vec<Node>,
     final_node_deps: Vec<HashSet<String>>,
+}
+
+/// Flattened nodes for partial rendering: `{% block %}` children promoted to top-level.
+/// This gives finer-grained fragments so the partial render can skip more nodes.
+struct FlattenedNodes {
+    nodes: Vec<Node>,
+    node_deps: Vec<HashSet<String>>,
+}
+
+/// Flatten `Node::Block` children into their parent level.
+/// When Django's template engine resolves `{% extends %}`, it leaves
+/// `{% block content %}...{% endblock %}` intact but they render identically
+/// to just rendering their children. Flattening exposes each child as a
+/// separate node for partial rendering.
+fn flatten_blocks(nodes: Vec<Node>) -> Vec<Node> {
+    let mut result = Vec::new();
+    for node in nodes {
+        match node {
+            Node::Block {
+                nodes: children, ..
+            } => {
+                result.extend(flatten_blocks(children));
+            }
+            other => result.push(other),
+        }
+    }
+    result
 }
 
 /// A compiled Django template
@@ -53,6 +78,8 @@ pub struct Template {
     node_deps: Vec<HashSet<String>>,
     /// Lazily resolved inheritance: final merged nodes + deps for `{% extends %}` templates.
     resolved: OnceLock<ResolvedInheritance>,
+    /// Lazily flattened nodes: blocks expanded for finer partial rendering.
+    flattened: OnceLock<FlattenedNodes>,
 }
 
 impl Template {
@@ -66,6 +93,7 @@ impl Template {
             source: source.to_string(),
             node_deps,
             resolved: OnceLock::new(),
+            flattened: OnceLock::new(),
         })
     }
 
@@ -100,23 +128,47 @@ impl Template {
         Ok(())
     }
 
+    /// Ensure flattened nodes are computed (lazy, thread-safe).
+    fn ensure_flattened(&self) {
+        if self.flattened.get().is_some() {
+            return;
+        }
+        // Only flatten when blocks exist and extends is NOT used
+        // (Django resolved extends, blocks are semantic no-ops)
+        let has_blocks = self.nodes.iter().any(|n| matches!(n, Node::Block { .. }));
+        if has_blocks && !self.uses_extends() {
+            let flat = flatten_blocks(self.nodes.clone());
+            let deps = parser::extract_per_node_deps(&flat);
+            let _ = self.flattened.set(FlattenedNodes {
+                nodes: flat,
+                node_deps: deps,
+            });
+        }
+    }
+
     /// Get the effective nodes for rendering.
-    /// Returns resolved final nodes if inheritance was resolved, original nodes otherwise.
+    /// Priority: resolved (extends) > flattened (block expansion) > original.
     fn effective_nodes(&self) -> &[Node] {
         if let Some(resolved) = self.resolved.get() {
-            &resolved.final_nodes
-        } else {
-            &self.nodes
+            return &resolved.final_nodes;
         }
+        self.ensure_flattened();
+        if let Some(flat) = self.flattened.get() {
+            return &flat.nodes;
+        }
+        &self.nodes
     }
 
     /// Get the effective node deps for partial rendering.
     fn effective_node_deps(&self) -> &[HashSet<String>] {
         if let Some(resolved) = self.resolved.get() {
-            &resolved.final_node_deps
-        } else {
-            &self.node_deps
+            return &resolved.final_node_deps;
         }
+        self.ensure_flattened();
+        if let Some(flat) = self.flattened.get() {
+            return &flat.node_deps;
+        }
+        &self.node_deps
     }
 
     pub fn render(&self, context: &Context) -> Result<String> {
