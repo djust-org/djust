@@ -30,6 +30,12 @@ _FRAMEWORK_KEYS = frozenset(
 # cache makes id() unreliable for small ints across calls.
 _IMMUTABLE_TYPES_FOR_SYNC = (int, float, bool, str, bytes, type(None))
 
+# Sentinel for "key not in previous context" in value-equality comparisons.
+# Using a unique object ensures `prev.get(k, _MISSING) != value` returns
+# True when the key was absent, even when value is None/0/"" (which would
+# collide with a default-None fallback).
+_MISSING = object()
+
 try:
     from .._rust import RustLiveView
 except ImportError:
@@ -326,6 +332,13 @@ class RustBridgeMixin:
 
             changed_keys = getattr(self, "_changed_keys", None)
             prev_refs = getattr(self, "_prev_context_refs", {})
+            # Cache of previous VALUES for immutable context keys. Needed
+            # because `id()` comparison is unreliable for small ints/strings
+            # (Python interns them), so we fall back to value equality for
+            # these types. Catches derived immutables like
+            # `completed_count = sum(...)` that change without their source
+            # name appearing in `_changed_keys`.
+            prev_immutables = getattr(self, "_prev_context_immutables", {})
 
             # Determine which context to send to Rust
             if prev_refs:
@@ -344,11 +357,13 @@ class RustBridgeMixin:
                     for key in changed_keys:
                         if key in full_context:
                             context[key] = full_context[key]
-                    # Also include derived values whose id() changed.
-                    # The explicit _changed_keys only tracks direct instance attrs.
-                    # Derived values (e.g., 'products' from self._products_cache)
-                    # need id() comparison to detect changes from private attrs.
-                    # Only check non-immutable types to avoid int cache false positives.
+                    # Also include derived values that changed. The explicit
+                    # `_changed_keys` only tracks direct instance attrs, so
+                    # we need to detect derived values (e.g. `products` from
+                    # `self._products_cache`, or `completed_count` computed
+                    # from `self.todos`). Non-immutables are detected via
+                    # `id()` change; immutables via value equality because
+                    # Python interns small ints/strings.
                     for key, value in full_context.items():
                         if key in context:
                             continue
@@ -358,9 +373,14 @@ class RustBridgeMixin:
                             context[key] = value  # TypedState dirty flag
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
-                        elif not isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC) and id(
-                            value
-                        ) != prev_refs.get(key):
+                        elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
+                            # Immutable: compare by value to catch derived
+                            # int/str changes (prev_immutables may miss the
+                            # key if it wasn't immutable last time — treat
+                            # that as "changed" since the type flipped).
+                            if prev_immutables.get(key, _MISSING) != value:
+                                context[key] = value
+                        elif id(value) != prev_refs.get(key):
                             context[key] = value  # derived value with new id()
                 else:
                     # No explicit changed_keys — use id() comparison as fallback.
@@ -372,14 +392,22 @@ class RustBridgeMixin:
                             context[key] = value  # new key
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
+                        elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
+                            if prev_immutables.get(key, _MISSING) != value:
+                                context[key] = value
                         elif id(value) != prev_refs.get(key):
                             context[key] = value  # different object reference
             else:
                 # First render: send everything
                 context = full_context
 
-            # Store refs for next comparison (full context, not filtered)
+            # Store refs for next comparison (full context, not filtered).
+            # We also cache immutable VALUES for the next call's equality
+            # check — id() is unreliable on interned primitives.
             self._prev_context_refs = {k: id(v) for k, v in full_context.items()}
+            self._prev_context_immutables = {
+                k: v for k, v in full_context.items() if isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
+            }
             self._sync_done_this_cycle = True
             self._changed_keys = None  # Clear
 

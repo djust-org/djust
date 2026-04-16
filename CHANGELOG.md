@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Derived immutable context values no longer go stale on partial re-render** — `_sync_state_to_rust` previously skipped id()-based change detection for immutable types (int/str/bool/bytes) to avoid false positives from Python's int cache, which meant derived values computed in `get_context_data` (e.g. `completed_count = sum(...)`, `total_count = len(...)`) were never synced to Rust when their sources changed. Partial rendering would then reuse the cached HTML for template nodes depending on those values, leaving counters stale after add/toggle/delete. Fixed by tracking previous VALUES for immutable keys and comparing by equality. Regression tests in `test_changed_tracking.py::TestDerivedImmutableSync`.
+
 - **VDOM input value leak on name change** — When the patcher morphs an input into a different field (e.g., wizard step 1 name → step 2 email), the old field's typed value no longer leaks into the new field. Both `morphElement` and `SetAttr` patches now clear `.value` when the `name` attribute changes.
 
 - **In-place dict mutation detection** — `_snapshot_assigns` now fingerprints list contents (id + dict values hash) to detect mutations like `todo['completed'] = True` that don't change the list's id or length. Falls back to id-only for unhashable values.

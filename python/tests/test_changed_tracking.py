@@ -611,3 +611,122 @@ class TestDerivedContextSubObjectSync:
 
         # person_data should NOT be in second_call since its parent didn't change
         assert "person_data" not in second_call
+
+
+class TestDerivedImmutableSync:
+    """Derived IMMUTABLE context values (int/str counters like
+    `completed_count = sum(...)`) must be synced when their computed value
+    changes — even though they aren't in `_changed_keys` (because they're
+    not instance attrs) and aren't detected by `id()` comparison (because
+    Python interns small ints and strings).
+
+    Regression: the Todo example's `{{ completed_count }}` / `{{ total_count }}`
+    stats counters stayed stale after a todo was deleted — the stats text
+    template node skipped re-render because its deps (`completed_count`) did
+    not intersect `_changed_keys = {'todos'}`, and the new context value was
+    never pushed to Rust because id() comparison was skipped for ints.
+    """
+
+    def test_derived_int_counter_synced_when_source_list_changes(self, mock_request):
+        """int counter computed from a list length must sync when list changes."""
+
+        class TodoStatsView(LiveView):
+            template = "<div dj-root>{{ total_count }} / {{ completed_count }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.todos = []
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                context["total_count"] = len(self.todos)
+                context["completed_count"] = sum(1 for t in self.todos if t.get("completed"))
+                return context
+
+        view = TodoStatsView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        # First render — sends everything
+        view._sync_state_to_rust()
+
+        # Append one COMPLETED todo; mark todos as changed. Both derived
+        # counters change values (0→1).
+        view.todos = [*view.todos, {"id": 1, "text": "buy milk", "completed": True}]
+        view._changed_keys = {"todos"}
+        view._sync_state_to_rust()
+        second = mock_rust.update_state.call_args[0][0]
+
+        # Both derived counters must be synced because both values changed.
+        assert second.get("total_count") == 1
+        assert second.get("completed_count") == 1
+
+        # Now remove the todo (the case that was broken for delete).
+        view.todos = []
+        view._changed_keys = {"todos"}
+        view._sync_state_to_rust()
+        third = mock_rust.update_state.call_args[0][0]
+
+        assert third.get("total_count") == 0
+        assert third.get("completed_count") == 0
+
+    def test_derived_string_synced_when_value_changes(self, mock_request):
+        """str derived value must sync when its text changes."""
+
+        class StatusView(LiveView):
+            template = "<div dj-root>{{ label }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.ready = False
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                context["label"] = "ready" if self.ready else "pending"
+                return context
+
+        view = StatusView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        view._sync_state_to_rust()
+
+        view.ready = True
+        view._changed_keys = {"ready"}
+        view._sync_state_to_rust()
+        second = mock_rust.update_state.call_args[0][0]
+
+        assert second.get("label") == "ready"
+
+    def test_unchanged_immutable_not_resent(self, mock_request):
+        """Immutable equality must be checked: identical values must NOT be
+        resent to Rust (would trigger spurious node re-renders)."""
+
+        class FixedView(LiveView):
+            template = "<div dj-root>{{ n }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.other = 0
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                context["n"] = 42  # constant
+                return context
+
+        view = FixedView()
+        view.mount(mock_request)
+
+        mock_rust = Mock()
+        view._rust_view = mock_rust
+
+        view._sync_state_to_rust()
+
+        view.other = 1
+        view._changed_keys = {"other"}
+        view._sync_state_to_rust()
+        second = mock_rust.update_state.call_args[0][0]
+
+        # n didn't change — must not be in the diff sent to Rust
+        assert "n" not in second
