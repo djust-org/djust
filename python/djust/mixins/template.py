@@ -536,7 +536,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         logger.debug("[LiveView] _rust_view after init: %s", self._rust_view)
 
-        self._sync_state_to_rust()
+        # Skip sync if already done this cycle (avoids double-sync which
+        # causes false-positive id() changes and defeats the text fast path).
+        if not getattr(self, "_sync_done_this_cycle", False):
+            self._sync_state_to_rust()
+        self._sync_done_this_cycle = False  # Reset for next cycle
 
         result = self._rust_view.render_with_diff()
         html, patches_json, version = result

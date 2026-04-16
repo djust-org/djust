@@ -305,39 +305,50 @@ class RustBridgeMixin:
 
             # Determine which context to send to Rust
             if prev_refs:
-                # Collect sub-object ids from changed values so derived context
-                # vars that share an inner object are detected (see #703).
-                changed_sub_ids = set()
                 if changed_keys:
+                    # Explicit change tracking from handle_event's snapshot
+                    # detection. Trust it exclusively — don't also run id()
+                    # comparison which produces false positives due to Python
+                    # int cache misses on the double-sync path.
+                    changed_sub_ids = set()
                     for key in changed_keys:
-                        # Look up from instance attrs (not context dict) because
-                        # changed_keys contains instance attr names which may not
-                        # appear directly in the template context. Also check
-                        # full_context in case the attr was renamed/derived.
                         val = getattr(self, key, None) or full_context.get(key)
                         if val is not None:
                             _collect_sub_ids(val, changed_sub_ids)
 
-                # Incremental: only send values that actually changed
-                context = {}
-                for key, value in full_context.items():
-                    if changed_keys and key in changed_keys:
-                        context[key] = value  # instance attr changed (snapshot)
-                    elif key not in prev_refs:
-                        context[key] = value  # new key
-                    elif getattr(value, "_dirty", False):
-                        context[key] = value  # TypedState with dirty flag
-                    elif id(value) != prev_refs.get(key):
-                        context[key] = value  # different object reference
-                    elif changed_sub_ids and id(value) in changed_sub_ids:
-                        context[key] = value  # sub-object of a changed value (#703)
-                    # else: unchanged — Rust already has it
+                    context = {}
+                    for key in changed_keys:
+                        if key in full_context:
+                            context[key] = full_context[key]
+                    # Also include new keys and sub-objects of changed values
+                    for key, value in full_context.items():
+                        if key in context:
+                            continue
+                        if key not in prev_refs:
+                            context[key] = value  # new key
+                        elif getattr(value, "_dirty", False):
+                            context[key] = value  # TypedState dirty flag
+                        elif changed_sub_ids and id(value) in changed_sub_ids:
+                            context[key] = value  # sub-object of changed (#703)
+                else:
+                    # No explicit changed_keys — use id() comparison as fallback.
+                    # This path runs on the internal sync from render_with_diff
+                    # and for in-place mutations without snapshot detection.
+                    context = {}
+                    for key, value in full_context.items():
+                        if key not in prev_refs:
+                            context[key] = value  # new key
+                        elif getattr(value, "_dirty", False):
+                            context[key] = value  # TypedState dirty flag
+                        elif id(value) != prev_refs.get(key):
+                            context[key] = value  # different object reference
             else:
                 # First render: send everything
                 context = full_context
 
             # Store refs for next comparison (full context, not filtered)
             self._prev_context_refs = {k: id(v) for k, v in full_context.items()}
+            self._sync_done_this_cycle = True
             self._changed_keys = None  # Clear
 
             # Clear dirty flags on TypedState objects after sync
