@@ -4979,7 +4979,7 @@ function preserveFormValues(container, updateFn) {
     // Only save the focused form element (user is actively editing)
     if (active && container.contains(active) &&
         (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT' || active.tagName === 'SELECT')) {
-        saved = { tag: active.tagName.toLowerCase() };
+        saved = { tag: active.tagName.toLowerCase(), originalName: active.name };
         // Build a matching key: prefer id, then name, then positional index
         if (active.id) {
             saved.findBy = 'id';
@@ -5636,6 +5636,12 @@ function applySinglePatch(patch) {
                         node.value = attrVal;
                     }
                     node.setAttribute(attrKey, attrVal);
+                } else if (attrKey === 'name' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
+                    // Input name changed = different field. Clear the value
+                    // so the old field's content doesn't leak into the new field.
+                    node.setAttribute(attrKey, attrVal);
+                    const serverValue = node.getAttribute('value') || '';
+                    node.value = serverValue;
                 } else if (attrKey === 'checked' && node.tagName === 'INPUT') {
                     node.checked = true;
                     node.setAttribute('checked', '');
