@@ -168,34 +168,47 @@ class TestSnapshotAssigns:
         assert snapshot["coords"] is view.coords
         assert snapshot["tags"] is view.tags
 
-    def test_mutable_types_deepcopied(self):
-        """Mutable types should be deep-copied (different id)."""
+    def test_mutable_types_fingerprinted(self):
+        """Mutable types use identity+fingerprint (id, length, etc.)."""
         view = LiveView()
         view.items = [1, 2, 3]
         view.config = {"key": "value"}
 
         snapshot = _snapshot_assigns(view)
 
-        # Mutable values should be copies, not the same object
-        assert snapshot["items"] is not view.items
-        assert snapshot["items"] == view.items
-        assert snapshot["config"] is not view.config
-        assert snapshot["config"] == view.config
+        # Lists: (id, length)
+        assert snapshot["items"] == (id(view.items), 3)
+        # Dicts: (id, length, keys_tuple)
+        assert snapshot["config"][0] == id(view.config)
+        assert snapshot["config"][1] == 1  # length
 
-    def test_non_copyable_uses_sentinel(self):
-        """Non-copyable objects get unique sentinel (never equals anything)."""
+        # Same values produce same snapshot
+        snapshot2 = _snapshot_assigns(view)
+        assert snapshot == snapshot2
 
-        class NoCopy:
-            def __deepcopy__(self, memo):
-                raise TypeError("Cannot copy")
+        # Mutation detected: append changes length
+        view.items.append(4)
+        snapshot3 = _snapshot_assigns(view)
+        assert snapshot3["items"] != snapshot["items"]
+
+    def test_non_copyable_uses_identity(self):
+        """Non-copyable objects use id() — reassignment detected, mutation not."""
+
+        class Custom:
+            pass
 
         view = LiveView()
-        view.weird = NoCopy()
+        view.weird = Custom()
 
         snapshot = _snapshot_assigns(view)
         assert "weird" in snapshot
-        # Sentinel should never equal itself or the original
-        assert snapshot["weird"] != view.weird
+        # Same object → same snapshot
+        snapshot2 = _snapshot_assigns(view)
+        assert snapshot["weird"] == snapshot2["weird"]
+        # New object → different snapshot
+        view.weird = Custom()
+        snapshot3 = _snapshot_assigns(view)
+        assert snapshot3["weird"] != snapshot["weird"]
 
     def test_no_static_assigns_skip(self):
         """After removing static_assigns, all public attrs are always included."""
