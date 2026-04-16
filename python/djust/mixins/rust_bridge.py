@@ -320,7 +320,12 @@ class RustBridgeMixin:
                     for key in changed_keys:
                         if key in full_context:
                             context[key] = full_context[key]
-                    # Also include new keys and sub-objects of changed values
+                    # Also include derived values whose id() changed.
+                    # The explicit _changed_keys only tracks direct instance attrs.
+                    # Derived values (e.g., 'products' from self._products_cache)
+                    # need id() comparison to detect changes from private attrs.
+                    # Only check non-immutable types to avoid int cache false positives.
+                    _IMMUTABLE = (int, float, bool, str, bytes, type(None))
                     for key, value in full_context.items():
                         if key in context:
                             continue
@@ -330,6 +335,8 @@ class RustBridgeMixin:
                             context[key] = value  # TypedState dirty flag
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
+                        elif not isinstance(value, _IMMUTABLE) and id(value) != prev_refs.get(key):
+                            context[key] = value  # derived value with new id()
                 else:
                     # No explicit changed_keys — use id() comparison as fallback.
                     # This path runs on the internal sync from render_with_diff
