@@ -422,7 +422,12 @@ class RustBridgeMixin:
             _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
             _skip_keys = _FRAMEWORK_KEYS | _temp_assigns
             if prev_refs and context:
-                user_changed = [k for k in context if k not in _skip_keys]
+                # Filter out auto-generated _count keys (from context.py
+                # auto-add for lists) — they have unstable id() on alternating
+                # sync calls due to the double-sync pattern.
+                user_changed = [
+                    k for k in context if k not in _skip_keys and not k.endswith("_count")
+                ]
                 if user_changed:
                     self._rust_view.set_changed_keys(user_changed)
 
