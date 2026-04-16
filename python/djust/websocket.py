@@ -179,7 +179,20 @@ def _snapshot_assigns(view_instance):
         # Identity + shallow fingerprint for mutable containers
         vid = id(v)
         if isinstance(v, list):
-            snapshot[k] = (vid, len(v))
+            # Include a content fingerprint to catch in-place dict mutations
+            # inside the list (e.g., todo['completed'] = True).
+            # Hash the id of each element to detect object replacements,
+            # plus a sample of dict values to detect in-place mutations.
+            if v and isinstance(v[0], dict) and len(v) < 100:
+                content_fp = hash(
+                    tuple(
+                        (id(item), tuple(item.values()) if len(item) < 10 else id(item))
+                        for item in v
+                    )
+                )
+                snapshot[k] = (vid, len(v), content_fp)
+            else:
+                snapshot[k] = (vid, len(v))
         elif isinstance(v, dict):
             snapshot[k] = (vid, len(v), tuple(v.keys()) if len(v) < 50 else len(v))
         elif isinstance(v, set):
