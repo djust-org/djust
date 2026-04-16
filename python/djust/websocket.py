@@ -1972,58 +1972,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                         version,
                                     )
                             else:
-                                # Batch sync work into a single thread hop
-                                # to avoid multiple sync_to_async crossings
-                                # (each hop costs ~0.5-2ms overhead).
-                                def _sync_context_and_render():
-                                    """Single sync function that gets context and renders.
+                                with tracker.track("Context + Render") as batch_node:
+                                    # Split into I/O and CPU phases:
+                                    # 1. get_context_data() may do ORM queries → thread
+                                    # 2. Rust render is pure CPU → run on event loop
+                                    t_ctx_start = time.perf_counter()
+                                    context = await sync_to_async(
+                                        self.view_instance.get_context_data
+                                    )()
+                                    ctx_ms = (time.perf_counter() - t_ctx_start) * 1000
 
-                                    Returns (ctx, html, patches, version). Note: ctx
-                                    (the result of get_context_data()) is returned for
-                                    tracking/diagnostics only — it feeds
-                                    tracker.track_context_size() and
-                                    _build_context_snapshot(), NOT the render path.
-                                    render_with_diff() builds its own context internally.
-                                    """
-                                    # Sub-phase timing: preserve granularity lost by
-                                    # batching into a single sync_to_async hop.
-                                    t0 = time.perf_counter()
-                                    ctx = self.view_instance.get_context_data()
-                                    t1 = time.perf_counter()
+                                    # Rust FFI: _sync_state_to_rust + render_with_diff
+                                    # are pure CPU (<1ms) — safe on event loop.
+                                    t_render_start = time.perf_counter()
                                     with profiler.profile(profiler.OP_RENDER):
-                                        r_html, r_patches, r_version = (
+                                        html, patches, version = (
                                             self.view_instance.render_with_diff()
                                         )
-                                    t2 = time.perf_counter()
-                                    context_prep_ms = (t1 - t0) * 1000
-                                    vdom_diff_ms = (t2 - t1) * 1000
-                                    logger.debug(
-                                        "[djust] _sync_context_and_render sub-phases: "
-                                        "context_prep=%.2fms vdom_diff=%.2fms",
-                                        context_prep_ms,
-                                        vdom_diff_ms,
-                                    )
-                                    return (
-                                        ctx,
-                                        r_html,
-                                        r_patches,
-                                        r_version,
-                                        context_prep_ms,
-                                        vdom_diff_ms,
-                                    )
-
-                                with tracker.track("Context + Render (batched)") as batch_node:
-                                    # Batch into a single sync_to_async hop to avoid
-                                    # multiple thread crossings. get_context_data()
-                                    # may do ORM queries so must run in a thread.
-                                    (
-                                        context,
-                                        html,
-                                        patches,
-                                        version,
-                                        ctx_ms,
-                                        diff_ms,
-                                    ) = await sync_to_async(_sync_context_and_render)()
+                                    diff_ms = (time.perf_counter() - t_render_start) * 1000
                                     # Record sub-phase durations so the profiler can
                                     # still distinguish slow context prep from slow
                                     # VDOM diffing, even though they share one thread hop.
