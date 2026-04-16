@@ -1974,19 +1974,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     )
                             else:
                                 with tracker.track("Context + Render") as batch_node:
-                                    # Tier 2 async: if both handler and get_context_data
-                                    # are async, run everything on the event loop — zero
-                                    # sync_to_async hops. Otherwise batch in a thread.
+                                    # Check if we can skip sync_to_async entirely:
+                                    # - async get_context_data → await directly
+                                    # - sync_safe = True → no I/O, safe on event loop
                                     _gcd = self.view_instance.get_context_data
-                                    if inspect.iscoroutinefunction(_gcd):
-                                        # Async path: no thread hops needed.
-                                        # get_context_data uses async ORM.
+                                    _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(
+                                        self.view_instance, "sync_safe", False
+                                    )
+                                    if _skip_thread:
+                                        # Fast path: run everything on the event loop.
                                         t0 = time.perf_counter()
-                                        context = await _gcd()
+                                        if inspect.iscoroutinefunction(_gcd):
+                                            context = await _gcd()
+                                        else:
+                                            context = _gcd()
                                         ctx_ms = (time.perf_counter() - t0) * 1000
                                         # Rust render is pure CPU — safe on event loop.
-                                        # Pass preloaded context to avoid sync
-                                        # get_context_data call inside render_with_diff.
                                         t1 = time.perf_counter()
                                         with profiler.profile(profiler.OP_RENDER):
                                             html, patches, version = (
