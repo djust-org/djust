@@ -759,7 +759,10 @@ function morphElement(existing, desired) {
 
     // --- Form element value sync ---
     const isFocused = document.activeElement === existing;
-    const skipValue = isFocused && !_isBroadcastUpdate;
+    // Skip value sync for focused inputs to preserve what the user is typing,
+    // UNLESS the input's identity changed (different name = different field).
+    const nameChanged = existing.getAttribute('name') !== desired.getAttribute('name');
+    const skipValue = isFocused && !_isBroadcastUpdate && !nameChanged;
 
     if (existing.tagName === 'INPUT' && !skipValue) {
         if (existing.type === 'checkbox' || existing.type === 'radio') {
