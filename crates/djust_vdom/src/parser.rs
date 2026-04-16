@@ -19,8 +19,8 @@
 
 use crate::{next_djust_id, reset_id_counter, should_trace, VNode};
 use djust_core::{DjangoRustError, Result};
-use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
+use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
 
@@ -217,6 +217,63 @@ pub fn parse_html_continue(html: &str) -> Result<VNode> {
     // Find the body or first child
     let root = find_root(&dom.document);
     handle_to_vnode(&root)
+}
+
+/// Parse an HTML fragment in the context of a given parent element.
+///
+/// Unlike `parse_html`, this does NOT expect a full document — it parses
+/// the string as if it were innerHTML of an element with tag `context_tag`.
+/// That context affects tokenization: `<tr>` inside `<table>` is valid,
+/// but top-level `<tr>` gets discarded. Use the parent element's tag as
+/// context (e.g. "body", "table", "select") to get correct behavior.
+///
+/// Returns the list of VNode roots produced by the fragment.  For most
+/// fragments this is one element; for fragments that emit sibling elements
+/// (e.g. `{% if %}` around multiple roots) it's several.
+///
+/// Does NOT reset the dj-id counter — new elements continue the sequence.
+pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
+    parser_trace!(
+        "parse_html_fragment() - parsing {} bytes in <{}> context",
+        html.len(),
+        context_tag
+    );
+
+    let context_name = QualName::new(None, ns!(html), LocalName::from(context_tag));
+    let dom = parse_fragment(
+        RcDom::default(),
+        ParseOpts::default(),
+        context_name,
+        vec![],
+        false,
+    )
+    .from_utf8()
+    .read_from(&mut html.as_bytes())
+    .map_err(|e| DjangoRustError::VdomError(format!("Failed to parse fragment: {e}")))?;
+
+    // parse_fragment wraps content in <html>...</html>. The fragment roots
+    // are the children of that wrapper.
+    let document = dom.document;
+    let doc_children = document.children.borrow();
+    let html_wrapper = doc_children
+        .iter()
+        .find(|c| matches!(c.data, NodeData::Element { ref name, .. } if name.local.as_ref() == "html"))
+        .ok_or_else(|| DjangoRustError::VdomError("fragment parse: missing html wrapper".into()))?
+        .clone();
+    drop(doc_children);
+
+    let mut roots = Vec::new();
+    for child in html_wrapper.children.borrow().iter() {
+        // Skip whitespace-only text nodes between roots (common at fragment
+        // boundaries due to template indentation)
+        if let NodeData::Text { ref contents } = child.data {
+            if contents.borrow().chars().all(char::is_whitespace) {
+                continue;
+            }
+        }
+        roots.push(handle_to_vnode(child)?);
+    }
+    Ok(roots)
 }
 
 fn find_root(handle: &Handle) -> Handle {
@@ -934,5 +991,54 @@ mod tests {
         assert_eq!(normalize_svg_attribute("class"), "class");
         assert_eq!(normalize_svg_attribute("id"), "id");
         assert_eq!(normalize_svg_attribute("fill"), "fill");
+    }
+
+    // --- parse_html_fragment tests ---
+
+    #[test]
+    fn fragment_single_div_in_body() {
+        let roots = parse_html_fragment(r#"<div class="x">hi</div>"#, "body").unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].tag, "div");
+        assert_eq!(roots[0].attrs.get("class").map(String::as_str), Some("x"));
+    }
+
+    #[test]
+    fn fragment_multiple_root_siblings() {
+        let roots = parse_html_fragment(r#"<div>a</div><div>b</div>"#, "body").unwrap();
+        assert_eq!(roots.len(), 2);
+        assert!(roots.iter().all(|n| n.tag == "div"));
+    }
+
+    #[test]
+    fn fragment_tr_in_table_context() {
+        // <tr> at document top-level would be discarded; with "table" context
+        // html5ever should preserve it.
+        let roots = parse_html_fragment(r#"<tr><td>cell</td></tr>"#, "table").unwrap();
+        // html5ever may auto-insert <tbody>; check we see something meaningful
+        assert!(!roots.is_empty(), "expected fragment roots for table row");
+    }
+
+    #[test]
+    fn fragment_whitespace_between_roots_skipped() {
+        let roots = parse_html_fragment("  <div>a</div>\n  <div>b</div>\n  ", "body").unwrap();
+        // Leading/trailing whitespace and inter-root whitespace should be
+        // filtered so we don't mis-count fragment roots.
+        assert_eq!(roots.iter().filter(|n| n.tag == "div").count(), 2);
+    }
+
+    #[test]
+    fn fragment_preserves_text_content() {
+        let roots = parse_html_fragment(r#"<span>Hello <b>world</b></span>"#, "body").unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].tag, "span");
+        // The text content includes "Hello " text node and <b> child
+        assert!(!roots[0].children.is_empty());
+    }
+
+    #[test]
+    fn fragment_empty_html_returns_no_roots() {
+        let roots = parse_html_fragment("", "body").unwrap();
+        assert!(roots.is_empty());
     }
 }
