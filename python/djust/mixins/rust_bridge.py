@@ -254,12 +254,17 @@ class RustBridgeMixin:
         self._template_deps = deps
         return deps
 
-    def _sync_state_to_rust(self):
+    def _sync_state_to_rust(self, preloaded_context=None):
         """Sync Python state to Rust backend.
 
         Phoenix-style change tracking: only sends values that actually changed
         since the last render. Rust's update_state() merges (extends), so
         unchanged keys are retained from the previous render.
+
+        Args:
+            preloaded_context: If provided, use this instead of calling
+                get_context_data(). Used by the async path where context
+                was already fetched with await.
 
         Three-layer detection:
           1. Instance attribute changes — snapshot-based (_changed_keys from handle_event)
@@ -270,7 +275,9 @@ class RustBridgeMixin:
             from ..components.base import Component, LiveComponent
             from django import forms
 
-            full_context = self.get_context_data()
+            full_context = (
+                preloaded_context if preloaded_context is not None else self.get_context_data()
+            )
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
             # Cache it to avoid creating a new string object each call,

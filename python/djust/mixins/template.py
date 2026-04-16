@@ -507,13 +507,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             return self.render(request)
 
     def render_with_diff(
-        self, request=None, extract_liveview_root=False
+        self, request=None, extract_liveview_root=False, preloaded_context=None
     ) -> tuple[str, Optional[str], int]:
         """
         Render the view and compute diff from last render.
 
         Args:
             extract_liveview_root: If True, extract innerHTML of [dj-root]
+            preloaded_context: If provided, pass to _sync_state_to_rust
+                instead of calling get_context_data() again. Used by the
+                async websocket path where context was already awaited.
 
         Returns:
             Tuple of (html, patches_json, version)
@@ -539,7 +542,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Skip sync if already done this cycle (avoids double-sync which
         # causes false-positive id() changes and defeats the text fast path).
         if not getattr(self, "_sync_done_this_cycle", False):
-            self._sync_state_to_rust()
+            self._sync_state_to_rust(preloaded_context=preloaded_context)
         self._sync_done_this_cycle = False  # Reset for next cycle
 
         result = self._rust_view.render_with_diff()
