@@ -184,13 +184,21 @@ def _snapshot_assigns(view_instance):
             # Hash the id of each element to detect object replacements,
             # plus a sample of dict values to detect in-place mutations.
             if v and isinstance(v[0], dict) and len(v) < 100:
-                content_fp = hash(
-                    tuple(
-                        (id(item), tuple(item.values()) if len(item) < 10 else id(item))
-                        for item in v
+                try:
+                    content_fp = hash(
+                        tuple(
+                            (
+                                id(item),
+                                tuple(item.values()) if len(item) < 10 else id(item),
+                            )
+                            for item in v
+                        )
                     )
-                )
-                snapshot[k] = (vid, len(v), content_fp)
+                    snapshot[k] = (vid, len(v), content_fp)
+                except TypeError:
+                    # Dict values contain unhashable types (nested lists/dicts)
+                    # Fall back to id+length only
+                    snapshot[k] = (vid, len(v))
             else:
                 snapshot[k] = (vid, len(v))
         elif isinstance(v, dict):
