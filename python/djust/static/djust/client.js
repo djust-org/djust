@@ -5636,7 +5636,7 @@ function applySinglePatch(patch) {
                         node.value = attrVal;
                     }
                     node.setAttribute(attrKey, attrVal);
-                } else if (attrKey === 'name' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
+                } else if (attrKey === 'name' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA' || node.tagName === 'SELECT')) {
                     // Input name changed = different field. Clear the value
                     // so the old field's content doesn't leak into the new field.
                     node.setAttribute(attrKey, attrVal);

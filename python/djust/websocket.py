@@ -179,25 +179,24 @@ def _snapshot_assigns(view_instance):
         # Identity + shallow fingerprint for mutable containers
         vid = id(v)
         if isinstance(v, list):
-            # Include a content fingerprint to catch in-place dict mutations
-            # inside the list (e.g., todo['completed'] = True).
-            # Hash the id of each element to detect object replacements,
-            # plus a sample of dict values to detect in-place mutations.
-            if v and isinstance(v[0], dict) and len(v) < 100:
+            # Include a content fingerprint to catch in-place mutations
+            # inside the list (e.g., todo['completed'] = True, matrix[0].append(5)).
+            if v and len(v) < 100:
                 try:
                     content_fp = hash(
                         tuple(
                             (
                                 id(item),
-                                tuple(item.values()) if len(item) < 10 else id(item),
+                                tuple(item.values())
+                                if isinstance(item, dict) and len(item) < 10
+                                else id(item),
                             )
                             for item in v
                         )
                     )
                     snapshot[k] = (vid, len(v), content_fp)
                 except TypeError:
-                    # Dict values contain unhashable types (nested lists/dicts)
-                    # Fall back to id+length only
+                    # Unhashable values — fall back to id+length only
                     snapshot[k] = (vid, len(v))
             else:
                 snapshot[k] = (vid, len(v))
@@ -2014,9 +2013,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     )
 
                                 with tracker.track("Context + Render (batched)") as batch_node:
-                                    # Run synchronously on the event loop — the actual
-                                    # work is <1ms (Rust FFI + Python dict ops, no I/O).
-                                    # Eliminates ~20ms sync_to_async thread hop overhead.
+                                    # Batch into a single sync_to_async hop to avoid
+                                    # multiple thread crossings. get_context_data()
+                                    # may do ORM queries so must run in a thread.
                                     (
                                         context,
                                         html,
@@ -2024,7 +2023,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                         version,
                                         ctx_ms,
                                         diff_ms,
-                                    ) = _sync_context_and_render()
+                                    ) = await sync_to_async(_sync_context_and_render)()
                                     # Record sub-phase durations so the profiler can
                                     # still distinguish slow context prep from slow
                                     # VDOM diffing, even though they share one thread hop.

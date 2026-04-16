@@ -10,6 +10,8 @@ import inspect
 import logging
 from typing import Callable, Dict, Any, Optional
 
+from asgiref.sync import sync_to_async
+
 
 from .config import config as djust_config
 from .decorators import is_event_handler
@@ -233,10 +235,8 @@ async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = No
             return await handler(**params)
         return await handler()
     else:
-        # Run sync handler directly on the event loop.
-        # Most handlers are pure CPU work (<1ms) — sync_to_async thread hops
-        # add ~7ms overhead under Daphne. Handlers that need I/O (database,
-        # network) should be declared async or use @background.
+        # Sync handler — run via sync_to_async to avoid blocking the event
+        # loop. Handlers commonly do ORM queries or other I/O.
         if params:
-            return handler(**params)
-        return handler()
+            return await sync_to_async(handler)(**params)
+        return await sync_to_async(handler)()

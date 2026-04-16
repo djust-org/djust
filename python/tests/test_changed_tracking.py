@@ -176,8 +176,9 @@ class TestSnapshotAssigns:
 
         snapshot = _snapshot_assigns(view)
 
-        # Lists: (id, length)
-        assert snapshot["items"] == (id(view.items), 3)
+        # Lists: (id, length, content_fingerprint) for non-empty lists
+        assert snapshot["items"][0] == id(view.items)
+        assert snapshot["items"][1] == 3
         # Dicts: (id, length, keys_tuple)
         assert snapshot["config"][0] == id(view.config)
         assert snapshot["config"][1] == 1  # length

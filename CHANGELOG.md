@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Text-only VDOM fast path** — When all changed template fragments are plain text (no HTML tags), skip both html5ever parsing and VDOM diffing entirely. The old VDOM is mutated in-place via a fragment→text-node map built on first render, and SetText patches are produced directly. For counter-style updates: parse phase drops from ~12ms to ~0.001ms.
 
+- **Block flattening for partial rendering** — `{% block %}` nodes left by Django's template engine are flattened to expose each child as a separate fragment. This enables the text fast path to activate on pages using `{% extends %}` where Django resolves blocks.
+
+- **Faster change detection** — `_snapshot_assigns` uses identity + shallow fingerprints (id, length, content hash for list-of-dicts) instead of `copy.deepcopy`. Framework-internal keys (`csrf_token`, `kwargs`, `temporary_assigns`, `DATE_FORMAT`, `TIME_FORMAT`) and auto-generated `_count` keys are excluded from `set_changed_keys` to avoid spurious re-renders.
+
+- **Optimized VNode parser** — Pre-sized attribute HashMap, eliminated redundant `to_lowercase()` call, removed form element debug output.
+
+### Fixed
+
+- **VDOM input value leak on name change** — When the patcher morphs an input into a different field (e.g., wizard step 1 name → step 2 email), the old field's typed value no longer leaks into the new field. Both `morphElement` and `SetAttr` patches now clear `.value` when the `name` attribute changes.
+
+- **In-place dict mutation detection** — `_snapshot_assigns` now fingerprints list contents (id + dict values hash) to detect mutations like `todo['completed'] = True` that don't change the list's id or length. Falls back to id-only for unhashable values.
+
+- **Derived context value detection** — When `_changed_keys` is set, the sync also checks non-immutable context values by id() to catch derived values (e.g., `products` from `_products_cache`) that change via private attributes.
+
 ## [0.4.4] - 2026-04-15
 
 ### Changed

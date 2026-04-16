@@ -13,6 +13,23 @@ from ..utils import get_template_dirs
 
 logger = logging.getLogger(__name__)
 
+# Keys excluded from set_changed_keys — these are framework-internal values
+# that change id() every render but don't affect template output.
+_FRAMEWORK_KEYS = frozenset(
+    {
+        "csrf_token",
+        "kwargs",
+        "temporary_assigns",
+        "DATE_FORMAT",
+        "TIME_FORMAT",
+    }
+)
+
+# Immutable types for id() comparison filtering — these never need
+# id() checks since value equality is sufficient and Python's int
+# cache makes id() unreliable for small ints across calls.
+_IMMUTABLE_TYPES_FOR_SYNC = (int, float, bool, str, bytes, type(None))
+
 try:
     from .._rust import RustLiveView
 except ImportError:
@@ -325,7 +342,6 @@ class RustBridgeMixin:
                     # Derived values (e.g., 'products' from self._products_cache)
                     # need id() comparison to detect changes from private attrs.
                     # Only check non-immutable types to avoid int cache false positives.
-                    _IMMUTABLE = (int, float, bool, str, bytes, type(None))
                     for key, value in full_context.items():
                         if key in context:
                             continue
@@ -335,7 +351,9 @@ class RustBridgeMixin:
                             context[key] = value  # TypedState dirty flag
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
-                        elif not isinstance(value, _IMMUTABLE) and id(value) != prev_refs.get(key):
+                        elif not isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC) and id(
+                            value
+                        ) != prev_refs.get(key):
                             context[key] = value  # derived value with new id()
                 else:
                     # No explicit changed_keys — use id() comparison as fallback.
@@ -423,29 +441,20 @@ class RustBridgeMixin:
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a
             # previous set_changed_keys call with meaningful keys.
-            # Exclude framework-internal keys that change id() every call
-            # but don't affect template output (they'd cause unnecessary
-            # re-renders of nodes that depend on these keys).
-            _FRAMEWORK_KEYS = frozenset(
-                {
-                    "csrf_token",
-                    "kwargs",
-                    "temporary_assigns",
-                    "DATE_FORMAT",
-                    "TIME_FORMAT",
-                }
-            )
             # Also exclude temporary_assigns keys — they're reset to new
             # objects after each render, always getting new id().
             _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
             _skip_keys = _FRAMEWORK_KEYS | _temp_assigns
+            # Collect auto-generated _count keys (context.py adds {list_key}_count).
+            # Only exclude keys where the base name is a list in full_context.
+            _auto_count_keys = set()
+            for k, v in full_context.items():
+                if isinstance(v, list):
+                    _auto_count_keys.add(f"{k}_count")
+            _skip_keys |= _auto_count_keys
+
             if prev_refs and context:
-                # Filter out auto-generated _count keys (from context.py
-                # auto-add for lists) — they have unstable id() on alternating
-                # sync calls due to the double-sync pattern.
-                user_changed = [
-                    k for k in context if k not in _skip_keys and not k.endswith("_count")
-                ]
+                user_changed = [k for k in context if k not in _skip_keys]
                 if user_changed:
                     self._rust_view.set_changed_keys(user_changed)
 
