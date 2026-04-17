@@ -219,6 +219,69 @@ def create_server():
             }
         )
 
+    # === Observability tools ===
+    #
+    # These call the dev server's /_djust/observability/ endpoints (installed
+    # in the project's urls.py as `djust.observability.urls`). Cross-process
+    # because djust MCP runs in a separate process from the Django server.
+    #
+    # The base URL defaults to http://127.0.0.1:8000 and can be overridden via
+    # the DJUST_DEV_SERVER_URL env var for non-standard ports.
+
+    @mcp.tool()
+    def get_view_assigns(session_id: str) -> str:
+        """Read the live LiveView's public state (self.* non-underscore attrs).
+
+        Args:
+            session_id: WebSocket session id from the connect frame's
+                `session_id` field. Persistent per WS connection.
+
+        Returns JSON: {session_id, view_class, view_module, assigns} where
+        `assigns` is the serializable {attr: value} dict of the view.
+
+        Requires djust.observability.urls included in the project's urls.py
+        with DEBUG=True. Complements the client-side `djust_state_diff`
+        from djust-browser-mcp — this reads the actual server-side source
+        of truth rather than inferred client state.
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/view_assigns/"
+        try:
+            r = requests.get(url, params={"session_id": session_id}, timeout=5)
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": (
+                        f"Is the dev server running? Tried {url}. Set "
+                        "DJUST_DEV_SERVER_URL env var for non-8000 ports."
+                    ),
+                }
+            )
+        if r.status_code == 404:
+            return json.dumps(
+                {
+                    "error": f"session {session_id} not registered or endpoint disabled",
+                    "status": 404,
+                    "hint": (
+                        "Check that (a) settings.DEBUG=True, (b) the project "
+                        "urls.py includes `path('_djust/observability/', "
+                        "include('djust.observability.urls'))`, and (c) a "
+                        "WebSocket connection is open for this session."
+                    ),
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
     # === Runtime tools ===
 
     @mcp.tool()
