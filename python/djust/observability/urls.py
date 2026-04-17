@@ -13,11 +13,12 @@ production config still refuses to serve data.
 
 from django.urls import path
 
-from djust.observability.views import health, view_assigns
+from djust.observability.views import health, last_traceback, view_assigns
 
 app_name = "djust_observability"
 
 urlpatterns = [
     path("health/", health, name="health"),
     path("view_assigns/", view_assigns, name="view_assigns"),
+    path("last_traceback/", last_traceback, name="last_traceback"),
 ]

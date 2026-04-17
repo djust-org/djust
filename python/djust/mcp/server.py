@@ -282,6 +282,44 @@ def create_server():
             return json.dumps({"error": r.text, "status": r.status_code})
         return r.text
 
+    @mcp.tool()
+    def get_last_traceback(n: int = 1) -> str:
+        """Read the most-recent captured server-side Python exceptions.
+
+        Args:
+            n: How many entries to return (newest first). Defaults to 1,
+                capped at 50 (ring-buffer size).
+
+        Returns JSON: {count, entries: [{timestamp_ms, exception_type,
+        message, view_class, event_name, traceback, ...}]}.
+
+        Captures flow through djust's single `handle_exception()` entry
+        point — every handler / mount / render error lands in the ring
+        buffer. Single biggest lever for blind debugging: eliminates
+        "can you check the terminal for a traceback?".
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/last_traceback/"
+        try:
+            r = requests.get(url, params={"n": n}, timeout=5)
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": f"Is the dev server running? Tried {url}.",
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
     # === Runtime tools ===
 
     @mcp.tool()

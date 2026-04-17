@@ -17,6 +17,7 @@ from djust.observability.registry import (
     get_registered_session_count,
     get_view_for_session,
 )
+from djust.observability.tracebacks import get_recent_tracebacks
 
 logger = logging.getLogger("djust.observability")
 
@@ -102,3 +103,31 @@ def view_assigns(request):
             "assigns": assigns,
         }
     )
+
+
+@csrf_exempt
+@require_GET
+def last_traceback(request):
+    """Return the most-recent N captured exceptions (newest first).
+
+    Query params:
+        n (optional): how many entries to return. Defaults to 1. Capped
+            at the ring buffer's size.
+
+    Each entry: {timestamp_ms, exception_type, exception_module, message,
+    error_type, event_name, view_class, session_id, traceback}.
+
+    Captures flow through `handle_exception()` — the single entry point
+    for djust-managed errors. Every handler / mount / render error ends
+    up here.
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    try:
+        n = int(request.GET.get("n", "1"))
+    except (TypeError, ValueError):
+        n = 1
+    n = max(1, min(n, 50))
+
+    return JsonResponse({"count": n, "entries": get_recent_tracebacks(n)})
