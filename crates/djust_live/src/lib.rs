@@ -2165,6 +2165,99 @@ fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
             .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
+/// Locate the byte offset in `html` immediately after the opening tag
+/// of the first element bearing a `dj-root` or `dj-view` attribute.
+/// Returns None if no such element is found.
+///
+/// Used to align the scanner's starting point with `find_root` in the
+/// VDOM parser, which begins the VDOM tree at that same element. Without
+/// this alignment, text nodes inside `<head>` (titles, meta, etc.) from
+/// a base template would be counted by the scanner but not appear in
+/// the VDOM, breaking the 1:1 text-node mapping.
+fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
+    let bytes = html.as_bytes();
+    // Find the OPEN tag of the dj-root element and capture its tag name.
+    let mut i = 0;
+    let (open_end, tag_name) = loop {
+        if i >= bytes.len() {
+            return None;
+        }
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < bytes.len() && bytes[j] != b'>' {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            return None;
+        }
+        let tag_body = &bytes[i + 1..j];
+        if tag_body.is_empty() || tag_body[0] == b'/' || tag_body[0] == b'!' {
+            i = j + 1;
+            continue;
+        }
+        let has_marker = tag_body
+            .windows(8)
+            .any(|w| w.eq_ignore_ascii_case(b" dj-root") || w.eq_ignore_ascii_case(b" dj-view"));
+        if !has_marker {
+            i = j + 1;
+            continue;
+        }
+        let name_end = tag_body
+            .iter()
+            .position(|&c| c == b' ' || c == b'\t' || c == b'\n' || c == b'/' || c == b'>')
+            .unwrap_or(tag_body.len());
+        let name = tag_body[..name_end].to_ascii_lowercase();
+        break (j + 1, name);
+    };
+
+    // Now walk forward, balancing open/close tags of the same name, to
+    // find the matching closing tag. Returns the byte offset of that
+    // closing tag's `<`.
+    let mut depth: usize = 1;
+    let mut k = open_end;
+    while k < bytes.len() {
+        if bytes[k] != b'<' {
+            k += 1;
+            continue;
+        }
+        let mut m = k + 1;
+        while m < bytes.len() && bytes[m] != b'>' {
+            m += 1;
+        }
+        if m >= bytes.len() {
+            return None;
+        }
+        let tag_body = &bytes[k + 1..m];
+        if tag_body.is_empty() || tag_body[0] == b'!' {
+            k = m + 1;
+            continue;
+        }
+        let is_close = tag_body[0] == b'/';
+        let name_start = if is_close { 1 } else { 0 };
+        let name_end = tag_body[name_start..]
+            .iter()
+            .position(|&c| c == b' ' || c == b'\t' || c == b'\n' || c == b'/' || c == b'>')
+            .map(|n| name_start + n)
+            .unwrap_or(tag_body.len());
+        let this_name = tag_body[name_start..name_end].to_ascii_lowercase();
+        if this_name == tag_name {
+            if is_close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open_end, k));
+                }
+            } else {
+                depth += 1;
+            }
+        }
+        k = m + 1;
+    }
+    None
+}
+
 /// Scan `html` and return the byte ranges of each text node that would
 /// survive the VDOM parser's whitespace filter, in document order.
 ///
@@ -2304,17 +2397,27 @@ fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
 /// text-node counts don't agree (e.g. due to `<script>`/`<style>` in
 /// the document, which the scanner refuses to count).
 fn build_text_node_index(html: &str, vdom: &VNode) -> Vec<TextNodeEntry> {
-    let Some(runs) = scan_html_text_runs(html) else {
+    // The VDOM is rooted at [dj-root] / [dj-view], so only text nodes
+    // INSIDE that element are in the VDOM. When the template extends a
+    // base, the pre-hydration HTML may include `<html><head><title>…`
+    // before dj-root and `<footer>`/`<script>` siblings after it — all
+    // of which have text the VDOM doesn't. Restrict the scanner's range
+    // to the dj-root element's interior to keep the 1:1 mapping.
+    let (scan_from, scan_to) = find_dj_root_content_range(html).unwrap_or((0, html.len()));
+    let Some(runs) = scan_html_text_runs(&html[scan_from..scan_to]) else {
         return Vec::new();
     };
+    let runs: Vec<(usize, usize)> = runs
+        .into_iter()
+        .map(|(s, e)| (s + scan_from, e + scan_from))
+        .collect();
 
     let mut vdom_nodes: Vec<(Vec<usize>, String, String)> = Vec::new();
     collect_vdom_text_nodes(vdom, &mut vec![], &mut vdom_nodes);
 
-    // Counts must match for the 1:1 positional mapping to hold. If they
-    // don't, silently bail — subsequent fast-path checks will see an
-    // empty index and fall through to full parse.
     if runs.len() != vdom_nodes.len() {
+        // Scanner and VDOM walker disagreed on count — fast-path can't
+        // trust the 1:1 mapping. Fall through to full html5ever parse.
         return Vec::new();
     }
 
