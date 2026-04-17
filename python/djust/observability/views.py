@@ -6,12 +6,19 @@ endpoint so the foundation PR is independently verifiable.
 
 from __future__ import annotations
 
+import logging
+
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
-from djust.observability.registry import get_registered_session_count
+from djust.observability.registry import (
+    get_registered_session_count,
+    get_view_for_session,
+)
+
+logger = logging.getLogger("djust.observability")
 
 
 def _debug_gate():
@@ -39,5 +46,59 @@ def health(request):
             "ok": True,
             "debug": settings.DEBUG,
             "registered_sessions": get_registered_session_count(),
+        }
+    )
+
+
+@csrf_exempt
+@require_GET
+def view_assigns(request):
+    """Return the mounted LiveView's public state for a session.
+
+    Query params:
+        session_id (required): session uuid from the WS handshake ack.
+
+    Response (200):
+        {"session_id": "...", "view_class": "CounterView", "assigns": {...}}
+
+    Response (400): session_id missing.
+    Response (404): DEBUG=False, or session not registered.
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    session_id = request.GET.get("session_id", "").strip()
+    if not session_id:
+        return JsonResponse(
+            {"error": "session_id query param required"},
+            status=400,
+        )
+
+    view = get_view_for_session(session_id)
+    if view is None:
+        return JsonResponse(
+            {"error": f"no view registered for session {session_id}"},
+            status=404,
+        )
+
+    try:
+        assigns = view.get_state()
+    except Exception as e:  # noqa: BLE001
+        # get_state raises TypeError on non-serializable values in DEBUG.
+        # Observability must still return something useful — fall back to
+        # a best-effort shallow dict of repr()s.
+        logger.warning("view.get_state() failed for session %s: %s", session_id, e)
+        assigns = {
+            k: repr(v)[:200]
+            for k, v in view.__dict__.items()
+            if not k.startswith("_") and not callable(v)
+        }
+
+    return JsonResponse(
+        {
+            "session_id": session_id,
+            "view_class": view.__class__.__name__,
+            "view_module": view.__class__.__module__,
+            "assigns": assigns,
         }
     )
