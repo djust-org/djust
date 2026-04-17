@@ -229,6 +229,21 @@ def handle_exception(
     if logger is None:
         logger = logging_module.getLogger("djust.security")
 
+    # Capture for observability ring buffer (AI introspection via the
+    # djust Python MCP). Best-effort — must not break error handling
+    # itself if the observability module is somehow broken.
+    try:
+        from djust.observability.tracebacks import record_traceback
+
+        record_traceback(
+            exception,
+            error_type=error_type,
+            event_name=event_name,
+            view_class=view_class,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     # Build context for logging — sanitize to break taint chain from caller inputs.
     from .log_sanitizer import sanitize_for_log
 
