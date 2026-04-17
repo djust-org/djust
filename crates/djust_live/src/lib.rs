@@ -409,6 +409,12 @@ impl RustLiveViewBackend {
                         PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
                     })?)
                 };
+                // The original text-fast-path mutates VDOM text nodes but
+                // doesn't know about our byte-position index — invalidate
+                // it so the NEXT render rebuilds rather than silently
+                // relying on the content-equality safety net in
+                // try_text_region_fast_path to catch stale offsets.
+                self.text_node_index = None;
                 (vdom, patches_json, parse_ms, 0.0)
             } else if let Some((vdom, text_patches)) = text_region_fast_path {
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
