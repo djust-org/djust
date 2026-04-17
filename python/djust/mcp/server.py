@@ -283,6 +283,51 @@ def create_server():
         return r.text
 
     @mcp.tool()
+    def tail_server_log(since_ms: int = 0, level: str = "INFO", limit: int = 500) -> str:
+        """Read buffered Django/djust log records from the dev server.
+
+        Args:
+            since_ms: Only entries with timestamp > since_ms. Default: entire
+                buffer (500 most recent entries).
+            level: Minimum severity — DEBUG / INFO / WARNING / ERROR / CRITICAL.
+                Default INFO.
+            limit: Cap on entries returned (default + max: 500).
+
+        Returns JSON: {count, since_ms, level, entries:[{timestamp_ms,
+        level, logger_name, message, pathname, lineno, exc_type?,
+        exc_message?}]}.
+
+        djust.* loggers capture at DEBUG+; django.* captures at WARNING+
+        only (keeps signal:noise reasonable). Replaces "can you check the
+        terminal?" for most log-reading tasks.
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/log/"
+        try:
+            r = requests.get(
+                url,
+                params={"since_ms": since_ms, "level": level, "limit": limit},
+                timeout=5,
+            )
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": f"Is the dev server running? Tried {url}.",
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
+    @mcp.tool()
     def get_last_traceback(n: int = 1) -> str:
         """Read the most-recent captured server-side Python exceptions.
 

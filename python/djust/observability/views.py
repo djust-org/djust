@@ -17,6 +17,7 @@ from djust.observability.registry import (
     get_registered_session_count,
     get_view_for_session,
 )
+from djust.observability.log_handler import get_recent_logs
 from djust.observability.tracebacks import get_recent_tracebacks
 
 logger = logging.getLogger("djust.observability")
@@ -131,3 +132,44 @@ def last_traceback(request):
     n = max(1, min(n, 50))
 
     return JsonResponse({"count": n, "entries": get_recent_tracebacks(n)})
+
+
+@csrf_exempt
+@require_GET
+def log_tail(request):
+    """Return buffered log records.
+
+    Query params:
+        since_ms (optional): only entries with timestamp > since_ms.
+        level (optional): minimum level, one of DEBUG/INFO/WARNING/ERROR/CRITICAL.
+            Default INFO.
+        limit (optional): max entries to return (default 500, capped to
+            buffer size).
+
+    Entries ordered chronologically (oldest first).
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    try:
+        since_ms = int(request.GET.get("since_ms", "0"))
+    except (TypeError, ValueError):
+        since_ms = 0
+
+    level = request.GET.get("level", "INFO").strip() or "INFO"
+
+    try:
+        limit = int(request.GET.get("limit", "500"))
+    except (TypeError, ValueError):
+        limit = 500
+    limit = max(1, min(limit, 500))
+
+    entries = get_recent_logs(since_ms=since_ms, level=level, limit=limit)
+    return JsonResponse(
+        {
+            "count": len(entries),
+            "since_ms": since_ms,
+            "level": level,
+            "entries": entries,
+        }
+    )
