@@ -946,6 +946,22 @@ pub fn parse_html_continue(html: &str) -> Result<VNode> {
     parser::parse_html_continue(html)
 }
 
+/// Parse an HTML fragment with a specific parent context.
+///
+/// Use this when you know where in the DOM the fragment will live — it
+/// skips the full-document wrapper and allows html5ever to tokenize
+/// context-sensitive elements (`<tr>`, `<td>`, `<option>`) correctly.
+///
+/// Does NOT reset the ID counter.
+pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
+    vdom_trace!(
+        "parse_html_fragment() called - context=<{}>, {} bytes",
+        context_tag,
+        html.len()
+    );
+    parser::parse_html_fragment(html, context_tag)
+}
+
 /// Python bindings
 #[pyclass]
 #[derive(Clone)]
