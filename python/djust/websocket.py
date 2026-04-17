@@ -954,6 +954,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
+        # Release observability registry entry first — it's weakly-held
+        # anyway but explicit cleanup avoids a brief stale entry window.
+        session_id = getattr(self, "session_id", None)
+        if session_id:
+            try:
+                from djust.observability.registry import unregister_view
+
+                unregister_view(session_id)
+            except Exception:  # noqa: BLE001
+                pass  # Observability never blocks shutdown.
+
         # Release IP connection slot
         client_ip = getattr(self, "_client_ip", None)
         if client_ip:
@@ -1246,6 +1257,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             self.view_instance._websocket_query_string = self.scope.get("query_string", b"").decode(
                 "utf-8"
             )
+
+            # Register this view in the observability session registry so the
+            # djust MCP can introspect live state via its HTTP endpoints.
+            # Registry uses weakrefs — no leak if unregister is missed.
+            try:
+                from djust.observability.registry import register_view
+
+                register_view(self.session_id, self.view_instance)
+            except Exception as e:  # noqa: BLE001
+                # Observability must never break a WS connection.
+                logger.warning("Failed to register view in observability registry: %s", e)
 
             # Join per-view channel group for server-push
             from .push import view_group_name
