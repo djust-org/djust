@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5rc1] - 2026-04-17
+
 ### Changed
 
 - **Text-region fast path now fires for `{% extends %}` templates** — The scanner that builds the VDOM text-node position index used to process the full pre-hydration HTML, but the VDOM is rooted at `[dj-root]`. On templates extending a base (with `<title>`, meta tags, scripts outside dj-root), the scanner counted text runs in `<head>` and trailing `<footer>`/`<script>` siblings that the VDOM didn't have — the count mismatched, the index was discarded, and every event fell through to a full html5ever parse (~10ms on the djust.org /examples/ page). Now the scanner is restricted to the dj-root element's interior via a balanced-tag walker. Rust render drops from ~14ms → ~2.8ms on extends templates; browser E2E (production, DEBUG=False) drops from 30ms → ~25ms avg, 18ms min.
