@@ -34,8 +34,31 @@ class _FakeView:
         return {k: v for k, v in self.__dict__.items() if not k.startswith("_") and not callable(v)}
 
 
-class _ExplodingView(_FakeView):
+class _FakeViewWithNonSerializable(_FakeView):
+    """Has an attribute the framework considers non-serializable (like a
+    live request or DB connection). Represents the DEBUG-mode common case.
+    """
+
+    def __init__(self):
+        super().__init__(count=42, label="mixed")
+        # Something that mimics a WSGIRequest — an object the framework's
+        # _is_serializable will reject.
+        self.request = object()
+
+    def _is_serializable(self, value):
+        # Mirror LiveView's semantics: reject objects of bare `object` type
+        # (non-JSON-serializable) but accept the ints/strs/lists/dicts.
+        try:
+            import json
+
+            json.dumps(value)
+            return True
+        except (TypeError, ValueError):
+            return False
+
     def get_state(self):
+        # Would raise in real LiveView when DEBUG=True because of self.request;
+        # here we delegate to the framework-style check via super-equivalent.
         raise TypeError("boom — non-serializable value")
 
 
@@ -90,14 +113,24 @@ def test_view_assigns_404_when_debug_off():
 
 
 @override_settings(DEBUG=True)
-def test_view_assigns_falls_back_when_get_state_raises():
-    """If get_state() can't serialize, return repr()s instead of 500."""
-    view = _ExplodingView(count=42)
+def test_view_assigns_per_attr_fallback_keeps_serializable_native():
+    """Partial serializability: good attrs stay native, bad ones get tagged.
+
+    Previously any non-serializable attr forced an all-or-nothing blanket
+    repr that lost all native values. Now each attr is handled independently.
+    """
+    view = _FakeViewWithNonSerializable()
     register_view("s", view)
     rf = RequestFactory()
     resp = view_assigns(rf.get("/?session_id=s"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
-    # Fallback is repr()'d strings — count=42 becomes "42"
-    assert "count" in data["assigns"]
-    assert data["assigns"]["count"] == "42"
+    # Serializable attrs stay as their actual values.
+    assert data["assigns"]["count"] == 42
+    assert data["assigns"]["label"] == "mixed"
+    # Non-serializable attr is tagged {_repr, _type} so the caller can see
+    # at a glance that it fell back.
+    request_field = data["assigns"]["request"]
+    assert isinstance(request_field, dict)
+    assert request_field["_type"] == "object"
+    assert "_repr" in request_field
