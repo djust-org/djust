@@ -57,6 +57,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Observability localhost-gate — must come early so it rejects LAN
+    # requests before any downstream middleware can do work.
+    'djust.observability.middleware.LocalhostOnlyObservabilityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
