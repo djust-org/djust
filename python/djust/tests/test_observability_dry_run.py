@@ -86,6 +86,33 @@ def test_context_unpatch_on_exception():
     assert Model.save is original_save
 
 
+def test_context_uninstall_failure_is_logged_not_swallowed(caplog):
+    """Regression for #759: if setattr fails during uninstall, we log a
+    warning so the failure is visible. Silent swallow would leave the
+    process running with a wrapped Model.save forever.
+    """
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="djust.observability")
+
+    ctx = DryRunContext()
+    ctx.__enter__()
+    try:
+        # Install a single bogus patch entry whose setattr will fail.
+        # frozenset is immutable — setattr raises AttributeError.
+        bogus_target = frozenset([1, 2, 3])
+        ctx._patches.append((bogus_target, "some_attr", "restore_value"))
+    finally:
+        ctx.__exit__(None, None, None)
+
+    # _uninstall should have logged the failure, not silently swallowed.
+    assert any(
+        "failed to restore" in rec.getMessage() for rec in caplog.records
+    ), "DryRunContext._uninstall must log when setattr fails"
+    # And the patch table is cleared regardless.
+    assert ctx._patches == []
+
+
 def test_context_blocks_http_requests():
     try:
         import requests  # noqa: F401
