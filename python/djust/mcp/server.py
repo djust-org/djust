@@ -527,26 +527,43 @@ def create_server():
         return r.text
 
     @mcp.tool()
-    def eval_handler(session_id: str, handler_name: str, params: dict | None = None) -> str:
+    def eval_handler(
+        session_id: str,
+        handler_name: str,
+        params: dict | None = None,
+        dry_run: bool = False,
+        dry_run_block: bool = True,
+    ) -> str:
         """Dry-run a handler against a live view's current state.
 
         Runs `view.<handler_name>(**params)` against the registered
         view and returns the state delta + handler return value.
 
-        **v1 limitations:**
-        - Side effects (ORM writes, emails, webhooks) are NOT prevented.
-          Use on views with pure state mutations or against a test DB.
-        - Sync handlers only (async returns 400 with a clear message).
-        - No render/patch push — the client won't see the mutation.
+        **dry_run mode (v2):** monkey-patches ORM writes (Model.save /
+        Model.delete), emails (send_mail / send_mass_mail), and outbound
+        HTTP (requests.*, urllib.request.urlopen) for the duration of
+        the handler call. By default, the first side-effect attempt
+        raises and the response includes `blocked_side_effect` with
+        kind/target/details. Set `dry_run_block=False` to *record*
+        attempts without blocking (still commits — useful for
+        instrumentation, not sandboxing).
+
+        Limitations that remain:
+        - Sync handlers only (async returns 400).
+        - No render/patch push — client doesn't see mutations.
+        - dry_run is serialized process-wide via a lock; one at a time.
 
         Args:
             session_id: WebSocket session id.
             handler_name: method name on the mounted view.
             params: kwargs dict passed to the handler.
+            dry_run: if True, install side-effect blockers for the call.
+            dry_run_block: if True (default), first violation raises;
+                if False, violations are recorded but not blocked.
 
         Returns JSON: {view_class, handler_name, params, before_assigns,
-        after_assigns, delta:{added, removed, modified, change_count},
-        result}.
+        after_assigns, delta, result, dry_run?, blocked_side_effect?,
+        recorded_side_effects?}.
         """
         import os
 
@@ -557,7 +574,10 @@ def create_server():
 
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/eval_handler/?session_id={session_id}"
-        body = {"handler_name": handler_name, "params": params or {}}
+        body: dict = {"handler_name": handler_name, "params": params or {}}
+        if dry_run:
+            body["dry_run"] = True
+            body["dry_run_block"] = bool(dry_run_block)
         try:
             r = requests.post(url, json=body, timeout=10)
         except requests.RequestException as e:
