@@ -147,11 +147,30 @@ class DryRunContext:
         self._patches.clear()
 
     def _install_orm(self) -> None:
+        """Patch Django ORM write methods.
+
+        Covers (#758):
+        - Per-instance: Model.save, Model.delete
+        - Bulk: QuerySet.update, QuerySet.delete, bulk_create, bulk_update
+        - Bulk insert/update via `Manager` also flow through QuerySet —
+          patching on QuerySet catches `Model.objects.create()` via
+          `QuerySet.create` too (which internally does `Model.save`,
+          already patched, but having it early lets us tag `kind:
+          "orm_create"` for readability).
+
+        Raw SQL (connection.execute, connection.cursor().execute) is NOT
+        patched — it's deliberately low-level; users invoking it want the
+        side effect. Use the sql_queries observability endpoint to see it.
+        """
         try:
             from django.db.models import Model
+            from django.db.models.query import QuerySet
         except Exception:  # noqa: BLE001
             return
 
+        _self = self
+
+        # --- Per-instance: Model.save, Model.delete -------------------
         orig_save = Model.save
         orig_delete = Model.delete
 
@@ -167,9 +186,41 @@ class DryRunContext:
                 "orm_delete", target, details, orig_delete, (self_, *a), kw
             )
 
-        _self = self
         self._patch(Model, "save", wrapped_save)
         self._patch(Model, "delete", wrapped_delete)
+
+        # --- Bulk: QuerySet.update / delete / bulk_create / bulk_update
+        # These bypass Model.save entirely so without patching QuerySet
+        # a handler that uses Model.objects.filter(...).update(...) would
+        # appear "pure" to dry_run while actually committing writes.
+        for qs_method, kind in [
+            ("update", "orm_bulk_update"),
+            ("delete", "orm_bulk_delete"),
+            ("bulk_create", "orm_bulk_create"),
+            ("bulk_update", "orm_bulk_update"),
+        ]:
+            if not hasattr(QuerySet, qs_method):
+                continue
+            original = getattr(QuerySet, qs_method)
+
+            def _make_qs_wrapper(method_name, orig, kind_tag):
+                def wrapper(self_, *a, **kw):
+                    model_name = getattr(self_, "model", None)
+                    model_name = getattr(model_name, "__name__", "?") if model_name else "?"
+                    target = f"{model_name}.objects.{method_name}"
+                    details: Dict[str, Any] = {}
+                    # For bulk_create/bulk_update the first positional arg
+                    # is the list — record its length for quick triage.
+                    if method_name in ("bulk_create", "bulk_update") and a:
+                        try:
+                            details["count"] = len(a[0])
+                        except TypeError:
+                            pass
+                    return _self._record_or_raise(kind_tag, target, details, orig, (self_, *a), kw)
+
+                return wrapper
+
+            self._patch(QuerySet, qs_method, _make_qs_wrapper(qs_method, original, kind))
 
     def _install_email(self) -> None:
         try:
