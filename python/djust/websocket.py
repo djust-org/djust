@@ -1813,7 +1813,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Call component's event handler (supports both sync and async)
                     # This may call send_parent() which triggers handle_component_event()
                     handler_start = time.perf_counter()
-                    await _call_handler(handler, coerced_event_data if coerced_event_data else None)
+                    # Observability: capture SQL queries fired by this handler.
+                    from djust.observability.sql import capture_for_event as _dj_sql_capture
+
+                    _sid = getattr(self, "session_id", None)
+                    with _dj_sql_capture(
+                        session_id=_sid,
+                        event_id=f"{_sid}:{handler_start}" if _sid else None,
+                        handler_name=event_name,
+                    ):
+                        await _call_handler(
+                            handler, coerced_event_data if coerced_event_data else None
+                        )
                     timing["handler"] = (
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
@@ -1900,13 +1911,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                         # Call handler with tracking (supports both sync and async handlers)
                         handler_start = time.perf_counter()
+                        # Observability: capture SQL queries fired by this handler.
+                        from djust.observability.sql import (
+                            capture_for_event as _dj_sql_capture,
+                        )
+
+                        _sid = getattr(self, "session_id", None)
                         with tracker.track(
                             "Event Handler", event_name=event_name, params=coerced_params
                         ):
                             with profiler.profile(profiler.OP_EVENT_HANDLE):
-                                await _call_handler(
-                                    handler, coerced_params if coerced_params else None
-                                )
+                                with _dj_sql_capture(
+                                    session_id=_sid,
+                                    event_id=f"{_sid}:{handler_start}" if _sid else None,
+                                    handler_name=event_name,
+                                ):
+                                    await _call_handler(
+                                        handler, coerced_params if coerced_params else None
+                                    )
                         timing["handler"] = (
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms

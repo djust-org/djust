@@ -329,6 +329,56 @@ def create_server():
         return r.text
 
     @mcp.tool()
+    def get_sql_queries_since(
+        since_ms: int = 0,
+        session_id: str = "",
+        handler_name: str = "",
+        limit: int = 500,
+    ) -> str:
+        """Captured SQL queries, scoped to an event handler when filtered.
+
+        Each query is tagged with the session_id + handler_name that fired
+        it, so you can ask "what SQL did the increment handler just run?"
+        and get a clean answer — including N+1 patterns that are almost
+        always the reason a handler got slow.
+
+        Args:
+            since_ms: only queries with timestamp > since_ms.
+            session_id: filter to one session.
+            handler_name: filter to one handler.
+            limit: max rows (default + cap: 500).
+
+        Returns JSON: {count, since_ms, entries:[{timestamp_ms, sql,
+        params, duration_ms, stack_top, session_id, handler_name, ...}]}.
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/sql_queries/"
+        params = {"since_ms": since_ms, "limit": limit}
+        if session_id:
+            params["session_id"] = session_id
+        if handler_name:
+            params["handler_name"] = handler_name
+        try:
+            r = requests.get(url, params=params, timeout=5)
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": f"Is the dev server running? Tried {url}.",
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
+    @mcp.tool()
     def tail_server_log(since_ms: int = 0, level: str = "INFO", limit: int = 500) -> str:
         """Read buffered Django/djust log records from the dev server.
 
