@@ -6,21 +6,70 @@ endpoint so the foundation PR is independently verifiable.
 
 from __future__ import annotations
 
-import logging
-
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
+from djust.observability.log_handler import get_recent_logs
 from djust.observability.registry import (
     get_registered_session_count,
     get_view_for_session,
 )
-from djust.observability.log_handler import get_recent_logs
 from djust.observability.tracebacks import get_recent_tracebacks
 
-logger = logging.getLogger("djust.observability")
+
+def _is_jsonable(value):
+    """Last-resort serializability check when the view doesn't expose
+    `_is_serializable`. Cheap for small values; we tolerate the cost
+    because observability endpoints aren't hot paths."""
+    import json
+
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _lenient_assigns(view):
+    """Serialize public attrs one-by-one with per-attr fallback.
+
+    Why not just call `view.get_state()`? In DEBUG mode that raises on
+    the first non-serializable attr, forcing an all-or-nothing choice.
+    A common pattern (`self.request = request` stored during mount)
+    then loses the other 95% of legitimate state to a blanket repr.
+
+    This walker keeps JSON-serializable values as themselves and tags
+    each non-serializable one with `{_repr, _type}` so the agent can
+    see at a glance which attrs fell back and why.
+
+    Uses the view's own `_is_serializable` when available (matches the
+    framework's definition) and falls back to a direct json.dumps probe
+    for anything that doesn't expose it (e.g. test doubles).
+    """
+    checker = getattr(view, "_is_serializable", None)
+
+    def _safe_check(val):
+        if checker is not None:
+            try:
+                return bool(checker(val))
+            except Exception:  # noqa: BLE001
+                return False
+        return _is_jsonable(val)
+
+    assigns = {}
+    for key, value in view.__dict__.items():
+        if key.startswith("_") or callable(value):
+            continue
+        if _safe_check(value):
+            assigns[key] = value
+        else:
+            assigns[key] = {
+                "_repr": repr(value)[:200],
+                "_type": type(value).__name__,
+            }
+    return assigns
 
 
 def _debug_gate():
@@ -83,18 +132,7 @@ def view_assigns(request):
             status=404,
         )
 
-    try:
-        assigns = view.get_state()
-    except Exception as e:  # noqa: BLE001
-        # get_state raises TypeError on non-serializable values in DEBUG.
-        # Observability must still return something useful — fall back to
-        # a best-effort shallow dict of repr()s.
-        logger.warning("view.get_state() failed for session %s: %s", session_id, e)
-        assigns = {
-            k: repr(v)[:200]
-            for k, v in view.__dict__.items()
-            if not k.startswith("_") and not callable(v)
-        }
+    assigns = _lenient_assigns(view)
 
     return JsonResponse(
         {
