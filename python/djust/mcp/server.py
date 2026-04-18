@@ -283,6 +283,52 @@ def create_server():
         return r.text
 
     @mcp.tool()
+    def get_handler_timings(handler_name: str = "", since_ms: int = 0) -> str:
+        """Per-handler percentile stats over the rolling sample window.
+
+        Args:
+            handler_name: Filter to one handler name. If multiple views
+                expose the same handler name, each view appears as its
+                own row. Empty string = no filter.
+            since_ms: Only include samples with timestamp > since_ms.
+                Default 0 = whole rolling window (last 100 samples per
+                handler).
+
+        Returns JSON: {count, stats:[{view_class, handler_name, count,
+        min_ms, max_ms, avg_ms, p50_ms, p90_ms, p99_ms}]}.
+
+        Rows sorted by p90 descending, so the slowest handlers surface
+        first. Catches "this handler got slow" regressions without
+        running a load test.
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/handler_timings/"
+        params = {}
+        if handler_name:
+            params["handler_name"] = handler_name
+        if since_ms:
+            params["since_ms"] = since_ms
+        try:
+            r = requests.get(url, params=params, timeout=5)
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": f"Is the dev server running? Tried {url}.",
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
+    @mcp.tool()
     def tail_server_log(since_ms: int = 0, level: str = "INFO", limit: int = 500) -> str:
         """Read buffered Django/djust log records from the dev server.
 

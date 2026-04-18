@@ -1818,6 +1818,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         time.perf_counter() - handler_start
                     ) * 1000  # Convert to ms
 
+                    # Observability: record the component-handler duration
+                    # for percentile stats. Best-effort — never disturbs
+                    # handler execution.
+                    try:
+                        from djust.observability.timings import record_handler_timing
+
+                        record_handler_timing(
+                            target_view.__class__.__name__, event_name, timing["handler"]
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+
                     # ADR-002 Phase 1b/1c follow-up: propagate component events
                     # to parent LiveView waiters. Without this, a tutorial step
                     # that uses `wait_for="component_handler"` on a LiveView
@@ -1898,6 +1910,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         timing["handler"] = (
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms
+
+                        # Observability: record the view-handler duration
+                        # for percentile stats. Best-effort.
+                        try:
+                            from djust.observability.timings import record_handler_timing
+
+                            record_handler_timing(
+                                target_view.__class__.__name__, event_name, timing["handler"]
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
 
                         # ADR-002 Phase 1b: resolve any pending wait_for_event
                         # waiters on the target view whose event_name matches.
