@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`eval_handler` v2 — dry-run side-effect blocking** — Extends the `eval_handler` observability endpoint + MCP tool with an opt-in `dry_run` flag that installs a `DryRunContext` around the handler call. ORM writes (`Model.save`/`Model.delete`), emails (`send_mail`/`send_mass_mail`), and outbound HTTP (`requests.*`, `urllib.request.urlopen`) are monkey-patched for the duration; first attempt raises `DryRunViolation` and the response surfaces `{blocked_side_effect: {kind, target, details}}`. Lets the AI agent ask "is this handler pure? what would it try to do?" without risking real writes. Process-wide lock serializes dry-runs so one tester's patches never leak into another thread's request. Set `dry_run_block: false` to record-but-allow (useful instrumentation, not sandboxing). DEBUG-gated + localhost-only per the rest of `djust.observability`.
+
 ## [0.4.5rc1] - 2026-04-17
 
 ### Changed

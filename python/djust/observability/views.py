@@ -329,28 +329,45 @@ def reset_view_state(request):
 def eval_handler(request):
     """Dry-run a handler against the live view's current state.
 
-    POST body (JSON): {handler_name, params?: {}}
-    Query param:       session_id (required)
+    POST body (JSON):
+      handler_name     (required) — method name on the mounted view
+      params           (optional) — kwargs dict passed to the handler
+      dry_run          (optional) — when true, install side-effect
+                                    blockers for the duration of the
+                                    handler call (v2 feature)
+      dry_run_block    (optional, default true) — when true, the first
+                                    side-effect attempt raises
+                                    DryRunViolation; when false, attempts
+                                    are recorded but still execute
+
+    Query param: session_id (required)
 
     Runs `view.<handler_name>(**params)` against the registered view,
-    snapshots state before + after, returns the delta.
+    snapshots state before + after, returns the delta. With
+    `dry_run=true`, Model.save / Model.delete / send_mail / requests.* /
+    urllib.urlopen are patched inside a DryRunContext; the first
+    attempted side effect is captured in `blocked_side_effect`.
 
-    **v1 limitations (explicit non-goals for now):**
-    - No side-effect recording. ORM writes will commit, emails will
-      send, webhooks will fire. Use against views that do pure state
-      mutations, or in a test DB.
-    - Sync handlers only. Async handlers return a 400 with a clear
-      message — running async code from a sync Django view is
-      non-trivial and was deliberately descoped for v1.
+    **Remaining limitations:**
+    - Sync handlers only. Async handlers return 400 with a clear hint
+      (running async code from a sync Django view was deliberately
+      descoped).
     - No render/patch push to the client. The handler mutates state
       but the client doesn't see it. Call `reset_view_state` if you
       need to rewind the view.
+    - `dry_run` is serialized process-wide via a lock; one at a time.
 
     Returns:
-        {session_id, view_class, handler_name,
-         before_assigns, after_assigns,
-         delta: {added, removed, modified: {key: {before, after}}},
-         result: <handler's return value if JSON-serializable>}
+        {
+          session_id, view_class, handler_name, params,
+          before_assigns, after_assigns,
+          delta: {added, removed, modified: {key: {before, after}}},
+          result: <handler's return value, JSON-safe>,
+          dry_run?: true,
+          dry_run_block?: bool,
+          blocked_side_effect?: {kind, target, details},
+          recorded_side_effects?: [{kind, target, details}, ...],  # block=false
+        }
     """
     if not settings.DEBUG:
         return _debug_gate()
@@ -412,10 +429,34 @@ def eval_handler(request):
 
     before = _lenient_assigns(view)
 
+    # dry_run mode (v2): block ORM writes / emails / HTTP calls.
+    # Default is off to preserve v1 behavior for callers that haven't
+    # opted in.
+    dry_run = bool(body.get("dry_run", False))
+    dry_run_block = body.get("dry_run_block", True)  # if False, record-but-allow
+
+    dry_run_violation = None
+    dry_run_violations: list = []
+
     try:
-        result = handler(**params) if params else handler()
+        if dry_run:
+            from djust.observability.dry_run import DryRunContext, DryRunViolation
+
+            ctx = DryRunContext(block=bool(dry_run_block))
+            try:
+                with ctx:
+                    result = handler(**params) if params else handler()
+            except DryRunViolation as v:
+                dry_run_violation = {
+                    "kind": v.kind,
+                    "target": v.target,
+                    "details": v.details,
+                }
+                result = None
+            dry_run_violations = list(ctx.violations)
+        else:
+            result = handler(**params) if params else handler()
     except TypeError as e:
-        # Most common: wrong params. Return with 400 so caller can fix.
         return JsonResponse(
             {
                 "error": f"handler call failed: {type(e).__name__}: {e}",
@@ -454,23 +495,29 @@ def eval_handler(request):
     except (TypeError, ValueError):
         safe_result = {"_repr": repr(result)[:200], "_type": type(result).__name__}
 
-    return JsonResponse(
-        {
-            "session_id": session_id,
-            "view_class": view.__class__.__name__,
-            "handler_name": handler_name,
-            "params": params,
-            "before_assigns": before,
-            "after_assigns": after,
-            "delta": {
-                "added": added,
-                "removed": removed,
-                "modified": modified,
-                "change_count": len(added) + len(removed) + len(modified),
-            },
-            "result": safe_result,
-        }
-    )
+    response_body = {
+        "session_id": session_id,
+        "view_class": view.__class__.__name__,
+        "handler_name": handler_name,
+        "params": params,
+        "before_assigns": before,
+        "after_assigns": after,
+        "delta": {
+            "added": added,
+            "removed": removed,
+            "modified": modified,
+            "change_count": len(added) + len(removed) + len(modified),
+        },
+        "result": safe_result,
+    }
+    if dry_run:
+        response_body["dry_run"] = True
+        response_body["dry_run_block"] = bool(dry_run_block)
+        if dry_run_violation:
+            response_body["blocked_side_effect"] = dry_run_violation
+        if dry_run_violations:
+            response_body["recorded_side_effects"] = dry_run_violations
+    return JsonResponse(response_body)
 
 
 @csrf_exempt
