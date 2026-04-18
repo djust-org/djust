@@ -46,6 +46,53 @@ def test_context_blocks_orm_delete():
     assert exc_info.value.kind == "orm_delete"
 
 
+# --- #758: bulk ORM writes via QuerySet ----------------------------------
+
+
+def test_context_blocks_queryset_update():
+    """QuerySet.update bypasses Model.save — must be patched separately (#758)."""
+    from django.contrib.auth.models import User
+
+    with DryRunContext(block=True):
+        with pytest.raises(DryRunViolation) as exc_info:
+            User.objects.filter(username="nobody").update(is_active=False)
+    assert exc_info.value.kind == "orm_bulk_update"
+    assert "User.objects.update" in exc_info.value.target
+
+
+def test_context_blocks_queryset_delete():
+    from django.contrib.auth.models import User
+
+    with DryRunContext(block=True):
+        with pytest.raises(DryRunViolation) as exc_info:
+            User.objects.filter(username="nobody").delete()
+    assert exc_info.value.kind == "orm_bulk_delete"
+
+
+def test_context_blocks_bulk_create():
+    from django.contrib.auth.models import User
+
+    users = [User(username=f"u{i}") for i in range(3)]
+    with DryRunContext(block=True):
+        with pytest.raises(DryRunViolation) as exc_info:
+            User.objects.bulk_create(users)
+    assert exc_info.value.kind == "orm_bulk_create"
+    # Details include count so triage is quick.
+    assert exc_info.value.details.get("count") == 3
+
+
+def test_context_blocks_bulk_update():
+    """bulk_update is a newer Django API — must also be patched (#758)."""
+    from django.contrib.auth.models import User
+
+    users = [User(username=f"u{i}", id=i + 1000) for i in range(2)]
+    with DryRunContext(block=True):
+        with pytest.raises(DryRunViolation) as exc_info:
+            User.objects.bulk_update(users, ["first_name"])
+    assert exc_info.value.kind == "orm_bulk_update"
+    assert exc_info.value.details.get("count") == 2
+
+
 def test_context_records_without_blocking_when_block_false():
     """block=False mode: attempts recorded AND the original call runs.
 
