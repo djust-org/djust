@@ -239,11 +239,21 @@ class TestHotReloadMessage:
         assert call_args["file"] == "test.html"
 
     @pytest.mark.asyncio
-    async def test_hotreload_empty_patches_array(self, mock_consumer, mock_view_instance):
-        """Test hot reload when patches array is empty."""
+    async def test_hotreload_empty_patches_array_is_suppressed(
+        self, mock_consumer, mock_view_instance
+    ):
+        """Test hot reload suppresses broadcast when patches array is empty (#763).
+
+        When an unrelated file change produces no patches for the current
+        view, we skip the broadcast entirely rather than sending a ~14 KB
+        empty-patch payload to every connected session.
+
+        NON-empty hot reload patches are still sent (covered by other tests).
+        User-event empty patches are still sent (loading state must clear).
+        """
         mock_consumer.view_instance = mock_view_instance
 
-        # Mock empty patches array (gets parsed but still sent as patch)
+        # Mock empty patches array.
         mock_view_instance.render_with_diff = Mock(return_value=("<html>same</html>", "[]", 1))
 
         with patch.object(mock_consumer, "_clear_template_caches", return_value=1):
@@ -251,16 +261,10 @@ class TestHotReloadMessage:
                 "channels.db.database_sync_to_async",
                 side_effect=lambda f: AsyncMock(return_value=f()),
             ):
-                # Call hotreload
                 await mock_consumer.hotreload({"file": "test.html"})
 
-        # Empty array is still sent as patch (no check after parsing)
-        mock_consumer.send_json.assert_called_once()
-        call_args = mock_consumer.send_json.call_args[0][0]
-
-        assert call_args["type"] == "patch"
-        assert call_args["patches"] == []
-        assert call_args["file"] == "test.html"
+        # Broadcast suppressed — nothing sent to the client.
+        mock_consumer.send_json.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_hotreload_general_exception(self, mock_consumer, mock_view_instance):
