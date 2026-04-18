@@ -1816,9 +1816,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Observability: capture SQL queries fired by this handler.
                     from djust.observability.sql import capture_for_event as _dj_sql_capture
 
+                    _sid = getattr(self, "session_id", None)
                     with _dj_sql_capture(
-                        session_id=self.session_id,
-                        event_id=f"{self.session_id}:{handler_start}",
+                        session_id=_sid,
+                        event_id=f"{_sid}:{handler_start}" if _sid else None,
                         handler_name=event_name,
                     ):
                         await _call_handler(
@@ -1915,13 +1916,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             capture_for_event as _dj_sql_capture,
                         )
 
+                        _sid = getattr(self, "session_id", None)
                         with tracker.track(
                             "Event Handler", event_name=event_name, params=coerced_params
                         ):
                             with profiler.profile(profiler.OP_EVENT_HANDLE):
                                 with _dj_sql_capture(
-                                    session_id=self.session_id,
-                                    event_id=f"{self.session_id}:{handler_start}",
+                                    session_id=_sid,
+                                    event_id=f"{_sid}:{handler_start}" if _sid else None,
                                     handler_name=event_name,
                                 ):
                                     await _call_handler(
