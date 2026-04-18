@@ -2,6 +2,7 @@
 URL configuration for demo_project.
 """
 
+from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
 
@@ -17,6 +18,17 @@ urlpatterns = [
     # PWA — service worker must be at root scope for full-site coverage
     path('sw.js', service_worker_view, name='service-worker'),
     path('manifest.json', manifest_view, name='pwa-manifest'),
+]
+
+# AI observability endpoints — DEBUG-gated, localhost-only (enforced by
+# LocalhostOnlyObservabilityMiddleware). djust Python MCP calls these to
+# introspect live state without sharing process memory with the dev server.
+if settings.DEBUG:
+    urlpatterns += [
+        path('_djust/observability/', include('djust.observability.urls')),
+    ]
+
+urlpatterns += [
 
     # New organized apps
     path('', include('djust_homepage.urls')),       # Homepage and embedded demos
