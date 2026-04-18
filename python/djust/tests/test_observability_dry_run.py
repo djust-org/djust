@@ -47,21 +47,32 @@ def test_context_blocks_orm_delete():
 
 
 def test_context_records_without_blocking_when_block_false():
-    """block=False mode: attempts recorded, original call proceeds.
-    Use email (safe to call django.core.mail.send_mail — it raises
-    locmem not-configured on a fresh test env but captures the attempt
-    first so we see it in violations)."""
+    """block=False mode: attempts recorded AND the original call runs.
+
+    Previous version only checked that the violation was recorded; it
+    didn't prove the original was invoked. We now swap mail.send_mail
+    with a Mock before entering the context and assert both:
+      1. ctx.violations contains an 'email' entry
+      2. The Mock was actually called (originals ran, not just recorded)
+    """
+    from unittest.mock import patch as mock_patch
+
     from django.core import mail
 
-    with DryRunContext(block=False) as ctx:
-        try:
+    fake_send = __import__("unittest.mock", fromlist=["Mock"]).Mock(return_value=1)
+    # Replace mail.send_mail BEFORE DryRunContext captures the original,
+    # so the wrapper delegates to our Mock.
+    with mock_patch.object(mail, "send_mail", fake_send):
+        with DryRunContext(block=False) as ctx:
             mail.send_mail("dr-test", "body", "from@x.co", ["to@x.co"])
-        except Exception:
-            # The original send_mail might raise (backend not configured
-            # for real mail), but the CM has already recorded the attempt.
-            pass
+
+    # 1. Violation recorded.
     kinds = {v["kind"] for v in ctx.violations}
-    assert "email" in kinds
+    assert "email" in kinds, "expected block=False to record an email violation"
+    # 2. Original call-through actually fired.
+    assert (
+        fake_send.call_count == 1
+    ), "block=False must invoke the original callable — not just record the attempt"
 
 
 def test_context_unpatch_on_exit():
@@ -164,6 +175,27 @@ class _FakeViewWithHttp:
         self.count += 1  # Never reached in block mode.
 
 
+class _FakeViewWithRecordableSideEffect:
+    """Handler that tries an HTTP call AND mutates state. Used to prove
+    the record-mode test actually exercises the record-but-allow path.
+
+    In block=False mode, the HTTP attempt is recorded and the original
+    requests.get runs (we mock it at patch-install time so it doesn't
+    hit the network). Then self.count increments.
+    """
+
+    def __init__(self):
+        self.count = 0
+
+    def fetch_and_increment(self):
+        import requests
+
+        # requests.get is mocked in the test; this just lets the block=False
+        # wrapper record the attempt and call through without network I/O.
+        requests.get("https://example.com/record-mode-test")
+        self.count += 1
+
+
 def _post(body: dict, session_id: str = "s"):
     rf = RequestFactory()
     return rf.post(
@@ -203,21 +235,46 @@ def test_endpoint_dry_run_blocks_http_call():
 
 @override_settings(DEBUG=True)
 def test_endpoint_dry_run_record_mode_no_block():
-    """dry_run_block=False records attempts but lets originals run.
+    """dry_run_block=False records attempts AND lets originals run.
 
-    We can't verify "originals ran" without actually making an HTTP
-    call, but we CAN verify the violation is recorded and no
-    blocked_side_effect appears in the response.
+    Proof of the record-but-allow contract:
+      1. recorded_side_effects contains the http attempt (proving it was
+         detected by the wrapper)
+      2. count was incremented (proving the original requests.get was
+         called — we mock it so no network I/O)
+      3. blocked_side_effect is absent (block=False means no raise)
     """
-    view = _FakeViewPure()  # pure — no violation to record
+    from unittest.mock import Mock, patch as mock_patch
+
+    view = _FakeViewWithRecordableSideEffect()
     register_view("s", view)
-    resp = eval_handler(
-        _post({"handler_name": "increment", "dry_run": True, "dry_run_block": False})
-    )
+
+    # Mock requests.get at the module level so the wrapper's call-through
+    # lands on the mock instead of a real network request.
+    fake_get = Mock(return_value=Mock(status_code=200, text=""))
+    import requests as _requests
+
+    with mock_patch.object(_requests, "get", fake_get):
+        resp = eval_handler(
+            _post({"handler_name": "fetch_and_increment", "dry_run": True, "dry_run_block": False})
+        )
     assert resp.status_code == 200
     data = json.loads(resp.content)
+
+    # Flags echoed correctly.
     assert data["dry_run"] is True
     assert data["dry_run_block"] is False
+    assert "blocked_side_effect" not in data, "block=False should not block"
+
+    # Recorded side effect surfaces in the response.
+    recorded = data.get("recorded_side_effects", [])
+    assert any(
+        v.get("kind") == "http" for v in recorded
+    ), "dry_run_block=False must record the http attempt"
+
+    # Original callable actually ran.
+    assert fake_get.call_count == 1, "original requests.get should have been invoked"
+    # Therefore state after the handler reflects the increment.
     assert data["after_assigns"]["count"] == 1
 
 
