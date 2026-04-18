@@ -489,6 +489,16 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**Lazy context via dependency map (#737 phase 4)**~~ ✅ — Investigation complete: the incremental sync in `_sync_state_to_rust()` already only sends changed keys to Rust (3-layer detection at lines 299-330), and SafeString/normalization scanning only runs on the changed subset. `get_context_data()` is user code that can't be lazily evaluated without API changes. The 20ms Python overhead is dominated by `get_context_data()`, `sync_to_async`, and Django session access — none of which benefit from the dep map. Closed as already optimized.
 
+**#758 — eval_handler dry_run misses bulk ORM writes** — `DryRunContext` patches `Model.save` / `Model.delete` but `QuerySet.update` / `QuerySet.delete` / `bulk_create` / `bulk_update` bypass per-instance hooks. Raw SQL, `cache.set`, and Celery `.delay()` are also uncovered. Handlers using these surface as "pure" to dry_run while actually committing writes. Fix: extend `_install_orm` in `python/djust/observability/dry_run.py` to patch the queryset methods; cache + Celery patches are a secondary scope.
+
+**#759 — DryRunContext._uninstall swallows setattr errors** — When patches can't be restored on context exit, the process runs indefinitely with a wrapped `Model.save` — catastrophic for a dev server. Replace `except Exception: pass` with a `logger.getLogger("djust.observability").warning(...)` so the failure is at least visible.
+
+**#760 — observability dry_run tests over-claim what they verify** — Two tests in `test_observability_dry_run.py` don't actually verify the invariants their names imply. `test_context_records_without_blocking_when_block_false` catches the original's exception but doesn't assert the original was called. `test_endpoint_dry_run_record_mode_no_block` uses a pure-state view so record mode has nothing to record. Tighten with explicit mock assertions.
+
+**#761 — client.js unguarded console.log violates project rule** — `djust/CLAUDE.md` says *"No console.log in JS without if (globalThis.djustDebug) guard — unguarded logging is auto-rejected."* Each LiveView event emits 7 unguarded log lines (`[Loading] Started`, `[LiveView] Received`, patch-apply confirmations, `pong` heartbeats). Wrap each with `if (globalThis.djustDebug)` or add a `djLog()` helper.
+
+**#763 — hot-reload sends 14KB empty-patch message on unrelated file changes** — When a Python file changes that isn't the mounted view, hot-reload still broadcasts a 14 KB payload with `patches: []` + full `_debug` dump to every connected session. Bandwidth waste proportional to number of dev sessions. Early-return when computed patches are empty AND the trigger was a file change.
+
 ### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
 
 *Goal:* Ship the async data loading and core component primitives that production apps need. Scope intentionally trimmed — DX features (testing, error overlay, computed state) moved to v0.5.1. Begin the package consolidation work from ADR-007 by folding the two smallest runtime packages into core.
