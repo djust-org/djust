@@ -220,6 +220,98 @@ def create_server():
         )
 
     @mcp.tool()
+    def seed_fixtures(fixture_paths: list[str]) -> str:
+        """Load Django fixtures into the dev database via `manage.py loaddata`.
+
+        Wraps `django-admin loaddata` so tests and regression fixtures can
+        depend on known DB state (users, sample records, feature flags)
+        without boilerplate.
+
+        Args:
+            fixture_paths: Absolute or relative paths to fixture files
+                (JSON, XML, YAML — whatever django-admin recognizes).
+                Relative paths are resolved against the Django project's
+                BASE_DIR (i.e. settings.BASE_DIR / path).
+
+        Returns JSON: {ok, loaded_count, stdout, stderr, returncode}.
+
+        Safety: runs the loaddata command in a subprocess so a bad
+        fixture can't disturb the MCP server process. Output is
+        captured and returned — no silent failures.
+        """
+        if not _ensure_django():
+            return json.dumps(
+                {
+                    "error": "Django not configured. Run via 'python manage.py djust_mcp'.",
+                }
+            )
+
+        import os
+        import shlex
+        import subprocess
+        import sys
+
+        if not fixture_paths:
+            return json.dumps({"error": "fixture_paths must contain at least one entry"})
+
+        # Resolve relative paths against settings.BASE_DIR so the caller
+        # can say "fixtures/users.json" and it Just Works.
+        from django.conf import settings as dj_settings
+
+        base_dir = getattr(dj_settings, "BASE_DIR", None)
+        resolved = []
+        for p in fixture_paths:
+            if os.path.isabs(p):
+                resolved.append(p)
+            elif base_dir:
+                resolved.append(os.path.join(str(base_dir), p))
+            else:
+                resolved.append(p)
+
+        # manage.py is the canonical entry point; fall back to -m if
+        # we can't find one (e.g. during tests).
+        manage_py = os.path.join(str(base_dir), "manage.py") if base_dir else None
+        if manage_py and os.path.isfile(manage_py):
+            cmd = [sys.executable, manage_py, "loaddata", *resolved]
+        else:
+            cmd = [sys.executable, "-m", "django", "loaddata", *resolved]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(base_dir) if base_dir else None,
+            )
+        except subprocess.TimeoutExpired:
+            return json.dumps(
+                {
+                    "error": "loaddata timed out after 60s",
+                    "command": " ".join(shlex.quote(x) for x in cmd),
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            return json.dumps(
+                {
+                    "error": f"subprocess failed to start: {e}",
+                    "command": " ".join(shlex.quote(x) for x in cmd),
+                }
+            )
+
+        return json.dumps(
+            {
+                "ok": result.returncode == 0,
+                "returncode": result.returncode,
+                "command": " ".join(shlex.quote(x) for x in cmd),
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-4000:],
+                "fixture_paths": resolved,
+            },
+            indent=2,
+        )
+
+    @mcp.tool()
     def find_handlers_for_template(template_path: str) -> str:
         """List every view that uses a template, and which dj-* handlers
         are wired in that template.
