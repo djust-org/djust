@@ -527,6 +527,51 @@ def create_server():
         return r.text
 
     @mcp.tool()
+    def eval_handler(session_id: str, handler_name: str, params: dict | None = None) -> str:
+        """Dry-run a handler against a live view's current state.
+
+        Runs `view.<handler_name>(**params)` against the registered
+        view and returns the state delta + handler return value.
+
+        **v1 limitations:**
+        - Side effects (ORM writes, emails, webhooks) are NOT prevented.
+          Use on views with pure state mutations or against a test DB.
+        - Sync handlers only (async returns 400 with a clear message).
+        - No render/patch push — the client won't see the mutation.
+
+        Args:
+            session_id: WebSocket session id.
+            handler_name: method name on the mounted view.
+            params: kwargs dict passed to the handler.
+
+        Returns JSON: {view_class, handler_name, params, before_assigns,
+        after_assigns, delta:{added, removed, modified, change_count},
+        result}.
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/eval_handler/?session_id={session_id}"
+        body = {"handler_name": handler_name, "params": params or {}}
+        try:
+            r = requests.post(url, json=body, timeout=10)
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": f"Is the dev server running? Tried {url}.",
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
+    @mcp.tool()
     def reset_view_state(session_id: str) -> str:
         """Replay `view.mount()` on the registered instance — resets all
         public attrs back to their post-mount defaults without a page

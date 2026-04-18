@@ -326,6 +326,154 @@ def reset_view_state(request):
 
 
 @csrf_exempt
+def eval_handler(request):
+    """Dry-run a handler against the live view's current state.
+
+    POST body (JSON): {handler_name, params?: {}}
+    Query param:       session_id (required)
+
+    Runs `view.<handler_name>(**params)` against the registered view,
+    snapshots state before + after, returns the delta.
+
+    **v1 limitations (explicit non-goals for now):**
+    - No side-effect recording. ORM writes will commit, emails will
+      send, webhooks will fire. Use against views that do pure state
+      mutations, or in a test DB.
+    - Sync handlers only. Async handlers return a 400 with a clear
+      message — running async code from a sync Django view is
+      non-trivial and was deliberately descoped for v1.
+    - No render/patch push to the client. The handler mutates state
+      but the client doesn't see it. Call `reset_view_state` if you
+      need to rewind the view.
+
+    Returns:
+        {session_id, view_class, handler_name,
+         before_assigns, after_assigns,
+         delta: {added, removed, modified: {key: {before, after}}},
+         result: <handler's return value if JSON-serializable>}
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    session_id = request.GET.get("session_id", "").strip()
+    if not session_id:
+        return JsonResponse({"error": "session_id query param required"}, status=400)
+
+    view = get_view_for_session(session_id)
+    if view is None:
+        return JsonResponse(
+            {"error": f"no view registered for session {session_id}"},
+            status=404,
+        )
+
+    # Parse body.
+    import json as _json
+
+    try:
+        body = _json.loads(request.body.decode("utf-8")) if request.body else {}
+    except (ValueError, UnicodeDecodeError) as e:
+        return JsonResponse({"error": f"invalid JSON body: {e}"}, status=400)
+
+    handler_name = (body.get("handler_name") or "").strip()
+    if not handler_name:
+        return JsonResponse({"error": "body.handler_name required"}, status=400)
+
+    params = body.get("params") or {}
+    if not isinstance(params, dict):
+        return JsonResponse(
+            {"error": "body.params must be a JSON object (or null/absent)"}, status=400
+        )
+
+    handler = getattr(view, handler_name, None)
+    if handler is None or not callable(handler):
+        return JsonResponse(
+            {
+                "error": f"view '{view.__class__.__name__}' has no callable '{handler_name}'",
+                "hint": "Use `get_view_schema` on the djust MCP to see available handler names.",
+            },
+            status=404,
+        )
+
+    # v1: sync handlers only.
+    import inspect as _inspect
+
+    if _inspect.iscoroutinefunction(handler):
+        return JsonResponse(
+            {
+                "error": f"handler '{handler_name}' is async; eval_handler v1 "
+                "only supports sync handlers",
+                "hint": "A future PR will add async support via an async endpoint.",
+            },
+            status=400,
+        )
+
+    before = _lenient_assigns(view)
+
+    try:
+        result = handler(**params) if params else handler()
+    except TypeError as e:
+        # Most common: wrong params. Return with 400 so caller can fix.
+        return JsonResponse(
+            {
+                "error": f"handler call failed: {type(e).__name__}: {e}",
+                "hint": "Check that params match the handler signature (use get_view_schema).",
+                "handler_name": handler_name,
+                "params": params,
+            },
+            status=400,
+        )
+    except Exception as e:  # noqa: BLE001
+        return JsonResponse(
+            {
+                "error": f"handler raised: {type(e).__name__}: {e}",
+                "handler_name": handler_name,
+                "params": params,
+            },
+            status=500,
+        )
+
+    after = _lenient_assigns(view)
+
+    # Compute delta.
+    before_keys = set(before.keys())
+    after_keys = set(after.keys())
+    added = {k: after[k] for k in after_keys - before_keys}
+    removed = {k: before[k] for k in before_keys - after_keys}
+    modified = {}
+    for k in before_keys & after_keys:
+        if _json.dumps(before[k], default=repr) != _json.dumps(after[k], default=repr):
+            modified[k] = {"before": before[k], "after": after[k]}
+
+    # Return value — best-effort serialize.
+    try:
+        _json.dumps(result)
+        safe_result = result
+    except (TypeError, ValueError):
+        safe_result = {"_repr": repr(result)[:200], "_type": type(result).__name__}
+
+    return JsonResponse(
+        {
+            "session_id": session_id,
+            "view_class": view.__class__.__name__,
+            "handler_name": handler_name,
+            "params": params,
+            "before_assigns": before,
+            "after_assigns": after,
+            "delta": {
+                "added": added,
+                "removed": removed,
+                "modified": modified,
+                "change_count": len(added) + len(removed) + len(modified),
+            },
+            "result": safe_result,
+        }
+    )
+
+
+@csrf_exempt
 @require_GET
 def sql_queries(request):
     """Return captured SQL queries, filtered by session/handler/since_ms.
