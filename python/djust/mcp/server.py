@@ -219,6 +219,158 @@ def create_server():
             }
         )
 
+    @mcp.tool()
+    def find_handlers_for_template(template_path: str) -> str:
+        """List every view that uses a template, and which dj-* handlers
+        are wired in that template.
+
+        Args:
+            template_path: Either a logical template name (e.g.
+                'demos/counter.html' — what you'd pass to `render`) OR
+                an absolute filesystem path. Both are searched.
+
+        Returns JSON:
+          {
+            "template_path": "...",
+            "resolved_path": "/abs/path.html",
+            "dj_handlers_in_template": ["increment", "decrement", ...],
+            "views": [
+              {"class": "CounterView", "template_name": "...",
+               "matched_handlers": ["increment", "decrement"],
+               "handlers_in_view_not_in_template": [...],
+               "handlers_in_template_not_in_view": [...]}
+            ]
+          }
+
+        Pure static analysis — no framework hooks. Precursor to automated
+        refactoring ("renaming this handler, who's affected?").
+        """
+        if not _ensure_django():
+            return json.dumps(
+                {
+                    "error": "Django not configured. Run via 'python manage.py djust_mcp'.",
+                }
+            )
+
+        import os
+        import re
+
+        from djust.schema import get_project_schema
+
+        # Resolve the template to an absolute path. Accept both logical
+        # names and absolute paths so callers can hand either form.
+        resolved_path: str | None = None
+        if os.path.isabs(template_path) and os.path.isfile(template_path):
+            resolved_path = template_path
+        else:
+            try:
+                from django.template.loader import get_template
+
+                tpl = get_template(template_path)
+                origin = getattr(tpl, "origin", None)
+                if origin and getattr(origin, "name", None):
+                    resolved_path = origin.name
+            except Exception as e:  # noqa: BLE001
+                return json.dumps(
+                    {
+                        "error": f"Could not resolve template '{template_path}': {e}",
+                        "hint": "Pass either a logical name (e.g. 'demos/counter.html') or an absolute filesystem path.",
+                    }
+                )
+
+        if not resolved_path or not os.path.isfile(resolved_path):
+            return json.dumps(
+                {
+                    "error": f"Template file not found for '{template_path}'",
+                    "resolved_path": resolved_path,
+                }
+            )
+
+        # Scan the template for dj-* handler references.
+        # Matches e.g. dj-click="increment" / dj-submit='add_todo'.
+        # Deliberately doesn't match dj-params / dj-id / dj-view / dj-loading
+        # etc. — only the event-wiring attrs.
+        dj_event_attr_re = re.compile(
+            r'\b(dj-(?:click|submit|change|input|keydown|keyup))\s*=\s*[\'"]([^\'"]+)[\'"]',
+            re.IGNORECASE,
+        )
+        with open(resolved_path, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
+        handler_names_in_template = sorted({m.group(2) for m in dj_event_attr_re.finditer(source)})
+
+        # Match against the project's views. A view matches when its
+        # template_name maps to the same resolved path. Compare by basename
+        # + tail so both logical and absolute inputs can match.
+        schema = get_project_schema()
+        logical_tail = template_path.replace(os.sep, "/")
+        resolved_tail_components = resolved_path.replace(os.sep, "/").split("/")
+
+        matched_views = []
+        for view in schema["views"] + schema.get("components", []):
+            view_template = view.get("template_name") or ""
+            if not view_template:
+                continue
+            # Match on exact string, suffix, or resolving the view's
+            # template_name to the same path.
+            same = (
+                view_template == template_path
+                or view_template == logical_tail
+                or (logical_tail and view_template.endswith(logical_tail))
+                or resolved_tail_components[-1] == os.path.basename(view_template)
+            )
+            if not same:
+                continue
+
+            # Also try to resolve view_template through the loader — the
+            # strongest match. Skip if resolution fails.
+            view_resolved = None
+            try:
+                from django.template.loader import get_template
+
+                view_tpl = get_template(view_template)
+                view_origin = getattr(view_tpl, "origin", None)
+                if view_origin and getattr(view_origin, "name", None):
+                    view_resolved = view_origin.name
+            except Exception:  # noqa: BLE001
+                pass
+
+            if view_resolved and view_resolved != resolved_path:
+                # Different actual file despite similar names — skip.
+                continue
+
+            # Build handler-name set from the view's schema (these are
+            # Python-side handler method names).
+            view_handler_names = set()
+            for h in view.get("handlers", []):
+                name = h.get("name") if isinstance(h, dict) else h
+                if name:
+                    view_handler_names.add(name)
+
+            matched_set = view_handler_names & set(handler_names_in_template)
+            only_view = sorted(view_handler_names - set(handler_names_in_template))
+            only_template = sorted(set(handler_names_in_template) - view_handler_names)
+
+            matched_views.append(
+                {
+                    "class": view.get("class"),
+                    "template_name": view_template,
+                    "matched_handlers": sorted(matched_set),
+                    "handlers_in_view_not_in_template": only_view,
+                    "handlers_in_template_not_in_view": only_template,
+                }
+            )
+
+        return json.dumps(
+            {
+                "template_path": template_path,
+                "resolved_path": resolved_path,
+                "dj_handlers_in_template": handler_names_in_template,
+                "view_count": len(matched_views),
+                "views": matched_views,
+            },
+            indent=2,
+        )
+
     # === Observability tools ===
     #
     # These call the dev server's /_djust/observability/ endpoints (installed
