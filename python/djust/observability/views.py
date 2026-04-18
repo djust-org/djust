@@ -246,6 +246,86 @@ def handler_timings(request):
 
 
 @csrf_exempt
+def reset_view_state(request):
+    """Replay `view.mount()` on the registered instance — resets all public
+    attrs back to their post-mount values.
+
+    Accepts POST only. Requires the consumer to have stashed
+    `_djust_mount_request` + `_djust_mount_kwargs` (automatic since djust
+    framework Phase 11 #42). Views mounted before this was wired will
+    fail with a 409 and a clear message.
+
+    Does NOT push a fresh render to the connected client — the caller
+    must trigger one (user interaction, force reload). This limitation
+    is acceptable for test-harness / fixture-cleanup use cases.
+
+    Query params:
+        session_id (required)
+
+    Response (200): {session_id, view_class, assigns_after_reset}
+    Response (400): session_id missing
+    Response (404): DEBUG=False, or session not registered
+    Response (405): wrong HTTP method
+    Response (409): mount args not stashed (view predates this feature)
+    Response (500): mount() raised
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    session_id = request.GET.get("session_id", "").strip()
+    if not session_id:
+        return JsonResponse({"error": "session_id query param required"}, status=400)
+
+    view = get_view_for_session(session_id)
+    if view is None:
+        return JsonResponse(
+            {"error": f"no view registered for session {session_id}"},
+            status=404,
+        )
+
+    mount_request = getattr(view, "_djust_mount_request", None)
+    mount_kwargs = getattr(view, "_djust_mount_kwargs", None)
+    if mount_request is None or mount_kwargs is None:
+        return JsonResponse(
+            {
+                "error": "view was mounted before reset_view_state was wired",
+                "hint": "Reconnect the WebSocket to re-mount under the new consumer.",
+            },
+            status=409,
+        )
+
+    # Clear all public, non-callable attrs. This is the "reset" — mount()
+    # will then repopulate them. Private (_foo) attrs stay so that framework
+    # bookkeeping (websocket_session_id, stashed request, etc.) isn't lost.
+    for key in list(view.__dict__.keys()):
+        if not key.startswith("_") and not callable(getattr(view, key, None)):
+            delattr(view, key)
+
+    try:
+        view.mount(mount_request, **mount_kwargs)
+    except Exception as e:  # noqa: BLE001
+        return JsonResponse(
+            {
+                "error": f"mount() raised: {type(e).__name__}: {e}",
+                "session_id": session_id,
+            },
+            status=500,
+        )
+
+    assigns = _lenient_assigns(view)
+    return JsonResponse(
+        {
+            "session_id": session_id,
+            "view_class": view.__class__.__name__,
+            "assigns_after_reset": assigns,
+        }
+    )
+
+
+@csrf_exempt
 @require_GET
 def sql_queries(request):
     """Return captured SQL queries, filtered by session/handler/since_ms.
