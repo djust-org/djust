@@ -767,6 +767,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             ref: Event reference number echoed back from the client's request,
                 allowing the client to match responses to sent events (#560).
         """
+        # #763: On hot-reload, suppress empty-patch broadcasts. When an
+        # unrelated Python file changes, re-rendering often produces zero
+        # patches (the file didn't affect the current view's output). The
+        # old code still broadcast a full ~14 KB payload including the
+        # `_debug` state dump to every connected session. Skip it — the
+        # client has nothing to do and the payload is pure noise.
+        # NON-hot-reload empty patches are still sent: user events that
+        # legitimately produce no diff still need an acknowledgment so
+        # the client can clear loading state.
+        if hotreload and patches == []:
+            hotreload_logger.debug(
+                "Suppressing empty-patch hot-reload broadcast (unrelated file: %s)",
+                file_path,
+            )
+            return
+
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
         if patches is not None:
