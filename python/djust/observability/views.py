@@ -16,6 +16,7 @@ from djust.observability.registry import (
     get_registered_session_count,
     get_view_for_session,
 )
+from djust.observability.sql import get_queries_since
 from djust.observability.timings import get_timing_stats
 from djust.observability.tracebacks import get_recent_tracebacks
 
@@ -242,3 +243,50 @@ def handler_timings(request):
 
     rows = get_timing_stats(handler_name=handler_name, since_ms=since_ms)
     return JsonResponse({"count": len(rows), "stats": rows})
+
+
+@csrf_exempt
+@require_GET
+def sql_queries(request):
+    """Return captured SQL queries, filtered by session/handler/since_ms.
+
+    Query params:
+        session_id: filter to one session
+        handler_name: filter to one handler
+        since_ms: only queries with timestamp > since_ms
+        limit: max rows returned (default 500)
+
+    Each entry: {timestamp_ms, session_id, event_id, handler_name, sql,
+    params, many, duration_ms, stack_top}. Entries chronological.
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    session_id = request.GET.get("session_id", "").strip() or None
+    handler_name = request.GET.get("handler_name", "").strip() or None
+
+    try:
+        since_ms = int(request.GET.get("since_ms", "0"))
+    except (TypeError, ValueError):
+        since_ms = 0
+    try:
+        limit = int(request.GET.get("limit", "500"))
+    except (TypeError, ValueError):
+        limit = 500
+    limit = max(1, min(limit, 500))
+
+    entries = get_queries_since(
+        since_ms=since_ms,
+        session_id=session_id,
+        handler_name=handler_name,
+        limit=limit,
+    )
+    return JsonResponse(
+        {
+            "count": len(entries),
+            "since_ms": since_ms,
+            "session_id": session_id,
+            "handler_name": handler_name,
+            "entries": entries,
+        }
+    )
