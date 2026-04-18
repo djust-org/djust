@@ -37,8 +37,11 @@ Design notes:
 
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("djust.observability")
 
 
 # Process-wide lock — serializes dry-runs so we never leave a patched
@@ -125,11 +128,22 @@ class DryRunContext:
 
     def _uninstall(self) -> None:
         # Restore in reverse order so nested wrappers don't leak.
+        # We catch+log rather than raise — if ONE restore fails, we still
+        # want to attempt every remaining restore so the smallest number of
+        # patches leak into subsequent requests. But we log at warning so
+        # the failure is visible (silent swallow would leave the process
+        # running with a wrapped Model.save indefinitely — catastrophic
+        # for a dev server).
         for obj, attr, original in reversed(self._patches):
             try:
                 setattr(obj, attr, original)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "DryRunContext failed to restore %s.%s: %s",
+                    getattr(obj, "__name__", type(obj).__name__),
+                    attr,
+                    e,
+                )
         self._patches.clear()
 
     def _install_orm(self) -> None:
