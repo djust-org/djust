@@ -16,6 +16,7 @@ from djust.observability.registry import (
     get_registered_session_count,
     get_view_for_session,
 )
+from djust.observability.timings import get_timing_stats
 from djust.observability.tracebacks import get_recent_tracebacks
 
 
@@ -211,3 +212,33 @@ def log_tail(request):
             "entries": entries,
         }
     )
+
+
+@csrf_exempt
+@require_GET
+def handler_timings(request):
+    """Return per-handler percentile stats over the rolling sample window.
+
+    Query params:
+        handler_name (optional): filter to a single handler name. If
+            multiple views expose handlers with the same name, each
+            appears as its own row.
+        since_ms (optional): only include samples with timestamp > since_ms.
+
+    Each row: {view_class, handler_name, count, min_ms, max_ms, avg_ms,
+    p50_ms, p90_ms, p99_ms}. Sorted by p90 descending so the slowest
+    handlers are first.
+    """
+    if not settings.DEBUG:
+        return _debug_gate()
+
+    handler_name = request.GET.get("handler_name", "").strip() or None
+
+    since_ms_raw = request.GET.get("since_ms", "").strip()
+    try:
+        since_ms = int(since_ms_raw) if since_ms_raw else None
+    except ValueError:
+        since_ms = None
+
+    rows = get_timing_stats(handler_name=handler_name, since_ms=since_ms)
+    return JsonResponse({"count": len(rows), "stats": rows})
