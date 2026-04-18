@@ -35,14 +35,14 @@
             // module ordering puts 26-js-commands.js before this file in the
             // build, but be defensive).
             if (globalThis.djustDebug) {
-                console.log('[djust:exec] js commands module not loaded; skipping exec chain');
+                djLog('[djust:exec] js commands module not loaded; skipping exec chain');
             }
             return;
         }
 
         if (!payload || !Array.isArray(payload.ops)) {
             if (globalThis.djustDebug) {
-                console.log('[djust:exec] malformed payload (expected {ops: [...]}):', payload);
+                djLog('[djust:exec] malformed payload (expected {ops: [...]}):', payload);
             }
             return;
         }
@@ -58,7 +58,7 @@
             // Don't let one bad op break the whole event pipeline. Log in debug
             // mode and swallow — downstream chains keep working.
             if (globalThis.djustDebug) {
-                console.log('[djust:exec] op execution failed:', err);
+                djLog('[djust:exec] op execution failed:', err);
             }
         }
     }

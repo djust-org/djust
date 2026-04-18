@@ -44,7 +44,7 @@ const globalLoadingManager = {
         if (modifiers.length > 0) {
             this.registeredElements.set(element, { eventName, modifiers, originalState });
             if (globalThis.djustDebug) {
-                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+                djLog(`[Loading] Registered element for "${eventName}":`, modifiers);
             }
         }
     },
@@ -88,7 +88,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
+            djLog(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -102,8 +102,8 @@ const globalLoadingManager = {
             // Check if trigger element has dj-loading.disable
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
-                console.log(`[Loading] triggerElement:`, triggerElement);
-                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
+                djLog(`[Loading] triggerElement:`, triggerElement);
+                djLog(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -120,7 +120,7 @@ const globalLoadingManager = {
         document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Started: ${eventName}`);
+            djLog(`[Loading] Started: ${eventName}`);
         }
     },
 
@@ -147,7 +147,7 @@ const globalLoadingManager = {
         document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Stopped: ${eventName}`);
+            djLog(`[Loading] Stopped: ${eventName}`);
         }
     },
 

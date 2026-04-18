@@ -8,6 +8,21 @@
 window.djust = window.djust || {};
 
 // ============================================================================
+// djLog: debug-gated console.log (#761)
+// ============================================================================
+// Per djust/CLAUDE.md: "No console.log in JS without if (globalThis.djustDebug)
+// guard". Rather than sprinkle that conditional at every callsite, client.js
+// uses djLog which checks the flag once per call. Tree-shakes nothing (we
+// still evaluate the args in the call), but at least the console stays clean
+// when djustDebug is false.
+//
+// console.warn / console.error are NOT guarded — those indicate real problems
+// and should be visible in prod.
+window.djLog = function djLog(...args) {
+    if (globalThis.djustDebug) console.log(...args);
+};
+
+// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template
@@ -223,7 +238,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 expiresAt
             });
             if (globalThis.djustDebug) {
-                console.log(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
+                djLog(`[LiveView:cache] Cached patches: ${cacheKey} (TTL: ${ttl}s)`);
             }
             pendingCacheRequests.delete(data.cache_request_id);
         }
@@ -412,7 +427,7 @@ function handleServerResponse(data, eventName, triggerElement) {
                 el.disabled = false;
             });
         } else if (globalThis.djustDebug) {
-            console.log('[LiveView] Keeping loading state — async work pending');
+            djLog('[LiveView] Keeping loading state — async work pending');
         }
         return true;
 
@@ -807,7 +822,7 @@ class LiveViewWebSocket {
                     // all pending event responses arrive.
                     _tickBuffer.push(data);
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
+                        djLog('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
                     }
                     break;
                 }
@@ -842,7 +857,7 @@ class LiveViewWebSocket {
                 // patches only when ALL pending events have resolved.
                 if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
+                        djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
@@ -869,7 +884,7 @@ class LiveViewWebSocket {
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
-                    console.log('[LiveView] DOM recovered via morph, version: %s', String(data.version));
+                    djLog('[LiveView] DOM recovered via morph, version: %s', String(data.version));
                 }
                 break;
             }
@@ -1701,7 +1716,7 @@ function addToCache(cacheKey, value) {
         const oldestKey = resultCache.keys().next().value;
         resultCache.delete(oldestKey);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+            djLog(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
         }
     }
 
@@ -1718,7 +1733,7 @@ function setCacheConfig(config) {
     Object.entries(config).forEach(([handlerName, handlerConfig]) => {
         cacheConfig.set(handlerName, handlerConfig);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+            djLog(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
         }
     });
 }
@@ -1806,7 +1821,7 @@ function clearCache() {
     const size = resultCache.size;
     resultCache.clear();
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+        djLog(`[LiveView:cache] Cleared all ${size} cached entries`);
     }
 }
 
@@ -1836,7 +1851,7 @@ function invalidateCache(pattern) {
     }
 
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+        djLog(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
     }
 
     return count;
@@ -1875,7 +1890,7 @@ class StateBus {
         const oldValue = this.state.get(key);
         this.state.set(key, value);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
+            djLog(`[StateBus] Set: ${key} =`, value, `(was:`, oldValue, `)`);
         }
         this.notify(key, value, oldValue);
     }
@@ -1890,14 +1905,14 @@ class StateBus {
         }
         this.subscribers.get(key).add(callback);
         if (globalThis.djustDebug) {
-            console.log(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
+            djLog(`[StateBus] Subscribed to: ${key} (${this.subscribers.get(key).size} subscribers)`);
         }
         return () => {
             const subs = this.subscribers.get(key);
             if (subs) {
                 subs.delete(callback);
                 if (globalThis.djustDebug) {
-                    console.log(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
+                    djLog(`[StateBus] Unsubscribed from: ${key} (${subs.size} remaining)`);
                 }
             }
         };
@@ -1906,7 +1921,7 @@ class StateBus {
     notify(key, newValue, oldValue) {
         const callbacks = this.subscribers.get(key) || new Set();
         if (callbacks.size > 0 && globalThis.djustDebug) {
-            console.log(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
+            djLog(`[StateBus] Notifying ${callbacks.size} subscribers of: ${key}`);
         }
         callbacks.forEach(callback => {
             try {
@@ -1921,7 +1936,7 @@ class StateBus {
         this.state.clear();
         this.subscribers.clear();
         if (globalThis.djustDebug) {
-            console.log('[StateBus] Cleared all state');
+            djLog('[StateBus] Cleared all state');
         }
     }
 
@@ -1953,7 +1968,7 @@ class DraftManager {
                 localStorage.setItem(`djust_draft_${draftKey}`, JSON.stringify(draftData));
 
                 if (globalThis.djustDebug) {
-                    console.log(`[DraftMode] Saved draft: ${draftKey}`, data);
+                    djLog(`[DraftMode] Saved draft: ${draftKey}`, data);
                 }
             } catch (error) {
                 console.error(`[DraftMode] Failed to save draft ${draftKey}:`, error);
@@ -1975,7 +1990,7 @@ class DraftManager {
 
             if (globalThis.djustDebug) {
                 const age = Math.round((Date.now() - draftData.timestamp) / 1000);
-                console.log(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
+                djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
             return draftData.data;
@@ -1995,7 +2010,7 @@ class DraftManager {
             localStorage.removeItem(`djust_draft_${draftKey}`);
 
             if (globalThis.djustDebug) {
-                console.log(`[DraftMode] Cleared draft: ${draftKey}`);
+                djLog(`[DraftMode] Cleared draft: ${draftKey}`);
             }
         } catch (error) {
             console.error(`[DraftMode] Failed to clear draft ${draftKey}:`, error);
@@ -2022,7 +2037,7 @@ class DraftManager {
         keys.forEach(key => this.clearDraft(key));
 
         if (globalThis.djustDebug) {
-            console.log(`[DraftMode] Cleared all ${keys.length} drafts`);
+            djLog(`[DraftMode] Cleared all ${keys.length} drafts`);
         }
     }
 }
@@ -2152,7 +2167,7 @@ function _restoreFormData(container, data) {
     });
 
     if (globalThis.djustDebug) {
-        console.log('[DraftMode] Restored form data:', data);
+        djLog('[DraftMode] Restored form data:', data);
     }
 }
 
@@ -3228,7 +3243,7 @@ async function _handleDjChange(element, e) {
     }
 
     if (globalThis.djustDebug) {
-        console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+        djLog(`[LiveView] dj-change handler: value="${value}", params=`, params);
     }
     await handleEvent(parsedChange.name, params);
 }
@@ -4134,7 +4149,7 @@ const globalLoadingManager = {
         if (modifiers.length > 0) {
             this.registeredElements.set(element, { eventName, modifiers, originalState });
             if (globalThis.djustDebug) {
-                console.log(`[Loading] Registered element for "${eventName}":`, modifiers);
+                djLog(`[Loading] Registered element for "${eventName}":`, modifiers);
             }
         }
     },
@@ -4178,7 +4193,7 @@ const globalLoadingManager = {
             }
         });
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
+            djLog(`[Loading] Scanned ${this.registeredElements.size} elements with dj-loading attributes`);
         }
     },
 
@@ -4192,8 +4207,8 @@ const globalLoadingManager = {
             // Check if trigger element has dj-loading.disable
             const hasDisable = triggerElement.hasAttribute('dj-loading.disable');
             if (globalThis.djustDebug) {
-                console.log(`[Loading] triggerElement:`, triggerElement);
-                console.log(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
+                djLog(`[Loading] triggerElement:`, triggerElement);
+                djLog(`[Loading] hasAttribute('dj-loading.disable'):`, hasDisable);
             }
             if (hasDisable) {
                 triggerElement.disabled = true;
@@ -4210,7 +4225,7 @@ const globalLoadingManager = {
         document.body.classList.add('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Started: ${eventName}`);
+            djLog(`[Loading] Started: ${eventName}`);
         }
     },
 
@@ -4237,7 +4252,7 @@ const globalLoadingManager = {
         document.body.classList.remove('djust-global-loading');
 
         if (globalThis.djustDebug) {
-            console.log(`[Loading] Stopped: ${eventName}`);
+            djLog(`[Loading] Stopped: ${eventName}`);
         }
     },
 
@@ -4285,7 +4300,7 @@ function generateCacheRequestId() {
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
-        console.log(`[LiveView] Handling event: ${eventName}`, params);
+        djLog(`[LiveView] Handling event: ${eventName}`, params);
     }
 
     // Extract client-only properties before sending to server.
@@ -4347,7 +4362,7 @@ async function handleEvent(eventName, params = {}) {
     if (cached) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+            djLog(`[LiveView:cache] Cache hit: ${cacheKey}`);
         }
 
         // Still show brief loading state for UX consistency
@@ -4365,7 +4380,7 @@ async function handleEvent(eventName, params = {}) {
 
     // Cache miss - need to fetch from server
     if (globalThis.djustDebug && cacheConfig.has(eventName)) {
-        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+        djLog(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
     if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
@@ -4384,7 +4399,7 @@ async function handleEvent(eventName, params = {}) {
             if (pendingCacheRequests.has(cacheRequestId)) {
                 pendingCacheRequests.delete(cacheRequestId);
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                    djLog(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
                 }
             }
         }, PENDING_CACHE_TIMEOUT);
@@ -5278,7 +5293,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            djLog(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -5299,7 +5314,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            djLog(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -5309,7 +5324,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    djLog(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -5700,7 +5715,7 @@ function applySinglePatch(patch) {
                     insertTarget = node.parentNode;
                     insertRefChild = node.nextSibling;
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] InsertChild redirected: non-option child into SELECT parent');
+                        djLog('[LiveView] InsertChild redirected: non-option child into SELECT parent');
                     }
                 } else {
                     if (patch.ref_d) {
@@ -6098,7 +6113,7 @@ const lazyHydrationManager = {
         }
 
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
+            djLog(`[LiveView:lazy] Registered element for lazy hydration (mode: ${lazyMode})`, element);
         }
     },
 
@@ -8755,14 +8770,14 @@ window.djust.bindModelElements = bindModelElements;
             // module ordering puts 26-js-commands.js before this file in the
             // build, but be defensive).
             if (globalThis.djustDebug) {
-                console.log('[djust:exec] js commands module not loaded; skipping exec chain');
+                djLog('[djust:exec] js commands module not loaded; skipping exec chain');
             }
             return;
         }
 
         if (!payload || !Array.isArray(payload.ops)) {
             if (globalThis.djustDebug) {
-                console.log('[djust:exec] malformed payload (expected {ops: [...]}):', payload);
+                djLog('[djust:exec] malformed payload (expected {ops: [...]}):', payload);
             }
             return;
         }
@@ -8778,7 +8793,7 @@ window.djust.bindModelElements = bindModelElements;
             // Don't let one bad op break the whole event pipeline. Log in debug
             // mode and swallow — downstream chains keep working.
             if (globalThis.djustDebug) {
-                console.log('[djust:exec] op execution failed:', err);
+                djLog('[djust:exec] op execution failed:', err);
             }
         }
     }

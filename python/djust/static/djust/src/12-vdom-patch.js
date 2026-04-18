@@ -842,7 +842,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and append new child
                         existingElement.appendChild(newChild.cloneNode(true));
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
+                            djLog(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -863,7 +863,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
                         // Clone and prepend new child
                         existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
                         if (globalThis.djustDebug) {
-                            console.log(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
+                            djLog(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
                         }
                     }
                 }
@@ -873,7 +873,7 @@ function applyDjUpdateElements(existingRoot, newRoot) {
             case 'ignore':
                 // Don't update this element at all
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:dj-update] Ignoring #${elementId}`);
+                    djLog(`[LiveView:dj-update] Ignoring #${elementId}`);
                 }
                 break;
 
@@ -1264,7 +1264,7 @@ function applySinglePatch(patch) {
                     insertTarget = node.parentNode;
                     insertRefChild = node.nextSibling;
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] InsertChild redirected: non-option child into SELECT parent');
+                        djLog('[LiveView] InsertChild redirected: non-option child into SELECT parent');
                     }
                 } else {
                     if (patch.ref_d) {
