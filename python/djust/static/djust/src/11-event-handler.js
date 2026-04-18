@@ -2,7 +2,7 @@
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
-        console.log(`[LiveView] Handling event: ${eventName}`, params);
+        djLog(`[LiveView] Handling event: ${eventName}`, params);
     }
 
     // Extract client-only properties before sending to server.
@@ -64,7 +64,7 @@ async function handleEvent(eventName, params = {}) {
     if (cached) {
         // Cache hit! Apply cached patches without server round-trip
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Cache hit: ${cacheKey}`);
+            djLog(`[LiveView:cache] Cache hit: ${cacheKey}`);
         }
 
         // Still show brief loading state for UX consistency
@@ -82,7 +82,7 @@ async function handleEvent(eventName, params = {}) {
 
     // Cache miss - need to fetch from server
     if (globalThis.djustDebug && cacheConfig.has(eventName)) {
-        console.log(`[LiveView:cache] Cache miss: ${cacheKey}`);
+        djLog(`[LiveView:cache] Cache miss: ${cacheKey}`);
     }
 
     if (!skipLoading) globalLoadingManager.startLoading(eventName, triggerElement);
@@ -101,7 +101,7 @@ async function handleEvent(eventName, params = {}) {
             if (pendingCacheRequests.has(cacheRequestId)) {
                 pendingCacheRequests.delete(cacheRequestId);
                 if (globalThis.djustDebug) {
-                    console.log(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
+                    djLog(`[LiveView:cache] Cleaned up stale pending request: ${cacheRequestId}`);
                 }
             }
         }, PENDING_CACHE_TIMEOUT);

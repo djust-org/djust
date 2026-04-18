@@ -591,7 +591,7 @@ async function _handleDjChange(element, e) {
     }
 
     if (globalThis.djustDebug) {
-        console.log(`[LiveView] dj-change handler: value="${value}", params=`, params);
+        djLog(`[LiveView] dj-change handler: value="${value}", params=`, params);
     }
     await handleEvent(parsedChange.name, params);
 }

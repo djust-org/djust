@@ -383,7 +383,7 @@ class LiveViewWebSocket {
                     // all pending event responses arrive.
                     _tickBuffer.push(data);
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
+                        djLog('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
                     }
                     break;
                 }
@@ -418,7 +418,7 @@ class LiveViewWebSocket {
                 // patches only when ALL pending events have resolved.
                 if (isEventResponse && _pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
                     if (globalThis.djustDebug) {
-                        console.log('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
+                        djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
                     }
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
@@ -445,7 +445,7 @@ class LiveViewWebSocket {
                 reinitAfterDOMUpdate();
                 if (globalThis.djustDebug) {
                     // codeql[js/log-injection] -- data.version is a server-controlled integer
-                    console.log('[LiveView] DOM recovered via morph, version: %s', String(data.version));
+                    djLog('[LiveView] DOM recovered via morph, version: %s', String(data.version));
                 }
                 break;
             }

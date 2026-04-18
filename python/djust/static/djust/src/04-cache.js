@@ -42,7 +42,7 @@ function addToCache(cacheKey, value) {
         const oldestKey = resultCache.keys().next().value;
         resultCache.delete(oldestKey);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
+            djLog(`[LiveView:cache] Evicted (LRU): ${oldestKey}`);
         }
     }
 
@@ -59,7 +59,7 @@ function setCacheConfig(config) {
     Object.entries(config).forEach(([handlerName, handlerConfig]) => {
         cacheConfig.set(handlerName, handlerConfig);
         if (globalThis.djustDebug) {
-            console.log(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
+            djLog(`[LiveView:cache] Configured cache for ${handlerName}:`, handlerConfig);
         }
     });
 }
@@ -147,7 +147,7 @@ function clearCache() {
     const size = resultCache.size;
     resultCache.clear();
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Cleared all ${size} cached entries`);
+        djLog(`[LiveView:cache] Cleared all ${size} cached entries`);
     }
 }
 
@@ -177,7 +177,7 @@ function invalidateCache(pattern) {
     }
 
     if (globalThis.djustDebug) {
-        console.log(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
+        djLog(`[LiveView:cache] Invalidated ${count} entries matching: ${pattern}`);
     }
 
     return count;

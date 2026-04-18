@@ -3968,7 +3968,7 @@
                             this.networkHistory = data.network || [];
                             this.patchHistory = data.patches || [];
                             this.renderTabContent();
-                            console.log('[djust] Debug session imported successfully');
+                            if (globalThis.djustDebug) console.log('[djust] Debug session imported successfully');
                         } catch (err) {
                             console.error('[djust] Failed to import debug session:', err);
                         }
@@ -4001,7 +4001,7 @@
             this.components = null;
             this.variables = {};
 
-            console.log('[djust] Debug panel destroyed');
+            if (globalThis.djustDebug) console.log('[djust] Debug panel destroyed');
         }
     }
 

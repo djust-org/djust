@@ -8,6 +8,21 @@
 window.djust = window.djust || {};
 
 // ============================================================================
+// djLog: debug-gated console.log (#761)
+// ============================================================================
+// Per djust/CLAUDE.md: "No console.log in JS without if (globalThis.djustDebug)
+// guard". Rather than sprinkle that conditional at every callsite, client.js
+// uses djLog which checks the flag once per call. Tree-shakes nothing (we
+// still evaluate the args in the call), but at least the console stays clean
+// when djustDebug is false.
+//
+// console.warn / console.error are NOT guarded — those indicate real problems
+// and should be visible in prod.
+window.djLog = function djLog(...args) {
+    if (globalThis.djustDebug) console.log(...args);
+};
+
+// ============================================================================
 // Double-Load Guard
 // ============================================================================
 // Prevent double execution when client.js is included in both base template
