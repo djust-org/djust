@@ -1475,6 +1475,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Run synchronous view operations in a thread pool
                 await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
+                # Stash request + kwargs so observability/reset_view_state/
+                # can replay mount() without page reload. Minor memory cost
+                # (one request ref per live view) in exchange for a cheap
+                # reset primitive.
+                self.view_instance._djust_mount_request = request
+                self.view_instance._djust_mount_kwargs = mount_kwargs
                 self.view_instance._snapshot_user_private_attrs()
         except Exception as e:
             response = handle_exception(

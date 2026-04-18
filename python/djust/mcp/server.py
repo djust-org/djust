@@ -527,6 +527,48 @@ def create_server():
         return r.text
 
     @mcp.tool()
+    def reset_view_state(session_id: str) -> str:
+        """Replay `view.mount()` on the registered instance — resets all
+        public attrs back to their post-mount defaults without a page
+        reload.
+
+        Useful between regression-fixture replays: you want the counter
+        at 0 again without closing the WebSocket or losing the login
+        session.
+
+        Does NOT push a fresh render to the client. The caller must
+        trigger one (the next user click re-renders with the reset
+        state).
+
+        Args:
+            session_id: WebSocket session id.
+
+        Returns JSON: {session_id, view_class, assigns_after_reset}.
+        """
+        import os
+
+        try:
+            import requests
+        except ImportError:
+            return json.dumps({"error": "`requests` package not installed in the MCP environment"})
+
+        base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
+        url = f"{base}/_djust/observability/reset_view_state/?session_id={session_id}"
+        try:
+            # csrf_exempt on the endpoint — POST with no body is fine.
+            r = requests.post(url, timeout=5)
+        except requests.RequestException as e:
+            return json.dumps(
+                {
+                    "error": f"request failed: {e}",
+                    "hint": f"Is the dev server running? Tried {url}.",
+                }
+            )
+        if r.status_code != 200:
+            return json.dumps({"error": r.text, "status": r.status_code})
+        return r.text
+
+    @mcp.tool()
     def get_handler_timings(handler_name: str = "", since_ms: int = 0) -> str:
         """Per-handler percentile stats over the rolling sample window.
 

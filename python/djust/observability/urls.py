@@ -18,6 +18,7 @@ from djust.observability.views import (
     health,
     last_traceback,
     log_tail,
+    reset_view_state,
     sql_queries,
     view_assigns,
 )
@@ -31,4 +32,5 @@ urlpatterns = [
     path("log/", log_tail, name="log"),
     path("handler_timings/", handler_timings, name="handler_timings"),
     path("sql_queries/", sql_queries, name="sql_queries"),
+    path("reset_view_state/", reset_view_state, name="reset_view_state"),
 ]
