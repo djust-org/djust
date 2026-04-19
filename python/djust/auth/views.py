@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth import login, logout
 from django.contrib.auth import views as auth_views
+from django.http import HttpResponseNotAllowed
 from django.shortcuts import redirect
 from django.views.generic import CreateView
 
@@ -34,6 +35,8 @@ class DjustLoginView(auth_views.LoginView):
 
 
 def logout_view(request):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
     logout(request)
     url = getattr(settings, "LOGOUT_REDIRECT_URL", "/")
     return redirect(url)

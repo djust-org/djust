@@ -64,12 +64,17 @@ class TenantMiddleware:
         # Set in thread-local storage (for use outside views)
         set_current_tenant(tenant)
 
-        # Check if tenant is required
+        # Check if tenant is required — check both DJUST_CONFIG (core) and
+        # DJUST_TENANTS (standalone compat) settings
         from django.conf import settings
 
         config = getattr(settings, "DJUST_TENANTS", {})
+        required = config.get("REQUIRED", False)
+        if not required:
+            djust_config = getattr(settings, "DJUST_CONFIG", {})
+            required = djust_config.get("TENANT_REQUIRED", False)
 
-        if config.get("REQUIRED", False) and not tenant:
+        if required and not tenant:
             raise Http404("Tenant not found")
 
         try:

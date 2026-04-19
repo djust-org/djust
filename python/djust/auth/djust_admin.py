@@ -33,15 +33,18 @@ if DjustModelAdmin is not None:
 
     # ---- Conditional model registration ----
 
-    if apps.is_installed("allauth.socialaccount"):
-        from allauth.socialaccount.models import SocialAccount
+    try:
+        if apps.is_installed("allauth.socialaccount"):
+            from allauth.socialaccount.models import SocialAccount
 
-        @register(SocialAccount)
-        class SocialAccountAdmin(DjustModelAdmin):
-            list_display = ["user", "provider", "uid", "date_joined"]
-            list_filter = ["provider"]
-            search_fields = ["user__username", "user__email", "uid"]
-            ordering = ["-date_joined"]
+            @register(SocialAccount)
+            class SocialAccountAdmin(DjustModelAdmin):
+                list_display = ["user", "provider", "uid", "date_joined"]
+                list_filter = ["provider"]
+                search_fields = ["user__username", "user__email", "uid"]
+                ordering = ["-date_joined"]
+    except Exception:
+        pass  # App registry not ready or allauth not configured
 
     # ---- Dashboard widget ----
 

@@ -99,3 +99,16 @@ class TestTenantAwareCSP:
         middleware = _make_middleware()
         response = middleware(request)
         assert response["Content-Security-Policy"] == "default-src 'self'"
+
+    def test_csp_injection_blocked(self, factory):
+        """Malicious tenant CSP domains with directives should be rejected."""
+        request = factory.get("/")
+        request.tenant = TenantInfo(
+            tenant_id="evil",
+            settings={"csp_allowed_domains": "https://evil.com; script-src 'unsafe-inline'"},
+        )
+        middleware = _make_middleware()
+        response = middleware(request)
+        # Should NOT contain the injected directive
+        assert "unsafe-inline" not in response["Content-Security-Policy"]
+        assert response["Content-Security-Policy"] == "default-src 'self'"

@@ -40,7 +40,7 @@ class TenantManager(models.Manager):
 
         if tenant:
             # Filter by tenant
-            filter_kwargs = {self.tenant_field: tenant.obj}
+            filter_kwargs = {self.tenant_field: tenant.raw}
             return qs.filter(**filter_kwargs)
 
         # No tenant set — strict mode returns empty queryset (safe default)
@@ -95,7 +95,7 @@ class TenantQuerySet(models.QuerySet):
         """Apply tenant filter to queryset."""
         tenant = get_current_tenant()
         if tenant:
-            filter_kwargs = {self._tenant_field: tenant.obj}
+            filter_kwargs = {self._tenant_field: tenant.raw}
             return self.filter(**filter_kwargs)
         return self
 

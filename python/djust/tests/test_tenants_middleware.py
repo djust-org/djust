@@ -20,10 +20,9 @@ def rf():
 
 class TestTenantMiddleware:
     @override_settings(
-        DJUST_TENANTS={
-            "RESOLVER": "subdomain",
-            "MAIN_DOMAIN": "example.com",
-            "REQUIRED": False,
+        DJUST_CONFIG={
+            "TENANT_RESOLVER": "subdomain",
+            "TENANT_MAIN_DOMAIN": "example.com",
         }
     )
     def test_middleware_sets_tenant(self, rf):
@@ -41,10 +40,9 @@ class TestTenantMiddleware:
         assert response.status_code == 200
 
     @override_settings(
-        DJUST_TENANTS={
-            "RESOLVER": "subdomain",
-            "MAIN_DOMAIN": "example.com",
-            "REQUIRED": False,
+        DJUST_CONFIG={
+            "TENANT_RESOLVER": "subdomain",
+            "TENANT_MAIN_DOMAIN": "example.com",
         }
     )
     def test_middleware_clears_thread_local(self, rf):
@@ -60,10 +58,10 @@ class TestTenantMiddleware:
         assert get_current_tenant() is None
 
     @override_settings(
-        DJUST_TENANTS={
-            "RESOLVER": "subdomain",
-            "MAIN_DOMAIN": "example.com",
-            "REQUIRED": True,
+        DJUST_CONFIG={
+            "TENANT_RESOLVER": "subdomain",
+            "TENANT_MAIN_DOMAIN": "example.com",
+            "TENANT_REQUIRED": True,
         }
     )
     def test_middleware_raises_404_when_required(self, rf):
@@ -79,10 +77,9 @@ class TestTenantMiddleware:
             middleware(request)
 
     @override_settings(
-        DJUST_TENANTS={
-            "RESOLVER": "subdomain",
-            "MAIN_DOMAIN": "example.com",
-            "REQUIRED": False,
+        DJUST_CONFIG={
+            "TENANT_RESOLVER": "subdomain",
+            "TENANT_MAIN_DOMAIN": "example.com",
         }
     )
     def test_middleware_allows_no_tenant(self, rf):

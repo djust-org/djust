@@ -181,6 +181,13 @@ class LogoutViewTest(TestCase):
         User.objects.create_user(username="testuser", password="testpass123")
         client = Client()
         client.login(username="testuser", password="testpass123")
-        response = client.get("/logout/")
+        response = client.post("/logout/")
         self.assertEqual(response.status_code, 302)
         self.assertRedirects(response, "/", fetch_redirect_response=False)
+
+    def test_logout_rejects_get(self):
+        User.objects.create_user(username="testuser", password="testpass123")
+        client = Client()
+        client.login(username="testuser", password="testpass123")
+        response = client.get("/logout/")
+        self.assertEqual(response.status_code, 405)

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import re
+
 from django.conf import settings
+
+# Only allow domain-like values in CSP (no semicolons, quotes, or directives)
+_CSP_DOMAIN_RE = re.compile(r"^[\w.*:/-]+$")
 
 
 class SecurityHeadersMiddleware:
@@ -29,7 +34,7 @@ class SecurityHeadersMiddleware:
                 allowed = None
                 if hasattr(tenant, "get_setting"):
                     allowed = tenant.get_setting("csp_allowed_domains")
-                if allowed:
+                if allowed and _CSP_DOMAIN_RE.match(allowed):
                     csp = f"{csp} {allowed}"
             response["Content-Security-Policy"] = csp
 
