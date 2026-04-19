@@ -7,9 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5rc2] - 2026-04-18
+
 ### Added
 
-- **`eval_handler` v2 — dry-run side-effect blocking** — Extends the `eval_handler` observability endpoint + MCP tool with an opt-in `dry_run` flag that installs a `DryRunContext` around the handler call. ORM writes (`Model.save`/`Model.delete`), emails (`send_mail`/`send_mass_mail`), and outbound HTTP (`requests.*`, `urllib.request.urlopen`) are monkey-patched for the duration; first attempt raises `DryRunViolation` and the response surfaces `{blocked_side_effect: {kind, target, details}}`. Lets the AI agent ask "is this handler pure? what would it try to do?" without risking real writes. Process-wide lock serializes dry-runs so one tester's patches never leak into another thread's request. Set `dry_run_block: false` to record-but-allow (useful instrumentation, not sandboxing). DEBUG-gated + localhost-only per the rest of `djust.observability`.
+- **AI observability module: `djust.observability`** — DEBUG-gated, localhost-only HTTP endpoints that give external tooling (like the djust Python MCP and djust-browser-mcp) live visibility into framework state without in-process coupling. Ships as seven endpoints under `/_djust/observability/`: `health`, `view_assigns`, `last_traceback`, `log_tail`, `handler_timings`, `sql_queries`, `reset_view_state`, `eval_handler`. Each pairs with a matching MCP tool. Security model mirrors django-debug-toolbar (DEBUG=True + `LocalhostOnlyObservabilityMiddleware`). Requires `path("_djust/observability/", include("djust.observability.urls"))` in the project urls.py.
+- **`get_view_assigns`** — Real server-side `self.*` state of the mounted LiveView for a given session. Complements browser-mcp's client-only `djust_state_diff` with the source of truth. Per-attr fallback tags non-serializable values with `{_repr, _type}` rather than an all-or-nothing blanket.
+- **`get_last_traceback`** — Ring-buffered (50) exception log populated from `handle_exception()`. Replaces "can you paste the terminal?" for 80% of blind-debugging cases.
+- **`tail_server_log`** — Ring-buffered (500) Django/djust log records with `since_ms` + `level` filters. `djust.*` captured at DEBUG+, `django.*` at WARNING+.
+- **`get_handler_timings`** — Per-handler rolling 100-sample distribution (min/max/avg/p50/p90/p99). Reuses existing `timing["handler"]` measurements; no extra perf counters.
+- **`get_sql_queries_since`** — Per-event SQL capture via `connection.execute_wrappers`. Queries are tagged with `(session_id, event_id, handler_name)` + `stack_top` filtered to skip framework frames.
+- **`reset_view_state`** — Replay `view.mount()` on a registered instance. Clears public attrs, re-invokes `mount(stashed_request, **stashed_kwargs)`. Useful between fixture replays.
+- **`eval_handler`** — Dry-run a handler against a live view's current state. Returns `{before_assigns, after_assigns, delta, result}`. v2 `dry_run=True` installs a `DryRunContext` that blocks `Model.save`/`delete`, `QuerySet.update`/`delete`/`bulk_create`/`bulk_update`, `send_mail`/`send_mass_mail`, `requests.*`, and `urllib.request.urlopen` — first attempt raises `DryRunViolation` and the response surfaces `{blocked_side_effect}`. `dry_run_block=False` records without blocking. Process-wide lock serializes dry-runs.
+- **`find_handlers_for_template(template_path)` in djust MCP** — Cross-references a template file against every view that uses it, returning dj-* handlers wired in the template and the diff against view handler methods. Catches dead bindings at author time (complements djust-browser-mcp's runtime `find_dead_bindings`).
+- **`seed_fixtures(fixture_paths)` in djust MCP** — Subprocess wrapper around `manage.py loaddata` for regression-fixture DB setup.
+
+### Fixed
+
+- **`hotreload`: suppress empty-patch broadcasts on unrelated file changes ([#763](https://github.com/djust-org/djust/issues/763))** — When a Python file changes that doesn't affect the currently-mounted view, re-render produces zero patches. The old code still broadcast ~14 KB (empty patches + full `_debug` state dump) to every connected session. Early-return when `hotreload=True AND patches==[]`. Non-hot-reload empty patches still sent (loading-state clear ack needed).
+- **`client.js`: guard 38 unguarded `console.log` calls ([#761](https://github.com/djust-org/djust/issues/761))** — Per `djust/CLAUDE.md` rule, no `console.log` without `if (globalThis.djustDebug)` guard. Introduced a `djLog` helper in `00-namespace.js` and replaced bare `console.log` → `djLog` across 12 client modules. `console.warn`/`console.error` untouched (real problems stay visible in prod).
+- **Observability `DryRunContext._uninstall` logs setattr failures ([#759](https://github.com/djust-org/djust/issues/759))** — Silent `except Exception: pass` meant the process could run indefinitely with a wrapped `Model.save` if uninstall partially failed — catastrophic for a dev server. Replaced with a `logger.warning` so the failure is observable.
+
+### Changed
+
+- **`djust.observability` + eval_handler v2** — Side-effect blocking now covers QuerySet bulk writes ([#758](https://github.com/djust-org/djust/issues/758)): `QuerySet.update`/`delete`/`bulk_create`/`bulk_update` are patched alongside `Model.save`/`delete`, so a handler that does `Model.objects.filter(...).update(...)` correctly raises `DryRunViolation` instead of silently committing.
+- **Observability dry_run tests tightened ([#760](https://github.com/djust-org/djust/issues/760))** — Two tests claimed to verify the record-but-allow contract but only checked detection. Now use `unittest.mock` to assert the original callable was actually invoked (`call_count == 1`) alongside the violation-recorded assertion.
 
 ## [0.4.5rc1] - 2026-04-17
 

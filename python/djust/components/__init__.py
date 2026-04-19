@@ -96,4 +96,4 @@ __all__ = [
     "ManyToManySelect",
 ]
 
-__version__ = "0.4.5rc1"
+__version__ = "0.4.5rc2"
