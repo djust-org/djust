@@ -1,0 +1,2 @@
+{% load theme_form_tags %}{% get_css_prefix as prefix %}<textarea name="{{ widget.name }}" class="{{ prefix }}theme-textarea{% if widget.attrs.class %} {{ widget.attrs.class }}{% endif %}"{% for name, value in widget.attrs.items %}{% if name != "class" %}{% if value is not False %} {{ name }}{% if value is not True %}="{{ value|stringformat:'s' }}"{% endif %}{% endif %}{% endif %}{% endfor %}>
+{% if widget.value %}{{ widget.value }}{% endif %}</textarea>

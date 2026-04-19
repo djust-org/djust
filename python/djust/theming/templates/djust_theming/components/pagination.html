@@ -1,0 +1,41 @@
+<nav class="{{ css_prefix }}pagination {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     aria-label="Pagination"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <ul class="{{ css_prefix }}pagination-list">
+        <li>
+            {% if slot_prev %}
+            {{ slot_prev|safe }}
+            {% elif current_page > 1 %}
+            <a href="{{ prev_url }}" class="{{ css_prefix }}pagination-prev" aria-label="Previous page">&laquo; Prev</a>
+            {% else %}
+            <span class="{{ css_prefix }}pagination-prev {{ css_prefix }}pagination-disabled" aria-disabled="true">&laquo; Prev</span>
+            {% endif %}
+        </li>
+        {% if show_edges and first_page != None %}
+        <li><a href="{{ first_url }}" class="{{ css_prefix }}pagination-link">1</a></li>
+        {% if first_ellipsis %}<li><span class="{{ css_prefix }}pagination-ellipsis">&hellip;</span></li>{% endif %}
+        {% endif %}
+        {% for page in page_range %}
+        <li>
+            {% if page.number == current_page %}
+            <span class="{{ css_prefix }}pagination-link {{ css_prefix }}pagination-active" aria-current="page">{{ page.number }}</span>
+            {% else %}
+            <a href="{{ page.url }}" class="{{ css_prefix }}pagination-link">{{ page.number }}</a>
+            {% endif %}
+        </li>
+        {% endfor %}
+        {% if show_edges and last_page != None %}
+        {% if last_ellipsis %}<li><span class="{{ css_prefix }}pagination-ellipsis">&hellip;</span></li>{% endif %}
+        <li><a href="{{ last_url }}" class="{{ css_prefix }}pagination-link">{{ total_pages }}</a></li>
+        {% endif %}
+        <li>
+            {% if slot_next %}
+            {{ slot_next|safe }}
+            {% elif current_page < total_pages %}
+            <a href="{{ next_url }}" class="{{ css_prefix }}pagination-next" aria-label="Next page">Next &raquo;</a>
+            {% else %}
+            <span class="{{ css_prefix }}pagination-next {{ css_prefix }}pagination-disabled" aria-disabled="true">Next &raquo;</span>
+            {% endif %}
+        </li>
+    </ul>
+</nav>

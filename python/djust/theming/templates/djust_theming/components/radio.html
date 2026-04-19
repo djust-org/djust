@@ -1,0 +1,26 @@
+<fieldset class="{{ css_prefix }}radio-group {% if attrs.class %}{{ attrs.class }}{% endif %}" role="radiogroup">
+    {% if slot_label %}
+    {{ slot_label|safe }}
+    {% elif label %}
+    <legend class="{{ css_prefix }}radio-legend">{{ label }}</legend>
+    {% endif %}
+    {% if slot_options %}
+    {{ slot_options|safe }}
+    {% else %}
+    {% for opt in options %}
+    <div class="{{ css_prefix }}radio-option">
+        <input
+            type="radio"
+            name="{{ name }}"
+            id="{{ name }}_{{ opt.value }}"
+            value="{{ opt.value }}"
+            class="{{ css_prefix }}radio"
+            {% if opt.value == selected %}checked{% endif %}
+            {% if attrs.required %}required{% endif %}
+            {% if attrs.disabled %}disabled{% endif %}
+        />
+        <label for="{{ name }}_{{ opt.value }}" class="{{ css_prefix }}radio-label">{{ opt.label }}</label>
+    </div>
+    {% endfor %}
+    {% endif %}
+</fieldset>

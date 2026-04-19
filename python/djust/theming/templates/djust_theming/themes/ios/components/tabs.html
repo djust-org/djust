@@ -1,0 +1,25 @@
+<div class="{{ css_prefix }}segmented-control {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     data-theme-tabs="{{ id }}"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <div class="{{ css_prefix }}segmented-control-track" role="tablist">
+        {% for tab in tabs %}
+        <button class="{{ css_prefix }}segment{% if forloop.counter0 == active %} {{ css_prefix }}segment-active{% endif %}"
+                role="tab"
+                id="{{ id }}-tab-{{ forloop.counter0 }}"
+                aria-selected="{% if forloop.counter0 == active %}true{% else %}false{% endif %}"
+                aria-controls="{{ id }}-panel-{{ forloop.counter0 }}"
+                {% if forloop.counter0 != active %}tabindex="-1"{% endif %}>
+            {{ tab.label }}
+        </button>
+        {% endfor %}
+    </div>
+    {% for tab in tabs %}
+    <div class="{{ css_prefix }}tab-panel{% if forloop.counter0 != active %} {{ css_prefix }}tab-panel-hidden{% endif %}"
+         role="tabpanel"
+         id="{{ id }}-panel-{{ forloop.counter0 }}"
+         aria-labelledby="{{ id }}-tab-{{ forloop.counter0 }}"
+         {% if forloop.counter0 != active %}hidden{% endif %}>
+        {{ tab.content|safe }}
+    </div>
+    {% endfor %}
+</div>

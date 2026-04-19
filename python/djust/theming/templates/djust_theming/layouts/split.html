@@ -1,0 +1,14 @@
+{% extends "djust_theming/layouts/base.html" %}
+
+{% block body_class %}layout-split{% endblock %}
+
+{% block content %}
+<div class="layout-split__container">
+  <div class="layout-split__left">
+    {% block panel_left %}{% endblock %}
+  </div>
+  <div class="layout-split__right">
+    {% block panel_right %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "djust_theming/layouts/sidebar_topbar.html" %}
+
+{% block body_class %}layout-dashboard layout-sidebar-topbar{% endblock %}
+
+{% block sidebar_topbar_content %}
+<div class="layout-dashboard__grid">
+  {% block dashboard_content %}{% endblock %}
+</div>
+{% endblock %}

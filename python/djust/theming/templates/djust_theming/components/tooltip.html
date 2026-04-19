@@ -1,0 +1,5 @@
+<span class="{{ css_prefix }}tooltip {% if attrs.class %}{{ attrs.class }}{% endif %}"
+      data-tooltip="{{ text }}"
+      data-tooltip-position="{{ position }}"
+      aria-describedby="{{ tooltip_id }}"
+      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>{% if slot_content %}{{ slot_content|safe }}{% else %}{{ text }}{% endif %}<span id="{{ tooltip_id }}" role="tooltip" hidden>{{ text }}</span></span>

@@ -1,0 +1,11 @@
+{# Preset selector: list layout #}
+<div class="theme-preset-list">
+    {% for preset in presets %}
+    <label class="theme-preset-item{% if preset.is_active %} active{% endif %}">
+        <input type="radio" name="theme-preset" value="{{ preset.name }}"{% if preset.is_active %} checked{% endif %}
+               data-theme-preset="{{ preset.name }}">
+        <span>{{ preset.display_name }}</span>
+        {% if show_descriptions and preset.description %}<small>{{ preset.description }}</small>{% endif %}
+    </label>
+    {% endfor %}
+</div>

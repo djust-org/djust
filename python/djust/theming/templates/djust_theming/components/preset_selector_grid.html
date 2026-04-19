@@ -1,0 +1,10 @@
+{# Preset selector: grid layout #}
+<div class="theme-preset-grid">
+    {% for preset in presets %}
+    <button type="button"
+            class="theme-preset-btn{% if preset.is_active %} active{% endif %}"
+            data-theme-preset="{{ preset.name }}">
+        {{ preset.display_name }}
+    </button>
+    {% endfor %}
+</div>

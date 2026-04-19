@@ -1,0 +1,19 @@
+<div class="{{ css_prefix }}page-utility {{ css_prefix }}page-maintenance {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    {% if slot_illustration %}
+    <div class="{{ css_prefix }}page-illustration">
+        {{ slot_illustration|safe }}
+    </div>
+    {% endif %}
+    <h1 class="{{ css_prefix }}page-title">{{ title }}</h1>
+    <p class="{{ css_prefix }}page-description">{{ description }}</p>
+    {% if slot_eta %}
+    <div class="{{ css_prefix }}page-eta">
+        {{ slot_eta|safe }}
+    </div>
+    {% endif %}
+    {% if slot_progress %}
+    <div class="{{ css_prefix }}page-progress">
+        {{ slot_progress|safe }}
+    </div>
+    {% endif %}
+</div>

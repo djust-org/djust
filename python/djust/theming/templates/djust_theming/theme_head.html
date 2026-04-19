@@ -1,0 +1,28 @@
+{# Theme head block: anti-FOUC script, CSS, and optional JS include #}
+{# Safety: autoescape off is safe here — all variables (css_block, direction, etc.) #}
+{# are framework-generated in theme_tags.py, not user input. #}
+{% load static %}
+{% autoescape off %}
+<script>
+(function() {
+    {% if loading_class %}document.documentElement.classList.add('loading');
+    {% endif %}var storageKey = 'djust-theme-mode';
+    var storedMode = localStorage.getItem(storageKey);
+    var mode = storedMode || 'system';
+    var resolvedMode = mode;
+    if (mode === 'system') {
+        resolvedMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', resolvedMode);
+    document.documentElement.setAttribute('data-theme-mode', mode);
+    document.documentElement.setAttribute('dir', '{{ direction }}');
+})();
+</script>
+{{ css_block }}
+{{ deferred_css_block }}
+{% if include_component_link %}<link rel="stylesheet" href="{% static 'djust_theming/css/components.css' %}">{% endif %}
+{{ component_css_block }}
+<link rel="stylesheet" href="{% static 'djust_theming/css/print.css' %}" media="print">
+{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}" defer></script>
+<script src="{% static 'djust_theming/js/components.js' %}" defer></script>{% endif %}
+{% endautoescape %}

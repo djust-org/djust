@@ -1,0 +1,330 @@
+{% load theme_tags static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Component Storybook{% endblock %}</title>
+  {% theme_head %}
+  <link href="{% static 'theme_demo/css/utilities.css' %}" rel="stylesheet">
+  <link href="{% static 'djust_components/components.css' %}" rel="stylesheet">
+  <link href="{% static 'djust_components/components-classes.css' %}" rel="stylesheet">
+  <link href="{% static 'theme_demo/css/bridge.css' %}" rel="stylesheet">
+  <style>
+    body {
+      margin: 0;
+      background: hsl(var(--background, 0 0% 100%));
+      color: hsl(var(--foreground, 222 47% 11%));
+      font-family: var(--font-body, system-ui, sans-serif);
+      font-size: var(--font-size-base, 16px);
+      line-height: var(--line-height, 1.5);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ===== Layout: topbar + sidebar + content ===== */
+    .sb-topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+      height: 3.25rem;
+      background: hsl(var(--surface-1, var(--background, 0 0% 100%)));
+      border-bottom: 1px solid hsl(var(--border, 220 13% 91%));
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0 1rem;
+      font-size: 0.875rem;
+    }
+    .sb-topbar a { color: hsl(var(--muted-foreground, 220 9% 46%)); text-decoration: none; transition: color 0.15s; }
+    .sb-topbar a:hover { color: hsl(var(--foreground, 222 47% 11%)); }
+    .sb-topbar .active { color: hsl(var(--foreground, 222 47% 11%)); }
+    .sb-topbar-brand { font-weight: 700; color: hsl(var(--foreground, 222 47% 11%)) !important; }
+    .sb-topbar-sep { color: hsl(var(--muted-foreground)); opacity: 0.3; }
+
+    .sb-layout {
+      display: flex;
+      min-height: 100vh;
+      padding-top: 3.25rem;
+    }
+
+    /* ===== Sidebar ===== */
+    .sb-sidebar {
+      position: fixed;
+      top: 3.25rem;
+      left: 0;
+      bottom: 0;
+      width: 240px;
+      background: hsl(var(--surface-2, var(--card, 0 0% 100%)));
+      border-right: 1px solid hsl(var(--border, 220 13% 91%));
+      overflow-y: auto;
+      padding: 1rem 0;
+      z-index: 40;
+    }
+    .sb-sidebar-search {
+      padding: 0 0.75rem 0.75rem;
+    }
+    .sb-sidebar-search input {
+      width: 100%;
+      padding: 0.375rem 0.625rem;
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: var(--radius-md, 0.375rem);
+      background: hsl(var(--surface-1, var(--background, 0 0% 100%)));
+      color: hsl(var(--foreground));
+      font-size: 0.8125rem;
+      outline: none;
+    }
+    .sb-sidebar-search input:focus {
+      border-color: hsl(var(--primary, 222 47% 51%));
+      box-shadow: 0 0 0 2px hsl(var(--primary, 222 47% 51%) / 0.2);
+    }
+    .sb-sidebar-search input::placeholder {
+      color: hsl(var(--muted-foreground));
+    }
+    .sb-sidebar-label {
+      padding: 0.5rem 0.75rem 0.25rem;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: hsl(var(--muted-foreground));
+    }
+    .sb-sidebar-link {
+      display: block;
+      padding: 0.375rem 0.75rem;
+      font-size: 0.8125rem;
+      color: hsl(var(--muted-foreground));
+      text-decoration: none;
+      transition: color 0.1s, background 0.1s;
+      border-left: 2px solid transparent;
+    }
+    .sb-sidebar-link:hover {
+      color: hsl(var(--foreground));
+      background: hsl(var(--muted, 220 13% 91%) / 0.3);
+    }
+    .sb-sidebar-link.active {
+      color: hsl(var(--primary, 222 47% 51%));
+      background: hsl(var(--primary, 222 47% 51%) / 0.08);
+      border-left-color: hsl(var(--primary, 222 47% 51%));
+      font-weight: 500;
+    }
+    .sb-sidebar-count {
+      float: right;
+      font-size: 0.6875rem;
+      color: hsl(var(--muted-foreground));
+      opacity: 0.6;
+    }
+
+    /* ===== Content ===== */
+    .sb-content {
+      margin-left: 240px;
+      flex: 1;
+      padding: 2rem;
+      max-width: 960px;
+    }
+
+    /* ===== Section cards ===== */
+    .sb-section {
+      background: hsl(var(--card, 0 0% 100%));
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: var(--radius-lg, 0.5rem);
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .sb-section-title {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: hsl(var(--muted-foreground));
+      margin-bottom: 0.75rem;
+    }
+    .sb-section-title .sb-badge {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: none;
+      letter-spacing: normal;
+      margin-left: 0.5rem;
+    }
+    .sb-section-title .sb-badge-count {
+      background: hsl(var(--muted, 220 13% 91%) / 0.5);
+      color: hsl(var(--muted-foreground));
+    }
+
+    /* ===== Preview area ===== */
+    .sb-preview {
+      background: hsl(var(--muted, 220 13% 91%) / 0.15);
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: var(--radius-md, 0.375rem);
+      padding: 1.5rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+    }
+
+    /* ===== Code panel ===== */
+    .sb-code {
+      background: hsl(var(--surface-1, var(--background, 0 0% 100%)));
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: var(--radius-md, 0.375rem);
+      overflow: hidden;
+    }
+    .sb-code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem 0.75rem;
+      background: hsl(var(--muted, 220 13% 91%) / 0.3);
+      border-bottom: 1px solid hsl(var(--border, 220 13% 91%));
+      font-size: 0.6875rem;
+      color: hsl(var(--muted-foreground));
+    }
+    .sb-code-dots { display: flex; gap: 0.25rem; }
+    .sb-code-dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; }
+    .sb-code-body {
+      padding: 0.75rem;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.75rem;
+      line-height: 1.6;
+      overflow-x: auto;
+      white-space: pre;
+      margin: 0;
+    }
+
+    /* ===== Props table ===== */
+    .sb-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+    .sb-table th, .sb-table td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid hsl(var(--border, 220 13% 91%)); }
+    .sb-table th { font-weight: 600; background: hsl(var(--muted, 220 13% 91%) / 0.3); font-size: 0.75rem; }
+    .sb-table code { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; background: hsl(var(--muted, 220 13% 91%) / 0.5); padding: 0.125rem 0.375rem; border-radius: 3px; }
+
+    /* ===== Pills ===== */
+    .sb-pill {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      background: hsl(var(--muted, 220 13% 91%) / 0.5);
+      border-radius: 9999px;
+      font-size: 0.6875rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: hsl(var(--muted-foreground));
+      margin: 0.125rem;
+    }
+
+    /* ===== Component header ===== */
+    .sb-comp-title {
+      font-family: var(--font-heading, system-ui);
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 0.25rem;
+    }
+    .sb-comp-meta {
+      display: flex;
+      gap: 0.75rem;
+      font-size: 0.75rem;
+      color: hsl(var(--muted-foreground));
+      margin-bottom: 1.25rem;
+    }
+    .sb-comp-meta span { display: flex; align-items: center; gap: 0.25rem; }
+
+    /* ===== Breadcrumb ===== */
+    .sb-breadcrumb { font-size: 0.8125rem; margin-bottom: 0.75rem; }
+    .sb-breadcrumb a { color: hsl(var(--primary, 222 47% 51%)); text-decoration: none; }
+    .sb-breadcrumb a:hover { text-decoration: underline; }
+    .sb-breadcrumb span { color: hsl(var(--muted-foreground)); }
+
+    /* ===== Collapsible ===== */
+    .sb-collapsible-toggle {
+      background: none; border: none; color: hsl(var(--primary)); cursor: pointer;
+      font-size: 0.75rem; padding: 0; margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <!-- Topbar -->
+  <div class="sb-topbar">
+    <a href="/" class="sb-topbar-brand">djust-theming</a>
+    <span class="sb-topbar-sep">|</span>
+    <a href="/">Demo Home</a>
+    <a href="/components/">Components</a>
+    <span class="sb-topbar-sep">|</span>
+    <a href="{% url 'djust_theming:gallery' %}">Gallery</a>
+    <a href="{% url 'djust_theming:storybook' %}" class="{% if current_component is None %}active{% endif %}">Storybook</a>
+    <a href="{% url 'djust_theming:editor' %}">Editor</a>
+    <a href="{% url 'djust_theming:diff' %}">Diff</a>
+  </div>
+
+  <div class="sb-layout">
+    <!-- Sidebar -->
+    <nav class="sb-sidebar">
+      <div class="sb-sidebar-search">
+        <input type="text" id="sb-search" placeholder="Search components..." autocomplete="off">
+      </div>
+      <div class="sb-sidebar-label">All Components ({{ all_components|length }})</div>
+      {% regroup all_components by category as category_groups %}
+      {% for group in category_groups %}
+      <div class="sb-sidebar-category" data-category="{{ group.grouper }}">
+        <div class="sb-sidebar-cat-header" onclick="toggleSidebarCategory(this)"
+          style="padding: 0.375rem 0.75rem; font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground)); cursor: pointer; display: flex; align-items: center; justify-content: space-between; user-select: none;">
+          <span>{{ group.grouper }}</span>
+          <span class="sb-cat-arrow" style="opacity: 0.5; transition: transform 0.15s;">▾</span>
+        </div>
+        <div class="sb-cat-items">
+          {% for comp in group.list %}
+          <a href="{% url 'djust_theming:storybook_detail' comp.name %}"
+             class="sb-sidebar-link {% if current_component == comp.name %}active{% endif %}"
+             data-name="{{ comp.name }}" data-display="{{ comp.display_name|lower }}" data-category="{{ comp.category }}">
+            {{ comp.display_name }}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </nav>
+
+    <!-- Content -->
+    <main class="sb-content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <script>
+    // Sidebar search filter
+    const search = document.getElementById('sb-search');
+    if (search) {
+      search.addEventListener('input', () => {
+        const q = search.value.toLowerCase();
+        document.querySelectorAll('.sb-sidebar-link').forEach(link => {
+          const name = link.dataset.display || link.textContent.toLowerCase();
+          const visible = name.includes(q);
+          link.style.display = visible ? '' : 'none';
+        });
+        // Show/hide category headers based on whether any items are visible
+        document.querySelectorAll('.sb-sidebar-category').forEach(cat => {
+          const anyVisible = [...cat.querySelectorAll('.sb-sidebar-link')].some(l => l.style.display !== 'none');
+          cat.style.display = anyVisible ? '' : 'none';
+        });
+      });
+    }
+
+    // Toggle sidebar category collapse
+    function toggleSidebarCategory(header) {
+      const items = header.nextElementSibling;
+      const arrow = header.querySelector('.sb-cat-arrow');
+      if (items.style.display === 'none') {
+        items.style.display = '';
+        if (arrow) arrow.style.transform = '';
+      } else {
+        items.style.display = 'none';
+        if (arrow) arrow.style.transform = 'rotate(-90deg)';
+      }
+    }
+
+    // Auto-expand the category of the current active component
+    document.querySelectorAll('.sb-sidebar-link.active').forEach(link => {
+      const cat = link.closest('.sb-sidebar-category');
+      if (cat) {
+        const items = cat.querySelector('.sb-cat-items');
+        if (items) items.style.display = '';
+      }
+    });
+  </script>
+</body>
+</html>

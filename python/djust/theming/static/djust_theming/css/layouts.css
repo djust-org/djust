@@ -1,0 +1,234 @@
+/* djust-theming layout styles */
+/*
+ * djust_theming - Layout CSS
+ *
+ * Structural styles for the 7 standard layout templates.
+ * Uses responsive design tokens (--breakpoint-*, --sidebar-width, --topbar-height).
+ *
+ * Include via: {% static 'djust_theming/css/layouts.css' %}
+ * Automatically included by the base layout template.
+ */
+
+/* ==========================================================================
+   Base Layout
+   ========================================================================== */
+
+.layout-base {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   Sidebar Layout
+   ========================================================================== */
+
+.layout-sidebar .layout-sidebar__container {
+  display: flex;
+  min-height: 100vh;
+}
+
+.layout-sidebar .layout-sidebar__aside {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+  flex-shrink: 0;
+  background-color: hsl(var(--card, 0 0% 100%));
+  border-inline-end: 1px solid hsl(var(--border, 240 6% 90%));
+}
+
+.layout-sidebar .layout-sidebar__main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .layout-sidebar .layout-sidebar__container {
+    flex-direction: column;
+  }
+
+  .layout-sidebar .layout-sidebar__aside {
+    width: 100%;
+    min-width: 100%;
+    height: auto;
+    position: relative;
+    border-inline-end: none;
+    border-bottom: 1px solid hsl(var(--border, 240 6% 90%));
+  }
+}
+
+/* ==========================================================================
+   Topbar Layout
+   ========================================================================== */
+
+.layout-topbar {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.layout-topbar .layout-topbar__header {
+  height: var(--topbar-height);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background-color: hsl(var(--card, 0 0% 100%));
+  border-bottom: 1px solid hsl(var(--border, 240 6% 90%));
+  padding: 0 var(--space-6, 1.5rem);
+}
+
+.layout-topbar .layout-topbar__main {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* ==========================================================================
+   Sidebar + Topbar Layout
+   ========================================================================== */
+
+.layout-sidebar-topbar .layout-sidebar-topbar__container {
+  display: flex;
+  min-height: 100vh;
+}
+
+.layout-sidebar-topbar .layout-sidebar-topbar__aside {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+  flex-shrink: 0;
+  background-color: hsl(var(--card, 0 0% 100%));
+  border-inline-end: 1px solid hsl(var(--border, 240 6% 90%));
+}
+
+.layout-sidebar-topbar .layout-sidebar-topbar__right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.layout-sidebar-topbar .layout-sidebar-topbar__header {
+  height: var(--topbar-height);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background-color: hsl(var(--card, 0 0% 100%));
+  border-bottom: 1px solid hsl(var(--border, 240 6% 90%));
+  padding: 0 var(--space-6, 1.5rem);
+}
+
+.layout-sidebar-topbar .layout-sidebar-topbar__main {
+  flex: 1;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .layout-sidebar-topbar .layout-sidebar-topbar__container {
+    flex-direction: column;
+  }
+
+  .layout-sidebar-topbar .layout-sidebar-topbar__aside {
+    width: 100%;
+    min-width: 100%;
+    height: auto;
+    position: relative;
+    border-inline-end: none;
+    border-bottom: 1px solid hsl(var(--border, 240 6% 90%));
+  }
+}
+
+/* ==========================================================================
+   Centered Layout
+   ========================================================================== */
+
+.layout-centered .layout-centered__main {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 100vh;
+  padding: var(--space-8, 2rem) var(--space-4, 1rem);
+}
+
+.layout-centered .layout-centered__container {
+  width: 100%;
+  max-width: 40rem;
+}
+
+/* ==========================================================================
+   Dashboard Layout
+   ========================================================================== */
+
+.layout-dashboard .layout-dashboard__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6, 1.5rem);
+  padding: var(--space-6, 1.5rem);
+}
+
+@media (min-width: 768px) {
+  .layout-dashboard .layout-dashboard__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .layout-dashboard .layout-dashboard__grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ==========================================================================
+   Split Panel Layout
+   ========================================================================== */
+
+.layout-split .layout-split__container {
+  display: flex;
+  min-height: 100vh;
+}
+
+.layout-split .layout-split__left {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+  flex-shrink: 0;
+  border-inline-end: 1px solid hsl(var(--border, 240 6% 90%));
+}
+
+.layout-split .layout-split__right {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .layout-split .layout-split__container {
+    flex-direction: column;
+  }
+
+  .layout-split .layout-split__left {
+    width: 100%;
+    min-width: 100%;
+    height: auto;
+    position: relative;
+    border-inline-end: none;
+    border-bottom: 1px solid hsl(var(--border, 240 6% 90%));
+  }
+}
+
+/* end layout styles */

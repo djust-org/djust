@@ -1,0 +1,273 @@
+/*
+ * djust_theming - Performance Optimizations
+ * Smooth theme transitions and scroll performance enhancements
+ */
+
+/* ============================================
+   1. Smooth Theme Transitions
+   ============================================ */
+
+/* Enable smooth transitions for theme changes */
+html {
+  /* Fast, snappy transitions for color properties */
+  transition: background-color 0.15s cubic-bezier(0.2, 0, 0.2, 1),
+              color 0.15s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/* Transition all themed elements smoothly and quickly */
+body *,
+body *::before,
+body *::after {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 0.12s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/* Prevent transitions on page load */
+html.loading,
+html.loading *,
+html.loading *::before,
+html.loading *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* Optimize animations to run on compositor */
+.btn,
+.card,
+.badge,
+.alert,
+[class*="hover:"] {
+  will-change: auto;
+  backface-visibility: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================
+   2. Scroll Performance
+   ============================================ */
+
+/* Enable GPU acceleration for scrolling */
+body {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: none;
+}
+
+/* Contain layout shifts */
+.card,
+.bg-card,
+.rounded-lg {
+  contain: layout style paint;
+  content-visibility: auto;
+}
+
+/* Optimize large content blocks */
+.gradient-bg,
+.demo-card {
+  contain: layout paint;
+  will-change: transform;
+}
+
+/* Optimize images and media */
+img,
+video,
+iframe {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 400px;
+}
+
+/* ============================================
+   3. Animation Performance
+   ============================================ */
+
+/* Use transform instead of position for animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Optimize hover effects to use transform */
+.demo-card {
+  transform: translateZ(0);
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0.2, 1),
+              box-shadow 0.15s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.demo-card:hover {
+  transform: translateY(-2px) translateZ(0);
+}
+
+/* Optimize button hover effects */
+.btn {
+  transform: translateZ(0);
+  transition: all 0.1s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.btn:hover {
+  transform: translateY(-1px) translateZ(0);
+}
+
+.btn:active {
+  transform: translateY(0) translateZ(0);
+  transition-duration: 0.05s;
+}
+
+/* ============================================
+   4. Reduce Repaints
+   ============================================ */
+
+/* Isolate frequently changing elements */
+[data-theme],
+[data-theme-mode] {
+  isolation: isolate;
+}
+
+/* Optimize color changes */
+.text-primary,
+.text-secondary,
+.text-accent,
+.text-muted-foreground {
+  will-change: color;
+}
+
+.bg-primary,
+.bg-secondary,
+.bg-accent,
+.bg-card {
+  will-change: background-color;
+}
+
+/* ============================================
+   5. Loading States
+   ============================================ */
+
+/* Prevent flash during theme load */
+html:not(.theme-ready) {
+  visibility: hidden;
+}
+
+html.theme-ready {
+  visibility: visible;
+}
+
+/* Skeleton loading for better perceived performance */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 0%,
+    hsl(var(--muted) / 0.8) 50%,
+    hsl(var(--muted)) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ============================================
+   6. Performance Hints
+   ============================================ */
+
+/* Tell browser these properties will change */
+.theme-switcher,
+.theme-mode-btn,
+.theme-preset-select {
+  will-change: background-color, color;
+  /* Instant feedback on interaction */
+  transition: all 0.08s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+/* Active state for instant feedback */
+.theme-mode-btn:active,
+.theme-preset-select:active,
+button:active {
+  transform: scale(0.97);
+  transition-duration: 0.05s;
+}
+
+/* Optimize text rendering */
+body {
+  text-rendering: optimizeSpeed;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Critical content should render first */
+.navbar,
+.hero-section {
+  contain: layout style;
+}
+
+/* ============================================
+   7. Responsive Performance
+   ============================================ */
+
+/* Optimize for mobile scrolling */
+@media (max-width: 768px) {
+  * {
+    /* Extra fast transitions on mobile for instant feel */
+    transition-duration: 0.08s;
+  }
+
+  .card,
+  .demo-card {
+    /* Simpler containment on mobile */
+    contain: layout;
+    content-visibility: auto;
+  }
+
+  /* Remove hover delays on mobile */
+  .btn,
+  .demo-card,
+  a {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+}
+
+/* Reduce motion for accessibility and performance */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ============================================
+   8. Font Loading Performance
+   ============================================ */
+
+/* Prevent font flash */
+body {
+  font-display: swap;
+}
+
+/* Use system fonts as fallback */
+.font-sans {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.font-mono {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+}

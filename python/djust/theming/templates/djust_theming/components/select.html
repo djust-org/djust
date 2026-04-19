@@ -1,0 +1,31 @@
+<div class="{{ css_prefix }}select-group {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    {% if slot_label %}
+    {{ slot_label|safe }}
+    {% elif label %}
+    <label for="{{ name }}" class="{{ css_prefix }}select-label">{{ label }}</label>
+    {% endif %}
+    {% if slot_select %}
+    {{ slot_select|safe }}
+    {% else %}
+    <select
+        name="{{ name }}"
+        id="{{ name }}"
+        class="{{ css_prefix }}select"
+        {% if attrs.required %}required{% endif %}
+        {% if attrs.disabled %}disabled{% endif %}
+    >
+        {% if placeholder %}
+        <option value="" disabled selected>{{ placeholder }}</option>
+        {% endif %}
+        {% for opt in options %}
+        <option value="{{ opt.value }}" {% if opt.selected %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+    {% if slot_help_text %}
+    <div class="{{ css_prefix }}select-help">{{ slot_help_text|safe }}</div>
+    {% endif %}
+    {% if slot_error %}
+    <div class="{{ css_prefix }}select-error" role="alert">{{ slot_error|safe }}</div>
+    {% endif %}
+</div>

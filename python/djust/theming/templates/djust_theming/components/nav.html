@@ -1,0 +1,31 @@
+<nav class="{{ css_prefix }}navbar {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     role="navigation"
+     aria-label="Main"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <div class="{{ css_prefix }}navbar-inner">
+        {% if slot_brand %}
+        <div class="{{ css_prefix }}navbar-brand">{{ slot_brand|safe }}</div>
+        {% elif brand %}
+        <div class="{{ css_prefix }}navbar-brand">{{ brand }}</div>
+        {% endif %}
+
+        <div class="{{ css_prefix }}navbar-nav">
+            {% if slot_items %}
+                {{ slot_items|safe }}
+            {% else %}
+                {% for item in items %}
+                <a href="{{ item.url }}" class="{{ css_prefix }}nav-link{% if item.active %} active{% endif %}"
+                   {% if item.active %}aria-current="page"{% endif %}>
+                    {% if item.icon %}<span class="{{ css_prefix }}nav-link-icon">{{ item.icon }}</span>{% endif %}
+                    {{ item.label }}
+                    {% if item.badge %}<span class="{{ css_prefix }}nav-link-badge">{{ item.badge }}</span>{% endif %}
+                </a>
+                {% endfor %}
+            {% endif %}
+        </div>
+
+        {% if slot_actions %}
+        <div class="{{ css_prefix }}navbar-actions">{{ slot_actions|safe }}</div>
+        {% endif %}
+    </div>
+</nav>

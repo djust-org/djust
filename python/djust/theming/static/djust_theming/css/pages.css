@@ -1,0 +1,180 @@
+/* djust-theming page styles */
+  /* -----------------------------------------------------------------------
+     Page templates — shared styles
+     ----------------------------------------------------------------------- */
+
+  /* Page title */
+  .page-title {
+    font-size: var(--font-size-2xl, 1.5rem);
+    font-weight: var(--font-weight-bold, 700);
+    line-height: var(--line-height-tight, 1.25);
+    margin: 0 0 var(--space-2, 0.5rem) 0;
+    color: var(--foreground);
+  }
+
+  /* Page description */
+  .page-description {
+    font-size: var(--font-size-sm, 0.875rem);
+    color: var(--muted-foreground);
+    margin: 0 0 var(--space-4, 1rem) 0;
+    line-height: var(--line-height-relaxed, 1.625);
+  }
+
+  /* Full-width button inside forms */
+  .page-btn-full {
+    width: 100%;
+  }
+
+  /* Page actions (button row) */
+  .page-actions {
+    display: flex;
+    gap: var(--space-3, 0.75rem);
+    justify-content: center;
+    margin-top: var(--space-6, 1.5rem);
+  }
+
+  /* Page illustration / icon container */
+  .page-illustration,
+  .page-icon {
+    display: flex;
+    justify-content: center;
+    margin-bottom: var(--space-4, 1rem);
+  }
+
+  /* -----------------------------------------------------------------------
+     Auth pages
+     ----------------------------------------------------------------------- */
+
+  .page-login,
+  .page-register,
+  .page-password-reset,
+  .page-password-confirm {
+    width: 100%;
+    max-width: 24rem;
+  }
+
+  .page-form-fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4, 1rem);
+  }
+
+  .page-form-options {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .page-link {
+    color: var(--link, var(--primary));
+    text-decoration: none;
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .page-link:hover {
+    text-decoration: underline;
+  }
+
+  .page-footer-text {
+    text-align: center;
+    font-size: var(--font-size-sm, 0.875rem);
+    color: var(--muted-foreground);
+    margin: 0;
+  }
+
+  .page-footer-text a {
+    color: var(--link, var(--primary));
+    text-decoration: none;
+  }
+
+  .page-footer-text a:hover {
+    text-decoration: underline;
+  }
+
+  .page-back-link {
+    text-align: center;
+    margin-top: var(--space-4, 1rem);
+    font-size: var(--font-size-sm, 0.875rem);
+  }
+
+  .page-back-link a {
+    color: var(--muted-foreground);
+    text-decoration: none;
+  }
+
+  .page-back-link a:hover {
+    text-decoration: underline;
+    color: var(--foreground);
+  }
+
+  .page-social {
+    margin-top: var(--space-4, 1rem);
+    padding-top: var(--space-4, 1rem);
+    border-top: 1px solid var(--border);
+  }
+
+  /* -----------------------------------------------------------------------
+     Error pages
+     ----------------------------------------------------------------------- */
+
+  .page-error {
+    text-align: center;
+    padding: var(--space-8, 2rem) var(--space-4, 1rem);
+  }
+
+  .page-error-code {
+    font-size: 6rem;
+    font-weight: var(--font-weight-extrabold, 800);
+    line-height: 1;
+    color: var(--muted-foreground);
+    opacity: 0.3;
+    margin-bottom: var(--space-4, 1rem);
+  }
+
+  .page-error .page-title {
+    font-size: var(--font-size-3xl, 1.875rem);
+  }
+
+  .page-error .page-description {
+    max-width: 28rem;
+    margin-inline: auto;
+  }
+
+  /* -----------------------------------------------------------------------
+     Utility pages
+     ----------------------------------------------------------------------- */
+
+  .page-utility {
+    text-align: center;
+    padding: var(--space-8, 2rem) var(--space-4, 1rem);
+  }
+
+  .page-utility .page-title {
+    font-size: var(--font-size-3xl, 1.875rem);
+  }
+
+  .page-utility .page-description {
+    max-width: 28rem;
+    margin-inline: auto;
+  }
+
+  .page-eta {
+    margin-top: var(--space-4, 1rem);
+    font-size: var(--font-size-sm, 0.875rem);
+    color: var(--muted-foreground);
+  }
+
+  .page-progress {
+    margin-top: var(--space-4, 1rem);
+    max-width: 20rem;
+    margin-inline: auto;
+  }
+
+  .page-empty-state {
+    padding: var(--space-12, 3rem) var(--space-4, 1rem);
+  }
+
+  .page-empty-state .page-icon {
+    margin-bottom: var(--space-6, 1.5rem);
+  }

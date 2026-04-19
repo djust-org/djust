@@ -1,0 +1,42 @@
+<div class="{{ css_prefix }}card {{ css_prefix }}page-register {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    <div class="{{ css_prefix }}card-header">
+        <h1 class="{{ css_prefix }}card-title {{ css_prefix }}page-title">{{ title }}</h1>
+    </div>
+    <div class="{{ css_prefix }}card-body">
+        <form method="post"{% if action %} action="{{ action }}"{% endif %}>
+            {% if csrf_token %}<input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}" />{% endif %}
+            <div class="{{ css_prefix }}page-form-fields">
+                <div class="{{ css_prefix }}input-group">
+                    <label for="name" class="{{ css_prefix }}input-label">Name</label>
+                    <input type="text" name="name" id="name" class="{{ css_prefix }}input" placeholder="Your full name" />
+                </div>
+                <div class="{{ css_prefix }}input-group">
+                    <label for="email" class="{{ css_prefix }}input-label">Email</label>
+                    <input type="email" name="email" id="email" class="{{ css_prefix }}input" placeholder="you@example.com" required />
+                </div>
+                <div class="{{ css_prefix }}input-group">
+                    <label for="password" class="{{ css_prefix }}input-label">Password</label>
+                    <input type="password" name="password" id="password" class="{{ css_prefix }}input" placeholder="Create a password" required />
+                </div>
+                <div class="{{ css_prefix }}input-group">
+                    <label for="password_confirm" class="{{ css_prefix }}input-label">Confirm password</label>
+                    <input type="password" name="password_confirm" id="password_confirm" class="{{ css_prefix }}input" placeholder="Confirm your password" required />
+                </div>
+                {% if terms_url %}
+                <div class="{{ css_prefix }}checkbox-group">
+                    <input type="checkbox" name="terms" id="terms" class="{{ css_prefix }}checkbox" required />
+                    <label for="terms" class="{{ css_prefix }}checkbox-label">I agree to the <a href="{{ terms_url }}">Terms of Service</a></label>
+                </div>
+                {% endif %}
+                <button type="submit" class="{{ css_prefix }}btn {{ css_prefix }}btn-primary {{ css_prefix }}btn-md {{ css_prefix }}page-btn-full">Create account</button>
+            </div>
+        </form>
+    </div>
+    <div class="{{ css_prefix }}card-footer">
+        {% if slot_footer %}
+        {{ slot_footer|safe }}
+        {% elif login_url %}
+        <p class="{{ css_prefix }}page-footer-text">Already have an account? <a href="{{ login_url }}">Sign in</a></p>
+        {% endif %}
+    </div>
+</div>

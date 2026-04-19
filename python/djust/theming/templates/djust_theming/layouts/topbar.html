@@ -1,0 +1,12 @@
+{% extends "djust_theming/layouts/base.html" %}
+
+{% block body_class %}layout-topbar{% endblock %}
+
+{% block content %}
+<header class="layout-topbar__header" role="banner">
+  {% block topbar %}{% endblock %}
+</header>
+<main class="layout-topbar__main">
+  {% block topbar_content %}{% endblock %}
+</main>
+{% endblock %}

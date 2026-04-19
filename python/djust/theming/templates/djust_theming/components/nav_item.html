@@ -1,0 +1,8 @@
+<a href="{{ url }}"
+   class="{{ css_prefix }}nav-link{% if is_active %} active{% endif %} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+   {% if is_active %}aria-current="page"{% endif %}
+   {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    {% if slot_icon %}{{ slot_icon|safe }}{% elif icon %}<span class="{{ css_prefix }}nav-link-icon">{{ icon }}</span>{% endif %}
+    <span class="{{ css_prefix }}nav-link-label">{{ label }}</span>
+    {% if slot_badge %}{{ slot_badge|safe }}{% elif badge %}<span class="{{ css_prefix }}nav-link-badge">{{ badge }}</span>{% endif %}
+</a>

@@ -1,0 +1,1466 @@
+{% load theme_tags theme_components %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Theme Editor</title>
+  {% theme_head %}
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+
+    /* === Live-binding: editor controls → preview === */
+    :root {
+      --font-sans: system-ui, -apple-system, sans-serif;
+      --font-display: inherit;
+      --border-width: 1px;
+      --border-style: solid;
+      --letter-spacing: 0;
+      --button-radius: var(--radius);
+      --card-radius: var(--radius);
+      --input-radius: var(--radius);
+      --backdrop-blur: 0px;
+      --container-width: 1200px;
+      --grid-gap: 1.5rem;
+      --section-spacing: 3rem;
+      --hover-scale: 1.02;
+      --hover-translate-y: -2px;
+      --ring-width: 2px;
+    }
+
+    .editor-layout {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      min-height: 100vh;
+    }
+
+    /* --- Sidebar (always system font) --- */
+    .editor-sidebar {
+      background: hsl(var(--card, 0 0% 100%));
+      border-inline-end: 1px solid hsl(var(--border, 220 13% 91%));
+      overflow-y: auto;
+      padding: 1rem;
+      max-height: 100vh;
+      position: sticky;
+      top: 0;
+      font-family: system-ui, -apple-system, sans-serif !important;
+      letter-spacing: 0 !important;
+    }
+    .editor-sidebar * { font-family: inherit !important; letter-spacing: inherit !important; }
+    .editor-sidebar h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+    .editor-sidebar h2 { font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em !important; color: hsl(var(--muted-foreground, 220 9% 46%)); margin: 1.5rem 0 0.5rem; }
+
+    .editor-select {
+      width: 100%;
+      padding: 0.375rem 0.5rem;
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: var(--radius, 0.5rem);
+      background: transparent;
+      color: inherit;
+      font-size: 0.875rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .token-group { margin-bottom: 0.25rem; }
+    .token-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0;
+    }
+    .token-row label {
+      flex: 1;
+      font-size: 0.75rem;
+      color: hsl(var(--muted-foreground, 220 9% 46%));
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .token-row input[type="color"] {
+      width: 2rem;
+      height: 1.5rem;
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: 0.25rem;
+      padding: 0;
+      cursor: pointer;
+      background: none;
+    }
+    .token-row input[type="color"]::-webkit-color-swatch-wrapper { padding: 1px; }
+    .token-row input[type="color"]::-webkit-color-swatch { border: none; border-radius: 0.125rem; }
+
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0;
+    }
+    .slider-row label { font-size: 0.75rem; color: hsl(var(--muted-foreground, 220 9% 46%)); min-width: 5.5rem; }
+    .slider-row input[type="range"] { flex: 1; }
+    .slider-row .slider-value { font-size: 0.75rem; min-width: 3.5rem; text-align: end; font-variant-numeric: tabular-nums; }
+
+    .text-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0;
+    }
+    .text-row label { font-size: 0.75rem; color: hsl(var(--muted-foreground, 220 9% 46%)); min-width: 5.5rem; }
+    .text-row select, .text-row input[type="text"] {
+      flex: 1;
+      padding: 0.25rem 0.375rem;
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: 0.25rem;
+      background: transparent;
+      color: inherit;
+      font-size: 0.75rem;
+    }
+
+    .section-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      padding: 0.25rem 0;
+      user-select: none;
+    }
+    .section-toggle h2 { margin: 0; }
+    .section-toggle .chevron { transition: transform 0.15s; font-size: 0.75rem; }
+    .section-toggle .chevron.open { transform: rotate(90deg); }
+    .section-body { overflow: hidden; }
+    .section-body.collapsed { display: none; }
+
+    .editor-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid hsl(var(--border, 220 13% 91%));
+    }
+    .editor-actions button {
+      flex: 1;
+      padding: 0.5rem 1rem;
+      border-radius: var(--radius, 0.5rem);
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      cursor: pointer;
+      font-size: 0.8125rem;
+      font-weight: 500;
+    }
+    .btn-export {
+      background: hsl(var(--primary, 240 6% 10%));
+      color: hsl(var(--primary-foreground, 0 0% 98%));
+      border-color: hsl(var(--primary, 240 6% 10%));
+    }
+    .btn-reset { background: transparent; color: inherit; }
+
+    .mode-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 0.75rem;
+      border: 1px solid hsl(var(--border, 220 13% 91%));
+      border-radius: var(--radius, 0.5rem);
+      overflow: hidden;
+    }
+    .mode-tabs button {
+      flex: 1;
+      padding: 0.375rem 0.75rem;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 0.8125rem;
+      color: hsl(var(--muted-foreground, 220 9% 46%));
+      transition: background 0.15s, color 0.15s;
+    }
+    .mode-tabs button.active {
+      background: hsl(var(--primary, 240 6% 10%));
+      color: hsl(var(--primary-foreground, 0 0% 98%));
+    }
+
+    .ds-description {
+      font-size: 0.7rem;
+      color: hsl(var(--muted-foreground, 220 9% 46%));
+      margin: 0 0 0.75rem;
+      line-height: 1.4;
+      font-style: italic;
+    }
+
+    /* --- Preview: uses all CSS variables --- */
+    .editor-preview {
+      padding: 2rem 1.5rem;
+      overflow-y: auto;
+      background: hsl(var(--background, 0 0% 100%));
+      color: hsl(var(--foreground, 222 47% 11%));
+      font-family: var(--font-sans);
+      font-size: var(--text-base);
+      line-height: var(--leading-normal);
+      letter-spacing: var(--letter-spacing, 0);
+      font-weight: var(--font-normal, 400);
+    }
+    .editor-preview h1,
+    .editor-preview h2,
+    .editor-preview h3,
+    .editor-preview h4 {
+      font-family: var(--font-display, var(--font-sans));
+      letter-spacing: var(--letter-spacing, 0);
+    }
+    .editor-preview h1 { font-size: var(--text-4xl, 2.25rem); font-weight: var(--font-bold, 700); line-height: var(--leading-tight, 1.25); margin: 0 0 1.5rem; }
+
+    .preview-section { margin-bottom: var(--section-spacing, 2.5rem); }
+    .preview-section h2 {
+      font-size: var(--text-xl, 1.25rem);
+      font-weight: var(--font-semibold, 600);
+      border-bottom: var(--border-width, 1px) var(--border-style, solid) hsl(var(--border, 220 13% 91%));
+      padding-bottom: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    .preview-examples { display: flex; flex-wrap: wrap; gap: var(--grid-gap, 0.75rem); align-items: flex-start; }
+    .preview-wide { width: 100%; }
+
+    .preview-typography-sample h3 { margin: 0 0 0.25rem; }
+    .preview-typography-sample p { margin: 0 0 0.75rem; color: hsl(var(--muted-foreground)); }
+
+    /* Bridge: apply shape variables to themed components in preview */
+    .editor-preview .btn { border-radius: var(--button-radius, var(--radius)); }
+    .editor-preview .card-theme { border-radius: var(--card-radius, var(--radius)); border-width: var(--border-width, 1px); border-style: var(--border-style, solid); }
+    .editor-preview .input-theme { border-radius: var(--input-radius, var(--radius)); border-width: var(--border-width, 1px); border-style: var(--border-style, solid); }
+    .editor-preview .alert-theme { border-width: var(--border-width, 1px); border-style: var(--border-style, solid); }
+    .editor-preview .badge-primary,
+    .editor-preview .badge-secondary,
+    .editor-preview .badge-success,
+    .editor-preview .badge-warning,
+    .editor-preview .badge-destructive,
+    .editor-preview .badge-default { border-width: var(--border-width, 1px); border-style: var(--border-style, solid); }
+    .editor-preview .tabs-theme .tab-btn { border-radius: var(--button-radius, var(--radius)); }
+    .editor-preview table { border-width: var(--border-width, 1px); border-style: var(--border-style, solid); }
+    .editor-preview .toast-theme { border-radius: var(--card-radius, var(--radius)); border-width: var(--border-width, 1px); border-style: var(--border-style, solid); }
+    /* Toast demos: render inline instead of as fixed-position overlays */
+    .editor-preview .toast { position: static; margin-bottom: 0.5rem; }
+
+    /* Bridge: focus ring */
+    .editor-preview *:focus-visible {
+      outline: var(--ring-width, 2px) solid hsl(var(--ring));
+      outline-offset: 2px;
+    }
+
+    /* Bridge: hover effects on preview interactive cards */
+    .editor-preview .hover-lift:hover {
+      transform: translateY(var(--hover-translate-y, -2px)) scale(var(--hover-scale, 1.02));
+    }
+    .editor-preview .hover-scale:hover {
+      transform: scale(var(--hover-scale, 1.02));
+    }
+
+    @media (max-width: 768px) {
+      .editor-layout { grid-template-columns: 1fr; }
+      .editor-sidebar { max-height: none; position: static; }
+    }
+    .gallery-topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+      height: 3rem;
+      background: hsl(var(--surface-1, var(--background, 0 0% 100%)));
+      border-bottom: 1px solid hsl(var(--border, 220 13% 91%));
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0 1rem; font-size: 0.875rem;
+    }
+    .gallery-topbar a { color: hsl(var(--muted-foreground, 220 9% 46%)); text-decoration: none; transition: color 0.15s; }
+    .gallery-topbar a:hover { color: hsl(var(--foreground, 222 47% 11%)); }
+    .gallery-topbar-brand { font-weight: 700; color: hsl(var(--foreground, 222 47% 11%)) !important; }
+    .gallery-topbar-sep { color: hsl(var(--muted-foreground, 220 9% 46%)); opacity: 0.3; }
+    .gallery-topbar-active { color: hsl(var(--foreground, 222 47% 11%)) !important; }
+  </style>
+</head>
+<body style="background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 222 47% 11%));">
+  <nav class="gallery-topbar">
+    <a href="/" class="gallery-topbar-brand">djust-theming</a>
+    <span class="gallery-topbar-sep">|</span>
+    <a href="/">Demo Home</a>
+    <a href="/components/">Components</a>
+    <span class="gallery-topbar-sep">|</span>
+    <a href="{% url 'djust_theming:gallery' %}">Gallery</a>
+    <a href="{% url 'djust_theming:storybook' %}">Storybook</a>
+    <a href="{% url 'djust_theming:editor' %}" class="gallery-topbar-active">Editor</a>
+    <a href="{% url 'djust_theming:diff' %}">Diff</a>
+  </nav>
+  <div class="editor-layout" style="padding-top: 3rem;">
+    <!-- ============ Sidebar Controls ============ -->
+    <aside class="editor-sidebar">
+      <h1>Theme Editor</h1>
+
+      <!-- Design System -->
+      <label for="editor-ds-select" style="font-size:0.75rem;color:hsl(var(--muted-foreground));">Design System</label>
+      <select id="editor-ds-select" class="editor-select">
+        <option value="">Custom</option>
+        {% for ds_name, ds in design_systems.items %}
+        <option value="{{ ds_name }}">{{ ds.display_name }}</option>
+        {% endfor %}
+      </select>
+      <p class="ds-description" id="ds-description"></p>
+
+      <!-- Color Preset -->
+      <label for="editor-preset-select" style="font-size:0.75rem;color:hsl(var(--muted-foreground));">Color Preset</label>
+      <select id="editor-preset-select" class="editor-select" style="margin-bottom:1rem;">
+        {% for preset in presets %}
+        <option value="{{ preset.name }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
+        {% endfor %}
+      </select>
+
+      <div class="mode-tabs">
+        <button type="button" class="active" data-mode="light">Light</button>
+        <button type="button" data-mode="dark">Dark</button>
+      </div>
+
+      <!-- Colors -->
+      <div class="section-toggle" onclick="toggleSection('colors')">
+        <h2>Colors</h2>
+        <span class="chevron open" id="chevron-colors">&#9654;</span>
+      </div>
+      <div class="section-body" id="section-colors">
+        <div id="token-controls-light" class="token-controls"></div>
+        <div id="token-controls-dark" class="token-controls" style="display:none;"></div>
+      </div>
+
+      <!-- Typography -->
+      <div class="section-toggle" onclick="toggleSection('typography')">
+        <h2>Typography</h2>
+        <span class="chevron open" id="chevron-typography">&#9654;</span>
+      </div>
+      <div class="section-body" id="section-typography">
+        <div class="text-row">
+          <label>Body font</label>
+          <select id="ctrl-font-sans" onchange="setVar('--font-sans', this.value)">
+            <option value="system-ui, -apple-system, sans-serif">System UI</option>
+            <option value="'Inter', sans-serif">Inter</option>
+            <option value="'Roboto', sans-serif">Roboto</option>
+            <option value="'Open Sans', sans-serif">Open Sans</option>
+            <option value="'Lato', sans-serif">Lato</option>
+            <option value="Georgia, serif">Georgia (Serif)</option>
+            <option value="'Playfair Display', serif">Playfair Display</option>
+            <option value="'JetBrains Mono', monospace">JetBrains Mono</option>
+          </select>
+        </div>
+        <div class="text-row">
+          <label>Display font</label>
+          <select id="ctrl-font-display" onchange="setVar('--font-display', this.value)">
+            <option value="inherit">Same as body</option>
+            <option value="system-ui, -apple-system, sans-serif">System UI</option>
+            <option value="'Inter', sans-serif">Inter</option>
+            <option value="Georgia, serif">Georgia</option>
+            <option value="'Playfair Display', serif">Playfair Display</option>
+          </select>
+        </div>
+        <div class="slider-row">
+          <label>Base size</label>
+          <input type="range" id="ctrl-text-base" min="12" max="20" step="1" value="16"
+                 oninput="setVarPx('--text-base', this.value); applyHeadingScale(document.getElementById('ctrl-heading-scale').value); updVal(this)">
+          <span class="slider-value">16px</span>
+        </div>
+        <div class="slider-row">
+          <label>Heading scale</label>
+          <input type="range" id="ctrl-heading-scale" min="1.1" max="1.5" step="0.05" value="1.25"
+                 oninput="applyHeadingScale(this.value); updVal(this, '')">
+          <span class="slider-value">1.25</span>
+        </div>
+        <div class="slider-row">
+          <label>Line height</label>
+          <input type="range" id="ctrl-leading" min="1" max="2" step="0.05" value="1.5"
+                 oninput="setVar('--leading-normal', this.value); updVal(this, '')">
+          <span class="slider-value">1.5</span>
+        </div>
+        <div class="slider-row">
+          <label>Heading weight</label>
+          <input type="range" id="ctrl-font-weight-heading" min="400" max="900" step="100" value="700"
+                 oninput="setVar('--font-bold', this.value); setVar('--font-semibold', Math.max(400,+this.value-100)); updVal(this, '')">
+          <span class="slider-value">700</span>
+        </div>
+        <div class="slider-row">
+          <label>Body weight</label>
+          <input type="range" id="ctrl-font-weight-body" min="300" max="600" step="100" value="400"
+                 oninput="setVar('--font-normal', this.value); updVal(this, '')">
+          <span class="slider-value">400</span>
+        </div>
+        <div class="text-row">
+          <label>Letter spacing</label>
+          <select id="ctrl-letter-spacing" onchange="applyLetterSpacing(this.value)">
+            <option value="tight">Tight (-0.025em)</option>
+            <option value="normal" selected>Normal (0)</option>
+            <option value="wide">Wide (0.025em)</option>
+            <option value="wider">Wider (0.05em)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Spacing & Layout -->
+      <div class="section-toggle" onclick="toggleSection('spacing')">
+        <h2>Spacing &amp; Layout</h2>
+        <span class="chevron open" id="chevron-spacing">&#9654;</span>
+      </div>
+      <div class="section-body" id="section-spacing">
+        <div class="slider-row">
+          <label>--radius</label>
+          <input type="range" id="radius-slider" min="0" max="2" step="0.125" value="0.5"
+                 oninput="setVarRem('--radius', this.value); updVal(this, 'rem')">
+          <span class="slider-value" id="radius-value">0.5rem</span>
+        </div>
+        <div class="slider-row">
+          <label>Space unit</label>
+          <input type="range" id="ctrl-space-unit" min="2" max="8" step="1" value="4"
+                 oninput="setVarPx('--space-unit', this.value); applySpaceScale(this.value); updVal(this)">
+          <span class="slider-value">4px</span>
+        </div>
+        <div class="slider-row">
+          <label>Grid gap</label>
+          <input type="range" id="ctrl-grid-gap" min="0.5" max="3" step="0.25" value="1.5"
+                 oninput="setVarRem('--grid-gap', this.value); updVal(this, 'rem')">
+          <span class="slider-value">1.5rem</span>
+        </div>
+        <div class="slider-row">
+          <label>Section spacing</label>
+          <input type="range" id="ctrl-section-spacing" min="1" max="6" step="0.5" value="3"
+                 oninput="setVarRem('--section-spacing', this.value); updVal(this, 'rem')">
+          <span class="slider-value">3rem</span>
+        </div>
+        <div class="slider-row">
+          <label>Container width</label>
+          <input type="range" id="ctrl-container-width" min="800" max="1600" step="50" value="1200"
+                 oninput="setVarPx('--container-width', this.value); updVal(this)">
+          <span class="slider-value">1200px</span>
+        </div>
+      </div>
+
+      <!-- Borders -->
+      <div class="section-toggle" onclick="toggleSection('borders')">
+        <h2>Borders</h2>
+        <span class="chevron open" id="chevron-borders">&#9654;</span>
+      </div>
+      <div class="section-body" id="section-borders">
+        <div class="slider-row">
+          <label>Border width</label>
+          <input type="range" id="ctrl-border-width" min="0" max="4" step="1" value="1"
+                 oninput="setVarPx('--border-width', this.value); updVal(this)">
+          <span class="slider-value">1px</span>
+        </div>
+        <div class="text-row">
+          <label>Border style</label>
+          <select id="ctrl-border-style" onchange="setVar('--border-style', this.value)">
+            <option value="solid" selected>Solid</option>
+            <option value="dashed">Dashed</option>
+            <option value="dotted">Dotted</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Component Shapes -->
+      <div class="section-toggle" onclick="toggleSection('shapes')">
+        <h2>Component Shapes</h2>
+        <span class="chevron" id="chevron-shapes">&#9654;</span>
+      </div>
+      <div class="section-body collapsed" id="section-shapes">
+        <div class="text-row">
+          <label>Buttons</label>
+          <select id="ctrl-button-shape" onchange="applyShape('button', this.value)">
+            <option value="rounded" selected>Rounded</option>
+            <option value="sharp">Sharp</option>
+            <option value="pill">Pill</option>
+          </select>
+        </div>
+        <div class="text-row">
+          <label>Cards</label>
+          <select id="ctrl-card-shape" onchange="applyShape('card', this.value)">
+            <option value="rounded" selected>Rounded</option>
+            <option value="sharp">Sharp</option>
+            <option value="pill">Pill</option>
+          </select>
+        </div>
+        <div class="text-row">
+          <label>Inputs</label>
+          <select id="ctrl-input-shape" onchange="applyShape('input', this.value)">
+            <option value="rounded" selected>Rounded</option>
+            <option value="sharp">Sharp</option>
+            <option value="pill">Pill</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Shadows -->
+      <div class="section-toggle" onclick="toggleSection('shadows')">
+        <h2>Shadows</h2>
+        <span class="chevron" id="chevron-shadows">&#9654;</span>
+      </div>
+      <div class="section-body collapsed" id="section-shadows">
+        <div class="text-row">
+          <label>Shadow sm</label>
+          <input type="text" id="ctrl-shadow-sm" value="0 1px 2px 0 rgb(0 0 0 / 0.05)"
+                 oninput="setVar('--shadow-sm', this.value)">
+        </div>
+        <div class="text-row">
+          <label>Shadow md</label>
+          <input type="text" id="ctrl-shadow-md" value="0 4px 6px -1px rgb(0 0 0 / 0.1)"
+                 oninput="setVar('--shadow-md', this.value)">
+        </div>
+        <div class="text-row">
+          <label>Shadow lg</label>
+          <input type="text" id="ctrl-shadow-lg" value="0 10px 15px -3px rgb(0 0 0 / 0.1)"
+                 oninput="setVar('--shadow-lg', this.value)">
+        </div>
+        <div class="text-row">
+          <label>Shadow xl</label>
+          <input type="text" id="ctrl-shadow-xl" value="0 20px 25px -5px rgb(0 0 0 / 0.1)"
+                 oninput="setVar('--shadow-xl', this.value)">
+        </div>
+      </div>
+
+      <!-- Surface -->
+      <div class="section-toggle" onclick="toggleSection('surface')">
+        <h2>Surface</h2>
+        <span class="chevron" id="chevron-surface">&#9654;</span>
+      </div>
+      <div class="section-body collapsed" id="section-surface">
+        <div class="text-row">
+          <label>Treatment</label>
+          <select id="ctrl-surface-treatment" onchange="applySurfaceTreatment(this.value)">
+            <option value="flat" selected>Flat</option>
+            <option value="glass">Glass</option>
+            <option value="textured">Textured</option>
+            <option value="gradient">Gradient</option>
+          </select>
+        </div>
+        <div class="slider-row">
+          <label>Backdrop blur</label>
+          <input type="range" id="ctrl-backdrop-blur" min="0" max="24" step="2" value="0"
+                 oninput="setVarPx('--backdrop-blur', this.value); updVal(this)">
+          <span class="slider-value">0px</span>
+        </div>
+      </div>
+
+      <!-- Animation -->
+      <div class="section-toggle" onclick="toggleSection('animation')">
+        <h2>Animation</h2>
+        <span class="chevron" id="chevron-animation">&#9654;</span>
+      </div>
+      <div class="section-body collapsed" id="section-animation">
+        <div class="slider-row">
+          <label>Fast</label>
+          <input type="range" id="ctrl-duration-fast" min="0" max="500" step="10" value="150"
+                 oninput="setVarMs('--duration-fast', this.value); updVal(this, 'ms')">
+          <span class="slider-value">150ms</span>
+        </div>
+        <div class="slider-row">
+          <label>Normal</label>
+          <input type="range" id="ctrl-duration-normal" min="0" max="800" step="10" value="300"
+                 oninput="setVarMs('--duration-normal', this.value); updVal(this, 'ms')">
+          <span class="slider-value">300ms</span>
+        </div>
+        <div class="slider-row">
+          <label>Slow</label>
+          <input type="range" id="ctrl-duration-slow" min="0" max="1200" step="10" value="500"
+                 oninput="setVarMs('--duration-slow', this.value); updVal(this, 'ms')">
+          <span class="slider-value">500ms</span>
+        </div>
+        <div class="text-row">
+          <label>Easing</label>
+          <select id="ctrl-easing" onchange="setVar('--ease-in-out', this.value)">
+            <option value="cubic-bezier(0.4, 0, 0.2, 1)">Smooth</option>
+            <option value="cubic-bezier(0.4, 0, 1, 1)">Ease-in</option>
+            <option value="cubic-bezier(0, 0, 0.2, 1)">Ease-out</option>
+            <option value="cubic-bezier(0.34, 1.56, 0.64, 1)">Bouncy</option>
+            <option value="linear">Linear</option>
+            <option value="steps(4, end)">Stepped</option>
+          </select>
+        </div>
+        <div class="slider-row">
+          <label>Hover scale</label>
+          <input type="range" id="ctrl-hover-scale" min="1" max="1.2" step="0.005" value="1.02"
+                 oninput="setVar('--hover-scale', this.value); updVal(this, '')">
+          <span class="slider-value">1.02</span>
+        </div>
+        <div class="slider-row">
+          <label>Hover lift</label>
+          <input type="range" id="ctrl-hover-translate-y" min="-8" max="0" step="1" value="-2"
+                 oninput="setVarPx('--hover-translate-y', this.value); updVal(this)">
+          <span class="slider-value">-2px</span>
+        </div>
+        <div class="text-row">
+          <label>Transition</label>
+          <select id="ctrl-transition-style">
+            <option value="smooth" selected>Smooth</option>
+            <option value="snappy">Snappy</option>
+            <option value="bouncy">Bouncy</option>
+            <option value="instant">Instant</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Interaction -->
+      <div class="section-toggle" onclick="toggleSection('interaction')">
+        <h2>Interaction</h2>
+        <span class="chevron" id="chevron-interaction">&#9654;</span>
+      </div>
+      <div class="section-body collapsed" id="section-interaction">
+        <div class="text-row">
+          <label>Button hover</label>
+          <select id="ctrl-button-hover">
+            <option value="lift" selected>Lift</option>
+            <option value="scale">Scale</option>
+            <option value="glow">Glow</option>
+            <option value="darken">Darken</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div class="text-row">
+          <label>Card hover</label>
+          <select id="ctrl-card-hover">
+            <option value="lift" selected>Lift</option>
+            <option value="scale">Scale</option>
+            <option value="border">Border</option>
+            <option value="shadow">Shadow</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div class="text-row">
+          <label>Link hover</label>
+          <select id="ctrl-link-hover">
+            <option value="underline" selected>Underline</option>
+            <option value="color">Color</option>
+            <option value="background">Background</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div class="text-row">
+          <label>Focus style</label>
+          <select id="ctrl-focus-style" onchange="setVar('--focus-style', this.value)">
+            <option value="ring" selected>Ring</option>
+            <option value="outline">Outline</option>
+            <option value="glow">Glow</option>
+            <option value="underline">Underline</option>
+          </select>
+        </div>
+        <div class="slider-row">
+          <label>Focus ring</label>
+          <input type="range" id="ctrl-focus-ring-width" min="1" max="4" step="1" value="2"
+                 oninput="setVarPx('--ring-width', this.value); updVal(this)">
+          <span class="slider-value">2px</span>
+        </div>
+      </div>
+
+      <div class="editor-actions">
+        <button type="button" class="btn-reset" id="btn-reset">Reset</button>
+        <button type="button" class="btn-export" id="btn-export">Export</button>
+      </div>
+    </aside>
+
+    <!-- ============ Live Preview ============ -->
+    <main class="editor-preview">
+      <h1>Preview</h1>
+
+      {# ---- Typography ---- #}
+      <section class="preview-section">
+        <h2>Typography</h2>
+        <div class="preview-typography-sample">
+          <h3 class="h1" style="font-size:var(--text-4xl); font-weight:var(--font-bold); line-height:var(--leading-tight);">Heading 1</h3>
+          <h3 class="h2" style="font-size:var(--text-3xl); font-weight:var(--font-bold); line-height:var(--leading-tight);">Heading 2</h3>
+          <h3 class="h3" style="font-size:var(--text-2xl); font-weight:var(--font-semibold); line-height:var(--leading-tight);">Heading 3</h3>
+          <h3 style="font-size:var(--text-xl); font-weight:var(--font-semibold); line-height:var(--leading-snug);">Heading 4</h3>
+          <p style="font-size:var(--text-base); line-height:var(--leading-normal);">Body text - The quick brown fox jumps over the lazy dog. This paragraph demonstrates the body font, base size, line height, and letter spacing of your current theme configuration.</p>
+          <p style="font-size:var(--text-sm); color:hsl(var(--muted-foreground)); line-height:var(--leading-normal);">Small text - Secondary information that uses the muted foreground color and smaller text size.</p>
+        </div>
+      </section>
+
+      {# ---- Button ---- #}
+      <section class="preview-section">
+        <h2>Button</h2>
+        <div class="preview-examples">
+          {% theme_button "Primary" variant="primary" %}
+          {% theme_button "Secondary" variant="secondary" %}
+          {% theme_button "Destructive" variant="destructive" %}
+          {% theme_button "Ghost" variant="ghost" %}
+          {% theme_button "Link" variant="link" %}
+        </div>
+        <div class="preview-examples" style="margin-top: 0.5rem;">
+          {% theme_button "Small" variant="primary" size="sm" %}
+          {% theme_button "Medium" variant="primary" size="md" %}
+          {% theme_button "Large" variant="primary" size="lg" %}
+        </div>
+      </section>
+
+      {# ---- Card ---- #}
+      <section class="preview-section">
+        <h2>Card</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_card title="Card Title" footer="Card footer" %}
+          {% theme_card title="No Footer" %}
+        </div>
+      </section>
+
+      {# ---- Alert ---- #}
+      <section class="preview-section">
+        <h2>Alert</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_alert "Default alert." variant="default" title="Default" %}
+          {% theme_alert "Success!" variant="success" title="Success" %}
+          {% theme_alert "Warning." variant="warning" title="Warning" %}
+          {% theme_alert "Error." variant="destructive" title="Error" %}
+        </div>
+      </section>
+
+      {# ---- Badge ---- #}
+      <section class="preview-section">
+        <h2>Badge</h2>
+        <div class="preview-examples">
+          {% theme_badge "Default" variant="default" %}
+          {% theme_badge "Secondary" variant="secondary" %}
+          {% theme_badge "Success" variant="success" %}
+          {% theme_badge "Warning" variant="warning" %}
+          {% theme_badge "Destructive" variant="destructive" %}
+        </div>
+      </section>
+
+      {# ---- Input ---- #}
+      <section class="preview-section">
+        <h2>Input</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_input "editor_text" label="Text Input" placeholder="Enter text..." type="text" %}
+          {% theme_input "editor_email" label="Email" placeholder="you@example.com" type="email" %}
+        </div>
+      </section>
+
+      {# ---- Table ---- #}
+      <section class="preview-section">
+        <h2>Table</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_table headers=table_headers rows=table_rows variant="striped" caption="Striped Table" %}
+        </div>
+      </section>
+
+      {# ---- Tabs ---- #}
+      <section class="preview-section">
+        <h2>Tabs</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_tabs id="editor-tabs" tabs=tab_data active=0 %}
+        </div>
+      </section>
+
+      {# ---- Progress ---- #}
+      <section class="preview-section">
+        <h2>Progress</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_progress value=50 max=100 label="50%" %}
+          {% theme_progress value=75 max=100 label="75%" %}
+        </div>
+      </section>
+
+      {# ---- Toast ---- #}
+      <section class="preview-section">
+        <h2>Toast</h2>
+        <div class="preview-examples preview-wide">
+          {% theme_toast "Success toast" variant="success" %}
+          {% theme_toast "Error toast" variant="error" %}
+        </div>
+      </section>
+
+      {# ---- Animation ---- #}
+      <section class="preview-section">
+        <h2>Animation</h2>
+        <div class="preview-examples" style="gap: 1rem;">
+          <div class="hover-lift transition" style="transition-property: transform, box-shadow; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); cursor: pointer; flex: 1; min-width: 140px;">
+            <div style="font-size: 0.875rem; font-weight: 500;">Hover Lift</div>
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">translateY + scale</div>
+          </div>
+          <div class="hover-scale transition" style="transition-property: transform; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); cursor: pointer; flex: 1; min-width: 140px;">
+            <div style="font-size: 0.875rem; font-weight: 500;">Hover Scale</div>
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">scale transform</div>
+          </div>
+          <div class="hover-glow transition" style="transition-property: box-shadow; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); cursor: pointer; flex: 1; min-width: 140px;">
+            <div style="font-size: 0.875rem; font-weight: 500;">Hover Glow</div>
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">box-shadow glow</div>
+          </div>
+        </div>
+        <div class="preview-examples" style="gap: 0.5rem; margin-top: 1rem;">
+          <button class="transition-fast" onclick="flashBg(this)" style="padding: 0.5rem 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--muted)); cursor: pointer; color: inherit; transition-property: background-color; font-size: 0.8125rem;">Fast</button>
+          <button class="transition" onclick="flashBg(this)" style="padding: 0.5rem 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--muted)); cursor: pointer; color: inherit; transition-property: background-color; font-size: 0.8125rem;">Normal</button>
+          <button class="transition-slow" onclick="flashBg(this)" style="padding: 0.5rem 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--muted)); cursor: pointer; color: inherit; transition-property: background-color; font-size: 0.8125rem;">Slow</button>
+          <span style="font-size: 0.75rem; color: hsl(var(--muted-foreground)); align-self: center;">Click to see speed</span>
+        </div>
+      </section>
+
+      {# ---- Radius & Shadow ---- #}
+      <section class="preview-section">
+        <h2>Radius &amp; Shadow</h2>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
+          <div style="width: 3rem; height: 3rem; border-radius: var(--radius-sm, 0.25rem); background: hsl(var(--muted)); display: flex; align-items: center; justify-content: center; font-size: 0.625rem;">sm</div>
+          <div style="width: 3rem; height: 3rem; border-radius: var(--radius, 0.5rem); background: hsl(var(--muted)); display: flex; align-items: center; justify-content: center; font-size: 0.625rem;">md</div>
+          <div style="width: 3rem; height: 3rem; border-radius: var(--radius-lg, 0.75rem); background: hsl(var(--muted)); display: flex; align-items: center; justify-content: center; font-size: 0.625rem;">lg</div>
+          <div style="width: 3rem; height: 3rem; border-radius: var(--radius-xl, 1rem); background: hsl(var(--muted)); display: flex; align-items: center; justify-content: center; font-size: 0.625rem;">xl</div>
+          <div style="width: 3rem; height: 3rem; border-radius: 9999px; background: hsl(var(--muted)); display: flex; align-items: center; justify-content: center; font-size: 0.625rem;">full</div>
+        </div>
+        <div class="preview-examples" style="gap: 1.5rem;">
+          <div style="padding: 1.5rem; border-radius: var(--radius); background: hsl(var(--card)); box-shadow: var(--shadow-sm); min-width: 100px; text-align: center;">
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">shadow-sm</div>
+          </div>
+          <div style="padding: 1.5rem; border-radius: var(--radius); background: hsl(var(--card)); box-shadow: var(--shadow-md); min-width: 100px; text-align: center;">
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">shadow-md</div>
+          </div>
+          <div style="padding: 1.5rem; border-radius: var(--radius); background: hsl(var(--card)); box-shadow: var(--shadow-lg); min-width: 100px; text-align: center;">
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">shadow-lg</div>
+          </div>
+          <div style="padding: 1.5rem; border-radius: var(--radius); background: hsl(var(--card)); box-shadow: var(--shadow-xl); min-width: 100px; text-align: center;">
+            <div style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">shadow-xl</div>
+          </div>
+        </div>
+      </section>
+
+      {# ---- Spacing ---- #}
+      <section class="preview-section">
+        <h2>Spacing Scale</h2>
+        <div style="display:flex; gap:2px; align-items:flex-end; height:120px;">
+          <div style="width:24px; height:var(--space-1,4px);  background:hsl(var(--primary)); border-radius:2px;" title="space-1"></div>
+          <div style="width:24px; height:var(--space-2,8px);  background:hsl(var(--primary)); border-radius:2px;" title="space-2"></div>
+          <div style="width:24px; height:var(--space-3,12px); background:hsl(var(--primary)); border-radius:2px;" title="space-3"></div>
+          <div style="width:24px; height:var(--space-4,16px); background:hsl(var(--primary)); border-radius:2px;" title="space-4"></div>
+          <div style="width:24px; height:var(--space-6,24px); background:hsl(var(--primary)); border-radius:2px;" title="space-6"></div>
+          <div style="width:24px; height:var(--space-8,32px); background:hsl(var(--primary)); border-radius:2px;" title="space-8"></div>
+          <div style="width:24px; height:var(--space-12,48px);background:hsl(var(--primary)); border-radius:2px;" title="space-12"></div>
+          <div style="width:24px; height:var(--space-16,64px);background:hsl(var(--primary)); border-radius:2px;" title="space-16"></div>
+          <div style="width:24px; height:var(--space-24,96px);background:hsl(var(--primary)); border-radius:2px;" title="space-24"></div>
+        </div>
+        <div style="display:flex; gap:2px; font-size:0.6rem; color:hsl(var(--muted-foreground)); margin-top:0.25rem;">
+          <span style="width:24px;text-align:center;">1</span>
+          <span style="width:24px;text-align:center;">2</span>
+          <span style="width:24px;text-align:center;">3</span>
+          <span style="width:24px;text-align:center;">4</span>
+          <span style="width:24px;text-align:center;">6</span>
+          <span style="width:24px;text-align:center;">8</span>
+          <span style="width:24px;text-align:center;">12</span>
+          <span style="width:24px;text-align:center;">16</span>
+          <span style="width:24px;text-align:center;">24</span>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Data for JS -->
+  <script>
+    var PRESET_DATA = {{ preset_data_json|safe }};
+    var DESIGN_SYSTEMS = {{ design_systems_json|safe }};
+  </script>
+  <script>
+    // --- Global helpers for inline event handlers ---
+    var root = document.documentElement;
+
+    function setVar(name, value) { root.style.setProperty(name, value); }
+    function setVarPx(name, value) { root.style.setProperty(name, value + 'px'); }
+    function setVarRem(name, value) { root.style.setProperty(name, value + 'rem'); }
+    function setVarMs(name, value) { root.style.setProperty(name, value + 'ms'); }
+    function updVal(input, suffix) {
+      var span = input.parentElement.querySelector('.slider-value');
+      if (span) span.textContent = input.value + (suffix !== undefined ? suffix : 'px');
+    }
+
+    function toggleSection(id) {
+      var body = document.getElementById('section-' + id);
+      var chevron = document.getElementById('chevron-' + id);
+      if (body.classList.contains('collapsed')) {
+        body.classList.remove('collapsed');
+        chevron.classList.add('open');
+      } else {
+        body.classList.add('collapsed');
+        chevron.classList.remove('open');
+      }
+    }
+
+    function flashBg(el) {
+      el.style.backgroundColor = 'hsl(var(--primary))';
+      el.style.color = 'hsl(var(--primary-foreground))';
+      setTimeout(function() {
+        el.style.backgroundColor = 'hsl(var(--muted))';
+        el.style.color = 'inherit';
+      }, 600);
+    }
+
+    // --- Heading scale: recompute text sizes from base + ratio ---
+    function applyHeadingScale(ratio) {
+      ratio = parseFloat(ratio);
+      var base = parseFloat(document.getElementById('ctrl-text-base').value);
+      var sizes = [
+        { name: '--text-xl',  exp: 1 },
+        { name: '--text-2xl', exp: 2 },
+        { name: '--text-3xl', exp: 3 },
+        { name: '--text-4xl', exp: 4 },
+        { name: '--text-5xl', exp: 5 },
+        { name: '--text-6xl', exp: 6 },
+      ];
+      sizes.forEach(function(s) {
+        var px = Math.round(base * Math.pow(ratio, s.exp));
+        root.style.setProperty(s.name, px + 'px');
+      });
+    }
+
+    // --- Space scale: recompute spacing from base unit ---
+    function applySpaceScale(unit) {
+      unit = parseFloat(unit);
+      var steps = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24];
+      steps.forEach(function(n) {
+        root.style.setProperty('--space-' + n, (unit * n / 4) + 'rem');
+      });
+    }
+
+    // --- Letter spacing ---
+    var LETTER_SPACING_MAP = { tight: '-0.025em', normal: '0', wide: '0.025em', wider: '0.05em' };
+    function applyLetterSpacing(val) {
+      root.style.setProperty('--letter-spacing', LETTER_SPACING_MAP[val] || '0');
+    }
+
+    // --- Shape helpers ---
+    var SHAPE_RADIUS = { sharp: '0', rounded: 'var(--radius)', pill: '9999px' };
+    function applyShape(component, shape) {
+      root.style.setProperty('--' + component + '-radius', SHAPE_RADIUS[shape] || 'var(--radius)');
+    }
+
+    // --- Surface treatment ---
+    function applySurfaceTreatment(val) {
+      root.style.setProperty('--surface-treatment', val);
+      if (val === 'glass') {
+        root.style.setProperty('--backdrop-blur', '12px');
+        document.getElementById('ctrl-backdrop-blur').value = 12;
+        updVal(document.getElementById('ctrl-backdrop-blur'));
+      }
+    }
+  </script>
+  <script>
+    (function() {
+      "use strict";
+
+      // --- Token field names (mirrors ThemeTokens dataclass order) ---
+      var TOKEN_FIELDS = [
+        "background", "foreground",
+        "card", "card_foreground",
+        "popover", "popover_foreground",
+        "primary", "primary_foreground",
+        "secondary", "secondary_foreground",
+        "muted", "muted_foreground",
+        "accent", "accent_foreground",
+        "destructive", "destructive_foreground",
+        "success", "success_foreground",
+        "warning", "warning_foreground",
+        "info", "info_foreground",
+        "link", "link_hover",
+        "code", "code_foreground",
+        "selection", "selection_foreground",
+        "border", "input", "ring",
+        "surface_1", "surface_2", "surface_3"
+      ];
+
+      var currentMode = "light";
+      var currentDefaultMode = "light";  // "light" or "dark" from preset
+      var currentPreset = document.getElementById("editor-preset-select").value;
+
+      // Deep copy of current token values for both modes
+      var currentTokens = { light: {}, dark: {} };
+
+      // --- HSL <-> Hex conversion ---
+      function hslToHex(h, s, l) {
+        s /= 100; l /= 100;
+        var c = (1 - Math.abs(2 * l - 1)) * s;
+        var x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        var m = l - c / 2;
+        var r = 0, g = 0, b = 0;
+        if (h < 60) { r = c; g = x; }
+        else if (h < 120) { r = x; g = c; }
+        else if (h < 180) { g = c; b = x; }
+        else if (h < 240) { g = x; b = c; }
+        else if (h < 300) { r = x; b = c; }
+        else { r = c; b = x; }
+        r = Math.round((r + m) * 255);
+        g = Math.round((g + m) * 255);
+        b = Math.round((b + m) * 255);
+        return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+      }
+
+      function hexToHsl(hex) {
+        hex = hex.replace("#", "");
+        if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+        var r = parseInt(hex.substr(0, 2), 16) / 255;
+        var g = parseInt(hex.substr(2, 2), 16) / 255;
+        var b = parseInt(hex.substr(4, 2), 16) / 255;
+        var max = Math.max(r, g, b), min = Math.min(r, g, b);
+        var h = 0, s = 0, l = (max + min) / 2;
+        if (max !== min) {
+          var d = max - min;
+          s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+          if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+          else if (max === g) h = ((b - r) / d + 2) / 6;
+          else h = ((r - g) / d + 4) / 6;
+        }
+        return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+      }
+
+      // --- Build color inputs for a mode ---
+      function buildColorInputs(mode) {
+        var container = document.getElementById("token-controls-" + mode);
+        container.innerHTML = "";
+
+        // Group tokens for better organization
+        var groups = {
+          "Base": ["background", "foreground", "card", "card_foreground", "popover", "popover_foreground"],
+          "Brand": ["primary", "primary_foreground", "secondary", "secondary_foreground", "accent", "accent_foreground"],
+          "Neutral": ["muted", "muted_foreground", "border", "input", "ring"],
+          "Semantic": ["destructive", "destructive_foreground", "success", "success_foreground", "warning", "warning_foreground", "info", "info_foreground"],
+          "Misc": ["link", "link_hover", "code", "code_foreground", "selection", "selection_foreground"],
+        };
+
+        Object.keys(groups).forEach(function(groupName) {
+          var groupLabel = document.createElement("div");
+          groupLabel.style.cssText = "font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em;color:hsl(var(--muted-foreground));margin:0.75rem 0 0.25rem;font-weight:600;";
+          groupLabel.textContent = groupName;
+          container.appendChild(groupLabel);
+
+          groups[groupName].forEach(function(field) {
+            var row = document.createElement("div");
+            row.className = "token-row";
+
+            var label = document.createElement("label");
+            label.textContent = field.replace(/_/g, "-");
+            label.setAttribute("for", "color-" + mode + "-" + field);
+
+            var input = document.createElement("input");
+            input.type = "color";
+            input.id = "color-" + mode + "-" + field;
+            input.dataset.field = field;
+            input.dataset.mode = mode;
+
+            var tok = currentTokens[mode][field];
+            if (tok) input.value = hslToHex(tok.h, tok.s, tok.l);
+
+            input.addEventListener("input", onColorChange);
+
+            row.appendChild(label);
+            row.appendChild(input);
+            container.appendChild(row);
+          });
+        });
+      }
+
+      function onColorChange(e) {
+        var field = e.target.dataset.field;
+        var mode = e.target.dataset.mode;
+        var hsl = hexToHsl(e.target.value);
+        currentTokens[mode][field] = hsl;
+        applyCSSVar(field, hsl);
+      }
+
+      function applyCSSVar(field, hsl) {
+        var cssName = "--" + field.replace(/_/g, "-");
+        root.style.setProperty(cssName, hsl.h + " " + hsl.s + "% " + hsl.l + "%");
+      }
+
+      // --- Load preset tokens into controls ---
+      function loadPreset(presetName) {
+        var data = PRESET_DATA[presetName];
+        if (!data) return;
+
+        currentPreset = presetName;
+        currentTokens.light = JSON.parse(JSON.stringify(data.light));
+        currentTokens.dark = JSON.parse(JSON.stringify(data.dark));
+        currentDefaultMode = data.default_mode || "light";
+
+        // Update radius
+        document.getElementById("radius-slider").value = data.radius;
+        document.getElementById("radius-value").textContent = data.radius + "rem";
+        root.style.setProperty("--radius", data.radius + "rem");
+
+        // Initialize mode tabs to match preset's default_mode
+        currentMode = currentDefaultMode;
+        updateModeTabUI();
+
+        buildColorInputs("light");
+        buildColorInputs("dark");
+
+        // Apply current mode tokens to CSS
+        applyAllTokens(currentMode);
+      }
+
+      function applyAllTokens(mode) {
+        var tokens = currentTokens[mode];
+        TOKEN_FIELDS.forEach(function(field) {
+          if (tokens[field]) applyCSSVar(field, tokens[field]);
+        });
+      }
+
+      // --- Design System selector ---
+      var dsSelect = document.getElementById("editor-ds-select");
+      var dsDesc = document.getElementById("ds-description");
+
+      function setSelectValue(id, value) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        // Find matching option
+        for (var i = 0; i < el.options.length; i++) {
+          if (el.options[i].value === value) {
+            el.selectedIndex = i;
+            return;
+          }
+        }
+      }
+
+      function setSliderValue(id, value, suffix) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.value = value;
+        var span = el.parentElement.querySelector('.slider-value');
+        if (span) span.textContent = value + (suffix !== undefined ? suffix : 'px');
+      }
+
+      function loadDesignSystem(name) {
+        var ds = DESIGN_SYSTEMS[name];
+        if (!ds) {
+          dsDesc.textContent = "";
+          return;
+        }
+
+        dsDesc.textContent = ds.description;
+
+        // Typography
+        setSelectValue("ctrl-font-sans", mapFontToSelect(ds.typography.body_font));
+        setSelectValue("ctrl-font-display", mapFontToSelect(ds.typography.heading_font));
+        setSliderValue("ctrl-text-base", parseInt(ds.typography.base_size), 'px');
+        setVarPx("--text-base", parseInt(ds.typography.base_size));
+        setSliderValue("ctrl-heading-scale", ds.typography.heading_scale, '');
+        applyHeadingScale(ds.typography.heading_scale);
+        setSliderValue("ctrl-leading", ds.typography.line_height, '');
+        setVar("--leading-normal", ds.typography.line_height);
+        setSliderValue("ctrl-font-weight-heading", ds.typography.heading_weight, '');
+        setVar("--font-bold", ds.typography.heading_weight);
+        setVar("--font-semibold", Math.max(400, parseInt(ds.typography.heading_weight) - 100));
+        setSliderValue("ctrl-font-weight-body", ds.typography.body_weight, '');
+        setVar("--font-normal", ds.typography.body_weight);
+        setSelectValue("ctrl-letter-spacing", ds.typography.letter_spacing);
+        applyLetterSpacing(ds.typography.letter_spacing);
+
+        // Layout
+        var spaceUnit = parseFloat(ds.layout.space_unit) * 16; // rem to px approx
+        if (ds.layout.space_unit.includes('px')) spaceUnit = parseFloat(ds.layout.space_unit);
+        else if (ds.layout.space_unit.includes('rem')) spaceUnit = parseFloat(ds.layout.space_unit) * 16;
+        // Normalize to 4px-based unit
+        var baseUnit = Math.round(spaceUnit / 4) || 4;
+        setSliderValue("ctrl-space-unit", baseUnit, 'px');
+        setVarPx("--space-unit", baseUnit);
+        applySpaceScale(baseUnit);
+
+        // Radius from layout
+        var radiusMd = parseFloat(ds.layout.border_radius_md) || 0.5;
+        document.getElementById("radius-slider").value = radiusMd;
+        document.getElementById("radius-value").textContent = radiusMd + "rem";
+        setVarRem("--radius", radiusMd);
+
+        setSliderValue("ctrl-grid-gap", parseFloat(ds.layout.grid_gap) || 1.5, 'rem');
+        setVarRem("--grid-gap", parseFloat(ds.layout.grid_gap) || 1.5);
+        setSliderValue("ctrl-section-spacing", parseFloat(ds.layout.section_spacing) || 3, 'rem');
+        setVarRem("--section-spacing", parseFloat(ds.layout.section_spacing) || 3);
+        setSliderValue("ctrl-container-width", parseInt(ds.layout.container_width) || 1200, 'px');
+        setVarPx("--container-width", parseInt(ds.layout.container_width) || 1200);
+
+        // Component shapes
+        setSelectValue("ctrl-button-shape", ds.layout.button_shape);
+        applyShape("button", ds.layout.button_shape);
+        setSelectValue("ctrl-card-shape", ds.layout.card_shape);
+        applyShape("card", ds.layout.card_shape);
+        setSelectValue("ctrl-input-shape", ds.layout.input_shape);
+        applyShape("input", ds.layout.input_shape);
+
+        // Borders
+        setSliderValue("ctrl-border-width", parseInt(ds.surface.border_width) || 1, 'px');
+        setVarPx("--border-width", parseInt(ds.surface.border_width) || 1);
+        setSelectValue("ctrl-border-style", ds.surface.border_style);
+        setVar("--border-style", ds.surface.border_style);
+
+        // Shadows
+        document.getElementById("ctrl-shadow-sm").value = ds.surface.shadow_sm;
+        setVar("--shadow-sm", ds.surface.shadow_sm);
+        document.getElementById("ctrl-shadow-md").value = ds.surface.shadow_md;
+        setVar("--shadow-md", ds.surface.shadow_md);
+        document.getElementById("ctrl-shadow-lg").value = ds.surface.shadow_lg;
+        setVar("--shadow-lg", ds.surface.shadow_lg);
+
+        // Surface
+        setSelectValue("ctrl-surface-treatment", ds.surface.surface_treatment);
+        applySurfaceTreatment(ds.surface.surface_treatment);
+        setSliderValue("ctrl-backdrop-blur", parseInt(ds.surface.backdrop_blur) || 0, 'px');
+        setVarPx("--backdrop-blur", parseInt(ds.surface.backdrop_blur) || 0);
+
+        // Animation
+        var dFast = Math.round(parseFloat(ds.animation.duration_fast) * 1000);
+        var dNormal = Math.round(parseFloat(ds.animation.duration_normal) * 1000);
+        var dSlow = Math.round(parseFloat(ds.animation.duration_slow) * 1000);
+        setSliderValue("ctrl-duration-fast", dFast, 'ms');
+        setVarMs("--duration-fast", dFast);
+        setSliderValue("ctrl-duration-normal", dNormal, 'ms');
+        setVarMs("--duration-normal", dNormal);
+        setSliderValue("ctrl-duration-slow", dSlow, 'ms');
+        setVarMs("--duration-slow", dSlow);
+        setSelectByValue("ctrl-easing", ds.animation.easing);
+        setVar("--ease-in-out", ds.animation.easing);
+        setSliderValue("ctrl-hover-scale", ds.animation.hover_scale, '');
+        setVar("--hover-scale", ds.animation.hover_scale);
+        var hoverY = parseInt(ds.animation.hover_translate_y) || -2;
+        setSliderValue("ctrl-hover-translate-y", hoverY, 'px');
+        setVarPx("--hover-translate-y", hoverY);
+        setSelectValue("ctrl-transition-style", ds.animation.transition_style);
+
+        // Interaction
+        setSelectValue("ctrl-button-hover", ds.interaction.button_hover);
+        setSelectValue("ctrl-card-hover", ds.interaction.card_hover);
+        setSelectValue("ctrl-link-hover", ds.interaction.link_hover);
+        setSelectValue("ctrl-focus-style", ds.interaction.focus_style);
+        setVar("--focus-style", ds.interaction.focus_style);
+        var focusW = parseInt(ds.interaction.focus_ring_width) || 2;
+        setSliderValue("ctrl-focus-ring-width", focusW, 'px');
+        setVarPx("--ring-width", focusW);
+      }
+
+      function mapFontToSelect(fontKey) {
+        var map = {
+          "system-ui": "system-ui, -apple-system, sans-serif",
+          "serif": "Georgia, serif",
+          "mono": "'JetBrains Mono', monospace",
+          "display": "'Playfair Display', serif",
+        };
+        return map[fontKey] || "system-ui, -apple-system, sans-serif";
+      }
+
+      function setSelectByValue(id, value) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        // Try exact match first
+        for (var i = 0; i < el.options.length; i++) {
+          if (el.options[i].value === value) { el.selectedIndex = i; return; }
+        }
+        // Fallback: first option
+        el.selectedIndex = 0;
+      }
+
+      dsSelect.addEventListener("change", function(e) {
+        if (e.target.value) {
+          loadDesignSystem(e.target.value);
+        } else {
+          dsDesc.textContent = "";
+        }
+      });
+
+      // --- Mode tabs ---
+      function updateModeTabUI() {
+        var modeTabs = document.querySelectorAll(".mode-tabs button");
+        modeTabs.forEach(function(t) {
+          if (t.dataset.mode === currentMode) {
+            t.classList.add("active");
+          } else {
+            t.classList.remove("active");
+          }
+        });
+        document.getElementById("token-controls-light").style.display = currentMode === "light" ? "" : "none";
+        document.getElementById("token-controls-dark").style.display = currentMode === "dark" ? "" : "none";
+        // For dark-first: Dark removes data-theme (bare :root dark), Light sets data-theme="light"
+        // For light-first: Light removes data-theme (bare :root light + media query OS override),
+        //                 Dark sets data-theme="dark" (overrides media query)
+        if (currentDefaultMode === "dark") {
+          // Dark-first
+          if (currentMode === "light") {
+            root.classList.remove("dark");
+            root.setAttribute("data-theme", "light");
+          } else {
+            root.classList.remove("dark");
+            root.removeAttribute("data-theme");
+          }
+        } else {
+          // Light-first
+          if (currentMode === "dark") {
+            root.classList.remove("dark");
+            root.setAttribute("data-theme", "dark");
+          } else {
+            root.classList.remove("dark");
+            root.removeAttribute("data-theme");
+          }
+        }
+      }
+
+      var modeTabs = document.querySelectorAll(".mode-tabs button");
+      modeTabs.forEach(function(tab) {
+        tab.addEventListener("click", function() {
+          currentMode = tab.dataset.mode;
+          updateModeTabUI();
+          applyAllTokens(currentMode);
+        });
+      });
+
+      // --- Preset selector ---
+      document.getElementById("editor-preset-select").addEventListener("change", function(e) {
+        loadPreset(e.target.value);
+      });
+
+      // --- Reset ---
+      document.getElementById("btn-reset").addEventListener("click", function() {
+        // Reset design system to Custom
+        dsSelect.value = "";
+        dsDesc.textContent = "";
+        // Reset all inline overrides on :root
+        root.style.cssText = "";
+        // Reset all controls to defaults
+        setSliderValue("ctrl-text-base", 16, "px");
+        setSliderValue("ctrl-heading-scale", 1.25, "");
+        setSliderValue("ctrl-leading", 1.5, "");
+        setSliderValue("ctrl-font-weight-heading", 700, "");
+        setSliderValue("ctrl-font-weight-body", 400, "");
+        setSelectValue("ctrl-letter-spacing", "normal");
+        setSliderValue("ctrl-space-unit", 4, "px");
+        setSliderValue("ctrl-grid-gap", 1.5, "rem");
+        setSliderValue("ctrl-section-spacing", 3, "rem");
+        setSliderValue("ctrl-container-width", 1200, "px");
+        setSliderValue("ctrl-border-width", 1, "px");
+        setSelectValue("ctrl-border-style", "solid");
+        setSelectValue("ctrl-button-shape", "rounded");
+        setSelectValue("ctrl-card-shape", "rounded");
+        setSelectValue("ctrl-input-shape", "rounded");
+        setSelectValue("ctrl-surface-treatment", "flat");
+        setSliderValue("ctrl-backdrop-blur", 0, "px");
+        setSliderValue("ctrl-duration-fast", 150, "ms");
+        setSliderValue("ctrl-duration-normal", 300, "ms");
+        setSliderValue("ctrl-duration-slow", 500, "ms");
+        setSliderValue("ctrl-hover-scale", 1.02, "");
+        setSliderValue("ctrl-hover-translate-y", -2, "px");
+        setSliderValue("ctrl-focus-ring-width", 2, "px");
+        setSelectValue("ctrl-font-sans", "system-ui, -apple-system, sans-serif");
+        setSelectValue("ctrl-font-display", "inherit");
+        setSelectValue("ctrl-easing", "cubic-bezier(0.4, 0, 0.2, 1)");
+        setSelectValue("ctrl-transition-style", "smooth");
+        setSelectValue("ctrl-button-hover", "lift");
+        setSelectValue("ctrl-card-hover", "lift");
+        setSelectValue("ctrl-link-hover", "underline");
+        setSelectValue("ctrl-focus-style", "ring");
+        document.getElementById("ctrl-shadow-sm").value = "0 1px 2px 0 rgb(0 0 0 / 0.05)";
+        document.getElementById("ctrl-shadow-md").value = "0 4px 6px -1px rgb(0 0 0 / 0.1)";
+        document.getElementById("ctrl-shadow-lg").value = "0 10px 15px -3px rgb(0 0 0 / 0.1)";
+        document.getElementById("ctrl-shadow-xl").value = "0 20px 25px -5px rgb(0 0 0 / 0.1)";
+        loadPreset(currentPreset);
+      });
+
+      // --- Collect all custom properties for export ---
+      function collectCustomProps() {
+        var props = {};
+        var controls = [
+          // Typography
+          { id: "ctrl-font-sans", prop: "font-sans" },
+          { id: "ctrl-font-display", prop: "font-display" },
+          { id: "ctrl-text-base", prop: "text-base", suffix: "px" },
+          { id: "ctrl-leading", prop: "leading-normal" },
+          { id: "ctrl-font-weight-heading", prop: "font-bold" },
+          { id: "ctrl-font-weight-body", prop: "font-normal" },
+          { id: "ctrl-letter-spacing", prop: "letter-spacing", transform: function(v) { return LETTER_SPACING_MAP[v] || '0'; } },
+          // Spacing & Layout
+          { id: "ctrl-space-unit", prop: "space-unit", suffix: "px" },
+          { id: "ctrl-grid-gap", prop: "grid-gap", suffix: "rem" },
+          { id: "ctrl-section-spacing", prop: "section-spacing", suffix: "rem" },
+          { id: "ctrl-container-width", prop: "container-width", suffix: "px" },
+          // Borders
+          { id: "ctrl-border-width", prop: "border-width", suffix: "px" },
+          { id: "ctrl-border-style", prop: "border-style" },
+          // Shadows
+          { id: "ctrl-shadow-sm", prop: "shadow-sm" },
+          { id: "ctrl-shadow-md", prop: "shadow-md" },
+          { id: "ctrl-shadow-lg", prop: "shadow-lg" },
+          { id: "ctrl-shadow-xl", prop: "shadow-xl" },
+          // Surface
+          { id: "ctrl-surface-treatment", prop: "surface-treatment" },
+          { id: "ctrl-backdrop-blur", prop: "backdrop-blur", suffix: "px" },
+          // Animation
+          { id: "ctrl-duration-fast", prop: "duration-fast", suffix: "ms" },
+          { id: "ctrl-duration-normal", prop: "duration-normal", suffix: "ms" },
+          { id: "ctrl-duration-slow", prop: "duration-slow", suffix: "ms" },
+          { id: "ctrl-easing", prop: "ease-in-out" },
+          { id: "ctrl-hover-scale", prop: "hover-scale" },
+          { id: "ctrl-hover-translate-y", prop: "hover-translate-y", suffix: "px" },
+          { id: "ctrl-transition-style", prop: "transition-style" },
+          // Interaction
+          { id: "ctrl-button-hover", prop: "button-hover" },
+          { id: "ctrl-card-hover", prop: "card-hover" },
+          { id: "ctrl-link-hover", prop: "link-hover" },
+          { id: "ctrl-focus-style", prop: "focus-style" },
+          { id: "ctrl-focus-ring-width", prop: "ring-width", suffix: "px" },
+          // Component shapes
+          { id: "ctrl-button-shape", prop: "button-radius", transform: function(v) { return SHAPE_RADIUS[v] || 'var(--radius)'; } },
+          { id: "ctrl-card-shape", prop: "card-radius", transform: function(v) { return SHAPE_RADIUS[v] || 'var(--radius)'; } },
+          { id: "ctrl-input-shape", prop: "input-radius", transform: function(v) { return SHAPE_RADIUS[v] || 'var(--radius)'; } },
+        ];
+        controls.forEach(function(c) {
+          var el = document.getElementById(c.id);
+          if (!el) return;
+          var val = el.value;
+          if (c.transform) val = c.transform(val);
+          else if (c.suffix) val = val + c.suffix;
+          props[c.prop] = val;
+        });
+
+        // Also add computed heading sizes
+        var headingScale = parseFloat(document.getElementById("ctrl-heading-scale").value);
+        var baseSize = parseInt(document.getElementById("ctrl-text-base").value);
+        props["heading-scale"] = "" + headingScale;
+        var scaleNames = ["text-xl", "text-2xl", "text-3xl", "text-4xl", "text-5xl", "text-6xl"];
+        for (var i = 0; i < scaleNames.length; i++) {
+          props[scaleNames[i]] = Math.round(baseSize * Math.pow(headingScale, i + 1)) + "px";
+        }
+
+        return props;
+      }
+
+      // --- Export ---
+      document.getElementById("btn-export").addEventListener("click", function() {
+        var payload = {
+          name: currentPreset + "-custom",
+          radius: parseFloat(document.getElementById("radius-slider").value),
+          tokens: currentTokens,
+          custom_properties: collectCustomProps()
+        };
+
+        fetch("export/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": getCsrfToken()
+          },
+          body: JSON.stringify(payload)
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          downloadFile(data.tokens_css, "tokens.css", "text/css");
+          setTimeout(function() {
+            downloadFile(data.theme_toml, "theme.toml", "text/plain");
+          }, 200);
+        })
+        .catch(function(err) {
+          console.error("Export failed:", err);
+          alert("Export failed. Check the console for details.");
+        });
+      });
+
+      function getCsrfToken() {
+        var cookie = document.cookie.split(";").find(function(c) { return c.trim().startsWith("csrftoken="); });
+        return cookie ? cookie.split("=")[1] : "";
+      }
+
+      function downloadFile(content, filename, mime) {
+        var blob = new Blob([content], { type: mime });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      // --- Initialize ---
+      loadPreset(currentPreset);
+    })();
+  </script>
+</body>
+</html>

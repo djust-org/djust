@@ -1,0 +1,1 @@
+{% load theme_form_tags %}{% get_css_prefix as prefix %}{% if field.errors %}{% for error in field.errors %}<span class="{{ prefix }}theme-field-error" role="alert">{{ error }}</span>{% endfor %}{% endif %}
