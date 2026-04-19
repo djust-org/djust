@@ -79,7 +79,7 @@
             <div class="flex items-center space-x-4">
                 {% block breadcrumbs %}
                 <nav class="text-sm">
-                    <a href="{% url admin_site_name|add:':index' %}" class="text-gray-500 hover:text-gray-700">Home</a>
+                    <a href="{% url admin_site_name|concat:':index' %}" class="text-gray-500 hover:text-gray-700">Home</a>
                     {% block breadcrumb_items %}{% endblock %}
                 </nav>
                 {% endblock %}
@@ -87,7 +87,7 @@
             <div class="flex items-center space-x-4">
                 {% if is_authenticated %}
                 <span class="text-sm text-gray-600">{{ username }}</span>
-                <a href="{% url admin_site_name|add:':logout' %}"
+                <a href="{% url admin_site_name|concat:':logout' %}"
                    class="text-sm text-gray-500 hover:text-gray-700">
                     Log out
                 </a>

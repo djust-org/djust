@@ -22,8 +22,8 @@ def get_field(form, field_name):
 
 
 @register.filter
-def add(value, arg):
-    """Concatenate strings."""
+def concat(value, arg):
+    """Concatenate two values as strings."""
     return str(value) + str(arg)
 
 

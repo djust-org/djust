@@ -64,13 +64,12 @@ def action(description=None, permissions=None):
     """
 
     def decorator(func):
-        func.short_description = description or func.__name__.replace("_", " ").title()
-        func.allowed_permissions = permissions or []
-
         @wraps(func)
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
+        wrapper.short_description = description or func.__name__.replace("_", " ").title()
+        wrapper.allowed_permissions = permissions or []
         return wrapper
 
     return decorator
@@ -91,11 +90,6 @@ def display(description=None, ordering=None, boolean=False, empty_value="-"):
     """
 
     def decorator(func):
-        func.short_description = description or func.__name__.replace("_", " ").title()
-        func.admin_order_field = ordering
-        func.boolean = boolean
-        func.empty_value_display = empty_value
-
         @wraps(func)
         def wrapper(*args, **kwargs):
             result = func(*args, **kwargs)
@@ -103,6 +97,10 @@ def display(description=None, ordering=None, boolean=False, empty_value="-"):
                 return empty_value
             return result
 
+        wrapper.short_description = description or func.__name__.replace("_", " ").title()
+        wrapper.admin_order_field = ordering
+        wrapper.boolean = boolean
+        wrapper.empty_value_display = empty_value
         return wrapper
 
     return decorator
