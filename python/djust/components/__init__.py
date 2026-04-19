@@ -1,18 +1,45 @@
 """
-djust Components
+djust Components — Comprehensive library of reusable, reactive components.
 
-A comprehensive library of reusable, reactive components with framework-aware styling.
+Includes both the original core component classes (Component, LiveComponent,
+AlertComponent, etc.) and the djust-components library (template tags,
+descriptors, mixins, rust handlers, gallery).
 
-Usage:
-    from djust.components import AlertComponent, CardComponent
+**Template Tags (declarative):**
+
+    {% load djust_components %}
+    {% modal id="confirm" title="Are you sure?" %}
+        <p>This action cannot be undone.</p>
+    {% endmodal %}
+
+**Component Classes (programmatic):**
+
+    from djust.components import AlertComponent, CardComponent, Badge
 
     class MyView(LiveView):
         def mount(self, request):
             self.alert = AlertComponent(message="Welcome!", type="success")
-            self.card = CardComponent(title="User Profile", body="User info here")
+
+**Descriptors (class-attribute style):**
+
+    from djust.components import Accordion, Tabs, Modal
+
+**LiveViews:**
+
+    from djust.components.ttyd import TtydTerminalView
+
+**Component Gallery:**
+
+    python manage.py component_gallery
 """
 
-# Core component classes
+__version__ = "0.4.5rc2"
+
+default_app_config = "djust.components.apps.DjustComponentsConfig"
+
+# ---------------------------------------------------------------------------
+# Core component classes (original djust.components)
+# ---------------------------------------------------------------------------
 from .base import Component, LiveComponent
 from .registry import (
     register_component,
@@ -51,7 +78,6 @@ from .forms import (
 )
 
 # Auto-register built-in components
-# UI Components
 register_component("alert", AlertComponent)
 register_component("badge", BadgeComponent)
 register_component("button", ButtonComponent)
@@ -60,13 +86,40 @@ register_component("dropdown", DropdownComponent)
 register_component("modal", ModalComponent)
 register_component("progress", ProgressComponent)
 register_component("spinner", SpinnerComponent)
-
-# Layout Components
 register_component("tabs", TabsComponent)
-
-# Data Components
 register_component("table", TableComponent)
 register_component("pagination", PaginationComponent)
+
+# ---------------------------------------------------------------------------
+# djust-components library (folded in)
+# ---------------------------------------------------------------------------
+from .ttyd import TtydTerminalView  # noqa: E402
+from .mixins import (  # noqa: E402
+    ComponentMixin,
+    DataTableMixin,
+    AccordionMixin,
+    TabsMixin,
+    ModalMixin,
+    CollapsibleMixin,
+    SheetMixin,
+    DropdownMixin,
+    TooltipMixin,
+    CarouselMixin,
+)
+from .server_event_toast import ServerEventToastMixin  # noqa: E402
+from .icons import render_icon  # noqa: E402
+from .helpers import push_toast, confirm_action  # noqa: E402
+from .presets import register_preset, get_preset  # noqa: E402
+from .descriptors import (  # noqa: E402
+    Accordion,
+    Tabs,
+    Modal,
+    Collapsible,
+    Sheet,
+    Dropdown,
+    Tooltip,
+    Carousel,
+)
 
 __all__ = [
     # Base classes
@@ -94,6 +147,33 @@ __all__ = [
     # Form Components
     "ForeignKeySelect",
     "ManyToManySelect",
+    # LiveViews
+    "TtydTerminalView",
+    # Descriptor components (preferred — DEP-002)
+    "Accordion",
+    "Tabs",
+    "Modal",
+    "Collapsible",
+    "Sheet",
+    "Dropdown",
+    "Tooltip",
+    "Carousel",
+    # Mixins
+    "ComponentMixin",
+    "DataTableMixin",
+    "AccordionMixin",
+    "TabsMixin",
+    "ModalMixin",
+    "CollapsibleMixin",
+    "SheetMixin",
+    "DropdownMixin",
+    "TooltipMixin",
+    "CarouselMixin",
+    "ServerEventToastMixin",
+    # Helpers
+    "render_icon",
+    "push_toast",
+    "confirm_action",
+    "register_preset",
+    "get_preset",
 ]
-
-__version__ = "0.4.5rc2"

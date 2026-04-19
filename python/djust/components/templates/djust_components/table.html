@@ -1,0 +1,84 @@
+<div class="data-table-wrapper data-table-container{% if striped %} data-table-striped{% endif %}{% if compact %} data-table-compact{% endif %}" role="grid" aria-label="Data table"{% if loading %} aria-busy="true"{% endif %}>
+  {% if search %}
+  <div class="data-table-search">
+    <input type="text" role="searchbox" aria-label="Search table"
+           class="table-search" placeholder="Search..."
+           value="{{ search_query }}"
+           dj-input="{{ search_event }}" dj-debounce="{{ search_debounce }}">
+  </div>
+  {% endif %}
+
+  {% if loading %}
+  <div class="data-table-loading skeleton-table" aria-live="polite">
+    <div class="skeleton skeleton-line" style="width:100%"></div>
+    <div class="skeleton skeleton-line" style="width:100%"></div>
+    <div class="skeleton skeleton-line" style="width:100%"></div>
+    <div class="skeleton skeleton-line" style="width:100%"></div>
+    <div class="skeleton skeleton-line" style="width:100%"></div>
+  </div>
+  {% else %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        {% if selectable %}
+        <th>
+          <input type="checkbox" class="data-table-select-all"
+                 aria-label="Select all rows"
+                 dj-click="{{ select_event }}" data-value="__all__">
+        </th>
+        {% endif %}
+        {% for col in columns %}
+        <th{% if col.sortable|default:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event }}" data-value="{{ col.key }}"{% else %} role="columnheader"{% endif %}{% if col.width %} style="width:{{ col.width }}"{% endif %}>
+          {{ col.label }}
+          {% if sort_by == col.key %}
+            {% if sort_desc %}&#8595;{% else %}&#8593;{% endif %}
+          {% endif %}
+        </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}>
+        {% if selectable %}
+        <td>
+          <input type="checkbox" class="data-table-checkbox"
+                 aria-label="Select row"
+                 {% if row.id|stringformat:'s' in selected_rows %}checked{% endif %}
+                 dj-click="{{ select_event }}" data-value="{{ row.id }}">
+        </td>
+        {% endif %}
+        {% for col in columns %}
+        <td>{{ row|dictsort:col.key|first }}</td>
+        {% endfor %}
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="{% if selectable %}{{ columns|length|add:1 }}{% else %}{{ columns|length }}{% endif %}">
+          <div class="data-table-empty" role="status">
+            {% if empty_icon %}<div class="data-table-empty-icon">{{ empty_icon }}</div>{% endif %}
+            <h3 class="data-table-empty-title">{{ empty_title|default:"No data" }}</h3>
+            {% if empty_description %}<p class="data-table-empty-description">{{ empty_description }}</p>{% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if paginate and total_pages > 1 %}
+  <div class="data-table-pagination" role="navigation" aria-label="Table pagination">
+    <button class="pagination-btn" dj-click="{{ page_event }}" data-value="{% if page > 1 %}{{ page|add:"-1" }}{% else %}1{% endif %}" {% if page <= 1 %}disabled{% endif %}>&#8592;</button>
+    <span class="pagination-info">Page {{ page }} of {{ total_pages }}</span>
+    <button class="pagination-btn" dj-click="{{ page_event }}" data-value="{% if page < total_pages %}{{ page|add:"1" }}{% else %}{{ total_pages }}{% endif %}" {% if page >= total_pages %}disabled{% endif %}>&#8594;</button>
+  </div>
+  {% elif total_pages > 1 %}
+  {# Backward-compatible pagination using prev_event/next_event #}
+  <div class="dj-table__pagination">
+    <button class="dj-table__page-btn" dj-click="{{ prev_event }}" {% if page <= 1 %}disabled{% endif %}>&larr; Prev</button>
+    <span class="dj-table__page-info">{{ page }} / {{ total_pages }}</span>
+    <button class="dj-table__page-btn" dj-click="{{ next_event }}" {% if page >= total_pages %}disabled{% endif %}>Next &rarr;</button>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>

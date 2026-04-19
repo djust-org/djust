@@ -1,0 +1,31 @@
+{% extends "djust_components/gallery/_base.html" %}
+
+{% block title %}{{ category_label }} — djust-components Gallery{% endblock %}
+
+{% block view_class %}{{ view_class_name }}{% endblock %}
+
+{% block content %}
+<div class="gallery-breadcrumb">
+    <a href="/">Gallery</a> &rsaquo; {{ category_label }} ({{ rendered_components|length }} components)
+</div>
+
+<section class="category-section">
+    <h2>{{ category_label }}</h2>
+    {% for comp in rendered_components %}
+    {{ comp.rendered_html|safe }}
+    {% endfor %}
+</section>
+
+<div class="category-nav">
+    {% if prev_category %}
+    <a href="/lv/{{ prev_category.slug }}/">&larr; {{ prev_category.label }}</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+    {% if next_category %}
+    <a href="/lv/{{ next_category.slug }}/">{{ next_category.label }} &rarr;</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+</div>
+{% endblock %}

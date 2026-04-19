@@ -505,14 +505,14 @@ def get_all_components_with_metadata() -> list[dict]:
 def render_python_component_example(component_name: str, kwargs_dict: dict) -> str:
     """Import and render a djust-component by name.
 
-    Dynamically imports from djust_components.components.<name>, instantiates
+    Dynamically imports from djust.components.components.<name>, instantiates
     the class with kwargs_dict, and calls .render().
 
     Returns rendered HTML string, or an error message string if import/render fails.
     """
     class_name = _to_class_name(component_name)
     try:
-        module = importlib.import_module(f"djust_components.components.{component_name}")
+        module = importlib.import_module(f"djust.components.components.{component_name}")
         cls = getattr(module, class_name)
         instance = cls(**kwargs_dict)
         return instance.render()
@@ -532,7 +532,7 @@ def get_python_component_signature(component_name: str) -> list[dict] | None:
     """
     class_name = _to_class_name(component_name)
     try:
-        module = importlib.import_module(f"djust_components.components.{component_name}")
+        module = importlib.import_module(f"djust.components.components.{component_name}")
         cls = getattr(module, class_name)
         sig = inspect.signature(cls.__init__)
         params = []
