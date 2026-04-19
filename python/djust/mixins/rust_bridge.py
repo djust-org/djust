@@ -340,14 +340,6 @@ class RustBridgeMixin:
             # name appearing in `_changed_keys`.
             prev_immutables = getattr(self, "_prev_context_immutables", {})
 
-            # When _force_full_html is set, the developer is signaling that
-            # the change is structural (template conditionals, loop lengths,
-            # etc.). Bypass change tracking and send ALL context values to
-            # Rust so derived values like computed step dicts are fresh (#774).
-            force_full = getattr(self, "_force_full_html", False)
-            if force_full:
-                prev_refs = {}  # Treat as first render — send everything
-
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
@@ -369,9 +361,19 @@ class RustBridgeMixin:
                     # `_changed_keys` only tracks direct instance attrs, so
                     # we need to detect derived values (e.g. `products` from
                     # `self._products_cache`, or `completed_count` computed
-                    # from `self.todos`). Non-immutables are detected via
-                    # `id()` change; immutables via value equality because
-                    # Python interns small ints/strings.
+                    # from `self.todos`).
+                    #
+                    # Container types (dict, list, set, tuple) are ALWAYS
+                    # re-sent because id() is unreliable for them: CPython
+                    # address reuse after GC, persistent list lookups
+                    # returning the same object, etc. (#774). These are the
+                    # most common derived context values (computed dicts,
+                    # filtered lists) and the cost of re-serializing them
+                    # is small relative to the correctness risk.
+                    #
+                    # Immutables use value equality (Python interns them).
+                    # Other types use id() comparison as a last resort.
+                    prev_containers = getattr(self, "_prev_context_containers", {})
                     for key, value in full_context.items():
                         if key in context:
                             continue
@@ -381,6 +383,12 @@ class RustBridgeMixin:
                             context[key] = value  # TypedState dirty flag
                         elif changed_sub_ids and id(value) in changed_sub_ids:
                             context[key] = value  # sub-object of changed (#703)
+                        elif isinstance(value, (dict, list, tuple)):
+                            # Containers: compare by VALUE, not id(). id() is
+                            # unreliable for derived containers due to CPython
+                            # address reuse and persistent-list lookups (#774).
+                            if prev_containers.get(key, _MISSING) != value:
+                                context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             # Immutable: compare by value to catch derived
                             # int/str changes (prev_immutables may miss the
@@ -394,12 +402,16 @@ class RustBridgeMixin:
                     # No explicit changed_keys — use id() comparison as fallback.
                     # This path runs on the internal sync from render_with_diff
                     # and for in-place mutations without snapshot detection.
+                    prev_containers = getattr(self, "_prev_context_containers", {})
                     context = {}
                     for key, value in full_context.items():
                         if key not in prev_refs:
                             context[key] = value  # new key
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
+                        elif isinstance(value, (dict, list, tuple)):
+                            if prev_containers.get(key, _MISSING) != value:
+                                context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
@@ -410,11 +422,18 @@ class RustBridgeMixin:
                 context = full_context
 
             # Store refs for next comparison (full context, not filtered).
-            # We also cache immutable VALUES for the next call's equality
-            # check — id() is unreliable on interned primitives.
+            # We also cache previous VALUES for types where id() is unreliable:
+            # - Immutables (int/str/etc.) — Python interns them, so id() gives
+            #   false negatives. Compared by value equality.
+            # - Containers (dict/list/tuple) — CPython address reuse after GC
+            #   can cause id() to match even when the value changed (#774).
+            #   Compared by value equality.
             self._prev_context_refs = {k: id(v) for k, v in full_context.items()}
             self._prev_context_immutables = {
                 k: v for k, v in full_context.items() if isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
+            }
+            self._prev_context_containers = {
+                k: v for k, v in full_context.items() if isinstance(v, (dict, list, tuple))
             }
             self._sync_done_this_cycle = True
             self._changed_keys = None  # Clear

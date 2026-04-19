@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`_force_full_html` now syncs ALL context to Rust ([#774](https://github.com/djust-org/djust/issues/774))** — When a view sets `self._force_full_html = True` in an event handler (e.g., wizard step transitions), the Rust VDOM renderer previously still used incremental change tracking. Derived context values like `current_step` (computed from `wizard_step_index` in `get_context_data()`) could be missed by the `id()` comparison, causing Rust to render with stale data. The fix bypasses change tracking entirely when `_force_full_html` is set, sending the complete context to Rust for a fully fresh render.
+- **Derived container context values now tracked by value equality ([#774](https://github.com/djust-org/djust/issues/774))** — The Rust state sync used `id()` comparison for all non-immutable context values, which is unreliable for containers (dict, list, tuple) due to CPython address reuse after GC. Derived values like `current_step = wizard_steps[step_index]` could be missed when the handler only changed `step_index`, causing Rust to render stale HTML. Fix: containers are now compared by value equality (like immutables already were), with previous values cached in `_prev_context_containers`. The optimization is preserved — unchanged containers are still skipped.
 
 ## [0.5.0rc1] - 2026-04-19
 

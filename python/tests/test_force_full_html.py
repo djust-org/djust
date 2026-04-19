@@ -1,21 +1,23 @@
 """
-Tests for _force_full_html rendering correctness (#774).
+Tests for derived context value sync correctness (#774).
 
-Verifies that when _force_full_html is set, ALL context values are synced
-to Rust — not just the explicitly changed ones. This ensures derived context
-values (computed in get_context_data from instance attrs) are fresh.
+Verifies that container-typed context values (dicts, lists) computed in
+get_context_data() are always re-sent to Rust, even when the change tracker
+only detects direct attribute changes. This prevents stale renders when a
+handler changes an index/key and a derived dict/list changes as a result.
 """
 
 import pytest
 
 try:
-    from djust import LiveView
+    from djust import LiveView, RustLiveView
 except ImportError:
     LiveView = None
+    RustLiveView = None
 
 pytestmark = pytest.mark.skipif(
-    LiveView is None,
-    reason="djust.LiveView not available",
+    LiveView is None or RustLiveView is None,
+    reason="djust.LiveView / RustLiveView not available",
 )
 
 
@@ -30,9 +32,22 @@ WIZARD_TEMPLATE = """
 </div>
 """
 
+DICT_CONTEXT_TEMPLATE = """
+<div dj-root>
+  <h1>{{ info.title }}</h1>
+  <p>{{ info.count }}</p>
+</div>
+"""
+
+LIST_CONTEXT_TEMPLATE = """
+<div dj-root>
+  {% for item in items %}<span>{{ item }}</span>{% endfor %}
+</div>
+"""
+
 
 class WizardView(LiveView):
-    """Minimal wizard-style view that computes current_step from step_index."""
+    """View that computes current_step from step_index."""
 
     template_name = None
 
@@ -50,81 +65,145 @@ class WizardView(LiveView):
         return ctx
 
 
-class TestForceFullHtmlSyncsAllContext:
-    """_force_full_html must bypass change tracking (#774)."""
+def _make_view(view_cls, template):
+    """Create a view with Rust backend, simulate mount, and do initial render."""
+    view = view_cls()
+    view.template_name = "inline"
+    view._full_template = template
+    view.step_index = 0
+    view._steps = ["step_a", "step_b"]
+    view._rust_view = RustLiveView(template)
+    view._sync_state_to_rust()
+    view._rust_view.render_with_diff()
+    return view
 
-    def _make_view(self):
-        from djust import RustLiveView
 
-        view = WizardView()
-        view.template_name = "inline"
-        view._full_template = WIZARD_TEMPLATE
-        # Simulate mount
-        view.step_index = 0
-        view._steps = ["step_a", "step_b"]
-        # Initialize Rust view directly (bypass request-based init)
-        view._rust_view = RustLiveView(WIZARD_TEMPLATE)
-        # First render — establishes baseline
-        view._sync_state_to_rust()
-        view._rust_view.render_with_diff()
-        return view
+class TestDerivedContextAutoDetection:
+    """Container-typed derived values must be synced automatically (#774).
 
-    def test_without_force_full_html_derived_value_may_be_stale(self):
-        """Demonstrate the bug: changing step_index without force_full_html
-        may not sync current_step if id() comparison misses it."""
-        view = self._make_view()
+    The developer should NOT need _force_full_html for this to work.
+    """
 
-        # Simulate event handler changing step_index
+    def test_derived_string_from_list_lookup(self):
+        """Changing step_index should automatically sync current_step
+        (a string looked up from a list) without _force_full_html."""
+        view = _make_view(WizardView, WIZARD_TEMPLATE)
+
         view.step_index = 1
         view._changed_keys = {"step_index"}
 
-        # Sync with change tracking
         view._sync_state_to_rust()
         html, _, _ = view._rust_view.render_with_diff()
 
-        # With the fix, this should show Step B even without _force_full_html
-        # because the id() comparison should detect the new string.
-        # But the test documents the pattern — derived string values
-        # that happen to be interned can fool id() tracking.
-        assert "Index: 1" in html
-
-    def test_force_full_html_syncs_derived_context(self):
-        """With _force_full_html, ALL context values must be sent to Rust,
-        bypassing change tracking. This ensures derived values are fresh."""
-        view = self._make_view()
-
-        # Simulate event handler changing step_index and setting force flag
-        view.step_index = 1
-        view._changed_keys = {"step_index"}
-        view._force_full_html = True
-
-        # Sync with force_full_html — should bypass change tracking
-        view._sync_state_to_rust()
-        html, _, _ = view._rust_view.render_with_diff()
-
-        # Must show Step B content (derived from step_index=1)
         assert "Step B" in html
         assert "Step A" not in html
         assert "Index: 1" in html
 
-    def test_force_full_html_resets_baseline_for_next_cycle(self):
-        """After force_full_html, the next render cycle should have
-        a clean baseline for change tracking."""
-        view = self._make_view()
+    def test_derived_dict_auto_synced(self):
+        """A dict context value computed in get_context_data must be
+        re-sent to Rust even if only a source attribute changed."""
 
-        # Force full sync
-        view.step_index = 1
-        view._changed_keys = {"step_index"}
-        view._force_full_html = True
+        class DictView(LiveView):
+            template_name = None
+
+            def get_template(self):
+                return DICT_CONTEXT_TEMPLATE
+
+            def mount(self, request, **kwargs):
+                self.title = "Hello"
+                self.count = 0
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["info"] = {"title": self.title, "count": self.count}
+                return ctx
+
+        view = DictView()
+        view.template_name = "inline"
+        view._full_template = DICT_CONTEXT_TEMPLATE
+        view.title = "Hello"
+        view.count = 0
+        view._rust_view = RustLiveView(DICT_CONTEXT_TEMPLATE)
         view._sync_state_to_rust()
         view._rust_view.render_with_diff()
 
-        # Next cycle: change step_index again (normal, no force)
+        # Change count, which changes the derived info dict
+        view.count = 42
+        view._changed_keys = {"count"}
+        view._sync_state_to_rust()
+        html, _, _ = view._rust_view.render_with_diff()
+
+        assert "42" in html
+
+    def test_derived_list_auto_synced(self):
+        """A list context value computed from instance state must be
+        re-sent to Rust automatically."""
+
+        class ListView(LiveView):
+            template_name = None
+
+            def get_template(self):
+                return LIST_CONTEXT_TEMPLATE
+
+            def mount(self, request, **kwargs):
+                self._data = ["a", "b", "c"]
+                self.filter_len = 3
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["items"] = self._data[: self.filter_len]
+                return ctx
+
+        view = ListView()
+        view.template_name = "inline"
+        view._full_template = LIST_CONTEXT_TEMPLATE
+        view._data = ["a", "b", "c"]
+        view.filter_len = 3
+        view._rust_view = RustLiveView(LIST_CONTEXT_TEMPLATE)
+        view._sync_state_to_rust()
+        view._rust_view.render_with_diff()
+
+        # Change filter to show only 1 item
+        view.filter_len = 1
+        view._changed_keys = {"filter_len"}
+        view._sync_state_to_rust()
+        html, _, _ = view._rust_view.render_with_diff()
+
+        # Rust adds dj-id attrs, so count <span dj-id=
+        assert html.count("<span") == 1
+        assert ">a<" in html
+        # b and c should not be rendered
+        assert ">b<" not in html
+
+    def test_step_transition_roundtrip(self):
+        """Full roundtrip: step 0 → step 1 → step 0 should all render correctly
+        without _force_full_html."""
+        view = _make_view(WizardView, WIZARD_TEMPLATE)
+
+        # Step 0 → 1
+        view.step_index = 1
+        view._changed_keys = {"step_index"}
+        view._sync_state_to_rust()
+        html, _, _ = view._rust_view.render_with_diff()
+        assert "Step B" in html
+
+        # Step 1 → 0
         view.step_index = 0
         view._changed_keys = {"step_index"}
         view._sync_state_to_rust()
         html, _, _ = view._rust_view.render_with_diff()
-
-        # Should show Step A
         assert "Step A" in html
-        assert "Index: 0" in html
+
+    def test_force_full_html_still_works_as_escape_hatch(self):
+        """_force_full_html should still work as a belt-and-suspenders
+        escape hatch for edge cases we haven't anticipated."""
+        view = _make_view(WizardView, WIZARD_TEMPLATE)
+
+        view.step_index = 1
+        view._changed_keys = {"step_index"}
+        view._force_full_html = True
+        view._sync_state_to_rust()
+        html, _, _ = view._rust_view.render_with_diff()
+
+        assert "Step B" in html
+        assert "Index: 1" in html
