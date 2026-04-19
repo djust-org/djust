@@ -1,0 +1,10 @@
+<div class="dj-avatar dj-avatar--{{ size }}">
+  {% if src %}
+    <img class="dj-avatar__img" src="{{ src }}" alt="{{ alt }}">
+  {% else %}
+    <span class="dj-avatar__initials">{{ initials }}</span>
+  {% endif %}
+  {% if status %}
+    <span class="dj-avatar__status dj-avatar__status--{{ status }}"></span>
+  {% endif %}
+</div>

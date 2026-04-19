@@ -1,0 +1,11 @@
+<div class="dj-progress dj-progress--{{ size }}">
+{% if label or show_label %}
+  <div class="dj-progress__header">
+    {% if label %}<span class="dj-progress__label">{{ label }}</span>{% endif %}
+    {% if show_label %}<span class="dj-progress__value">{{ value }}%</span>{% endif %}
+  </div>
+{% endif %}
+  <div class="dj-progress__track">
+    <div class="dj-progress__fill dj-progress__fill--{{ color }}" style="width: {{ value }}%"></div>
+  </div>
+</div>

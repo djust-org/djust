@@ -1,0 +1,11 @@
+<nav class="dj-pagination">
+  <button class="dj-pagination__btn" dj-click="{{ prev_event }}" {% if page <= 1 %}disabled{% endif %}>&larr;</button>
+  {% for p in pages %}
+    {% if p == "..." %}
+      <span class="dj-pagination__ellipsis">&hellip;</span>
+    {% else %}
+      <button class="dj-pagination__btn{% if p == page %} dj-pagination__btn--active{% endif %}" dj-click="{{ next_event }}" data-value="{{ p }}">{{ p }}</button>
+    {% endif %}
+  {% endfor %}
+  <button class="dj-pagination__btn" dj-click="{{ next_event }}" {% if page >= total_pages %}disabled{% endif %}>&rarr;</button>
+</nav>

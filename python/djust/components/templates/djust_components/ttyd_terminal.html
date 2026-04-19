@@ -1,0 +1,17 @@
+{% load static %}
+<div id="dj-ttyd-terminal"
+     class="dj-ttyd-terminal"
+     dj-hook="TtydTerminal"
+     data-ttyd-url="{{ ttyd_url }}"
+     data-rows="{{ rows }}"
+     data-cols="{{ cols }}"
+     data-theme="{{ theme_json }}"
+     style="width: 100%; height: 100%; min-height: calc({{ rows }} * 1.2em); background: #1e1e2e;">
+</div>
+
+<script type="module">
+  import { TtydTerminalHook } from "{% static 'djust_components/ttyd/ttyd_terminal.js' %}";
+  window.djust = window.djust || {};
+  window.djust.hooks = window.djust.hooks || {};
+  window.djust.hooks.TtydTerminal = TtydTerminalHook;
+</script>

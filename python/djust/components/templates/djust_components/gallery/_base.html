@@ -1,0 +1,232 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ mode }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}djust-components Gallery{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'djust_theming/css/base.css' %}">
+    <link rel="stylesheet" href="{% static 'djust_components/components.css' %}">
+    <link rel="stylesheet" href="{% static 'djust_components/components-classes.css' %}">
+    <style>
+        /* ── Gallery Layout CSS ── */
+        *, *::before, *::after { box-sizing: border-box; }
+        body { margin: 0; }
+        h1, h2, h3, p { margin: 0; }
+
+        /* ── Interactive component state CSS ── */
+        .dj-accordion-item .dj-accordion__content { max-height: 0; overflow: hidden; transition: max-height 0.25s ease, padding 0.25s ease; padding: 0 1rem; }
+        .dj-accordion-item--open .dj-accordion__content { max-height: 500px; padding: 0.75rem 1rem; }
+        .dj-accordion__chevron { transition: transform 0.2s ease; display: inline-block; }
+        .dj-accordion__chevron--open { transform: rotate(0deg); }
+        .dj-accordion-item:not(.dj-accordion-item--open) .dj-accordion__chevron { transform: rotate(-90deg); }
+        .dj-dropdown--open .dj-dropdown__menu { display: block !important; }
+        .dj-dropdown__menu { display: none; }
+        .gallery-header, .gallery-sidebar, .gallery-content,
+        .gallery-body, .category-section, .category-grid,
+        .gallery-toolbar, .toolbar-group, .gallery-breadcrumb,
+        .category-nav, .variant-section, .variant-label { margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+            background: var(--color-bg);
+            color: var(--color-text);
+            line-height: 1.6;
+        }
+
+        .gallery-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 16px 24px; border-bottom: 1px solid var(--color-border);
+            position: sticky; top: 0; background: var(--color-bg); z-index: 100;
+        }
+        .gallery-header h1 { font-size: 1.25rem; font-weight: 600; }
+        .gallery-header h1 span { color: var(--color-text-secondary); font-weight: 400; font-size: 0.875rem; margin-left: 8px; }
+        .gallery-header h1 a { color: inherit; text-decoration: none; }
+
+        .gallery-toolbar { display: flex; align-items: center; gap: 8px; }
+        .gallery-toolbar button {
+            padding: 6px 12px; border: 1px solid var(--color-border);
+            background: var(--color-bg-subtle); color: var(--color-text);
+            border-radius: var(--radius-md, 8px); cursor: pointer; font-size: 0.8rem;
+        }
+        .gallery-toolbar button:hover { border-color: var(--color-primary); }
+        .gallery-toolbar button.active {
+            background: var(--color-primary); color: hsl(var(--primary-foreground));
+            border-color: var(--color-primary);
+        }
+        .gallery-toolbar select {
+            padding: 6px 8px; border: 1px solid var(--color-border);
+            background: var(--color-bg-subtle); color: var(--color-text);
+            border-radius: var(--radius-md, 8px); font-size: 0.8rem; cursor: pointer;
+        }
+        .gallery-toolbar label {
+            font-size: 0.7rem; color: var(--color-text-secondary);
+            text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .toolbar-group { display: flex; align-items: center; gap: 4px; }
+        .theme-toggle {
+            font-size: 1.1rem; background: none;
+            border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px);
+            padding: 6px 10px; cursor: pointer; color: var(--color-text);
+        }
+
+        .gallery-body { display: flex; min-height: calc(100vh - 57px); }
+
+        .gallery-sidebar {
+            width: 220px; border-right: 1px solid var(--color-border);
+            padding: 16px 0; position: sticky; top: 57px;
+            height: calc(100vh - 57px); overflow-y: auto; flex-shrink: 0;
+        }
+        .gallery-sidebar h3 {
+            font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
+            color: var(--color-text-secondary); padding: 8px 16px 4px; margin-top: 8px;
+        }
+        .gallery-sidebar a {
+            display: block; padding: 4px 16px; color: var(--color-text);
+            text-decoration: none; font-size: 0.85rem;
+        }
+        .gallery-sidebar a:hover { background: var(--color-bg-subtle); }
+        .gallery-sidebar a.active { color: var(--color-primary); font-weight: 600; }
+
+        .gallery-content { flex: 1; padding: 24px; max-width: 960px; }
+
+        .category-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px;
+        }
+        .category-card {
+            border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px);
+            padding: 20px; text-decoration: none; color: var(--color-text);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .category-card:hover { border-color: var(--color-primary); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .category-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 4px; }
+        .category-card .count { font-size: 0.85rem; color: var(--color-text-secondary); }
+
+        .preview-container { transition: max-width 0.3s ease; }
+        .preview-container.mobile { max-width: 375px; }
+        .preview-container.tablet { max-width: 768px; }
+        .preview-container.desktop { max-width: none; }
+
+        .gallery-breadcrumb { font-size: 0.8rem; color: var(--color-text-secondary); margin-bottom: 16px; }
+        .gallery-breadcrumb a { color: var(--color-primary); text-decoration: none; }
+
+        .category-nav {
+            display: flex; justify-content: space-between; margin-top: 32px;
+            padding-top: 16px; border-top: 1px solid var(--color-border);
+        }
+        .category-nav a { color: var(--color-primary); text-decoration: none; font-size: 0.9rem; }
+
+        .component-card {
+            border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px);
+            margin-bottom: 24px; overflow: hidden;
+        }
+        .component-card-header {
+            padding: 12px 16px; background: var(--color-bg-subtle);
+            border-bottom: 1px solid var(--color-border); font-weight: 600;
+            font-size: 0.9rem; display: flex; align-items: center; gap: 8px;
+        }
+        .component-card-header .tag-badge {
+            font-size: 0.65rem; padding: 2px 6px;
+            border-radius: var(--radius-sm, 4px); background: var(--color-primary);
+            color: hsl(var(--primary-foreground)); font-weight: 500;
+        }
+        .variant-section { padding: 16px; border-bottom: 1px solid var(--color-border); }
+        .variant-section:last-child { border-bottom: none; }
+        .variant-label { font-size: 0.75rem; color: var(--color-text-secondary); margin-bottom: 8px; font-weight: 500; }
+        .variant-preview {
+            padding: 16px; background: var(--color-bg);
+            border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px);
+            overflow: hidden; position: relative; transform: translateZ(0);
+            min-height: 60px; max-height: 500px; overflow-y: auto; z-index: 0;
+        }
+        .variant-preview .modal-overlay, .variant-preview .dj-modal-backdrop,
+        .variant-preview .sheet-overlay, .variant-preview .sheet,
+        .variant-preview .palette-overlay, .variant-preview .palette-dialog,
+        .variant-preview .fab-container, .variant-preview .toast-container,
+        .variant-preview .dj-connection-status, .variant-preview .dj-toast-container,
+        .variant-preview .dj-confirm-dialog-backdrop,
+        .variant-preview .dj-sidebar, .variant-preview .dj-sidebar__backdrop,
+        .variant-preview .dj-bottom-sheet__backdrop,
+        .variant-preview .dj-cookie-consent--bottom, .variant-preview .dj-cookie-consent--top,
+        .variant-preview .dj-export-dialog__backdrop, .variant-preview .dj-lightbox,
+        .variant-preview .dj-tour__overlay, .variant-preview .dj-tour__popover,
+        .variant-preview .palette { position: absolute !important; }
+    </style>
+</head>
+<body>
+<div dj-view="djust_components.gallery.live_views.{% block view_class %}GalleryIndexView{% endblock %}">
+    <style data-djust-theme>{{ theme_css|safe }}</style>
+
+    <header class="gallery-header">
+        <h1><a href="./">djust-components</a><span>Gallery</span></h1>
+        <div class="gallery-toolbar">
+            <div class="toolbar-group">
+                <label>Design</label>
+                <select id="gallery-ds-select" onchange="galleryTheme.setDS(this.value)">
+                    {% for ds in ds_options %}
+                    <option value="{{ ds }}" {% if ds == design_system %}selected{% endif %}>{{ ds }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="toolbar-group">
+                <label>Preset</label>
+                <select id="gallery-preset-select" onchange="galleryTheme.setPreset(this.value)">
+                    {% for p in preset_options %}
+                    <option value="{{ p }}" {% if p == preset %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button onclick="galleryTheme.setPreview('mobile')" class="preview-btn {% if preview_mode == 'mobile' %}active{% endif %}" data-preview="mobile">Mobile</button>
+            <button onclick="galleryTheme.setPreview('tablet')" class="preview-btn {% if preview_mode == 'tablet' %}active{% endif %}" data-preview="tablet">Tablet</button>
+            <button onclick="galleryTheme.setPreview('desktop')" class="preview-btn {% if preview_mode == 'desktop' %}active{% endif %}" data-preview="desktop">Desktop</button>
+            <button class="theme-toggle" onclick="galleryTheme.toggleMode()">{% if mode == "dark" %}&#9728;&#65039;{% else %}&#127769;{% endif %}</button>
+        </div>
+    </header>
+
+    <div class="gallery-body">
+        <nav class="gallery-sidebar">
+            {% for cat in category_cards %}
+            <h3><a href="/lv/{{ cat.slug }}/" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
+            {% endfor %}
+        </nav>
+        <main class="gallery-content preview-container {{ preview_mode }}">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</div>
+
+<script>
+    // Client-side theme management — no server round-trip needed.
+    // Cookies are read by the context processor on next page load.
+    var galleryTheme = {
+        _setCookie: function(name, value) {
+            document.cookie = name + '=' + value + ';path=/;max-age=31536000;SameSite=Lax';
+        },
+        setDS: function(value) {
+            this._setCookie('gallery_ds', value);
+            window.location.reload();
+        },
+        setPreset: function(value) {
+            this._setCookie('gallery_preset', value);
+            window.location.reload();
+        },
+        toggleMode: function() {
+            var current = document.documentElement.getAttribute('data-theme') || '{{ mode }}';
+            var next = current === 'dark' ? 'light' : 'dark';
+            this._setCookie('gallery_mode', next);
+            document.documentElement.setAttribute('data-theme', next);
+            window.location.reload();
+        },
+        setPreview: function(value) {
+            var container = document.querySelector('.preview-container');
+            if (container) {
+                container.className = 'gallery-content preview-container ' + value;
+            }
+            document.querySelectorAll('.preview-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.getAttribute('data-preview') === value);
+            });
+        }
+    };
+</script>
+</body>
+</html>

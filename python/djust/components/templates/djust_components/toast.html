@@ -1,0 +1,16 @@
+<div class="dj-toast-container">
+{% for toast in toasts %}
+<div class="dj-toast dj-toast--{{ toast.type }}">
+  <span class="dj-toast__icon">
+    {% if toast.type == "success" %}&#10003;{% endif %}
+    {% if toast.type == "error" %}&#10007;{% endif %}
+    {% if toast.type == "warning" %}&#9888;{% endif %}
+    {% if toast.type == "info" %}&#8505;{% endif %}
+  </span>
+  <span class="dj-toast__message">{{ toast.message }}</span>
+  <button class="dj-toast__dismiss" dj-click="{{ dismiss_event }}" data-value="{{ toast.id }}">&times;</button>
+</div>
+{% empty %}
+<div class="dj-toast-container--empty"></div>
+{% endfor %}
+</div>

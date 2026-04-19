@@ -1,0 +1,55 @@
+{% extends "djust_components/gallery/_base.html" %}
+
+{% block title %}djust-components — Interactive Component Gallery{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 32px;">
+    <h2 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 8px;">Component Gallery</h2>
+    <p style="color: var(--color-text-secondary); margin-bottom: 20px; max-width: 560px;">
+        {{ total_count }} reusable components for djust — server-rendered, interactive, zero custom JS.
+        Pick a category to browse live demos.
+    </p>
+    <div style="position: relative; max-width: 400px;">
+        <input
+            type="text"
+            placeholder="Search components..."
+            value="{{ search_query }}"
+            dj-input="search"
+            style="width: 100%; padding: 8px 12px 8px 36px; border: 1px solid var(--color-border);
+                   border-radius: var(--radius-md, 8px); background: var(--color-bg-subtle);
+                   color: var(--color-text); font-size: 0.9rem; box-sizing: border-box;"
+        >
+        <svg style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+                    width: 16px; height: 16px; color: var(--color-text-secondary); pointer-events: none;"
+             fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+    </div>
+</div>
+
+{% if search_query and not filtered_cards %}
+<p style="color: var(--color-text-secondary);">No components found for &ldquo;{{ search_query }}&rdquo;.</p>
+{% elif search_query %}
+<p style="font-size: 0.85rem; color: var(--color-text-secondary); margin-bottom: 16px;">
+    {{ filtered_count }} component{{ filtered_count|pluralize }} matching &ldquo;{{ search_query }}&rdquo;
+</p>
+<div class="category-grid">
+    {% for comp in filtered_cards %}
+    <a class="category-card" href="/lv/{{ comp.category_slug }}/">
+        <h3 style="font-size: 0.95rem;">{{ comp.label }}</h3>
+        <span class="count">{{ comp.category_label }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="category-grid">
+    {% for cat in category_cards %}
+    <a class="category-card" href="lv/{{ cat.slug }}/">
+        <h3>{{ cat.label }}</h3>
+        <span class="count">{{ cat.count }} component{{ cat.count|pluralize }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

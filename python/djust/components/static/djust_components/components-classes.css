@@ -1,0 +1,830 @@
+/**
+ * djust-components Component Classes CSS
+ *
+ * Styles for Component class pattern (Badge, StatusDot, etc.)
+ * Uses CSS custom properties with sensible fallbacks.
+ */
+
+@layer djust-components {
+
+/* ============================================================================
+   Badge Component
+   ============================================================================ */
+
+.dj-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--dj-badge-padding, 0.25rem 0.5rem);
+  font-size: var(--dj-badge-font-size, 0.75rem);
+  font-weight: var(--dj-badge-font-weight, 500);
+  line-height: 1;
+  border-radius: var(--dj-badge-radius, 0.25rem);
+  background: var(--dj-badge-bg, hsl(var(--muted, 220 13% 91%)));
+  color: var(--dj-badge-fg, hsl(var(--foreground, 222 47% 11%)));
+  white-space: nowrap;
+}
+
+/* Size variants */
+.dj-badge-sm {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+}
+
+.dj-badge-lg {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+/* Color variants */
+.dj-badge-success {
+  background: var(--dj-badge-success-bg, hsl(var(--success, 160 84% 39%) / 0.1));
+  color: var(--dj-badge-success-fg, hsl(var(--success, 160 84% 39%)));
+}
+
+.dj-badge-info {
+  background: var(--dj-badge-info-bg, hsl(var(--primary, 222 47% 51%) / 0.1));
+  color: var(--dj-badge-info-fg, hsl(var(--primary, 222 47% 51%)));
+}
+
+.dj-badge-warning {
+  background: var(--dj-badge-warning-bg, hsl(var(--warning, 48 96% 53%) / 0.1));
+  color: var(--dj-badge-warning-fg, hsl(var(--warning, 48 96% 53%)));
+}
+
+.dj-badge-danger {
+  background: var(--dj-badge-danger-bg, hsl(var(--destructive, 0 84% 60%) / 0.1));
+  color: var(--dj-badge-danger-fg, hsl(var(--destructive, 0 84% 60%)));
+}
+
+.dj-badge-muted {
+  background: var(--dj-badge-muted-bg, hsl(var(--muted-foreground, 220 9% 46%) / 0.1));
+  color: var(--dj-badge-muted-fg, hsl(var(--muted-foreground, 220 9% 46%)));
+}
+
+/* ============================================================================
+   StatusDot Component
+   ============================================================================ */
+
+.dj-status-dot {
+  display: inline-block;
+  width: var(--dj-status-dot-size, 0.5rem);
+  height: var(--dj-status-dot-size, 0.5rem);
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Size variants */
+.dj-status-dot-sm {
+  width: 0.375rem;
+  height: 0.375rem;
+}
+
+.dj-status-dot-lg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* Color variants */
+.dj-status-dot-success {
+  color: var(--dj-status-dot-success, hsl(var(--success, 160 84% 39%)));
+}
+
+.dj-status-dot-info {
+  color: var(--dj-status-dot-info, hsl(var(--primary, 222 47% 51%)));
+}
+
+.dj-status-dot-warning {
+  color: var(--dj-status-dot-warning, hsl(var(--warning, 48 96% 53%)));
+}
+
+.dj-status-dot-danger {
+  color: var(--dj-status-dot-danger, hsl(var(--destructive, 0 84% 60%)));
+}
+
+.dj-status-dot-muted {
+  color: var(--dj-status-dot-muted, hsl(var(--muted-foreground, 220 9% 46%)));
+}
+
+/* Animation variants */
+.dj-status-dot-pulse {
+  animation: dj-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.dj-status-dot-spin {
+  animation: dj-spin 1s linear infinite;
+  /* Note: Spin works better with a non-circular shape like a crescent */
+  background: linear-gradient(
+    to right,
+    currentColor 50%,
+    transparent 50%
+  );
+}
+
+.dj-status-dot-fade {
+  animation: dj-fade 2s ease-in-out infinite;
+}
+
+/* Keyframes — uses shared dj-spin, dj-pulse, dj-fade from components.css */
+
+/* ============================================================================
+   Button Component
+   ============================================================================ */
+
+.dj-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: var(--dj-btn-padding, 0.5rem 1rem);
+  font-size: var(--dj-btn-font-size, 0.875rem);
+  font-weight: var(--dj-btn-font-weight, 500);
+  line-height: 1.25;
+  border: 1px solid transparent;
+  border-radius: var(--dj-btn-radius, 0.375rem);
+  background: var(--dj-btn-primary-bg, hsl(var(--primary, 222 47% 51%)));
+  color: var(--dj-btn-primary-fg, white);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.dj-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.dj-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.dj-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Size variants */
+.dj-btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.dj-btn-lg {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+}
+
+/* Color variants */
+.dj-btn-secondary {
+  background: var(--dj-btn-secondary-bg, hsl(var(--muted-foreground, 220 9% 46%)));
+  color: var(--dj-btn-secondary-fg, white);
+}
+
+.dj-btn-danger {
+  background: var(--dj-btn-danger-bg, hsl(var(--destructive, 0 84% 60%)));
+  color: var(--dj-btn-danger-fg, white);
+}
+
+.dj-btn-success {
+  background: var(--dj-btn-success-bg, hsl(var(--success, 160 84% 39%)));
+  color: var(--dj-btn-success-fg, white);
+}
+
+.dj-btn-ghost {
+  background: var(--dj-btn-ghost-bg, transparent);
+  color: var(--dj-btn-ghost-fg, hsl(var(--muted-foreground, 220 9% 46%)));
+  border-color: var(--dj-btn-ghost-border, hsl(var(--border, 240 6% 90%)));
+}
+
+.dj-btn-ghost:hover:not(:disabled) {
+  background: hsl(var(--muted-foreground, 220 9% 46%) / 0.1);
+}
+
+.dj-btn-link {
+  background: transparent;
+  color: var(--dj-btn-link-fg, hsl(var(--primary, 222 47% 51%)));
+  border: none;
+  padding: 0;
+}
+
+.dj-btn-link:hover:not(:disabled) {
+  text-decoration: underline;
+  transform: none;
+}
+
+.dj-btn-text {
+  background: transparent;
+  color: var(--dj-btn-text-fg, currentColor);
+  border: none;
+}
+
+.dj-btn-text:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Loading state */
+.dj-btn-loading {
+  position: relative;
+  pointer-events: none;
+}
+
+.dj-btn-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: dj-spin 0.6s linear infinite;
+}
+
+/* Icon positioning */
+.dj-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ============================================================================
+   Card Component
+   ============================================================================ */
+
+.dj-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--dj-card-bg, hsl(var(--card, 0 0% 100%)));
+  color: hsl(var(--card-foreground, 240 10% 4%));
+  border: 1px solid var(--dj-card-border, hsl(var(--border, 240 6% 90%)));
+  border-radius: var(--dj-card-radius, calc(var(--radius, 0.5rem) + 2px));
+  overflow: hidden;
+  transition: all 0.15s ease;
+}
+
+/* Padding variants */
+.dj-card-p-sm {
+  padding: 0.75rem;
+}
+
+.dj-card-p-md {
+  padding: 1rem;
+}
+
+.dj-card-p-lg {
+  padding: 1.5rem;
+}
+
+/* Style variants */
+.dj-card-bordered {
+  border-width: 2px;
+}
+
+.dj-card-elevated {
+  box-shadow: var(--dj-card-shadow, 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06));
+  border-color: transparent;
+}
+
+.dj-card-flat {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Hover effect */
+.dj-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+/* Clickable card */
+.dj-card-clickable {
+  cursor: pointer;
+}
+
+/* Card sections */
+.dj-card-image {
+  width: 100%;
+  overflow: hidden;
+}
+
+.dj-card-image img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.dj-card-header {
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--dj-card-border, hsl(var(--border, 240 6% 90%)));
+}
+
+.dj-card-content {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+.dj-card-footer {
+  padding: 1.5rem;
+  border-top: 1px solid var(--dj-card-border, hsl(var(--border, 240 6% 90%)));
+}
+
+/* Adjust padding when card has padding class and sections */
+.dj-card-p-sm > .dj-card-header,
+.dj-card-p-sm > .dj-card-content,
+.dj-card-p-sm > .dj-card-footer {
+  padding: 0.75rem;
+}
+
+.dj-card-p-md > .dj-card-header,
+.dj-card-p-md > .dj-card-content,
+.dj-card-p-md > .dj-card-footer {
+  padding: 1rem;
+}
+
+.dj-card-p-lg > .dj-card-header,
+.dj-card-p-lg > .dj-card-content,
+.dj-card-p-lg > .dj-card-footer {
+  padding: 1.5rem;
+}
+
+/* Override section padding when card has global padding */
+.dj-card-p-sm > .dj-card-content:only-child,
+.dj-card-p-md > .dj-card-content:only-child,
+.dj-card-p-lg > .dj-card-content:only-child {
+  padding: inherit;
+}
+
+/* ============================================================================
+   Integration with djust-theming
+   ============================================================================ */
+
+/* ============================================================================
+   Notification Badge Component
+   ============================================================================ */
+
+.dj-notification-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  font-size: var(--dj-notification-badge-font-size, 0.625rem);
+  font-weight: 600;
+  line-height: 1;
+  border-radius: 9999px;
+  background: var(--dj-notification-badge-bg, hsl(var(--destructive, 0 84% 60%)));
+  color: var(--dj-notification-badge-fg, #fff);
+  white-space: nowrap;
+}
+
+.dj-notification-badge--sm {
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.25rem;
+  font-size: 0.5rem;
+}
+
+.dj-notification-badge--lg {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+}
+
+.dj-notification-badge--dot {
+  min-width: var(--dj-notification-badge-size, 0.5rem);
+  width: var(--dj-notification-badge-size, 0.5rem);
+  height: var(--dj-notification-badge-size, 0.5rem);
+  padding: 0;
+}
+
+.dj-notification-badge--dot.dj-notification-badge--sm {
+  min-width: 0.375rem;
+  width: 0.375rem;
+  height: 0.375rem;
+}
+
+.dj-notification-badge--dot.dj-notification-badge--lg {
+  min-width: 0.75rem;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.dj-notification-badge--pulse {
+  animation: dj-pulse 2s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Segmented Progress Component
+   ============================================================================ */
+
+.dj-segmented-progress {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.dj-segmented-progress__step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.dj-segmented-progress__indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 2px solid;
+  transition: all 0.2s ease;
+}
+
+.dj-segmented-progress--sm .dj-segmented-progress__indicator {
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.625rem;
+}
+
+.dj-segmented-progress--lg .dj-segmented-progress__indicator {
+  width: 2.5rem;
+  height: 2.5rem;
+  font-size: 0.875rem;
+}
+
+.dj-segmented-progress__label {
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground, 215 14% 46%));
+  white-space: nowrap;
+}
+
+.dj-segmented-progress--sm .dj-segmented-progress__label {
+  font-size: 0.625rem;
+}
+
+.dj-segmented-progress--lg .dj-segmented-progress__label {
+  font-size: 0.875rem;
+}
+
+.dj-segmented-progress__step--completed .dj-segmented-progress__indicator {
+  background: var(--dj-segmented-progress-completed-bg, hsl(var(--success, 142 71% 45%)));
+  border-color: var(--dj-segmented-progress-completed-bg, hsl(var(--success, 142 71% 45%)));
+  color: hsl(var(--success-foreground, 0 0% 100%));
+}
+
+.dj-segmented-progress__step--active .dj-segmented-progress__indicator {
+  background: var(--dj-segmented-progress-active-bg, hsl(var(--primary, 221 83% 53%)));
+  border-color: var(--dj-segmented-progress-active-bg, hsl(var(--primary, 221 83% 53%)));
+  color: hsl(var(--primary-foreground, 210 40% 98%));
+}
+
+.dj-segmented-progress__step--pending .dj-segmented-progress__indicator {
+  background: transparent;
+  border-color: var(--dj-segmented-progress-pending-bg, hsl(var(--muted, 220 13% 91%)));
+  color: hsl(var(--muted-foreground, 215 14% 46%));
+}
+
+.dj-segmented-progress__step--active .dj-segmented-progress__label {
+  color: hsl(var(--foreground, 222 47% 11%));
+  font-weight: 600;
+}
+
+.dj-segmented-progress__connector {
+  flex: 1;
+  height: 2px;
+  min-width: 2rem;
+  margin: 0 0.5rem;
+  margin-bottom: 1.5rem;
+  transition: background 0.2s ease;
+}
+
+.dj-segmented-progress__connector--completed {
+  background: var(--dj-segmented-progress-completed-bg, hsl(var(--success, 142 71% 45%)));
+}
+
+.dj-segmented-progress__connector--pending {
+  background: var(--dj-segmented-progress-pending-bg, hsl(var(--muted, 220 13% 91%)));
+}
+
+/* ============================================================================
+   Progress Circle Component
+   ============================================================================ */
+
+.dj-progress-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dj-progress-circle__track {
+  stroke: var(--dj-progress-circle-track, hsl(var(--muted, 220 13% 91%)));
+}
+
+.dj-progress-circle__fill {
+  stroke: var(--dj-progress-circle-fill, hsl(var(--primary, 221 83% 53%)));
+  transition: stroke-dashoffset 0.6s ease;
+}
+
+.dj-progress-circle--success .dj-progress-circle__fill {
+  stroke: hsl(var(--success, 142 71% 45%));
+}
+
+.dj-progress-circle--warning .dj-progress-circle__fill {
+  stroke: hsl(var(--warning, 38 92% 50%));
+}
+
+.dj-progress-circle--danger .dj-progress-circle__fill {
+  stroke: hsl(var(--destructive, 0 84% 60%));
+}
+
+.dj-progress-circle__value {
+  fill: var(--dj-progress-circle-value-color, hsl(var(--foreground, 222 47% 11%)));
+  font-weight: 600;
+}
+
+/* ============================================================================
+   Status Indicator Component
+   ============================================================================ */
+
+.dj-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dj-status-indicator--sm {
+  gap: 0.375rem;
+}
+
+.dj-status-indicator--lg {
+  gap: 0.625rem;
+}
+
+.dj-status-indicator__dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.dj-status-indicator--sm .dj-status-indicator__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+}
+
+.dj-status-indicator--lg .dj-status-indicator__dot {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.dj-status-indicator--green .dj-status-indicator__dot {
+  background: var(--dj-status-indicator-green, hsl(var(--success, 142 71% 45%)));
+}
+
+.dj-status-indicator--yellow .dj-status-indicator__dot {
+  background: var(--dj-status-indicator-yellow, hsl(var(--warning, 38 92% 50%)));
+}
+
+.dj-status-indicator--red .dj-status-indicator__dot {
+  background: var(--dj-status-indicator-red, hsl(var(--destructive, 0 84% 60%)));
+}
+
+.dj-status-indicator--blue .dj-status-indicator__dot {
+  background: var(--dj-status-indicator-blue, hsl(var(--info, 217 91% 60%)));
+}
+
+.dj-status-indicator--gray .dj-status-indicator__dot {
+  background: hsl(var(--muted-foreground, 215 14% 46%));
+}
+
+.dj-status-indicator__label {
+  font-size: 0.875rem;
+  color: hsl(var(--foreground, 222 47% 11%));
+}
+
+.dj-status-indicator--sm .dj-status-indicator__label {
+  font-size: 0.75rem;
+}
+
+.dj-status-indicator--lg .dj-status-indicator__label {
+  font-size: 1rem;
+}
+
+.dj-status-indicator--pulse .dj-status-indicator__dot {
+  animation: dj-pulse 2s ease-in-out infinite;
+}
+
+/*
+ * When djust-theming is installed, it will provide CSS custom properties
+ * that these components can use:
+ *
+ * Colors:
+ *   --muted, --foreground (for Badge)
+ *   --success, --info, --warning, --danger (for variants)
+ *   --primary, --secondary (for Button)
+ *   --card-bg, --card-border (for Card)
+ *
+ * Spacing:
+ *   --space-1, --space-2, --space-3 (for padding)
+ *
+ * Radius:
+ *   --radius-sm, --radius-md, --radius-lg (for border-radius)
+ *
+ * This CSS uses fallbacks so components work without theming,
+ * but automatically pick up theme tokens when available.
+ */
+
+/* --- Avatar Group --- */
+.dj-avatar-group { display: flex; align-items: center; }
+.dj-avatar-group__item { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; border: 2px solid white; overflow: hidden; font-weight: 600; }
+.dj-avatar-group__item + .dj-avatar-group__item { margin-inline-start: -0.75rem; }
+.dj-avatar-group__img { width: 100%; height: 100%; object-fit: cover; }
+.dj-avatar-group__initials { font-size: 0.75em; text-transform: uppercase; }
+.dj-avatar-group__overflow { font-size: 0.7em; }
+.dj-avatar-group--sm .dj-avatar-group__item { width: 1.75rem; height: 1.75rem; }
+.dj-avatar-group--md .dj-avatar-group__item { width: 2.5rem; height: 2.5rem; }
+.dj-avatar-group--lg .dj-avatar-group__item { width: 3.25rem; height: 3.25rem; }
+
+/* --- Hover Card --- */
+.dj-hover-card { position: relative; display: inline-block; }
+.dj-hover-card__trigger { cursor: pointer; }
+.dj-hover-card__content { display: none; position: absolute; z-index: 50; border-radius: 0.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 0.75rem 1rem; max-width: 20rem; min-width: 12rem; }
+.dj-hover-card:hover .dj-hover-card__content { display: block; }
+.dj-hover-card--bottom .dj-hover-card__content { top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; }
+.dj-hover-card--top .dj-hover-card__content { bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 0.5rem; }
+
+/* --- Notification Popover --- */
+.dj-notif-popover { position: relative; display: inline-block; }
+.dj-notif-popover__bell { position: relative; background: none; border: none; cursor: pointer; }
+.dj-notif-popover__badge { position: absolute; top: -0.25rem; right: -0.25rem; min-width: 1.15rem; height: 1.15rem; font-size: 0.625rem; font-weight: 700; line-height: 1.15rem; text-align: center; border-radius: 9999px; background: hsl(var(--destructive, 0 84% 60%)); color: white; }
+.dj-notif-popover__panel { display: none; position: absolute; right: 0; top: 100%; margin-top: 0.5rem; width: 20rem; max-height: 24rem; overflow-y: auto; border-radius: 0.5rem; box-shadow: 0 4px 16px rgba(0,0,0,0.12); z-index: 50; }
+.dj-notif-popover--open .dj-notif-popover__panel { display: block; }
+.dj-notif-popover__header { padding: 0.75rem 1rem; font-weight: 600; }
+.dj-notif-popover__item { padding: 0.625rem 1rem; cursor: pointer; }
+.dj-notif-popover__item--read { opacity: 0.6; }
+
+/* --- Conversation Thread (classes) --- */
+.dj-chat-thread { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem; overflow-y: auto; }
+.dj-chat-msg { display: flex; gap: 0.5rem; align-items: flex-start; max-width: 80%; }
+.dj-chat-msg--user { align-self: flex-end; flex-direction: row-reverse; }
+.dj-chat-msg--ai { align-self: flex-start; }
+.dj-chat-avatar { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; min-width: 2rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+.dj-chat-avatar--hidden { visibility: hidden; }
+.dj-chat-bubble { border-radius: 0.75rem; padding: 0.5rem 0.75rem; }
+.dj-chat-typing { display: flex; gap: 0.25rem; padding: 0.25rem 0; }
+.dj-chat-typing__dot { width: 0.4rem; height: 0.4rem; border-radius: 9999px; background: currentColor; opacity: 0.4; }
+
+/* --- Thinking Indicator (classes) --- */
+.dj-thinking { display: inline-flex; align-items: center; gap: 0.5rem; }
+.dj-thinking__dots { display: inline-flex; gap: 0.2rem; }
+.dj-thinking__dot { width: 0.5rem; height: 0.5rem; border-radius: 9999px; background: currentColor; }
+.dj-thinking__pulse { width: 1rem; height: 1rem; border-radius: 9999px; background: currentColor; }
+.dj-thinking__cursor { width: 2px; height: 1.1em; background: currentColor; }
+.dj-thinking__spinner { width: 1rem; height: 1rem; border: 2px solid currentColor; border-top-color: transparent; border-radius: 9999px; }
+
+/* --- Multimodal Input (classes) --- */
+.dj-mminput { display: flex; align-items: flex-end; gap: 0.375rem; padding: 0.5rem; border: 1px solid; border-radius: 0.75rem; }
+.dj-mminput--disabled { opacity: 0.5; pointer-events: none; }
+.dj-mminput__text { flex: 1; border: none; outline: none; background: transparent; resize: none; font: inherit; min-height: 1.5em; max-height: 8rem; }
+.dj-mminput__btn { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: none; border-radius: 0.375rem; background: transparent; cursor: pointer; flex-shrink: 0; }
+
+/* --- Feedback Widget (classes) --- */
+.dj-feedback { display: inline-flex; align-items: center; gap: 0.25rem; }
+.dj-feedback__btn { display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; padding: 0.25rem; border-radius: 0.25rem; font-size: 1.125rem; }
+.dj-feedback__btn--active, .dj-feedback__star--active { font-weight: bold; }
+
+/* --- Approval Gate (classes) --- */
+.dj-approval { border: 1px solid; border-radius: var(--dj-approval-radius, 0.5rem); padding: 1rem; }
+.dj-approval--low { border-color: var(--dj-approval-low-color, hsl(var(--success, 142 71% 45%))); }
+.dj-approval--medium { border-color: var(--dj-approval-medium-color, hsl(var(--warning, 48 96% 53%))); }
+.dj-approval--high { border-color: var(--dj-approval-high-color, hsl(var(--warning, 24 95% 53%))); }
+.dj-approval--critical { border-color: var(--dj-approval-critical-color, hsl(var(--destructive, 0 84% 60%))); }
+.dj-approval__header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; font-weight: 600; }
+.dj-approval__icon { flex-shrink: 0; }
+.dj-approval--low .dj-approval__icon { color: var(--dj-approval-low-color, hsl(var(--success, 142 71% 45%))); }
+.dj-approval--medium .dj-approval__icon { color: var(--dj-approval-medium-color, hsl(var(--warning, 48 96% 53%))); }
+.dj-approval--high .dj-approval__icon { color: var(--dj-approval-high-color, hsl(var(--warning, 24 95% 53%))); }
+.dj-approval--critical .dj-approval__icon { color: var(--dj-approval-critical-color, hsl(var(--destructive, 0 84% 60%))); }
+.dj-approval__message { margin-bottom: 0.75rem; }
+.dj-approval__actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+.dj-approval__btn { padding: 0.375rem 0.75rem; border: 1px solid; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; font-weight: 500; }
+.dj-approval__btn--reject { background: transparent; }
+.dj-approval__btn--approve { color: white; }
+.dj-approval--low .dj-approval__btn--approve { background: var(--dj-approval-low-color, hsl(var(--success, 142 71% 45%))); border-color: var(--dj-approval-low-color, hsl(var(--success, 142 71% 45%))); }
+.dj-approval--medium .dj-approval__btn--approve { background: var(--dj-approval-medium-color, hsl(var(--warning, 48 96% 53%))); border-color: var(--dj-approval-medium-color, hsl(var(--warning, 48 96% 53%))); }
+.dj-approval--high .dj-approval__btn--approve { background: var(--dj-approval-high-color, hsl(var(--warning, 24 95% 53%))); border-color: var(--dj-approval-high-color, hsl(var(--warning, 24 95% 53%))); }
+.dj-approval--critical .dj-approval__btn--approve { background: var(--dj-approval-critical-color, hsl(var(--destructive, 0 84% 60%))); border-color: var(--dj-approval-critical-color, hsl(var(--destructive, 0 84% 60%))); }
+
+/* --- Source Citation (classes) --- */
+.dj-citation { position: relative; display: inline; }
+.dj-citation__marker { cursor: help; color: var(--dj-citation-color, hsl(var(--primary, 222 47% 51%))); font-weight: 600; font-size: 0.75em; }
+.dj-citation__popover { display: none; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; min-width: 12rem; max-width: 20rem; border-radius: var(--dj-citation-radius, 0.375rem); background: var(--dj-citation-popover-bg, #1f2937); color: var(--dj-citation-popover-color, #f9fafb); font-size: 0.75rem; line-height: 1.4; box-shadow: var(--dj-citation-popover-shadow, 0 4px 12px rgba(0,0,0,0.15)); z-index: 50; white-space: normal; }
+.dj-citation:hover .dj-citation__popover, .dj-citation:focus-within .dj-citation__popover { display: flex; flex-direction: column; gap: 0.25rem; }
+.dj-citation__title { font-weight: 600; }
+.dj-citation__url { color: var(--dj-citation-color, hsl(var(--primary, 222 47% 51%))); text-decoration: underline; word-break: break-all; }
+.dj-citation__relevance { opacity: 0.7; }
+
+/* --- Model Selector (classes) --- */
+.dj-model-sel { position: relative; }
+.dj-model-sel--disabled { opacity: 0.5; pointer-events: none; }
+.dj-model-sel__label { display: block; margin-bottom: 0.25rem; font-weight: 500; font-size: 0.875rem; }
+.dj-model-sel__trigger { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 0.375rem; cursor: pointer; min-height: 2.5rem; }
+.dj-model-sel__chevron { margin-left: 0.5rem; font-size: 0.75rem; }
+.dj-model-sel__placeholder { opacity: 0.5; }
+.dj-model-sel__dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; margin-top: 0.25rem; border: 1px solid; border-radius: 0.375rem; max-height: 16rem; overflow-y: auto; z-index: 50; }
+.dj-model-sel__opt { padding: 0.5rem 0.75rem; cursor: pointer; }
+.dj-model-sel__opt--active { font-weight: 600; }
+.dj-model-sel__info { display: flex; flex-direction: column; gap: 0.125rem; }
+.dj-model-sel__name { font-weight: 500; }
+.dj-model-sel__desc { font-size: 0.75rem; opacity: 0.7; }
+.dj-model-sel__meta { display: flex; align-items: center; gap: 0.5rem; font-size: 0.6875rem; }
+.dj-model-sel__ctx { opacity: 0.6; }
+.dj-model-sel__tier { padding: 0.0625rem 0.375rem; border-radius: 9999px; font-size: 0.625rem; font-weight: 600; text-transform: uppercase; }
+.dj-model-sel__tier--free { background: hsl(var(--success, 142 71% 45%) / 0.1); color: hsl(var(--success, 142 71% 45%)); }
+.dj-model-sel__tier--standard { background: hsl(var(--primary, 222 47% 51%) / 0.1); color: hsl(var(--primary, 222 47% 51%)); }
+.dj-model-sel__tier--premium { background: hsl(var(--warning, 48 96% 53%) / 0.1); color: hsl(var(--warning, 48 96% 53%)); }
+.dj-model-sel__tier--enterprise { background: hsl(var(--accent, 270 30% 96%)); color: hsl(var(--accent-foreground, 270 50% 11%)); }
+
+/* --- Token Counter (classes) --- */
+.dj-token { display: flex; flex-direction: column; gap: 0.25rem; }
+.dj-token__label { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.dj-token__track { height: var(--dj-token-height, 0.375rem); border-radius: var(--dj-token-radius, 9999px); background: var(--dj-token-bg, hsl(var(--muted, 220 13% 91%))); overflow: hidden; }
+.dj-token__bar { height: 100%; border-radius: inherit; transition: width 0.3s ease; }
+.dj-token--ok .dj-token__bar { background: var(--dj-token-ok-color, hsl(var(--success, 142 71% 45%))); }
+.dj-token--warn .dj-token__bar { background: var(--dj-token-warn-color, hsl(var(--warning, 48 96% 53%))); }
+.dj-token--danger .dj-token__bar { background: var(--dj-token-danger-color, hsl(var(--destructive, 0 84% 60%))); }
+
+/* --- Chat Bubble (classes) --- */
+.dj-bubble { display: flex; gap: 0.5rem; align-items: flex-start; max-width: 80%; }
+.dj-bubble--user { align-self: flex-end; flex-direction: row-reverse; }
+.dj-bubble--other { align-self: flex-start; }
+.dj-bubble__avatar { display: flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; min-width: 2.25rem; border-radius: 9999px; overflow: hidden; font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
+.dj-bubble__avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.dj-bubble__content { border-radius: 0.75rem; padding: 0.5rem 0.75rem; }
+.dj-bubble__header { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.125rem; }
+.dj-bubble__name { font-size: 0.75rem; font-weight: 600; }
+.dj-bubble__time { font-size: 0.75rem; opacity: 0.6; }
+.dj-bubble__text { font-size: 0.875rem; line-height: 1.625; white-space: pre-wrap; }
+.dj-bubble__footer { display: flex; justify-content: flex-end; margin-top: 0.125rem; }
+.dj-bubble__status { font-size: 0.625rem; opacity: 0.7; }
+
+/* --- Presence Avatars (classes) --- */
+.dj-presence { display: flex; align-items: center; }
+.dj-presence__item { position: relative; display: flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; border-radius: 9999px; border: 2px solid white; overflow: visible; font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
+.dj-presence__item + .dj-presence__item { margin-left: -0.5rem; }
+.dj-presence__img { width: 100%; height: 100%; object-fit: cover; border-radius: 9999px; }
+.dj-presence__dot { position: absolute; bottom: 0; right: 0; width: 0.5rem; height: 0.5rem; border-radius: 9999px; border: 1.5px solid white; }
+.dj-presence__dot--online { background: hsl(var(--success, 142 71% 45%)); }
+.dj-presence__dot--away { background: hsl(var(--warning, 48 96% 53%)); }
+.dj-presence__dot--busy { background: hsl(var(--destructive, 0 84% 60%)); }
+.dj-presence__dot--offline { background: hsl(var(--muted-foreground, 220 9% 46%)); }
+.dj-presence__overflow { font-size: 0.6875rem; font-weight: 600; }
+
+/* --- Mentions Input (classes) --- */
+.dj-mentions { position: relative; display: inline-block; width: 100%; }
+.dj-mentions--disabled { opacity: 0.5; pointer-events: none; }
+.dj-mentions__input { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 0.5rem; font: inherit; font-size: 0.875rem; outline: none; }
+.dj-mentions__dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; margin: 0; padding: 0.25rem 0; list-style: none; border: 1px solid; border-radius: 0.375rem; max-height: 12rem; overflow-y: auto; z-index: 50; }
+.dj-mentions__item { display: flex; align-items: center; gap: 0.5rem; padding: 0.375rem 0.75rem; cursor: pointer; }
+.dj-mentions__avatar { display: flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: 9999px; overflow: hidden; flex-shrink: 0; }
+.dj-mentions__avatar-img { width: 100%; height: 100%; object-fit: cover; }
+.dj-mentions__avatar-initials { font-size: 0.625rem; font-weight: 600; }
+.dj-mentions__name { font-size: 0.875rem; }
+
+/* --- Terminal (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Markdown Editor (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- JSON Viewer (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Log Viewer (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- File Tree (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Tour (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Cursors Overlay (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Live Indicator (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Collaborative Selection (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Activity Feed (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+/* --- Reactions (classes) --- */
+/* Shares styles from components.css — no additional class-only overrides needed */
+
+} /* end @layer djust-components */
