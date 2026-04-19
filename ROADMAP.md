@@ -499,11 +499,35 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 **#763 — hot-reload sends 14KB empty-patch message on unrelated file changes** — When a Python file changes that isn't the mounted view, hot-reload still broadcasts a 14 KB payload with `patches: []` + full `_debug` dump to every connected session. Bandwidth waste proportional to number of dev sessions. Early-return when computed patches are empty AND the trigger was a file change.
 
-### Milestone: v0.5.0 — Async Loading, Core Components, Streams & Package Consolidation
+### Milestone: v0.5.0 — Full Package Consolidation
 
-*Goal:* Ship the async data loading and core component primitives that production apps need. Scope intentionally trimmed — DX features (testing, error overlay, computed state) moved to v0.5.1. Begin the package consolidation work from ADR-007 by folding the two smallest runtime packages into core.
+*Goal:* Fold all five runtime packages into `djust` core as optional extras. One install, one version, one CHANGELOG. `pip install djust` stays lean; `pip install djust[all]` gets everything. Revised 2026-04-18 to include all packages in a single milestone (previously split across v0.5.0/v0.5.1/v0.5.2).
 
-**Package consolidation: fold `djust-auth` and `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md))** — Phase 1 of the three-phase consolidation. Move `djust_auth/` → `djust.auth` and `djust_tenants/` → `djust.tenants`, expose as `djust[auth]` / `djust[auth-oauth]` / `djust[tenants]` / `djust[tenants-redis]` / `djust[tenants-postgres]` extras. Ship final `djust-auth 0.4.0` and `djust-tenants 0.4.0` standalone releases as thin compat shims that re-export from the new locations with a `DeprecationWarning`. Smallest fold (670 + 1,900 LOC total), ~2-3 days of work. Proves out the migration process ahead of the larger `djust-theming` and `djust-components` folds in v0.5.1 and v0.5.2.
+**Package consolidation: fold all 5 runtime packages into djust core as extras ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md))** — Move each package's source into `python/djust/<name>/`, add `[project.optional-dependencies]` entries in pyproject.toml, update all internal imports, ship final standalone versions as thin compat shims with `DeprecationWarning`, update downstream consumers (djust.org, djustlive, demo_project). Tests merged into djust's suite with pytest markers.
+
+Execute in order (smallest → largest to amortize risk):
+
+1. **`djust-auth` → `djust[auth]`** (879 LOC, 13 files) — Django-generic auth mixins. Move to `python/djust/auth/`. Extra deps: none beyond Django. Shim: final `djust-auth` release re-exports from `djust.auth` with DeprecationWarning.
+
+2. **`djust-tenants` → `djust[tenants]`** (3,277 LOC, 21 files) — Multi-tenant schema isolation. Move to `python/djust/tenants/`. Sub-extras: `tenants-redis`, `tenants-postgres` for backend-specific deps. Currently has optional djust dep → becomes unconditional once inside core.
+
+3. **`djust-admin` → `djust[admin]`** (3,878 LOC, 23 files) — Admin UI extensions. Move to `python/djust/admin_ext/` (avoid collision with `django.contrib.admin`). Already depends on djust ≥0.3.0rc5.
+
+4. **`djust-theming` → `djust[theming]`** (49,105 LOC, 176 files) — CSS theming engine + design tokens. Move to `python/djust/theming/`. Currently Django-generic (no djust dep) → will gain implicit djust dep once inside core. Extra deps: any theming-specific packages (Sass, etc.).
+
+5. **`djust-components` → `djust[components]`** (99,681 LOC, 371 files) — Pre-built UI component library. Move to `python/djust/components/`. Largest fold (~100K LOC). Already depends on djust ≥0.3.0rc5. May have its own template tags, static assets, management commands — merge carefully. Check for Cargo.toml (Rust components?).
+
+Per-package checklist:
+- [ ] Create `python/djust/<name>/` in djust repo
+- [ ] Move source files preserving directory structure
+- [ ] Update all imports (`from djust_<name>` → `from djust.<name>`)
+- [ ] Add `[project.optional-dependencies] <name> = [...]` to pyproject.toml
+- [ ] Add `__all__` exports for backward compat
+- [ ] Ship final standalone version as compat shim with DeprecationWarning
+- [ ] Update downstream: djust.org, djustlive, demo_project
+- [ ] Merge test suite (pytest markers: `pytest -m auth`, `pytest -m components`, etc.)
+- [ ] CHANGELOG entry
+- [ ] Close open issues on old repo
 
 **`assign_async` / `AsyncResult` (promoted from v0.7.0)** — High-level async data loading inspired by Phoenix's `assign_async` and React's Suspense. Wrap a function in `assign_async()` — the template receives an `AsyncResult` with `.loading`, `.ok`, `.failed` states and renders accordingly. Multiple async assigns load concurrently. Auto-cancels on navigation. Nested async loading within components enables independent loading boundaries (one slow query doesn't block the entire page). *Promoted from v0.7.0 because this is the #1 pattern for building responsive dashboards — every panel loads independently with its own skeleton state. Without this, developers either block the entire mount on the slowest query or manually wire up `start_async` + loading flags for every data source. Phoenix added this in 0.19 and it immediately became the default pattern for all data loading.*
 
