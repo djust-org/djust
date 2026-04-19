@@ -1,10 +1,10 @@
 """
 Tests for derived context value sync correctness (#774).
 
-Verifies that container-typed context values (dicts, lists) computed in
-get_context_data() are always re-sent to Rust, even when the change tracker
-only detects direct attribute changes. This prevents stale renders when a
-handler changes an index/key and a derived dict/list changes as a result.
+Verifies that container-typed context values (dicts, lists) are tracked by
+value equality (not id()) so derived values are correctly detected as changed.
+Prevents stale renders when a handler changes an index/key and a computed
+dict/list changes as a result.
 """
 
 import pytest
@@ -194,16 +194,17 @@ class TestDerivedContextAutoDetection:
         html, _, _ = view._rust_view.render_with_diff()
         assert "Step A" in html
 
-    def test_force_full_html_still_works_as_escape_hatch(self):
-        """_force_full_html should still work as a belt-and-suspenders
-        escape hatch for edge cases we haven't anticipated."""
+    def test_unchanged_container_not_resent(self):
+        """When a container value hasn't changed, it should NOT be
+        re-sent to Rust (optimization preserved)."""
         view = _make_view(WizardView, WIZARD_TEMPLATE)
 
-        view.step_index = 1
+        # Change something unrelated — current_step should NOT be re-sent
+        view.step_index = 0  # Same as initial value
         view._changed_keys = {"step_index"}
-        view._force_full_html = True
         view._sync_state_to_rust()
         html, _, _ = view._rust_view.render_with_diff()
 
-        assert "Step B" in html
-        assert "Index: 1" in html
+        # Should still show Step A (no change)
+        assert "Step A" in html
+        assert "Index: 0" in html

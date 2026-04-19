@@ -363,13 +363,12 @@ class RustBridgeMixin:
                     # `self._products_cache`, or `completed_count` computed
                     # from `self.todos`).
                     #
-                    # Container types (dict, list, set, tuple) are ALWAYS
-                    # re-sent because id() is unreliable for them: CPython
-                    # address reuse after GC, persistent list lookups
-                    # returning the same object, etc. (#774). These are the
-                    # most common derived context values (computed dicts,
-                    # filtered lists) and the cost of re-serializing them
-                    # is small relative to the correctness risk.
+                    # Containers (dict, list, tuple) use VALUE equality
+                    # instead of id() because id() is unreliable for them:
+                    # CPython address reuse after GC, persistent list lookups
+                    # returning the same object, etc. (#774). Unchanged
+                    # containers are still skipped (previous values cached
+                    # in _prev_context_containers).
                     #
                     # Immutables use value equality (Python interns them).
                     # Other types use id() comparison as a last resort.
@@ -387,7 +386,11 @@ class RustBridgeMixin:
                             # Containers: compare by VALUE, not id(). id() is
                             # unreliable for derived containers due to CPython
                             # address reuse and persistent-list lookups (#774).
-                            if prev_containers.get(key, _MISSING) != value:
+                            try:
+                                changed = prev_containers.get(key, _MISSING) != value
+                            except (TypeError, ValueError):
+                                changed = True  # Broken __eq__ → assume changed
+                            if changed:
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             # Immutable: compare by value to catch derived
@@ -410,7 +413,11 @@ class RustBridgeMixin:
                         elif getattr(value, "_dirty", False):
                             context[key] = value  # TypedState dirty flag
                         elif isinstance(value, (dict, list, tuple)):
-                            if prev_containers.get(key, _MISSING) != value:
+                            try:
+                                changed = prev_containers.get(key, _MISSING) != value
+                            except (TypeError, ValueError):
+                                changed = True
+                            if changed:
                                 context[key] = value
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
