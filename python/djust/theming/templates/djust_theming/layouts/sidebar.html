@@ -1,0 +1,14 @@
+{% extends "djust_theming/layouts/base.html" %}
+
+{% block body_class %}layout-sidebar{% endblock %}
+
+{% block content %}
+<div class="layout-sidebar__container">
+  <aside class="layout-sidebar__aside" role="navigation" aria-label="Sidebar">
+    {% block sidebar %}{% endblock %}
+  </aside>
+  <main class="layout-sidebar__main">
+    {% block sidebar_content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}

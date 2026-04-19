@@ -1,0 +1,11 @@
+<div class="{{ css_prefix }}page-error {{ css_prefix }}page-500 {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    <div class="{{ css_prefix }}page-error-code">500</div>
+    <h1 class="{{ css_prefix }}page-title">{{ title }}</h1>
+    <p class="{{ css_prefix }}page-description">{{ description }}</p>
+    <div class="{{ css_prefix }}page-actions">
+        {% if retry_url %}
+        <a href="{{ retry_url }}" class="{{ css_prefix }}btn {{ css_prefix }}btn-primary {{ css_prefix }}btn-md">Try again</a>
+        {% endif %}
+        <a href="{{ home_url }}" class="{{ css_prefix }}btn {{ css_prefix }}btn-secondary {{ css_prefix }}btn-md">Go home</a>
+    </div>
+</div>

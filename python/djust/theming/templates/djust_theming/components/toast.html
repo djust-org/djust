@@ -1,0 +1,21 @@
+<div class="{{ css_prefix }}toast {{ css_prefix }}toast-{{ variant }} {{ css_prefix }}toast-{{ position }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     role="status"
+     aria-live="polite"
+     data-theme-toast
+     data-duration="{{ duration }}"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <div class="{{ css_prefix }}toast-content">
+        {% if slot_message %}{{ slot_message|safe }}{% else %}<div class="{{ css_prefix }}toast-message">{{ message }}</div>{% endif %}
+    </div>
+    {% if slot_actions %}
+    <div class="{{ css_prefix }}toast-actions">
+        {{ slot_actions|safe }}
+    </div>
+    {% endif %}
+    <button class="{{ css_prefix }}toast-close" onclick="this.parentElement.remove()" aria-label="Dismiss">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+    </button>
+</div>

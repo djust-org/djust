@@ -1,0 +1,35 @@
+<nav class="{{ css_prefix }}sidebar {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     role="navigation"
+     aria-label="Sidebar"
+     data-theme-sidebar-collapse
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    {% if slot_header %}
+    <div class="{{ css_prefix }}sidebar-header">{{ slot_header|safe }}</div>
+    {% endif %}
+
+    {% if slot_sections %}
+        {{ slot_sections|safe }}
+    {% else %}
+        {% for section in sections %}
+        <div class="{{ css_prefix }}sidebar-section">
+            {% if section.title %}
+            <h3 class="{{ css_prefix }}sidebar-title">{{ section.title }}</h3>
+            {% endif %}
+            <div class="{{ css_prefix }}sidebar-menu">
+                {% for item in section.items %}
+                <a href="{{ item.url }}" class="{{ css_prefix }}sidebar-item{% if item.active %} active{% endif %}"
+                   {% if item.active %}aria-current="page"{% endif %}>
+                    {% if item.icon %}<span class="{{ css_prefix }}sidebar-item-icon">{{ item.icon }}</span>{% endif %}
+                    {{ item.label }}
+                    {% if item.badge %}<span class="{{ css_prefix }}sidebar-item-count">{{ item.badge }}</span>{% endif %}
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    {% endif %}
+
+    {% if slot_footer %}
+    <div class="{{ css_prefix }}sidebar-footer">{{ slot_footer|safe }}</div>
+    {% endif %}
+</nav>

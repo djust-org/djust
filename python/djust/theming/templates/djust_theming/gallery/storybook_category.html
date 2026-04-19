@@ -1,0 +1,42 @@
+{% extends "djust_theming/gallery/storybook_base.html" %}
+
+{% block title %}{{ category }} — Component Storybook{% endblock %}
+
+{% block content %}
+<nav class="sb-breadcrumb">
+  <a href="{% url 'djust_theming:storybook' %}">Storybook</a> <span>/</span> <span>{{ category }}</span>
+</nav>
+
+<div style="margin-bottom: 1.5rem;">
+  <h1 class="sb-comp-title">{{ category }}</h1>
+  <p style="color: hsl(var(--muted-foreground)); margin: 0;">
+    {{ category_components|length }} component{{ category_components|length|pluralize }} in this category.
+  </p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem;">
+  {% for comp in category_components %}
+  <a href="{% url 'djust_theming:storybook_detail' comp.name %}" class="sb-section"
+    style="text-decoration: none; color: inherit; display: block; transition: box-shadow 0.15s, border-color 0.15s;">
+    <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 0.4rem;">
+      <h2 style="margin: 0; font-size: 1rem; color: hsl(var(--foreground));">
+        {{ comp.display_name }}
+      </h2>
+      <span style="font-size: 0.625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.15rem 0.5rem; border-radius: 9999px; white-space: nowrap; margin-left: 0.5rem;
+        {% if comp.component_type == 'template' %}
+          background: hsl(var(--primary, 222 47% 51%) / 0.12); color: hsl(var(--primary, 222 47% 51%));
+        {% else %}
+          background: hsl(var(--muted, 220 13% 91%) / 0.5); color: hsl(var(--muted-foreground));
+        {% endif %}
+      ">
+        {% if comp.component_type == 'template' %}template{% else %}python{% endif %}
+      </span>
+    </div>
+    <div class="sb-comp-meta" style="margin-bottom: 0;">
+      {% if comp.example_count %}<span style="font-size: 0.6875rem; color: hsl(var(--muted-foreground));">{{ comp.example_count }} example{{ comp.example_count|pluralize }}</span>{% endif %}
+      {% if comp.a11y_count %}<span style="font-size: 0.6875rem; color: hsl(var(--muted-foreground));">{{ comp.a11y_count }} a11y</span>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

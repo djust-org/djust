@@ -1,0 +1,5 @@
+{% load theme_form_tags %}{% get_css_prefix as prefix %}<select name="{{ widget.name }}" class="{{ prefix }}theme-select{% if widget.attrs.class %} {{ widget.attrs.class }}{% endif %}"{% for name, value in widget.attrs.items %}{% if name != "class" %}{% if value is not False %} {{ name }}{% if value is not True %}="{{ value|stringformat:'s' }}"{% endif %}{% endif %}{% endif %}{% endfor %}>{% for group_name, group_choices, group_index in widget.optgroups %}{% if group_name %}
+  <optgroup label="{{ group_name }}">{% endif %}{% for option in group_choices %}
+  {% include option.template_name with widget=option %}{% endfor %}{% if group_name %}
+  </optgroup>{% endif %}{% endfor %}
+</select>

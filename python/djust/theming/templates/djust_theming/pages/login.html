@@ -1,0 +1,42 @@
+<div class="{{ css_prefix }}card {{ css_prefix }}page-login {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    <div class="{{ css_prefix }}card-header">
+        <h1 class="{{ css_prefix }}card-title {{ css_prefix }}page-title">{{ title }}</h1>
+    </div>
+    <div class="{{ css_prefix }}card-body">
+        <form method="post"{% if action %} action="{{ action }}"{% endif %}>
+            {% if csrf_token %}<input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}" />{% endif %}
+            <div class="{{ css_prefix }}page-form-fields">
+                <div class="{{ css_prefix }}input-group">
+                    <label for="email" class="{{ css_prefix }}input-label">Email</label>
+                    <input type="email" name="email" id="email" class="{{ css_prefix }}input" placeholder="you@example.com" required />
+                </div>
+                <div class="{{ css_prefix }}input-group">
+                    <label for="password" class="{{ css_prefix }}input-label">Password</label>
+                    <input type="password" name="password" id="password" class="{{ css_prefix }}input" placeholder="Enter your password" required />
+                </div>
+                <div class="{{ css_prefix }}page-form-options">
+                    <div class="{{ css_prefix }}checkbox-group">
+                        <input type="checkbox" name="remember" id="remember" class="{{ css_prefix }}checkbox" />
+                        <label for="remember" class="{{ css_prefix }}checkbox-label">Remember me</label>
+                    </div>
+                    {% if forgot_password_url %}
+                    <a href="{{ forgot_password_url }}" class="{{ css_prefix }}page-link">Forgot password?</a>
+                    {% endif %}
+                </div>
+                <button type="submit" class="{{ css_prefix }}btn {{ css_prefix }}btn-primary {{ css_prefix }}btn-md {{ css_prefix }}page-btn-full">Sign in</button>
+            </div>
+        </form>
+        {% if slot_social %}
+        <div class="{{ css_prefix }}page-social">
+            {{ slot_social|safe }}
+        </div>
+        {% endif %}
+    </div>
+    <div class="{{ css_prefix }}card-footer">
+        {% if slot_footer %}
+        {{ slot_footer|safe }}
+        {% elif register_url %}
+        <p class="{{ css_prefix }}page-footer-text">Don't have an account? <a href="{{ register_url }}">Register</a></p>
+        {% endif %}
+    </div>
+</div>

@@ -1,0 +1,320 @@
+{% load theme_tags theme_components static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Theme Gallery</title>
+  {% theme_head include_js=True %}
+  <style data-djust-theme-gallery>{{ gallery_preset_css }}</style>
+<style>
+    /* ===== Gallery topbar ===== */
+    .gallery-topbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+      height: 3rem;
+      background: hsl(var(--surface-1, var(--background, 0 0% 100%)));
+      border-bottom: 1px solid hsl(var(--border, 220 13% 91%));
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0 1rem;
+      font-size: 0.875rem;
+    }
+    .gallery-topbar a { color: hsl(var(--muted-foreground, 220 9% 46%)); text-decoration: none; transition: color 0.15s; }
+    .gallery-topbar a:hover { color: hsl(var(--foreground, 222 47% 11%)); }
+    .gallery-topbar-brand { font-weight: 700; color: hsl(var(--foreground, 222 47% 11%)) !important; }
+    .gallery-topbar-sep { color: hsl(var(--muted-foreground)); opacity: 0.3; }
+    .gallery-topbar-active { color: hsl(var(--foreground, 222 47% 11%)) !important; }
+    /* ===== Gallery layout ===== */
+    .gallery__header { margin-bottom: 2rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .gallery__header h1 { margin: 0; font-size: 1.75rem; }
+    .gallery__preset-form { display: flex; align-items: center; gap: 0.5rem; margin-inline-start: auto; }
+    .gallery__section { margin-bottom: 3rem; }
+    .gallery__section h2 { font-size: 1.25rem; border-bottom: 1px solid hsl(var(--border, 220 13% 91%)); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+    .gallery__examples { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+    .gallery__example { display: flex; flex-direction: column; gap: 0.25rem; }
+    .gallery__example-label { font-size: 0.75rem; color: hsl(var(--muted-foreground, 220 9% 46%)); }
+    .gallery__wide { width: 100%; }
+    .gallery { max-width: 1200px; margin: 0 auto; padding: 2rem 1rem; padding-top: calc(3rem + 2rem); }
+    /* Toast demos: render inline instead of as fixed-position overlays */
+    .gallery__section .toast { position: static; margin-bottom: 0.5rem; }
+</style>
+</head>
+<body style="background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 222 47% 11%));">
+
+<nav class="gallery-topbar">
+  <a href="/" class="gallery-topbar-brand">djust-theming</a>
+  <span class="gallery-topbar-sep">|</span>
+  <a href="/">Demo Home</a>
+  <a href="/components/">Components</a>
+  <span class="gallery-topbar-sep">|</span>
+  <a href="{% url 'djust_theming:gallery' %}" class="gallery-topbar-active">Gallery</a>
+  <a href="{% url 'djust_theming:storybook' %}">Storybook</a>
+  <a href="{% url 'djust_theming:editor' %}">Editor</a>
+  <a href="{% url 'djust_theming:diff' %}">Diff</a>
+</nav>
+
+<div class="gallery">
+    <div class="gallery__header">
+      <h1>Theme Gallery</h1>
+      <form class="gallery__preset-form" method="get">
+        <label for="preset-select">Preset:</label>
+        <select id="preset-select" name="preset" onchange="this.form.submit()">
+          {% for preset in presets %}
+          <option value="{{ preset.name }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+
+    {# ---- Button ---- #}
+    <section class="gallery__section" id="button">
+      <h2>Button</h2>
+      <h3>Variants</h3>
+      <div class="gallery__examples">
+        {% theme_button "Primary" variant="primary" %}
+        {% theme_button "Secondary" variant="secondary" %}
+        {% theme_button "Destructive" variant="destructive" %}
+        {% theme_button "Ghost" variant="ghost" %}
+        {% theme_button "Link" variant="link" %}
+      </div>
+      <h3>Sizes</h3>
+      <div class="gallery__examples">
+        {% theme_button "Small (sm)" variant="primary" size="sm" %}
+        {% theme_button "Medium (md)" variant="primary" size="md" %}
+        {% theme_button "Large (lg)" variant="primary" size="lg" %}
+      </div>
+    </section>
+
+    {# ---- Card ---- #}
+    <section class="gallery__section" id="card">
+      <h2>Card</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_card title="Card Title" footer="Card footer" %}
+        {% theme_card title="No Footer" %}
+      </div>
+    </section>
+
+    {# ---- Alert ---- #}
+    <section class="gallery__section" id="alert">
+      <h2>Alert</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_alert "This is a default alert." variant="default" title="Default" %}
+        {% theme_alert "Operation successful!" variant="success" title="Success" %}
+        {% theme_alert "Please be careful." variant="warning" title="Warning" %}
+        {% theme_alert "Something went wrong." variant="destructive" title="Destructive" %}
+        {% theme_alert "This alert can be dismissed." variant="default" dismissible=True %}
+      </div>
+    </section>
+
+    {# ---- Badge ---- #}
+    <section class="gallery__section" id="badge">
+      <h2>Badge</h2>
+      <div class="gallery__examples">
+        {% theme_badge "Default" variant="default" %}
+        {% theme_badge "Secondary" variant="secondary" %}
+        {% theme_badge "Success" variant="success" %}
+        {% theme_badge "Warning" variant="warning" %}
+        {% theme_badge "Destructive" variant="destructive" %}
+      </div>
+    </section>
+
+    {# ---- Input ---- #}
+    <section class="gallery__section" id="input">
+      <h2>Input</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_input "gallery_text" label="Text Input" placeholder="Enter text..." type="text" %}
+        {% theme_input "gallery_email" label="Email" placeholder="you@example.com" type="email" %}
+        {% theme_input "gallery_password" label="Password" placeholder="Enter password" type="password" %}
+      </div>
+    </section>
+
+    {# ---- Modal ---- #}
+    <section class="gallery__section" id="modal">
+      <h2>Modal</h2>
+      <div class="gallery__examples">
+        <div class="gallery__example">
+          <span class="gallery__example-label">sm</span>
+          <button data-theme-modal-open="gallery-modal-sm">Open Small Modal</button>
+          {% theme_modal id="gallery-modal-sm" title="Small Modal" size="sm" %}
+        </div>
+        <div class="gallery__example">
+          <span class="gallery__example-label">md</span>
+          <button data-theme-modal-open="gallery-modal-md">Open Medium Modal</button>
+          {% theme_modal id="gallery-modal-md" title="Medium Modal" size="md" %}
+        </div>
+        <div class="gallery__example">
+          <span class="gallery__example-label">lg</span>
+          <button data-theme-modal-open="gallery-modal-lg">Open Large Modal</button>
+          {% theme_modal id="gallery-modal-lg" title="Large Modal" size="lg" %}
+        </div>
+      </div>
+    </section>
+
+    {# ---- Dropdown ---- #}
+    <section class="gallery__section" id="dropdown">
+      <h2>Dropdown</h2>
+      <div class="gallery__examples">
+        {% theme_dropdown id="gallery-dd-left" label="Dropdown (left)" align="left" %}
+        {% theme_dropdown id="gallery-dd-right" label="Dropdown (right)" align="right" %}
+      </div>
+    </section>
+
+    {# ---- Tabs ---- #}
+    <section class="gallery__section" id="tabs">
+      <h2>Tabs</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_tabs id="gallery-tabs" tabs=tab_data active=0 %}
+      </div>
+    </section>
+
+    {# ---- Table ---- #}
+    <section class="gallery__section" id="table">
+      <h2>Table</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_table headers=table_headers rows=table_rows variant="default" caption="Default Table" %}
+        {% theme_table headers=table_headers rows=table_rows variant="striped" caption="Striped Table" %}
+        {% theme_table headers=table_headers rows=table_rows variant="hover" caption="Hover Table" %}
+      </div>
+    </section>
+
+    {# ---- Pagination ---- #}
+    <section class="gallery__section" id="pagination">
+      <h2>Pagination</h2>
+      <div class="gallery__examples">
+        {% theme_pagination current_page=3 total_pages=10 url_pattern="?page={}" %}
+      </div>
+    </section>
+
+    {# ---- Select ---- #}
+    <section class="gallery__section" id="select">
+      <h2>Select</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_select "gallery_select" label="Select Field" options=select_options placeholder="Choose..." %}
+      </div>
+    </section>
+
+    {# ---- Textarea ---- #}
+    <section class="gallery__section" id="textarea">
+      <h2>Textarea</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_textarea "gallery_textarea" label="Textarea" placeholder="Write something..." rows=4 %}
+      </div>
+    </section>
+
+    {# ---- Checkbox ---- #}
+    <section class="gallery__section" id="checkbox">
+      <h2>Checkbox</h2>
+      <div class="gallery__examples">
+        {% theme_checkbox "gallery_cb1" label="Accept terms" description="You agree to our terms." %}
+        {% theme_checkbox "gallery_cb2" label="Subscribe to newsletter" %}
+      </div>
+    </section>
+
+    {# ---- Radio ---- #}
+    <section class="gallery__section" id="radio">
+      <h2>Radio</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_radio "gallery_radio" label="Choose a size" options=radio_options selected="md" %}
+      </div>
+    </section>
+
+    {# ---- Breadcrumb ---- #}
+    <section class="gallery__section" id="breadcrumb">
+      <h2>Breadcrumb</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_breadcrumb items=breadcrumb_items separator="/" %}
+        {% theme_breadcrumb items=breadcrumb_items separator=">" %}
+      </div>
+    </section>
+
+    {# ---- Avatar ---- #}
+    <section class="gallery__section" id="avatar">
+      <h2>Avatar</h2>
+      <div class="gallery__examples">
+        {% theme_avatar name="Jane Doe" size="sm" %}
+        {% theme_avatar name="Jane Doe" size="md" %}
+        {% theme_avatar name="Jane Doe" size="lg" %}
+      </div>
+    </section>
+
+    {# ---- Toast ---- #}
+    <section class="gallery__section" id="toast">
+      <h2>Toast</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_toast "Success toast" variant="success" %}
+        {% theme_toast "Warning toast" variant="warning" %}
+        {% theme_toast "Error toast" variant="error" %}
+        {% theme_toast "Info toast" variant="info" %}
+      </div>
+    </section>
+
+    {# ---- Progress ---- #}
+    <section class="gallery__section" id="progress">
+      <h2>Progress</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_progress value=25 max=100 label="25%" %}
+        {% theme_progress value=50 max=100 label="50%" %}
+        {% theme_progress value=75 max=100 label="75%" %}
+        {% theme_progress value=100 max=100 label="100%" %}
+        {% theme_progress label="Indeterminate" %}
+      </div>
+    </section>
+
+    {# ---- Skeleton ---- #}
+    <section class="gallery__section" id="skeleton">
+      <h2>Skeleton</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_skeleton variant="text" width="200px" height="1rem" %}
+        {% theme_skeleton variant="circle" width="3rem" height="3rem" %}
+        {% theme_skeleton variant="rect" width="100%" height="6rem" %}
+      </div>
+    </section>
+
+    {# ---- Tooltip ---- #}
+    <section class="gallery__section" id="tooltip">
+      <h2>Tooltip</h2>
+      <div class="gallery__examples">
+        {% theme_tooltip "Top tooltip" position="top" slot_content="<button>Hover (top)</button>" %}
+        {% theme_tooltip "Bottom tooltip" position="bottom" slot_content="<button>Hover (bottom)</button>" %}
+        {% theme_tooltip "Left tooltip" position="left" slot_content="<button>Hover (left)</button>" %}
+        {% theme_tooltip "Right tooltip" position="right" slot_content="<button>Hover (right)</button>" %}
+      </div>
+    </section>
+
+    {# ---- Nav Item ---- #}
+    <section class="gallery__section" id="nav_item">
+      <h2>Nav Item</h2>
+      <div class="gallery__examples">
+        {% theme_nav_item "Home" "/" active=True %}
+        {% theme_nav_item "About" "/about/" active=False %}
+        {% theme_nav_item "Inbox" "/inbox/" badge="5" %}
+      </div>
+    </section>
+
+    {# ---- Nav Group ---- #}
+    <section class="gallery__section" id="nav_group">
+      <h2>Nav Group</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_nav_group "Admin" items=nav_group_items expanded=True %}
+        {% theme_nav_group "Collapsed" items=nav_group_items expanded=False %}
+      </div>
+    </section>
+
+    {# ---- Nav ---- #}
+    <section class="gallery__section" id="nav">
+      <h2>Nav</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_nav brand="MyApp" items=nav_items %}
+      </div>
+    </section>
+
+    {# ---- Sidebar Nav ---- #}
+    <section class="gallery__section" id="sidebar_nav">
+      <h2>Sidebar Nav</h2>
+      <div class="gallery__examples gallery__wide">
+        {% theme_sidebar_nav sections=sidebar_sections %}
+      </div>
+    </section>
+
+</div>
+</body>
+</html>

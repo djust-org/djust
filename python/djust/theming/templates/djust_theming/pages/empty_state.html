@@ -1,0 +1,14 @@
+<div class="{{ css_prefix }}page-utility {{ css_prefix }}page-empty-state {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    {% if slot_icon %}
+    <div class="{{ css_prefix }}page-icon">
+        {{ slot_icon|safe }}
+    </div>
+    {% endif %}
+    <h2 class="{{ css_prefix }}page-title">{{ title }}</h2>
+    <p class="{{ css_prefix }}page-description">{{ description }}</p>
+    {% if cta_text and cta_url %}
+    <div class="{{ css_prefix }}page-actions">
+        <a href="{{ cta_url }}" class="{{ css_prefix }}btn {{ css_prefix }}btn-primary {{ css_prefix }}btn-md">{{ cta_text }}</a>
+    </div>
+    {% endif %}
+</div>

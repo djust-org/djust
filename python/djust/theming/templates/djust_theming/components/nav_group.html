@@ -1,0 +1,21 @@
+<details class="{{ css_prefix }}nav-group {% if attrs.class %}{{ attrs.class }}{% endif %}"
+         {% if expanded %}open=""{% endif %}
+         {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <summary class="{{ css_prefix }}sidebar-title">
+        {% if icon %}<span class="{{ css_prefix }}nav-group-icon">{{ icon }}</span>{% endif %}
+        {% if slot_label %}{{ slot_label|safe }}{% else %}{{ label }}{% endif %}
+    </summary>
+    <div class="{{ css_prefix }}sidebar-menu">
+        {% if slot_items %}
+            {{ slot_items|safe }}
+        {% else %}
+            {% for item in items %}
+            <a href="{{ item.url }}" class="{{ css_prefix }}sidebar-item">
+                {% if item.icon %}<span class="{{ css_prefix }}nav-item-icon">{{ item.icon }}</span>{% endif %}
+                {{ item.label }}
+                {% if item.badge %}<span class="{{ css_prefix }}sidebar-item-count">{{ item.badge }}</span>{% endif %}
+            </a>
+            {% endfor %}
+        {% endif %}
+    </div>
+</details>

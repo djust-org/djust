@@ -1,0 +1,32 @@
+<div class="{{ css_prefix }}alert {{ css_prefix }}alert-{{ variant }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     role="alert"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    {% if slot_icon %}
+    <div class="{{ css_prefix }}alert-icon">
+        {{ slot_icon|safe }}
+    </div>
+    {% endif %}
+    <div class="{{ css_prefix }}alert-content">
+        {% if title %}
+        <div class="{{ css_prefix }}alert-title">{{ title }}</div>
+        {% endif %}
+        {% if slot_message %}{{ slot_message|safe }}{% else %}<div class="{{ css_prefix }}alert-message">{{ message }}</div>{% endif %}
+    </div>
+    {% if slot_actions %}
+    <div class="{{ css_prefix }}alert-actions">
+        {{ slot_actions|safe }}
+    </div>
+    {% endif %}
+    {% if dismissible %}
+        {% if slot_dismiss %}
+        {{ slot_dismiss|safe }}
+        {% else %}
+        <button class="{{ css_prefix }}alert-dismiss" onclick="this.parentElement.remove()" aria-label="Dismiss">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+        {% endif %}
+    {% endif %}
+</div>

@@ -1,0 +1,27 @@
+<div class="{{ css_prefix }}textarea-group {% if attrs.class %}{{ attrs.class }}{% endif %}">
+    {% if slot_label %}
+    {{ slot_label|safe }}
+    {% elif label %}
+    <label for="{{ name }}" class="{{ css_prefix }}textarea-label">{{ label }}</label>
+    {% endif %}
+    {% if slot_textarea %}
+    {{ slot_textarea|safe }}
+    {% else %}
+    <textarea
+        name="{{ name }}"
+        id="{{ name }}"
+        placeholder="{{ placeholder }}"
+        rows="{{ rows }}"
+        class="{{ css_prefix }}textarea"
+        {% if attrs.required %}required{% endif %}
+        {% if attrs.disabled %}disabled{% endif %}
+        {% if attrs.readonly %}readonly{% endif %}
+    >{% if attrs.value %}{{ attrs.value }}{% endif %}</textarea>
+    {% endif %}
+    {% if slot_help_text %}
+    <div class="{{ css_prefix }}textarea-help">{{ slot_help_text|safe }}</div>
+    {% endif %}
+    {% if slot_error %}
+    <div class="{{ css_prefix }}textarea-error" role="alert">{{ slot_error|safe }}</div>
+    {% endif %}
+</div>

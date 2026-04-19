@@ -1,0 +1,23 @@
+<div class="{{ css_prefix }}dropdown {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     data-theme-dropdown="{{ id }}"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    {% if slot_trigger %}
+    {{ slot_trigger|safe }}
+    {% else %}
+    <button class="{{ css_prefix }}dropdown-trigger"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="{{ id }}-menu">
+        {{ label }}
+        <svg class="{{ css_prefix }}dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m6 9 6 6 6-6"/>
+        </svg>
+    </button>
+    {% endif %}
+    <div class="{{ css_prefix }}dropdown-menu {{ css_prefix }}dropdown-{{ align }}"
+         id="{{ id }}-menu"
+         role="menu"
+         style="display:none;">
+        {% if slot_menu %}{{ slot_menu|safe }}{% endif %}
+    </div>
+</div>

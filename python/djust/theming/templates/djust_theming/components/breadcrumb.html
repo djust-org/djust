@@ -1,0 +1,20 @@
+<nav class="{{ css_prefix }}breadcrumb {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     aria-label="Breadcrumb"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <ol class="{{ css_prefix }}breadcrumb-list">
+        {% for item in items %}
+        <li class="{{ css_prefix }}breadcrumb-item">
+            {% if not forloop.last %}
+            <a href="{{ item.url }}" class="{{ css_prefix }}breadcrumb-link">{{ item.label }}</a>
+            {% if slot_separator %}
+            <span class="{{ css_prefix }}breadcrumb-separator" aria-hidden="true">{{ slot_separator|safe }}</span>
+            {% else %}
+            <span class="{{ css_prefix }}breadcrumb-separator" aria-hidden="true">{{ separator }}</span>
+            {% endif %}
+            {% else %}
+            <span class="{{ css_prefix }}breadcrumb-current" aria-current="page">{{ item.label }}</span>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ol>
+</nav>

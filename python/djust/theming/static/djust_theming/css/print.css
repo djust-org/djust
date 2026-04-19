@@ -1,0 +1,116 @@
+/*
+ * djust_theming - Print Stylesheet
+ * Optimizes page output for printing: hides interactive elements,
+ * forces readable colors, displays link URLs, and controls page breaks.
+ */
+
+@media print {
+  /* ============================================
+     1. Hide Non-Printable Elements
+     ============================================ */
+
+  .sidebar,
+  .navbar,
+  .navbar-inner,
+  .theme-switcher,
+  .theme-mode-btn,
+  .theme-preset-select,
+  .toast,
+  .toast-container,
+  .modal-overlay,
+  .modal-content,
+  button[type="button"],
+  [data-theme-sidebar-collapse] ~ .sidebar-toggle,
+  .floating-element {
+    display: none !important;
+  }
+
+  /* ============================================
+     2. Force Readable Colors
+     ============================================ */
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  a,
+  .link {
+    color: #000 !important;
+    text-decoration: underline !important;
+  }
+
+  h1, h2, h3, h4, h5, h6,
+  .h1, .h2, .h3, .h4, .h5, .h6 {
+    color: #000 !important;
+  }
+
+  .text-muted-foreground {
+    color: #333 !important;
+  }
+
+  /* ============================================
+     3. Remove Visual Effects
+     ============================================ */
+
+  *,
+  *::before,
+  *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .card-theme,
+  .card,
+  .bg-card {
+    border: 1px solid #ccc !important;
+    background: #fff !important;
+  }
+
+  /* ============================================
+     4. Display Link URLs
+     ============================================ */
+
+  a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    color: #555;
+  }
+
+  /* Don't show URLs for anchors or javascript links */
+  a[href^="#"]::after,
+  a[href^="javascript:"]::after {
+    content: "";
+  }
+
+  /* ============================================
+     5. Page Break Control
+     ============================================ */
+
+  h2, h3, .h2, .h3 {
+    page-break-after: avoid;
+  }
+
+  img, svg, .card, .card-theme {
+    page-break-inside: avoid;
+  }
+
+  table, pre, blockquote {
+    page-break-inside: avoid;
+  }
+
+  /* ============================================
+     6. Layout Adjustments
+     ============================================ */
+
+  .main-content,
+  .layout-content,
+  .layout-centered-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}

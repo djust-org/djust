@@ -1,0 +1,115 @@
+{% extends "djust_theming/gallery/storybook_base.html" %}
+
+{% block title %}Component Storybook{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 1.5rem;">
+  <h1 class="sb-comp-title">Component Storybook</h1>
+  <p style="color: hsl(var(--muted-foreground)); margin: 0;">
+    Auto-generated documentation for all {{ total_count }} theme components.
+    Click a component to see its contract, template source, and variants.
+  </p>
+</div>
+
+<div class="sb-section" style="padding: 0.75rem 1.25rem; margin-bottom: 1.5rem;">
+  <span style="font-size: 0.8125rem; color: hsl(var(--muted-foreground));">
+    <strong style="color: hsl(var(--foreground));">{{ total_count }}</strong> components across
+    <strong style="color: hsl(var(--foreground));">{{ components_by_category|length }}</strong> categories
+  </span>
+</div>
+
+{# Category filter buttons #}
+<div id="sb-category-filters" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
+  <button class="sb-cat-btn sb-cat-btn-active" data-category="all"
+    style="padding: 0.375rem 0.875rem; border-radius: 9999px; font-size: 0.8125rem; border: 1px solid hsl(var(--border)); background: hsl(var(--primary, 222 47% 51%)); color: #fff; cursor: pointer; font-weight: 500; transition: all 0.15s;">
+    All ({{ total_count }})
+  </button>
+  {% for cat_group in components_by_category %}
+  <button class="sb-cat-btn" data-category="{{ cat_group.category }}"
+    style="padding: 0.375rem 0.875rem; border-radius: 9999px; font-size: 0.8125rem; border: 1px solid hsl(var(--border)); background: hsl(var(--surface-1, var(--background))); color: hsl(var(--muted-foreground)); cursor: pointer; transition: all 0.15s;">
+    {{ cat_group.category }} ({{ cat_group.count }})
+  </button>
+  {% endfor %}
+</div>
+
+{# Component grid #}
+<div id="sb-component-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem;">
+  {% for comp in components %}
+  <a href="{{ comp.name }}/" class="sb-section sb-comp-card" data-category="{{ comp.category }}"
+    style="text-decoration: none; color: inherit; display: block; transition: box-shadow 0.15s, border-color 0.15s;">
+    <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 0.4rem;">
+      <h2 style="margin: 0; font-size: 1rem; color: hsl(var(--foreground));">
+        {{ comp.display_name }}
+      </h2>
+      <span style="font-size: 0.625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 0.15rem 0.5rem; border-radius: 9999px; white-space: nowrap; margin-left: 0.5rem;
+        {% if comp.component_type == 'template' %}
+          background: hsl(var(--primary, 222 47% 51%) / 0.12); color: hsl(var(--primary, 222 47% 51%));
+        {% else %}
+          background: hsl(var(--muted, 220 13% 91%) / 0.5); color: hsl(var(--muted-foreground));
+        {% endif %}
+      ">
+        {% if comp.component_type == 'template' %}template{% else %}python{% endif %}
+      </span>
+    </div>
+    <div class="sb-comp-meta" style="margin-bottom: 0;">
+      <span style="font-size: 0.6875rem; color: hsl(var(--muted-foreground)); opacity: 0.7;">{{ comp.category }}</span>
+      {% if comp.example_count %}<span style="font-size: 0.6875rem; color: hsl(var(--muted-foreground));">{{ comp.example_count }} example{{ comp.example_count|pluralize }}</span>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<script>
+(function() {
+  const buttons = document.querySelectorAll('.sb-cat-btn');
+  const cards = document.querySelectorAll('.sb-comp-card');
+  const activeStyle = {
+    background: 'hsl(var(--primary, 222 47% 51%))',
+    color: '#fff',
+    borderColor: 'hsl(var(--primary, 222 47% 51%))',
+  };
+  const inactiveStyle = {
+    background: 'hsl(var(--surface-1, var(--background)))',
+    color: 'hsl(var(--muted-foreground))',
+    borderColor: 'hsl(var(--border))',
+  };
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.category;
+      // Update button styles
+      buttons.forEach(b => {
+        b.style.background = inactiveStyle.background;
+        b.style.color = inactiveStyle.color;
+        b.style.borderColor = inactiveStyle.borderColor;
+        b.classList.remove('sb-cat-btn-active');
+      });
+      btn.style.background = activeStyle.background;
+      btn.style.color = activeStyle.color;
+      btn.style.borderColor = activeStyle.borderColor;
+      btn.classList.add('sb-cat-btn-active');
+      // Filter cards
+      cards.forEach(card => {
+        if (cat === 'all' || card.dataset.category === cat) {
+          card.style.display = '';
+        } else {
+          card.style.display = 'none';
+        }
+      });
+    });
+  });
+
+  // Also filter by sidebar search
+  const sbSearch = document.getElementById('sb-search');
+  if (sbSearch) {
+    sbSearch.addEventListener('input', () => {
+      const q = sbSearch.value.toLowerCase();
+      cards.forEach(card => {
+        const name = card.querySelector('h2').textContent.toLowerCase();
+        card.style.display = name.includes(q) ? '' : 'none';
+      });
+    });
+  }
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,24 @@
+<div class="{{ css_prefix }}card {{ css_prefix }}card-elevated {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    {% if slot_header %}
+    <div class="{{ css_prefix }}card-header">
+        {{ slot_header|safe }}
+    </div>
+    {% elif title %}
+    <div class="{{ css_prefix }}card-header">
+        <h3 class="{{ css_prefix }}card-title">{{ title }}</h3>
+    </div>
+    {% endif %}
+    <div class="{{ css_prefix }}card-body">
+        {% if slot_body %}{{ slot_body|safe }}{% else %}{{ content }}{% endif %}
+    </div>
+    {% if slot_footer %}
+    <div class="{{ css_prefix }}card-footer">
+        {{ slot_footer|safe }}
+    </div>
+    {% elif footer %}
+    <div class="{{ css_prefix }}card-footer">
+        {{ footer }}
+    </div>
+    {% endif %}
+</div>

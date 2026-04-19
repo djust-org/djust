@@ -1,0 +1,18 @@
+<div class="{{ css_prefix }}progress-wrapper {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    {% if slot_label %}
+    {{ slot_label|safe }}
+    {% elif label %}
+    <div class="{{ css_prefix }}progress-label">{{ label }}</div>
+    {% endif %}
+    <div class="{{ css_prefix }}progress {% if is_indeterminate %}{{ css_prefix }}progress-indeterminate{% endif %}"
+         role="progressbar"
+         aria-valuemin="0"
+         aria-valuemax="{{ max }}"
+         {% if not is_indeterminate %}aria-valuenow="{{ value }}"{% endif %}
+         {% if label %}aria-label="{{ label }}"{% endif %}>
+        {% if not is_indeterminate %}
+        <div class="{{ css_prefix }}progress-bar" style="width: {{ percentage }}%"></div>
+        {% endif %}
+    </div>
+</div>

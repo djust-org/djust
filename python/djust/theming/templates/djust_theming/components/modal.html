@@ -1,0 +1,35 @@
+<div class="{{ css_prefix }}modal-backdrop" data-theme-modal="{{ id }}" style="display:none;">
+    <div class="{{ css_prefix }}modal {{ css_prefix }}modal-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+         role="dialog"
+         aria-modal="true"
+         {% if title %}aria-labelledby="{{ id }}-title"{% endif %}
+         {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+        {% if slot_close %}
+        {{ slot_close|safe }}
+        {% else %}
+        <button class="{{ css_prefix }}modal-close" data-theme-modal-close aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+        {% endif %}
+        {% if slot_header %}
+        <div class="{{ css_prefix }}modal-header">
+            {{ slot_header|safe }}
+        </div>
+        {% elif title %}
+        <div class="{{ css_prefix }}modal-header">
+            <h2 class="{{ css_prefix }}modal-title" id="{{ id }}-title">{{ title }}</h2>
+        </div>
+        {% endif %}
+        <div class="{{ css_prefix }}modal-body">
+            {% if slot_body %}{{ slot_body|safe }}{% elif body %}{{ body }}{% endif %}
+        </div>
+        {% if slot_footer %}
+        <div class="{{ css_prefix }}modal-footer">
+            {{ slot_footer|safe }}
+        </div>
+        {% endif %}
+    </div>
+</div>

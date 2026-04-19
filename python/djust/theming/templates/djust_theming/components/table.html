@@ -1,0 +1,37 @@
+<div class="{{ css_prefix }}table-container {% if attrs.class %}{{ attrs.class }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+    <table class="{{ css_prefix }}table {{ css_prefix }}table-{{ variant }}">
+        {% if slot_caption %}
+        <caption>{{ slot_caption|safe }}</caption>
+        {% elif caption %}
+        <caption>{{ caption }}</caption>
+        {% endif %}
+        {% if slot_header %}
+        <thead>{{ slot_header|safe }}</thead>
+        {% else %}
+        <thead>
+            <tr>
+                {% for header in headers %}
+                <th>{{ header }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        {% endif %}
+        {% if slot_body %}
+        <tbody>{{ slot_body|safe }}</tbody>
+        {% else %}
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                {% for cell in row %}
+                <td>{{ cell }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+        {% endif %}
+        {% if slot_footer %}
+        <tfoot>{{ slot_footer|safe }}</tfoot>
+        {% endif %}
+    </table>
+</div>

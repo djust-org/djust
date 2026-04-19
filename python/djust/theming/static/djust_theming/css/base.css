@@ -1,0 +1,13 @@
+/*
+ * DEPRECATED — use scaffold.css instead.
+ *
+ * This file now redirects to scaffold.css, which removes the bridge variable
+ * layer and duplicate token definitions. Components should use raw theme
+ * tokens directly (e.g., hsl(var(--primary)) not var(--color-primary)).
+ *
+ * Migration: Replace {% static 'djust_theming/css/base.css' %}
+ *       with {% static 'djust_theming/css/scaffold.css' %}
+ *
+ * This redirect will be removed in a future major version.
+ */
+@import url("scaffold.css");
