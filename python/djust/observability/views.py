@@ -404,6 +404,15 @@ def eval_handler(request):
             {"error": "body.params must be a JSON object (or null/absent)"}, status=400
         )
 
+    # Security: reject _private and __dunder__ names. eval_handler should
+    # only invoke public event-handler methods, not framework internals
+    # like __init__, __reduce__, mount, _clear_state, etc.
+    if handler_name.startswith("_"):
+        return JsonResponse(
+            {"error": "private/dunder methods are not allowed"},
+            status=403,
+        )
+
     handler = getattr(view, handler_name, None)
     if handler is None or not callable(handler):
         return JsonResponse(

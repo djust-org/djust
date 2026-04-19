@@ -262,11 +262,22 @@ def create_server():
         resolved = []
         for p in fixture_paths:
             if os.path.isabs(p):
-                resolved.append(p)
+                candidate = os.path.realpath(p)
             elif base_dir:
-                resolved.append(os.path.join(str(base_dir), p))
+                candidate = os.path.realpath(os.path.join(str(base_dir), p))
             else:
-                resolved.append(p)
+                candidate = os.path.realpath(p)
+            # Security: reject paths outside the project directory.
+            # Prevents ../../../etc/evil.json style traversal.
+            if base_dir and not candidate.startswith(os.path.realpath(str(base_dir))):
+                return json.dumps(
+                    {
+                        "error": f"fixture path '{p}' resolves outside the project directory",
+                        "resolved": candidate,
+                        "project_dir": str(base_dir),
+                    }
+                )
+            resolved.append(candidate)
 
         # manage.py is the canonical entry point; fall back to -m if
         # we can't find one (e.g. during tests).
