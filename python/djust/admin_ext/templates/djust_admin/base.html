@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ title }} | {{ site_title }}{% endblock %}</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-gray-100 min-h-screen" data-djust-root>
+    <!-- Sidebar -->
+    <aside class="fixed inset-y-0 left-0 w-64 bg-gray-900 text-white overflow-y-auto">
+        <!-- Header -->
+        <div class="h-16 flex items-center px-6 border-b border-gray-800">
+            <h1 class="text-lg font-semibold">{{ site_header }}</h1>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="mt-6 px-4">
+            <!-- Model navigation (grouped by app) -->
+            {% for app in app_list %}
+            <div class="mb-6">
+                <h3 class="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    {{ app.name }}
+                </h3>
+                <ul class="mt-2 space-y-1">
+                    {% for model in app.models %}
+                    <li>
+                        <a href="{{ model.admin_url }}"
+                           class="flex items-center px-2 py-2 text-sm font-medium rounded-md
+                                  {% if request.path == model.admin_url %}
+                                  bg-gray-800 text-white
+                                  {% else %}
+                                  text-gray-300 hover:bg-gray-800 hover:text-white
+                                  {% endif %}">
+                            {{ model.name }}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endfor %}
+
+            <!-- Plugin navigation (grouped by section) -->
+            {% for section in plugin_nav %}
+            <div class="mb-6">
+                <h3 class="px-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    {{ section.section }}
+                </h3>
+                <ul class="mt-2 space-y-1">
+                    {% for item in section.items %}
+                    <li>
+                        <a href="{{ item.url }}"
+                           class="flex items-center px-2 py-2 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800 hover:text-white">
+                            {% if item.icon %}
+                            <span class="mr-2">{{ item.icon|safe }}</span>
+                            {% endif %}
+                            {{ item.label }}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endfor %}
+        </nav>
+    </aside>
+
+    <!-- Main content -->
+    <div class="pl-64">
+        <!-- Top bar -->
+        <header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+            <div class="flex items-center space-x-4">
+                {% block breadcrumbs %}
+                <nav class="text-sm">
+                    <a href="{% url admin_site_name|add:':index' %}" class="text-gray-500 hover:text-gray-700">Home</a>
+                    {% block breadcrumb_items %}{% endblock %}
+                </nav>
+                {% endblock %}
+            </div>
+            <div class="flex items-center space-x-4">
+                {% if is_authenticated %}
+                <span class="text-sm text-gray-600">{{ username }}</span>
+                <a href="{% url admin_site_name|add:':logout' %}"
+                   class="text-sm text-gray-500 hover:text-gray-700">
+                    Log out
+                </a>
+                {% endif %}
+            </div>
+        </header>
+
+        <!-- Page content -->
+        <main class="p-6">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

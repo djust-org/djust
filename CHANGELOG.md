@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Package consolidation Phase 1+2: `djust-auth` and `djust-tenants` folded into core** — `djust-auth` (879 LOC) merged into `python/djust/auth/` package. Existing core auth (check_view_auth, LoginRequiredMixin, PermissionRequiredMixin) moved to `auth/core.py`; new modules from djust-auth (views, forms, mixins, social, admin_views) added alongside. `djust-tenants` missing modules (audit, middleware, managers, models, security) merged into existing `python/djust/tenants/`. Both packages are now part of core `pip install djust` — no extras needed since they're small. 27 new tests added (12 auth + 15 tenants). All imports backward-compatible via lazy loading in `__init__.py`.
+- **Package consolidation Phase 3: `djust-admin` folded as `djust[admin]`** — `djust-admin` (3,878 LOC) merged into `python/djust/admin_ext/` as an optional extra (`pip install djust[admin]`). Uses `admin_ext` to avoid collision with `django.contrib.admin`. Includes views, forms, adapters, plugins, decorators, template tags, and 7 HTML templates. 40 new tests. `pip install djust[all]` now includes admin.
 
 ## [0.4.5rc2] - 2026-04-18
 

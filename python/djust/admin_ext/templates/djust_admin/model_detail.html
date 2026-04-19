@@ -1,0 +1,101 @@
+{% extends "djust_admin/base.html" %}
+
+{% block breadcrumb_items %}
+<span class="mx-2 text-gray-400">/</span>
+<a href="{% url admin_site_name|add:':'|add:opts.app_label|add:'_'|add:opts.model_name|add:'_changelist' %}"
+   class="text-gray-500 hover:text-gray-700">{{ opts.verbose_name_plural|title }}</a>
+<span class="mx-2 text-gray-400">/</span>
+<span class="text-gray-700">{% if object %}{{ object }}{% else %}Add{% endif %}</span>
+{% endblock %}
+
+{% block content %}
+<!-- Redirect on save -->
+{% if redirect_url %}
+<script>window.location.href = "{{ redirect_url }}";</script>
+{% endif %}
+
+<div class="max-w-4xl mx-auto">
+    <!-- Header -->
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-gray-900">{{ title }}</h1>
+    </div>
+
+    <!-- Success message -->
+    {% if save_success %}
+    <div class="mb-4 rounded-md bg-green-50 p-4">
+        <div class="flex">
+            <div class="flex-shrink-0">
+                <svg class="h-5 w-5 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+            </div>
+            <div class="ml-3">
+                <p class="text-sm font-medium text-green-800">
+                    Changes saved successfully.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Form -->
+    <div class="bg-white shadow rounded-lg">
+        {% for fieldset in fieldsets %}
+        <div class="{% if not forloop.first %}border-t border-gray-200{% endif %}">
+            {% if fieldset.name %}
+            <div class="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                <h3 class="text-lg font-medium text-gray-900">{{ fieldset.name }}</h3>
+            </div>
+            {% endif %}
+
+            <div class="px-4 py-5 space-y-6 sm:p-6">
+                {% for field in fieldset.fields %}
+                <!-- Pre-rendered field HTML from as_live_field() -->
+                {{ field.html|safe }}
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+
+        <!-- Action buttons -->
+        <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between rounded-b-lg">
+            <div>
+                {% if object_pk and has_delete_permission %}
+                <a href="{{ delete_url }}"
+                   class="text-red-600 hover:text-red-800 text-sm font-medium">
+                    Delete
+                </a>
+                {% endif %}
+            </div>
+            <div class="flex items-center space-x-3">
+                <button type="button"
+                        dj-click="save_and_add_another()"
+                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        {% if is_saving %}disabled{% endif %}>
+                    Save and add another
+                </button>
+                <button type="button"
+                        dj-click="save_and_continue()"
+                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        {% if is_saving %}disabled{% endif %}>
+                    Save and continue editing
+                </button>
+                <button type="button"
+                        dj-click="save()"
+                        class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        {% if is_saving %}disabled{% endif %}>
+                    {% if is_saving %}
+                    <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                    {% else %}
+                    Save
+                    {% endif %}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

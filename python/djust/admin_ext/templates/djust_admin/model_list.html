@@ -1,0 +1,220 @@
+{% extends "djust_admin/base.html" %}
+
+{% block breadcrumb_items %}
+<span class="mx-2 text-gray-400">/</span>
+<span class="text-gray-700">{{ opts.verbose_name_plural|title }}</span>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-2xl font-bold text-gray-900">{{ opts.verbose_name_plural|title }}</h1>
+        {% if has_add_permission %}
+        <a href="{{ add_url }}"
+           class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
+            <svg class="-ml-1 mr-2 h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            Add {{ opts.verbose_name }}
+        </a>
+        {% endif %}
+    </div>
+
+    <div class="flex gap-6">
+        <!-- Main content area -->
+        <div class="{% if has_filters %}flex-1{% else %}w-full{% endif %}">
+            <!-- Toolbar -->
+            <div class="bg-white rounded-lg shadow mb-4">
+                <div class="px-4 py-3 border-b border-gray-200">
+                    <div class="flex items-center justify-between">
+                        <!-- Search -->
+                        <div class="flex-1 max-w-md">
+                            <div class="relative">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <svg class="h-5 w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                                    </svg>
+                                </div>
+                                <input type="text"
+                                       placeholder="Search..."
+                                       value="{{ search_query }}"
+                                       dj-input="search(value)"
+                                       class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+                            </div>
+                        </div>
+
+                        <!-- Actions dropdown -->
+                        {% if selected_ids %}
+                        <div class="ml-4 flex items-center space-x-2">
+                            <span class="text-sm text-gray-600">{{ selected_ids|length }} selected</span>
+                            <select dj-change="run_action(value)"
+                                    class="block pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md">
+                                <option value="">-- Select action --</option>
+                                {% for action in actions %}
+                                <option value="{{ action.name }}">{{ action.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <!-- Select all checkbox -->
+                                <th scope="col" class="px-6 py-3 w-10">
+                                    <input type="checkbox"
+                                           {% if select_all %}checked{% endif %}
+                                           dj-click="toggle_select_all()"
+                                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                </th>
+                                {% for column in columns %}
+                                <th scope="col"
+                                    class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider
+                                           {% if column.sortable %}cursor-pointer hover:bg-gray-100{% endif %}"
+                                    {% if column.sortable %}dj-click="sort_by('{{ column.name }}')"{% endif %}>
+                                    <div class="flex items-center space-x-1">
+                                        <span>{{ column.label }}</span>
+                                        {% if column.sortable %}
+                                        <span class="text-gray-400">
+                                            {% if ordering == column.name %}
+                                            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fill-rule="evenodd" d="M14.707 10.293a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L10 13.586l3.293-3.293a1 1 0 011.414 0z" clip-rule="evenodd"/>
+                                            </svg>
+                                            {% elif ordering == '-'|add:column.name %}
+                                            <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fill-rule="evenodd" d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L10 6.414l-3.293 3.293a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                                            </svg>
+                                            {% else %}
+                                            <svg class="h-4 w-4 opacity-0 group-hover:opacity-100" fill="currentColor" viewBox="0 0 20 20">
+                                                <path d="M5 10a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z"/>
+                                            </svg>
+                                            {% endif %}
+                                        </span>
+                                        {% endif %}
+                                    </div>
+                                </th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for row in rows %}
+                            <tr class="hover:bg-gray-50 {% if row.selected %}bg-indigo-50{% endif %}">
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <input type="checkbox"
+                                           {% if row.selected %}checked{% endif %}
+                                           dj-click="toggle_select({{ row.pk }})"
+                                           class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                </td>
+                                {% for value in row.values %}
+                                <td class="px-6 py-4 whitespace-nowrap text-sm {% if forloop.first %}font-medium text-gray-900{% else %}text-gray-500{% endif %}">
+                                    {% if forloop.first %}
+                                    <a href="{{ row.edit_url }}" class="text-indigo-600 hover:text-indigo-900">
+                                        {{ value }}
+                                    </a>
+                                    {% else %}
+                                    {{ value }}
+                                    {% endif %}
+                                </td>
+                                {% endfor %}
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="{{ columns|length|add:1 }}" class="px-6 py-12 text-center text-gray-500">
+                                    {% if search_query %}
+                                    No results found for "{{ search_query }}"
+                                    {% else %}
+                                    No {{ opts.verbose_name_plural }} found.
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                {% if pagination.num_pages > 1 %}
+                <div class="bg-white px-4 py-3 border-t border-gray-200 sm:px-6">
+                    <div class="flex items-center justify-between">
+                        <div class="text-sm text-gray-700">
+                            Showing page
+                            <span class="font-medium">{{ pagination.number }}</span>
+                            of
+                            <span class="font-medium">{{ pagination.num_pages }}</span>
+                            ({{ pagination.count }} results)
+                        </div>
+                        <div class="flex space-x-2">
+                            {% if pagination.has_previous %}
+                            <button dj-click="go_to_page(1)"
+                                    class="px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                                First
+                            </button>
+                            <button dj-click="go_to_page({{ pagination.previous_page_number }})"
+                                    class="px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                                Previous
+                            </button>
+                            {% endif %}
+
+                            <span class="px-3 py-1 text-sm text-gray-700">
+                                Page {{ pagination.number }} of {{ pagination.num_pages }}
+                            </span>
+
+                            {% if pagination.has_next %}
+                            <button dj-click="go_to_page({{ pagination.next_page_number }})"
+                                    class="px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                                Next
+                            </button>
+                            <button dj-click="go_to_page({{ pagination.num_pages }})"
+                                    class="px-3 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                                Last
+                            </button>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Filter sidebar -->
+        {% if has_filters %}
+        <div class="w-64 flex-shrink-0">
+            <div class="bg-white rounded-lg shadow">
+                <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+                    <h3 class="text-sm font-medium text-gray-900">Filters</h3>
+                    {% if active_filters %}
+                    <button dj-click="clear_filters()"
+                            class="text-xs text-indigo-600 hover:text-indigo-800">
+                        Clear all
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="px-4 py-3 space-y-4">
+                    {% for filter in filters %}
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            {{ filter.label }}
+                        </label>
+                        <select dj-change="apply_filter('{{ filter.name }}', value)"
+                                class="block w-full pl-3 pr-10 py-2 text-sm border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-md">
+                            <option value="">All</option>
+                            {% for choice in filter.choices %}
+                            <option value="{{ choice.value }}" {% if filter.current_value == choice.value %}selected{% endif %}>
+                                {{ choice.label }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
