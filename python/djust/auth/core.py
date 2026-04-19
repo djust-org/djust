@@ -113,7 +113,7 @@ def check_view_auth(view_instance, request) -> Optional[str]:
 
 def _has_custom_check_permissions(view_instance) -> bool:
     """Check if the view subclass overrides check_permissions()."""
-    from .live_view import LiveView
+    from djust.live_view import LiveView
 
     for klass in type(view_instance).__mro__:
         if klass is LiveView or klass is object:

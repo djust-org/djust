@@ -33,8 +33,9 @@ def _make_backend(sessions=3):
 @pytest.fixture()
 def mock_backend():
     backend = _make_backend()
-    with patch("djust.cli.setup_django"), patch(
-        "djust.state_backend.get_backend", return_value=backend
+    with (
+        patch("djust.cli.setup_django"),
+        patch("djust.state_backend.get_backend", return_value=backend),
     ):
         yield backend
 
@@ -75,9 +76,11 @@ class TestCmdClearAll:
         backend.get_stats.return_value = {"total_sessions": 1}
         backend.delete_all.side_effect = RuntimeError("boom")
 
-        with patch("djust.cli.setup_django"), patch(
-            "djust.state_backend.get_backend", return_value=backend
-        ), pytest.raises(SystemExit) as exc_info:
+        with (
+            patch("djust.cli.setup_django"),
+            patch("djust.state_backend.get_backend", return_value=backend),
+            pytest.raises(SystemExit) as exc_info,
+        ):
             cmd_clear(_make_args(all_flag=True))
 
         assert exc_info.value.code == 1

@@ -100,7 +100,7 @@ include = [
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-testpaths = ["python/tests", "tests/unit", "tests/e2e", "tests/integration"]
+testpaths = ["python/tests", "python/djust/tests", "tests/unit", "tests/e2e", "tests/integration"]
 pythonpath = [".", "examples/demo_project"]
 DJANGO_SETTINGS_MODULE = "demo_project.settings"
 addopts = [
@@ -116,6 +116,11 @@ markers = [
     "e2e: marks tests as end-to-end tests",
     "asyncio: marks tests as async tests",
     "benchmark: marks tests as benchmarks (run with pytest-benchmark)",
+    "auth: marks tests for djust.auth module",
+    "tenants: marks tests for djust.tenants module",
+    "admin: marks tests for djust.admin_ext module",
+    "theming: marks tests for djust.theming module",
+    "components: marks tests for djust.components module",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
