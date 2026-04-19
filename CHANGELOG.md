@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`_force_full_html` now syncs ALL context to Rust ([#774](https://github.com/djust-org/djust/issues/774))** — When a view sets `self._force_full_html = True` in an event handler (e.g., wizard step transitions), the Rust VDOM renderer previously still used incremental change tracking. Derived context values like `current_step` (computed from `wizard_step_index` in `get_context_data()`) could be missed by the `id()` comparison, causing Rust to render with stale data. The fix bypasses change tracking entirely when `_force_full_html` is set, sending the complete context to Rust for a fully fresh render.
+
 ## [0.5.0rc1] - 2026-04-19
 
 ### Added

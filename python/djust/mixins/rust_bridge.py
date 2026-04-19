@@ -340,6 +340,14 @@ class RustBridgeMixin:
             # name appearing in `_changed_keys`.
             prev_immutables = getattr(self, "_prev_context_immutables", {})
 
+            # When _force_full_html is set, the developer is signaling that
+            # the change is structural (template conditionals, loop lengths,
+            # etc.). Bypass change tracking and send ALL context values to
+            # Rust so derived values like computed step dicts are fresh (#774).
+            force_full = getattr(self, "_force_full_html", False)
+            if force_full:
+                prev_refs = {}  # Treat as first render — send everything
+
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
