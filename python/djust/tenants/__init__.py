@@ -101,6 +101,13 @@ __all__ = [
     "get_tenant_resolver",
     "resolve_tenant",
     "RESOLVER_REGISTRY",
+    # Middleware
+    "TenantMiddleware",
+    "get_current_tenant",
+    "set_current_tenant",
+    # Managers
+    "TenantManager",
+    "TenantQuerySet",
     # Mixins
     "TenantMixin",
     "TenantScopedMixin",
@@ -112,4 +119,42 @@ __all__ = [
     "TenantAwareMemoryBackend",
     "TenantPresenceManager",
     "get_tenant_presence_backend",
+    # Audit
+    "AuditEvent",
+    "AuditBackend",
+    "LoggingAuditBackend",
+    "DatabaseAuditBackend",
+    "CallbackAuditBackend",
+    "get_audit_backend",
+    "emit_audit",
+    "audit_action",
+    # Security
+    "SecurityHeadersMiddleware",
 ]
+
+# Lazy imports for modules that require Django ORM
+_LAZY_IMPORTS = {
+    "TenantMiddleware": ".middleware",
+    "get_current_tenant": ".middleware",
+    "set_current_tenant": ".middleware",
+    "TenantManager": ".managers",
+    "TenantQuerySet": ".managers",
+    "AuditEvent": ".audit",
+    "AuditBackend": ".audit",
+    "LoggingAuditBackend": ".audit",
+    "DatabaseAuditBackend": ".audit",
+    "CallbackAuditBackend": ".audit",
+    "get_audit_backend": ".audit",
+    "emit_audit": ".audit",
+    "audit_action": ".audit",
+    "SecurityHeadersMiddleware": ".security",
+}
+
+
+def __getattr__(name):
+    if name in _LAZY_IMPORTS:
+        import importlib
+
+        module = importlib.import_module(_LAZY_IMPORTS[name], __package__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
