@@ -33,7 +33,7 @@ descriptors, mixins, rust handlers, gallery).
     python manage.py component_gallery
 """
 
-__version__ = "0.5.0rc1"
+__version__ = "0.5.0rc2"
 
 default_app_config = "djust.components.apps.DjustComponentsConfig"
 
