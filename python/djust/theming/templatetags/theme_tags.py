@@ -165,6 +165,42 @@ def theme_css(context):
 
 
 @register.simple_tag(takes_context=True)
+def theme_framework_overrides(context):
+    """
+    Render theme-aware CSS overrides for the active CSS framework.
+
+    Maps djust theme variables (--primary, --border, --ring, etc.) onto the
+    framework's form, button, badge, and alert selectors. Place this tag
+    AFTER your framework's CSS file so the theme-based rules take precedence.
+
+    Usage:
+        <link rel="stylesheet" href="bootstrap4.css">
+        {% theme_framework_overrides %}
+        <link rel="stylesheet" href="base.css">
+    """
+    request = context.get("request")
+    manager = get_theme_manager(request)
+    state = manager.get_state()
+
+    if not state.pack:
+        return ""
+
+    try:
+        from ..pack_css_generator import ThemePackCSSGenerator
+
+        gen = ThemePackCSSGenerator(pack_name=state.pack)
+        fw_css = gen._generate_framework_css()
+        if fw_css:
+            return format_html(
+                "<style data-djust-framework-overrides>{}</style>", mark_safe(fw_css)
+            )
+    except (ValueError, ImportError):
+        pass
+
+    return ""
+
+
+@register.simple_tag(takes_context=True)
 def theme_switcher(
     context,
     show_presets: bool = True,

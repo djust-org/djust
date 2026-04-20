@@ -464,6 +464,9 @@
 .form-input-success { border-color: hsl(var(--success) / 0.6); }
 .form-input-success:focus { border-color: hsl(var(--success)); box-shadow: 0 0 0 3px hsl(var(--success) / 0.15); }
 
+/* Bootstrap form-control focus — matches .form-input:focus but for Bootstrap's native class */
+.form-control:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 var(--form-focus-ring-width, 3px) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.2)); outline: none; }
+
 /* Select */
 .form-select { display: block; width: 100%; padding: var(--space-2) var(--space-8) var(--space-2) var(--space-3); background: hsl(var(--input, var(--card))) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right var(--space-3) center; border: 1px solid hsl(var(--border)); border-radius: var(--radius-md); font-size: var(--text-sm); color: hsl(var(--foreground)); appearance: none; -webkit-appearance: none; cursor: pointer; transition: border-color var(--duration-fast) var(--ease-in-out, ease), box-shadow var(--duration-fast) var(--ease-in-out, ease); }
 .form-select:focus { outline: none; border-color: hsl(var(--ring)); box-shadow: 0 0 0 3px hsl(var(--ring) / 0.2); }
@@ -494,9 +497,9 @@
 .form-textarea-error:focus { border-color: hsl(var(--destructive)); box-shadow: 0 0 0 3px hsl(var(--destructive) / 0.15); }
 
 /* Form Group / Field */
-.form-group { display: flex; flex-direction: column; gap: var(--space-1); }
+.form-group { display: flex; flex-direction: column; gap: var(--form-group-gap, var(--space-1)); margin-bottom: var(--form-group-margin, 0); }
 .form-field { display: flex; flex-direction: column; gap: var(--space-1); }
-.form-label { font-size: var(--text-sm); font-weight: var(--font-medium); color: hsl(var(--foreground)); }
+.form-label { font-size: var(--form-label-size, var(--text-sm)); font-weight: var(--form-label-weight, var(--font-medium)); color: hsl(var(--foreground)); }
 .form-label-required::after { content: ' *'; color: hsl(var(--destructive)); }
 .form-helper { font-size: var(--text-xs); color: hsl(var(--muted-foreground)); }
 .form-error-message { font-size: var(--text-xs); color: hsl(var(--destructive)); }
