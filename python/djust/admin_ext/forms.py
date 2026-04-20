@@ -5,12 +5,15 @@ Extends djust's FormMixin with ModelAdmin integration for FK/M2M fields,
 readonly fields, and fieldset-based rendering.
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from django import forms
 from django.db.models import ForeignKey, ManyToManyField, OneToOneField
 from django.db.models.fields import DateField, DateTimeField, TimeField
 from djust.forms import FormMixin
+
+logger = logging.getLogger(__name__)
 
 
 class AdminFormMixin(FormMixin):
@@ -104,7 +107,7 @@ class AdminFormMixin(FormMixin):
                     for obj in related_model.objects.all()[:100]
                 ]
         except Exception:
-            pass
+            logger.debug("Failed to get field options for %s", field_name, exc_info=True)
         return []
 
     def get_field_info(self, field_name: str) -> Dict[str, Any]:
@@ -148,7 +151,7 @@ class AdminFormMixin(FormMixin):
                 info["is_time"] = True
                 info["input_type"] = "time"
         except Exception:
-            pass
+            logger.debug("Failed to get field info for %s", field_name, exc_info=True)
 
         return info
 
@@ -215,6 +218,7 @@ class AdminFormMixin(FormMixin):
                 return getattr(self.object, field_name, default)
 
         except Exception:
+            logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
 
     def validate_field(self, field_name: str = "", value: Any = None, **kwargs):
