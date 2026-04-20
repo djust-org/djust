@@ -2,14 +2,108 @@
 CSS Generator for Theme Packs.
 
 Generates complete CSS including icons, animations, patterns, interactions,
-and all other styling dimensions from a ThemePack.
+framework-aware component overrides, and all other styling dimensions from a ThemePack.
 """
 
 from functools import lru_cache
 
+from ..config import config as djust_config
 from .manager import get_theme_config
 from .theme_packs import get_theme_pack, get_design_system
 from .theme_css_generator import CompleteThemeCSSGenerator
+
+
+# ── Framework CSS: theme-variable-based overrides for CSS framework selectors ──
+# These map djust theme variables (--primary, --border, --ring, etc.) onto the
+# active framework's form, button, badge, and alert selectors so that switching
+# themes automatically re-styles framework components.
+
+_FRAMEWORK_CSS = {
+    "bootstrap4": """/* Theme → Bootstrap 4 component overrides */
+
+/* Forms */
+.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.form-control:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 var(--form-focus-ring-width, 0.2rem) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.25)); }
+.form-control::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
+.form-control:disabled { background-color: hsl(var(--muted) / 0.5); }
+select.form-control { color: hsl(var(--foreground)); }
+textarea.form-control { color: hsl(var(--foreground)); }
+
+/* Labels */
+label, .form-label { color: hsl(var(--foreground)); }
+
+/* Checkboxes & Radios */
+.form-check-input:checked { background-color: hsl(var(--primary)); border-color: hsl(var(--primary)); }
+.custom-control-input:checked ~ .custom-control-label::before { background-color: hsl(var(--primary)); border-color: hsl(var(--primary)); }
+
+/* Buttons */
+.btn-primary { background-color: hsl(var(--primary)); border-color: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.btn-primary:hover { background-color: hsl(var(--primary) / 0.9); border-color: hsl(var(--primary) / 0.9); }
+.btn-primary:focus { box-shadow: 0 0 0 var(--form-focus-ring-width, 0.2rem) hsl(var(--primary) / var(--form-focus-ring-opacity, 0.25)); }
+.btn-secondary { background-color: hsl(var(--secondary)); border-color: hsl(var(--border)); color: hsl(var(--secondary-foreground)); }
+.btn-secondary:hover { background-color: hsl(var(--secondary) / 0.8); }
+.btn-danger { background-color: hsl(var(--destructive)); border-color: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+.btn-success { background-color: hsl(var(--success)); border-color: hsl(var(--success)); color: hsl(var(--success-foreground)); }
+.btn-warning { background-color: hsl(var(--warning)); border-color: hsl(var(--warning)); color: hsl(var(--warning-foreground)); }
+
+/* Alerts */
+.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
+.alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success)); }
+.alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning)); }
+.alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive)); }
+
+/* Cards */
+.card { background-color: hsl(var(--card)); color: hsl(var(--card-foreground)); border-color: hsl(var(--border)); }
+
+/* Tables */
+.table { color: hsl(var(--foreground)); }
+.table th { color: hsl(var(--foreground)); }
+.table td { border-color: hsl(var(--border)); }
+.table thead th { border-color: hsl(var(--border)); }
+
+/* Links */
+a { color: hsl(var(--link)); }
+a:hover { color: hsl(var(--link-hover)); }
+
+/* Text utilities */
+.text-muted { color: hsl(var(--muted-foreground)) !important; }
+.text-primary { color: hsl(var(--primary)) !important; }
+.text-danger { color: hsl(var(--destructive)) !important; }
+.text-success { color: hsl(var(--success)) !important; }
+.text-warning { color: hsl(var(--warning)) !important; }
+
+/* Borders */
+.border { border-color: hsl(var(--border)) !important; }
+hr { border-color: hsl(var(--border)); }
+""",
+    "bootstrap5": """/* Theme → Bootstrap 5 component overrides */
+
+/* Forms */
+.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.form-control:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 var(--form-focus-ring-width, 0.25rem) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.25)); }
+.form-control::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
+.form-select { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.form-select:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 0.25rem hsl(var(--ring, var(--primary)) / 0.25); }
+.form-check-input:checked { background-color: hsl(var(--primary)); border-color: hsl(var(--primary)); }
+
+/* Buttons */
+.btn-primary { --bs-btn-bg: hsl(var(--primary)); --bs-btn-border-color: hsl(var(--primary)); --bs-btn-color: hsl(var(--primary-foreground)); }
+.btn-secondary { --bs-btn-bg: hsl(var(--secondary)); --bs-btn-border-color: hsl(var(--border)); --bs-btn-color: hsl(var(--secondary-foreground)); }
+
+/* Alerts */
+.alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
+.alert-success { background-color: hsl(var(--success) / 0.1); border-color: hsl(var(--success) / 0.3); color: hsl(var(--success)); }
+.alert-warning { background-color: hsl(var(--warning) / 0.1); border-color: hsl(var(--warning) / 0.3); color: hsl(var(--warning)); }
+.alert-danger { background-color: hsl(var(--destructive) / 0.1); border-color: hsl(var(--destructive) / 0.3); color: hsl(var(--destructive)); }
+
+/* Cards */
+.card { background-color: hsl(var(--card)); color: hsl(var(--card-foreground)); border-color: hsl(var(--border)); }
+
+/* Links */
+a { color: hsl(var(--link)); }
+a:hover { color: hsl(var(--link-hover)); }
+""",
+}
 
 
 class ThemePackCSSGenerator:
@@ -75,6 +169,18 @@ class ThemePackCSSGenerator:
 
         return "\n".join(parts)
 
+    def _generate_framework_css(self) -> str:
+        """Generate theme-aware CSS overrides for the active CSS framework.
+
+        Maps djust theme variables (--primary, --border, --ring, etc.) onto the
+        framework's form, button, badge, and alert selectors. This makes
+        framework components respond to theme switches automatically.
+
+        Returns empty string if no framework CSS is defined for the active framework.
+        """
+        framework = djust_config.get("css_framework", "bootstrap5")
+        return _FRAMEWORK_CSS.get(framework, "")
+
     def _generate_design_system_vars(self) -> str:
         """Generate :root CSS variables from the pack's DesignSystem."""
         ds = get_design_system(self.pack.design_theme)
@@ -108,6 +214,8 @@ class ThemePackCSSGenerator:
             f"  --body-line-height: {typo.body_line_height};",
             f"  --prose-max-width: {typo.prose_max_width};",
             f"  --badge-radius: {typo.badge_radius};",
+            f"  --form-label-weight: {typo.form_label_weight};",
+            f"  --form-label-size: {typo.form_label_size};",
             "",
             "  /* Design System: Layout */",
             f"  --space-unit: {layout.space_unit};",
@@ -123,6 +231,10 @@ class ThemePackCSSGenerator:
             f"  --container-width: {layout.container_width};",
             f"  --grid-gap: {layout.grid_gap};",
             f"  --section-spacing: {layout.section_spacing};",
+            f"  --form-group-margin: {layout.form_group_margin};",
+            f"  --form-group-gap: {layout.form_group_gap};",
+            f"  --form-focus-ring-width: {layout.form_focus_ring_width};",
+            f"  --form-focus-ring-opacity: {layout.form_focus_ring_opacity};",
             f"  --button-radius: {shape_map.get(layout.button_shape, layout.border_radius_md)};",
             f"  --card-radius: {shape_map.get(layout.card_shape, layout.border_radius_lg)};",
             f"  --input-radius: {shape_map.get(layout.input_shape, layout.border_radius_sm)};",

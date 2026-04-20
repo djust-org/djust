@@ -155,7 +155,14 @@ def generate_critical_css_for_state(state: "ThemeState", css_prefix: str = "") -
             from .pack_css_generator import ThemePackCSSGenerator
 
             gen = ThemePackCSSGenerator(pack_name=state.pack)
-            return gen.theme_generator.generate_critical_css()
+            critical = gen.theme_generator.generate_critical_css()
+            # Include design system tokens (form, layout, typography vars)
+            # in critical CSS so they're available for first paint.
+            ds_vars = gen._generate_design_system_vars()
+            # Framework CSS (theme vars → Bootstrap/Tailwind selectors) is
+            # emitted separately by {% theme_framework_overrides %} so it
+            # loads AFTER the framework's static CSS file in the cascade.
+            return critical + "\n" + ds_vars
         except ValueError:
             pass
 
@@ -288,7 +295,7 @@ class ThemeManager:
         if not preset:
             preset = session_data.get("preset", self.config["preset"])
         if not pack:
-            pack = session_data.get("pack")
+            pack = session_data.get("pack", self.config.get("pack"))
 
         mode = session_data.get("mode", self.config["default_mode"])
 

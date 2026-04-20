@@ -1038,8 +1038,8 @@
 .form-group {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1, 0.25rem);
-    margin-bottom: var(--space-4, 1rem);
+    gap: var(--form-group-gap, var(--space-1, 0.25rem));
+    margin-bottom: var(--form-group-margin, var(--space-4, 1rem));
 }
 
 
@@ -1347,3 +1347,178 @@
 .theme-panel-field { margin-top: 0.75rem; }
 .theme-panel-field:first-child { margin-top: 0; }
 .theme-panel-field .theme-panel-label { margin-bottom: 0.375rem; }
+
+
+/* ==========================================================================
+   Page Header — clean strip below navigation
+   ========================================================================== */
+
+.page-header {
+    background-color: hsl(var(--card));
+    padding: 1.5rem 0;
+    border-bottom: 1px solid hsl(var(--border));
+    margin-bottom: 2rem;
+}
+.page-header h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; color: hsl(var(--foreground)); }
+.page-header p { font-size: 1rem; color: hsl(var(--muted-foreground)); margin-bottom: 0; }
+
+
+/* ==========================================================================
+   Required Field Indicators
+   ========================================================================== */
+
+.required { color: hsl(var(--destructive)); }
+label .text-danger, .form-label .text-danger { color: hsl(var(--destructive)); }
+
+
+/* ==========================================================================
+   Stat Cards — large number + icon + label pattern
+   ========================================================================== */
+
+.stat-cards-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+@media (max-width: 768px) { .stat-cards-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .stat-cards-row { grid-template-columns: 1fr; } }
+
+.stat-card { background: hsl(var(--card)); padding: 1.5rem; border-radius: 0.5rem; text-align: center; border: 1px solid hsl(var(--border)); }
+.stat-card .stat-icon { width: 50px; height: 50px; background: hsl(var(--secondary)); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 1.5rem; color: hsl(var(--primary)); margin-bottom: 0.5rem; }
+.stat-card .stat-number { font-size: 2rem; font-weight: 700; color: hsl(var(--primary)); line-height: 1; margin-bottom: 0.25rem; }
+.stat-card .stat-label { color: hsl(var(--muted-foreground)); font-size: 0.95rem; font-weight: 600; }
+
+
+/* ==========================================================================
+   Status Badges — semantic-color status indicators
+   ========================================================================== */
+
+.status-badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 0.25rem; font-size: 0.875rem; font-weight: 600; text-transform: uppercase; }
+.status-badge-muted   { background-color: hsl(var(--muted-foreground)); color: hsl(var(--card)); }
+.status-badge-info    { background-color: hsl(var(--info)); color: hsl(var(--info-foreground)); }
+.status-badge-warning { background-color: hsl(var(--warning)); color: hsl(var(--warning-foreground)); }
+.status-badge-success { background-color: hsl(var(--success)); color: hsl(var(--success-foreground)); }
+.status-badge-danger  { background-color: hsl(var(--destructive)); color: hsl(var(--destructive-foreground)); }
+.status-badge-accent  { background-color: hsl(var(--accent-foreground)); color: hsl(var(--card)); }
+
+
+/* ==========================================================================
+   Wizard — multi-step form container with progress indicator
+   ========================================================================== */
+
+.wizard-container { max-width: 900px; margin: 0 auto; }
+
+/* Clean card variant for wizard steps */
+.wizard-container .card { background: hsl(var(--card)) !important; border: none !important; border-radius: 0.5rem !important; box-shadow: var(--shadow-sm, 0 0 1rem rgba(0, 0, 0, 0.05)) !important; margin-bottom: 2rem !important; }
+.wizard-container .card-header { background: none !important; border-bottom: none !important; padding: 2.5rem 2.5rem 0 !important; }
+.wizard-container .card-title { font-size: 1.5rem !important; font-weight: 700 !important; color: hsl(var(--foreground)) !important; padding-bottom: 0.75rem !important; border-bottom: 2px solid hsl(var(--border)) !important; margin-bottom: 0 !important; }
+.wizard-container .card-body { padding: 2.5rem !important; }
+.wizard-container .card-body h3 { font-size: 1.25rem !important; font-weight: 600 !important; color: hsl(var(--foreground)) !important; margin-top: 2rem !important; margin-bottom: 1rem !important; padding-bottom: 0.5rem !important; border-bottom: 1px solid hsl(var(--border)) !important; }
+
+/* Textareas inside wizard forms */
+.wizard-container .card-body textarea.form-control { height: auto; min-height: 6rem; }
+
+
+/* ==========================================================================
+   Wizard Step Indicator — numbered circles with progress connectors
+   ========================================================================== */
+
+.wizard-progress { background: hsl(var(--card)); padding: 2rem; border-radius: 0.5rem; box-shadow: var(--shadow-sm, 0 0 1rem rgba(0, 0, 0, 0.05)); margin-bottom: 2rem; display: flex; align-items: flex-start; justify-content: space-between; position: relative; }
+.wizard-step-wrap { display: flex; align-items: center; flex: 1; min-width: 0; }
+.wizard-step-wrap:last-child { flex: 0 0 auto; min-width: fit-content; }
+.wizard-step { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; cursor: default; position: relative; z-index: 1; flex: 1; }
+.wizard-step.completed { cursor: pointer; }
+
+.step-number { width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; font-weight: 700; background: hsl(var(--border)); color: hsl(var(--muted-foreground)); transition: all 0.2s; flex-shrink: 0; border: none; }
+.wizard-step.active .step-number { background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.wizard-step.completed .step-number { background: hsl(var(--success)); color: hsl(var(--success-foreground)); }
+
+.step-title { font-size: 0.875rem; color: hsl(var(--muted-foreground)); text-align: center; }
+.wizard-step.active .step-title { color: hsl(var(--foreground)); font-weight: 600; }
+.wizard-step.completed .step-title { color: hsl(var(--muted-foreground)); }
+
+@media (max-width: 600px) { .step-title { font-size: 0.75rem; } .step-number { width: 36px; height: 36px; font-size: 1rem; } }
+
+.wizard-connector { flex: 1; height: 2px; background: hsl(var(--border)); margin: 0 0.5rem; margin-top: 24px; min-width: 1rem; transition: background 0.2s; }
+.wizard-connector.completed { background: hsl(var(--success)); }
+
+.wizard-content { margin-bottom: 1.5rem; }
+.wizard-nav { display: flex; align-items: center; gap: 0.75rem; padding-top: 0.5rem; }
+.wizard-nav .btn-back { margin-right: auto; }
+
+.field-error { font-size: 0.8125rem; color: hsl(var(--destructive)); margin-top: 0.25rem; display: block; }
+
+
+/* ==========================================================================
+   Review Page — label:value rows with per-section Edit links
+   ========================================================================== */
+
+.review-section { margin-bottom: 2rem; padding-bottom: 2rem; border-bottom: 1px solid hsl(var(--border)); }
+.review-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.review-section h3 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+
+.btn-edit { background: none; border: none; padding: 0; font: inherit; color: hsl(var(--link)); text-decoration: none; font-size: 0.875rem; font-weight: 600; cursor: pointer; }
+.btn-edit:hover { text-decoration: underline; color: hsl(var(--link-hover)); }
+
+.review-item { display: flex; margin-bottom: 0.75rem; }
+.review-label { font-weight: 600; min-width: 200px; color: hsl(var(--muted-foreground)); }
+.review-value { color: hsl(var(--foreground)); flex: 1; }
+
+
+/* ==========================================================================
+   Breadcrumbs
+   ========================================================================== */
+
+.breadcrumb-nav { margin-bottom: 1rem; font-size: 0.8125rem; }
+.breadcrumb { list-style: none; display: flex; flex-wrap: wrap; gap: 0.25rem; padding: 0; margin: 0; }
+.breadcrumb-item + .breadcrumb-item::before { content: "/"; color: hsl(var(--muted-foreground)); margin-right: 0.25rem; }
+.breadcrumb-item a { color: hsl(var(--primary)); text-decoration: none; }
+.breadcrumb-item a:hover { text-decoration: underline; }
+.breadcrumb-item.active span { color: hsl(var(--muted-foreground)); }
+
+
+/* ==========================================================================
+   Validation Modal — warning modal for missing required fields
+   ========================================================================== */
+
+.validation-modal-backdrop { position: fixed; inset: 0; background: hsl(var(--foreground) / 0.5); z-index: 1040; }
+.validation-modal.modal-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1050; width: 100%; max-width: 500px; padding: 0 1rem; }
+.validation-modal .modal-content { background: hsl(var(--surface-1, var(--card, 0 0% 100%))); border: 1px solid hsl(var(--border)); border-radius: var(--radius, 0.5rem); box-shadow: 0 10px 25px hsl(var(--foreground) / 0.2); overflow: hidden; }
+.validation-modal .modal-header.warning { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; background-color: hsl(var(--warning) / 0.12); border-bottom: 2px solid hsl(var(--warning)); }
+.validation-modal .modal-title { margin: 0; font-size: 1.125rem; font-weight: 700; color: hsl(var(--warning)); }
+.validation-modal .modal-close { background: transparent; border: 0; padding: 0 0.25rem; font-size: 1.5rem; line-height: 1; color: hsl(var(--warning)); cursor: pointer; }
+.validation-modal .modal-close:hover, .validation-modal .modal-close:focus { opacity: 0.75; outline: 2px solid hsl(var(--ring, var(--primary))); outline-offset: 2px; }
+.validation-modal .modal-body { padding: 1.25rem; color: hsl(var(--foreground)); }
+.validation-modal .modal-body p { margin: 0 0 0.75rem 0; }
+.validation-modal .modal-body ul { margin: 0; padding-left: 1.5rem; line-height: 1.8; font-weight: 600; }
+.validation-modal .modal-footer { display: flex; justify-content: flex-end; padding: 0.75rem 1.25rem; background: hsl(var(--surface-2, var(--muted))); border-top: 1px solid hsl(var(--border)); }
+
+
+/* ==========================================================================
+   Upload Area — drag-and-drop file upload zone
+   ========================================================================== */
+
+.info-box { background: hsl(var(--muted) / 0.5); border-left: 4px solid hsl(var(--primary)); padding: 1rem 1.25rem; border-radius: 0.25rem; margin-bottom: 1.5rem; }
+.info-box p { margin: 0; }
+
+.upload-area { border: 2px dashed hsl(var(--border)); border-radius: 0.5rem; padding: 3rem 2rem; text-align: center; background: hsl(var(--muted) / 0.3); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.upload-area:hover:not(.upload-area--disabled) { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.05); }
+.upload-area.dragover { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.1); }
+.upload-area--disabled { opacity: 0.65; cursor: not-allowed; }
+.upload-area p { margin: 0.5rem 0; }
+.upload-area-icon { font-size: 3rem; line-height: 1; color: hsl(var(--muted-foreground)); margin-bottom: 0.5rem; }
+
+.uploaded-file-item { display: flex; align-items: center; justify-content: space-between; padding: 1rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.25rem; margin-bottom: 0.75rem; }
+.file-info { display: flex; align-items: center; gap: 1rem; flex: 1; }
+.file-icon { color: hsl(var(--primary)); font-size: 1.5rem; }
+.btn-remove { background: transparent; color: hsl(var(--primary)); border: none; padding: 0.5rem; cursor: pointer; font-size: 1.25rem; }
+.btn-remove:hover { color: hsl(var(--link-hover)); }
+.btn-remove:focus { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
+
+
+/* ==========================================================================
+   Radio Group Layout — horizontal or vertical arrangement
+   ========================================================================== */
+
+.radio-group .form-group { display: flex; flex-wrap: wrap; flex-direction: row; gap: 2rem; margin-top: 0.5rem; }
+.radio-group .form-group > .form-label, .radio-group .form-group > .field-error, .radio-group .form-group > .form-hint { flex: 1 0 100%; }
+.radio-group.vertical .form-group { flex-direction: column; gap: 0.75rem; }
+
+/* Conditional section divider */
+.conditional-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid hsl(var(--border)); }

@@ -73,17 +73,41 @@ class LiveViewConfig:
         # Always emits warning logs before fallback, even in non-strict mode
         "strict_serialization": False,  # Raise TypeError for non-serializable values instead of str() fallback
         # CSS Framework
-        "css_framework": "bootstrap5",  # Options: 'bootstrap5', 'tailwind', None
+        "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
+        # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)
+        "bootstrap4": {
+            "field_class": "form-control",
+            "field_class_invalid": "form-control is-invalid",
+            "select_class": "custom-select",
+            "error_class": "invalid-feedback",
+            "error_class_block": "invalid-feedback d-block",
+            "help_text_class": "form-text text-muted",
+            "label_class": "",
+            "checkbox_class": "custom-control-input",
+            "checkbox_label_class": "custom-control-label",
+            "checkbox_wrapper_class": "custom-control custom-checkbox",
+            "radio_class": "custom-control-input",
+            "radio_label_class": "custom-control-label",
+            "radio_wrapper_class": "custom-control custom-radio",
+            "field_wrapper_class": "form-group",
+            "button_primary_class": "btn btn-primary",
+            "button_secondary_class": "btn btn-secondary",
+        },
         # Bootstrap 5 classes
         "bootstrap5": {
             "field_class": "form-control",
             "field_class_invalid": "form-control is-invalid",
+            "select_class": "form-select",
             "error_class": "invalid-feedback",
             "error_class_block": "invalid-feedback d-block",
+            "help_text_class": "form-text",
             "label_class": "form-label",
             "checkbox_class": "form-check-input",
             "checkbox_label_class": "form-check-label",
             "checkbox_wrapper_class": "form-check",
+            "radio_class": "form-check-input",
+            "radio_label_class": "form-check-label",
+            "radio_wrapper_class": "form-check",
             "field_wrapper_class": "mb-3",
             "button_primary_class": "btn btn-primary",
             "button_secondary_class": "btn btn-secondary",

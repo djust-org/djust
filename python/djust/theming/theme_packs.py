@@ -35,6 +35,10 @@ class TypographyStyle:
     body_weight: str = "400"
     letter_spacing: str = "normal"  # CSS value: "normal", "-0.025em", "0.025em"
 
+    # Form labels — how form field labels look (consumed by djust-components .form-label)
+    form_label_weight: str = "500"  # "400" for BS4/gov, "500" for modern/djust default
+    form_label_size: str = "0.875rem"  # var(--text-sm) by default; "1rem" for BS4
+
     # Measure
     prose_max_width: str = "42rem"  # Max width for readable text blocks
     badge_radius: str = "9999px"  # Badge border-radius (pill by default)
@@ -64,6 +68,12 @@ class LayoutStyle:
     container_width: str = "1200px"
     grid_gap: str = "1.5rem"
     section_spacing: str = "3rem"
+
+    # Form layout — spacing between form fields and internal gaps
+    form_group_margin: str = "1rem"  # Vertical space between form fields
+    form_group_gap: str = "0.25rem"  # Internal gap (label → input)
+    form_focus_ring_width: str = "3px"  # Focus outline thickness
+    form_focus_ring_opacity: str = "0.2"  # Focus outline opacity (0–1)
 
     # Hero section
     hero_padding_top: str = "8rem"

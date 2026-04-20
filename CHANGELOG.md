@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bootstrap 4 CSS framework adapter** — New `Bootstrap4Adapter` for projects using Bootstrap 4 (NYC Core Framework, government sites, legacy projects). Set `DJUST_CONFIG = {"css_framework": "bootstrap4"}`. Includes proper `custom-select`, `custom-control-*` classes for checkboxes/radios, and `form-group` wrappers.
+- **Dedicated radio button classes** — Radio buttons now use `radio_class`, `radio_label_class`, and `radio_wrapper_class` config keys (with fallback to checkbox classes). Both Bootstrap 4 and 5 configs define radio-specific classes.
+- **Select widget class support** — `ChoiceField` with `Select` widget uses `select_class` config key (e.g., `custom-select` for BS4, `form-select` for BS5) instead of the generic `field_class`.
+- **Theme-to-framework CSS bridge** — New `{% theme_framework_css %}` template tag generates `<style>` overrides that map djust theme variables (`--primary`, `--border`, etc.) onto the active CSS framework's selectors (`.btn-primary`, `.form-control`, `.alert-*`, etc.). Switching themes now automatically re-styles Bootstrap 4/5 and Tailwind components.
+
 ### Fixed
 
 - **Derived container context values now tracked by value equality ([#774](https://github.com/djust-org/djust/issues/774))** — The Rust state sync used `id()` comparison for all non-immutable context values, which is unreliable for containers (dict, list, tuple) due to CPython address reuse after GC. Derived values like `current_step = wizard_steps[step_index]` could be missed when the handler only changed `step_index`, causing Rust to render stale HTML. Fix: containers are now compared by value equality (like immutables already were), with previous values cached in `_prev_context_containers`. The optimization is preserved — unchanged containers are still skipped.

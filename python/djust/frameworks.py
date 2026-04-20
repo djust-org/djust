@@ -113,6 +113,19 @@ class BaseAdapter(FrameworkAdapter):
     def get_field_class(self, field: forms.Field, has_errors: bool = False) -> str:
         if isinstance(field, forms.BooleanField):
             return config.get_framework_class("checkbox_class")
+        elif isinstance(field, forms.ChoiceField) and not isinstance(
+            field.widget, (forms.RadioSelect, forms.CheckboxSelectMultiple)
+        ):
+            # Select widgets use select_class when configured (e.g. Bootstrap 4
+            # "custom-select"), falling back to the generic field_class.
+            select_class = config.get_framework_class("select_class")
+            if select_class:
+                return select_class
+            return (
+                config.get_framework_class("field_class_invalid")
+                if has_errors
+                else config.get_framework_class("field_class")
+            )
         elif has_errors:
             return config.get_framework_class("field_class_invalid")
         else:
@@ -295,9 +308,21 @@ class BaseAdapter(FrameworkAdapter):
         if not hasattr(field, "choices"):
             return "<!-- ERROR: Radio field must have choices -->"
 
-        radio_field_class = config.get_framework_class("checkbox_class") or "form-check-input"
-        radio_wrapper = config.get_framework_class("checkbox_wrapper_class") or "form-check"
-        radio_label_class = config.get_framework_class("checkbox_label_class") or "form-check-label"
+        radio_field_class = (
+            config.get_framework_class("radio_class")
+            or config.get_framework_class("checkbox_class")
+            or "form-check-input"
+        )
+        radio_wrapper = (
+            config.get_framework_class("radio_wrapper_class")
+            or config.get_framework_class("checkbox_wrapper_class")
+            or "form-check"
+        )
+        radio_label_class = (
+            config.get_framework_class("radio_label_class")
+            or config.get_framework_class("checkbox_label_class")
+            or "form-check-label"
+        )
 
         html = ""
         for choice_value, choice_label in field.choices:
@@ -328,6 +353,15 @@ class BaseAdapter(FrameworkAdapter):
                 f"</div>"
             )
         return html
+
+
+class Bootstrap4Adapter(BaseAdapter):
+    """Bootstrap 4 CSS framework adapter (NYC Core Framework, gov sites, legacy projects)"""
+
+    required_marker = ' <span class="text-danger">*</span>'
+    help_text_tag = "small"
+    help_text_class = "form-text text-muted"
+    error_wrapper = True
 
 
 class Bootstrap5Adapter(BaseAdapter):
@@ -376,6 +410,7 @@ class PlainAdapter(BaseAdapter):
 
 # Registry of available adapters
 _adapters: Dict[str, FrameworkAdapter] = {
+    "bootstrap4": Bootstrap4Adapter(),
     "bootstrap5": Bootstrap5Adapter(),
     "tailwind": TailwindAdapter(),
     "plain": PlainAdapter(),
@@ -387,7 +422,7 @@ def get_adapter(framework: Optional[str] = None) -> FrameworkAdapter:
     Get a framework adapter by name.
 
     Args:
-        framework: Framework name ('bootstrap5', 'tailwind', 'plain', or None)
+        framework: Framework name ('bootstrap4', 'bootstrap5', 'tailwind', 'plain', or None)
                   If None, uses the configured default
 
     Returns:
