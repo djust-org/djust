@@ -194,6 +194,25 @@ class TestDerivedContextAutoDetection:
         html, _, _ = view._rust_view.render_with_diff()
         assert "Step A" in html
 
+    def test_force_full_html_with_no_changed_keys(self):
+        """When _force_full_html is True and _changed_keys is None (the websocket
+        pattern), ALL context must be sent and set_changed_keys must be called
+        so Rust's partial renderer re-renders affected nodes (#783)."""
+        view = _make_view(WizardView, WIZARD_TEMPLATE)
+
+        # Simulate the websocket pattern: handler sets _force_full_html,
+        # websocket.py skips _changed_keys computation
+        view.step_index = 1
+        view._force_full_html = True
+        view._changed_keys = None
+
+        view._sync_state_to_rust()
+        html, _, _ = view._rust_view.render_with_diff()
+
+        # Must show Step B despite no explicit _changed_keys
+        assert "Step B" in html
+        assert "Step A" not in html
+
     def test_unchanged_container_not_resent(self):
         """When a container value hasn't changed, it should NOT be
         re-sent to Rust (optimization preserved)."""

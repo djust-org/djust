@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`_force_full_html` now calls `set_changed_keys` so Rust partial renderer re-renders ([#783](https://github.com/djust-org/djust/issues/783))** — When `_force_full_html` was set, `_sync_state_to_rust()` cleared `prev_refs` to force all context to Rust, but the `set_changed_keys` call was gated by `if prev_refs` which evaluated to False after clearing. Rust's partial renderer saw no `changed_keys`, fell back to full render with empty `changed_indices`, and the text-region fast-path compared identical old/new HTML → zero patches. Fix: `set_changed_keys` is now called when `_force_full_html` is set regardless of `prev_refs`.
+
 ## [0.5.0rc2] - 2026-04-20
 
 ### Added

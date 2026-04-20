@@ -340,6 +340,12 @@ class RustBridgeMixin:
             # name appearing in `_changed_keys`.
             prev_immutables = getattr(self, "_prev_context_immutables", {})
 
+            # _force_full_html: bypass ALL change tracking and send everything.
+            # The websocket code skips _changed_keys computation when this is
+            # set (line 1991), so we must treat it as a first render (#783).
+            if getattr(self, "_force_full_html", False):
+                prev_refs = {}
+
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
@@ -522,7 +528,12 @@ class RustBridgeMixin:
                     _auto_count_keys.add(f"{k}_count")
             _skip_keys |= _auto_count_keys
 
-            if prev_refs and context:
+            # Tell Rust which keys changed so the partial renderer knows
+            # which nodes to re-render. When _force_full_html cleared
+            # prev_refs, context == full_context, so we must still call
+            # set_changed_keys or Rust won't do a partial render (#783).
+            force_full = getattr(self, "_force_full_html", False)
+            if context and (prev_refs or force_full):
                 user_changed = [k for k in context if k not in _skip_keys]
                 if user_changed:
                     self._rust_view.set_changed_keys(user_changed)

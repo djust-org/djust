@@ -543,6 +543,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # causes false-positive id() changes and defeats the text fast path).
         if not getattr(self, "_sync_done_this_cycle", False):
             self._sync_state_to_rust(preloaded_context=preloaded_context)
+        else:
+            logger.debug(
+                "[LiveView] _sync_done_this_cycle=True — SKIPPING sync (force_full=%s)",
+                getattr(self, "_force_full_html", False),
+            )
         self._sync_done_this_cycle = False  # Reset for next cycle
 
         result = self._rust_view.render_with_diff()
