@@ -120,6 +120,8 @@ class BaseAdapter(FrameworkAdapter):
             # "custom-select"), falling back to the generic field_class.
             select_class = config.get_framework_class("select_class")
             if select_class:
+                if has_errors:
+                    return f"{select_class} is-invalid"
                 return select_class
             return (
                 config.get_framework_class("field_class_invalid")

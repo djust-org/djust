@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bootstrap 4 CSS framework adapter** — New `Bootstrap4Adapter` for projects using Bootstrap 4 (NYC Core Framework, government sites, legacy projects). Set `DJUST_CONFIG = {"css_framework": "bootstrap4"}`. Includes proper `custom-select`, `custom-control-*` classes for checkboxes/radios, and `form-group` wrappers.
 - **Dedicated radio button classes** — Radio buttons now use `radio_class`, `radio_label_class`, and `radio_wrapper_class` config keys (with fallback to checkbox classes). Both Bootstrap 4 and 5 configs define radio-specific classes.
 - **Select widget class support** — `ChoiceField` with `Select` widget uses `select_class` config key (e.g., `custom-select` for BS4, `form-select` for BS5) instead of the generic `field_class`.
-- **Theme-to-framework CSS bridge** — New `{% theme_framework_css %}` template tag generates `<style>` overrides that map djust theme variables (`--primary`, `--border`, etc.) onto the active CSS framework's selectors (`.btn-primary`, `.form-control`, `.alert-*`, etc.). Switching themes now automatically re-styles Bootstrap 4/5 and Tailwind components.
+- **Theme-to-framework CSS bridge** — New `{% theme_framework_overrides %}` template tag generates `<style>` overrides that map djust theme variables (`--primary`, `--border`, etc.) onto the active CSS framework's selectors (`.btn-primary`, `.form-control`, `.alert-*`, etc.). Switching themes now automatically re-styles Bootstrap 4/5 components.
 
 ### Fixed
 
