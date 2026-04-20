@@ -5,6 +5,7 @@ These views use djust's LiveView to provide reactive, real-time admin interfaces
 Includes plugin-aware context (plugin_nav, widgets) for the admin shell.
 """
 
+import logging
 from functools import wraps
 
 from django.contrib.auth import authenticate, logout
@@ -16,6 +17,8 @@ from djust import LiveView
 from djust.decorators import debounce, event_handler, state
 
 from .forms import AdminFormMixin
+
+logger = logging.getLogger(__name__)
 
 # Global registry for admin view configurations
 # This avoids storing non-serializable objects on view instances
@@ -303,7 +306,7 @@ class ModelListView(AdminBaseMixin, LiveView):
 
                 filters.append(filter_data)
             except Exception:
-                pass
+                logger.debug("Failed to build filter for %s", filter_field, exc_info=True)
 
         return {
             **self.get_admin_context(),

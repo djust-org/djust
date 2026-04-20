@@ -11,7 +11,7 @@
 {% block content %}
 <!-- Redirect on save -->
 {% if redirect_url %}
-<script>window.location.href = "{{ redirect_url }}";</script>
+<script>window.location.href = "{{ redirect_url|escapejs }}";</script>
 {% endif %}
 
 <div class="max-w-4xl mx-auto">

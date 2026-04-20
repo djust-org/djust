@@ -12,7 +12,7 @@
 {% block content %}
 <!-- Redirect after deletion -->
 {% if redirect_url %}
-<script>window.location.href = "{{ redirect_url }}";</script>
+<script>window.location.href = "{{ redirect_url|escapejs }}";</script>
 {% endif %}
 
 <div class="max-w-2xl mx-auto">

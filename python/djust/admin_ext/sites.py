@@ -6,8 +6,11 @@ Similar to Django's AdminSite but renders using djust LiveViews
 for reactive, real-time admin interfaces.
 """
 
+import logging
 from django.apps import apps
 from django.urls import path, reverse
+
+logger = logging.getLogger(__name__)
 
 
 class DjustAdminSite:
@@ -277,6 +280,7 @@ class DjustAdminSite:
                         current_app=self.name,
                     )
                 except Exception:
+                    logger.debug("Failed to reverse URL for %s", nav_item.url_name, exc_info=True)
                     url = "#"
 
                 sections[section_name].append(

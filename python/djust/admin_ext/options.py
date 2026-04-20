@@ -4,8 +4,11 @@ DjustModelAdmin - Configuration class for model admin interfaces.
 Similar to Django's ModelAdmin but designed for reactive LiveView rendering.
 """
 
+import logging
 from django.db import models
 from django.forms import modelform_factory
+
+logger = logging.getLogger(__name__)
 
 
 class DjustModelAdmin:
@@ -83,7 +86,7 @@ class DjustModelAdmin:
                     if isinstance(field, (models.ForeignKey, models.OneToOneField)):
                         fk_fields.append(field_name)
                 except Exception:
-                    pass
+                    logger.debug("Failed to resolve FK for %s", field_name, exc_info=True)
             if fk_fields:
                 qs = qs.select_related(*fk_fields)
 
@@ -231,4 +234,5 @@ class DjustModelAdmin:
             field = self.opts.get_field(field_name)
             return field.verbose_name.title()
         except Exception:
+            logger.debug("Failed to get verbose name for %s", field_name, exc_info=True)
             return field_name.replace("_", " ").title()
