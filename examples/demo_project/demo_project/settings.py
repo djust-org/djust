@@ -43,6 +43,8 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'channels',
     'djust',
+    'djust.theming',     # Optional extra — needed for theming tests
+    'djust.admin_ext',   # Optional extra — needed for admin tests
     # New organized apps
     'djust_shared',      # Shared components and base classes
     'djust_homepage',    # Landing page and navigation
