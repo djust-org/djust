@@ -719,7 +719,7 @@ async def test_search_with_debounce(self):
 
 ~~**Error overlay (development mode)**~~ ✅ **Shipped in v0.5.1** — `36-error-overlay.js` renders a dev-only full-screen panel on `djust:error`. Shows the error message, triggering event, traceback, hint, and validation details. Gated on `window.DEBUG_MODE` so production ships nothing. 10 JSDOM tests. See `docs/website/guides/error-overlay.md`.
 
-**`@computed` decorator for derived state** — (Moved from v0.5.0) Memoize derived values that depend on other state, re-computing only when dependencies change. React's `useMemo` equivalent.
+~~**`@computed` decorator for derived state**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `@computed("dep1", "dep2")` memoizes derived values keyed on shallow-fingerprint of listed deps; plain `@computed` retains property semantics. See `python/djust/decorators.py`.
 
 ```python
 from djust.decorators import computed
@@ -733,21 +733,21 @@ class ProductView(LiveView):
 
 ~~**`dj-lazy` — Lazy component loading**~~ ✅ **Lazy LiveView hydration shipped in PR #54** (`python/djust/static/djust/src/13-lazy-hydration.js`). `<div dj-view="..." dj-lazy>` (and `dj-lazy="click|hover|idle"`) defers WebSocket connection + LiveView mount until the element enters the viewport (or the named trigger fires). Note: this covers full LiveView hydration — deferred rendering of *individual LiveComponent instances* within an already-mounted view is a narrower variant that remains unshipped and can be picked up if a user actually needs it. Retained in ROADMAP for completeness.
 
-**Component context sharing** — (Moved from v0.5.0) React's Context API equivalent. `self.provide_context('theme', self.theme)` in a parent, `self.consume_context('theme')` in descendants. ~80 lines Python.
+~~**Component context sharing**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `self.provide_context(key, value)` / `self.consume_context(key, default)` walk the `_djust_context_parent` chain. Scoped per render tree. See `python/djust/live_view.py`.
 
-**`dj-trigger-action` — Bridge live validation to standard form POST** — (Moved from v0.5.0) Trigger standard HTML form submission after LiveView validation passes. Essential for OAuth flows, payment gateways. ~30 lines JS.
+~~**`dj-trigger-action` — Bridge live validation to standard form POST**~~ ✅ **Shipped in v0.5.1rc1** (Form & submit polish batch) — `self.trigger_submit("#form-id")` pushes an event that submits the target form's native `.submit()` after validation. Form must opt in via `dj-trigger-action`. See `python/djust/mixins/push_events.py` and `python/djust/static/djust/src/34-form-polish.js`.
 
-**Scoped loading states (`dj-loading`)** — (Moved from v0.5.0) Show loading indicators scoped to specific events. `<div dj-loading="search">Searching...</div>` only shows while the `search` event is in-flight.
+~~**Scoped loading states (`dj-loading`)**~~ ✅ **Shipped in v0.5.1rc1** (Form & submit polish batch) — `<div dj-loading="search">` shorthand auto-hides on register and shows only during in-flight `search` events. Coexists with existing `dj-loading.*` modifiers. See `python/djust/static/djust/src/10-loading-states.js`.
 
 ~~**Error boundaries**~~ ✅ **Shipped via the v0.5.0 components consolidation (PR #773)** — `python/djust/components/components/error_boundary.py` provides a style-agnostic error boundary for catching rendering errors within a LiveComponent subtree. See the components reference docs for usage.
 
 ~~**Nested form handling (`inputs_for`)**~~ ✅ **Shipped in v0.5.1** — `{% inputs_for formset as form %}` block tag in `djust.templatetags.djust_formsets` pairs with `djust.formsets.FormSetHelpersMixin` (and the direct `add_row` / `remove_row` helpers) for add/remove event handlers. Respects `max_num` / `absolute_max` caps; uses Django's standard `DELETE=on` protocol on remove. 16 tests in `python/djust/tests/test_formsets.py`. (commit 335cce26)
 
-**Stable component IDs (React 19 `useId` equivalent)** — (Moved from v0.5.0) `self.unique_id(suffix)` returning deterministic IDs stable across renders. ~30 lines Python.
+~~**Stable component IDs (React 19 `useId` equivalent)**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `self.unique_id(suffix="")` returns `djust-<viewslug>-<n>[-<suffix>]`, deterministic per logical position, reset at render boundaries. See `python/djust/live_view.py`.
 
 ~~**Native `<dialog>` element integration**~~ ✅ **Shipped in v0.5.1** — `dj-dialog="open|close"` attribute, MutationObserver-driven sync, 8 JSDOM tests. See `python/djust/static/djust/src/35-dj-dialog.js`.
 
-**Automatic dirty tracking** — Track which view attributes have changed since mount or the last event, exposing `self.changed_fields` and `self.is_dirty`. Template: `{% if is_dirty %}<button dj-click="save">Save changes</button>{% endif %}`. Use cases: "unsaved changes" warnings (`beforeunload`), conditional save buttons, optimized `handle_event` that skips work when nothing changed. Combined with selective re-rendering, dirty tracking is the foundation for efficient large views. ~60 lines Python.
+~~**Automatic dirty tracking**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `self.is_dirty` / `self.changed_fields` / `self.mark_clean()` track which public view attrs differ from the post-mount baseline. Respects `static_assigns` and skips private attrs. See `python/djust/live_view.py`.
 
 ~~**Type-safe template validation (`manage.py djust_typecheck`)**~~ ✅ **Shipped in v0.5.1** — Python-side static analysis (walks LiveView subclasses, resolves each `template_name`, extracts referenced names via regex + AST extraction of class attrs / `self.x =` assigns / properties / literal `get_context_data` returns). Supports `{# djust_typecheck: noqa name #}` pragma, `strict_context = True` per-view opt-in, `DJUST_TEMPLATE_GLOBALS` setting. Flags: `--json`, `--strict`, `--app`, `--view`. 14 tests. See `docs/website/guides/typecheck.md`. *Chose pure Python regex+AST instead of Rust AST extraction — simpler to iterate and the perf headroom isn't needed for a CI check.*
 
