@@ -95,6 +95,22 @@ function _applyStreamOp(op, streamName) {
             el.remove();
             break;
 
+        case 'prune': {
+            // Stream `:limit` garbage-collection. Trim children from the
+            // specified edge ('top' removes from the start, 'bottom' from
+            // the end) until `limit` or fewer element children remain.
+            const limit = typeof op.limit === 'number' ? Math.max(0, op.limit) : 0;
+            const edge = op.edge === 'bottom' ? 'bottom' : 'top';
+            let kids = Array.from(el.children).filter(c => c.nodeType === 1);
+            while (kids.length > limit) {
+                const victim = edge === 'top' ? kids.shift() : kids.pop();
+                if (!victim) break;
+                victim.remove();
+            }
+            _dispatchStreamEvent(el, 'stream:prune', { stream: streamName, edge, limit });
+            break;
+        }
+
         case 'text': {
             // Streaming text content — respects dj-stream-mode attribute
             const text = op.text || '';

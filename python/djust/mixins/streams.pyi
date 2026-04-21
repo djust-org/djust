@@ -19,6 +19,7 @@ class StreamsMixin:
         dom_id: Optional[Callable[[Any], str]] = None,
         at: int = -1,
         reset: bool = False,
+        limit: Optional[int] = None,
     ) -> Stream:
         """
         Initialize or update a stream with items.
@@ -66,5 +67,16 @@ class StreamsMixin:
         Args:
             name: Stream name
             items: Optional new items to add after reset
+        """
+        ...
+
+    def stream_prune(self, name: str, limit: int, edge: str = "top") -> None:
+        """
+        Emit a stream_prune op to cap the DOM element count for a stream.
+
+        Args:
+            name: Stream name
+            limit: Maximum number of DOM element children to keep
+            edge: 'top' or 'bottom' — which edge to remove excess children from
         """
         ...
