@@ -125,6 +125,15 @@ class ContextMixin:
             for key, value in vars(cls).items():
                 if key not in _seen and key not in self.__dict__:
                     _seen.add(key)
+                    # Skip read-only ``property`` descriptors defined by the
+                    # framework (``is_dirty``, ``changed_fields``) — they are
+                    # derived state and must not round-trip through session
+                    # storage. ``@computed`` properties carry ``_is_computed``
+                    # and remain eligible so they continue to appear in template
+                    # context as the existing behavior expects.
+                    if isinstance(value, property) and value.fset is None:
+                        if not getattr(value, "_is_computed", False):
+                            continue
                     # For descriptors (LiveComponent with __get__), resolve
                     # through the instance so __get__ returns the State dict
                     # instead of the descriptor itself.
