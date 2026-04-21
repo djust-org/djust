@@ -18,9 +18,12 @@ Usage:
 """
 
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from django import template
+from django.conf import settings
+from django.template import Node, TemplateSyntaxError
 from django.utils.safestring import mark_safe
 
 from .._html import build_tag
@@ -28,6 +31,11 @@ from ..config import config
 
 register = template.Library()
 logger = logging.getLogger(__name__)
+
+# Matches </script> with any letter casing. Used by the `{% colocated_hook %}`
+# body-escape defense to prevent a template-author typo from prematurely
+# closing the <script> block that carries the hook body.
+_SCRIPT_CLOSE_RE = re.compile(r"</(script)>", re.IGNORECASE)
 
 
 @register.simple_tag
@@ -559,3 +567,99 @@ def live_input(field_type: str = "text", **kwargs) -> Any:
         )
 
     return mark_safe(html)
+
+
+# ---------------------------------------------------------------------------
+# {% colocated_hook %} — Phoenix 1.1 parity
+# ---------------------------------------------------------------------------
+
+
+class ColocatedHookNode(Node):
+    """
+    Emit a ``<script type="djust/hook" data-hook="NAME">...</script>`` tag
+    carrying the body JS. The client runtime
+    (``python/djust/static/djust/src/32-colocated-hooks.js``) walks the DOM
+    on init and after each VDOM morph, extracts these scripts, and registers
+    each body as ``window.djust.hooks[NAME]``.
+
+    With ``DJUST_CONFIG = {"hook_namespacing": "strict"}`` in settings, the
+    emitted ``data-hook`` attribute is prefixed with
+    ``<view_module>.<view_qualname>.`` so two views can each define ``Chart``
+    without colliding.  Per-tag opt-out: ``{% colocated_hook "X" global %}``
+    always emits the bare name.
+
+    SECURITY: the body is template-author JS, not user input.  We escape
+    ``</script>`` to prevent premature tag close.  mark_safe is used on the
+    final string because every interpolation is either a template-author hook
+    name or the body (which has been ``</script>``-escaped) — no
+    request/POST data is interpolated.  The client uses ``new Function(...)``
+    to evaluate the body; strict-CSP apps without ``'unsafe-eval'`` should
+    avoid this tag and register hooks via a nonce-bearing script instead.
+    """
+
+    def __init__(self, name, nodelist, force_global=False):
+        self.name = name
+        self.nodelist = nodelist
+        self.force_global = force_global
+
+    def _namespace(self, context):
+        if self.force_global:
+            return self.name
+        cfg = getattr(settings, "DJUST_CONFIG", {}) or {}
+        if cfg.get("hook_namespacing") != "strict":
+            return self.name
+        view = context.get("view")
+        if view is None:
+            return self.name
+        try:
+            prefix = f"{type(view).__module__}.{type(view).__qualname__}"
+        except AttributeError:
+            return self.name
+        return f"{prefix}.{self.name}"
+
+    def render(self, context):
+        body = self.nodelist.render(context)
+        namespaced = self._namespace(context)
+
+        # Defense: escape </script> in the body to prevent premature tag close.
+        # HTML tokenizers treat tag names case-insensitively, so a mixed-case
+        # </Script> or </sCrIpT> would still terminate the <script> block.
+        # Use a case-insensitive regex that preserves the original casing of
+        # the matched text inside the escaped form so the body remains
+        # readable to a human auditor.
+        safe_body = _SCRIPT_CLOSE_RE.sub(r"<\\/\1>", body)
+        banner = "/* COLOCATED HOOK: " + namespaced + " */"
+        # Build the tag via concatenation (no f-string interpolation with
+        # mark_safe per CLAUDE.md rules). `namespaced` is a template-author
+        # supplied identifier; `safe_body` has been </script>-escaped above.
+        html = (
+            '<script type="djust/hook" data-hook="'
+            + namespaced
+            + '">'
+            + banner
+            + "\n"
+            + safe_body
+            + "</script>"
+        )
+        return mark_safe(html)
+
+
+@register.tag("colocated_hook")
+def do_colocated_hook(parser, token):
+    """
+    ``{% colocated_hook "HookName" [global] %}js body{% endcolocated_hook %}``
+
+    Emits a colocated JS hook definition alongside the template that uses it.
+    The optional ``global`` keyword opts out of namespacing when
+    ``DJUST_CONFIG["hook_namespacing"] = "strict"`` is set.
+    """
+    bits = token.split_contents()
+    if len(bits) < 2:
+        raise TemplateSyntaxError("{% colocated_hook %} requires a hook name argument")
+    name = bits[1].strip("\"'")
+    if not name:
+        raise TemplateSyntaxError("{% colocated_hook %} name must be non-empty")
+    force_global = len(bits) >= 3 and bits[2] == "global"
+    nodelist = parser.parse(("endcolocated_hook",))
+    parser.delete_first_token()
+    return ColocatedHookNode(name, nodelist, force_global)

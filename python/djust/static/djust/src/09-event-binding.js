@@ -1261,6 +1261,12 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // Extract any new colocated hook definitions (<script type="djust/hook">)
+    // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
+    // are visible to mountHooks().
+    if (window.djust.extractColocatedHooks) {
+        window.djust.extractColocatedHooks(scope || document);
+    }
     if (window.djust.mountHooks) {
         // updateHooks scans for [dj-hook] — scope it too
         const hookRoot = scope || getLiveViewRoot();
