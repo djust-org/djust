@@ -8,6 +8,8 @@ powered by Rust for maximum performance.
 from .utils import get_template_dirs, clear_template_dirs_cache
 from .live_view import LiveView, live_view
 from .components.base import Component, LiveComponent
+from .components.assigns import Assign, AssignValidationError, Slot
+from .components.function_component import component, clear_components
 from .decorators import (
     reactive,
     event_handler,
@@ -191,6 +193,13 @@ __all__ = [
     "live_view",
     "Component",
     "LiveComponent",
+    # Declarative assigns & slots
+    "Assign",
+    "AssignValidationError",
+    "Slot",
+    # Function components
+    "component",
+    "clear_components",
     "reactive",
     "event_handler",
     "event",

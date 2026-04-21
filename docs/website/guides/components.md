@@ -827,3 +827,101 @@ Then use theme colors in Tailwind classes:
 | **`djust-components` alone**             | You want pre-built template tags but will define your own `--dj-*` CSS variables.                                                     |
 | **Core `djust.components`**              | You need Rust-accelerated rendering for high-frequency components (100+ per page), or need programmatic component creation in Python. |
 | **Plain HTML**                           | You want full control. Use `dj-click`, `dj-submit` etc. directly on your own markup. djust has zero opinions on your HTML structure.  |
+
+## Function Components (v0.5.0+)
+
+For the ~80% of UI pieces that are stateless — buttons, cards, badges, icons, alert boxes — function components close the gap between raw HTML and a full `LiveComponent`. They are plain Python functions registered via the `@component` decorator and invokable from templates with `{% call %}` or `{% component %}`.
+
+```python
+from djust import component, Assign
+
+@component
+def badge(assigns):
+    variant = assigns.get("variant", "default")
+    return f'<span class="badge bg-{variant}">{assigns["children"]}</span>'
+
+@component(
+    name="primary_button",
+    assigns=[
+        Assign("label", type=str, required=True),
+        Assign("size", type=str, default="md", values=["sm", "md", "lg"]),
+    ],
+)
+def button(assigns):
+    return f'<button class="btn btn-{assigns["size"]}">{assigns["label"]}</button>'
+```
+
+Usage in templates:
+
+```django
+{% call "badge" variant="primary" %}New{% endcall %}
+
+{% component "primary_button" label="Save" size="lg" %}{% endcomponent %}
+```
+
+Both tags are synonyms — pick whichever reads best at the call site. The body of the tag (everything between `{% call %}` / `{% endcall %}`) becomes `assigns["children"]` *and* `assigns["inner_block"]` (Phoenix parity). The body **always** wins over any `children=`/`inner_block=` kwarg passed at the call site — the block body is authoritative.
+
+> **⚠ Escape user-controlled strings.** The examples above f-string-interpolate `variant` / `label` directly into HTML. That's safe when the values come from your own code (literals, enum values), but if a kwarg originates from user input — e.g. `{% call badge variant=user_selected_variant %}` where `user_selected_variant` is a form field — you must escape it. Prefer `html.escape(variant)` or use `format_html(...)` from `django.utils.html`. The function's return value is treated as trusted HTML by the template engine (no auto-escape), which is what makes components expressive — but also means XSS is the component author's responsibility, not the template engine's.
+
+### Declarative Assigns
+
+Declare the expected inputs with `Assign(...)` to get runtime validation, type coercion, and self-documenting components. Available on both `LiveComponent` subclasses (via class attribute) and function components (via `@component(assigns=[...])`).
+
+```python
+from djust import LiveComponent, Assign, Slot
+
+class Card(LiveComponent):
+    template_name = "components/card.html"
+    assigns = [
+        Assign("title", type=str, required=True),
+        Assign("variant", type=str, default="default",
+               values=["default", "primary", "danger"]),
+        Assign("padding", type=int, default=4),   # str "8" -> int 8 auto-coercion
+        Assign("dismissable", type=bool, default=False),  # "true"/"yes"/"1" accepted
+    ]
+    slots = [Slot("inner_block", required=True)]
+```
+
+Validation behaviour:
+
+- **Required missing** — raises `AssignValidationError` when `settings.DEBUG=True`; logs a warning otherwise.
+- **Type coercion** — `str → int`, `str → float`, `str → bool` (case-insensitive `true`/`yes`/`1`/`on`; `false`/`no`/`0`/`off`/empty).
+- **Enum check** — values outside `values=[...]` raise.
+- **Inheritance** — child-class `assigns` extend parent's; same-name entries override.
+
+### Named Slots
+
+Pass multiple named content blocks (with attributes) into a component. Perfect for tables where the parent defines columns, or any layout where content has distinct regions.
+
+```django
+{% call "card" %}
+  {% slot header label="Dashboard" %}
+    <h3>Today's Metrics</h3>
+  {% endslot %}
+  {% slot footer %}
+    <button>Close</button>
+  {% endslot %}
+  Main body content here.
+{% endcall %}
+```
+
+Inside the component, slots are available as a dict:
+
+```python
+@component
+def card(assigns):
+    header = assigns["slots"].get("header", [{"content": ""}])[0]["content"]
+    footer = assigns["slots"].get("footer", [{"content": ""}])[0]["content"]
+    body = assigns["children"]  # Non-slot content
+    return f"<div class='card'><header>{header}</header>{body}<footer>{footer}</footer></div>"
+```
+
+`assigns["slots"]` is `{name: [slot_dict, ...]}` where each `slot_dict` carries `{"attrs": {...}, "content": "..."}`. Multiple same-name slots collect into a list:
+
+```django
+{% slot col label="Name" %}{{ row.name }}{% endslot %}
+{% slot col label="Email" %}{{ row.email }}{% endslot %}
+{% slot col label="Joined" %}{{ row.joined }}{% endslot %}
+```
+
+yields `assigns["slots"]["col"]` as a 3-element list. The inline tag `{% render_slot slots.col.0 %}` emits the content of a slot at a given path — useful when you need to reference a slot inside a rendered loop.
