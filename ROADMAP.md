@@ -35,7 +35,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Keep-Alive / `dj-activity` | Pre-render hidden routes, preserve state — React 19.2 parity | v0.7.0 |
 | **P2** | Streaming markdown renderer | Incremental markdown for LLM output — strongest AI vertical signal | v0.7.0 |
 | **P1** | Database change notifications (pg_notify) | PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards | v0.5.0 |
-| **P1** | Virtual/windowed lists (`dj-virtual`) | DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps | v0.5.0 |
+| ~~**P1**~~ | ~~Virtual/windowed lists (`dj-virtual`)~~ ✅ | ~~DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps~~ | v0.5.0 |
 | **P2** | Multi-step wizard (`WizardMixin`) | #2 most common UI pattern after CRUD — no framework has this natively | v0.5.1 |
 | **P2** | Error overlay (dev mode) | In-browser error display like Next.js/Vite — faster debugging loop | v0.5.1 |
 | **P2** | WebSocket compression | `permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available | v0.6.0 |
@@ -687,9 +687,9 @@ class OrderDashboardView(LiveView):
             self.orders = list(Order.objects.filter(status='pending'))
 ```
 
-**Virtual/windowed lists (`dj-virtual`)** — Render only the visible portion of large lists, recycling DOM elements as the user scrolls. `<div dj-virtual="items" dj-virtual-item-height="48" dj-virtual-overscan="5">` renders ~20-30 visible items plus overscan, even if `items` has 10,000 entries. The server sends the full list to the client once (or uses temporary assigns + streams for truly large datasets), and the client handles windowing purely client-side — no server round-trip per scroll. Different from streams with `:limit` (which manages server memory) — virtual lists manage *client DOM performance*. The two complement each other: streams feed data in, virtual lists render it efficiently. React's `react-window` and `react-virtuoso` are the most popular React libraries by download count after React itself — this is the #1 performance pattern for data-heavy apps. Implementation: CSS `transform: translateY()` positioning with a sentinel element for scroll tracking, recycled DOM nodes via the existing morph pipeline. ~120 lines JS + ~30 lines Python (context helper for slice calculation). *Without virtual lists, djust apps with 500+ row tables visibly lag. With virtual lists, 100K rows render at 60fps. This is not optional for admin panels, log viewers, or any data-intensive application.*
+~~**Virtual/windowed lists (`dj-virtual`)**~~ ✅ **Shipped in v0.5.0** — `python/djust/static/djust/src/29-virtual-list.js`. Render only the visible portion of large lists, recycling DOM elements as the user scrolls. `<div dj-virtual="items" dj-virtual-item-height="48" dj-virtual-overscan="5">` renders ~20-30 visible items plus overscan, even if `items` has 10,000 entries. Fixed-height model via `dj-virtual-item-height`; variable-height deferred to v0.5.1. See `docs/website/guides/large-lists.md`.
 
-**`dj-viewport-top` / `dj-viewport-bottom` — Bidirectional infinite scroll (Phoenix 1.0 streams parity)** — Fire server events when the first or last child of a stream container enters the viewport. `<div dj-stream="messages" dj-viewport-top="load_older" dj-viewport-bottom="load_newer">`. Combined with stream `:limit` (cap DOM elements to N), this enables memory-efficient bidirectional infinite scroll — load older messages when scrolling up, newer when scrolling down, and garbage-collect off-screen items. Phoenix 1.0 added `phx-viewport-top` and `phx-viewport-bottom` specifically for this pattern. Implementation: IntersectionObserver on first/last stream children, event push on intersection, stream `limit` option to remove elements from the opposite end. ~60 lines JS + ~40 lines Python. *This is the foundation for chat apps, activity feeds, and log viewers — the three most common real-time UI patterns.*
+~~**`dj-viewport-top` / `dj-viewport-bottom` — Bidirectional infinite scroll**~~ ✅ **Shipped in v0.5.0** — `python/djust/static/djust/src/30-infinite-scroll.js` and `stream()` `limit=` kwarg on `StreamsMixin`. Once-per-entry firing semantics matches Phoenix; re-arm via `djust.resetViewport(container)` or by replacing the sentinel child. `stream_prune` op trims children from the opposite edge so chat / feed / log patterns cap DOM growth. See `docs/website/guides/large-lists.md`.
 
 **Service worker core improvements** — Instant page shell (cached head/nav/footer served instantly, swap `<main>` on response). WebSocket reconnection bridge (buffer events in SW during disconnect, replay on reconnect).
 
@@ -903,8 +903,8 @@ Open questions that inform future direction:
 | Targeted events (`@myself`) | `phx-target` | — | Not started | v0.5.0 |
 | Named slots | `slot/3` macro | `children` / slots | Not started | v0.5.0 |
 | Direct-to-S3 uploads | `presign_upload` | — | Not started | v0.5.0 |
-| Stream limits + viewport | `:limit`, viewport events | Virtualization | Not started | v0.5.0 |
-| **Viewport top/bottom (streams)** | **`phx-viewport-top/bottom`** | — | **Not started** | **v0.5.0** |
+| ~~Stream limits + viewport~~ ✅ | ~~`:limit`, viewport events~~ | ~~Virtualization~~ | ~~Not started~~ **Shipped** | v0.5.0 |
+| ~~**Viewport top/bottom (streams)**~~ ✅ | ~~**`phx-viewport-top/bottom`**~~ | — | ~~**Not started**~~ **Shipped** | **v0.5.0** |
 | `handle_info` | `handle_info/2` | — | Not started | v0.5.0 |
 | Template fragments | HEEx static tracking | — | Not started | v0.5.0 |
 | **`used_input?` (server-side)** | **`used_input?/2`** | — | **Not started** | **v0.5.0** |
@@ -963,7 +963,7 @@ Open questions that inform future direction:
 | **Type-safe template validation** | — | TypeScript | **Not started** | **v0.5.1** |
 | **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
 | **DB change notifications** | **PubSub + Ecto** | — | **Not started** | **v0.5.0** |
-| **Virtual/windowed lists** | — | **`react-window`** | **Not started** | **v0.5.0** |
+| ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
 | **Multi-step wizard** | — | **`react-hook-form`** | **Not started** | **v0.5.1** |
 | **Paste event handling** | — | **`onPaste`** | **Not started** | **v0.4.1** |
 | ~~**Standalone `{% live_input %}` template tag**~~ | — | — | ✅ **Shipped (#650, PR #668)** | v0.4.1 |
@@ -1016,7 +1016,7 @@ High-impact areas for contributions:
 22. **Multi-tab sync** — BroadcastChannel API integration, ~60 lines JS
 23. **View Transitions API** — Animated page transitions, ~60 lines JS
 24a. **`dj-paste`** — Paste event handling (text + images), ~40 lines JS
-24. **`dj-viewport-top`/`dj-viewport-bottom`** — Bidirectional infinite scroll, ~60 lines JS + ~40 lines Python
+24. ~~**`dj-viewport-top`/`dj-viewport-bottom`**~~ ✅ Shipped in v0.5.0 — Bidirectional infinite scroll (`30-infinite-scroll.js` + stream `limit` kwarg)
 25. **`used_input?` (server-side feedback)** — Server-side field touched tracking, ~40 lines Python + ~10 lines JS
 26. **Programmable JS Commands from hooks** — Expose DJ command API to dj-hook callbacks, ~60 lines JS
 27. **Stable component IDs** — Deterministic `self.unique_id()` for ARIA/label matching, ~30 lines Python
@@ -1045,7 +1045,7 @@ High-impact areas for contributions:
 47. **Streaming markdown renderer** — Incremental Rust-side CommonMark parser for LLM streaming, ~500 lines Rust
 48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
 49. **Database change notifications** — PostgreSQL LISTEN/NOTIFY → LiveView push, ~150 lines Python
-50. **Virtual/windowed lists** — DOM virtualization for large lists, ~120 lines JS + ~30 lines Python
+50. ~~**Virtual/windowed lists**~~ ✅ Shipped in v0.5.0 — DOM virtualization for large lists (`29-virtual-list.js`, fixed-height v0.5.0; variable-height v0.5.1)
 51. **Multi-step wizard (`WizardMixin`)** — Per-step validation, URL sync, progress, ~200 lines Python + template tags
 52. **i18n live language switching** — Switch locale without page reload, ~60 lines Python
 

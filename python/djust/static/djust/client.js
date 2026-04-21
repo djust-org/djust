@@ -3923,6 +3923,11 @@ function reinitAfterDOMUpdate(scope) {
     }
     updateHooks();
 
+    // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
+    // get observers and existing ones pick up new first/last children.
+    if (window.djust.initVirtualLists) window.djust.initVirtualLists(scope || document);
+    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(scope || document);
+
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     const scrollRoot = scope || document;
     scrollRoot.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
@@ -6345,6 +6350,10 @@ function djustInit() {
     // Scan and register dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
+    // Initialize virtual lists and infinite-scroll viewport observers (v0.5.0)
+    if (window.djust.initVirtualLists) window.djust.initVirtualLists(document);
+    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(document);
+
     // Mark as initialized so turbo:load handler knows we're ready
     window.djustInitialized = true;
     if (globalThis.djustDebug) console.log('[LiveView] Initialization complete, window.djustInitialized = true');
@@ -7111,6 +7120,22 @@ function _applyStreamOp(op, streamName) {
             _dispatchStreamEvent(el, 'stream:remove', { stream: streamName });
             el.remove();
             break;
+
+        case 'prune': {
+            // Stream `:limit` garbage-collection. Trim children from the
+            // specified edge ('top' removes from the start, 'bottom' from
+            // the end) until `limit` or fewer element children remain.
+            const limit = typeof op.limit === 'number' ? Math.max(0, op.limit) : 0;
+            const edge = op.edge === 'bottom' ? 'bottom' : 'top';
+            let kids = Array.from(el.children).filter(c => c.nodeType === 1);
+            while (kids.length > limit) {
+                const victim = edge === 'top' ? kids.shift() : kids.pop();
+                if (!victim) break;
+                victim.remove();
+            }
+            _dispatchStreamEvent(el, 'stream:prune', { stream: streamName, edge, limit });
+            break;
+        }
 
         case 'text': {
             // Streaming text content — respects dj-stream-mode attribute
@@ -9091,4 +9116,377 @@ window.djust.bindModelElements = bindModelElements;
         showBubble: showBubble,
         hideBubble: hideBubble,
     };
+})();
+
+// ============================================================================
+// dj-virtual — Virtual / windowed lists with DOM recycling (v0.5.0)
+// ============================================================================
+//
+// Render only the visible slice of a large list. All items outside the
+// viewport (plus overscan) are pulled out of the DOM on scroll; the container
+// keeps a spacer element so the native scrollbar reflects the virtual length.
+//
+// Required attributes on the container:
+//   dj-virtual="items_var_name"       — context variable driving the list
+//   dj-virtual-item-height="48"       — fixed pixel height per item
+//
+// Optional:
+//   dj-virtual-overscan="5"           — rows rendered above/below (default 3)
+//
+// The container itself must have a fixed height (e.g. style="height: 600px")
+// and `overflow: auto`. Direct children must be pre-rendered server-side for
+// first paint; on hydration we move them under an inner shell that uses
+// translateY() to position the visible slice, and recycle nodes on scroll.
+//
+// Integration:
+//   - djust.initVirtualLists(root) — scan + set up new containers
+//   - djust.refreshVirtualList(el) — forced recompute after VDOM morph
+//   - djust.teardownVirtualList(el) — remove observers (test helper)
+//
+// Throttling: scroll handler wrapped in requestAnimationFrame (one compute
+// per frame). No setTimeout debounce.
+
+(function initVirtualListModule() {
+    const STATE = new WeakMap();
+    const DEFAULT_OVERSCAN = 3;
+
+    function parseIntAttr(el, name, fallback) {
+        const raw = el.getAttribute(name);
+        if (raw == null || raw === '') return fallback;
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) && n >= 0 ? n : fallback;
+    }
+
+    function setup(container) {
+        const itemHeight = parseIntAttr(container, 'dj-virtual-item-height', 0);
+        if (!itemHeight) {
+            if (globalThis.djustDebug) {
+                console.warn('[dj-virtual] Missing or invalid dj-virtual-item-height on', container);
+            }
+            return;
+        }
+        const overscan = parseIntAttr(container, 'dj-virtual-overscan', DEFAULT_OVERSCAN);
+
+        // Snapshot the pre-rendered children as the full item pool.
+        const originalChildren = Array.from(container.children).filter(
+            el => el.nodeType === 1
+        );
+
+        // Inner shell that actually holds the visible slice. A spacer sibling
+        // forces the container scroll height to the virtual length.
+        const shell = document.createElement('div');
+        shell.setAttribute('data-dj-virtual-shell', '');
+        shell.style.position = 'relative';
+        shell.style.willChange = 'transform';
+        shell.style.transform = 'translateY(0px)';
+
+        const spacer = document.createElement('div');
+        spacer.setAttribute('data-dj-virtual-spacer', '');
+        spacer.style.width = '1px';
+        spacer.style.pointerEvents = 'none';
+        spacer.style.visibility = 'hidden';
+
+        container.innerHTML = '';
+        container.appendChild(shell);
+        container.appendChild(spacer);
+        if (getComputedStyle(container).position === 'static') {
+            container.style.position = 'relative';
+        }
+
+        const state = {
+            container,
+            shell,
+            spacer,
+            itemHeight,
+            overscan,
+            items: originalChildren, // data source: cloned DOM nodes
+            visibleStart: 0,
+            visibleEnd: 0,
+            rafPending: false,
+            onScroll: null,
+            onResize: null,
+            resizeObserver: null,
+        };
+
+        state.onScroll = () => requestFrame(state);
+        state.onResize = () => requestFrame(state);
+
+        container.addEventListener('scroll', state.onScroll, { passive: true });
+        if (typeof ResizeObserver !== 'undefined') {
+            state.resizeObserver = new ResizeObserver(state.onResize);
+            state.resizeObserver.observe(container);
+        }
+
+        STATE.set(container, state);
+        render(state);
+    }
+
+    function requestFrame(state) {
+        if (state.rafPending) return;
+        state.rafPending = true;
+        const raf = typeof requestAnimationFrame !== 'undefined'
+            ? requestAnimationFrame
+            : (cb) => setTimeout(cb, 16);
+        raf(() => {
+            state.rafPending = false;
+            render(state);
+        });
+    }
+
+    function render(state) {
+        const { container, shell, spacer, itemHeight, overscan, items } = state;
+        const total = items.length;
+
+        spacer.style.height = (total * itemHeight) + 'px';
+
+        if (total === 0) {
+            shell.innerHTML = '';
+            shell.style.transform = 'translateY(0px)';
+            state.visibleStart = 0;
+            state.visibleEnd = 0;
+            return;
+        }
+
+        const viewportHeight = container.clientHeight || 0;
+        const scrollTop = container.scrollTop || 0;
+
+        const firstVisible = Math.floor(scrollTop / itemHeight);
+        const visibleCount = Math.max(1, Math.ceil(viewportHeight / itemHeight));
+
+        const start = Math.max(0, firstVisible - overscan);
+        const end = Math.min(total, firstVisible + visibleCount + overscan);
+
+        if (start === state.visibleStart && end === state.visibleEnd && shell.childElementCount === end - start) {
+            // Window unchanged and DOM already populated — nothing to do.
+            shell.style.transform = 'translateY(' + (start * itemHeight) + 'px)';
+            return;
+        }
+
+        // Recycle by clearing the shell and re-attaching the slice nodes.
+        // We reuse the real element references from `items` so frameworks /
+        // tests can rely on identity across scrolls.
+        shell.textContent = '';
+        const frag = document.createDocumentFragment();
+        for (let i = start; i < end; i++) {
+            const node = items[i];
+            node.style.height = itemHeight + 'px';
+            node.style.boxSizing = 'border-box';
+            frag.appendChild(node);
+        }
+        shell.appendChild(frag);
+        shell.style.transform = 'translateY(' + (start * itemHeight) + 'px)';
+
+        state.visibleStart = start;
+        state.visibleEnd = end;
+    }
+
+    function initVirtualLists(root) {
+        const scope = root || document;
+        const containers = scope.querySelectorAll
+            ? scope.querySelectorAll('[dj-virtual]')
+            : [];
+        containers.forEach(container => {
+            if (!STATE.has(container)) setup(container);
+        });
+    }
+
+    function refreshVirtualList(container) {
+        const state = STATE.get(container);
+        if (!state) return;
+        // Re-snapshot: after VDOM morph, the shell holds only the visible
+        // slice. The full data source is whatever is currently in the shell
+        // plus any new children added outside of virtualization. We support
+        // an external update path: callers may set `container.__djVirtualItems`
+        // to an array of HTMLElements to replace the item pool.
+        const replacement = container.__djVirtualItems;
+        if (Array.isArray(replacement)) {
+            state.items = replacement.slice();
+            delete container.__djVirtualItems;
+            state.visibleStart = -1;
+            state.visibleEnd = -1;
+        }
+        render(state);
+    }
+
+    function teardownVirtualList(container) {
+        const state = STATE.get(container);
+        if (!state) return;
+        container.removeEventListener('scroll', state.onScroll);
+        if (state.resizeObserver) state.resizeObserver.disconnect();
+        STATE.delete(container);
+    }
+
+    window.djust = window.djust || {};
+    window.djust.initVirtualLists = initVirtualLists;
+    window.djust.refreshVirtualList = refreshVirtualList;
+    window.djust.teardownVirtualList = teardownVirtualList;
+})();
+
+// ============================================================================
+// dj-viewport-top / dj-viewport-bottom — Bidirectional infinite scroll (v0.5.0)
+// ============================================================================
+//
+// Fire server events when the first or last child of a stream container
+// enters the viewport. Phoenix 1.0 parity with phx-viewport-top /
+// phx-viewport-bottom.
+//
+// Attributes on the stream/list container:
+//   dj-viewport-top="event_name"       — fire when first child enters viewport
+//   dj-viewport-bottom="event_name"    — fire when last child enters viewport
+//   dj-viewport-threshold="0.1"        — IntersectionObserver threshold (default 0.1)
+//
+// Firing semantics: once-per-entry. A sentinel attribute
+// `data-dj-viewport-fired` is set on the sentinel child (first or last) so
+// the same element doesn't re-fire on scroll oscillation. To re-arm after
+// firing, either (a) replace the sentinel child via a stream op (the new
+// child has no sentinel attribute), or (b) call `djust.resetViewport(container)`
+// from a client-side hook. There is no corresponding HTML attribute —
+// re-arming is programmatic.
+//
+// Integration:
+//   - djust.initInfiniteScroll(root)
+//   - djust.teardownInfiniteScroll(container)
+//   - djust.resetViewport(container) — clear fired sentinels (re-arm)
+
+(function initInfiniteScrollModule() {
+    const STATE = new WeakMap();
+    const DEFAULT_THRESHOLD = 0.1;
+
+    function parseFloatAttr(el, name, fallback) {
+        const raw = el.getAttribute(name);
+        if (raw == null || raw === '') return fallback;
+        const n = parseFloat(raw);
+        return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback;
+    }
+
+    function dispatch(container, eventName, edge) {
+        // Prefer djust.pushEvent if wired, else dispatch a CustomEvent so
+        // tests and hook-based handlers can observe.
+        const detail = { event: eventName, edge, target: container };
+        container.dispatchEvent(new CustomEvent('dj-viewport', {
+            bubbles: true,
+            detail,
+        }));
+        if (window.djust && typeof window.djust.pushEvent === 'function') {
+            try {
+                window.djust.pushEvent(eventName, { edge });
+            } catch (err) {
+                if (globalThis.djustDebug) {
+                    console.warn('[dj-viewport] pushEvent failed for %s: %s', eventName, err);
+                }
+            }
+        }
+    }
+
+    function markFired(el) {
+        if (el && el.setAttribute) el.setAttribute('data-dj-viewport-fired', 'true');
+    }
+    function hasFired(el) {
+        return !!(el && el.getAttribute && el.getAttribute('data-dj-viewport-fired') === 'true');
+    }
+
+    function setup(container) {
+        if (typeof IntersectionObserver === 'undefined') {
+            if (globalThis.djustDebug) {
+                console.warn('[dj-viewport] IntersectionObserver not available');
+            }
+            return;
+        }
+
+        const topEvent = container.getAttribute('dj-viewport-top');
+        const bottomEvent = container.getAttribute('dj-viewport-bottom');
+        if (!topEvent && !bottomEvent) return;
+
+        const threshold = parseFloatAttr(container, 'dj-viewport-threshold', DEFAULT_THRESHOLD);
+
+        const state = {
+            container,
+            topEvent,
+            bottomEvent,
+            threshold,
+            observer: null,
+            observedTop: null,
+            observedBottom: null,
+        };
+
+        state.observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                const target = entry.target;
+                if (hasFired(target)) continue;
+                markFired(target);
+
+                if (target === state.observedTop && state.topEvent) {
+                    dispatch(container, state.topEvent, 'top');
+                } else if (target === state.observedBottom && state.bottomEvent) {
+                    dispatch(container, state.bottomEvent, 'bottom');
+                }
+            }
+        }, {
+            root: null,
+            threshold,
+        });
+
+        STATE.set(container, state);
+        observeSentinels(state);
+    }
+
+    function observeSentinels(state) {
+        const { container, observer } = state;
+        const kids = Array.from(container.children).filter(el => el.nodeType === 1);
+        const first = kids[0] || null;
+        const last = kids[kids.length - 1] || null;
+
+        if (state.observedTop && state.observedTop !== first) {
+            observer.unobserve(state.observedTop);
+            state.observedTop = null;
+        }
+        if (state.observedBottom && state.observedBottom !== last) {
+            observer.unobserve(state.observedBottom);
+            state.observedBottom = null;
+        }
+
+        if (state.topEvent && first && first !== state.observedTop) {
+            observer.observe(first);
+            state.observedTop = first;
+        }
+        if (state.bottomEvent && last && last !== state.observedBottom && last !== first) {
+            observer.observe(last);
+            state.observedBottom = last;
+        }
+    }
+
+    function initInfiniteScroll(root) {
+        const scope = root || document;
+        const containers = scope.querySelectorAll
+            ? scope.querySelectorAll('[dj-viewport-top], [dj-viewport-bottom]')
+            : [];
+        containers.forEach(container => {
+            if (!STATE.has(container)) {
+                setup(container);
+            } else {
+                // Re-scan sentinels: children may have changed after VDOM morph.
+                observeSentinels(STATE.get(container));
+            }
+        });
+    }
+
+    function resetViewport(container) {
+        const state = STATE.get(container);
+        if (!state) return;
+        if (state.observedTop) state.observedTop.removeAttribute('data-dj-viewport-fired');
+        if (state.observedBottom) state.observedBottom.removeAttribute('data-dj-viewport-fired');
+    }
+
+    function teardownInfiniteScroll(container) {
+        const state = STATE.get(container);
+        if (!state) return;
+        if (state.observer) state.observer.disconnect();
+        STATE.delete(container);
+    }
+
+    window.djust = window.djust || {};
+    window.djust.initInfiniteScroll = initInfiniteScroll;
+    window.djust.resetViewport = resetViewport;
+    window.djust.teardownInfiniteScroll = teardownInfiniteScroll;
 })();

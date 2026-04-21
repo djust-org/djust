@@ -106,6 +106,11 @@ navigation:
         file: guides/streaming.md
         order: 1
         level: intermediate
+      - title: Large Lists (Virtual / Infinite)
+        slug: large-lists
+        file: guides/large-lists.md
+        order: 1.5
+        level: intermediate
       - title: Presence
         slug: presence
         file: guides/presence.md

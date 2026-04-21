@@ -132,6 +132,10 @@ function djustInit() {
     // Scan and register dj-loading attributes
     globalLoadingManager.scanAndRegister();
 
+    // Initialize virtual lists and infinite-scroll viewport observers (v0.5.0)
+    if (window.djust.initVirtualLists) window.djust.initVirtualLists(document);
+    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(document);
+
     // Mark as initialized so turbo:load handler knows we're ready
     window.djustInitialized = true;
     if (globalThis.djustDebug) console.log('[LiveView] Initialization complete, window.djustInitialized = true');

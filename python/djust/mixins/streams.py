@@ -17,6 +17,7 @@ class StreamsMixin:
         dom_id: Optional[Callable[[Any], str]] = None,
         at: int = -1,
         reset: bool = False,
+        limit: Optional[int] = None,
     ) -> Stream:
         """
         Initialize or update a stream with items.
@@ -30,6 +31,11 @@ class StreamsMixin:
             dom_id: Function to generate DOM id from item (default: lambda x: x.id)
             at: Position to insert (-1 = end, 0 = beginning)
             reset: If True, clear existing items first
+            limit: If set, emit a stream_prune op to cap the DOM element
+                count. Items are pruned from the opposite edge of ``at``:
+                prepending (``at=0``) prunes the bottom; appending
+                (``at=-1``) prunes the top. Used for bidirectional
+                infinite scroll with ``dj-viewport-top/bottom``.
 
         Returns:
             Stream object for chaining
@@ -70,7 +76,46 @@ class StreamsMixin:
                 }
             )
 
+        if limit is not None and limit >= 0:
+            # Prune from the opposite edge of the insert direction so the
+            # newly added items are preserved.
+            edge = "bottom" if at == 0 else "top"
+            self._stream_operations.append(
+                {
+                    "type": "stream_prune",
+                    "stream": name,
+                    "limit": int(limit),
+                    "edge": edge,
+                }
+            )
+
         return stream_obj
+
+    def stream_prune(self, name: str, limit: int, edge: str = "top") -> None:
+        """
+        Emit a stream_prune op to cap the DOM element count for a stream.
+
+        Args:
+            name: Stream name. Must have been initialized via ``stream()``.
+            limit: Maximum number of DOM element children to keep. Must be >= 0.
+            edge: ``"top"`` removes from the start of the container (oldest
+                children in an append-only feed); ``"bottom"`` removes from
+                the end.
+        """
+        if name not in self._streams:
+            raise ValueError(f"Stream '{name}' not initialized. Call stream() first.")
+        if limit < 0:
+            raise ValueError("limit must be >= 0")
+        if edge not in ("top", "bottom"):
+            raise ValueError("edge must be 'top' or 'bottom'")
+        self._stream_operations.append(
+            {
+                "type": "stream_prune",
+                "stream": name,
+                "limit": int(limit),
+                "edge": edge,
+            }
+        )
 
     def stream_insert(self, name: str, item: Any, at: int = -1) -> None:
         """Insert an item into a stream (-1 = append, 0 = prepend)."""
