@@ -88,6 +88,46 @@ def test_extract_context_keys_from_ast_finds_literal_dict_returns():
     assert keys == {"alpha", "beta"}
 
 
+def test_extract_context_keys_from_ast_finds_self_assignments():
+    class _V(LiveView):
+        def mount(self, request=None, **kwargs):
+            self.count = 0
+            self.items = []
+
+        def tick(self):
+            self.count += 1  # AugAssign
+
+    keys = _extract_context_keys_from_ast(_V)
+    assert {"count", "items"} <= keys
+
+
+def test_extract_context_keys_from_ast_finds_annotated_assignments():
+    """Typed `self.x: int = 0` declarations must be picked up (Stage 11 regression)."""
+
+    class _V(LiveView):
+        def mount(self, request=None, **kwargs):
+            self.count: int = 0
+            self.label: str = ""
+
+    keys = _extract_context_keys_from_ast(_V)
+    assert {"count", "label"} <= keys
+
+
+def test_extract_context_keys_from_ast_finds_property_methods():
+    class _V(LiveView):
+        @property
+        def display_name(self):
+            return "x"
+
+        @property
+        def _private_prop(self):
+            return "hidden"
+
+    keys = _extract_context_keys_from_ast(_V)
+    assert "display_name" in keys
+    assert "_private_prop" not in keys  # private names skipped
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _check_view integration tests
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,6 +190,36 @@ def test_check_view_strict_flag_flows_through(monkeypatch):
     report = _check_view(_V)
     assert report is not None
     assert report["strict"] is True
+
+
+def test_check_view_honors_DJUST_TEMPLATE_GLOBALS(monkeypatch, settings):
+    """Names in settings.DJUST_TEMPLATE_GLOBALS must resolve without being on the class."""
+    path = _template("<p>{{ navbar }}</p>")
+
+    class _V(LiveView):
+        template_name = "globals.html"
+
+    settings.DJUST_TEMPLATE_GLOBALS = ["navbar"]
+    monkeypatch.setattr(
+        "djust.management.commands.djust_typecheck._find_template_path",
+        lambda _tn: path,
+    )
+    assert _check_view(_V) is None
+
+
+def test_check_view_reports_when_template_not_found(monkeypatch):
+    """Template loader failures must be surfaced, not silently swallowed."""
+
+    class _V(LiveView):
+        template_name = "does_not_exist.html"
+
+    monkeypatch.setattr(
+        "djust.management.commands.djust_typecheck._find_template_path",
+        lambda _tn: None,
+    )
+    report = _check_view(_V)
+    assert report is not None
+    assert "template not found" in report["error"]
 
 
 def test_check_view_skips_when_no_template_name():

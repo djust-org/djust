@@ -169,6 +169,16 @@ def _extract_context_keys_from_ast(cls) -> Set[str]:
                 and not target.attr.startswith("_")
             ):
                 keys.add(target.attr)
+        # Also cover annotated assignments: `self.counter: int = 0`
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+                and not target.attr.startswith("_")
+            ):
+                keys.add(target.attr)
         # 3. @property methods
         if isinstance(node, ast.FunctionDef):
             for deco in node.decorator_list:
