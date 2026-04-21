@@ -2032,6 +2032,13 @@ def register_with_rust_engine():
     register_block_tag_handler("slot", "endslot", SlotTagHandler())
     register_tag_handler("render_slot", RenderSlotTagHandler())
 
+    # Async rendering (v0.5.0): {% dj_suspense await="..." fallback="..." %}
+    # wraps sections dependent on AsyncResult assigns. See
+    # djust/components/suspense.py for semantics.
+    from .suspense import SuspenseTagHandler
+
+    register_block_tag_handler("dj_suspense", "enddj_suspense", SuspenseTagHandler())
+
 
 # ===========================================================================
 # TIER 2 REMAINING + TIER 3 HANDLERS

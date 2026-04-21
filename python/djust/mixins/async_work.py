@@ -22,8 +22,9 @@ and sends updated patches to the client.
                 self.error = str(error)
 """
 
+import inspect
 import logging
-from typing import Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -116,3 +117,77 @@ class AsyncWorkMixin:
         if not hasattr(self, "_async_cancelled"):
             self._async_cancelled = set()
         self._async_cancelled.add(name)
+
+    def assign_async(
+        self,
+        name: str,
+        loader: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """High-level async data loading with built-in loading / ok / failed state.
+
+        Sets ``self.<name>`` to an :class:`~djust.async_result.AsyncResult` in
+        the ``loading`` state immediately, then schedules ``loader`` via
+        :meth:`start_async`. When the loader completes, ``self.<name>`` is
+        replaced with ``AsyncResult.succeeded(result)`` (or
+        ``AsyncResult.errored(exc)`` on failure) and the view re-renders.
+
+        Templates read the state via the three mutually-exclusive flags::
+
+            {% if metrics.loading %}<div class="skeleton"></div>{% endif %}
+            {% if metrics.ok %}<div>{{ metrics.result.total_users }}</div>{% endif %}
+            {% if metrics.failed %}<div class="error">{{ metrics.error }}</div>{% endif %}
+
+        Multiple ``assign_async`` calls in the same handler load concurrently
+        (each is an independent :meth:`start_async` task). Cancel via
+        :meth:`cancel_async` using ``"assign_async:<name>"`` as the task name.
+
+        Both synchronous and ``async def`` loaders are supported — coroutine
+        functions are awaited on the consumer's event loop; sync functions run
+        in a worker thread via ``sync_to_async``.
+
+        Args:
+            name: Attribute name to bind on ``self``. The loader's result is
+                wrapped in an :class:`AsyncResult` and set at ``self.<name>``.
+            loader: Callable (or async callable) that returns the payload.
+            *args: Positional args forwarded to ``loader``.
+            **kwargs: Keyword args forwarded to ``loader``.
+
+        Example::
+
+            class DashboardView(LiveView):
+                def mount(self, request, **kwargs):
+                    self.assign_async("metrics", self._load_metrics)
+                    self.assign_async("notifications", self._load_notifications)
+
+                def _load_metrics(self):
+                    return expensive_query()
+        """
+        # Deferred import avoids a circular dependency at package-init time.
+        from ..async_result import AsyncResult
+
+        setattr(self, name, AsyncResult.pending())
+
+        if inspect.iscoroutinefunction(loader):
+
+            async def _async_runner() -> None:
+                try:
+                    result = await loader(*args, **kwargs)
+                    setattr(self, name, AsyncResult.succeeded(result))
+                except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    setattr(self, name, AsyncResult.errored(exc))
+                    logger.debug("assign_async loader for %s raised: %s", name, exc)
+
+            self.start_async(_async_runner, name=f"assign_async:{name}")
+        else:
+
+            def _sync_runner() -> None:
+                try:
+                    result = loader(*args, **kwargs)
+                    setattr(self, name, AsyncResult.succeeded(result))
+                except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    setattr(self, name, AsyncResult.errored(exc))
+                    logger.debug("assign_async loader for %s raised: %s", name, exc)
+
+            self.start_async(_sync_runner, name=f"assign_async:{name}")
