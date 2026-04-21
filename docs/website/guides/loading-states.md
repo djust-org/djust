@@ -388,3 +388,111 @@ window.djust.globalLoadingManager.stopLoading('my_event');
 // Check if an event is currently loading
 window.djust.globalLoadingManager.pendingEvents.has('my_event');
 ```
+
+## High-level async loading: `assign_async` + `AsyncResult` (v0.5.0)
+
+For the common "load slow data, show a skeleton, then render the result"
+pattern, djust ships a high-level API that captures all three states in a
+single immutable value object.
+
+```python
+from djust import LiveView
+
+class DashboardView(LiveView):
+    template_name = "dashboard.html"
+
+    def mount(self, request, **kwargs):
+        # Each call schedules a concurrent loader.
+        self.assign_async("metrics", self._load_metrics)
+        self.assign_async("notifications", self._load_notifications)
+
+    def _load_metrics(self):
+        return expensive_query()
+
+    async def _load_notifications(self):
+        return await fetch_notifications()
+```
+
+`assign_async(name, loader, *args, **kwargs)` sets `self.<name>` to an
+`AsyncResult` in the `loading` state immediately, so the first render sends a
+skeleton to the client. The loader runs in the background (sync callables via
+`sync_to_async`; `async def` callables on the event loop). On completion the
+attribute is replaced with `AsyncResult.succeeded(result)` or
+`AsyncResult.errored(exc)` and the view re-renders.
+
+Each `AsyncResult` exposes three mutually-exclusive booleans:
+
+| Flag | Meaning |
+|------|---------|
+| `.loading` | Work scheduled / in flight |
+| `.ok` | Completed successfully; `.result` holds the payload |
+| `.failed` | Raised; `.error` holds the exception |
+
+Templates read the flags directly:
+
+```html
+{% if metrics.loading %}
+  <div class="skeleton-card"></div>
+{% endif %}
+{% if metrics.ok %}
+  <div class="metric-card">{{ metrics.result.total_users }}</div>
+{% endif %}
+{% if metrics.failed %}
+  <div class="error">Failed to load: {{ metrics.error }}</div>
+{% endif %}
+```
+
+`AsyncResult` is also truthy only when `.ok`, so `{% if metrics %}…` is
+shorthand for "loaded successfully".
+
+Cancellation piggybacks on the existing `cancel_async` API — scheduled tasks
+use the name `"assign_async:<name>"`:
+
+```python
+self.cancel_async("assign_async:metrics")
+```
+
+## Declarative loading boundaries: `{% dj_suspense %}` (v0.5.0)
+
+Scattering `{% if x.loading %}` / `{% if x.ok %}` conditionals across every
+section that depends on async data becomes verbose quickly. `{% dj_suspense %}`
+collapses it into one declarative wrapper:
+
+```html
+{% dj_suspense await="metrics" fallback="components/metric_skeleton.html" %}
+  <div class="metric">{{ metrics.result.total_users }}</div>
+{% enddj_suspense %}
+```
+
+Semantics:
+
+* Any awaited ref is `loading` (or missing from context) → the `fallback`
+  template is rendered. If `fallback=` is omitted, a minimal default spinner
+  `<div class="djust-suspense-fallback">…</div>` is emitted instead.
+* Any awaited ref is `failed` → an error `<div class="djust-suspense-error">`
+  is rendered with the exception message (HTML-escaped).
+* All awaited refs are `ok` → the body is rendered verbatim.
+* No `await=` argument → body passes through unchanged.
+
+Multiple references load independently and compose cleanly:
+
+```html
+<div class="dashboard">
+  {% dj_suspense await="metrics" fallback="components/metric_skeleton.html" %}
+    <div class="metric-card">{{ metrics.result.total_users }}</div>
+  {% enddj_suspense %}
+
+  {% dj_suspense await="chart_data" fallback="components/chart_skeleton.html" %}
+    <canvas dj-hook="Chart" data-values="{{ chart_data.result }}"></canvas>
+  {% enddj_suspense %}
+</div>
+```
+
+A slow query in one suspense boundary never blocks another. Nested
+`{% dj_suspense %}` works — each boundary resolves its own `await=` list
+against the context independently.
+
+**Design note:** `await="..."` is required rather than inferred — keeping the
+tag explicit makes template-level debugging trivial. You can await multiple
+refs with a comma-separated list (`await="metrics,chart_data,user_prefs"`),
+and whitespace around the commas is tolerated.

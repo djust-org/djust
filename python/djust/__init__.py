@@ -6,6 +6,7 @@ powered by Rust for maximum performance.
 """
 
 from .utils import get_template_dirs, clear_template_dirs_cache
+from .async_result import AsyncResult
 from .live_view import LiveView, live_view
 from .components.base import Component, LiveComponent
 from .components.assigns import Assign, AssignValidationError, Slot
@@ -191,6 +192,7 @@ def enable_hot_reload():
 __all__ = [
     "LiveView",
     "live_view",
+    "AsyncResult",
     "Component",
     "LiveComponent",
     # Declarative assigns & slots
