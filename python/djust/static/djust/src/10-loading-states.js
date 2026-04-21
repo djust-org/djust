@@ -11,6 +11,21 @@ const globalLoadingManager = {
         const modifiers = [];
         const originalState = {};
 
+        // Shorthand form: ``dj-loading="event_name"`` (v0.5.1). Treat as an
+        // implicit ``.show`` modifier — the element is hidden by default and
+        // becomes visible (display:block) while the named event is in-flight.
+        // Auto-hide on register so authors don't need inline ``style="display:none"``.
+        if (element.hasAttribute('dj-loading')) {
+            modifiers.push({ type: 'show' });
+            // Record the ORIGINAL display (if the author set one explicitly,
+            // use it for the visible phase); then force display:none so the
+            // element starts hidden.
+            const priorDisplay = element.style.display;
+            originalState.display = 'none';
+            originalState.visibleDisplay = (priorDisplay && priorDisplay !== 'none') ? priorDisplay : 'block';
+            element.style.display = 'none';
+        }
+
         // Parse dj-loading.* attributes
         Array.from(element.attributes).forEach(attr => {
             const match = attr.name.match(/^dj-loading\.(.+)$/);
@@ -60,6 +75,7 @@ const globalLoadingManager = {
 
         // Use targeted attribute selectors for better performance on large pages
         const selectors = [
+            '[dj-loading]',
             '[dj-loading\\.disable]',
             '[dj-loading\\.show]',
             '[dj-loading\\.hide]',
@@ -74,9 +90,10 @@ const globalLoadingManager = {
             // and re-registering would capture the loading state as "original")
             if (this.registeredElements.has(element)) return;
             // Determine associated event name:
-            // 1. Explicit: dj-loading.for="event_name" (works on any element)
-            // 2. Implicit: from the element's own dj-click, dj-submit, etc.
-            let eventName = element.getAttribute('dj-loading.for');
+            // 1. Shorthand: dj-loading="event_name" (v0.5.1)
+            // 2. Explicit: dj-loading.for="event_name" (works on any element)
+            // 3. Implicit: from the element's own dj-click, dj-submit, etc.
+            let eventName = element.getAttribute('dj-loading') || element.getAttribute('dj-loading.for');
             if (!eventName) {
                 const eventAttr = Array.from(element.attributes).find(
                     attr => attr.name.startsWith('dj-') && !attr.name.startsWith('dj-loading')
