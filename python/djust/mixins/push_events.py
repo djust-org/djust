@@ -60,6 +60,36 @@ class PushEventMixin:
             payload = {}
         self._pending_push_events.append((event, payload))
 
+    def trigger_submit(self, selector: str) -> None:
+        """Trigger a native HTML form POST on the client after this handler.
+
+        Partner API to the ``dj-trigger-action`` client-side form attribute
+        (v0.5.1). After the handler completes (validation passed, etc.), the
+        client finds ``document.querySelector(selector)``, verifies it carries
+        ``dj-trigger-action``, and calls its native ``.submit()`` — bypassing
+        djust's WebSocket handler for this final step. Essential for OAuth
+        flows, payment gateway handoffs, and any path that needs a real
+        browser POST.
+
+        The selector is sent to the client as-is; keep it simple (``"#form-id"``)
+        and match it with ``dj-trigger-action`` on the target form. Forms
+        without that attribute are refused client-side, so the attribute
+        doubles as an explicit opt-in for native submission.
+
+        Args:
+            selector: A CSS selector (typically ``"#form-id"``) for the form
+                to submit natively.
+
+        Example::
+
+            @event_handler
+            def complete_payment(self, **kwargs):
+                self._process_validation()
+                # Hand off to the payment gateway via a real browser POST.
+                self.trigger_submit("#payment-form")
+        """
+        self.push_event("djust:trigger-submit", {"selector": selector})
+
     def push_commands(self, chain: "JSChain") -> None:
         """
         Push a JS Command chain to the current session for immediate execution.
