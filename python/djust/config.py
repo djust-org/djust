@@ -56,6 +56,14 @@ class LiveViewConfig:
         "debug_components": False,  # Enable component lifecycle debug logs
         "debug_panel_max_history": 50,  # Maximum number of events/patches to keep in debug panel history
         "debug_auto_open_on_error": False,  # Auto-open debug panel on first error/warning (DEBUG mode only)
+        # Colocated JS hook namespacing (Phoenix 1.1 parity).
+        # "lax"    - bare hook name, no prefix (default, compat)
+        # "strict" - prefix with <view-module>.<view-qualname> so two views
+        #            can both define `Chart` without colliding.
+        # Per-tag opt-out: {% colocated_hook "X" global %} always emits bare name.
+        # This is also readable from settings.DJUST_CONFIG["hook_namespacing"]
+        # via the template tag (kept here for discoverability / system-check tooling).
+        "hook_namespacing": "lax",
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)

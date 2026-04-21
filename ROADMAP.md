@@ -658,9 +658,9 @@ class Button(LiveComponent):
     template_name = 'components/button.html'
 ```
 
-**`JS.ignore_attributes` equivalent (Phoenix 1.1 parity)** — Mark specific HTML attributes as client-owned so VDOM patching doesn't overwrite them. `<dialog dj-ignore-attrs="open">` prevents the server from resetting the `open` attribute that the browser manages. Essential for integrating with browser-native elements (`<dialog>`, `<details>`) and third-party JS libraries that set attributes the server doesn't know about. Phoenix 1.1 added `JS.ignore_attributes/1` for exactly this. ~20 lines JS.
+~~**`JS.ignore_attributes` equivalent (Phoenix 1.1 parity)**~~ ✅ **Shipped in v0.5.0** — `<dialog dj-ignore-attrs="open">` / `<div dj-ignore-attrs="data-lib-state, aria-expanded">`. Comma-separated opt-out list; VDOM `SetAttr` patches for listed keys are skipped. See `python/djust/static/djust/src/31-ignore-attrs.js` + the guard in `12-vdom-patch.js::applySinglePatch` (`case 'SetAttr'`).
 
-**Colocated JS hooks with namespacing (Phoenix 1.1 parity)** — Write hook JavaScript inline alongside the template that uses it, instead of in a separate file. Phoenix 1.1's `ColocatedHook` was their most requested DX feature. For djust, since there's no build step, the extraction can happen at collectstatic time or via the Rust pre-processor. Also includes **hook namespacing** (Phoenix 1.1) — automatically prefix hook names with the view/component module path to prevent name collisions. When two components both define a `Chart` hook, they become `myapp.DashboardView.Chart` and `myapp.AnalyticsView.Chart` internally. ~150 lines Python + Rust.
+~~**Colocated JS hooks with namespacing (Phoenix 1.1 parity)**~~ ✅ **Shipped in v0.5.0** — `{% colocated_hook "Chart" %}...{% endcolocated_hook %}` emits a `<script type="djust/hook" data-hook="Chart">` tag with a `/* COLOCATED HOOK: Chart */` auditor banner; client runtime walks `script[type="djust/hook"]` on init and after each VDOM morph and registers each body as `window.djust.hooks[name]`. Namespacing is opt-in via `DJUST_CONFIG = {"hook_namespacing": "strict"}` (prefixes hook name with `<view_module>.<view_qualname>`); per-tag opt-out with `{% colocated_hook "X" global %}`. See `python/djust/static/djust/src/32-colocated-hooks.js`, `python/djust/templatetags/live_tags.py::ColocatedHookNode`, `docs/website/guides/hooks.md`.
 
 **`UploadWriter` — Raw upload byte stream access (Phoenix 1.0 parity)** — Access raw upload byte streams during chunked transfer for server-to-server streaming (e.g., pipe directly to S3 without buffering to disk). `UploadWriter` class with `write_chunk(chunk)` and `close()` methods, passed to `allow_upload(writer=MyWriter)`. ~100 lines Python.
 
@@ -912,8 +912,8 @@ Open questions that inform future direction:
 | **Function components** | **`Phoenix.Component`** | **Function components** | **Not started** | **v0.5.0** |
 | Selective re-rendering | Per-component diff | Reconciliation | Not started | v0.5.0 |
 | Attribute spread (`@rest`) | `{@rest}` | `...props` | Not started | v0.5.0 |
-| **Ignore attributes (client-owned)** | **`JS.ignore_attributes`** | — | **Not started** | **v0.5.0** |
-| **Colocated JS hooks + namespacing** | **`ColocatedHook`** | — | **Not started** | **v0.5.0** |
+| ~~**Ignore attributes (client-owned)**~~ ✅ | `JS.ignore_attributes` | — | **Shipped v0.5.0** | v0.5.0 |
+| ~~**Colocated JS hooks + namespacing**~~ ✅ | `ColocatedHook` | — | **Shipped v0.5.0** | v0.5.0 |
 | **`UploadWriter` (stream upload)** | **`UploadWriter`** | — | **Not started** | **v0.5.0** |
 | **Keyed for-loop change tracking** | **Auto in comprehensions** | — | **Not started** | **v0.5.0** |
 | **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** | **v0.5.0** |

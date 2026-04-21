@@ -3913,6 +3913,12 @@ function reinitAfterDOMUpdate(scope) {
     initReactCounters();
     initTodoItems();
     bindLiveViewEvents(scope);
+    // Extract any new colocated hook definitions (<script type="djust/hook">)
+    // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
+    // are visible to mountHooks().
+    if (window.djust.extractColocatedHooks) {
+        window.djust.extractColocatedHooks(scope || document);
+    }
     if (window.djust.mountHooks) {
         // updateHooks scans for [dj-hook] — scope it too
         const hookRoot = scope || getLiveViewRoot();
@@ -5659,6 +5665,15 @@ function applySinglePatch(patch) {
                 // Sanitize key to prevent prototype pollution
                 const attrKey = String(patch.key);
                 if (UNSAFE_KEYS.includes(attrKey)) break;
+                // dj-ignore-attrs: element opts out of server updates for this key
+                // (e.g. <dialog dj-ignore-attrs="open">).
+                if (globalThis.djust && typeof globalThis.djust.isIgnoredAttr === 'function' &&
+                    globalThis.djust.isIgnoredAttr(node, attrKey)) {
+                    if (globalThis.djustDebug) {
+                        console.debug('[LiveView] Skipped SetAttr on ignored attr %s', attrKey);
+                    }
+                    break;
+                }
                 const attrVal = String(patch.value != null ? patch.value : '');
                 if (attrKey === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
                     if (document.activeElement !== node) {
@@ -6346,6 +6361,13 @@ function djustInit() {
 
     // Bind initial events
     bindLiveViewEvents();
+
+    // Extract colocated hook definitions from <script type="djust/hook"> tags
+    // emitted by the {% colocated_hook %} template tag.  Must run BEFORE
+    // mountHooks() so newly registered definitions are visible to the scan.
+    if (window.djust.extractColocatedHooks) {
+        window.djust.extractColocatedHooks(document);
+    }
 
     // Mount dj-hook elements
     mountHooks();
@@ -9510,4 +9532,137 @@ window.djust.bindModelElements = bindModelElements;
     window.djust.initInfiniteScroll = initInfiniteScroll;
     window.djust.resetViewport = resetViewport;
     window.djust.teardownInfiniteScroll = teardownInfiniteScroll;
+})();
+// ============================================================================
+// dj-ignore-attrs — Client-owned attributes skipped by VDOM SetAttr patches
+// ============================================================================
+//
+// Mark HTML attributes as client-owned so VDOM SetAttr patches skip them.
+// Essential for browser-native elements (<dialog open>, <details open>) and
+// third-party JS libraries that manage attributes the server doesn't know
+// about.
+//
+// Phoenix 1.1 parity: JS.ignore_attributes/1.
+//
+// Usage (template):
+//   <dialog dj-ignore-attrs="open">
+//   <div dj-ignore-attrs="data-lib-state, aria-expanded">
+//
+// Format: comma-separated attribute names, whitespace-tolerant.
+// ============================================================================
+
+(function initIgnoreAttrs() {
+    globalThis.djust = globalThis.djust || {};
+
+    /**
+     * Return true when the element opts out of SetAttr updates for attrName.
+     *
+     * @param {Element|null} el - DOM element
+     * @param {string} attrName - attribute key to check
+     * @returns {boolean}
+     */
+    globalThis.djust.isIgnoredAttr = function(el, attrName) {
+        if (!el || typeof el.getAttribute !== 'function') return false;
+        const raw = el.getAttribute('dj-ignore-attrs');
+        if (!raw) return false;
+        // CSV with whitespace tolerance. Exact match on attribute name.
+        for (const item of raw.split(',')) {
+            if (item.trim() === attrName) return true;
+        }
+        return false;
+    };
+})();
+// ============================================================================
+// Colocated JS Hooks — Phoenix 1.1 parity
+// ============================================================================
+//
+// Extract <script type="djust/hook"> tags emitted by the {% colocated_hook %}
+// template tag and register them into window.djust.hooks for the dj-hook
+// runtime to mount.
+//
+// Usage (template):
+//   {% load live_tags %}
+//   {% colocated_hook "Chart" %}
+//       hook.mounted = function() { renderChart(this.el); };
+//       hook.updated = function() { renderChart(this.el); };
+//   {% endcolocated_hook %}
+//   <canvas dj-hook="Chart"></canvas>
+//
+// With namespacing (DJUST_CONFIG = {"hook_namespacing": "strict"}) the server
+// emits the tag's data-hook as e.g. "myapp.views.DashboardView.Chart"; the
+// client registers that exact key, and dj-hook="myapp.views.DashboardView.Chart"
+// in the template resolves correctly.
+//
+// SECURITY BOUNDARY
+// -----------------
+// The script body is evaluated via `new Function(...)`. This is safe at the
+// same trust level as any other JS inside a Django template: the body is
+// template-author-controlled, not user-supplied. The {% colocated_hook %} tag
+// escapes `</script>` in the body to prevent premature tag close. Users on
+// strict CSP without 'unsafe-eval' should not use this feature — register
+// hooks via a nonce-bearing <script>window.djust.hooks.X = {...}</script>
+// instead.
+// ============================================================================
+
+(function initColocatedHooks() {
+    globalThis.djust = globalThis.djust || {};
+
+    /**
+     * Walk the given root and register every <script type="djust/hook">
+     * definition it finds. Idempotent via the data-djust-hook-registered
+     * sentinel — safe to call on every DOM morph.
+     *
+     * @param {ParentNode} [root=document] - where to search
+     */
+    function extractAndRegister(root) {
+        root = root || document;
+        const scripts = root.querySelectorAll('script[type="djust/hook"]');
+        for (const scriptEl of scripts) {
+            if (scriptEl.dataset.djustHookRegistered === '1') continue;
+            const hookName = scriptEl.getAttribute('data-hook');
+            if (!hookName) {
+                // Mark as processed so we don't keep scanning it.
+                scriptEl.dataset.djustHookRegistered = '1';
+                continue;
+            }
+            try {
+                // Convention: the body assigns to a local `hook` object.
+                // We wrap in an IIFE-factory so users don't have to return
+                // the hook themselves.
+                //
+                // `new Function` is intentional here: the template body is
+                // inert text (we set type="djust/hook" on the emitter so
+                // the browser doesn't auto-execute it). Running it through
+                // `new Function` is the registration step. The body is
+                // authored by the same people who write the template —
+                // the same trust boundary as any other inline template
+                // script. The Python emitter escapes `</script>` in all
+                // casings to prevent tag-breakout.
+                // eslint-disable-next-line no-new-func
+                const factory = new Function(
+                    'return (function() { const hook = {}; ' +
+                    scriptEl.textContent +
+                    '; return hook; })()'
+                );
+                const definition = factory();
+                globalThis.djust.hooks = globalThis.djust.hooks || {};
+                globalThis.djust.hooks[hookName] = definition;
+                scriptEl.dataset.djustHookRegistered = '1';
+                if (globalThis.djustDebug) {
+                    console.debug('[colocated-hook] Registered %s', hookName);
+                }
+            } catch (err) {
+                if (globalThis.djustDebug) {
+                    console.warn(
+                        '[colocated-hook] Failed to register %s: %s',
+                        hookName,
+                        err && err.message
+                    );
+                }
+                scriptEl.dataset.djustHookRegistered = 'error';
+            }
+        }
+    }
+
+    globalThis.djust.extractColocatedHooks = extractAndRegister;
 })();

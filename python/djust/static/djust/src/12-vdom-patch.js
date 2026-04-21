@@ -1194,6 +1194,15 @@ function applySinglePatch(patch) {
                 // Sanitize key to prevent prototype pollution
                 const attrKey = String(patch.key);
                 if (UNSAFE_KEYS.includes(attrKey)) break;
+                // dj-ignore-attrs: element opts out of server updates for this key
+                // (e.g. <dialog dj-ignore-attrs="open">).
+                if (globalThis.djust && typeof globalThis.djust.isIgnoredAttr === 'function' &&
+                    globalThis.djust.isIgnoredAttr(node, attrKey)) {
+                    if (globalThis.djustDebug) {
+                        console.debug('[LiveView] Skipped SetAttr on ignored attr %s', attrKey);
+                    }
+                    break;
+                }
                 const attrVal = String(patch.value != null ? patch.value : '');
                 if (attrKey === 'value' && (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA')) {
                     if (document.activeElement !== node) {

@@ -120,6 +120,13 @@ function djustInit() {
     // Bind initial events
     bindLiveViewEvents();
 
+    // Extract colocated hook definitions from <script type="djust/hook"> tags
+    // emitted by the {% colocated_hook %} template tag.  Must run BEFORE
+    // mountHooks() so newly registered definitions are visible to the scan.
+    if (window.djust.extractColocatedHooks) {
+        window.djust.extractColocatedHooks(document);
+    }
+
     // Mount dj-hook elements
     mountHooks();
 

@@ -202,3 +202,73 @@ window.djust.hooks = {
 - **Pass data via `data-*` attributes**: Use JSON in data attributes for complex data. Parse in the hook.
 - **Use `pushEvent` / `handleEvent`** for server communication, not direct WebSocket calls.
 - **Register hooks before mount**: Place hook definitions in `<head>` or before the djust client script. Hooks registered late are picked up on the next DOM patch.
+
+## Colocated Hooks (v0.5.0, Phoenix 1.1 parity)
+
+Write hook JavaScript inline with the template that uses it, instead of in a separate file. The `{% colocated_hook %}` block tag emits a `<script type="djust/hook" data-hook="NAME">` tag; the djust client walks these on init and after each VDOM morph and registers each body as `window.djust.hooks[NAME]`.
+
+```django
+{% load live_tags %}
+
+{% colocated_hook "Chart" %}
+    hook.mounted = function() {
+        const data = JSON.parse(this.el.dataset.values);
+        this.chart = new Chart(this.el, { type: 'line', data });
+    };
+    hook.updated = function() {
+        this.chart.data = JSON.parse(this.el.dataset.values);
+        this.chart.update();
+    };
+    hook.destroyed = function() {
+        this.chart.destroy();
+    };
+{% endcolocated_hook %}
+
+<canvas dj-hook="Chart" data-values='{{ chart_data_json }}'></canvas>
+```
+
+**Convention**: your body assigns callbacks to a local `hook` object. The client wraps the body in an IIFE factory (`(function() { const hook = {}; <body>; return hook; })()`) and stores the result under `data-hook`.
+
+### Namespacing
+
+Two different views that each define `Chart` will collide if both register the hook globally. Opt into namespacing to prefix each hook with the view's module + class name:
+
+```python
+# settings.py
+DJUST_CONFIG = {"hook_namespacing": "strict"}
+```
+
+With strict namespacing on, `{% colocated_hook "Chart" %}` inside a template rendered by `myapp.views.DashboardView` emits `data-hook="myapp.views.DashboardView.Chart"`, and the `<canvas dj-hook="myapp.views.DashboardView.Chart">` selector must match. Set `dj-hook` to the same namespaced name — typically this is done via a Django context variable or a helper that knows the current view.
+
+Per-tag opt-out when a hook truly is global (e.g. a page-wide tooltip handler):
+
+```django
+{% colocated_hook "Tooltip" global %}
+    hook.mounted = function() { /* ... */ };
+{% endcolocated_hook %}
+```
+
+The `global` keyword emits the bare `data-hook="Tooltip"` regardless of the `hook_namespacing` setting.
+
+### Security
+
+- The hook body is **template-author JS**, not user input. Never interpolate request data into the body.
+- The `{% colocated_hook %}` tag escapes `</script>` / `</SCRIPT>` in the body to prevent premature tag close.
+- The client evaluates bodies via `new Function(...)`. Apps on strict CSP without `'unsafe-eval'` should skip this feature and register hooks via a nonce-bearing `<script>window.djust.hooks.X = {...}</script>`.
+- Every emitted script carries a `/* COLOCATED HOOK: <name> */` banner so security auditors can grep for them.
+
+## Ignored Attributes (`dj-ignore-attrs`) — v0.5.0
+
+Mark specific HTML attributes as client-owned so VDOM `SetAttr` patches skip them. Essential for browser-native elements (`<dialog>`, `<details>`) and third-party JS libraries that manage attributes the server doesn't know about. Phoenix 1.1 calls this `JS.ignore_attributes/1`.
+
+```html
+<!-- Browser manages <dialog open> via .showModal() / .close() -->
+<dialog id="confirm" dj-ignore-attrs="open">...</dialog>
+
+<!-- Third-party library manages data-state + aria-expanded -->
+<div dj-ignore-attrs="data-state, aria-expanded" ...></div>
+```
+
+**Format**: comma-separated list of attribute names. Whitespace around commas is tolerated.
+
+**Scope**: only `SetAttr` patches are skipped — `RemoveAttr` is not affected. Users explicitly opt in per element; there is no framework-level default list. Rationale: the browser-native case is common, but silent magic is a bigger cost than the typing.
