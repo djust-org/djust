@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Scaffold CSS — reusable layout/utility pack in `djust.theming`** — `djust_theming/static/djust_theming/css/scaffold.css` gains ~729 lines of framework-generic scaffold covering typography, responsive grid utilities (`.grid-2/3/4`), hero section, flash messages (Django + LiveView), accessibility utilities (`.sr-only`), extended layout helpers (`.flex-center`, `.content-narrow/-wide`), stat-display variants, auth layout, live indicator dot, card-accent variants, code blocks, noise texture overlay, shared nav links, dashboard/centered grids, and the full `data-layout` switching system (sidebar, topbar, dashboard, centered, sidebar-topbar). All new rules use CSS-variable fallbacks so the scaffold works without a loaded theme; no hardcoded hex colors; `.container` max-width now reads `var(--container-width, 1200px)`. Pure-CSS addition — no Python/JS/test behavior changes. (PR #836)
+
 ## [0.5.1rc1] - 2026-04-21
 
 ### Added
