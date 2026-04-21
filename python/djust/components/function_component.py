@@ -310,15 +310,28 @@ class CallTagHandler:
             # bubbles a clean error message back up.
             raise RuntimeError(f"Component '{name}' validation failed: {exc}") from exc
 
-        # Build the full assigns mapping passed into the component.
+        # Build the full assigns mapping passed into the component. Body
+        # content wins over any caller-supplied children/inner_block kwargs
+        # (Phoenix convention: the block body is the content). Slots
+        # likewise cannot be overridden by kwargs since they come from the
+        # block body's {% slot %} tags.
         assigns: dict[str, Any] = dict(kwargs)
-        assigns.setdefault("children", default_content)
-        assigns.setdefault("inner_block", default_content)
-        assigns.setdefault("slots", slots)
+        assigns["children"] = default_content
+        assigns["inner_block"] = default_content
+        assigns["slots"] = slots
 
         # Dispatch.
         if isinstance(target, type):
-            # LiveComponent subclass (duck-typed on ``mount``).
+            # Only LiveComponent subclasses are valid class targets. Other
+            # classes would instantiate confusingly and fail on .render().
+            from .base import LiveComponent
+
+            if not issubclass(target, LiveComponent):
+                raise RuntimeError(
+                    f"Component '{name}' is a class but not a LiveComponent "
+                    f"subclass. Only LiveComponent subclasses and @component-"
+                    f"decorated functions can be invoked via {{% call %}}."
+                )
             instance = target(**{k: v for k, v in kwargs.items() if not k.startswith("_")})
             # Expose slots + children on the instance for template access.
             instance._slots = slots

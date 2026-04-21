@@ -118,6 +118,43 @@ class TestCallTagHandlerDirect:
         assert captured["children"] == "body"
         assert captured["inner_block"] == "body"
 
+    def test_body_wins_over_children_kwarg(self):
+        """Phoenix convention: the block body is authoritative. A caller
+        passing ``children="..."`` or ``inner_block="..."`` via tag args
+        must not shadow the actual body content."""
+        captured = {}
+
+        @component
+        def probe(assigns):
+            captured["children"] = assigns.get("children")
+            captured["inner_block"] = assigns.get("inner_block")
+            return ""
+
+        handler = CallTagHandler()
+        handler.render(
+            ["'probe'", 'children="attempted-override"', 'inner_block="also-attempted"'],
+            "actual-body-content",
+            {},
+        )
+        assert captured["children"] == "actual-body-content"
+        assert captured["inner_block"] == "actual-body-content"
+
+    def test_non_livecomponent_class_raises_clear_error(self):
+        """A class target that isn't a LiveComponent subclass must produce
+        a clear error rather than silently instantiating and failing on
+        .render()."""
+
+        class NotAComponent:
+            def __init__(self, **kwargs):
+                pass
+
+        from djust.components.function_component import _COMPONENT_REGISTRY
+
+        _COMPONENT_REGISTRY["bad"] = NotAComponent
+        handler = CallTagHandler()
+        with pytest.raises(RuntimeError, match="not a LiveComponent subclass"):
+            handler.render(["'bad'"], "", {})
+
     def test_unregistered_component_raises(self):
         handler = CallTagHandler()
         with pytest.raises(RuntimeError, match="not registered"):

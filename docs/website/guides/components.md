@@ -859,7 +859,9 @@ Usage in templates:
 {% component "primary_button" label="Save" size="lg" %}{% endcomponent %}
 ```
 
-Both tags are synonyms — pick whichever reads best at the call site. The body of the tag (everything between `{% call %}` / `{% endcall %}`) becomes `assigns["children"]` *and* `assigns["inner_block"]` (Phoenix parity).
+Both tags are synonyms — pick whichever reads best at the call site. The body of the tag (everything between `{% call %}` / `{% endcall %}`) becomes `assigns["children"]` *and* `assigns["inner_block"]` (Phoenix parity). The body **always** wins over any `children=`/`inner_block=` kwarg passed at the call site — the block body is authoritative.
+
+> **⚠ Escape user-controlled strings.** The examples above f-string-interpolate `variant` / `label` directly into HTML. That's safe when the values come from your own code (literals, enum values), but if a kwarg originates from user input — e.g. `{% call badge variant=user_selected_variant %}` where `user_selected_variant` is a form field — you must escape it. Prefer `html.escape(variant)` or use `format_html(...)` from `django.utils.html`. The function's return value is treated as trusted HTML by the template engine (no auto-escape), which is what makes components expressive — but also means XSS is the component author's responsibility, not the template engine's.
 
 ### Declarative Assigns
 

@@ -97,14 +97,26 @@ class TestSlotExtraction:
         slots, remainder = _extract_slots(sentinel)
         assert slots["header"][0]["content"] == ""
 
-    def test_user_comment_not_misinterpreted(self):
-        # A user writing "<!--DJUST_SLOT:fake-->" in their template must not
-        # be treated as a sentinel. Our format is V1 with JSON — bare text
-        # won't parse.
+    def test_user_comment_without_v1_prefix_not_misinterpreted(self):
+        # A user writing "<!--DJUST_SLOT:fake-->" (without _V1) in their
+        # template must not be treated as a sentinel. The regex requires
+        # the _V1 prefix.
         slots, remainder = _extract_slots("before <!--DJUST_SLOT:fake--> after")
         assert slots == {}
-        # The old-style comment passes through verbatim.
+        # The non-matching comment passes through verbatim.
         assert "<!--DJUST_SLOT:fake-->" in remainder
+
+    def test_malformed_v1_sentinel_falls_through(self):
+        # A sentinel that matches our V1 prefix but has an invalid JSON
+        # payload (e.g. user authored the comment by mistake, or it was
+        # truncated in transit) must fall through verbatim rather than
+        # crashing the renderer.
+        malformed = "before <!--DJUST_SLOT_V1:not-json-payload--> after"
+        slots, remainder = _extract_slots(malformed)
+        assert slots == {}
+        # The malformed sentinel passes through literally (defensive
+        # branch at function_component.py::_extract_slots).
+        assert "<!--DJUST_SLOT_V1:not-json-payload-->" in remainder
 
 
 # ---------------------------------------------------------------------------
