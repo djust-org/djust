@@ -1084,6 +1084,11 @@ fn extract_from_nodes(
                 if let Node::BlockCustomTag { children, .. } = node {
                     extract_from_nodes(children, variables);
                 }
+                // Custom tags can reference arbitrary vars internally; mark
+                // the enclosing wrapper as "*" so partial render re-renders
+                // it on any context change. Mirrors the top-level treatment
+                // in extract_per_node_deps. Fixes #783.
+                variables.entry("*".to_string()).or_default();
             }
             Node::WidthRatio {
                 value,
@@ -1116,8 +1121,47 @@ fn extract_from_nodes(
                     }
                 }
             }
-            // Text, Comment, CsrfToken, Static, Include, Extends, TemplateTag, Now
-            // don't contain variable references
+            // Inline conditional `{{ x if cond else y }}` — same class of
+            // silent dep-loss bug as the nested-Include case (#783).
+            // Without this arm, an InlineIf inside a `{% for %}` / `{% if %}`
+            // wrapper contributes zero deps; changing the condition variable
+            // alone leaves the wrapper's dep set unintersected with
+            // changed_keys, the cached fragment is reused, and the diff
+            // returns 0 patches.
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                filters: _,
+            } => {
+                for expr in [true_expr, condition, false_expr] {
+                    let trimmed = expr.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let is_literal = (trimmed.starts_with('"') && trimmed.ends_with('"'))
+                        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+                        || trimmed
+                            .chars()
+                            .all(|c| c.is_numeric() || c == '.' || c == '-');
+                    if !is_literal {
+                        extract_from_variable(trimmed, variables);
+                    }
+                }
+            }
+            // Nested Include nodes: the included template's vars can't be
+            // determined statically from here, so mark the enclosing
+            // wrapper as depending on "*" (any key change). Without this,
+            // `{% if cond %}{% include "x" %}{% endif %}` has deps={cond},
+            // and partial render reuses the cached If fragment when any
+            // other context key changes — including vars used inside the
+            // included template. (CustomTag/BlockCustomTag get "*" via
+            // the earlier arm above.) Fixes #783.
+            Node::Include { .. } => {
+                variables.entry("*".to_string()).or_default();
+            }
+            // Text, Comment, CsrfToken, Extends, TemplateTag, Now, Static
+            // don't contain variable references.
             _ => {}
         }
     }
