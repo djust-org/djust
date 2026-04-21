@@ -156,6 +156,15 @@ class LiveViewConfig:
         # Component defaults
         "component_wrapper_class": "",
         "component_loading_class": "loading",
+        # Service worker (v0.5.0 P3) — opt-in instant shell + reconnection bridge.
+        # These values are informational for tooling / system checks; the
+        # actual runtime knobs live in the client-side registration call
+        # (``djust.registerServiceWorker({...})``) and in the SW itself.
+        "service_worker": {
+            "main_selector": "main",  # element whose innerHTML is the "main" swap target
+            "shell_cache_name": "djust-shell-v1",  # Cache API bucket key for the cached shell
+            "reconnect_buffer_cap": 50,  # max buffered WS messages per connection id
+        },
         # @loading attribute configuration (Phase 5)
         "loading_grouping_classes": [
             "d-flex",  # Bootstrap flex container
