@@ -13,7 +13,7 @@
 //   to a standard HTML form POST. Essential for OAuth redirects, payment
 //   gateway handoffs, and anywhere the final step needs a real browser POST.
 //   Usage: the server calls ``self.trigger_submit(selector)`` (or pushes a
-//   ``dj:trigger-submit`` event with ``{"selector": "#form-id"}``); the
+//   ``djust:trigger-submit`` event with ``{"selector": "#form-id"}``); the
 //   client finds the matching form and calls its native ``.submit()``.
 
 const _TEXT_INPUT_TYPES = new Set([
@@ -21,6 +21,11 @@ const _TEXT_INPUT_TYPES = new Set([
 ]);
 
 function _isEnterKey(event) {
+    // IME composition: CJK users press Enter to confirm an IME candidate —
+    // that keypress MUST NOT be treated as a form-submit trigger. Browsers
+    // signal this via ``event.isComposing`` (keydown fired during composition)
+    // and the legacy ``event.keyCode === 229`` on some platforms.
+    if (event.isComposing || event.keyCode === 229) return false;
     return event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
 }
 
@@ -62,16 +67,21 @@ function _installFormPolishListeners() {
             form = document.querySelector(selector);
         } catch (err) {
             if (globalThis.djustDebug) {
-                djLog('[form-polish] invalid dj:trigger-submit selector:', selector, err);
+                djLog('[form-polish] invalid djust:trigger-submit selector:', selector, err);
             }
             return;
         }
         if (!form || form.tagName !== 'FORM') {
             if (globalThis.djustDebug) {
-                djLog('[form-polish] dj:trigger-submit: no matching <form> for', selector);
+                djLog('[form-polish] djust:trigger-submit: no matching <form> for', selector);
             }
             return;
         }
+        // SECURITY: this attribute check is load-bearing, not defense-in-depth.
+        // A server compromise that could push ``trigger_submit("#any-form")``
+        // would otherwise be able to submit arbitrary forms on the page. The
+        // ``dj-trigger-action`` attribute is the explicit author opt-in that
+        // limits the blast radius. Do NOT simplify this check away.
         if (!form.hasAttribute('dj-trigger-action')) {
             if (globalThis.djustDebug) {
                 djLog('[form-polish] refusing to submit form without dj-trigger-action:', form);
@@ -85,9 +95,9 @@ function _installFormPolishListeners() {
 
     // Server-pushed events arrive as a ``djust:push_event`` CustomEvent on
     // ``window`` with ``detail = {event, payload}``. Filter to the
-    // ``dj:trigger-submit`` subtype and forward the payload.
+    // ``djust:trigger-submit`` subtype and forward the payload.
     window.addEventListener('djust:push_event', function (e) {
-        if (!e || !e.detail || e.detail.event !== 'dj:trigger-submit') return;
+        if (!e || !e.detail || e.detail.event !== 'djust:trigger-submit') return;
         handleTriggerAction(e.detail.payload);
     });
 }

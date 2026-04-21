@@ -11,7 +11,7 @@ def test_trigger_submit_queues_push_event():
 
     v = V()
     v.trigger_submit("#payment-form")
-    assert v._pending_push_events == [("dj:trigger-submit", {"selector": "#payment-form"})]
+    assert v._pending_push_events == [("djust:trigger-submit", {"selector": "#payment-form"})]
 
 
 def test_trigger_submit_passes_selector_verbatim():
@@ -21,7 +21,7 @@ def test_trigger_submit_passes_selector_verbatim():
     v = V()
     v.trigger_submit('form[data-name="oauth"]')
     ev_name, payload = v._pending_push_events[-1]
-    assert ev_name == "dj:trigger-submit"
+    assert ev_name == "djust:trigger-submit"
     assert payload["selector"] == 'form[data-name="oauth"]'
 
 
@@ -46,4 +46,4 @@ def test_trigger_submit_coexists_with_push_event():
     v.trigger_submit("#payment-form")
     # Order preserved — flash arrives at client first, then the submit trigger.
     assert v._pending_push_events[0][0] == "flash"
-    assert v._pending_push_events[1][0] == "dj:trigger-submit"
+    assert v._pending_push_events[1][0] == "djust:trigger-submit"

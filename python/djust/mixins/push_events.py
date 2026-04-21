@@ -88,7 +88,7 @@ class PushEventMixin:
                 # Hand off to the payment gateway via a real browser POST.
                 self.trigger_submit("#payment-form")
         """
-        self.push_event("dj:trigger-submit", {"selector": selector})
+        self.push_event("djust:trigger-submit", {"selector": selector})
 
     def push_commands(self, chain: "JSChain") -> None:
         """

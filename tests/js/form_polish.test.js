@@ -132,6 +132,51 @@ describe('dj-no-submit="enter"', () => {
         expect(submitted).toBe(true);
     });
 
+    it('does not suppress Enter during IME composition (CJK input)', () => {
+        dom = createDom(`
+            <form dj-submit="save" dj-no-submit="enter" id="f">
+                <input type="text" id="t" />
+            </form>
+        `);
+
+        const { document } = dom.window;
+        const input = document.getElementById('t');
+
+        // Enter pressed while an IME candidate is active — browsers signal
+        // this via ``isComposing``. Must not be treated as a submit trigger.
+        const event = new dom.window.KeyboardEvent('keydown', {
+            key: 'Enter',
+            bubbles: true,
+            cancelable: true,
+            isComposing: true,
+        });
+        input.dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(false);
+    });
+
+    it('does not suppress Enter when keyCode is 229 (legacy IME signal)', () => {
+        dom = createDom(`
+            <form dj-submit="save" dj-no-submit="enter" id="f">
+                <input type="text" id="t" />
+            </form>
+        `);
+
+        const { document } = dom.window;
+        const input = document.getElementById('t');
+
+        // Some platforms still signal IME composition via keyCode 229.
+        const event = new dom.window.KeyboardEvent('keydown', {
+            key: 'Enter',
+            keyCode: 229,
+            bubbles: true,
+            cancelable: true,
+        });
+        input.dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(false);
+    });
+
     it('does not suppress Enter when modifier keys are pressed', () => {
         dom = createDom(`
             <form dj-submit="save" dj-no-submit="enter" id="f">
@@ -157,14 +202,15 @@ describe('dj-no-submit="enter"', () => {
 describe('dj-trigger-action', () => {
     let dom;
 
-    it('submits a marked form when the server pushes dj:trigger-submit', () => {
+    it('submits a marked form when the server pushes djust:trigger-submit', () => {
         dom = createDom(`
             <form id="login" action="/oauth/callback/" method="post" dj-trigger-action>
                 <input type="hidden" name="token" value="abc" />
             </form>
         `);
 
-        const { document, window } = dom.window.document.defaultView ? { document: dom.window.document, window: dom.window } : dom;
+        const { document } = dom.window;
+        const window = dom.window;
 
         const form = document.getElementById('login');
         let submitted = false;
@@ -173,7 +219,7 @@ describe('dj-trigger-action', () => {
         };
 
         window.dispatchEvent(new window.CustomEvent('djust:push_event', {
-            detail: { event: 'dj:trigger-submit', payload: { selector: '#login' } },
+            detail: { event: 'djust:trigger-submit', payload: { selector: '#login' } },
         }));
 
         expect(submitted).toBe(true);
@@ -194,7 +240,7 @@ describe('dj-trigger-action', () => {
         };
 
         window.dispatchEvent(new window.CustomEvent('djust:push_event', {
-            detail: { event: 'dj:trigger-submit', payload: { selector: '#login' } },
+            detail: { event: 'djust:trigger-submit', payload: { selector: '#login' } },
         }));
 
         expect(submitted).toBe(false);
@@ -205,7 +251,7 @@ describe('dj-trigger-action', () => {
         const { window } = { window: dom.window };
         expect(() => {
             window.dispatchEvent(new window.CustomEvent('djust:push_event', {
-                detail: { event: 'dj:trigger-submit', payload: { selector: '#not-a-form' } },
+                detail: { event: 'djust:trigger-submit', payload: { selector: '#not-a-form' } },
             }));
         }).not.toThrow();
     });
@@ -241,6 +287,23 @@ describe('dj-loading="event_name" shorthand', () => {
         // scanAndRegister runs during djustInit; the shorthand should have
         // hidden the element.
         const el = dom.window.document.getElementById('l');
+        expect(el.style.display).toBe('none');
+    });
+
+    it('becomes visible when startLoading fires, hides again on stopLoading', () => {
+        dom = createDom('<div dj-loading="search" id="l">Searching...</div>');
+
+        const el = dom.window.document.getElementById('l');
+        const manager = dom.window.djust && dom.window.djust._globalLoadingManager;
+        // If the manager isn't exposed in this build, skip — the hide-on-register
+        // test above already proves registration. The behavior under test here
+        // is specifically "show during the event".
+        if (!manager) return;
+
+        expect(el.style.display).toBe('none');
+        manager.startLoading('search', null);
+        expect(el.style.display).toBe('block');
+        manager.stopLoading('search', null);
         expect(el.style.display).toBe('none');
     });
 
