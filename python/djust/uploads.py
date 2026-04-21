@@ -259,20 +259,28 @@ class BufferedUploadWriter(UploadWriter):
 
     Example (S3)::
 
+        from pathlib import Path
+        from uuid import uuid4
+
         class S3Writer(BufferedUploadWriter):
             buffer_threshold = 5 * 1024 * 1024  # 5 MB — S3 MPU min
 
             def open(self):
+                # SECURITY: self.filename is client-supplied and attacker-
+                # controlled. Scope to a server-generated namespace; never
+                # use self.filename verbatim as a destination key/path.
+                safe = Path(self.filename).name
+                self._key = f"uploads/{uuid4()}-{safe}"
                 self._s3 = boto3.client("s3")
                 self._mpu = self._s3.create_multipart_upload(
-                    Bucket="my-bucket", Key=self.filename
+                    Bucket="my-bucket", Key=self._key
                 )
                 self._parts = []
 
             def on_part(self, part, part_num):
                 resp = self._s3.upload_part(
                     Bucket="my-bucket",
-                    Key=self.filename,
+                    Key=self._key,
                     UploadId=self._mpu["UploadId"],
                     PartNumber=part_num,
                     Body=part,
@@ -282,17 +290,17 @@ class BufferedUploadWriter(UploadWriter):
             def on_complete(self):
                 self._s3.complete_multipart_upload(
                     Bucket="my-bucket",
-                    Key=self.filename,
+                    Key=self._key,
                     UploadId=self._mpu["UploadId"],
                     MultipartUpload={"Parts": self._parts},
                 )
-                return {"url": f"s3://my-bucket/{self.filename}"}
+                return {"key": self._key, "url": f"s3://my-bucket/{self._key}"}
 
             def abort(self, error):
                 if getattr(self, "_mpu", None):
                     self._s3.abort_multipart_upload(
                         Bucket="my-bucket",
-                        Key=self.filename,
+                        Key=self._key,
                         UploadId=self._mpu["UploadId"],
                     )
     """
@@ -580,23 +588,40 @@ class UploadManager:
                     expected_size=entry.client_size,
                 )
             except Exception as exc:  # noqa: BLE001
-                entry._error = "Writer instantiation failed: %s" % exc
-                logger.exception("UploadWriter instantiation failed for %s", entry.ref)
+                # Do NOT surface the raw exception message to the client —
+                # writer implementations may embed IAM ARNs, bucket names,
+                # or endpoint URLs in their exceptions. Log the full trace
+                # server-side for debugging; return a generic message to the
+                # client.
+                entry._error = "Upload writer failed to initialize"
+                logger.exception(
+                    "UploadWriter instantiation failed for upload %s: %s",
+                    entry.ref,
+                    exc,
+                )
                 return False
         if not entry._writer_opened:
             try:
                 entry.writer_instance.open()
             except Exception as exc:  # noqa: BLE001
-                entry._error = "Writer open() failed: %s" % exc
-                logger.exception("UploadWriter.open() raised for upload %s", entry.ref)
+                entry._error = "Upload writer failed to initialize"
+                logger.exception(
+                    "UploadWriter.open() raised for upload %s: %s",
+                    entry.ref,
+                    exc,
+                )
                 self._safe_abort_writer(entry, exc)
                 return False
             entry._writer_opened = True
         try:
             entry.writer_instance.write_chunk(data)
         except Exception as exc:  # noqa: BLE001
-            entry._error = "Writer write_chunk() failed: %s" % exc
-            logger.exception("UploadWriter.write_chunk() raised for upload %s", entry.ref)
+            entry._error = "Upload writer rejected chunk"
+            logger.exception(
+                "UploadWriter.write_chunk() raised for upload %s: %s",
+                entry.ref,
+                exc,
+            )
             self._safe_abort_writer(entry, exc)
             return False
         entry._total_received += len(data)
@@ -611,8 +636,12 @@ class UploadManager:
         try:
             entry.writer_result = writer.close()
         except Exception as exc:  # noqa: BLE001
-            entry._error = "Writer close() failed: %s" % exc
-            logger.exception("UploadWriter.close() raised for upload %s", entry.ref)
+            entry._error = "Upload writer failed to finalize"
+            logger.exception(
+                "UploadWriter.close() raised for upload %s: %s",
+                entry.ref,
+                exc,
+            )
             self._safe_abort_writer(entry, exc)
             return False
         entry._complete = True

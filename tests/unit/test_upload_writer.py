@@ -298,6 +298,29 @@ class TestWriterErrorPaths:
         assert "cannot write" in str(w.aborted_with[0])
         assert entry._error is not None
 
+    def test_error_messages_do_not_leak_raw_exception_text(self):
+        """Client-facing error strings must NOT contain raw exception text —
+        writer implementations can raise boto3 exceptions that embed bucket
+        names, IAM ARNs, or endpoint URLs. Those must stay in the server
+        log, not the WebSocket error frame. (Stage 11 review of PR #819.)"""
+
+        class LeakyWriter(RecordingWriter):
+            def write_chunk(self, chunk):
+                raise RuntimeError(
+                    "access denied for arn:aws:s3:::secret-bucket/key.pem "
+                    "at https://secret-bucket.s3.us-west-2.amazonaws.com"
+                )
+
+        mgr = self._mgr_for(LeakyWriter)
+        entry = _register(mgr, "avatar", size=100)
+        mgr.add_chunk(entry.ref, 0, b"xyz")
+        # Raw boto3-ish message should be ABSENT from the client-surfaced error.
+        assert "arn:aws:s3" not in entry._error
+        assert "secret-bucket" not in entry._error
+        assert "amazonaws.com" not in entry._error
+        # Generic message present.
+        assert "Upload writer rejected chunk" in entry._error
+
     def test_close_exception_triggers_abort(self):
         mgr = self._mgr_for(CloseRaisesWriter)
         entry = _register(mgr, "avatar", size=100)

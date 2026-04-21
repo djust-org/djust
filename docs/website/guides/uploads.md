@@ -277,8 +277,8 @@ class S3MultipartWriter(BufferedUploadWriter):
         )
         return {
             "bucket": "my-bucket",
-            "key": self.filename,
-            "url": f"https://my-bucket.s3.amazonaws.com/{self.filename}",
+            "key": self._key,
+            "url": f"https://my-bucket.s3.amazonaws.com/{self._key}",
         }
 
     def abort(self, error):
