@@ -37,7 +37,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
 | ~~**P1**~~ | ~~Virtual/windowed lists (`dj-virtual`)~~ ✅ | ~~DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps~~ | v0.5.0 |
 | ~~**P2**~~ | ~~Multi-step wizard (`WizardMixin`)~~ ✅ Shipped in PR #632 (`python/djust/wizard.py`) | ~~#2 most common UI pattern after CRUD — no framework has this natively~~ | ~~v0.5.1~~ |
-| **P2** | Error overlay (dev mode) | In-browser error display like Next.js/Vite — faster debugging loop | v0.5.1 |
+| ~~**P2**~~ | ~~Error overlay (dev mode)~~ ✅ Shipped in v0.5.1 (`36-error-overlay.js`) | ~~In-browser error display like Next.js/Vite — faster debugging loop~~ | ~~v0.5.1~~ |
 | **P2** | WebSocket compression | `permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available | v0.6.0 |
 | **P2** | Static asset tracking (`dj-track-static`) | Detect stale JS/CSS on reconnect, prompt reload — Phoenix `phx-track-static` parity | v0.6.0 |
 | **P3** | View Transitions API | Cheapest way to make navigation feel native | v0.5.0 |
@@ -717,7 +717,7 @@ async def test_search_with_debounce(self):
     await view.assert_push_event('highlight', {'query': 'django'})
 ```
 
-**Error overlay (development mode)** — (Moved from v0.5.0) In-browser Python stack traces with syntax-highlighted source, relevant view state, and the event that triggered the error. ~100 lines Python + ~80 lines JS.
+~~**Error overlay (development mode)**~~ ✅ **Shipped in v0.5.1** — `36-error-overlay.js` renders a dev-only full-screen panel on `djust:error`. Shows the error message, triggering event, traceback, hint, and validation details. Gated on `window.DEBUG_MODE` so production ships nothing. 10 JSDOM tests. See `docs/website/guides/error-overlay.md`.
 
 **`@computed` decorator for derived state** — (Moved from v0.5.0) Memoize derived values that depend on other state, re-computing only when dependencies change. React's `useMemo` equivalent.
 
@@ -927,7 +927,7 @@ Open questions that inform future direction:
 | **Keyed for-loop change tracking** | **Auto in comprehensions** | — | **Not started** | **v0.5.0** |
 | **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** | **v0.5.0** |
 | **Testing utilities** | **`LiveViewTest`** | **Testing Library** | **Basic** (`LiveViewTestClient`) | **v0.5.1** |
-| **Error overlay (dev)** | Error page | **Next.js overlay** | **Not started** | **v0.5.1** |
+| **Error overlay (dev)** | Error page | **Next.js overlay** | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Computed/derived state | — | `useMemo` | Not started | v0.5.1 |
 | Lazy component loading | — | `React.lazy()` | ✅ Shipped (LiveView-level, PR #54) | v0.5.1 |
 | Component context sharing | — | `useContext` | Not started | v0.5.1 |
@@ -1040,7 +1040,7 @@ High-impact areas for contributions:
 33. **`handle_async` callback** — Typed async completion handler (Phoenix 1.0 parity), ~80 lines Python
 34. **Declarative component assigns** — Type-checked attrs with defaults/validation, ~120 lines Python
 35. ~~**LiveView testing utilities**~~ ✅ **Shipped in v0.5.1** — 7 methods + 21 tests; see guide at `docs/website/guides/testing.md`.
-36. **Error overlay (dev mode)** — In-browser Python stack traces, ~100 lines Python + ~80 lines JS
+36. ~~**Error overlay (dev mode)**~~ ✅ **Shipped in v0.5.1** — `36-error-overlay.js` dev panel + `docs/website/guides/error-overlay.md` guide + 10 JSDOM tests.
 37. **Template fragments** — Rust-side static subtree fingerprinting for wire-size optimization
 38. **Connection multiplexing** — Share one WS across multiple LiveViews, ~200 lines JS + Python
 39. ~~**Rust template engine parity**~~ ✅ — Closed in v0.5.0: getattr fallback, attr-context escape, assign-tag handler

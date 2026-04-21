@@ -216,6 +216,11 @@ navigation:
         file: guides/error-codes.md
         order: 15
         level: reference
+      - title: Error Overlay (Dev Mode)
+        slug: error-overlay
+        file: guides/error-overlay.md
+        order: 16
+        level: beginner
 
   - title: Testing
     slug: testing
