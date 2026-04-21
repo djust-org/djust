@@ -5,9 +5,35 @@ Provides Component (stateless) and LiveComponent (stateful) base classes for cre
 reusable, reactive components with automatic performance optimization.
 """
 
-from typing import Dict, Any, Optional, Type
+import logging
+from typing import Dict, Any, List, Optional, Type
 from abc import ABC
 from django.utils.safestring import mark_safe
+
+from .assigns import (
+    Assign,
+    AssignValidationError,
+    Slot,
+    merge_assign_declarations,
+    validate_assigns,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _is_debug_mode() -> bool:
+    """Return True when Django DEBUG is on (fail-fast) or settings unavailable.
+
+    Falls back to True when Django settings aren't configured so tests that
+    don't bootstrap Django still raise, matching developer expectations.
+    """
+
+    try:
+        from django.conf import settings
+
+        return bool(getattr(settings, "DEBUG", True))
+    except Exception:
+        return True
 
 
 def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -> str:
@@ -405,7 +431,43 @@ class LiveComponent:
     template: Optional[str] = None  # Inline template string
     component_id: Optional[str] = None
 
+    # Declarative assigns/slots (Phoenix.Component parity).
+    # Merged across the MRO by :func:`merge_assign_declarations`.
+    assigns: List[Assign] = []
+    slots: List[Slot] = []
+
     # ── Descriptor support ──
+
+    def _validate_component_inputs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate & coerce ``kwargs`` against this class's declarative assigns.
+
+        Returns the coerced kwargs dict (with defaults applied). Raises in
+        DEBUG mode; logs a warning otherwise.
+
+        Side effects:
+            Stores the validated dict on ``self._validated_assigns``.
+        """
+
+        declarations = merge_assign_declarations(type(self))
+        if not declarations:
+            self._validated_assigns = dict(kwargs)
+            return kwargs
+
+        try:
+            coerced = validate_assigns(declarations, kwargs)
+        except AssignValidationError as exc:
+            if _is_debug_mode():
+                raise
+            logger.warning(
+                "Component %s assign validation failed: %s",
+                type(self).__name__,
+                exc,
+            )
+            self._validated_assigns = dict(kwargs)
+            return kwargs
+
+        self._validated_assigns = coerced
+        return coerced
 
     def __init__(self, component_id: Optional[str] = None, **kwargs):
         """
@@ -424,19 +486,23 @@ class LiveComponent:
         self._descriptor_defaults = kwargs
         self._descriptor_attr_name = None
         self._descriptor_storage_key = None
+        self._validated_assigns: Dict[str, Any] = {}
 
         # Determine if this is the new descriptor pattern (has State inner class)
         # or the legacy direct-instantiation pattern (no State class).
         has_state_class = hasattr(type(self), "State")
 
         if component_id is not None or not kwargs or not has_state_class:
-            # Legacy instantiation path — mount immediately
+            # Legacy instantiation path — mount immediately.
+            # Validate declarative assigns (if any) before mount() runs so
+            # mount() receives coerced values with defaults applied.
+            coerced = self._validate_component_inputs(kwargs)
             self.component_id = component_id or self._generate_id()
             self._mounted = False
             self._parent = None
             self._parent_callback = None
             if hasattr(self, "mount") and callable(self.mount):
-                self.mount(**kwargs)
+                self.mount(**coerced)
             self._mounted = True
         else:
             # Descriptor path — defer mounting, store defaults

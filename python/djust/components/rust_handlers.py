@@ -2017,6 +2017,21 @@ def register_with_rust_engine():
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
         register_block_tag_handler(tag_name, end_tag, handler)
 
+    # Component system (v0.5.0): {% call %}, {% component %}, {% slot %},
+    # {% render_slot %}. Registered here so the tags are available without
+    # a separate {% load %} in user templates.
+    from .function_component import (
+        CallTagHandler,
+        RenderSlotTagHandler,
+        SlotTagHandler,
+    )
+
+    _call_handler = CallTagHandler()
+    register_block_tag_handler("call", "endcall", _call_handler)
+    register_block_tag_handler("component", "endcomponent", _call_handler)
+    register_block_tag_handler("slot", "endslot", SlotTagHandler())
+    register_tag_handler("render_slot", RenderSlotTagHandler())
+
 
 # ===========================================================================
 # TIER 2 REMAINING + TIER 3 HANDLERS
