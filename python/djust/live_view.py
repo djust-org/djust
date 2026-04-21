@@ -72,7 +72,49 @@ __all__ = [
 ]
 
 
+class ContextProviderMixin:
+    """Component/view context sharing — React Context API equivalent (v0.5.1).
+
+    Mixed into both :class:`LiveView` and :class:`LiveComponent` so provider
+    and consumer roles work at any depth of the render tree. Providers are
+    stored per-instance in ``_djust_context_providers`` and the consumer walks
+    the ``_djust_context_parent`` chain (set by
+    ``LiveComponent.set_parent``).
+    """
+
+    def provide_context(self, key: str, value: Any) -> None:
+        """Expose a value to descendant components under ``key``.
+
+        Descendants read via :meth:`consume_context`. Scoped to the current
+        render tree; reset at the start of each render via
+        :meth:`clear_context_providers`.
+        """
+        providers = self.__dict__.setdefault("_djust_context_providers", {})
+        providers[key] = value
+
+    def consume_context(self, key: str, default: Any = None) -> Any:
+        """Return the value provided under ``key`` by this node or any ancestor.
+
+        Walks ``_djust_context_parent`` upward; returns ``default`` if no
+        provider is found.
+        """
+        node = self
+        while node is not None:
+            providers = getattr(node, "_djust_context_providers", None)
+            if providers and key in providers:
+                return providers[key]
+            node = getattr(node, "_djust_context_parent", None)
+        return default
+
+    def clear_context_providers(self) -> None:
+        """Reset all context providers — called at the start of each render."""
+        providers = self.__dict__.get("_djust_context_providers")
+        if providers:
+            providers.clear()
+
+
 class LiveView(
+    ContextProviderMixin,
     StreamsMixin,
     StreamingMixin,
     TemplateMixin,
@@ -269,6 +311,124 @@ class LiveView(
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
+
+    # ============================================================================
+    # DIRTY TRACKING — cumulative since mount or last mark_clean() (v0.5.1)
+    # ============================================================================
+
+    def _dirty_fingerprint(self) -> Dict[str, Any]:
+        """Shallow fingerprint of public assigns for dirty tracking.
+
+        Mirrors the WS consumer's ``_snapshot_assigns`` but scoped to public
+        attributes only (no leading underscore), so dirty tracking never
+        reports framework-internal changes.
+        """
+        static_skip = set(getattr(self, "static_assigns", []))
+        fp: Dict[str, Any] = {}
+        for k, v in self.__dict__.items():
+            if k.startswith("_") or k in static_skip:
+                continue
+            if isinstance(v, (int, float, bool, str, bytes)) or v is None:
+                fp[k] = ("v", v)
+            elif isinstance(v, (list, tuple)):
+                fp[k] = ("seq", id(v), len(v))
+            elif isinstance(v, dict):
+                fp[k] = ("dict", id(v), len(v), tuple(v.keys())[:16])
+            elif isinstance(v, set):
+                fp[k] = ("set", id(v), len(v))
+            else:
+                fp[k] = ("id", id(v))
+        return fp
+
+    def _capture_dirty_baseline(self) -> None:
+        """Snapshot current public assigns as the dirty-tracking baseline.
+
+        Called once after ``mount()`` completes (by the WS consumer) and again
+        whenever the user calls :meth:`mark_clean`.
+        """
+        self._dirty_baseline = self._dirty_fingerprint()
+
+    def mark_clean(self) -> None:
+        """Reset the dirty-tracking baseline to the current state.
+
+        Call this after persisting the view's state (e.g., after a successful
+        save handler) so subsequent mutations show up as ``is_dirty``.
+        """
+        self._capture_dirty_baseline()
+
+    class _FrameworkProperty(property):
+        """Marker subclass so ``get_context_data`` can skip framework-derived properties."""
+
+        _djust_framework_derived = True
+
+    @_FrameworkProperty
+    def changed_fields(self) -> set:
+        """Set of public attribute names that have changed since the baseline.
+
+        The baseline is captured after ``mount()`` completes, and reset by
+        :meth:`mark_clean`. Returns an empty set if the baseline hasn't been
+        captured yet (e.g., during ``mount()`` itself).
+        """
+        baseline = getattr(self, "_dirty_baseline", None)
+        if baseline is None:
+            return set()
+        current = self._dirty_fingerprint()
+        changed = set()
+        for k in set(baseline) | set(current):
+            if k not in baseline or k not in current:
+                changed.add(k)
+            elif baseline[k] != current[k]:
+                changed.add(k)
+        return changed
+
+    @_FrameworkProperty
+    def is_dirty(self) -> bool:
+        """True if any public attribute has changed since the baseline.
+
+        Use for "unsaved changes" UI patterns, conditional save buttons, and
+        ``beforeunload`` warnings. Combine with :meth:`mark_clean` to reset
+        after a successful save.
+        """
+        return bool(self.changed_fields)
+
+    # ============================================================================
+    # STABLE UNIQUE IDs — React 19 useId equivalent (v0.5.1)
+    # ============================================================================
+
+    def unique_id(self, suffix: str = "") -> str:
+        """Return a deterministic per-view ID stable across renders.
+
+        Each call within the same mount-render cycle returns a new unique ID,
+        but the sequence is stable: if the template renders ``unique_id()``
+        three times, the same three IDs are generated on every render. Useful
+        for ``aria-labelledby``, form field IDs, and any element that needs a
+        stable identifier without depending on DOM ordering.
+
+        The ID format is ``djust-<view-slug>-<n>[-<suffix>]`` where ``<n>`` is a
+        monotonically incrementing per-call counter that resets at the start of
+        each render cycle (``reset_unique_ids()``).
+        """
+        counter = self.__dict__.setdefault("_djust_id_counter", 0)
+        self._djust_id_counter = counter + 1
+        slug = getattr(self, "_djust_id_slug", None)
+        if slug is None:
+            slug = type(self).__name__.lower()
+            self._djust_id_slug = slug
+        base = f"djust-{slug}-{counter}"
+        return f"{base}-{suffix}" if suffix else base
+
+    def reset_unique_ids(self) -> None:
+        """Reset the ``unique_id()`` counter — called at the start of each render.
+
+        The WS consumer calls this before invoking ``get_context_data``; tests
+        can call it manually to assert stable-across-renders behavior.
+        """
+        self._djust_id_counter = 0
+
+    # Component context sharing methods are provided by ``ContextProviderMixin``
+    # below (declared at module scope) and mixed into both LiveView and
+    # LiveComponent so ``provide_context`` / ``consume_context`` work across
+    # the full render tree.
 
     def _snapshot_user_private_attrs(self) -> None:
         """Snapshot current _-prefixed attrs as user-defined private state names.

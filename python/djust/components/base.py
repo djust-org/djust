@@ -371,7 +371,10 @@ class Component(ABC):
         return self.render()
 
 
-class LiveComponent:
+from djust.live_view import ContextProviderMixin
+
+
+class LiveComponent(ContextProviderMixin):
     """
     Base class for creating reusable, reactive components.
 
@@ -697,6 +700,10 @@ class LiveComponent:
             parent: Parent LiveView instance
         """
         self._parent = parent
+        # Wire the component-context chain (v0.5.1) so ``consume_context``
+        # walks from this component up to the parent view when looking up a
+        # provider. See :meth:`LiveView.provide_context`.
+        self._djust_context_parent = parent
 
     def trigger_update(self):
         """

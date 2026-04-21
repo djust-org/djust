@@ -78,6 +78,16 @@ class ContextMixin:
         # redundant QuerySet evaluation across sync_state_to_rust/render_with_diff)
         if hasattr(self, "_cached_context") and self._cached_context is not None:
             return self._cached_context
+        # Reset the per-render ``unique_id()`` counter (v0.5.1) so IDs are
+        # stable across successive renders of the same logical position.
+        reset_ids = getattr(self, "reset_unique_ids", None)
+        if callable(reset_ids):
+            reset_ids()
+        # Reset context providers at the start of each render so
+        # ``provide_context`` from a previous render doesn't leak into this one.
+        clear_providers = getattr(self, "clear_context_providers", None)
+        if callable(clear_providers):
+            clear_providers()
 
         from ..components.base import Component, LiveComponent
         from django.db.models import QuerySet
@@ -125,6 +135,15 @@ class ContextMixin:
             for key, value in vars(cls).items():
                 if key not in _seen and key not in self.__dict__:
                     _seen.add(key)
+                    # Skip framework-defined derived properties (``is_dirty``,
+                    # ``changed_fields``) — they are derived state and must not
+                    # round-trip through session storage. Detected via an
+                    # opt-in marker ``_djust_framework_derived = True`` set on
+                    # the property descriptor by ``live_view.py``. User-defined
+                    # ``@property`` attributes and ``@computed`` properties are
+                    # unaffected — they flow to template context as before.
+                    if getattr(value, "_djust_framework_derived", False):
+                        continue
                     # For descriptors (LiveComponent with __get__), resolve
                     # through the instance so __get__ returns the State dict
                     # instead of the descriptor itself.
