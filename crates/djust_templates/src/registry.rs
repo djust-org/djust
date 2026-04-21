@@ -49,6 +49,14 @@ type BlockHandlerEntry = (String, Py<PyAny>);
 static BLOCK_TAG_HANDLERS: Lazy<Mutex<HashMap<String, BlockHandlerEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Global registry for assign tag handlers (context-mutating tags).
+///
+/// Handlers implement `render(args, context) -> dict[str, Any]`. The
+/// returned dict is merged into the template context for siblings
+/// following the tag in the same render iteration.
+static ASSIGN_TAG_HANDLERS: Lazy<Mutex<HashMap<String, Py<PyAny>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
 /// Register a Python tag handler for a custom template tag.
 ///
 /// The handler must be a Python object with a `render(self, args, context)` method:
@@ -374,6 +382,146 @@ pub fn call_handler(
         result
             .extract::<String>()
             .map_err(|_| format!("Handler '{name}' render() must return a string"))
+    })
+}
+
+// ============================================================================
+// Assign Tag Handler API (context-mutating tags)
+// ============================================================================
+
+/// Register a Python assign-tag handler for a custom template tag.
+///
+/// Assign tags mutate the template context rather than emitting HTML.
+/// Example: `{% assign_slot user_card %}` — the handler returns a
+/// dict whose keys become context variables visible to subsequent
+/// sibling nodes in the template.
+///
+/// The handler must be a Python object with a `render(args, context)`
+/// method that returns a `dict[str, Any]`. Non-dict return values
+/// are treated as an empty dict (no-op) and logged by the caller.
+///
+/// # Arguments
+///
+/// * `name` - Tag name (e.g., "assign_slot")
+/// * `handler` - Python handler object with `render` method
+#[pyfunction]
+pub fn register_assign_tag_handler(
+    py: Python<'_>,
+    name: String,
+    handler: Py<PyAny>,
+) -> PyResult<()> {
+    let handler_ref = handler.bind(py);
+    if !handler_ref.hasattr("render")? {
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Assign tag handler must have a 'render' method",
+        ));
+    }
+
+    let mut registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+
+    registry.insert(name, handler);
+    Ok(())
+}
+
+/// Unregister an assign tag handler.
+#[pyfunction]
+pub fn unregister_assign_tag_handler(name: &str) -> PyResult<bool> {
+    let mut registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    Ok(registry.remove(name).is_some())
+}
+
+/// Check if an assign tag handler is registered.
+#[pyfunction]
+pub fn has_assign_tag_handler(name: &str) -> PyResult<bool> {
+    let registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    Ok(registry.contains_key(name))
+}
+
+/// Clear all registered assign tag handlers (primarily for testing).
+#[pyfunction]
+pub fn clear_assign_tag_handlers() -> PyResult<()> {
+    let mut registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    registry.clear();
+    Ok(())
+}
+
+/// Internal Rust API — does an assign tag handler exist for this name?
+pub fn assign_handler_exists(name: &str) -> bool {
+    ASSIGN_TAG_HANDLERS
+        .lock()
+        .map(|registry| registry.contains_key(name))
+        .unwrap_or(false)
+}
+
+/// Call a registered Python assign-tag handler with args and context.
+///
+/// Returns a map of context updates to merge into the surrounding
+/// render context. Error strings bubble up through
+/// [`crate::renderer`] as `DjangoRustError::TemplateError`.
+pub fn call_assign_handler(
+    name: &str,
+    args: &[String],
+    context: &HashMap<String, djust_core::Value>,
+) -> Result<HashMap<String, djust_core::Value>, String> {
+    let handler = {
+        let registry = ASSIGN_TAG_HANDLERS
+            .lock()
+            .map_err(|e| format!("Registry lock error: {e}"))?;
+        let handler_ref = registry
+            .get(name)
+            .ok_or_else(|| format!("No assign handler registered for tag: {name}"))?;
+        Python::with_gil(|py| handler_ref.clone_ref(py))
+    };
+
+    Python::with_gil(|py| {
+        use pyo3::IntoPyObject;
+
+        let py_args = pyo3::types::PyList::new(py, args)
+            .map_err(|e| format!("Failed to create args list: {e}"))?;
+
+        let py_context = pyo3::types::PyDict::new(py);
+        for (key, value) in context {
+            let py_value = value
+                .clone()
+                .into_pyobject(py)
+                .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
+            py_context
+                .set_item(key, py_value)
+                .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+        }
+
+        let handler_ref = handler.bind(py);
+        let result = handler_ref
+            .call_method1("render", (py_args, py_context))
+            .map_err(|e| {
+                let traceback = e
+                    .traceback(py)
+                    .map(|tb| tb.format().unwrap_or_default())
+                    .unwrap_or_default();
+                format!(
+                    "Assign handler '{}' raised exception: {}\n{}",
+                    name,
+                    e.value(py),
+                    traceback
+                )
+            })?;
+
+        // Handlers may legitimately return None or something dict-like
+        // but not a dict. Treat any extraction failure as an empty
+        // merge (no-op) so a misbehaving handler can't crash the
+        // whole render.
+        match result.extract::<HashMap<String, djust_core::Value>>() {
+            Ok(map) => Ok(map),
+            Err(_) => Ok(HashMap::new()),
+        }
     })
 }
 

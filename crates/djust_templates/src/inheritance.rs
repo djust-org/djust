@@ -303,7 +303,7 @@ fn nodes_to_template_string(nodes: &[Node]) -> String {
 fn node_to_template_string(node: &Node) -> String {
     match node {
         Node::Text(text) => text.clone(),
-        Node::Variable(var_name, filters) => {
+        Node::Variable(var_name, filters, _in_attr) => {
             let mut result = format!("{{{{ {var_name} ");
             for (filter_name, arg) in filters {
                 if let Some(arg) = arg {
@@ -492,6 +492,16 @@ fn node_to_template_string(node: &Node) -> String {
             result.push_str(&format!("{{% end{name} %}}"));
             result
         }
+        Node::AssignTag { name, args } => {
+            // Reconstruct assign tag: {% tagname args %}
+            let mut result = format!("{{% {name}");
+            for arg in args {
+                result.push(' ');
+                result.push_str(arg);
+            }
+            result.push_str(" %}");
+            result
+        }
     }
 }
 
@@ -582,7 +592,7 @@ mod tests {
     fn test_nodes_to_template_string_preserves_variables() {
         // Test that variables are preserved as {{ var }} not rendered
         let nodes = vec![
-            Node::Variable("name".to_string(), vec![]),
+            Node::Variable("name".to_string(), vec![], false),
             Node::Text(" is here".to_string()),
         ];
 
@@ -601,6 +611,7 @@ mod tests {
                 ("floatformat".to_string(), Some("2".to_string())),
                 ("default".to_string(), Some("0.00".to_string())),
             ],
+            false,
         )];
 
         let result = nodes_to_template_string(&nodes);
@@ -617,7 +628,7 @@ mod tests {
             name: "content".to_string(),
             nodes: vec![
                 Node::Text("<p>".to_string()),
-                Node::Variable("message".to_string(), vec![]),
+                Node::Variable("message".to_string(), vec![], false),
                 Node::Text("</p>".to_string()),
             ],
         }];
@@ -653,7 +664,7 @@ mod tests {
             var_names: vec!["item".to_string()],
             iterable: "items".to_string(),
             reversed: false,
-            nodes: vec![Node::Variable("item.name".to_string(), vec![])],
+            nodes: vec![Node::Variable("item.name".to_string(), vec![], false)],
             empty_nodes: vec![],
         }];
 
@@ -686,7 +697,7 @@ mod tests {
                 ("total".to_string(), "price|add:tax".to_string()),
                 ("discount".to_string(), "0.1".to_string()),
             ],
-            nodes: vec![Node::Variable("total".to_string(), vec![])],
+            nodes: vec![Node::Variable("total".to_string(), vec![], false)],
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -734,7 +745,11 @@ mod tests {
                     reversed: false,
                     nodes: vec![
                         Node::Text("<li>".to_string()),
-                        Node::Variable("item.name".to_string(), vec![("upper".to_string(), None)]),
+                        Node::Variable(
+                            "item.name".to_string(),
+                            vec![("upper".to_string(), None)],
+                            false,
+                        ),
                         Node::Text("</li>".to_string()),
                     ],
                     empty_nodes: vec![],
@@ -1057,7 +1072,7 @@ mod tests {
             Node::Extends("base.html".to_string()),
             Node::Block {
                 name: "item_content".to_string(),
-                nodes: vec![Node::Variable("item.name".to_string(), vec![])],
+                nodes: vec![Node::Variable("item.name".to_string(), vec![], false)],
             },
         ];
 

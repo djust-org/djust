@@ -16,24 +16,107 @@ pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
 }
 
-/// Render nodes with an optional template loader for {% include %} support
+/// Render nodes with an optional template loader for {% include %} support.
+///
+/// Supports `Node::AssignTag` by lazily cloning the incoming
+/// `&Context` into an owned, mutable context the first time an
+/// assign tag is encountered. All subsequent sibling nodes see the
+/// assigned variables. Siblings preceding the assign tag are
+/// rendered with the original (unmutated) context.
 pub fn render_nodes_with_loader<L: TemplateLoader>(
     nodes: &[Node],
     context: &Context,
     loader: Option<&L>,
 ) -> Result<String> {
     let mut output = String::new();
+    // Lazily materialised mutable copy of the context for assign-tag
+    // effects. `None` until an assign tag forces a clone.
+    let mut mutated: Option<Context> = None;
 
     for node in nodes {
-        output.push_str(&render_node_with_loader(node, context, loader)?);
+        // Pick which context this node renders against.
+        let active_ctx: &Context = match &mutated {
+            Some(c) => c,
+            None => context,
+        };
+
+        match node {
+            Node::AssignTag { name, args } => {
+                // Resolve variable references in args using the same
+                // semantics as `Node::CustomTag`.
+                let resolved_args: Vec<String> = args
+                    .iter()
+                    .map(|arg| resolve_tag_arg(arg, active_ctx))
+                    .collect();
+
+                let context_map = active_ctx.to_hashmap();
+                let updates =
+                    crate::registry::call_assign_handler(name, &resolved_args, &context_map)
+                        .map_err(|e| {
+                            DjangoRustError::TemplateError(format!(
+                                "Assign tag '{name}' error: {e}"
+                            ))
+                        })?;
+
+                // Promote to owned context if we haven't already, then
+                // merge the handler's returned dict.
+                if mutated.is_none() {
+                    mutated = Some(active_ctx.clone());
+                }
+                if let Some(ctx) = mutated.as_mut() {
+                    for (k, v) in updates {
+                        ctx.set(k, v);
+                    }
+                }
+                // Assign tags emit no HTML.
+            }
+            _ => {
+                output.push_str(&render_node_with_loader(node, active_ctx, loader)?);
+            }
+        }
     }
 
     Ok(output)
 }
 
+/// Resolve a tag argument the same way `Node::CustomTag` does.
+///
+/// - Quoted string literals are returned unchanged.
+/// - `key=value` pairs resolve `value` against the context.
+/// - Bare names are looked up in the context.
+///
+/// Used by both `CustomTag` (via its inline logic) and `AssignTag`.
+fn resolve_tag_arg(arg: &str, context: &Context) -> String {
+    let arg_trimmed = arg.trim();
+    if (arg_trimmed.starts_with('"') && arg_trimmed.ends_with('"'))
+        || (arg_trimmed.starts_with('\'') && arg_trimmed.ends_with('\''))
+    {
+        return arg.to_string();
+    }
+    if let Some(eq_pos) = arg.find('=') {
+        let key = &arg[..eq_pos];
+        let value = arg[eq_pos + 1..].trim();
+        if (value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\''))
+        {
+            return arg.to_string();
+        }
+        return match context.get(value) {
+            Some(resolved) => format!("{}={}", key, resolved),
+            None => arg.to_string(),
+        };
+    }
+    match context.get(arg_trimmed) {
+        Some(resolved) => resolved.to_string(),
+        None => arg.to_string(),
+    }
+}
+
 /// Render all nodes and return full HTML plus per-node fragments.
 ///
 /// Used on the first render to populate the per-node HTML cache.
+/// Like [`render_nodes_with_loader`], supports context-mutating
+/// [`Node::AssignTag`] siblings.
 pub fn render_nodes_collecting<L: TemplateLoader>(
     nodes: &[Node],
     context: &Context,
@@ -41,8 +124,40 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
 ) -> Result<(String, Vec<String>)> {
     let mut full_output = String::new();
     let mut fragments = Vec::with_capacity(nodes.len());
+    let mut mutated: Option<Context> = None;
+
     for node in nodes {
-        let frag = render_node_with_loader(node, context, loader)?;
+        let active_ctx: &Context = match &mutated {
+            Some(c) => c,
+            None => context,
+        };
+
+        let frag = match node {
+            Node::AssignTag { name, args } => {
+                let resolved_args: Vec<String> = args
+                    .iter()
+                    .map(|arg| resolve_tag_arg(arg, active_ctx))
+                    .collect();
+                let context_map = active_ctx.to_hashmap();
+                let updates =
+                    crate::registry::call_assign_handler(name, &resolved_args, &context_map)
+                        .map_err(|e| {
+                            DjangoRustError::TemplateError(format!(
+                                "Assign tag '{name}' error: {e}"
+                            ))
+                        })?;
+                if mutated.is_none() {
+                    mutated = Some(active_ctx.clone());
+                }
+                if let Some(ctx) = mutated.as_mut() {
+                    for (k, v) in updates {
+                        ctx.set(k, v);
+                    }
+                }
+                String::new()
+            }
+            _ => render_node_with_loader(node, active_ctx, loader)?,
+        };
         full_output.push_str(&frag);
         fragments.push(frag);
     }
@@ -64,8 +179,17 @@ pub fn render_nodes_partial<L: TemplateLoader>(
     let mut full_output = String::new();
     let mut fragments = Vec::with_capacity(nodes.len());
     let mut changed_indices = Vec::new();
+    // AssignTag produces `"*"` in its dep set (see extract_from_nodes)
+    // so it always re-renders on any change; mutations propagate to
+    // subsequent siblings via this optional cloned context.
+    let mut mutated: Option<Context> = None;
 
     for (i, node) in nodes.iter().enumerate() {
+        let active_ctx: &Context = match &mutated {
+            Some(c) => c,
+            None => context,
+        };
+
         let needs_render = if let Some(deps) = node_deps.get(i) {
             deps.contains("*")
                 || i >= node_html_cache.len()
@@ -75,7 +199,32 @@ pub fn render_nodes_partial<L: TemplateLoader>(
         };
 
         if needs_render {
-            let html = render_node_with_loader(node, context, loader)?;
+            let html = match node {
+                Node::AssignTag { name, args } => {
+                    let resolved_args: Vec<String> = args
+                        .iter()
+                        .map(|arg| resolve_tag_arg(arg, active_ctx))
+                        .collect();
+                    let context_map = active_ctx.to_hashmap();
+                    let updates =
+                        crate::registry::call_assign_handler(name, &resolved_args, &context_map)
+                            .map_err(|e| {
+                                DjangoRustError::TemplateError(format!(
+                                    "Assign tag '{name}' error: {e}"
+                                ))
+                            })?;
+                    if mutated.is_none() {
+                        mutated = Some(active_ctx.clone());
+                    }
+                    if let Some(ctx) = mutated.as_mut() {
+                        for (k, v) in updates {
+                            ctx.set(k, v);
+                        }
+                    }
+                    String::new()
+                }
+                _ => render_node_with_loader(node, active_ctx, loader)?,
+            };
             full_output.push_str(&html);
             fragments.push(html);
             changed_indices.push(i);
@@ -107,8 +256,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
     match node {
         Node::Text(text) => Ok(text.clone()),
 
-        Node::Variable(var_name, filter_specs) => {
-            let mut value = context.get(var_name).cloned().unwrap_or(Value::Null);
+        Node::Variable(var_name, filter_specs, in_attr) => {
+            // `resolve` tries the normal value-stack path first, then
+            // falls back to `getattr` on any PyObject sidecar attached
+            // to the context (e.g. Django model instances).
+            let mut value = context.resolve(var_name).unwrap_or(Value::Null);
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             for (filter_name, arg) in filter_specs {
@@ -141,6 +293,13 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 || context.is_safe(var_name);
             if is_safe {
                 Ok(text)
+            } else if *in_attr {
+                // Attribute-context escape: handles `"` → `&quot;`
+                // and `'` → `&#x27;` in addition to the base
+                // `&`/`<`/`>` escapes, so quoted attribute values
+                // like `<a href="{{ url }}">` never break when the
+                // value itself contains a quote.
+                Ok(filters::html_escape_attr(&text))
             } else {
                 Ok(filters::html_escape(&text))
             }
@@ -637,6 +796,23 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 .map_err(|e| {
                     DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e))
                 })
+        }
+
+        Node::AssignTag { name, args } => {
+            // When an AssignTag is rendered individually (outside of
+            // render_nodes_with_loader's sibling-aware loop) we still
+            // invoke the handler for its side-effects but discard the
+            // result — there's no way to propagate context mutations
+            // without a sibling to pass them to. Emits empty string.
+            let resolved_args: Vec<String> = args
+                .iter()
+                .map(|arg| resolve_tag_arg(arg, context))
+                .collect();
+            let context_map = context.to_hashmap();
+            crate::registry::call_assign_handler(name, &resolved_args, &context_map).map_err(
+                |e| DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}")),
+            )?;
+            Ok(String::new())
         }
 
         Node::CustomTag { name, args } => {
@@ -1620,7 +1796,7 @@ mod tests {
 
     #[test]
     fn test_render_variable() {
-        let nodes = vec![Node::Variable("name".to_string(), vec![])];
+        let nodes = vec![Node::Variable("name".to_string(), vec![], false)];
         let mut context = Context::new();
         context.set("name".to_string(), Value::String("World".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();

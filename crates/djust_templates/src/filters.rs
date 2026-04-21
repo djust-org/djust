@@ -475,6 +475,24 @@ pub fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Attribute-safe HTML escape.
+///
+/// Currently behaves identically to [`html_escape`]: both escape
+/// `&`, `<`, `>`, `"`, and `'`. The distinct function exists so
+/// parse-time classification (whether a `{{ var }}` is inside an
+/// HTML opening tag) is visible at the render layer — callers can
+/// rely on this to produce attribute-safe output even if the base
+/// `html_escape` were ever relaxed to omit quote escaping for text
+/// context. Matches Django's `escape()` contract for attribute
+/// values: `"` → `&quot;` and `'` → `&#x27;` are always emitted.
+pub fn html_escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 fn truncate_words(text: &str, num_words: usize) -> String {
     let words: Vec<&str> = text.split_whitespace().collect();
     if words.len() <= num_words {
@@ -1469,6 +1487,28 @@ mod tests {
         assert_eq!(html_escape("safe text"), "safe text");
         assert_eq!(html_escape("a&b"), "a&amp;b");
         assert_eq!(html_escape("it's"), "it&#x27;s");
+    }
+
+    #[test]
+    fn test_html_escape_attr_contract_is_independent() {
+        // `html_escape_attr` is called in attribute-value context, where
+        // unescaped quotes and apostrophes break the attribute string.
+        // Pin the contract directly — do NOT rely on `html_escape` happening
+        // to do the same work today. If a future change loosens
+        // `html_escape` (e.g. to skip quote escaping outside attrs per
+        // strict Django parity), `html_escape_attr` MUST still escape
+        // quotes + apostrophes. This test locks that in. (PR #TBD,
+        // Stage 7 review of feat/rust-template-parity-v050.)
+        assert_eq!(html_escape_attr("\""), "&quot;");
+        assert_eq!(html_escape_attr("'"), "&#x27;");
+        assert_eq!(html_escape_attr("<"), "&lt;");
+        assert_eq!(html_escape_attr(">"), "&gt;");
+        assert_eq!(html_escape_attr("&"), "&amp;");
+        // Combined realistic case: a URL with quotes inside an href=".." value
+        assert_eq!(
+            html_escape_attr("https://ex.com/?x=\"a\"&y='b'"),
+            "https://ex.com/?x=&quot;a&quot;&amp;y=&#x27;b&#x27;"
+        );
     }
 
     #[test]

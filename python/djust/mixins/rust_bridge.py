@@ -513,6 +513,47 @@ class RustBridgeMixin:
             if safe_keys:
                 self._rust_view.mark_safe_keys(safe_keys)
 
+            # Build a sidecar of raw Python objects (e.g. Django model
+            # instances) so the Rust template engine can fall back to
+            # `getattr` for attributes that are not in the JSON-
+            # serialized state. Only send values that are genuinely
+            # non-JSON-friendly — primitives, dicts, lists, Components
+            # and Forms are already handled via normalize_django_value.
+            if hasattr(self._rust_view, "set_raw_py_values"):
+                _JSON_FRIENDLY = (
+                    int,
+                    float,
+                    bool,
+                    str,
+                    bytes,
+                    type(None),
+                    dict,
+                    list,
+                    tuple,
+                    set,
+                    frozenset,
+                )
+                sidecar = {}
+                for _raw_key, _raw_val in full_context.items():
+                    if _raw_val is None:
+                        continue
+                    if isinstance(_raw_val, _JSON_FRIENDLY):
+                        continue
+                    if isinstance(_raw_val, (Component, LiveComponent)):
+                        continue
+                    if isinstance(_raw_val, forms.BaseForm):
+                        continue
+                    sidecar[_raw_key] = _raw_val
+                # Always call (even when empty) so stale objects from
+                # a previous render are cleared.
+                try:
+                    self._rust_view.set_raw_py_values(sidecar)
+                except Exception:
+                    logging.getLogger("djust.rust_bridge").warning(
+                        "set_raw_py_values failed; template getattr fallback disabled this cycle",
+                        exc_info=True,
+                    )
+
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a
             # previous set_changed_keys call with meaningful keys.

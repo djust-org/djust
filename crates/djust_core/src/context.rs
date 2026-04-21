@@ -2,10 +2,16 @@
 
 use crate::Value;
 use ahash::{AHashMap, AHashSet};
+use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// A context for template rendering, similar to Django's Context
-#[derive(Debug, Clone, Default)]
+///
+/// In addition to JSON-friendly `Value` entries, `Context` can hold a
+/// sidecar map of raw Python objects (e.g. Django model instances) for
+/// `getattr`-style fallback lookups when a nested key like
+/// `user.username` cannot be resolved through the normal value stack.
+#[derive(Debug, Default)]
 pub struct Context {
     stack: Vec<AHashMap<String, Value>>,
     /// Keys marked as safe (skip auto-escaping), like Django's SafeData
@@ -13,6 +19,29 @@ pub struct Context {
     /// Track loop variable mappings: loop_var -> (iterable_name, index)
     /// e.g., "item" -> ("items", 0) means `item` refers to `items[0]`
     loop_mappings: AHashMap<String, (String, usize)>,
+    /// Optional sidecar of raw Python objects keyed by top-level
+    /// context name. Used only as a fallback when `get()` misses —
+    /// the value-stack path remains the fast path for JSON-friendly
+    /// context entries.
+    ///
+    /// Shared via `Arc` across clones because `Py<PyAny>` does not
+    /// implement `Clone` directly (it requires a GIL-held `clone_ref`).
+    /// Wrapping in `Arc` lets `Context::clone` stay GIL-free — the
+    /// sidecar is logically immutable after construction.
+    raw_py_objects: Option<std::sync::Arc<HashMap<String, PyObject>>>,
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        Self {
+            stack: self.stack.clone(),
+            safe_keys: self.safe_keys.clone(),
+            loop_mappings: self.loop_mappings.clone(),
+            // Arc::clone is cheap and does not require the GIL —
+            // the contained `Py<PyAny>` refcount is not touched.
+            raw_py_objects: self.raw_py_objects.clone(),
+        }
+    }
 }
 
 impl Context {
@@ -21,6 +50,7 @@ impl Context {
             stack: vec![AHashMap::new()],
             safe_keys: AHashSet::new(),
             loop_mappings: AHashMap::new(),
+            raw_py_objects: None,
         }
     }
 
@@ -33,7 +63,25 @@ impl Context {
             stack: vec![map],
             safe_keys: AHashSet::new(),
             loop_mappings: AHashMap::new(),
+            raw_py_objects: None,
         }
+    }
+
+    /// Attach a map of raw Python objects for `getattr`-fallback
+    /// lookups. Typically called by the live-view layer after
+    /// building the context from JSON-compatible state. Safe to
+    /// call with an empty map (no-op on lookup).
+    pub fn set_raw_py_objects(&mut self, objects: HashMap<String, PyObject>) {
+        if objects.is_empty() {
+            self.raw_py_objects = None;
+        } else {
+            self.raw_py_objects = Some(std::sync::Arc::new(objects));
+        }
+    }
+
+    /// Does this context have any raw Python objects attached?
+    pub fn has_raw_py_objects(&self) -> bool {
+        self.raw_py_objects.is_some()
     }
 
     /// Mark a variable name as safe (skip auto-escaping on render).
@@ -149,6 +197,57 @@ impl Context {
                 frame.insert(k, v);
             }
         }
+    }
+
+    /// Resolve a dotted lookup, falling back to `getattr` on raw
+    /// Python objects when the normal value-stack path misses.
+    ///
+    /// This is the public user-facing lookup used by the template
+    /// renderer for `{{ variable.path }}` expressions. Unlike
+    /// [`Context::get`], the return type is owned `Value` (not
+    /// `&Value`) because the `getattr` fallback constructs fresh
+    /// values from Python attributes.
+    ///
+    /// Fallback semantics:
+    /// - Single-segment keys with a hit in `raw_py_objects` convert
+    ///   the object to `Value` (via `Value::extract`).
+    /// - Nested keys walk `getattr` one segment at a time.
+    ///   Intermediate attributes that themselves are Python objects
+    ///   continue the walk; intermediate `dict`/`list` return values
+    ///   are honoured as if they were regular `Value`s.
+    /// - Any exception raised by `getattr` (AttributeError, property
+    ///   raise, etc.) is caught and returned as `None`. This mirrors
+    ///   Django's documented "template string if invalid" behaviour
+    ///   (defaults to "") — a malformed template never crashes the
+    ///   render.
+    pub fn resolve(&self, key: &str) -> Option<Value> {
+        if let Some(v) = self.get(key) {
+            return Some(v.clone());
+        }
+        let raw = self.raw_py_objects.as_deref()?;
+        let parts: Vec<&str> = key.split('.').collect();
+        let first = *parts.first()?;
+        let obj = raw.get(first)?;
+
+        Python::with_gil(|py| -> Option<Value> {
+            let mut current: pyo3::Bound<'_, pyo3::PyAny> = obj.bind(py).clone();
+            for part in &parts[1..] {
+                match current.getattr(*part) {
+                    Ok(next) => {
+                        current = next;
+                    }
+                    Err(_) => {
+                        // Swallow AttributeError (and anything else
+                        // raised by custom descriptors) — invalid
+                        // template paths render as empty, matching
+                        // Django's default.
+                        return None;
+                    }
+                }
+            }
+            // Convert the resolved attribute to Value; failure → None
+            current.extract::<Value>().ok()
+        })
     }
 
     /// Convert the entire context to a flattened HashMap.
