@@ -289,8 +289,14 @@ class TestSnapshotAssigns:
         assert "count" in snap
         assert "_private" not in snap
 
-    def test_list_same_content_no_render(self):
-        """Reassigning a list with identical content should match (no render)."""
+    def test_list_reassign_detected_by_identity(self):
+        """Reassigning a list (even to identical content) changes identity and
+        therefore changes the snapshot. This matches `_snapshot_assigns`'
+        documented contract: identity-based detection, with a shallow content
+        fingerprint layered on top. Content-equal reassignment is INTENTIONALLY
+        treated as dirty — avoiding it is the caller's responsibility (e.g.
+        via ``_changed_keys`` marking, or by mutating in place).
+        """
         from djust.live_view import LiveView
         from djust.websocket import _snapshot_assigns
 
@@ -298,9 +304,9 @@ class TestSnapshotAssigns:
         view.items = [1, 2, 3]
 
         snap1 = _snapshot_assigns(view)
-        view.items = [1, 2, 3]  # New list object, same content
+        view.items = [1, 2, 3]  # New list object — different id() → dirty.
         snap2 = _snapshot_assigns(view)
-        assert snap1 == snap2  # Same content → no render needed
+        assert snap1 != snap2, "reassignment should register as a state change"
 
     def test_list_different_content_detected(self):
         """Reassigning a list with different content should differ."""
