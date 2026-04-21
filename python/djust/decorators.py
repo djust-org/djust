@@ -272,40 +272,123 @@ def state(default: Any = None):
     return StateProperty()
 
 
-def computed(func: F) -> F:
+def computed(*deps):
     """
     Decorator to mark a method as a computed property.
 
-    Computed properties are derived from state and are automatically
-    recalculated when state changes. They are available in templates
-    but not stored in state.
+    Two forms:
 
-    Usage:
-        class MyView(LiveView):
-            count = state(default=0)
+    1. **Plain** — ``@computed`` with no args. Recomputes on every access.
+       Good for cheap derivations::
 
-            @computed
-            def count_doubled(self):
-                return self.count * 2
+           @computed
+           def count_doubled(self):
+               return self.count * 2
 
-            @computed
-            def is_even(self):
-                return self.count % 2 == 0
+    2. **Memoized** — ``@computed("items", "tax_rate")`` with explicit dependency
+       attribute names. The value is cached on the instance and only recomputed
+       when any of the listed dependencies' identity or shallow content
+       fingerprint changes. Use for expensive derivations (large sums, DB
+       aggregates, etc.)::
 
-    In template:
+           @computed("items", "tax_rate")
+           def total_price(self):
+               subtotal = sum(i["price"] * i["qty"] for i in self.items)
+               return subtotal * (1 + self.tax_rate)
+
+    In both forms the result is a property — available in templates as a plain
+    attribute::
+
         <div>Count: {{ count }}</div>
-        <div>Doubled: {{ count_doubled }}</div>
-        <div>Is even? {{ is_even }}</div>
+        <div>Total: {{ total_price }}</div>
+
+    The memoized form stores its cache under ``self._djust_computed_cache``
+    (a dict keyed by attribute name) and its last-seen dependency fingerprints
+    under ``self._djust_computed_deps`` (a dict keyed by attribute name). Both
+    attributes are lazily created on first access — no ``__init__`` change
+    needed.
+    """
+    # Polymorphic call: ``@computed`` (no parens, ``deps == (func,)``) vs.
+    # ``@computed("dep1", "dep2")``.
+    if len(deps) == 1 and callable(deps[0]) and not isinstance(deps[0], str):
+        func = deps[0]
+
+        @functools.wraps(func)
+        def _inner(self):
+            return func(self)
+
+        prop = _ComputedProperty(_inner)
+        prop._is_computed = True
+        prop._computed_name = func.__name__
+        return cast(F, prop)
+
+    # Memoized form: keep a per-instance cache keyed on a fingerprint of the
+    # dependency values. The fingerprint uses identity + shallow content info,
+    # matching what ``_snapshot_assigns`` uses elsewhere in djust.
+    dep_names = tuple(deps)
+    for name in dep_names:
+        if not isinstance(name, str):
+            raise TypeError(
+                f"@computed() dependency names must be strings, got {type(name).__name__}"
+            )
+
+    def make_decorator(func):
+        attr_name = func.__name__
+
+        def _fingerprint(instance):
+            parts = []
+            for name in dep_names:
+                v = getattr(instance, name, _MISSING)
+                if v is _MISSING:
+                    parts.append((name, _MISSING_TAG))
+                elif isinstance(v, (int, float, bool, str, bytes)) or v is None:
+                    parts.append((name, "v", v))
+                elif isinstance(v, (list, tuple)):
+                    parts.append((name, "seq", id(v), len(v)))
+                elif isinstance(v, dict):
+                    parts.append((name, "dict", id(v), len(v), tuple(v.keys())[:16]))
+                elif isinstance(v, set):
+                    parts.append((name, "set", id(v), len(v)))
+                else:
+                    parts.append((name, "id", id(v)))
+            return tuple(parts)
+
+        @functools.wraps(func)
+        def _inner(self):
+            cache = self.__dict__.setdefault("_djust_computed_cache", {})
+            deps_seen = self.__dict__.setdefault("_djust_computed_deps", {})
+            current = _fingerprint(self)
+            if deps_seen.get(attr_name) != current or attr_name not in cache:
+                cache[attr_name] = func(self)
+                deps_seen[attr_name] = current
+            return cache[attr_name]
+
+        prop = _ComputedProperty(_inner)
+        prop._is_computed = True
+        prop._computed_name = attr_name
+        prop._computed_deps = dep_names
+        return cast(F, prop)
+
+    return make_decorator
+
+
+_MISSING = object()
+_MISSING_TAG = "__djust_missing__"
+
+
+class _ComputedProperty(property):
+    """A ``property`` subclass that allows custom attributes for djust metadata.
+
+    Plain ``property`` instances reject ``__setattr__`` on arbitrary names,
+    which breaks ``@functools.wraps`` and our own ``_is_computed`` / ``_computed_name``
+    / ``_computed_deps`` metadata. Subclassing lets the attributes live on the
+    descriptor without runtime errors.
     """
 
-    @functools.wraps(func)
-    @property
-    def wrapper(self):
-        return func(self)
-
-    wrapper._is_computed = True  # type: ignore
-    wrapper._computed_name = func.__name__  # type: ignore
-    return cast(F, wrapper)
+    # Explicit __slots__-free class so arbitrary attributes are permitted via
+    # the usual ``__dict__``; ``property`` defines ``__dict__`` on the
+    # descriptor, so assignment works here.
+    pass
 
 
 def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F], F]:

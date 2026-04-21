@@ -118,6 +118,10 @@ def _instantiate_view(view_cls, request: HttpRequest):
         mount = getattr(instance, "mount", None)
         if callable(mount):
             _call_possibly_async(mount, request)
+    # Dirty-tracking baseline (v0.5.1) so ``is_dirty`` / ``changed_fields``
+    # reflect mutations made during the handler run.
+    if hasattr(instance, "_capture_dirty_baseline"):
+        instance._capture_dirty_baseline()
     return instance
 
 

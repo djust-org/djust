@@ -1525,6 +1525,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self.view_instance._djust_mount_request = request
                 self.view_instance._djust_mount_kwargs = mount_kwargs
                 self.view_instance._snapshot_user_private_attrs()
+                # Dirty tracking baseline (v0.5.1) — captures the post-mount
+                # state so ``is_dirty`` / ``changed_fields`` reflect changes
+                # made by subsequent event handlers.
+                if hasattr(self.view_instance, "_capture_dirty_baseline"):
+                    self.view_instance._capture_dirty_baseline()
         except Exception as e:
             response = handle_exception(
                 e,
