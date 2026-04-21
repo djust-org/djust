@@ -82,6 +82,7 @@ How to build specific features.
 | **[PWA](guides/pwa.md)**                                  | Build offline-first Progressive Web Apps           |
 | **[Service Worker](guides/service-worker.md)**            | Instant page shell + WebSocket reconnection bridge |
 | **[Error Codes](guides/error-codes.md)**                  | Complete error code reference with fixes           |
+| **[Error Overlay (Dev Mode)](guides/error-overlay.md)**   | In-browser Python traceback panel, Next.js-style   |
 
 ---
 
