@@ -2482,6 +2482,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         ref = frame["ref"]
 
         if frame["type"] == "chunk":
+            # add_chunk() internally dispatches to either the disk-buffer
+            # path or (when the upload slot was configured with writer=)
+            # the writer's write_chunk() — no disk I/O on the writer path.
             progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"])
             if progress is not None:
                 # Send progress update (throttle to every 10%)
@@ -2489,7 +2492,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if entry and (progress % 10 == 0 or progress >= 100):
                     await self.send_json(build_progress_message(ref, progress))
             else:
-                await self.send_json(build_progress_message(ref, 0, "error"))
+                # Surface error details (writer exception, size-limit, etc.)
+                err_entry = mgr._entries.get(ref)
+                error_msg = err_entry.error if err_entry and err_entry.error else None
+                msg = build_progress_message(ref, 0, "error")
+                if error_msg:
+                    msg["error"] = error_msg
+                await self.send_json(msg)
 
         elif frame["type"] == "complete":
             entry = mgr.complete_upload(ref)

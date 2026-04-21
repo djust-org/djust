@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple, Type
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,184 @@ def build_progress_message(ref: str, progress: int, status: str = "uploading") -
     }
 
 
+# ============================================================================
+# UploadWriter — direct-to-destination byte stream
+# ============================================================================
+
+
+class UploadWriter:
+    """Base class for direct-to-destination upload writers.
+
+    Subclass this to pipe raw upload chunks directly into S3, GCS, Azure
+    Blob, etc. without buffering to disk. A writer instance is created
+    lazily per upload on the first chunk.
+
+    Lifecycle (all sync):
+
+        1. __init__(upload_id, filename, content_type, expected_size)
+           Instantiated per upload on the first chunk.
+        2. open()
+           Called exactly once, before the first write_chunk(). May raise to
+           reject the upload; the exception is passed to abort().
+        3. write_chunk(chunk: bytes)
+           Called once per WebSocket binary frame with the raw bytes. May
+           raise to abort; the exception is passed to abort().
+        4. close() -> Any
+           Called on successful upload completion. The return value is stored
+           on the UploadEntry as ``writer_result`` and is template-accessible
+           (e.g. ``{{ entry.writer_result.url }}``).
+        5. abort(error)
+           Called on any failure path (open/write_chunk raised, client
+           cancelled, transport disconnected, size limit exceeded). The
+           error argument is the raw exception object.
+
+    Important guarantees:
+
+    - ``open()`` is called at most once.
+    - ``write_chunk()`` is never called before ``open()`` succeeds.
+    - After ``close()`` returns, no further methods are invoked.
+    - After ``abort()`` returns, no further methods are invoked.
+    - Writer instances are isolated per upload — no shared state.
+    - ``abort()`` must not raise; any exception is logged and swallowed to
+      avoid leaking cleanup failures into the request path.
+    """
+
+    def __init__(
+        self,
+        upload_id: str,
+        filename: str,
+        content_type: str,
+        expected_size: Optional[int] = None,
+    ):
+        self.upload_id = upload_id
+        self.filename = filename
+        self.content_type = content_type
+        self.expected_size = expected_size
+
+    def open(self) -> None:
+        """Called once before the first write_chunk(). Override to set up
+        resources (e.g. start an S3 multipart upload)."""
+        return None
+
+    def write_chunk(self, chunk: bytes) -> None:
+        """Called once per WebSocket binary frame. Must be overridden."""
+        raise NotImplementedError("UploadWriter subclasses must implement write_chunk()")
+
+    def close(self) -> Any:
+        """Called on upload completion. The return value is stored on
+        UploadEntry.writer_result (template-accessible)."""
+        return None
+
+    def abort(self, error: BaseException) -> None:
+        """Called on any failure path with the raw exception. Override to
+        clean up partial state (e.g. S3 AbortMultipartUpload). Must not
+        raise."""
+        return None
+
+
+class BufferedUploadWriter(UploadWriter):
+    """UploadWriter helper that accumulates chunks until a configurable
+    threshold, then emits fixed-size parts.
+
+    Clients send whatever chunk size they send (today: 64 KB). S3 multipart
+    upload requires each part except the last to be >= 5 MB. Subclass
+    ``BufferedUploadWriter`` and override ``on_part(part, part_num)`` and
+    ``on_complete()`` to get 5-MB-aligned parts without worrying about the
+    raw client chunk size.
+
+    Example (S3)::
+
+        from pathlib import Path
+        from uuid import uuid4
+
+        class S3Writer(BufferedUploadWriter):
+            buffer_threshold = 5 * 1024 * 1024  # 5 MB — S3 MPU min
+
+            def open(self):
+                # SECURITY: self.filename is client-supplied and attacker-
+                # controlled. Scope to a server-generated namespace; never
+                # use self.filename verbatim as a destination key/path.
+                safe = Path(self.filename).name
+                self._key = f"uploads/{uuid4()}-{safe}"
+                self._s3 = boto3.client("s3")
+                self._mpu = self._s3.create_multipart_upload(
+                    Bucket="my-bucket", Key=self._key
+                )
+                self._parts = []
+
+            def on_part(self, part, part_num):
+                resp = self._s3.upload_part(
+                    Bucket="my-bucket",
+                    Key=self._key,
+                    UploadId=self._mpu["UploadId"],
+                    PartNumber=part_num,
+                    Body=part,
+                )
+                self._parts.append({"ETag": resp["ETag"], "PartNumber": part_num})
+
+            def on_complete(self):
+                self._s3.complete_multipart_upload(
+                    Bucket="my-bucket",
+                    Key=self._key,
+                    UploadId=self._mpu["UploadId"],
+                    MultipartUpload={"Parts": self._parts},
+                )
+                return {"key": self._key, "url": f"s3://my-bucket/{self._key}"}
+
+            def abort(self, error):
+                if getattr(self, "_mpu", None):
+                    self._s3.abort_multipart_upload(
+                        Bucket="my-bucket",
+                        Key=self._key,
+                        UploadId=self._mpu["UploadId"],
+                    )
+    """
+
+    # Default threshold = S3 multipart upload minimum part size.
+    buffer_threshold: int = 5 * 1024 * 1024
+
+    def __init__(
+        self,
+        upload_id: str,
+        filename: str,
+        content_type: str,
+        expected_size: Optional[int] = None,
+    ):
+        super().__init__(upload_id, filename, content_type, expected_size)
+        self._buf = bytearray()
+        self._part_num = 0
+        self._finalized = False
+
+    def write_chunk(self, chunk: bytes) -> None:
+        """Buffer the chunk; emit full parts while buffer exceeds threshold."""
+        self._buf.extend(chunk)
+        threshold = self.buffer_threshold
+        while len(self._buf) >= threshold:
+            part = bytes(self._buf[:threshold])
+            del self._buf[:threshold]
+            self._part_num += 1
+            self.on_part(part, self._part_num)
+
+    def close(self) -> Any:
+        """Flush any remaining buffered bytes as a final partial part,
+        then call on_complete() and return its value."""
+        if self._buf:
+            self._part_num += 1
+            final_part = bytes(self._buf)
+            self._buf = bytearray()
+            self.on_part(final_part, self._part_num)
+        self._finalized = True
+        return self.on_complete()
+
+    def on_part(self, part: bytes, part_num: int) -> None:
+        """Override to handle each part (S3-min-sized except the last)."""
+        return None
+
+    def on_complete(self) -> Any:
+        """Override to finalize the upload and return a result (e.g. URL)."""
+        return None
+
+
 @dataclass
 class UploadConfig:
     """Configuration for an upload slot."""
@@ -184,6 +362,7 @@ class UploadConfig:
     auto_upload: bool = True  # Start upload immediately on file selection
     accepted_extensions: Set[str] = field(default_factory=set)
     accepted_mimes: Set[str] = field(default_factory=set)
+    writer: Optional[Type[UploadWriter]] = None  # If set, bypass disk buffering
 
     def __post_init__(self):
         if self.accept:
@@ -234,6 +413,14 @@ class UploadEntry:
     _complete: bool = field(default=False, repr=False)
     _error: Optional[str] = field(default=None, repr=False)
     _created_at: float = field(default_factory=time.time, repr=False)
+    # Writer path — populated when the upload slot was configured with a
+    # writer= kwarg. writer_instance holds the live per-upload writer;
+    # writer_result holds the value returned from writer.close() and is
+    # template-accessible as entry.writer_result.
+    writer_instance: Optional[UploadWriter] = field(default=None, repr=False)
+    writer_result: Any = field(default=None, repr=False)
+    _writer_opened: bool = field(default=False, repr=False)
+    _writer_aborted: bool = field(default=False, repr=False)
 
     @property
     def data(self) -> bytes:
@@ -346,6 +533,7 @@ class UploadManager:
         max_file_size: int = 10_000_000,
         chunk_size: int = 64 * 1024,
         auto_upload: bool = True,
+        writer: Optional[Type[UploadWriter]] = None,
     ) -> UploadConfig:
         """Configure an upload slot."""
         config = UploadConfig(
@@ -355,11 +543,109 @@ class UploadManager:
             max_file_size=max_file_size,
             chunk_size=chunk_size,
             auto_upload=auto_upload,
+            writer=writer,
         )
         self._configs[name] = config
         if name not in self._name_to_refs:
             self._name_to_refs[name] = []
         return config
+
+    # ------------------------------------------------------------------
+    # Writer path
+    # ------------------------------------------------------------------
+
+    def _safe_abort_writer(self, entry: UploadEntry, error: BaseException) -> None:
+        """Call writer.abort(error), swallowing (but logging) any exception.
+
+        abort() is a cleanup hook and must never itself propagate — a
+        failing S3 AbortMultipartUpload is a cleanup problem, not a
+        correctness problem for the rest of the view.
+        """
+        writer = entry.writer_instance
+        if writer is None or entry._writer_aborted:
+            return
+        entry._writer_aborted = True
+        try:
+            writer.abort(error)
+        except Exception:  # noqa: BLE001 — abort() must never raise
+            logger.exception("UploadWriter.abort() raised for upload %s", entry.ref)
+
+    def _add_chunk_via_writer(self, entry: UploadEntry, config: UploadConfig, data: bytes) -> bool:
+        """Route a chunk through the writer. Returns True on success.
+
+        Lazily instantiates the writer and calls open() on the first chunk.
+        On any exception from open() or write_chunk(), calls writer.abort()
+        and marks the entry failed.
+        """
+        writer_cls = config.writer
+        assert writer_cls is not None  # caller guards
+        if entry.writer_instance is None:
+            try:
+                entry.writer_instance = writer_cls(
+                    upload_id=entry.ref,
+                    filename=entry.client_name,
+                    content_type=entry.client_type,
+                    expected_size=entry.client_size,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Do NOT surface the raw exception message to the client —
+                # writer implementations may embed IAM ARNs, bucket names,
+                # or endpoint URLs in their exceptions. Log the full trace
+                # server-side for debugging; return a generic message to the
+                # client.
+                entry._error = "Upload writer failed to initialize"
+                logger.exception(
+                    "UploadWriter instantiation failed for upload %s: %s",
+                    entry.ref,
+                    exc,
+                )
+                return False
+        if not entry._writer_opened:
+            try:
+                entry.writer_instance.open()
+            except Exception as exc:  # noqa: BLE001
+                entry._error = "Upload writer failed to initialize"
+                logger.exception(
+                    "UploadWriter.open() raised for upload %s: %s",
+                    entry.ref,
+                    exc,
+                )
+                self._safe_abort_writer(entry, exc)
+                return False
+            entry._writer_opened = True
+        try:
+            entry.writer_instance.write_chunk(data)
+        except Exception as exc:  # noqa: BLE001
+            entry._error = "Upload writer rejected chunk"
+            logger.exception(
+                "UploadWriter.write_chunk() raised for upload %s: %s",
+                entry.ref,
+                exc,
+            )
+            self._safe_abort_writer(entry, exc)
+            return False
+        entry._total_received += len(data)
+        return True
+
+    def _finalize_writer(self, entry: UploadEntry) -> bool:
+        """Call writer.close() and store the return value on
+        entry.writer_result. Returns True on success."""
+        writer = entry.writer_instance
+        if writer is None:
+            return False
+        try:
+            entry.writer_result = writer.close()
+        except Exception as exc:  # noqa: BLE001
+            entry._error = "Upload writer failed to finalize"
+            logger.exception(
+                "UploadWriter.close() raised for upload %s: %s",
+                entry.ref,
+                exc,
+            )
+            self._safe_abort_writer(entry, exc)
+            return False
+        entry._complete = True
+        return True
 
     def get_config(self, name: str) -> Optional[UploadConfig]:
         return self._configs.get(name)
@@ -421,7 +707,11 @@ class UploadManager:
         """
         Add a chunk to an upload.
 
-        Returns progress (0-100) or None if ref not found.
+        Returns progress (0-100) or None if ref not found or the chunk
+        was rejected (size limit, writer error).
+
+        When the upload slot is configured with writer=, the chunk is
+        piped to the writer and nothing is buffered to RAM or disk.
         """
         entry = self._entries.get(ref)
         if not entry:
@@ -429,20 +719,41 @@ class UploadManager:
 
         config = self._configs.get(entry.upload_name)
         if config and entry._total_received + len(data) > config.max_file_size:
+            err = ValueError(
+                "File size exceeds limit (%d bytes)" % config.max_file_size,
+            )
             entry._error = "File size exceeds limit"
+            if config.writer is not None:
+                self._safe_abort_writer(entry, err)
             return None
+
+        if config is not None and config.writer is not None:
+            if not self._add_chunk_via_writer(entry, config, data):
+                return None
+            return entry.progress
 
         entry.add_chunk(chunk_index, data)
         return entry.progress
 
     def complete_upload(self, ref: str) -> Optional[UploadEntry]:
         """
-        Mark upload as complete and finalize (write to temp file, validate).
+        Mark upload as complete and finalize.
 
-        Returns the entry if successful, None if validation failed.
+        For writer-configured slots, calls writer.close() and stores its
+        return value on entry.writer_result. For disk-buffered slots,
+        writes chunks to a temp file and runs magic-byte validation.
+
+        Returns the entry if successful, None if finalization failed.
         """
         entry = self._entries.get(ref)
         if not entry:
+            return None
+
+        config = self._configs.get(entry.upload_name)
+        if config is not None and config.writer is not None:
+            if self._finalize_writer(entry):
+                return entry
+            logger.warning("Upload writer finalize failed for %s: %s", ref, entry.error)
             return None
 
         if entry.finalize(self._temp_dir):
@@ -452,9 +763,16 @@ class UploadManager:
             return None
 
     def cancel_upload(self, ref: str) -> None:
-        """Cancel and clean up an upload."""
+        """Cancel and clean up an upload.
+
+        For writer-configured slots, calls writer.abort() with a
+        ConnectionAbortedError so the writer can release server-side
+        resources (e.g. S3 AbortMultipartUpload).
+        """
         entry = self._entries.pop(ref, None)
         if entry:
+            if entry.writer_instance is not None and not entry._complete:
+                self._safe_abort_writer(entry, ConnectionAbortedError("upload cancelled"))
             entry.cleanup()
             refs = self._name_to_refs.get(entry.upload_name, [])
             if ref in refs:
@@ -523,6 +841,7 @@ class UploadManager:
                         "progress": e.progress,
                         "complete": e.complete,
                         "error": e.error,
+                        "writer_result": e.writer_result,
                     }
                     for e in entries
                 ],
@@ -533,6 +852,8 @@ class UploadManager:
     def cleanup(self) -> None:
         """Clean up all uploads and temp directory."""
         for entry in self._entries.values():
+            if entry.writer_instance is not None and not entry._complete:
+                self._safe_abort_writer(entry, ConnectionAbortedError("session closed"))
             entry.cleanup()
         self._entries.clear()
         self._name_to_refs.clear()
@@ -581,6 +902,7 @@ class UploadMixin:
         max_file_size: int = 10_000_000,
         chunk_size: int = 64 * 1024,
         auto_upload: bool = True,
+        writer: Optional[Type[UploadWriter]] = None,
     ) -> UploadConfig:
         """
         Configure a named upload slot.
@@ -592,6 +914,12 @@ class UploadMixin:
             max_file_size: Maximum file size in bytes (default 10MB)
             chunk_size: Chunk size for transfer (default 64KB)
             auto_upload: Start upload immediately on selection
+            writer: Optional ``UploadWriter`` subclass. When set, chunks
+                bypass disk buffering and are piped directly through the
+                writer's ``write_chunk()`` (e.g. straight to S3). See
+                ``UploadWriter`` and ``BufferedUploadWriter`` in
+                ``djust.uploads``. When omitted (default), uploads are
+                buffered to a temp file and validated by magic bytes.
 
         Returns:
             UploadConfig object
@@ -604,6 +932,7 @@ class UploadMixin:
             max_file_size=max_file_size,
             chunk_size=chunk_size,
             auto_upload=auto_upload,
+            writer=writer,
         )
 
     def consume_uploaded_entries(self, name: str) -> Generator[UploadEntry, None, None]:
