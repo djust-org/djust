@@ -741,7 +741,7 @@ class ProductView(LiveView):
 
 ~~**Error boundaries**~~ ✅ **Shipped via the v0.5.0 components consolidation (PR #773)** — `python/djust/components/components/error_boundary.py` provides a style-agnostic error boundary for catching rendering errors within a LiveComponent subtree. See the components reference docs for usage.
 
-**Nested form handling (`inputs_for`)** — (Moved from v0.5.0) Django formset/inline-formset patterns with LiveView-aware wrappers. Auto add/remove, index maintenance across patches.
+~~**Nested form handling (`inputs_for`)**~~ ✅ **Shipped in v0.5.1** — `{% inputs_for formset as form %}` block tag in `djust.templatetags.djust_formsets` pairs with `djust.formsets.FormSetHelpersMixin` (and the direct `add_row` / `remove_row` helpers) for add/remove event handlers. Respects `max_num` / `absolute_max` caps; uses Django's standard `DELETE=on` protocol on remove. 16 tests in `python/djust/tests/test_formsets.py`. (commit 335cce26)
 
 **Stable component IDs (React 19 `useId` equivalent)** — (Moved from v0.5.0) `self.unique_id(suffix)` returning deterministic IDs stable across renders. ~30 lines Python.
 
@@ -932,7 +932,7 @@ Open questions that inform future direction:
 | Lazy component loading | — | `React.lazy()` | ✅ Shipped (LiveView-level, PR #54) | v0.5.1 |
 | Component context sharing | — | `useContext` | Not started | v0.5.1 |
 | Trigger form action | `phx-trigger-action` | — | Not started | v0.5.1 |
-| Nested forms | `inputs_for/4` | Formik nested | Not started | v0.5.1 |
+| Nested forms | `inputs_for/4` | Formik nested | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Scoped loading states | `phx-loading` | Suspense per-query | Not started | v0.5.1 |
 | Error boundaries | — | `<ErrorBoundary>` | ✅ Shipped (PR #773) | v0.5.1 |
 | **Native `<dialog>`** | — | — | **Not started** | **v0.5.1** |
