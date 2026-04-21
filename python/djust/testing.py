@@ -390,7 +390,7 @@ class LiveViewTestClient:
         event_name: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Verify the most recent event queued a ``push_event`` with this name.
+        """Verify that at least one queued ``push_event`` matches this name.
 
         Searches ``view_instance._pending_push_events`` (populated by
         :meth:`PushEventMixin.push_event`). If ``params`` is given, the stored
