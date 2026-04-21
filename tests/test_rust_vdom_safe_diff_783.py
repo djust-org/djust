@@ -156,9 +156,9 @@ class TestDerivedSafeBlobDiff:
         # OR a None/absent patches field are both acceptable — the websocket
         # layer may emit a full-html update instead of patches when
         # _force_full_html is set.
-        assert not (patches is not None and len(patches) == 0), (
-            f"empty patches with _force_full_html is the #783 symptom; " f"got patches={patches!r}"
-        )
+        assert not (
+            patches is not None and len(patches) == 0
+        ), f"empty patches with _force_full_html is the #783 symptom; got patches={patches!r}"
 
     def test_step_index_plus_data_change(self):
         """Simulates the ``demo_autofill`` → ``next_step`` sequence:
@@ -213,7 +213,7 @@ class TestDerivedSafeBlobDiffExtends:
     @pytest.fixture
     def template_dir(self, tmp_path):
         (tmp_path / "base_wizard.html").write_text(
-            "<div dj-root><header>Wizard</header>" "{% block content %}default{% endblock %}</div>"
+            "<div dj-root><header>Wizard</header>{% block content %}default{% endblock %}</div>"
         )
         (tmp_path / "child_wizard.html").write_text(
             '{% extends "base_wizard.html" %}\n'
@@ -347,3 +347,196 @@ class TestSafeBlobDiffNestedInclude:
         html, patches_json, version = _simulate_event_cycle(view, mutate)
         assert version == 2
         _assert_produces_patch(html, patches_json, new_value="Amanda")
+
+
+# ---------------------------------------------------------------------------
+# Partial-render correctness harness (#783 P0 follow-up)
+# ---------------------------------------------------------------------------
+#
+# Oracle for silent dep-drop regressions. For each template shape + mutation
+# pair, renders twice:
+#
+# 1. Via the normal partial-render path (cache populated from the baseline
+#    render, then a mutation triggers a fragment-level diff).
+# 2. Control: same mutation applied to a fresh view with the Rust fragment
+#    cache cleared (``_rust_view.clear_fragment_cache()``), forcing a full
+#    collecting render.
+#
+# Byte-equality of the two HTML outputs is the correctness oracle: any
+# dep-miss that causes partial render to reuse a stale cached fragment will
+# diverge from the control, regardless of Node type or wrapper depth.
+#
+# Added in the #783 follow-up because the earlier symptom (``patches=[]``
+# with ``diff_ms: 0``) is indistinguishable from "nothing changed" without
+# this comparison.
+
+
+def _assert_partial_matches_full(view_factory, mutate, *, expected_change_substring=""):
+    """Render a mutation twice — once via partial render, once via a
+    cache-cleared full render — and assert the two HTMLs are byte-identical.
+
+    Parameters:
+        view_factory: zero-arg callable returning a fresh LiveView instance.
+        mutate: callable(view) that applies the state change to mutate.
+        expected_change_substring: if non-empty, also asserts the substring
+            appears in the partial-render HTML (so the test detects the
+            degenerate "no change happened" case where both outputs agree
+            trivially).
+    """
+    # Partial-render path
+    partial_view = _prime(view_factory)
+    partial_html, _partial_patches, _partial_version = _simulate_event_cycle(partial_view, mutate)
+
+    # Control: same mutation, full render via cleared cache
+    control_view = _prime(view_factory)
+    pre = _snapshot_assigns(control_view)
+    mutate(control_view)
+    post = _snapshot_assigns(control_view)
+    control_view._changed_keys = _compute_changed_keys(pre, post)
+    control_view._sync_done_this_cycle = False
+    # Force full re-render by clearing the Rust fragment cache. `last_vdom`
+    # is kept intact so diff baseline is preserved.
+    control_view._rust_view.clear_fragment_cache()
+    control_html, _control_patches, _control_version = control_view.render_with_diff()
+
+    assert partial_html == control_html, (
+        "partial render diverged from control full render — dep-miss regression suspected.\n"
+        f"partial: {partial_html!r}\n"
+        f"control: {control_html!r}"
+    )
+    if expected_change_substring:
+        assert expected_change_substring in partial_html, (
+            f"expected change substring {expected_change_substring!r} missing from "
+            f"partial HTML; {partial_html!r}"
+        )
+
+
+class TestPartialRenderCorrectness:
+    """Parametrized partial-render vs full-render correctness oracle.
+
+    Each case defines a template wrapper shape + mutation pair. The harness
+    asserts byte-equality between partial and control full renders, catching
+    silent dep-drops the way #783 / #774 went undetected. If a new parser or
+    extractor regression silently reuses a stale cached fragment, the
+    corresponding shape will fail.
+    """
+
+    def test_no_wrapper(self):
+        class NoWrapperView(LiveView):
+            template = "<div dj-root>{{ x }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.x = "a"
+
+        def mutate(v):
+            v.x = "b"
+
+        _assert_partial_matches_full(NoWrapperView, mutate, expected_change_substring=">b<")
+
+    def test_if_wrapper(self):
+        class IfView(LiveView):
+            template = "<div dj-root>{% if show %}{{ x }}{% endif %}</div>"
+
+            def mount(self, request, **kwargs):
+                self.show = True
+                self.x = "a"
+
+        def mutate(v):
+            v.x = "b"
+
+        _assert_partial_matches_full(IfView, mutate, expected_change_substring="b")
+
+    def test_for_loop_over_dicts(self):
+        class ForView(LiveView):
+            template = (
+                "<div dj-root>{% for i in items %}<span>{{ i.name }}</span>{% endfor %}</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.items = [{"name": "alpha"}, {"name": "beta"}]
+
+        def mutate(v):
+            v.items = [{"name": "gamma"}, {"name": "delta"}]
+
+        _assert_partial_matches_full(ForView, mutate, expected_change_substring="gamma")
+
+    def test_with_wrapper(self):
+        class WithView(LiveView):
+            template = "<div dj-root>{% with y=x %}<span>{{ y }}</span>{% endwith %}</div>"
+
+            def mount(self, request, **kwargs):
+                self.x = "a"
+
+        def mutate(v):
+            v.x = "b"
+
+        _assert_partial_matches_full(WithView, mutate, expected_change_substring="b")
+
+    def test_extends_if_include_safe_blob(self, tmp_path):
+        """Exact #783 shape: extends → block → if → include → |safe blob."""
+        (tmp_path / "corr_base.html").write_text(
+            "<html><body>{% block content %}default{% endblock %}</body></html>"
+        )
+        (tmp_path / "corr_step.html").write_text(
+            '<div class="step">{{ field_html.first_name|safe }}</div>'
+        )
+        (tmp_path / "corr_wizard.html").write_text(
+            '{% extends "corr_base.html" %}\n'
+            "{% block content %}\n<div dj-root>\n"
+            '{% if current_step_name == "claimant" %}\n'
+            '{% include "corr_step.html" %}\n'
+            "{% endif %}\n</div>\n{% endblock %}"
+        )
+
+        original_dirs = settings.TEMPLATES[0]["DIRS"]
+        settings.TEMPLATES[0]["DIRS"] = [str(tmp_path)]
+        engines._engines = {}
+        engines.__dict__.pop("templates", None)
+        _get_template_dirs_cached.cache_clear()
+        try:
+
+            class CorrectnessWizard(_WizardLike):
+                template = None
+                template_name = "corr_wizard.html"
+
+                def get_context_data(self, **kwargs):
+                    ctx = super().get_context_data(**kwargs)
+                    ctx["current_step_name"] = "claimant"
+                    return ctx
+
+            def mutate(v):
+                v.wizard_step_data = {"claimant": {"first_name": "Amanda"}}
+
+            _assert_partial_matches_full(
+                CorrectnessWizard, mutate, expected_change_substring='value="Amanda"'
+            )
+        finally:
+            settings.TEMPLATES[0]["DIRS"] = original_dirs
+            engines._engines = {}
+            engines.__dict__.pop("templates", None)
+            _get_template_dirs_cached.cache_clear()
+
+    def test_inline_if_in_for(self):
+        """InlineIf condition inside a {% for %} wrapper — sibling of the
+        nested-include bug (#783). Changing ``active`` alone must re-render
+        every span in the loop."""
+
+        class InlineIfInForView(LiveView):
+            template = (
+                "<div dj-root>"
+                "{% for s in steps %}"
+                '<span class="{{ "on" if active else "off" }}">x</span>'
+                "{% endfor %}"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.steps = [1, 2, 3]
+                self.active = False
+
+        def mutate(v):
+            v.active = True
+
+        _assert_partial_matches_full(
+            InlineIfInForView, mutate, expected_change_substring='class="on"'
+        )

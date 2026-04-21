@@ -215,6 +215,17 @@ impl RustLiveViewBackend {
         self.text_node_index = None; // Invalidate text-region fast-path index
     }
 
+    /// Clear the partial-render fragment cache, forcing the next render to
+    /// do a full collecting render. Keeps `last_vdom` intact so the diff
+    /// baseline is preserved. Used by the partial-render correctness harness
+    /// in tests to produce a control output for byte-equality comparison.
+    fn clear_fragment_cache(&mut self) {
+        self.node_html_cache = Vec::new();
+        self.last_html = None;
+        self.fragment_text_map = None;
+        self.text_node_index = None;
+    }
+
     /// Get current state
     fn get_state(&self, py: Python) -> PyResult<PyObject> {
         let dict = PyDict::new(py);
