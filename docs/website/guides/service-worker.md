@@ -74,13 +74,15 @@ MIDDLEWARE = [
 ]
 ```
 
-The middleware is **ordering-safe** — it only reads the request header and trims `response.content` on the way out. It:
+The middleware is **mostly ordering-safe** — it only reads the request header and trims `response.content` on the way out. It:
 
 - Passes through non-HTML responses (JSON, binary) unchanged.
 - Passes through requests that don't carry the header.
 - Updates `Content-Length` after trimming.
 - Sets `X-Djust-Main-Only-Response: 1` on transformed responses so clients can distinguish them.
 - Leaves streaming responses untouched.
+
+> **⚠ Ordering caveat with `GZipMiddleware`.** If you use Django's `GZipMiddleware`, place `DjustMainOnlyMiddleware` **above it** in the `MIDDLEWARE` list (so it runs first on the outgoing response). `MIDDLEWARE` executes in reverse order on responses, so "above" = "runs later on responses." If the truncation runs AFTER gzip compression, the `Content-Encoding: gzip` header stays but the bytes have been modified in place, producing a broken response the client cannot decode. Rule of thumb: any middleware that modifies `response.content` must run before any middleware that encodes/compresses it.
 
 ### 3. Ensure your layout has a `<main>` element
 
