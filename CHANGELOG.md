@@ -7,9 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1rc2] - 2026-04-21
+
 ### Added
 
 - **Scaffold CSS — reusable layout/utility pack in `djust.theming`** — `djust_theming/static/djust_theming/css/scaffold.css` gains ~729 lines of framework-generic scaffold covering typography, responsive grid utilities (`.grid-2/3/4`), hero section, flash messages (Django + LiveView), accessibility utilities (`.sr-only`), extended layout helpers (`.flex-center`, `.content-narrow/-wide`), stat-display variants, auth layout, live indicator dot, card-accent variants, code blocks, noise texture overlay, shared nav links, dashboard/centered grids, and the full `data-layout` switching system (sidebar, topbar, dashboard, centered, sidebar-topbar). All new rules use CSS-variable fallbacks so the scaffold works without a loaded theme; no hardcoded hex colors; `.container` max-width now reads `var(--container-width, 1200px)`. Pure-CSS addition — no Python/JS/test behavior changes. (PR #836)
+
+### Fixed
+
+- **All 82 pre-existing test failures resolved (PR #841)** — The `make test` baseline went from `2135 passed, 61 failed, 21 errors` (which had blocked normal merges for the entire v0.5.1 milestone and forced `--admin` on every PR) to `2219 passed, 0 failed, 0 errors`. Four fix clusters:
+  - **Test-infrastructure shims** (64 fixes) — added `tests/gallery_test_urls.py` and `tests/test_critical_css.py` URL-conf shims that theming tests reference via `@override_settings(ROOT_URLCONF=...)` but were never created; added `mcp[cli]>=1.2.0; python_version >= '3.10'` to dev deps so `djust.mcp` server tests stop throwing `ModuleNotFoundError`.
+  - **Stale `@layer` test expectations** (4 fixes) — several theming CSS files (`components.css`, `layouts.css`, `pages.css`, critical-CSS generator) were intentionally unwrapped from `@layer` blocks for specificity reasons (documented in file headers); updated tests to match the current design using `@layer NAME {` block-syntax regex rather than substring match.
+  - **Real code bugs** (3 fixes) — `ocean_deep` preset's internal `name` was `"ocean"` while its registry key was `"ocean_deep"`; one stray `text-align: left` in `components.css` `.tp-select-option` broke RTL support (changed to `text-align: start`); and the CSS prefix generator's hand-maintained `_COMPONENT_CLASSES` list had drifted from `components.css` — `.btn-edit`, `.btn-remove`, `.avatar`, `.breadcrumb`, `.dropdown` and many more weren't being prefixed when a custom `css_prefix` was set. Replaced with auto-extraction via regex over the static file; stays in sync automatically.
+  - **Stale test assumption** (1 fix) — `test_list_same_content_no_render` encoded a wrong assumption about `_snapshot_assigns` (identity-based by design); rewrote to match the documented contract.
+- **CSS prefix generator hardening** — Auto-extraction regex gained a negative lookbehind `(?<![\w])` to prevent capturing domain fragments inside data-URIs (previously `.org` and `.w3` in `http://www.w3.org/2000/svg` were mis-captured as class selectors, producing `http://www.dj-w3.dj-org/2000/svg` under prefix); compound state-class chains like `.wizard-step.completed` now correctly leave the trailing state class unprefixed (JS toggles state classes by bare name, so they must NOT get the prefix). Two new regression tests (`test_data_uri_domains_are_not_mis_prefixed`, `test_compound_state_classes_stay_unprefixed`) lock both in.
+
+### Changed
+
+- **ROADMAP.md audit correction** — Five entries marked as "v0.5.1 Not started" were actually shipped earlier: djust-theming fold (v0.5.0 PR #772), WizardMixin (PR #632), Error boundaries (v0.5.0 PR #773), and `dj-lazy` lazy LiveView hydration (PR #54). All marked with strikethrough + ✅ and a shipped-in PR pointer. Real v0.5.1 remainder after audit: LiveView testing utilities, type-safe template validation, error overlay, `inputs_for` nested formsets, native `<dialog>` (5 items instead of 8).
 
 ## [0.5.1rc1] - 2026-04-21
 
