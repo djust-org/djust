@@ -7,7 +7,16 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone)]
 pub enum Node {
     Text(String),
-    Variable(String, Vec<(String, Option<String>)>), // variable name, (filter, arg)
+    /// Variable expression `{{ var|filter:arg }}`.
+    ///
+    /// Tuple: (variable name, filter specs, in_attr).
+    ///
+    /// `in_attr` is computed at parse time via
+    /// [`is_inside_html_tag_at`]. When true, the renderer uses
+    /// [`crate::filters::html_escape_attr`] (attribute-safe escape)
+    /// instead of [`crate::filters::html_escape`]. `|safe` still
+    /// bypasses escaping in both contexts.
+    Variable(String, Vec<(String, Option<String>)>, bool),
     If {
         condition: String,
         true_nodes: Vec<Node>,
@@ -109,6 +118,23 @@ pub enum Node {
         /// Tag name (e.g., "ifchanged", "regroup")
         name: String,
         /// Original arguments from the tag
+        args: Vec<String>,
+    },
+    /// Custom assign tag — handler returns a dict that is merged
+    /// into the context for subsequent sibling nodes (no HTML
+    /// output).
+    ///
+    /// Registered via `register_assign_tag_handler(name, handler)`.
+    /// The handler's `render(args, context)` must return a
+    /// `dict[str, Any]`; each key becomes a context variable
+    /// visible to siblings that follow the assign tag in the same
+    /// `render_nodes_with_loader` iteration.
+    ///
+    /// See [`crate::registry::register_assign_tag_handler`].
+    AssignTag {
+        /// Tag name (e.g., "assign_slot")
+        name: String,
+        /// Raw arguments from the template tag
         args: Vec<String>,
     },
     /// Jinja2-style inline conditional: {{ true_expr if condition else false_expr }}
@@ -239,7 +265,11 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                 }));
             }
 
-            Ok(Some(Node::Variable(expr_part.clone(), filters)))
+            // Detect whether this variable is inside an HTML opening
+            // tag (attribute context). When true the renderer uses
+            // the attribute-safe escape (see `html_escape_attr`).
+            let in_attr = is_inside_html_tag_at(tokens, *i);
+            Ok(Some(Node::Variable(expr_part.clone(), filters, in_attr)))
         }
 
         Token::Tag(tag_name, args) => {
@@ -611,6 +641,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             name: tag_name.clone(),
                             args: args.clone(),
                         }))
+                    } else if crate::registry::assign_handler_exists(tag_name) {
+                        // Context-mutating assign tag (register_assign_tag_handler)
+                        Ok(Some(Node::AssignTag {
+                            name: tag_name.clone(),
+                            args: args.clone(),
+                        }))
                     } else {
                         // Unknown tag with no handler - create warning node
                         Ok(Some(Node::UnsupportedTag {
@@ -950,7 +986,7 @@ fn extract_from_nodes(
 ) {
     for node in nodes {
         match node {
-            Node::Variable(var_expr, _filters) => {
+            Node::Variable(var_expr, _filters, _in_attr) => {
                 // Extract from variable: {{ variable.path }}
                 extract_from_variable(var_expr, variables);
             }
@@ -1053,6 +1089,34 @@ fn extract_from_nodes(
                 for (_prop_name, prop_value) in props {
                     extract_from_variable(prop_value, variables);
                 }
+            }
+            Node::AssignTag { args, name: _ } => {
+                // Extract variable references from the assign tag's
+                // arguments so the partial renderer knows the tag
+                // depends on them. Because an assign tag mutates the
+                // context for subsequent sibling nodes in unknowable
+                // ways, also emit the `"*"` wildcard — any change
+                // may alter downstream rendering.
+                for arg in args {
+                    if (arg.starts_with('"') && arg.ends_with('"'))
+                        || (arg.starts_with('\'') && arg.ends_with('\''))
+                    {
+                        continue;
+                    }
+                    let value = if let Some(eq_pos) = arg.find('=') {
+                        arg[eq_pos + 1..].trim()
+                    } else {
+                        arg.trim()
+                    };
+                    if !value.is_empty()
+                        && !value.starts_with('"')
+                        && !value.starts_with('\'')
+                        && !value.chars().all(|c| c.is_numeric() || c == '.')
+                    {
+                        extract_from_variable(value, variables);
+                    }
+                }
+                variables.entry("*".to_string()).or_default();
             }
             Node::CustomTag { args, name: _ }
             | Node::BlockCustomTag {
@@ -2049,7 +2113,7 @@ mod tests {
         let nodes = parse(&tokens).unwrap();
         assert_eq!(nodes.len(), 1);
         match &nodes[0] {
-            Node::Variable(name, _) => assert_eq!(name, "notify_if_late"),
+            Node::Variable(name, _, _) => assert_eq!(name, "notify_if_late"),
             _ => panic!("Expected Variable node"),
         }
     }
@@ -2292,6 +2356,7 @@ mod dep_tests {
             Node::Now(_) => "Now",
             Node::UnsupportedTag { .. } => "UnsupportedTag",
             Node::InlineIf { .. } => "InlineIf",
+            Node::AssignTag { .. } => "AssignTag",
         }
     }
 
@@ -2302,7 +2367,7 @@ mod dep_tests {
     fn sample_nodes() -> Vec<Node> {
         vec![
             Node::Text("hi".into()),
-            Node::Variable("a".into(), vec![]),
+            Node::Variable("a".into(), vec![], false),
             Node::If {
                 condition: "c".into(),
                 true_nodes: vec![],
@@ -2318,7 +2383,7 @@ mod dep_tests {
             },
             Node::Block {
                 name: "content".into(),
-                nodes: vec![Node::Variable("a".into(), vec![])],
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::Extends("base.html".into()),
             Node::Include {
@@ -2362,7 +2427,7 @@ mod dep_tests {
             },
             Node::TemplateTag("openblock".into()),
             Node::Spaceless {
-                nodes: vec![Node::Variable("a".into(), vec![])],
+                nodes: vec![Node::Variable("a".into(), vec![], false)],
             },
             Node::Cycle {
                 values: vec!["a".into(), "b".into()],
@@ -2378,6 +2443,10 @@ mod dep_tests {
                 condition: "cond".into(),
                 false_expr: "b".into(),
                 filters: vec![],
+            },
+            Node::AssignTag {
+                name: "assign_slot".into(),
+                args: vec!["var_name".into()],
             },
         ]
     }

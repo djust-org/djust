@@ -356,6 +356,34 @@ def clear_block_tag_handlers() -> None:
     """
     ...
 
+def register_assign_tag_handler(tag_name: str, handler: Any) -> None:
+    """
+    Register a Python assign-tag handler for a context-mutating template tag.
+
+    Unlike ``register_tag_handler`` (emits HTML) and
+    ``register_block_tag_handler`` (wraps content), an assign tag
+    returns a ``dict[str, Any]`` whose keys are merged into the
+    template context for subsequent sibling nodes. No HTML is emitted.
+
+    Args:
+        tag_name: Tag name (e.g., "assign_slot")
+        handler: Python object with ``render(args, context)`` method
+            returning a ``dict[str, Any]``
+    """
+    ...
+
+def has_assign_tag_handler(tag_name: str) -> bool:
+    """Check if an assign tag handler is registered for the given name."""
+    ...
+
+def unregister_assign_tag_handler(tag_name: str) -> bool:
+    """Unregister an assign tag handler. Returns True if one was removed."""
+    ...
+
+def clear_assign_tag_handlers() -> None:
+    """Clear all registered assign tag handlers (primarily for testing)."""
+    ...
+
 # ============================================================================
 # Actor System
 # ============================================================================
@@ -518,6 +546,23 @@ class RustLiveView:
 
         Args:
             keys: List of context keys to mark as safe
+        """
+        ...
+
+    def set_raw_py_values(self, values: Dict[str, Any]) -> None:
+        """
+        Attach raw Python objects for ``getattr``-fallback lookups.
+
+        Called from ``_sync_state_to_rust`` to pass through Django
+        model instances (and other non-JSON-serializable context
+        values) so the Rust template engine can resolve expressions
+        like ``{{ user.username }}`` via ``getattr`` when the value
+        is not present in the JSON-serialized state.
+
+        An empty dict clears any previously-attached sidecar.
+
+        Args:
+            values: Mapping of top-level context name -> Python object
         """
         ...
 
@@ -712,6 +757,11 @@ __all__ = [
     "has_block_tag_handler",
     "unregister_block_tag_handler",
     "clear_block_tag_handlers",
+    # Assign tag handlers (context-mutating)
+    "register_assign_tag_handler",
+    "has_assign_tag_handler",
+    "unregister_assign_tag_handler",
+    "clear_assign_tag_handlers",
     # Actor system
     "SessionActorHandle",
     "SupervisorStatsPy",

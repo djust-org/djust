@@ -123,6 +123,13 @@ pub struct RustLiveViewBackend {
     /// renders don't modify the index because they only change text
     /// content, not text-node positions or count.
     text_node_index: Option<Vec<TextNodeEntry>>,
+    /// Sidecar map of raw Python objects keyed by top-level context
+    /// name. Populated by Python's `set_raw_py_values` so the Rust
+    /// template engine can fall back to `getattr` for attributes
+    /// that are not JSON-serializable (e.g. Django model instances).
+    /// Not persisted across MessagePack serialize/deserialize —
+    /// Python re-populates it on each sync cycle.
+    raw_py_values: Option<HashMap<String, PyObject>>,
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +170,7 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            raw_py_values: None,
         }
     }
 
@@ -203,6 +211,21 @@ impl RustLiveViewBackend {
     /// Called from Python when SafeString values are detected.
     fn mark_safe_keys(&mut self, keys: Vec<String>) {
         self.safe_keys.extend(keys);
+    }
+
+    /// Attach a map of raw Python objects for `getattr`-fallback
+    /// lookups. Called from Python's `_sync_state_to_rust()` for
+    /// context values that are not JSON-serializable (e.g. Django
+    /// model instances). The template engine falls back to
+    /// `getattr(obj, "field")` when a nested key like
+    /// `{{ user.username }}` cannot be resolved via the normal
+    /// value-stack path. An empty dict clears the sidecar.
+    fn set_raw_py_values(&mut self, values: HashMap<String, PyObject>) {
+        if values.is_empty() {
+            self.raw_py_values = None;
+        } else {
+            self.raw_py_values = Some(values);
+        }
     }
 
     /// Update the template source while preserving VDOM state
@@ -257,6 +280,16 @@ impl RustLiveViewBackend {
         for key in &self.safe_keys {
             context.mark_safe(key.clone());
         }
+        // Attach PyObject sidecar so `{{ model.attr }}` falls back
+        // to `getattr` when `attr` isn't in the JSON-serialized state.
+        if let Some(raw) = &self.raw_py_values {
+            let cloned: HashMap<String, PyObject> = Python::with_gil(|py| {
+                raw.iter()
+                    .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                    .collect()
+            });
+            context.set_raw_py_objects(cloned);
+        }
 
         // Use template loader for {% include %} support
         let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
@@ -284,6 +317,16 @@ impl RustLiveViewBackend {
         let mut context = Context::from_dict(self.state.clone());
         for key in &self.safe_keys {
             context.mark_safe(key.clone());
+        }
+        // Attach PyObject sidecar so `{{ model.attr }}` falls back
+        // to `getattr` when `attr` isn't in the JSON-serialized state.
+        if let Some(raw) = &self.raw_py_values {
+            let cloned: HashMap<String, PyObject> = Python::with_gil(|py| {
+                raw.iter()
+                    .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                    .collect()
+            });
+            context.set_raw_py_objects(cloned);
         }
 
         // Phase 1: Template render (partial if cache available)
@@ -546,6 +589,16 @@ impl RustLiveViewBackend {
         for key in &self.safe_keys {
             context.mark_safe(key.clone());
         }
+        // Attach PyObject sidecar so `{{ model.attr }}` falls back
+        // to `getattr` when `attr` isn't in the JSON-serialized state.
+        if let Some(raw) = &self.raw_py_values {
+            let cloned: HashMap<String, PyObject> = Python::with_gil(|py| {
+                raw.iter()
+                    .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                    .collect()
+            });
+            context.set_raw_py_objects(cloned);
+        }
 
         // Phase 1: Template render (partial if cache available)
         let t_render_start = Instant::now();
@@ -729,6 +782,7 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            raw_py_values: None,
         })
     }
 
@@ -2610,6 +2664,25 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         djust_templates::registry::clear_block_tag_handlers,
+        m
+    )?)?;
+
+    // Assign tag handler registry (context-mutating tags). Returns a
+    // dict that's merged into the context rather than HTML.
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::register_assign_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::unregister_assign_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::has_assign_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_assign_tag_handlers,
         m
     )?)?;
 

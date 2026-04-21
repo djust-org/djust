@@ -664,7 +664,7 @@ class Button(LiveComponent):
 
 **`UploadWriter` — Raw upload byte stream access (Phoenix 1.0 parity)** — Access raw upload byte streams during chunked transfer for server-to-server streaming (e.g., pipe directly to S3 without buffering to disk). `UploadWriter` class with `write_chunk(chunk)` and `close()` methods, passed to `allow_upload(writer=MyWriter)`. ~100 lines Python.
 
-**Rust template engine parity** — Close the remaining gaps: model attribute access via PyO3 `getattr` fallback, `&quot;` escaping in attribute context, broader custom tag handler support.
+~~**Rust template engine parity**~~ ✅ **(v0.5.0)** — ~~Close the remaining gaps: model attribute access via PyO3 `getattr` fallback, `&quot;` escaping in attribute context, broader custom tag handler support.~~ Shipped as a single PR: PyO3 `getattr` fallback with PyObject sidecar on `Context` (templates now reference Django models directly), dedicated `html_escape_attr` split with parse-time `in_attr` classification on every `Node::Variable`, and `register_assign_tag_handler()` for context-mutating tags (returns `dict[str, Any]` merged into context). Known limitations left as future work: loader access for block handlers (2b) and parent-tag propagation for nested handlers (2c).
 
 **Database change notifications (PostgreSQL LISTEN/NOTIFY → LiveView push)** — Subscribe to PostgreSQL NOTIFY channels and automatically push updates to connected LiveViews when database rows change. `self.listen('table_changes', channel='orders_updated')` in mount, `def handle_info(self, message)` receives the notification payload. Combined with Django signals or database triggers, this creates truly reactive UIs where a change in one user's session (or a Celery task, or a management command) instantly reflects in all connected views without any explicit broadcasting code. Phoenix achieves this via PubSub + Ecto; Django has no built-in equivalent, but PostgreSQL's `LISTEN/NOTIFY` is a perfect fit. Implementation: async listener on the Channels layer that bridges `pg_notify` → `channel_layer.group_send()`. Optional `@notify_on_save` model mixin that auto-sends NOTIFY on `post_save`. ~150 lines Python. *This is the killer feature for dashboards, admin panels, and collaborative apps — "change the database, all connected users see it instantly" with zero explicit pub/sub wiring. No other Python framework has this built-in. Phoenix gets it implicitly from Ecto's PubSub; Rails has it via ActionCable + PostgreSQL triggers but it's not first-class. Making this a one-liner in djust is a genuine adoption driver.*
 
@@ -1034,7 +1034,7 @@ High-impact areas for contributions:
 36. **Error overlay (dev mode)** — In-browser Python stack traces, ~100 lines Python + ~80 lines JS
 37. **Template fragments** — Rust-side static subtree fingerprinting for wire-size optimization
 38. **Connection multiplexing** — Share one WS across multiple LiveViews, ~200 lines JS + Python
-39. **Rust template engine parity** — Close the model attribute access gap
+39. ~~**Rust template engine parity**~~ ✅ — Closed in v0.5.0: getattr fallback, attr-context escape, assign-tag handler
 40. **AI streaming primitives** — Purpose-built LLM streaming components
 41. **Streaming initial render** — Chunked HTTP response with progressive content loading
 42. **Django admin LiveView widgets** — Real-time admin dashboards and inline editing
