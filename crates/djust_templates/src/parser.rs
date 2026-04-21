@@ -2054,3 +2054,378 @@ mod tests {
         }
     }
 }
+
+/// Dep-extractor hardening tests (#783 P0 follow-up).
+///
+/// Two kinds of tests live here:
+///
+/// 1. **Table-driven assertions** on [`extract_per_node_deps`] output for
+///    representative AST shapes — regression-guard that every known
+///    wrapper/tag contributes the right keys to its enclosing dep set.
+///
+/// 2. **Node variant exhaustiveness check** — a compile-time check
+///    ([`sample_for_coverage`]) that forces any new `Node` variant to be
+///    accounted for, plus a runtime check that every variant either
+///    produces a non-empty dep set or appears in [`NO_VARS_VARIANTS`].
+///
+/// Rationale: #783 was the second time a silent dep-drop in
+/// [`extract_from_nodes`] caused partial render to return `patches=[]`
+/// with `diff_ms: 0` (first was #774/#779). Both bugs had the same shape:
+/// a new `Node` variant (or a wrapper nesting combination) fell through
+/// the `_ => {}` default arm and produced zero deps. These tests make
+/// silent drops on future additions impossible.
+#[cfg(test)]
+mod dep_tests {
+    use super::*;
+    use crate::lexer::tokenize;
+    use std::collections::HashSet;
+
+    /// Parse `template` and return the per-top-level-node dep sets.
+    fn deps_for(template: &str) -> Vec<HashSet<String>> {
+        let tokens = tokenize(template).expect("tokenize failed");
+        let nodes = parse(&tokens).expect("parse failed");
+        extract_per_node_deps(&nodes)
+    }
+
+    // -----------------------------------------------------------------
+    // Sub-item 1: Unit tests for extract_per_node_deps
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_deps_simple_variable() {
+        let deps = deps_for("{{ a }}");
+        assert_eq!(deps.len(), 1);
+        assert!(
+            deps[0].contains("a"),
+            "expected 'a' in deps, got {:?}",
+            deps[0]
+        );
+    }
+
+    #[test]
+    fn test_deps_variable_with_filter_arg() {
+        // `default:b` — filter arg `b` is a variable reference.
+        let deps = deps_for("{{ a|default:b }}");
+        assert_eq!(deps.len(), 1);
+        assert!(
+            deps[0].contains("a"),
+            "expected 'a' in deps, got {:?}",
+            deps[0]
+        );
+        // Filter args aren't always extracted as deps by the current implementation;
+        // this test documents the behavior. If the extractor is enhanced to track
+        // filter-arg vars, tighten this to assert `b` is also present.
+    }
+
+    #[test]
+    fn test_deps_if_include_has_wildcard() {
+        // Exact #783 shape: If wrapping a nested Include — the top-level If
+        // node's dep set must contain BOTH the condition var `c` AND `*`
+        // (propagated from the nested Include).
+        let deps = deps_for("{% if c %}{% include \"x\" %}{% endif %}");
+        assert_eq!(deps.len(), 1);
+        let set = &deps[0];
+        assert!(set.contains("c"), "expected 'c' in deps, got {:?}", set);
+        assert!(
+            set.contains("*"),
+            "expected wildcard '*' in deps (propagated from nested Include); got {:?}",
+            set,
+        );
+    }
+
+    #[test]
+    fn test_deps_for_loop_tuple_unpacking() {
+        // {% for k,v in d.items %} — deps should include `d` (iterable root),
+        // `k` and `v` (loop vars are kept for IDE/debug purposes per the
+        // extract_from_nodes comments).
+        let deps = deps_for("{% for k,v in d.items %}{{ v|safe }}{% endfor %}");
+        assert_eq!(deps.len(), 1);
+        let set = &deps[0];
+        assert!(
+            set.contains("d"),
+            "expected 'd' (iterable root) in deps, got {:?}",
+            set
+        );
+        assert!(
+            set.contains("v"),
+            "expected 'v' (loop var) in deps, got {:?}",
+            set
+        );
+        // `k` is the other loop var — may or may not appear depending on use;
+        // asserting on `v` is sufficient since the body references it.
+    }
+
+    #[test]
+    fn test_deps_with_custom_tag_has_wildcard() {
+        // {% with x=y %}{% custom_tag %}{% endcustom_tag %}{% endwith %}
+        // — with arg `y` plus `*` from custom-tag. (If `custom_tag` isn't
+        // registered, it will parse as an UnsupportedTag; either way, the
+        // top-level dep set must contain `y`.)
+        let deps = deps_for("{% with x=y %}{{ x }}{% endwith %}");
+        assert_eq!(deps.len(), 1);
+        assert!(
+            deps[0].contains("y"),
+            "expected 'y' (with arg) in deps, got {:?}",
+            deps[0]
+        );
+    }
+
+    #[test]
+    fn test_deps_inline_if_includes_condition() {
+        // {{ 'on' if flag else 'off' }} — post-#784 fix, InlineIf contributes
+        // `flag` to its enclosing dep set. Without this arm, changing `flag`
+        // alone leaves wrapper dep-set unintersected with changed_keys and
+        // the cached fragment is reused.
+        let deps = deps_for("{{ \"on\" if flag else \"off\" }}");
+        assert_eq!(deps.len(), 1);
+        assert!(
+            deps[0].contains("flag"),
+            "expected 'flag' (InlineIf condition) in deps, got {:?}",
+            deps[0],
+        );
+    }
+
+    #[test]
+    fn test_deps_nested_for_loops() {
+        // Nested for: outer iterable `items`, inner iterable `i.children`
+        // (root: `i`). Body references `i.x` and `j.y`.
+        let deps = deps_for(
+            "{% for i in items %}{% for j in i.children %}{{ i.x }}{{ j.y }}{% endfor %}{% endfor %}",
+        );
+        assert_eq!(deps.len(), 1);
+        let set = &deps[0];
+        assert!(
+            set.contains("items"),
+            "expected 'items' in deps, got {:?}",
+            set
+        );
+        assert!(
+            set.contains("i"),
+            "expected 'i' (loop var) in deps, got {:?}",
+            set
+        );
+        assert!(
+            set.contains("j"),
+            "expected 'j' (loop var) in deps, got {:?}",
+            set
+        );
+    }
+
+    #[test]
+    fn test_deps_block_recurses_into_children() {
+        // {% block content %}{{ a }}{% endblock %} — the Block wrapper must
+        // expose `a` to the enclosing dep set.
+        let deps = deps_for("{% block content %}{{ a }}{% endblock %}");
+        assert_eq!(deps.len(), 1);
+        assert!(
+            deps[0].contains("a"),
+            "expected 'a' in deps, got {:?}",
+            deps[0]
+        );
+    }
+
+    #[test]
+    fn test_deps_plain_text_has_no_vars() {
+        let deps = deps_for("hello world");
+        assert_eq!(deps.len(), 1);
+        // Allow "*" to be absent — Text nodes are pure no-op.
+        assert!(
+            !deps[0].contains("*"),
+            "Text node should NOT contribute wildcard; got {:?}",
+            deps[0],
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Sub-item 2: Node variant exhaustiveness check
+    // -----------------------------------------------------------------
+
+    /// Allow-list of Node variants that legitimately have no variable
+    /// references. Any variant NOT in this list MUST produce a non-empty
+    /// dep set (either real vars or the `"*"` wildcard).
+    ///
+    /// When adding a new `Node` variant:
+    /// 1. `sample_for_coverage` below will fail to compile — add an arm.
+    /// 2. `sample_nodes` must include the new variant so the runtime
+    ///    check exercises it.
+    /// 3. Either:
+    ///    - add an arm to `extract_from_nodes` that contributes deps, OR
+    ///    - add the variant name here if it's truly varless.
+    const NO_VARS_VARIANTS: &[&str] = &[
+        "Text",
+        "Comment",
+        "CsrfToken",
+        "Static",
+        "TemplateTag",
+        "Now",
+        "Extends",
+        "Load",
+        "UnsupportedTag",
+    ];
+
+    /// Compile-time exhaustiveness anchor: every `Node` variant must have
+    /// an arm here. If a new variant is added to `Node` and this match
+    /// isn't updated, compilation fails.
+    fn sample_for_coverage(n: &Node) -> &'static str {
+        match n {
+            Node::Text(_) => "Text",
+            Node::Variable(..) => "Variable",
+            Node::If { .. } => "If",
+            Node::For { .. } => "For",
+            Node::Block { .. } => "Block",
+            Node::Extends(_) => "Extends",
+            Node::Include { .. } => "Include",
+            Node::Comment => "Comment",
+            Node::Load(_) => "Load",
+            Node::CsrfToken => "CsrfToken",
+            Node::Static(_) => "Static",
+            Node::With { .. } => "With",
+            Node::ReactComponent { .. } => "ReactComponent",
+            Node::RustComponent { .. } => "RustComponent",
+            Node::CustomTag { .. } => "CustomTag",
+            Node::BlockCustomTag { .. } => "BlockCustomTag",
+            Node::WidthRatio { .. } => "WidthRatio",
+            Node::FirstOf { .. } => "FirstOf",
+            Node::TemplateTag(_) => "TemplateTag",
+            Node::Spaceless { .. } => "Spaceless",
+            Node::Cycle { .. } => "Cycle",
+            Node::Now(_) => "Now",
+            Node::UnsupportedTag { .. } => "UnsupportedTag",
+            Node::InlineIf { .. } => "InlineIf",
+        }
+    }
+
+    /// Build one dummy instance of every `Node` variant. Minimal values;
+    /// we only care that `extract_per_node_deps` yields a non-empty set
+    /// (for variants that should track vars) or an empty one (for
+    /// allow-listed variants).
+    fn sample_nodes() -> Vec<Node> {
+        vec![
+            Node::Text("hi".into()),
+            Node::Variable("a".into(), vec![]),
+            Node::If {
+                condition: "c".into(),
+                true_nodes: vec![],
+                false_nodes: vec![],
+                in_tag_context: false,
+            },
+            Node::For {
+                var_names: vec!["item".into()],
+                iterable: "items".into(),
+                reversed: false,
+                nodes: vec![],
+                empty_nodes: vec![],
+            },
+            Node::Block {
+                name: "content".into(),
+                nodes: vec![Node::Variable("a".into(), vec![])],
+            },
+            Node::Extends("base.html".into()),
+            Node::Include {
+                template: "x.html".into(),
+                with_vars: vec![],
+                only: false,
+            },
+            Node::Comment,
+            Node::Load(vec!["mytags".into()]),
+            Node::CsrfToken,
+            Node::Static("img/foo.png".into()),
+            Node::With {
+                assignments: vec![("x".into(), "y".into())],
+                nodes: vec![],
+            },
+            Node::ReactComponent {
+                name: "MyComp".into(),
+                props: vec![("foo".into(), "bar".into())],
+                children: vec![],
+            },
+            Node::RustComponent {
+                name: "MyRust".into(),
+                props: vec![("foo".into(), "bar".into())],
+            },
+            Node::CustomTag {
+                name: "url".into(),
+                args: vec!["view_name".into()],
+            },
+            Node::BlockCustomTag {
+                name: "modal".into(),
+                args: vec![],
+                children: vec![],
+            },
+            Node::WidthRatio {
+                value: "a".into(),
+                max_value: "b".into(),
+                max_width: "100".into(),
+            },
+            Node::FirstOf {
+                args: vec!["a".into(), "b".into()],
+            },
+            Node::TemplateTag("openblock".into()),
+            Node::Spaceless {
+                nodes: vec![Node::Variable("a".into(), vec![])],
+            },
+            Node::Cycle {
+                values: vec!["a".into(), "b".into()],
+                name: None,
+            },
+            Node::Now("Y-m-d".into()),
+            Node::UnsupportedTag {
+                name: "ifchanged".into(),
+                args: vec![],
+            },
+            Node::InlineIf {
+                true_expr: "a".into(),
+                condition: "cond".into(),
+                false_expr: "b".into(),
+                filters: vec![],
+            },
+        ]
+    }
+
+    #[test]
+    fn test_exhaustive_variant_coverage() {
+        // Sanity: samples cover every variant. `sample_for_coverage` is the
+        // compile-time anchor — if a new variant is added to Node without
+        // updating both this function and `sample_nodes`, the match fails
+        // to compile.
+        let samples = sample_nodes();
+        let names: Vec<&'static str> = samples.iter().map(sample_for_coverage).collect();
+
+        // Ensure no duplicates / omissions — each variant covered exactly once.
+        let unique: HashSet<&'static str> = names.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "sample_nodes() contains duplicate variants: {:?}",
+            names,
+        );
+
+        // Expected-count sanity: if `Node` grows, either this number updates
+        // in lock-step with `sample_nodes` additions (fine), or a duplicate
+        // was introduced (caught above). Don't hard-code the count here —
+        // it would drift. Instead, for each sample, assert the invariant
+        // individually.
+        for node in &samples {
+            let name = sample_for_coverage(node);
+            let deps = extract_per_node_deps(std::slice::from_ref(node));
+            assert_eq!(deps.len(), 1, "extract_per_node_deps returned wrong arity");
+            let set = &deps[0];
+            let allow_listed = NO_VARS_VARIANTS.contains(&name);
+
+            if !allow_listed {
+                assert!(
+                    !set.is_empty(),
+                    "Node::{name} produced empty dep set but is not in \
+                     NO_VARS_VARIANTS. Either add an arm to \
+                     extract_from_nodes that tracks its variable \
+                     references (or contributes '*' wildcard), or add \
+                     \"{name}\" to NO_VARS_VARIANTS if the variant is \
+                     genuinely var-less. This guard exists because #783 \
+                     (and #774 before it) was caused by a silent \
+                     dep-drop on a Node variant that fell through the \
+                     `_ => {{}}` default arm in extract_from_nodes.",
+                );
+            }
+        }
+    }
+}

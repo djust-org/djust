@@ -532,6 +532,17 @@ class RustLiveView:
         """
         ...
 
+    def clear_fragment_cache(self) -> None:
+        """
+        Clear the partial-render fragment cache, forcing the next render to
+        do a full collecting render.
+
+        Keeps ``last_vdom`` intact so the diff baseline is preserved. Used by
+        the partial-render correctness harness in tests to produce a control
+        output for byte-equality comparison.
+        """
+        ...
+
     def get_state(self) -> Dict[str, Any]:
         """
         Get current state.
