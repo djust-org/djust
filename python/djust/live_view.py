@@ -229,6 +229,21 @@ class LiveView(
     # on_mount hooks — cross-cutting mount logic (Phoenix on_mount parity)
     on_mount: List[Any] = []
 
+    # HTTP API exposure (ADR-008) — opt-in; see djust.api and the
+    # ``docs/website/guides/http-api.md`` guide.
+    #
+    # ``api_name`` is the stable URL slug under ``/djust/api/<slug>/``. If left
+    # ``None``, the slug is derived from the module path + lowercased class name,
+    # but the derived slug changes when the class is moved or renamed — set
+    # ``api_name`` explicitly for any view with ``expose_api=True`` handlers.
+    #
+    # ``api_auth_classes`` is a list of auth classes (instances or classes) tried
+    # in order; the first one whose ``authenticate(request)`` returns a non-None
+    # user wins. CSRF is enforced unless the winning class sets
+    # ``csrf_exempt = True``. When ``None``, djust uses ``[SessionAuth]``.
+    api_name: Optional[str] = None
+    api_auth_classes: Optional[List[Any]] = None
+
     # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================

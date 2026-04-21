@@ -950,6 +950,9 @@ class Command(BaseCommand):
                 )
             )
 
+        # API-exposed handlers (ADR-008)
+        self._output_api_exposed_section()
+
         # Summary
         self.stdout.write("")
         self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
@@ -965,3 +968,51 @@ class Command(BaseCommand):
             )
         )
         self.stdout.write("")
+
+    def _output_api_exposed_section(self):
+        """List every ``@event_handler(expose_api=True)`` handler (ADR-008).
+
+        Flags any exposed handler that is NOT also guarded by
+        ``@permission_required`` — an exposed handler without explicit
+        permissions is treated like ``@csrf_exempt`` and should be reviewed.
+        """
+        try:
+            from djust.api.registry import iter_exposed_handlers
+        except ImportError:
+            return
+        try:
+            exposed = list(iter_exposed_handlers())
+        except Exception:
+            return
+        if not exposed:
+            return
+        self.stdout.write("")
+        self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+        self.stdout.write(self.style.MIGRATE_HEADING("  HTTP API exposed handlers (ADR-008)"))
+        self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+        missing_perms = []
+        for slug, view_cls, handler_name, handler in exposed:
+            meta = getattr(handler, "_djust_decorators", {}) or {}
+            has_perm = "permission_required" in meta
+            marker = self.style.SUCCESS("✓") if has_perm else self.style.WARNING("⚠")
+            self.stdout.write(
+                "  %s POST /djust/api/%s/%s/  (%s.%s)"
+                % (marker, slug, handler_name, view_cls.__name__, handler_name)
+            )
+            if not has_perm:
+                missing_perms.append((slug, view_cls.__name__, handler_name))
+        if missing_perms:
+            self.stdout.write("")
+            self.stdout.write(
+                self.style.WARNING(
+                    "  ⚠  %d exposed handler%s without @permission_required:"
+                    % (
+                        len(missing_perms),
+                        "s" if len(missing_perms) != 1 else "",
+                    )
+                )
+            )
+            for slug, cls_name, handler_name in missing_perms:
+                self.stdout.write("      - %s.%s (slug: %s)" % (cls_name, handler_name, slug))
+            self.stdout.write("  Review each site. Treat ``expose_api=True`` like @csrf_exempt —")
+            self.stdout.write("  a public endpoint without explicit permissions is easy to leak.")
