@@ -19,7 +19,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P1** | Function Components (stateless) | Cheap render-only components without WS overhead — Phoenix.Component parity | v0.5.0 |
 | **P1** | `assign_async` / AsyncResult | Foundation for responsive dashboards — independent loading boundaries | v0.5.0 |
 | **P1** | Template fragments (static subtree) | Biggest wire-size optimization; how Phoenix achieves sub-ms updates | v0.5.0 |
-| **P1** | LiveView testing utilities | `assert_push_event()`, `assert_patch()`, `render_async()` — test DX is adoption-critical | v0.5.0 |
+| ~~**P1**~~ | ~~LiveView testing utilities~~ ✅ Shipped in v0.5.1 (7 methods + 21 tests) | ~~`assert_push_event()`, `assert_patch()`, `render_async()` — test DX is adoption-critical~~ | ~~v0.5.0~~ |
 | **P1** | Keyed for-loop change tracking | O(changed) not O(total) for list re-renders — foundation for large-list performance | v0.5.0 |
 | **P1** | Temporary assigns | Phoenix's #1 memory optimization — without it, large lists (chat, feeds) leak memory unboundedly | v0.5.0 |
 | **P1** | ✅ `manage.py djust_gen_live` scaffolding | Phoenix's generators are the #1 onboarding DX feature; scaffold views/templates/tests from a model | v0.4.0 |
@@ -704,7 +704,7 @@ class OrderDashboardView(LiveView):
 
 ~~**Package consolidation: fold `djust-theming` into core** ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md))~~ ✅ **Shipped in v0.5.0 (PR #772)** — Phase 2 of the three-phase consolidation landed as part of the v0.5.0 "Full Package Consolidation" milestone rather than slipping to v0.5.1. `djust_theming/` (~37.6K LOC) was moved to `python/djust/theming/` with `djust-theming 0.5.0` shipping as a compat shim. Retained in the ROADMAP for historical context; sunset tracked under v0.6.0 Phase 4.
 
-**LiveView testing utilities** — (Moved from v0.5.0) The existing `LiveViewTestClient` covers basic mount/event/render. Production apps need: `assert_push_event(event_name, params)` to verify server→client push events, `assert_patch(path)` / `assert_redirect(path)` for navigation testing, `render_async()` that waits for `start_async` callbacks to complete before asserting, `follow_redirect()` for chaining navigation, `assert_stream_insert(stream, item)` for testing streaming operations, and `trigger_info(message)` for testing `handle_info` handlers. Phoenix's `LiveViewTest` is considered best-in-class testing DX — we need parity. ~300 lines Python.
+~~**LiveView testing utilities**~~ ✅ **Shipped in v0.5.1** (7 methods + 21 tests in `LiveViewTestClient`). `assert_push_event`, `assert_patch`, `assert_redirect`, `render_async`, `follow_redirect`, `assert_stream_insert`, `trigger_info` all match the v0.5.1 roadmap spec. Full user guide at `docs/website/guides/testing.md`. See also the priority matrix row above.
 
 ```python
 # Target API
@@ -1039,7 +1039,7 @@ High-impact areas for contributions:
 32. **`assign_async`/`AsyncResult`** — High-level async data loading, ~200 lines Python
 33. **`handle_async` callback** — Typed async completion handler (Phoenix 1.0 parity), ~80 lines Python
 34. **Declarative component assigns** — Type-checked attrs with defaults/validation, ~120 lines Python
-35. **LiveView testing utilities** — `assert_push_event`, `assert_patch`, `render_async`, ~300 lines Python
+35. ~~**LiveView testing utilities**~~ ✅ **Shipped in v0.5.1** — 7 methods + 21 tests; see guide at `docs/website/guides/testing.md`.
 36. **Error overlay (dev mode)** — In-browser Python stack traces, ~100 lines Python + ~80 lines JS
 37. **Template fragments** — Rust-side static subtree fingerprinting for wire-size optimization
 38. **Connection multiplexing** — Share one WS across multiple LiveViews, ~200 lines JS + Python

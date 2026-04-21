@@ -116,6 +116,7 @@ Test LiveViews without a browser.
 |                                       |                                                                                     |
 | ------------------------------------- | ----------------------------------------------------------------------------------- |
 | **[Testing Guide](testing/index.md)** | `LiveViewTestClient`, `SnapshotTestMixin`, `LiveViewSmokeTest`, `@performance_test` |
+| **[Testing LiveViews (v0.5.1 API)](guides/testing.md)** | Phoenix-parity assertions: `assert_push_event`, `assert_patch`, `render_async`, `follow_redirect`, `assert_stream_insert`, `trigger_info` |
 
 ---
 

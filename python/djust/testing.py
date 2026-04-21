@@ -381,6 +381,290 @@ class LiveViewTestClient:
         """
         return self.events.copy()
 
+    # ========================================================================
+    # v0.5.1 — Phoenix LiveViewTest parity assertions
+    # ========================================================================
+
+    def assert_push_event(
+        self,
+        event_name: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Verify that at least one queued ``push_event`` matches this name.
+
+        Searches ``view_instance._pending_push_events`` (populated by
+        :meth:`PushEventMixin.push_event`). If ``params`` is given, the stored
+        payload must be a superset of it (extra keys are allowed — matches
+        are subset-based so tests are resilient to later payload additions).
+
+        Args:
+            event_name: Name passed to ``self.push_event(...)`` in the handler.
+            params: Optional payload subset to match. ``None`` skips payload check.
+
+        Raises:
+            AssertionError: No matching push event queued.
+            RuntimeError: View not mounted.
+
+        Example::
+
+            client.send_event("save")
+            client.assert_push_event("flash", {"type": "success"})
+        """
+        self._require_mounted()
+        pending = getattr(self.view_instance, "_pending_push_events", [])
+        for name, payload in pending:
+            if name != event_name:
+                continue
+            if params is None:
+                return
+            if all(payload.get(k) == v for k, v in params.items()):
+                return
+        available = ", ".join(n for n, _ in pending) or "(none)"
+        raise AssertionError(
+            f"Expected push_event({event_name!r}{', ' + repr(params) if params else ''}) "
+            f"but handler queued: {available}"
+        )
+
+    def assert_patch(
+        self,
+        path: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Verify the handler queued a :meth:`live_patch` navigation.
+
+        Args:
+            path: Optional URL path to match. ``None`` matches any patch.
+            params: Optional query-param subset to match against ``nav["params"]``.
+
+        Raises:
+            AssertionError: No matching live_patch queued.
+        """
+        self._require_mounted()
+        nav = getattr(self.view_instance, "_pending_navigation", [])
+        patches = [n for n in nav if n.get("type") == "live_patch"]
+        if not patches:
+            raise AssertionError(
+                f"Expected a live_patch, but the handler queued: "
+                f"{[n.get('type') for n in nav] or '(no navigation)'}"
+            )
+        for p in patches:
+            if path is not None and p.get("path") != path:
+                continue
+            if params is not None:
+                p_params = p.get("params") or {}
+                if not all(p_params.get(k) == v for k, v in params.items()):
+                    continue
+            return
+        raise AssertionError(
+            f"Expected live_patch(path={path!r}, params={params!r}) but got: {patches}"
+        )
+
+    def assert_redirect(
+        self,
+        path: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Verify the handler queued a :meth:`live_redirect` navigation.
+
+        See :meth:`assert_patch` for args/behavior — identical shape, different
+        navigation type.
+        """
+        self._require_mounted()
+        nav = getattr(self.view_instance, "_pending_navigation", [])
+        redirects = [n for n in nav if n.get("type") == "live_redirect"]
+        if not redirects:
+            raise AssertionError(
+                f"Expected a live_redirect, but the handler queued: "
+                f"{[n.get('type') for n in nav] or '(no navigation)'}"
+            )
+        for r in redirects:
+            if path is not None and r.get("path") != path:
+                continue
+            if params is not None:
+                r_params = r.get("params") or {}
+                if not all(r_params.get(k) == v for k, v in params.items()):
+                    continue
+            return
+        raise AssertionError(
+            f"Expected live_redirect(path={path!r}, params={params!r}) but got: {redirects}"
+        )
+
+    def render_async(self) -> None:
+        """Synchronously run any pending ``start_async`` / ``assign_async`` tasks.
+
+        The production WS consumer runs these tasks after the handler returns;
+        in unit tests we drain them inline so subsequent assertions see their
+        results. Each task's ``(callback, args, kwargs)`` tuple is called in
+        declaration order; exceptions propagate so test authors see real
+        failures instead of silent skips. Async callbacks are driven via
+        ``asgiref.sync.async_to_sync``.
+
+        Raises:
+            RuntimeError: View not mounted.
+        """
+        self._require_mounted()
+        tasks = getattr(self.view_instance, "_async_tasks", None)
+        if not tasks:
+            return
+        from asgiref.sync import async_to_sync
+
+        # Drain so tasks re-queued by their callbacks are visible to the next
+        # render_async() call (matches the production consumer semantics).
+        pending = list(tasks.items())
+        self.view_instance._async_tasks = {}
+        for _name, (callback, args, kwargs) in pending:
+            result = callback(*args, **kwargs)
+            if inspect.iscoroutine(result):
+                async_to_sync(_await_coro)(result)
+
+    def follow_redirect(self) -> "LiveViewTestClient":
+        """After a handler queued a ``live_redirect``, mount the destination.
+
+        Resolves the queued redirect path against Django's URL resolver, finds
+        the target ``LiveView`` class, and returns a fresh
+        :class:`LiveViewTestClient` mounted on it. Query params from the
+        redirect become mount kwargs.
+
+        Returns:
+            A new ``LiveViewTestClient`` pointed at the destination view.
+
+        Raises:
+            AssertionError: No redirect was queued, or the URL resolves to a
+                non-LiveView view.
+        """
+        self._require_mounted()
+        nav = getattr(self.view_instance, "_pending_navigation", [])
+        redirects = [n for n in nav if n.get("type") == "live_redirect"]
+        if not redirects:
+            raise AssertionError(
+                "Expected a live_redirect to follow, but the handler queued no redirect."
+            )
+        target = redirects[-1]
+        from django.urls import resolve
+
+        match = resolve(target["path"])
+        view_cls = getattr(match.func, "view_class", None) or match.func
+        # Guard: the destination must actually be a LiveView. Without this,
+        # ``client.mount()`` would explode with a confusing traceback.
+        from djust.live_view import LiveView
+
+        if not (isinstance(view_cls, type) and issubclass(view_cls, LiveView)):
+            raise AssertionError(
+                f"follow_redirect: {target['path']!r} resolves to {view_cls!r} which "
+                f"is not a LiveView subclass. The test client can only follow "
+                f"redirects to LiveView destinations."
+            )
+        client = LiveViewTestClient(view_cls, user=self.user)
+        mount_params = dict(target.get("params") or {})
+        mount_params.update(match.kwargs)
+        client.mount(**mount_params)
+        return client
+
+    def assert_stream_insert(
+        self,
+        stream_name: str,
+        item: Optional[Any] = None,
+    ) -> None:
+        """Verify the handler queued a ``stream_insert`` for ``stream_name``.
+
+        Args:
+            stream_name: The stream name passed to :meth:`stream_insert`.
+            item: Optional item to match (subset-match on dict keys if item
+                is a dict; equality otherwise).
+
+        Raises:
+            AssertionError: No matching stream op queued.
+        """
+        self._require_mounted()
+        ops = getattr(self.view_instance, "_stream_operations", [])
+        inserts = [
+            o for o in ops if o.get("type") == "stream_insert" and o.get("stream") == stream_name
+        ]
+        if not inserts:
+            available = sorted({o.get("stream") for o in ops if o.get("type") == "stream_insert"})
+            raise AssertionError(
+                f"Expected stream_insert on {stream_name!r}, "
+                f"but inserts were queued on: {available or '(none)'}"
+            )
+        if item is None:
+            return
+        # The op dict only stores metadata (dom_id, position); the actual item
+        # lives in ``view_instance._streams[stream_name]``. Walk the stream's
+        # items to match.
+        streams = getattr(self.view_instance, "_streams", {})
+        stream_obj = streams.get(stream_name)
+        stream_items = list(getattr(stream_obj, "items", ())) if stream_obj else []
+        for stored in stream_items:
+            if isinstance(item, dict) and isinstance(stored, dict):
+                if all(stored.get(k) == v for k, v in item.items()):
+                    return
+            elif stored == item:
+                return
+        raise AssertionError(
+            f"Expected stream_insert({stream_name!r}, {item!r}) but stream contains: {stream_items}"
+        )
+
+    def trigger_info(self, message: Any) -> Dict[str, Any]:
+        """Synthetically deliver a ``handle_info`` message to the view.
+
+        Lets tests exercise ``pg_notify`` / pubsub handlers without standing
+        up real backend infrastructure. Every LiveView inherits a no-op
+        ``handle_info`` default from :class:`NotificationMixin`, so calling
+        this on a view that hasn't overridden it returns success with no
+        state change — the assertion job belongs to the test author.
+
+        Args:
+            message: The payload to pass. Typically a dict of the shape
+                ``{"type": "db_notify", "channel": "...", "payload": {...}}``.
+
+        Returns:
+            Dict with ``state_before`` / ``state_after`` / ``duration_ms`` /
+            ``error`` — same shape as :meth:`send_event`.
+
+        Raises:
+            RuntimeError: View not mounted.
+        """
+        self._require_mounted()
+        handler = getattr(self.view_instance, "handle_info", None)
+        if not callable(handler):  # defensive — NotificationMixin always provides it
+            raise AttributeError(
+                f"{type(self.view_instance).__name__} does not define handle_info()."
+            )
+        state_before = self.get_state()
+        start_time = time.perf_counter()
+        error = None
+        try:
+            handler(message)
+        except Exception as exc:
+            error = str(exc)
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        state_after = self.get_state()
+        self.events.append(
+            {
+                "type": "handle_info",
+                "message": message,
+                "timestamp": time.time(),
+                "duration_ms": duration_ms,
+                "error": error,
+            }
+        )
+        return {
+            "success": error is None,
+            "error": error,
+            "state_before": state_before,
+            "state_after": state_after,
+            "duration_ms": duration_ms,
+        }
+
+    def _require_mounted(self) -> None:
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+
+
+async def _await_coro(coro):
+    """Helper for ``render_async`` — awaits a coroutine under async_to_sync."""
+    return await coro
+
 
 class SnapshotTestMixin:
     """
