@@ -61,6 +61,7 @@ def event_handler(
     params: Optional[List[str]] = None,
     description: str = "",
     coerce_types: bool = True,
+    expose_api: bool = False,
 ) -> Callable[[F], F]:
     """
     Mark method as event handler with automatic signature introspection.
@@ -76,6 +77,11 @@ def event_handler(
         params: Optional explicit parameter list (overrides auto-extraction)
         description: Human-readable description (overrides docstring)
         coerce_types: Whether to coerce string params to expected types (default: True)
+        expose_api: Expose this handler as an HTTP API endpoint at
+            ``POST /djust/api/<view_slug>/<handler_name>/`` with OpenAPI 3.1 schema.
+            Default is False (WebSocket-only). When True, the same handler runs with
+            identical validation, permissions, and rate limiting regardless of
+            transport. See docs/adr/008-auto-generated-http-api-from-event-handlers.md.
 
     Usage:
         @event_handler
@@ -137,6 +143,7 @@ def event_handler(
                 "required": [p["name"] for p in sig_info["params"] if p["required"]],
                 "optional": [p["name"] for p in sig_info["params"] if not p["required"]],
                 "coerce_types": coerce_types,  # Whether to coerce string params
+                "expose_api": expose_api,  # ADR-008: expose as HTTP API endpoint
             },
         )
 

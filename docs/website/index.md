@@ -70,6 +70,7 @@ How to build specific features.
 | **[Multi-Tenant](guides/multi-tenant.md)**     | SaaS architecture with tenant isolation                   |
 | **[External Services](guides/services.md)**    | AWS, REST APIs, Redis integration patterns                |
 | **[MCP Server](guides/mcp-server.md)**         | AI assistant integration via Model Context Protocol       |
+| **[HTTP API](guides/http-api.md)**             | Auto-generated HTTP endpoints + OpenAPI from `@event_handler` (ADR-008) |
 
 ### Operations
 

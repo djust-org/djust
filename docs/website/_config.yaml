@@ -196,6 +196,11 @@ navigation:
         file: guides/service-worker.md
         order: 12.5
         level: advanced
+      - title: HTTP API (Auto-Generated from @event_handler)
+        slug: http-api
+        file: guides/http-api.md
+        order: 12.6
+        level: advanced
       - title: Deployment
         slug: deployment
         file: guides/deployment.md
