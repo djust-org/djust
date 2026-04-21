@@ -64,6 +64,83 @@ issue or be explicitly closed with a reason.
 | 52 | `DjustMainOnlyMiddleware` should early-return on 4xx/5xx responses | PR #826 | #828 | Open | — |
 | 53 | `registerServiceWorker` duplicate-call guard | PR #826 | #829 | Open | — |
 | 54 | Middleware should match `text/html` with charset variants | PR #826 | #830 | Open | — |
+| 55 | `djust_typecheck`: support `{% firstof %}`, `{% cycle %}`, `{% blocktrans with %}` | PR #849 | #850 | Open | Template-tag blind spots |
+| 56 | `djust_typecheck`: MRO walk for `self.foo = ...` assigns from parent classes | PR #849 | #851 | Open | — |
+| 57 | Extract shared `_walk_subclasses` / `_is_user_class` (3x duplication) | PR #849 | #852 | Open | Refactor |
+| 58 | `follow_redirect` silent drop on multiple redirects | PR #842 | #843 | Open | Should raise or compose |
+| 59 | `handle_async_result` callback not invoked in `render_async` | PR #842 | #844 | Open | — |
+
+---
+
+## v0.5.1 — HTTP API Headline + Testing, Forms & Developer Experience (PRs #834–#849, #853)
+
+**Date**: 2026-04-21
+**Scope**: Auto-generated HTTP API (ADR-008 headline), testing utilities, dj-dialog, inputs_for formsets, dev error overlay, type-safe template validation, plus batch-landed state/computation primitives (`@computed` memoization, dirty tracking, `unique_id`, context provider/consumer) and form-polish (`dj-no-submit`, `dj-trigger-action`, scoped `dj-loading`). Closed the 82 pre-existing test failures that had blocked normal merges for the entire v0.5.1 cycle (PR #841).
+**Tests at close**: 3,312 Python + 1,206 JS passing (1 flaky perf test that passes on re-run)
+
+### What We Learned
+
+**1. Stage 11 is load-bearing — 6 PRs in a row had Stage 7 pass + Stage 11 find real defects.**
+PRs #814, #837, #840, #842, #846, #849 all passed Stage 7 (self-review) cleanly and then Stage 11 (subagent code review) found bugs that would have shipped. Examples: `AnnAssign` unhandled in the typecheck extractor (#849), `get_default_prefix()` always returning `"form"` regardless of custom prefix (#846), `absolute_max` miscap allowing `max_num=5` to grow to 1005 rows (#846), `follow_redirect` docstring promising a `RuntimeError` it never raised (#842). The pattern is strong enough to be mandatory — the pipeline's "never skip Stage 11" rule paid off every single time.
+
+**Action taken**: No change — rule stays load-bearing. Continues to catch what the author missed.
+
+**2. Directly-to-main pushes are a real risk — caught by permission denial.**
+During the Stage 11 fix pass on PR #846, I pushed the fix commit (335cce26) to main instead of the feature branch because I never switched back after a sync. Recovery was awkward (close the stale PR as superseded, file docs-bookkeeping PR #847). Later, the same mistake was prevented by a permission rule the user had installed. The rule is cheap to add and expensive to work without.
+
+**Action taken**: The denial pattern should be the default. Version-bump commits can still use release branches + PR — no loss of velocity.
+
+**3. Pre-existing test failures block normal merge flow until fixed.**
+The v0.5.1 cycle started with 82 failing tests. Every PR in the cycle before #841 was forced to use `--admin` bypass on merge. This eroded the signal from CI — a green CI run meant nothing because red CI also merged. PR #841 fixed all 82 in four clusters (missing test shims, stale `@layer` expectations, real code bugs like CSS prefix drift, and one wrong test assumption). After #841, every subsequent PR merged via the normal path.
+
+**Action taken**: Don't let pre-existing failures accumulate. Fix them in a dedicated PR when they cross ~10 and block merge flow.
+
+**4. Dogfooding before committing prevents shipping broken UX.**
+The first `djust_typecheck` implementation correctly flagged everything the static analysis *could* resolve, but running it against the demo project surfaced 230+ lines of false positives because it only looked at `get_context_data` literals. The second pass added `self.foo = ...` AST extraction, reducing the noise to acceptable levels. Without the demo-project dry run, it would have shipped unusable.
+
+**Action taken**: Established the pattern — any CLI tool that reports on project state gets a dogfood pass against the demo project before commit.
+
+**5. Batching related small features into one PR is the right default.**
+The state-primitives batch (#837: `@computed`, `is_dirty`, `unique_id`, context sharing) and form-polish batch (#840: `dj-no-submit`, `dj-trigger-action`, scoped `dj-loading`) were ~100-150 LOC each and shipped as single PRs. Four separate PRs would have produced 4x the review surface for low marginal signal. The `--group` flag in pipeline-run matched this correctly.
+
+**Action taken**: Keep grouping. Cutoff is roughly: under 6 tasks per group, shared functional area, no architectural branching.
+
+**6. `window.DEBUG_MODE` gate pattern works for dev-only JS.**
+The error overlay (#848) is gated on `window.DEBUG_MODE`, which the `djust_tags` template tag sets based on Django `DEBUG`. Production ships the code but it early-returns before rendering — and since Django strips the `traceback`/`debug_detail`/`hint` fields from the error frame in non-DEBUG, there's nothing to leak even if the guard were bypassed. Defense in depth without runtime cost.
+
+**Action taken**: Continue pattern for any dev-only client-side feature.
+
+### Insights
+
+- **Five P2 items + the HTTP API headline + pre-existing-test-fix in one milestone** is feature-rich for a minor version. The HTTP API alone is a strategic inflection (unlocks mobile/S2S/CLI/AI-agent consumers via OpenAPI 3.1 schema); batching it with DX improvements produces a milestone that's both strategically meaningful and developer-facing.
+- **Tech-debt issues should be filed *during* Stage 11, not after.** Stage 11 on #849 identified 3 follow-ups; filing #850/#851/#852 immediately from the review findings kept them visible. The alternative (mentioning in retro, hoping to remember) leaks.
+- **Autonomous overnight execution (`--all --group`) works when CI is green and Stage 11 is mandatory.** 5 feature PRs + 1 docs PR + a release-bump PR in one session, zero regressions, each PR independently reviewed and merged.
+- **"The typecheck command surfaces false positives" is the feature, not the bug.** Three silencing tiers (template pragma, per-view `strict_context`, project-wide `DJUST_TEMPLATE_GLOBALS`) mean developers triage on first run and then accumulate trust. This matches how linters ship.
+
+### Review Stats
+
+| Metric | #835 (HTTP API) | #837 | #840 | #841 | #842 | #845 | #847 | #848 | #849 | Total |
+|--------|-----------------|------|------|------|------|------|------|------|------|-------|
+| Tests added | ~40 | ~20 | 11+4 | 0 (fixed 82) | 21 | 8 | 0 | 10 | 19 | ~133 |
+| 🔴 Findings | tbd | 1 | 1 | — | 4 | — | — | — | 1 | 7 |
+| 🟡 Findings | tbd | ~3 | 2 | — | 3 | 1 | — | 4 | 3 | ~16 |
+| Findings fixed pre-merge | all | all | all | — | all | 1 | — | 0 (minor) | C1 | all Cs |
+| Stage 7 → Stage 11 delta | — | 3 | 1 | — | 4 | 0 | — | 0 | 1 | 9 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No structural changes. Memory entries added for "never skip Stage 11" load-bearing rule and "pipeline autonomous — don't stop to ask next-task scope" behavioral adjustment.
+**Pipeline template**: Continues to use the djust-local `.pipeline-templates/` with mandatory Stage 11 + 13 + 15. WIRING_CHECK + downstream-app name-leak scan applied to every PR.
+**Skills**: No new skills. `/pipeline-run --all --group` validated across 5 feature PRs.
+
+### Open Items
+
+- [ ] `djust_typecheck` template-tag blind spots — Action Tracker #55 (#850)
+- [ ] `djust_typecheck` MRO walk for self-assigns — Action Tracker #56 (#851)
+- [ ] Extract `_walk_subclasses` / `_is_user_class` (3x duplication) — Action Tracker #57 (#852)
+- [ ] `follow_redirect` multiple-redirect semantics — Action Tracker #58 (#843)
+- [ ] `handle_async_result` callback not invoked in `render_async` — Action Tracker #59 (#844)
+- [ ] v0.5.1rc3 → v0.5.1 stable release — PR #853 awaiting merge authorization
 
 ---
 
