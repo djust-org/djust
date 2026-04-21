@@ -997,6 +997,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._presence_group:
             await self.channel_layer.group_discard(self._presence_group, self.channel_name)
 
+        # Leave db_notify groups registered by NotificationMixin.listen()
+        db_notify_channels = getattr(self, "_db_notify_channels", None)
+        if db_notify_channels:
+            for ch in list(db_notify_channels):
+                try:
+                    await self.channel_layer.group_discard(
+                        f"djust_db_notify_{ch}", self.channel_name
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error leaving db_notify group for %s: %s", ch, e)
+
         # Clean up presence tracking if view supports it
         if self.view_instance and hasattr(self.view_instance, "untrack_presence"):
             try:
@@ -1301,6 +1312,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.channel_layer.group_add(self._presence_group, self.channel_name)
                 except Exception as e:
                     logger.warning("Error setting up presence group: %s", e)
+
+            # Join db_notify groups for every channel the view subscribed to
+            # via NotificationMixin.listen() during mount(). The groups are
+            # addressed per-channel (djust_db_notify_<channel>) so a NOTIFY
+            # on one channel never fans out to views listening on another.
+            self._db_notify_channels = set()
+            listen_channels = getattr(self.view_instance, "_listen_channels", None)
+            if listen_channels:
+                for ch in listen_channels:
+                    try:
+                        await self.channel_layer.group_add(
+                            f"djust_db_notify_{ch}", self.channel_name
+                        )
+                        self._db_notify_channels.add(ch)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("Error joining db_notify group for %s: %s", ch, e)
 
             # Start periodic tick if subclass overrides handle_tick
             tick_interval = getattr(view_class, "tick_interval", None)
@@ -3004,6 +3031,90 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "payload": event.get("payload", {}),
             }
         )
+
+    async def db_notify(self, event):
+        """Handle a PostgreSQL NOTIFY forwarded by ``PostgresNotifyListener``.
+
+        The listener calls ``group_send("djust_db_notify_<channel>", ...)``
+        when a NOTIFY arrives on the wire. Every consumer whose view
+        subscribed via ``self.listen(<channel>)`` receives this event.
+
+        Flow:
+          1. Dispatch a ``handle_info({"type": "db_notify", ...})`` call on
+             the view (runs under the render lock to serialize with
+             ticks and user events).
+          2. Re-sync state to Rust and emit VDOM patches via the same
+             ``source="broadcast"`` path as ``server_push``.
+        """
+        if not self.view_instance:
+            return
+
+        channel = event.get("channel", "")
+        payload = event.get("payload", {})
+        message = {"type": "db_notify", "channel": channel, "payload": payload}
+
+        try:
+            # Yield to user events: version interleaving is the same risk
+            # as server_push (#560).
+            if self._processing_user_event:
+                logger.debug(
+                    "[djust] db_notify on %s skipped — user event in progress",
+                    self.view_instance.__class__.__name__,
+                )
+                return
+
+            try:
+                await asyncio.wait_for(self._render_lock.acquire(), timeout=0.1)
+            except asyncio.TimeoutError:
+                logger.debug(
+                    "[djust] db_notify on %s skipped — render lock held",
+                    self.view_instance.__class__.__name__,
+                )
+                return
+
+            try:
+                handler = getattr(self.view_instance, "handle_info", None)
+                if handler and callable(handler):
+                    try:
+                        await sync_to_async(handler)(message)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "db_notify: handle_info raised on %s: %s",
+                            self.view_instance.__class__.__name__,
+                            exc,
+                        )
+                        return
+
+                if getattr(self.view_instance, "_skip_render", False):
+                    self.view_instance._skip_render = False
+                    await self._flush_push_events()
+                    await self._flush_flash()
+                    await self._flush_page_metadata()
+                    await self._send_noop()
+                    return
+
+                if hasattr(self.view_instance, "_sync_state_to_rust"):
+                    await sync_to_async(self.view_instance._sync_state_to_rust)()
+
+                html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+
+                if patches is not None:
+                    if isinstance(patches, str):
+                        patches = fast_json_loads(patches)
+                    await self._send_update(
+                        patches=patches,
+                        version=version,
+                        broadcast=True,
+                        source="broadcast",
+                    )
+                else:
+                    await self._flush_push_events()
+                    await self._flush_flash()
+                    await self._flush_page_metadata()
+            finally:
+                self._render_lock.release()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Error in db_notify: %s", e)
 
     async def _run_tick(self, interval_ms):
         """

@@ -40,6 +40,7 @@ from .mixins import (
     FlashMixin,
     PageMetadataMixin,
     WaiterMixin,
+    NotificationMixin,
 )
 
 # Configure logger
@@ -89,6 +90,7 @@ class LiveView(
     PageMetadataMixin,
     WaiterMixin,
     AsyncWorkMixin,
+    NotificationMixin,
     View,
 ):
     """

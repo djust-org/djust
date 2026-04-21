@@ -36,6 +36,8 @@ from .streaming import StreamingMixin
 from .uploads import UploadMixin
 from .mixins.flash import FlashMixin
 from .mixins.page_metadata import PageMetadataMixin
+from .mixins.notifications import NotificationMixin
+from .db import notify_on_save, send_pg_notify
 
 # Import Rust functions
 try:
@@ -252,4 +254,8 @@ __all__ = [
     "on_mount",
     # Rust components (optional)
     "rust_components",
+    # Database change notifications (pg_notify bridge)
+    "NotificationMixin",
+    "notify_on_save",
+    "send_pg_notify",
 ]
