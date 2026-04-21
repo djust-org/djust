@@ -68,6 +68,7 @@ wheels/
 .claude/
 .pipeline-log.md
 .pipeline-state/
+.customer-names
 pr/
 outreach/
 packages/

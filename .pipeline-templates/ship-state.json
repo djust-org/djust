@@ -1,0 +1,151 @@
+{
+  "pipeline_type": "ship",
+  "task_description": "",
+  "branch_name": "",
+  "pr_target_branch": "main",
+  "project_path": "",
+  "started_at": "",
+  "completed_at": null,
+  "current_stage": 1,
+  "stages": {
+    "1": {
+      "name": "Inventory Changes",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {"action": "git status — list all modified, added, deleted, and untracked files", "done": false, "mandatory": true},
+        {"action": "git diff --stat — summarize scope of changes", "done": false},
+        {"action": "git diff — read the full diff to understand what changed", "done": false, "mandatory": true},
+        {"action": "git log --oneline -5 — recent commits for context", "done": false},
+        {"action": "classify changes: CODE_CHANGES or DOCS_ONLY", "done": false, "mandatory": true},
+        {"action": "write summary of all changes to .pipeline-state/<branch>-changes.txt", "done": false, "mandatory": true},
+        {"action": "output INVENTORY_COMPLETE", "done": false, "mandatory": true}
+      ]
+    },
+    "2": {
+      "name": "Test Execution",
+      "status": "pending",
+      "verdict": null,
+      "skip_if": "DOCS_ONLY",
+      "checklist": [
+        {"action": "run full test suite (read-only, no source modifications)", "done": false, "mandatory": true},
+        {"action": "report pass/fail counts", "done": false},
+        {"action": "if tests fail: stop — output TESTS_FAILED with details", "done": false},
+        {"action": "output TESTS_PASSED or TESTS_FAILED", "done": false, "mandatory": true}
+      ]
+    },
+    "3": {
+      "name": "Self-Review",
+      "status": "pending",
+      "verdict": null,
+      "skip_if": "DOCS_ONLY",
+      "checklist": [
+        {"action": "re-read full diff as if you are a code reviewer", "done": false, "mandatory": true},
+        {"action": "correctness: does it do what it claims?", "done": false},
+        {"action": "edge cases: empty inputs, large data, concurrent access?", "done": false},
+        {"action": "check auto-reject triggers (per profile and generic: print vs logging, except:pass, no tests, phantom modules, stub code)", "done": false, "mandatory": true},
+        {"action": "scrutinize every code example in new/changed docs with the same security rigor as production code — doc examples are copy-pasted by users and inherit the production trust boundary", "done": false, "mandatory": true},
+        {"action": "trace every contract boundary where server/backend data reaches the client — does ANY exception message, error string, or internal path leak identifying info (ARNs, bucket names, endpoints, file paths)? Raw exceptions surfaced via response bodies, WebSocket error frames, or template context are the main leak vectors", "done": false, "mandatory": true},
+        {"action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) — djust sits alongside multiple private downstream apps (NYC Claims, Rezme, Ridgeview MHP, JBM, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines — they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.", "done": false, "mandatory": true},
+        {"action": "test coverage: are new code paths tested?", "done": false},
+        {"action": "code quality: broad except, unused params, dead code", "done": false},
+        {"action": "if issues found: fix them now, re-run tests", "done": false},
+        {"action": "output REVIEW_PASSED or REVIEW_FAILED", "done": false, "mandatory": true}
+      ]
+    },
+    "4": {
+      "name": "Security Check",
+      "status": "pending",
+      "verdict": null,
+      "skip_if": "DOCS_ONLY",
+      "checklist": [
+        {"action": "read .pipeline-state/<branch>-changes.txt for changed files", "done": false},
+        {"action": "scan changed files for security patterns (per profile: secrets, injection, XSS, etc.)", "done": false},
+        {"action": "check for XSS in any HTML output", "done": false},
+        {"action": "output SECURITY_PASSED or SECURITY_FAILED", "done": false, "mandatory": true}
+      ]
+    },
+    "5": {
+      "name": "Documentation",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {"action": "add/update docstrings for new/modified public APIs", "done": false},
+        {"action": "update CHANGELOG.md if one exists", "done": false},
+        {"action": "update any affected documentation files", "done": false},
+        {"action": "output DOCS_UPDATED or DOCS_SKIPPED", "done": false, "mandatory": true}
+      ]
+    },
+    "6": {
+      "name": "Commit & PR",
+      "status": "pending",
+      "verdict": null,
+      "checklist": [
+        {"action": "read .pipeline-state/<branch>-changes.txt for list of files", "done": false},
+        {"action": "git remote -v — verify github remote exists", "done": false},
+        {"action": "create branch if not already on a feature branch", "done": false},
+        {"action": "git add specific files (not git add -A)", "done": false},
+        {"action": "git diff --check — no conflict markers", "done": false},
+        {"action": "commit with conventional prefix (feat:/fix:/refactor:/docs:/chore:)", "done": false, "mandatory": true},
+        {"action": "git push -u origin", "done": false},
+        {"action": "gh pr create with summary, test plan, and file list", "done": false},
+        {"action": "verify PR body against actual diff — no phantom features", "done": false, "mandatory": true},
+        {"action": "output PR_CREATED/PR_EXISTS/PR_SKIPPED with URL", "done": false, "mandatory": true}
+      ]
+    },
+    "7": {
+      "name": "Code Review",
+      "status": "pending",
+      "verdict": null,
+      "run_as": "subagent",
+      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists. Step 2: Review for correctness, security (XSS, injection, secrets exposure), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3: Run project test suite, report pass/fail. Step 4: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 5 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review with checklist>'. If REQUEST_CHANGES use --request-changes. Step 6: Output verdict.",
+      "checklist": [
+        {"action": "git diff against target branch", "done": false},
+        {"action": "review: correctness, security, testing, quality, docs, perf, architecture", "done": false, "mandatory": true},
+        {"action": "check auto-reject triggers", "done": false, "mandatory": true},
+        {"action": "run full test suite, report pass/fail", "done": false, "mandatory": true},
+        {"action": "post review to GitHub: gh pr review --comment with formatted checklist", "done": false, "mandatory": true},
+        {"action": "output APPROVE/REQUEST_CHANGES/COMMENT", "done": false, "mandatory": true}
+      ]
+    },
+    "8": {
+      "name": "Review Verdict",
+      "status": "pending",
+      "verdict": null,
+      "note": "If APPROVE, proceed to Merge. If REQUEST_CHANGES, fix issues, re-commit, re-push, re-run stage 7.",
+      "checklist": [
+        {"action": "if REQUEST_CHANGES: fix issues, re-commit, re-push, re-run stage 7", "done": false},
+        {"action": "if APPROVE: proceed to Merge", "done": false, "mandatory": true}
+      ]
+    },
+    "9": {
+      "name": "Merge PR",
+      "status": "pending",
+      "verdict": null,
+      "run_as": "subagent",
+      "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
+      "checklist": [
+        {"action": "verify CI green: gh pr checks", "done": false, "mandatory": true},
+        {"action": "gh pr merge --squash --delete-branch (do NOT self-approve)", "done": false, "mandatory": true},
+        {"action": "output PR_MERGED or MERGE_FAILED", "done": false, "mandatory": true}
+      ]
+    },
+    "10": {
+      "name": "Retrospective",
+      "status": "pending",
+      "verdict": null,
+      "run_as": "subagent",
+      "subagent_prompt": "Write retrospective for: {task_description}. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details. Rate quality 1-5, what went well, lessons learned, improvements. MANDATORY: Post retro as gh pr comment {pr_number} --body '<formatted retro>'. MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
+      "checklist": [
+        {"action": "rate quality 1-5", "done": false},
+        {"action": "what went well + lessons learned", "done": false},
+        {"action": "post retrospective to GitHub PR: gh pr comment", "done": false, "mandatory": true},
+        {"action": "append to .pipeline-log.md", "done": false, "mandatory": true},
+        {"action": "output RETRO_COMPLETE", "done": false, "mandatory": true}
+      ]
+    }
+  },
+  "pr_number": null,
+  "pr_url": null,
+  "rewind_count": 0
+}
