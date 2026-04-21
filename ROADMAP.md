@@ -31,7 +31,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Connection multiplexing | Pages with 5+ live sections need this to not waste connections | v0.6.0 |
 | **P2** | Dead View / Progressive Enhancement | 1.0 requirement for government/accessibility projects | v1.0.0 |
 | **P2** | Accessibility (ARIA/WCAG) | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
-| **P2** | Type-safe template validation | Catch template variable typos at CI — unique differentiator vs all competitors | v0.5.1 |
+| ~~**P2**~~ | ~~Type-safe template validation~~ ✅ Shipped in v0.5.1 (`manage.py djust_typecheck`) | ~~Catch template variable typos at CI — unique differentiator vs all competitors~~ | ~~v0.5.1~~ |
 | **P2** | Keep-Alive / `dj-activity` | Pre-render hidden routes, preserve state — React 19.2 parity | v0.7.0 |
 | **P2** | Streaming markdown renderer | Incremental markdown for LLM output — strongest AI vertical signal | v0.7.0 |
 | ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
@@ -749,7 +749,7 @@ class ProductView(LiveView):
 
 **Automatic dirty tracking** — Track which view attributes have changed since mount or the last event, exposing `self.changed_fields` and `self.is_dirty`. Template: `{% if is_dirty %}<button dj-click="save">Save changes</button>{% endif %}`. Use cases: "unsaved changes" warnings (`beforeunload`), conditional save buttons, optimized `handle_event` that skips work when nothing changed. Combined with selective re-rendering, dirty tracking is the foundation for efficient large views. ~60 lines Python.
 
-**Type-safe template validation (`manage.py djust_typecheck`)** — Static analysis that validates template variables against the view's `get_context_data()` return type at startup or CI time. The Rust template engine already parses templates into an AST — extract all variable references (`{{ user.name }}`, `{% if is_admin %}`) and verify they exist in the view's context. Catches typos like `{{ usre.name }}` before they hit production. API: `manage.py djust_typecheck` scans all LiveView templates and reports mismatches. Optional `strict_context = True` class attribute for per-view opt-in. ~200 lines Python + Rust AST extraction. *Neither Phoenix nor React catches template variable typos statically without TypeScript. This is a genuine differentiator — Python's dynamic typing makes template bugs the #1 source of "it renders blank and I don't know why" issues. Catching them at CI time transforms the debugging experience.*
+~~**Type-safe template validation (`manage.py djust_typecheck`)**~~ ✅ **Shipped in v0.5.1** — Python-side static analysis (walks LiveView subclasses, resolves each `template_name`, extracts referenced names via regex + AST extraction of class attrs / `self.x =` assigns / properties / literal `get_context_data` returns). Supports `{# djust_typecheck: noqa name #}` pragma, `strict_context = True` per-view opt-in, `DJUST_TEMPLATE_GLOBALS` setting. Flags: `--json`, `--strict`, `--app`, `--view`. 14 tests. See `docs/website/guides/typecheck.md`. *Chose pure Python regex+AST instead of Rust AST extraction — simpler to iterate and the perf headroom isn't needed for a CI check.*
 
 ~~**Multi-step form wizard primitive (`WizardMixin`)**~~ ✅ **Shipped in PR #632** (`python/djust/wizard.py`). Built-in support for multi-step forms (onboarding, checkout, surveys, registration) with step index management, per-step validation, back/forward navigation with state preservation, URL sync via `live_patch`, and `on_wizard_complete(step_data)` callback. API matches the original spec: `current_step`, `step_data`, `next_step()`, `prev_step()`. Retained in ROADMAP for historical context.
 
@@ -969,7 +969,7 @@ Open questions that inform future direction:
 | Prefetch on hover/intent | — | Remix prefetch | Not started | v0.7.0 |
 | **Keep-Alive / Activity** | — | **`<Activity>`** (19.2) | **Not started** | **v0.7.0** |
 | ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
-| **Type-safe template validation** | — | TypeScript | **Not started** | **v0.5.1** |
+| **Type-safe template validation** | — | TypeScript | ✅ Shipped (v0.5.1) | v0.5.1 |
 | **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
 | ~~**DB change notifications**~~ ✅ | ~~**PubSub + Ecto**~~ | — | **Shipped** | **v0.5.0** |
 | ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
@@ -1050,7 +1050,7 @@ High-impact areas for contributions:
 43. **Hot View Replacement** — State-preserving Python code reload in dev mode, ~200 lines Python
 44. **Server Actions (`@action`)** — React 19-style mutation handlers with auto pending/error states
 45. **Keyed for-loop change tracking** — Rust-side per-item change detection in `{% for %}` loops, ~200 lines Rust
-46. **Type-safe template validation** — Static analysis matching template vars to view context, ~200 lines Python + Rust
+46. ~~**Type-safe template validation**~~ ✅ **Shipped in v0.5.1** — `manage.py djust_typecheck` static analysis + `docs/website/guides/typecheck.md` guide + 14 tests.
 47. **Streaming markdown renderer** — Incremental Rust-side CommonMark parser for LLM streaming, ~500 lines Rust
 48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
 49. ~~**Database change notifications**~~ ✅ Shipped in v0.5.0 — PostgreSQL LISTEN/NOTIFY → LiveView push (`@notify_on_save`, `self.listen`, `handle_info`). See `docs/website/guides/database-notifications.md`.
