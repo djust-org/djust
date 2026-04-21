@@ -106,6 +106,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P1** | Consent envelope for remote control ([ADR-005](docs/adr/005-consent-envelope-for-remote-control.md)) | Security-critical primitive for support handoffs, accessibility caregivers, AI assist | v0.5.x |
 | **P0** | `AssistantMixin` + LLM provider abstraction ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 5, [ADR-003](docs/adr/003-llm-provider-abstraction.md), [ADR-004](docs/adr/004-undo-for-llm-driven-actions.md)) | Voice/chat-driven djust apps; market window is ~12 months; largest revenue angle | v0.5.x |
 | **P0** | AI-generated UIs with capture-and-promote ([ADR-006](docs/adr/006-ai-generated-uis-with-capture-and-promote.md)) | "User builds an app with an LLM" — v0.6.0 headline feature; lossless export to Python | v0.6.0 |
+| **P1** | Auto-generated HTTP API from `@event_handler` ([ADR-008](docs/adr/008-auto-generated-http-api-from-event-handlers.md)) | Opt-in `expose_api=True` turns handlers into `POST /djust/api/<view>/<handler>/` endpoints with OpenAPI schema — unlocks mobile, S2S, and AI-agent callers without duplicating logic | v0.7.0 |
 
 ---
 
