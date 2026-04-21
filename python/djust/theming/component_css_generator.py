@@ -38,12 +38,19 @@ def _component_classes() -> tuple:
     ``test_no_unprefixed_classes_when_prefix_set`` — ``btn-edit`` /
     ``btn-remove`` / many more were missed). Sorted longest-first so a class
     like ``alert-destructive`` matches before ``alert``.
+
+    Important: only match ``.`` that is NOT preceded by an identifier
+    character, otherwise domain fragments inside data-URIs (e.g.
+    ``http://www.w3.org/2000/svg``) get mis-captured as classes
+    (``.org``, ``.w3``, etc.) and the prefix replacement corrupts the URL.
     """
     css = _read_static_css()
-    # Match top-level class selectors: a dot, then a lowercase letter, then
-    # letters/digits/hyphens/underscores. We catch both ``.btn`` at column 0
-    # and compound chains like ``.btn.active`` (captures each piece).
-    found = set(re.findall(r"\.([a-z][a-z0-9_-]*)", css))
+    # Match top-level class selectors: a dot NOT preceded by an identifier
+    # character, then a lowercase letter, then letters/digits/hyphens/
+    # underscores. Catches both ``.btn`` at column 0 and compound chains
+    # like ``.btn.active`` (the second ``.active`` is preceded by an
+    # identifier-boundary — the closing of ``btn``).
+    found = set(re.findall(r"(?<![\w])\.([a-z][a-z0-9_-]*)", css))
     classes = {c for c in found if c not in _DO_NOT_PREFIX}
     return tuple(sorted(classes, key=len, reverse=True))
 

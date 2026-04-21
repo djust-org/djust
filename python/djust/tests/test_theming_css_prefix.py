@@ -148,6 +148,52 @@ class TestComponentCSSGeneration:
         assert ".dj-input::placeholder" in css
         assert ".dj-input:focus" in css
 
+    def test_data_uri_domains_are_not_mis_prefixed(self):
+        """Domain fragments inside data-URIs (e.g. http://www.w3.org/2000/svg)
+        must NOT be treated as class selectors — the ``.org``/``.w3`` in a
+        URL are NOT CSS classes. Regression from the auto-extracted
+        component-class list — PR #841 review."""
+        from djust.theming.component_css_generator import generate_component_css
+
+        css = generate_component_css("dj-")
+        # Neither the SVG namespace URL nor any other domain fragment
+        # should have been prefixed.
+        assert "http://www.w3.org/2000/svg" in css, (
+            "SVG namespace URL should pass through unchanged — found corruption: "
+            + next(
+                (
+                    line
+                    for line in css.splitlines()
+                    if "w3" in line and "prefix" not in line.lower()
+                ),
+                "(no line matched)",
+            )
+        )
+        assert "w3.dj-org" not in css
+        assert "www.dj-w3" not in css
+
+    def test_compound_state_classes_stay_unprefixed(self):
+        """Compound selectors like ``.wizard-step.completed`` toggle their
+        trailing state class from JS that doesn't know about the CSS prefix.
+        Those state classes must stay un-prefixed so the styles continue to
+        apply when JS adds/removes them. Regression from PR #841 review."""
+        from djust.theming.component_css_generator import generate_component_css
+
+        css = generate_component_css("dj-")
+        # ``.completed`` / ``.dragover`` / ``.required`` / ``.active`` are
+        # state classes JS toggles directly — they must NOT become
+        # ``.dj-completed`` etc. Pick a few that appear in components.css
+        # as the trailing chain of compound selectors.
+        for state_class in (".completed", ".active", ".dragover", ".required"):
+            dj_form = state_class.replace(".", ".dj-")
+            # Only assert the prefixed form is absent if the unprefixed form
+            # is actually used in the CSS (some states may not appear).
+            if state_class in css:
+                assert dj_form not in css, (
+                    f"State class {state_class} should stay unprefixed but was "
+                    f"rewritten to {dj_form}"
+                )
+
 
 # ---------------------------------------------------------------------------
 # 3. Theme CSS generator with prefix
