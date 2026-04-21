@@ -181,6 +181,11 @@ navigation:
         file: guides/services.md
         order: 11
         level: intermediate
+      - title: Database Notifications (pg_notify)
+        slug: database-notifications
+        file: guides/database-notifications.md
+        order: 11.5
+        level: advanced
       - title: PWA
         slug: pwa
         file: guides/pwa.md

@@ -34,7 +34,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Type-safe template validation | Catch template variable typos at CI — unique differentiator vs all competitors | v0.5.1 |
 | **P2** | Keep-Alive / `dj-activity` | Pre-render hidden routes, preserve state — React 19.2 parity | v0.7.0 |
 | **P2** | Streaming markdown renderer | Incremental markdown for LLM output — strongest AI vertical signal | v0.7.0 |
-| **P1** | Database change notifications (pg_notify) | PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards | v0.5.0 |
+| ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
 | ~~**P1**~~ | ~~Virtual/windowed lists (`dj-virtual`)~~ ✅ | ~~DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps~~ | v0.5.0 |
 | **P2** | Multi-step wizard (`WizardMixin`) | #2 most common UI pattern after CRUD — no framework has this natively | v0.5.1 |
 | **P2** | Error overlay (dev mode) | In-browser error display like Next.js/Vite — faster debugging loop | v0.5.1 |
@@ -666,7 +666,7 @@ class Button(LiveComponent):
 
 ~~**Rust template engine parity**~~ ✅ **(v0.5.0)** — ~~Close the remaining gaps: model attribute access via PyO3 `getattr` fallback, `&quot;` escaping in attribute context, broader custom tag handler support.~~ Shipped as a single PR: PyO3 `getattr` fallback with PyObject sidecar on `Context` (templates now reference Django models directly), dedicated `html_escape_attr` split with parse-time `in_attr` classification on every `Node::Variable`, and `register_assign_tag_handler()` for context-mutating tags (returns `dict[str, Any]` merged into context). Known limitations left as future work: loader access for block handlers (2b) and parent-tag propagation for nested handlers (2c).
 
-**Database change notifications (PostgreSQL LISTEN/NOTIFY → LiveView push)** — Subscribe to PostgreSQL NOTIFY channels and automatically push updates to connected LiveViews when database rows change. `self.listen('table_changes', channel='orders_updated')` in mount, `def handle_info(self, message)` receives the notification payload. Combined with Django signals or database triggers, this creates truly reactive UIs where a change in one user's session (or a Celery task, or a management command) instantly reflects in all connected views without any explicit broadcasting code. Phoenix achieves this via PubSub + Ecto; Django has no built-in equivalent, but PostgreSQL's `LISTEN/NOTIFY` is a perfect fit. Implementation: async listener on the Channels layer that bridges `pg_notify` → `channel_layer.group_send()`. Optional `@notify_on_save` model mixin that auto-sends NOTIFY on `post_save`. ~150 lines Python. *This is the killer feature for dashboards, admin panels, and collaborative apps — "change the database, all connected users see it instantly" with zero explicit pub/sub wiring. No other Python framework has this built-in. Phoenix gets it implicitly from Ecto's PubSub; Rails has it via ActionCable + PostgreSQL triggers but it's not first-class. Making this a one-liner in djust is a genuine adoption driver.*
+~~**Database change notifications (PostgreSQL LISTEN/NOTIFY → LiveView push)**~~ ✅ **Shipped in v0.5.0** — `python/djust/db/decorators.py`, `python/djust/db/notifications.py`, `python/djust/mixins/notifications.py`. `@notify_on_save` decorator hooks `post_save` / `post_delete` → `pg_notify`; `self.listen(channel)` in `mount()` joins the `djust_db_notify_<channel>` Channels group; `handle_info(message)` receives `{"type": "db_notify", "channel": ..., "payload": ...}`. Process-wide `PostgresNotifyListener` on a dedicated `psycopg.AsyncConnection` (outside Django's pool, auto-reconnect on drop). Channel names strictly validated (`^[a-z_][a-z0-9_]{0,62}$`) — load-bearing because Postgres NOTIFY takes no bind parameters for the channel. `send_pg_notify()` helper for Celery tasks / management commands. See `docs/website/guides/database-notifications.md`.
 
 ```python
 # Target API
@@ -962,7 +962,7 @@ Open questions that inform future direction:
 | ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
 | **Type-safe template validation** | — | TypeScript | **Not started** | **v0.5.1** |
 | **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
-| **DB change notifications** | **PubSub + Ecto** | — | **Not started** | **v0.5.0** |
+| ~~**DB change notifications**~~ ✅ | ~~**PubSub + Ecto**~~ | — | **Shipped** | **v0.5.0** |
 | ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
 | **Multi-step wizard** | — | **`react-hook-form`** | **Not started** | **v0.5.1** |
 | **Paste event handling** | — | **`onPaste`** | **Not started** | **v0.4.1** |
@@ -1044,7 +1044,7 @@ High-impact areas for contributions:
 46. **Type-safe template validation** — Static analysis matching template vars to view context, ~200 lines Python + Rust
 47. **Streaming markdown renderer** — Incremental Rust-side CommonMark parser for LLM streaming, ~500 lines Rust
 48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
-49. **Database change notifications** — PostgreSQL LISTEN/NOTIFY → LiveView push, ~150 lines Python
+49. ~~**Database change notifications**~~ ✅ Shipped in v0.5.0 — PostgreSQL LISTEN/NOTIFY → LiveView push (`@notify_on_save`, `self.listen`, `handle_info`). See `docs/website/guides/database-notifications.md`.
 50. ~~**Virtual/windowed lists**~~ ✅ Shipped in v0.5.0 — DOM virtualization for large lists (`29-virtual-list.js`, fixed-height v0.5.0; variable-height v0.5.1)
 51. **Multi-step wizard (`WizardMixin`)** — Per-step validation, URL sync, progress, ~200 lines Python + template tags
 52. **i18n live language switching** — Switch locale without page reload, ~60 lines Python
