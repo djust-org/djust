@@ -244,6 +244,21 @@ def test_unique_id_uses_class_name_slug():
     assert v.unique_id().startswith("djust-myfancyview-")
 
 
+def test_unique_id_resets_per_render_via_get_context_data():
+    """``get_context_data`` resets the counter so IDs are stable across renders."""
+
+    class V(LiveView):
+        pass
+
+    v = V()
+    # Simulate two render cycles; each triggers get_context_data.
+    first_render = [v.unique_id() for _ in range(3)]
+    v._cached_context = None  # invalidate cache so reset fires
+    v.get_context_data()
+    second_render = [v.unique_id() for _ in range(3)]
+    assert first_render == second_render
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # provide_context / consume_context
 # ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +317,25 @@ def test_clear_context_providers():
     v.clear_context_providers()
     assert v.consume_context("theme") is None
     assert v.consume_context("locale") is None
+
+
+def test_component_parent_wired_for_context_chain_walk():
+    """``LiveComponent._set_parent`` wires ``_djust_context_parent`` (v0.5.1)."""
+    from djust.components.base import LiveComponent
+
+    class ParentView(LiveView):
+        pass
+
+    class MyComponent(LiveComponent):
+        def render(self, assigns):
+            return ""
+
+    parent = ParentView()
+    parent.provide_context("theme", "dark")
+    component = MyComponent()
+    component.set_parent(parent)
+    # Component now sees the theme through the parent chain.
+    assert component.consume_context("theme") == "dark"
 
 
 def test_consume_returns_default_when_parent_has_no_providers():
