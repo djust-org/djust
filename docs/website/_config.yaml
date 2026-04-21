@@ -221,6 +221,11 @@ navigation:
         file: guides/error-overlay.md
         order: 16
         level: beginner
+      - title: Type-Safe Template Validation
+        slug: typecheck
+        file: guides/typecheck.md
+        order: 17
+        level: intermediate
 
   - title: Testing
     slug: testing

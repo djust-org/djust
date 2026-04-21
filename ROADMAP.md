@@ -31,7 +31,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Connection multiplexing | Pages with 5+ live sections need this to not waste connections | v0.6.0 |
 | **P2** | Dead View / Progressive Enhancement | 1.0 requirement for government/accessibility projects | v1.0.0 |
 | **P2** | Accessibility (ARIA/WCAG) | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
-| **P2** | Type-safe template validation | Catch template variable typos at CI — unique differentiator vs all competitors | v0.5.1 |
+| ~~**P2**~~ | ~~Type-safe template validation~~ ✅ Shipped in v0.5.1 (`manage.py djust_typecheck`) | ~~Catch template variable typos at CI — unique differentiator vs all competitors~~ | ~~v0.5.1~~ |
 | **P2** | Keep-Alive / `dj-activity` | Pre-render hidden routes, preserve state — React 19.2 parity | v0.7.0 |
 | **P2** | Streaming markdown renderer | Incremental markdown for LLM output — strongest AI vertical signal | v0.7.0 |
 | ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
@@ -719,7 +719,7 @@ async def test_search_with_debounce(self):
 
 ~~**Error overlay (development mode)**~~ ✅ **Shipped in v0.5.1** — `36-error-overlay.js` renders a dev-only full-screen panel on `djust:error`. Shows the error message, triggering event, traceback, hint, and validation details. Gated on `window.DEBUG_MODE` so production ships nothing. 10 JSDOM tests. See `docs/website/guides/error-overlay.md`.
 
-**`@computed` decorator for derived state** — (Moved from v0.5.0) Memoize derived values that depend on other state, re-computing only when dependencies change. React's `useMemo` equivalent.
+~~**`@computed` decorator for derived state**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `@computed("dep1", "dep2")` memoizes derived values keyed on shallow-fingerprint of listed deps; plain `@computed` retains property semantics. See `python/djust/decorators.py`.
 
 ```python
 from djust.decorators import computed
@@ -733,23 +733,23 @@ class ProductView(LiveView):
 
 ~~**`dj-lazy` — Lazy component loading**~~ ✅ **Lazy LiveView hydration shipped in PR #54** (`python/djust/static/djust/src/13-lazy-hydration.js`). `<div dj-view="..." dj-lazy>` (and `dj-lazy="click|hover|idle"`) defers WebSocket connection + LiveView mount until the element enters the viewport (or the named trigger fires). Note: this covers full LiveView hydration — deferred rendering of *individual LiveComponent instances* within an already-mounted view is a narrower variant that remains unshipped and can be picked up if a user actually needs it. Retained in ROADMAP for completeness.
 
-**Component context sharing** — (Moved from v0.5.0) React's Context API equivalent. `self.provide_context('theme', self.theme)` in a parent, `self.consume_context('theme')` in descendants. ~80 lines Python.
+~~**Component context sharing**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `self.provide_context(key, value)` / `self.consume_context(key, default)` walk the `_djust_context_parent` chain. Scoped per render tree. See `python/djust/live_view.py`.
 
-**`dj-trigger-action` — Bridge live validation to standard form POST** — (Moved from v0.5.0) Trigger standard HTML form submission after LiveView validation passes. Essential for OAuth flows, payment gateways. ~30 lines JS.
+~~**`dj-trigger-action` — Bridge live validation to standard form POST**~~ ✅ **Shipped in v0.5.1rc1** (Form & submit polish batch) — `self.trigger_submit("#form-id")` pushes an event that submits the target form's native `.submit()` after validation. Form must opt in via `dj-trigger-action`. See `python/djust/mixins/push_events.py` and `python/djust/static/djust/src/34-form-polish.js`.
 
-**Scoped loading states (`dj-loading`)** — (Moved from v0.5.0) Show loading indicators scoped to specific events. `<div dj-loading="search">Searching...</div>` only shows while the `search` event is in-flight.
+~~**Scoped loading states (`dj-loading`)**~~ ✅ **Shipped in v0.5.1rc1** (Form & submit polish batch) — `<div dj-loading="search">` shorthand auto-hides on register and shows only during in-flight `search` events. Coexists with existing `dj-loading.*` modifiers. See `python/djust/static/djust/src/10-loading-states.js`.
 
 ~~**Error boundaries**~~ ✅ **Shipped via the v0.5.0 components consolidation (PR #773)** — `python/djust/components/components/error_boundary.py` provides a style-agnostic error boundary for catching rendering errors within a LiveComponent subtree. See the components reference docs for usage.
 
 ~~**Nested form handling (`inputs_for`)**~~ ✅ **Shipped in v0.5.1** — `{% inputs_for formset as form %}` block tag in `djust.templatetags.djust_formsets` pairs with `djust.formsets.FormSetHelpersMixin` (and the direct `add_row` / `remove_row` helpers) for add/remove event handlers. Respects `max_num` / `absolute_max` caps; uses Django's standard `DELETE=on` protocol on remove. 16 tests in `python/djust/tests/test_formsets.py`. (commit 335cce26)
 
-**Stable component IDs (React 19 `useId` equivalent)** — (Moved from v0.5.0) `self.unique_id(suffix)` returning deterministic IDs stable across renders. ~30 lines Python.
+~~**Stable component IDs (React 19 `useId` equivalent)**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `self.unique_id(suffix="")` returns `djust-<viewslug>-<n>[-<suffix>]`, deterministic per logical position, reset at render boundaries. See `python/djust/live_view.py`.
 
 ~~**Native `<dialog>` element integration**~~ ✅ **Shipped in v0.5.1** — `dj-dialog="open|close"` attribute, MutationObserver-driven sync, 8 JSDOM tests. See `python/djust/static/djust/src/35-dj-dialog.js`.
 
-**Automatic dirty tracking** — Track which view attributes have changed since mount or the last event, exposing `self.changed_fields` and `self.is_dirty`. Template: `{% if is_dirty %}<button dj-click="save">Save changes</button>{% endif %}`. Use cases: "unsaved changes" warnings (`beforeunload`), conditional save buttons, optimized `handle_event` that skips work when nothing changed. Combined with selective re-rendering, dirty tracking is the foundation for efficient large views. ~60 lines Python.
+~~**Automatic dirty tracking**~~ ✅ **Shipped in v0.5.1rc1** (State & computation primitives batch) — `self.is_dirty` / `self.changed_fields` / `self.mark_clean()` track which public view attrs differ from the post-mount baseline. Respects `static_assigns` and skips private attrs. See `python/djust/live_view.py`.
 
-**Type-safe template validation (`manage.py djust_typecheck`)** — Static analysis that validates template variables against the view's `get_context_data()` return type at startup or CI time. The Rust template engine already parses templates into an AST — extract all variable references (`{{ user.name }}`, `{% if is_admin %}`) and verify they exist in the view's context. Catches typos like `{{ usre.name }}` before they hit production. API: `manage.py djust_typecheck` scans all LiveView templates and reports mismatches. Optional `strict_context = True` class attribute for per-view opt-in. ~200 lines Python + Rust AST extraction. *Neither Phoenix nor React catches template variable typos statically without TypeScript. This is a genuine differentiator — Python's dynamic typing makes template bugs the #1 source of "it renders blank and I don't know why" issues. Catching them at CI time transforms the debugging experience.*
+~~**Type-safe template validation (`manage.py djust_typecheck`)**~~ ✅ **Shipped in v0.5.1** — Python-side static analysis (walks LiveView subclasses, resolves each `template_name`, extracts referenced names via regex + AST extraction of class attrs / `self.x =` assigns / properties / literal `get_context_data` returns). Supports `{# djust_typecheck: noqa name #}` pragma, `strict_context = True` per-view opt-in, `DJUST_TEMPLATE_GLOBALS` setting. Flags: `--json`, `--strict`, `--app`, `--view`. 14 tests. See `docs/website/guides/typecheck.md`. *Chose pure Python regex+AST instead of Rust AST extraction — simpler to iterate and the perf headroom isn't needed for a CI check.*
 
 ~~**Multi-step form wizard primitive (`WizardMixin`)**~~ ✅ **Shipped in PR #632** (`python/djust/wizard.py`). Built-in support for multi-step forms (onboarding, checkout, surveys, registration) with step index management, per-step validation, back/forward navigation with state preservation, URL sync via `live_patch`, and `on_wizard_complete(step_data)` callback. API matches the original spec: `current_step`, `step_data`, `next_step()`, `prev_step()`. Retained in ROADMAP for historical context.
 
@@ -969,7 +969,7 @@ Open questions that inform future direction:
 | Prefetch on hover/intent | — | Remix prefetch | Not started | v0.7.0 |
 | **Keep-Alive / Activity** | — | **`<Activity>`** (19.2) | **Not started** | **v0.7.0** |
 | ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
-| **Type-safe template validation** | — | TypeScript | **Not started** | **v0.5.1** |
+| **Type-safe template validation** | — | TypeScript | ✅ Shipped (v0.5.1) | v0.5.1 |
 | **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
 | ~~**DB change notifications**~~ ✅ | ~~**PubSub + Ecto**~~ | — | **Shipped** | **v0.5.0** |
 | ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
@@ -1050,7 +1050,7 @@ High-impact areas for contributions:
 43. **Hot View Replacement** — State-preserving Python code reload in dev mode, ~200 lines Python
 44. **Server Actions (`@action`)** — React 19-style mutation handlers with auto pending/error states
 45. **Keyed for-loop change tracking** — Rust-side per-item change detection in `{% for %}` loops, ~200 lines Rust
-46. **Type-safe template validation** — Static analysis matching template vars to view context, ~200 lines Python + Rust
+46. ~~**Type-safe template validation**~~ ✅ **Shipped in v0.5.1** — `manage.py djust_typecheck` static analysis + `docs/website/guides/typecheck.md` guide + 14 tests.
 47. **Streaming markdown renderer** — Incremental Rust-side CommonMark parser for LLM streaming, ~500 lines Rust
 48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
 49. ~~**Database change notifications**~~ ✅ Shipped in v0.5.0 — PostgreSQL LISTEN/NOTIFY → LiveView push (`@notify_on_save`, `self.listen`, `handle_info`). See `docs/website/guides/database-notifications.md`.
