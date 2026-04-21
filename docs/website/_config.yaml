@@ -191,6 +191,11 @@ navigation:
         file: guides/pwa.md
         order: 12
         level: intermediate
+      - title: Service Worker (Instant Shell + Reconnection Bridge)
+        slug: service-worker
+        file: guides/service-worker.md
+        order: 12.5
+        level: advanced
       - title: Deployment
         slug: deployment
         file: guides/deployment.md

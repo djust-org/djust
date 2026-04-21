@@ -691,7 +691,7 @@ class OrderDashboardView(LiveView):
 
 ~~**`dj-viewport-top` / `dj-viewport-bottom` — Bidirectional infinite scroll**~~ ✅ **Shipped in v0.5.0** — `python/djust/static/djust/src/30-infinite-scroll.js` and `stream()` `limit=` kwarg on `StreamsMixin`. Once-per-entry firing semantics matches Phoenix; re-arm via `djust.resetViewport(container)` or by replacing the sentinel child. `stream_prune` op trims children from the opposite edge so chat / feed / log patterns cap DOM growth. See `docs/website/guides/large-lists.md`.
 
-**Service worker core improvements** — Instant page shell (cached head/nav/footer served instantly, swap `<main>` on response). WebSocket reconnection bridge (buffer events in SW during disconnect, replay on reconnect).
+~~**Service worker core improvements**~~ ✅ **Shipped in v0.5.0** — Opt-in SW at `python/djust/static/djust/service-worker.js` registered via `djust.registerServiceWorker({ instantShell: true, reconnectionBridge: true })`. Instant page shell (SW caches first-navigate response split into shell + main; subsequent navigates serve shell immediately and swap `<main>` innerHTML via `X-Djust-Main-Only: 1` header handled by `djust.middleware.DjustMainOnlyMiddleware`). WebSocket reconnection bridge (client wraps `sendMessage` to `postMessage` buffered payloads to SW during disconnect, capped at 50/connection; replays via `DJUST_DRAIN` on reconnect). 17 tests (10 JS + 7 Python). See `docs/website/guides/service-worker.md`.
 
 ### Milestone: v0.5.1 — Developer Experience, Testing & Form Patterns
 
