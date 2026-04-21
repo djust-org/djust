@@ -36,7 +36,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Streaming markdown renderer | Incremental markdown for LLM output — strongest AI vertical signal | v0.7.0 |
 | ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
 | ~~**P1**~~ | ~~Virtual/windowed lists (`dj-virtual`)~~ ✅ | ~~DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps~~ | v0.5.0 |
-| **P2** | Multi-step wizard (`WizardMixin`) | #2 most common UI pattern after CRUD — no framework has this natively | v0.5.1 |
+| ~~**P2**~~ | ~~Multi-step wizard (`WizardMixin`)~~ ✅ Shipped in PR #632 (`python/djust/wizard.py`) | ~~#2 most common UI pattern after CRUD — no framework has this natively~~ | ~~v0.5.1~~ |
 | **P2** | Error overlay (dev mode) | In-browser error display like Next.js/Vite — faster debugging loop | v0.5.1 |
 | **P2** | WebSocket compression | `permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available | v0.6.0 |
 | **P2** | Static asset tracking (`dj-track-static`) | Detect stale JS/CSS on reconnect, prompt reload — Phoenix `phx-track-static` parity | v0.6.0 |
@@ -731,7 +731,7 @@ class ProductView(LiveView):
         return subtotal * (1 + self.tax_rate)
 ```
 
-**`dj-lazy` — Lazy component loading** — (Moved from v0.5.0) Defer rendering of below-fold or hidden components until they enter the viewport via IntersectionObserver. ~40 lines JS + Python decorator.
+~~**`dj-lazy` — Lazy component loading**~~ ✅ **Lazy LiveView hydration shipped in PR #54** (`python/djust/static/djust/src/13-lazy-hydration.js`). `<div dj-view="..." dj-lazy>` (and `dj-lazy="click|hover|idle"`) defers WebSocket connection + LiveView mount until the element enters the viewport (or the named trigger fires). Note: this covers full LiveView hydration — deferred rendering of *individual LiveComponent instances* within an already-mounted view is a narrower variant that remains unshipped and can be picked up if a user actually needs it. Retained in ROADMAP for completeness.
 
 **Component context sharing** — (Moved from v0.5.0) React's Context API equivalent. `self.provide_context('theme', self.theme)` in a parent, `self.consume_context('theme')` in descendants. ~80 lines Python.
 
@@ -739,7 +739,7 @@ class ProductView(LiveView):
 
 **Scoped loading states (`dj-loading`)** — (Moved from v0.5.0) Show loading indicators scoped to specific events. `<div dj-loading="search">Searching...</div>` only shows while the `search` event is in-flight.
 
-**Error boundaries** — (Moved from v0.5.0) If a LiveComponent raises, isolate failure to that component with error fallback UI while the rest of the page continues working.
+~~**Error boundaries**~~ ✅ **Shipped via the v0.5.0 components consolidation (PR #773)** — `python/djust/components/components/error_boundary.py` provides a style-agnostic error boundary for catching rendering errors within a LiveComponent subtree. See the components reference docs for usage.
 
 **Nested form handling (`inputs_for`)** — (Moved from v0.5.0) Django formset/inline-formset patterns with LiveView-aware wrappers. Auto add/remove, index maintenance across patches.
 
@@ -751,7 +751,7 @@ class ProductView(LiveView):
 
 **Type-safe template validation (`manage.py djust_typecheck`)** — Static analysis that validates template variables against the view's `get_context_data()` return type at startup or CI time. The Rust template engine already parses templates into an AST — extract all variable references (`{{ user.name }}`, `{% if is_admin %}`) and verify they exist in the view's context. Catches typos like `{{ usre.name }}` before they hit production. API: `manage.py djust_typecheck` scans all LiveView templates and reports mismatches. Optional `strict_context = True` class attribute for per-view opt-in. ~200 lines Python + Rust AST extraction. *Neither Phoenix nor React catches template variable typos statically without TypeScript. This is a genuine differentiator — Python's dynamic typing makes template bugs the #1 source of "it renders blank and I don't know why" issues. Catching them at CI time transforms the debugging experience.*
 
-**Multi-step form wizard primitive (`WizardMixin`)** — Built-in support for multi-step forms (onboarding flows, checkout, surveys, registration). `WizardMixin` manages step index, per-step validation, back/forward navigation with state preservation, and URL sync via `live_patch` so each step is bookmarkable. API: `steps = [Step1Form, Step2Form, Step3Form]` class attribute, `self.current_step`, `self.next_step()`, `self.prev_step()`, `self.step_data` (accumulated across steps), `self.is_complete`. Per-step validation runs the current step's Django form before advancing — if invalid, errors display and the user stays on that step. Template helpers: `{% dj_wizard_progress %}` renders a step indicator, `{% dj_wizard_nav %}` renders back/next buttons. On final step, `self.wizard_complete(all_data)` is called with merged data from all steps. ~200 lines Python + template tags. *Multi-step forms are the #2 most common UI pattern after CRUD (every SaaS onboarding, every checkout flow, every survey tool). Currently, every djust developer builds this from scratch with manual step tracking, per-step validation, and back-button state management. Phoenix doesn't have this either — making it a djust differentiator. React has `react-hook-form` multi-step patterns but nothing built-in. A first-class wizard primitive that integrates with Django forms, `live_patch` URLs, and VDOM patching is a genuine value-add that no framework offers natively.*
+~~**Multi-step form wizard primitive (`WizardMixin`)**~~ ✅ **Shipped in PR #632** (`python/djust/wizard.py`). Built-in support for multi-step forms (onboarding, checkout, surveys, registration) with step index management, per-step validation, back/forward navigation with state preservation, URL sync via `live_patch`, and `on_wizard_complete(step_data)` callback. API matches the original spec: `current_step`, `step_data`, `next_step()`, `prev_step()`. Retained in ROADMAP for historical context.
 
 ```python
 # Target API
@@ -929,12 +929,12 @@ Open questions that inform future direction:
 | **Testing utilities** | **`LiveViewTest`** | **Testing Library** | **Basic** (`LiveViewTestClient`) | **v0.5.1** |
 | **Error overlay (dev)** | Error page | **Next.js overlay** | **Not started** | **v0.5.1** |
 | Computed/derived state | — | `useMemo` | Not started | v0.5.1 |
-| Lazy component loading | — | `React.lazy()` | Not started | v0.5.1 |
+| Lazy component loading | — | `React.lazy()` | ✅ Shipped (LiveView-level, PR #54) | v0.5.1 |
 | Component context sharing | — | `useContext` | Not started | v0.5.1 |
 | Trigger form action | `phx-trigger-action` | — | Not started | v0.5.1 |
 | Nested forms | `inputs_for/4` | Formik nested | Not started | v0.5.1 |
 | Scoped loading states | `phx-loading` | Suspense per-query | Not started | v0.5.1 |
-| Error boundaries | — | `<ErrorBoundary>` | Not started | v0.5.1 |
+| Error boundaries | — | `<ErrorBoundary>` | ✅ Shipped (PR #773) | v0.5.1 |
 | **Native `<dialog>`** | — | — | **Not started** | **v0.5.1** |
 | **Stable component IDs** | — | **`useId`** | **Not started** | **v0.5.1** |
 | **Form status awareness** | — | **`useFormStatus`** | **Not started** | **v0.8.0** |
@@ -973,7 +973,7 @@ Open questions that inform future direction:
 | **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
 | ~~**DB change notifications**~~ ✅ | ~~**PubSub + Ecto**~~ | — | **Shipped** | **v0.5.0** |
 | ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
-| **Multi-step wizard** | — | **`react-hook-form`** | **Not started** | **v0.5.1** |
+| **Multi-step wizard** | — | **`react-hook-form`** | ✅ **Shipped (PR #632)** | **v0.5.1** |
 | **Paste event handling** | — | **`onPaste`** | **Not started** | **v0.4.1** |
 | ~~**Standalone `{% live_input %}` template tag**~~ | — | — | ✅ **Shipped (#650, PR #668)** | v0.4.1 |
 | ~~**WebSocket Origin validation (CSWSH fix)**~~ | ~~`check_origin/2`~~ | — | ✅ **Shipped (#653, PR #658)** | v0.4.1 |
@@ -1021,7 +1021,7 @@ High-impact areas for contributions:
 18. **`handle_params` callback** — URL param change handler, ~50 lines Python
 19. ~~**`dj-mounted`**~~ ✅
 20. **`dj-sticky-scroll`** — Auto-scroll chat/log containers, ~40 lines JS
-21. **`dj-lazy` viewport loading** — Lazy component rendering, ~40 lines JS
+21. ~~**`dj-lazy` viewport loading**~~ ✅ **Shipped (PR #54)** — lazy LiveView hydration (viewport/click/hover/idle) in `13-lazy-hydration.js`
 22. **Multi-tab sync** — BroadcastChannel API integration, ~60 lines JS
 23. **View Transitions API** — Animated page transitions, ~60 lines JS
 24a. **`dj-paste`** — Paste event handling (text + images), ~40 lines JS
@@ -1055,7 +1055,7 @@ High-impact areas for contributions:
 48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
 49. ~~**Database change notifications**~~ ✅ Shipped in v0.5.0 — PostgreSQL LISTEN/NOTIFY → LiveView push (`@notify_on_save`, `self.listen`, `handle_info`). See `docs/website/guides/database-notifications.md`.
 50. ~~**Virtual/windowed lists**~~ ✅ Shipped in v0.5.0 — DOM virtualization for large lists (`29-virtual-list.js`, fixed-height v0.5.0; variable-height v0.5.1)
-51. **Multi-step wizard (`WizardMixin`)** — Per-step validation, URL sync, progress, ~200 lines Python + template tags
+51. ~~**Multi-step wizard (`WizardMixin`)**~~ ✅ **Shipped (PR #632)** — per-step validation, URL sync, progress (`python/djust/wizard.py`)
 52. **i18n live language switching** — Switch locale without page reload, ~60 lines Python
 
 #### Always Welcome
