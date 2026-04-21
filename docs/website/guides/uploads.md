@@ -172,9 +172,170 @@ class GalleryView(UploadMixin, LiveView):
 </div>
 ```
 
+## Direct-to-S3 streaming with `UploadWriter`
+
+By default, uploaded chunks are buffered into a temp file on the djust server, then your event handler reads the finished file via `entry.data` / `entry.file`. For large files or server-to-server pipelines (S3, GCS, Azure Blob, a CDN origin), you can bypass the server temp file entirely and pipe each chunk straight to its destination.
+
+Pass an `UploadWriter` subclass to `allow_upload(writer=...)`. When a writer is configured, djust instantiates it lazily on the first chunk, calls `write_chunk(bytes)` for each client chunk, and calls `close()` on completion (or `abort(error)` on any failure path — including client cancellation, size-limit overflow, and WebSocket disconnect).
+
+### The `UploadWriter` contract
+
+```python
+from djust.uploads import UploadWriter
+
+class MyWriter(UploadWriter):
+    # Constructor is called per-upload on the first chunk:
+    #   (upload_id, filename, content_type, expected_size)
+
+    def open(self) -> None:
+        """Called exactly once before the first write_chunk.
+        Raise to reject the upload (abort() is called with the exception)."""
+
+    def write_chunk(self, chunk: bytes) -> None:
+        """Called once per WebSocket binary frame with the raw bytes.
+        Raise to abort the upload."""
+
+    def close(self):
+        """Called on successful completion. The return value is stored on
+        UploadEntry.writer_result and is template-accessible."""
+        return {"url": "..."}
+
+    def abort(self, error: BaseException) -> None:
+        """Called on ANY failure path with the raw exception.
+        Must not raise (any exception is logged and swallowed).
+        Use this to release server-side resources, e.g. AbortMultipartUpload."""
+```
+
+Guarantees:
+
+- `open()` is called at most once.
+- `write_chunk()` is never called before `open()` succeeds.
+- After `close()` or `abort()` returns, no further methods are invoked on the instance.
+- Writer instances are **isolated per upload** — no shared state across concurrent uploads.
+- Writers are **synchronous**. If you need async I/O, use `sync_to_async` / `asyncio.run_coroutine_threadsafe` at the boundary inside your methods.
+
+> **⚠ Security: never use `self.filename` verbatim as a destination path/key.**
+> `self.filename` comes from the client-supplied `File.name` and is fully attacker-controlled. Strings like `../../etc/passwd`, absolute paths, URL-encoded nulls, or paths intended to overwrite other users' objects will all flow through verbatim unless you sanitize.
+>
+> **Always scope the destination to a safe namespace:** derive the S3 key (or filesystem path) from the authenticated user id, a server-generated UUID, and a sanitized basename. Example pattern used in the S3 writer below:
+>
+> ```python
+> from pathlib import Path
+> from uuid import uuid4
+>
+> def _safe_key(self) -> str:
+>     safe = Path(self.filename).name  # strip any directory components
+>     return f"uploads/user-{self.user_id}/{uuid4()}-{safe}"
+> ```
+>
+> The `self.user_id` comes from your `__init__` override — pass the authenticated user at `allow_upload(writer=...)` time via a closure or factory. Never trust `self.filename` alone for routing.
+
+### S3 multipart upload (full example)
+
+```python
+import boto3
+from pathlib import Path
+from uuid import uuid4
+from djust import LiveView
+from djust.uploads import UploadMixin, BufferedUploadWriter
+
+class S3MultipartWriter(BufferedUploadWriter):
+    buffer_threshold = 5 * 1024 * 1024  # 5 MB — S3 MPU minimum part size
+
+    def _safe_key(self) -> str:
+        # Client-supplied filename is untrusted — strip directory components
+        # and scope to a server-generated UUID namespace.
+        safe = Path(self.filename).name
+        return f"uploads/{uuid4()}-{safe}"
+
+    def open(self):
+        self._s3 = boto3.client("s3")
+        self._key = self._safe_key()
+        self._mpu = self._s3.create_multipart_upload(
+            Bucket="my-bucket",
+            Key=self._key,
+            ContentType=self.content_type,
+        )
+        self._parts = []
+
+    def on_part(self, part: bytes, part_num: int) -> None:
+        resp = self._s3.upload_part(
+            Bucket="my-bucket",
+            Key=self._key,
+            UploadId=self._mpu["UploadId"],
+            PartNumber=part_num,
+            Body=part,
+        )
+        self._parts.append({"ETag": resp["ETag"], "PartNumber": part_num})
+
+    def on_complete(self):
+        self._s3.complete_multipart_upload(
+            Bucket="my-bucket",
+            Key=self._key,
+            UploadId=self._mpu["UploadId"],
+            MultipartUpload={"Parts": self._parts},
+        )
+        return {
+            "bucket": "my-bucket",
+            "key": self.filename,
+            "url": f"https://my-bucket.s3.amazonaws.com/{self.filename}",
+        }
+
+    def abort(self, error):
+        mpu = getattr(self, "_mpu", None)
+        if mpu:
+            self._s3.abort_multipart_upload(
+                Bucket="my-bucket",
+                Key=self._key,
+                UploadId=mpu["UploadId"],
+            )
+
+
+class UploadView(LiveView, UploadMixin):
+    def mount(self, request, **kwargs):
+        self.allow_upload(
+            "asset",
+            writer=S3MultipartWriter,
+            max_file_size=500_000_000,  # 500 MB
+            accept=".jpg,.png,.mp4",
+        )
+
+    def save_uploads(self):
+        for entry in self.consume_uploaded_entries("asset"):
+            # entry.writer_result is whatever on_complete() returned
+            url = entry.writer_result["url"]
+            # Persist the URL on your model, emit a toast, etc.
+```
+
+### Why `BufferedUploadWriter`?
+
+Clients send whatever chunk size they send (djust's default is 64 KB per WebSocket binary frame). S3's multipart upload API requires every part except the last to be at least **5 MB**. `BufferedUploadWriter` accumulates raw client chunks into an internal buffer and emits `on_part(part, part_num)` calls aligned to your threshold — so you write S3-compliant code without thinking about the raw frame size. If you're targeting a destination with no minimum part size (a pure HTTP pipe, a local Ceph, a custom CDN API), subclass `UploadWriter` directly and handle chunks as they arrive.
+
+### Error handling
+
+`abort(error)` is called on **every** failure path with the raw exception object:
+
+| Trigger | Exception passed to `abort()` |
+|---------|-------------------------------|
+| `open()` raised | the exception raised by `open()` |
+| `write_chunk()` raised | the exception raised by `write_chunk()` |
+| `close()` raised | the exception raised by `close()` |
+| Total bytes exceeds `max_file_size` | `ValueError("File size exceeds limit (N bytes)")` |
+| Client sent a cancel frame | `ConnectionAbortedError("upload cancelled")` |
+| WebSocket session closed with upload in flight | `ConnectionAbortedError("session closed")` |
+
+If your own `abort()` implementation raises, djust logs the traceback and swallows it — a failing S3 `AbortMultipartUpload` is a cleanup problem, not a correctness problem for the rest of the view.
+
+### Limitations of the writer path
+
+- **No magic-byte validation.** The disk-buffered path runs magic-byte checks (e.g. verify a `.png` really starts with `\x89PNG`) because it has the full file. The writer path streams — if you need content validation, buffer the first N bytes yourself in `write_chunk()` and validate before forwarding.
+- **`entry.data` / `entry.file` are empty.** The raw bytes never sat anywhere djust could hand them to you. Use `entry.writer_result` (whatever `close()` returned) instead.
+- **No temp file cleanup required.** Because no temp file was created, `entry.cleanup()` is a no-op for writer uploads.
+
 ## Best Practices
 
 - **Set `max_file_size`** based on your needs. Client-side validation rejects oversized files before upload begins; server-side validates after all chunks arrive.
 - **Use file extensions** (`.jpg,.png`) for simple filtering or MIME types (`image/*`) for broader categories. Server-side magic byte checking prevents extension spoofing.
 - **Always iterate fully** over `consume_uploaded_entries()` or call `cancel_upload()` for unwanted files. Temp files are cleaned up on WebSocket disconnect.
-- **For large files**, increase `chunk_size` to reduce the number of WebSocket frames.
+- **For large files**, increase `chunk_size` to reduce the number of WebSocket frames — or better, switch to `UploadWriter` and stream directly to your object store.
+- **For direct-to-S3 uploads**, subclass `BufferedUploadWriter` (not `UploadWriter` directly) so you get S3-compliant 5 MB parts without buffering raw client chunks. Always implement `abort()` to call `AbortMultipartUpload` — otherwise failed uploads will leak stranded multipart uploads in your bucket that you'll keep paying for.
