@@ -1272,9 +1272,18 @@ function reinitAfterDOMUpdate(scope) {
     updateHooks();
 
     // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
-    // get observers and existing ones pick up new first/last children.
-    if (window.djust.initVirtualLists) window.djust.initVirtualLists(scope || document);
-    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(scope || document);
+    // get observers and existing ones pick up new first/last children. For
+    // dj-virtual, existing containers must ALSO be refreshed so stream-
+    // appended items render (initVirtualLists short-circuits on already-
+    // tracked containers; refreshVirtualList is the re-window path).
+    const reinitScope = scope || document;
+    if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
+    if (window.djust.refreshVirtualList) {
+        reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
+            window.djust.refreshVirtualList(el);
+        });
+    }
+    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(reinitScope);
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     const scrollRoot = scope || document;

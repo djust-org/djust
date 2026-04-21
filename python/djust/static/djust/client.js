@@ -3924,9 +3924,18 @@ function reinitAfterDOMUpdate(scope) {
     updateHooks();
 
     // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
-    // get observers and existing ones pick up new first/last children.
-    if (window.djust.initVirtualLists) window.djust.initVirtualLists(scope || document);
-    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(scope || document);
+    // get observers and existing ones pick up new first/last children. For
+    // dj-virtual, existing containers must ALSO be refreshed so stream-
+    // appended items render (initVirtualLists short-circuits on already-
+    // tracked containers; refreshVirtualList is the re-window path).
+    const reinitScope = scope || document;
+    if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
+    if (window.djust.refreshVirtualList) {
+        reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
+            window.djust.refreshVirtualList(el);
+        });
+    }
+    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(reinitScope);
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     const scrollRoot = scope || document;
@@ -9360,21 +9369,33 @@ window.djust.bindModelElements = bindModelElements;
     }
 
     function dispatch(container, eventName, edge) {
-        // Prefer djust.pushEvent if wired, else dispatch a CustomEvent so
-        // tests and hook-based handlers can observe.
+        // Dispatch a CustomEvent for tests and hook-based handlers to
+        // observe, then send to the server via the same public entry
+        // point that dj-click / dj-change / dj-submit use
+        // (11-event-handler.js exposes this as window.djust.handleEvent).
         const detail = { event: eventName, edge, target: container };
         container.dispatchEvent(new CustomEvent('dj-viewport', {
             bubbles: true,
             detail,
         }));
-        if (window.djust && typeof window.djust.pushEvent === 'function') {
+        if (window.djust && typeof window.djust.handleEvent === 'function') {
             try {
-                window.djust.pushEvent(eventName, { edge });
+                window.djust.handleEvent(eventName, { edge });
             } catch (err) {
                 if (globalThis.djustDebug) {
-                    console.warn('[dj-viewport] pushEvent failed for %s: %s', eventName, err);
+                    console.warn(
+                        '[dj-viewport] handleEvent failed for %s: %s',
+                        eventName,
+                        err,
+                    );
                 }
             }
+        } else if (globalThis.djustDebug) {
+            console.warn(
+                '[dj-viewport] window.djust.handleEvent not available — ' +
+                    'event %s not sent to server',
+                eventName,
+            );
         }
     }
 

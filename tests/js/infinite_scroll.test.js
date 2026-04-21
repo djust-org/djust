@@ -109,6 +109,31 @@ describe('dj-viewport-top / dj-viewport-bottom', () => {
         expect(events.length).toBe(1);
     });
 
+    it('also invokes window.djust.handleEvent so the server receives the event', () => {
+        // Regression: PR #796 Stage 11 review caught that a viewport event
+        // only dispatched a CustomEvent but never reached the server —
+        // the module called window.djust.pushEvent which doesn't exist.
+        // The public entry point is window.djust.handleEvent (from
+        // 11-event-handler.js); verify it is called with the right args.
+        const dom = createDom(makeStream('dj-viewport-top="load_older"'));
+        const calls = [];
+        dom.window.djust.handleEvent = (name, params) => {
+            calls.push({ name, params });
+        };
+        dom.window.djust.initInfiniteScroll(dom.window.document);
+        const first = dom.window.document.getElementById('row-0');
+
+        dom.window.__fireIntersection(first, true);
+
+        expect(calls.length).toBe(1);
+        expect(calls[0].name).toBe('load_older');
+        expect(calls[0].params).toEqual({ edge: 'top' });
+
+        // Same-element re-intersection must not re-send to server.
+        dom.window.__fireIntersection(first, true);
+        expect(calls.length).toBe(1);
+    });
+
     it('dj-viewport-bottom fires once when last child enters viewport', () => {
         const dom = createDom(makeStream('dj-viewport-bottom="load_newer"'));
         dom.window.djust.initInfiniteScroll(dom.window.document);
