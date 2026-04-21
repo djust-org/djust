@@ -43,7 +43,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P3** | View Transitions API | Cheapest way to make navigation feel native | v0.5.0 |
 | **P3** | Islands of interactivity | Content-heavy sites with small interactive zones | v0.7.0 |
 | **P3** | Offline mutation queue | Mobile/spotty-connection differentiator | v0.6.0 |
-| **P3** | Native `<dialog>` integration | Browser-native modals with better a11y than custom implementations | v0.5.0 |
+| ~~**P3**~~ | ~~Native `<dialog>` integration~~ ✅ Shipped in v0.5.1 (`dj-dialog="open|close"`, 8 tests) | ~~Browser-native modals with better a11y than custom implementations~~ | ~~v0.5.0~~ |
 | ~~**P0**~~ | ~~`push_commands` + `djust:exec` auto-executor~~ ✅ ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 1a) | ~~Foundation primitive for every backend-driven UI feature in ADRs 002-006~~ | v0.4.2 |
 | ~~**P0**~~ | ~~`wait_for_event` async primitive~~ ✅ ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 1b) | ~~Lets background handlers pause until real user actions — required for TutorialMixin~~ | v0.4.2 |
 | ~~**P0**~~ | ~~`TutorialMixin` + `{% tutorial_bubble %}`~~ ✅ ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 1c) | ~~Declarative guided tours with zero custom JS — v0.4.2 headline feature~~ | v0.4.2 |
@@ -745,7 +745,7 @@ class ProductView(LiveView):
 
 **Stable component IDs (React 19 `useId` equivalent)** — (Moved from v0.5.0) `self.unique_id(suffix)` returning deterministic IDs stable across renders. ~30 lines Python.
 
-**Native `<dialog>` element integration** — (Moved from v0.5.0) Browser-native modals with `dj-dialog="open|close"`. Built-in focus trapping, backdrop, Escape handling. ~20 lines JS.
+~~**Native `<dialog>` element integration**~~ ✅ **Shipped in v0.5.1** — `dj-dialog="open|close"` attribute, MutationObserver-driven sync, 8 JSDOM tests. See `python/djust/static/djust/src/35-dj-dialog.js`.
 
 **Automatic dirty tracking** — Track which view attributes have changed since mount or the last event, exposing `self.changed_fields` and `self.is_dirty`. Template: `{% if is_dirty %}<button dj-click="save">Save changes</button>{% endif %}`. Use cases: "unsaved changes" warnings (`beforeunload`), conditional save buttons, optimized `handle_event` that skips work when nothing changed. Combined with selective re-rendering, dirty tracking is the foundation for efficient large views. ~60 lines Python.
 
@@ -1007,7 +1007,7 @@ High-impact areas for contributions:
 8. ~~**`dj-click-away`**~~ ✅
 9. ~~**`dj-lock`**~~ ✅
 10. ~~**`dj-page-loading`**~~ ✅
-11. **Native `<dialog>` integration** — `dj-dialog="open|close"`, ~20 lines JS
+11. ~~**Native `<dialog>` integration**~~ ✅ **Shipped in v0.5.1** — `dj-dialog="open|close"` with MutationObserver sync.
 12. **`dj-no-submit`** — Prevent enter-key form submission, ~10 lines JS
 13. **`page_loading` on `dj.push`** — Trigger loading bar during heavy events, ~15 lines JS
 14. ~~**`dj-scroll-into-view`**~~ ✅
