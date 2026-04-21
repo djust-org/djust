@@ -506,8 +506,6 @@ class LiveViewTestClient:
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if not tasks:
             return
-        import inspect
-
         from asgiref.sync import async_to_sync
 
         # Drain so tasks re-queued by their callbacks are visible to the next
@@ -531,8 +529,8 @@ class LiveViewTestClient:
             A new ``LiveViewTestClient`` pointed at the destination view.
 
         Raises:
-            AssertionError: No redirect was queued.
-            RuntimeError: URL resolves to a non-LiveView view.
+            AssertionError: No redirect was queued, or the URL resolves to a
+                non-LiveView view.
         """
         self._require_mounted()
         nav = getattr(self.view_instance, "_pending_navigation", [])
@@ -546,6 +544,16 @@ class LiveViewTestClient:
 
         match = resolve(target["path"])
         view_cls = getattr(match.func, "view_class", None) or match.func
+        # Guard: the destination must actually be a LiveView. Without this,
+        # ``client.mount()`` would explode with a confusing traceback.
+        from djust.live_view import LiveView
+
+        if not (isinstance(view_cls, type) and issubclass(view_cls, LiveView)):
+            raise AssertionError(
+                f"follow_redirect: {target['path']!r} resolves to {view_cls!r} which "
+                f"is not a LiveView subclass. The test client can only follow "
+                f"redirects to LiveView destinations."
+            )
         client = LiveViewTestClient(view_cls, user=self.user)
         mount_params = dict(target.get("params") or {})
         mount_params.update(match.kwargs)
@@ -593,8 +601,7 @@ class LiveViewTestClient:
             elif stored == item:
                 return
         raise AssertionError(
-            f"Expected stream_insert({stream_name!r}, {item!r}) but stream contains: "
-            f"{stream_items}"
+            f"Expected stream_insert({stream_name!r}, {item!r}) but stream contains: {stream_items}"
         )
 
     def trigger_info(self, message: Any) -> Dict[str, Any]:

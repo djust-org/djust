@@ -228,6 +228,11 @@ navigation:
         file: testing/index.md
         order: 1
         level: intermediate
+      - title: Testing LiveViews (v0.5.1 API)
+        slug: testing-liveviews
+        file: guides/testing.md
+        order: 2
+        level: intermediate
 
   - title: Advanced
     slug: advanced

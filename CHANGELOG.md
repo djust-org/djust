@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.1rc2] - 2026-04-21
+### Added
+
+- **LiveView testing utilities (v0.5.1 P2)** — Seven new methods on `LiveViewTestClient` for Phoenix LiveViewTest parity: `assert_push_event(event_name, params=None)` verifies a handler queued a client-bound push event (payload match is subset-based so tests stay resilient to later payload additions); `assert_patch(path=None, params=None)` / `assert_redirect(path=None, params=None)` assert `live_patch` / `live_redirect` calls; `render_async()` drains pending `start_async` / `assign_async` tasks synchronously so subsequent assertions see their results; `follow_redirect()` resolves the queued redirect via Django's URL router and returns a new test client mounted on the destination view; `assert_stream_insert(stream_name, item=None)` verifies stream operations (item subset-match for dicts); `trigger_info(message)` synthetically delivers a `handle_info` message so pubsub / pg_notify handlers can be tested without real backend wiring. Full user-facing guide at `docs/website/guides/testing.md`. 21 new test cases. (`python/djust/testing.py`)
+
+
 
 ### Added
 

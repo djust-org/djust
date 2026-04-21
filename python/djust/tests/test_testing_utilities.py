@@ -326,6 +326,7 @@ def test_assertions_require_mount():
         ("assert_patch", ("/x/",)),
         ("assert_redirect", ("/y/",)),
         ("render_async", ()),
+        ("follow_redirect", ()),
         ("assert_stream_insert", ("s",)),
         ("trigger_info", ({"type": "x"},)),
     ]:

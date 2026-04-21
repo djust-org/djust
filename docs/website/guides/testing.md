@@ -83,8 +83,14 @@ class ReportView(LiveView):
         self.start_async(self._build_report)
 
     def _build_report(self):
-        self.report = build(...)
-        self.generating = False
+        try:
+            self.report = build(...)
+        except Exception as exc:
+            # Always guard async callbacks — a crash that leaves `generating`
+            # True will leave the client stuck in a loading state.
+            self.error = str(exc)
+        finally:
+            self.generating = False
 
 client = LiveViewTestClient(ReportView).mount()
 client.send_event("generate")
@@ -126,7 +132,8 @@ class ChatView(LiveView):
 
     @event_handler
     def post(self, text="", **kwargs):
-        self.stream_insert("messages", {"id": next_id(), "text": text})
+        from uuid import uuid4
+        self.stream_insert("messages", {"id": uuid4().hex, "text": text})
 
 client = LiveViewTestClient(ChatView).mount()
 client.send_event("post", text="hello")
