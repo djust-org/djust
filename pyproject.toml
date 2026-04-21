@@ -81,6 +81,7 @@ dev = [
     "click>=8.0",  # Deploy CLI
     "requests>=2.28",  # Deploy CLI
     "requests-mock>=1.11",  # HTTP mocking for deploy CLI tests
+    "mcp[cli]>=1.2.0",  # djust.mcp server tests (test_mcp.py)
 ]
 
 [project.scripts]

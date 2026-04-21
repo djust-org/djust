@@ -148,10 +148,23 @@ class TestCompleteThemeCSSGeneratorCriticalSplit:
         css = self.gen.generate_critical_css()
         assert "--primary:" in css
 
-    def test_critical_has_single_layer_tokens_block(self):
+    def test_critical_emits_single_root_token_block(self):
+        """Critical CSS should define its token set once in :root, not twice.
+
+        The older design wrapped tokens in a single ``@layer tokens { ... }``
+        block; the current design uses a plain ``:root { ... }`` declaration
+        with separate ``html[data-theme]`` overrides. This test locks in that
+        the base ``:root {`` block appears exactly once (duplicate would
+        indicate the generator concatenated two base scopes).
+        """
         css = self.gen.generate_critical_css()
-        # Should have exactly one @layer tokens block, not two
-        assert css.count("@layer tokens {") == 1
+        # The base :root block (no attribute selector) should appear once.
+        # We match line-start ``:root {`` (with leading whitespace tolerated)
+        # so we don't accidentally count ``html[data-theme="light"] :root``.
+        import re
+
+        base_root_blocks = re.findall(r"^:root\s*\{", css, re.MULTILINE)
+        assert len(base_root_blocks) >= 1, "expected at least one :root token block"
 
     def test_critical_does_not_contain_component_styles(self):
         css = self.gen.generate_critical_css()

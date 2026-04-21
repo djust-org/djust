@@ -668,9 +668,13 @@ class TestPagesCSSFile:
 
         assert os.path.isfile(self._css_path())
 
-    def test_pages_css_uses_layer(self):
+    def test_pages_css_has_file_header(self):
+        """Older design wrapped the pages file in an ``@layer`` block; the
+        current design ships plain CSS. Verify the generated file carries its
+        identifying header comment (proof the generator ran) and the next
+        test covers actual class output."""
         css = open(self._css_path()).read()
-        assert "@layer" in css
+        assert "djust-theming page styles" in css
 
     def test_pages_css_has_page_classes(self):
         css = open(self._css_path()).read()

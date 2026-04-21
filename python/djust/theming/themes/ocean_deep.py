@@ -97,7 +97,7 @@ DARK = ThemeTokens(
 )
 
 PRESET = ThemePreset(
-    name="ocean",
+    name="ocean_deep",
     display_name="Ocean",
     description="Deep sea gradient depth — coastal sky to ocean floor",
     light=LIGHT,

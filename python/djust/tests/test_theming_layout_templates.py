@@ -257,9 +257,12 @@ class TestLayoutsCSS:
     def test_layouts_css_exists(self):
         assert os.path.isfile(self._css_path())
 
-    def test_layouts_css_uses_layer_base(self):
+    def test_layouts_css_defines_base_layout_classes(self):
+        """Older design wrapped the layouts file in ``@layer base``; the
+        current design ships plain CSS so it composes cleanly with app-level
+        overrides. Verify the layout classes that matter are present."""
         css = open(self._css_path()).read()
-        assert "@layer base" in css
+        assert ".layout-base" in css
 
     @pytest.mark.parametrize(
         "selector",

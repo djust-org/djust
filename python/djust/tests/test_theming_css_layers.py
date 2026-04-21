@@ -222,6 +222,8 @@ class TestComponentCSSLayer:
 
     def test_component_css_no_layer_when_disabled(self):
         """When use_css_layers=False, no layer wrapping."""
+        import re
+
         from djust.theming.component_css_generator import generate_component_css
 
         generate_component_css.cache_clear()
@@ -232,19 +234,27 @@ class TestComponentCSSLayer:
             create=True,
         ):
             css = generate_component_css("")
-        assert "@layer" not in css
+        # Match actual ``@layer NAME {`` block syntax rather than the
+        # substring — the file header comment may mention "@layer" while
+        # the CSS body is layer-free (e.g., "NOT wrapped in @layer").
+        assert not re.search(r"@layer\s+\w+\s*\{", css)
         generate_component_css.cache_clear()  # Reset for other tests
 
 
 # ---------------------------------------------------------------------------
-# 7. Static components.css wrapped in @layer components
+# 7. Static components.css is NOT wrapped in @layer (intentional, see file)
 # ---------------------------------------------------------------------------
 
 
 class TestStaticComponentsCSS:
-    """The static components.css file is wrapped in @layer components."""
+    """The static components.css file documents its own @layer-free design.
 
-    def test_static_css_has_layer_wrapper(self):
+    Component styles must have higher specificity than djust-components
+    defaults so theming overrides take effect; wrapping them in @layer would
+    lower their priority. The file header explicitly calls this out.
+    """
+
+    def test_static_css_explicitly_unlayered(self):
         from pathlib import Path
 
         css_path = (
@@ -256,8 +266,18 @@ class TestStaticComponentsCSS:
             / "components.css"
         )
         css = css_path.read_text()
-        assert css.strip().startswith("@layer components {")
-        assert css.strip().endswith("}")
+        import re
+
+        # The file's top comment documents the design; verify it stays.
+        assert "NOT wrapped in @layer" in css[:500], (
+            "components.css should carry the documented 'NOT wrapped in @layer' "
+            "rationale in its file header so future maintainers don't re-wrap it."
+        )
+        # And no stray @layer blocks snuck in. (The substring "@layer" may
+        # appear inside the header comment — match the actual block syntax.)
+        assert not re.search(
+            r"@layer\s+\w+\s*\{", css
+        ), "components.css should not contain any @layer blocks"
 
 
 # ---------------------------------------------------------------------------

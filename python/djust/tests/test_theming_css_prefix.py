@@ -107,7 +107,9 @@ class TestComponentCSSGeneration:
         assert lines_with_bare_selectors == [], f"Found bare selectors: {lines_with_bare_selectors}"
 
     def test_no_prefix_backward_compat(self):
-        """With empty prefix, output matches the static components.css content."""
+        """With empty prefix, the generated CSS contains the static file's
+        content verbatim (possibly wrapped in @layer components when
+        ``use_css_layers`` is on, which is the default)."""
         from djust.theming.component_css_generator import generate_component_css
         import pathlib
 
@@ -120,8 +122,14 @@ class TestComponentCSSGeneration:
             / "css"
             / "components.css"
         )
-        expected = static_css.read_text()
-        assert css.strip() == expected.strip()
+        expected = static_css.read_text().strip()
+        # Strip the generator's optional @layer components wrapper before
+        # comparing — the static file is the unwrapped canonical content;
+        # the generator adds the layer wrapper when ``use_css_layers=True``.
+        generated = css.strip()
+        if generated.startswith("@layer components {") and generated.endswith("}"):
+            generated = generated[len("@layer components {") : -1].strip()
+        assert generated == expected
 
     def test_prefix_applied_to_dark_mode_selectors(self):
         """Dark mode selectors like [data-theme='dark'] .theme-mode-btn also get prefixed."""

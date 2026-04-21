@@ -11,68 +11,41 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-# All component class names that appear in components.css, longest-first
-# so that e.g. "alert-destructive" is matched before "alert".
-_COMPONENT_CLASSES = sorted(
-    [
-        # Alert
-        "alert-content",
-        "alert-title",
-        "alert-message",
-        "alert-dismiss",
-        "alert-default",
-        "alert-success",
-        "alert-warning",
-        "alert-destructive",
-        "alert",
-        # Badge
-        "badge-default",
-        "badge-secondary",
-        "badge-success",
-        "badge-warning",
-        "badge-destructive",
-        "badge-outline",
-        "badge",
-        # Button
-        "btn-primary",
-        "btn-secondary",
-        "btn-destructive",
-        "btn-ghost",
-        "btn-link",
-        "btn-sm",
-        "btn-md",
-        "btn-lg",
-        "btn",
-        # Card
-        "card-header",
-        "card-title",
-        "card-body",
-        "card-footer",
-        "card",
-        # Input
-        "input-group",
-        "input-label",
-        "input",
-        # Theme Switcher
-        "theme-switcher",
-        "theme-mode-controls",
-        "theme-mode-btn",
-        "theme-preset-select",
-        "theme-preset-controls",
-        # Form layouts
-        "theme-form-stacked",
-        "theme-form-horizontal",
-        "theme-form-inline",
-        "theme-form-field",
-        "theme-form-errors",
-        "theme-label",
-        "theme-help-text",
-        "theme-field-error",
-        "theme-error-list",
-    ],
-    key=len,
-    reverse=True,
+# Non-component top-level class tokens from components.css that should NOT
+# get the prefix. These are utility/pseudo classes that live globally.
+_DO_NOT_PREFIX = frozenset(
+    {
+        "dark",
+        "light",
+        "active",
+        "open",
+        "collapsed",
+        "dragging",
+        "uploading",
+        "vertical",
+        "horizontal",
+    }
 )
+
+
+@lru_cache(maxsize=1)
+def _component_classes() -> tuple:
+    """Auto-extract the full set of component class selectors from components.css.
+
+    Parsing the file keeps the prefix generator in sync with the canonical
+    CSS — any new ``.foo-bar {`` rule is automatically picked up. Previously
+    the list was hand-maintained and drifted (caught by
+    ``test_no_unprefixed_classes_when_prefix_set`` — ``btn-edit`` /
+    ``btn-remove`` / many more were missed). Sorted longest-first so a class
+    like ``alert-destructive`` matches before ``alert``.
+    """
+    css = _read_static_css()
+    # Match top-level class selectors: a dot, then a lowercase letter, then
+    # letters/digits/hyphens/underscores. We catch both ``.btn`` at column 0
+    # and compound chains like ``.btn.active`` (captures each piece).
+    found = set(re.findall(r"\.([a-z][a-z0-9_-]*)", css))
+    classes = {c for c in found if c not in _DO_NOT_PREFIX}
+    return tuple(sorted(classes, key=len, reverse=True))
 
 
 def _read_static_css() -> str:
@@ -114,7 +87,7 @@ def _apply_prefix(css: str, prefix: str) -> str:
     #
     # Strategy: for each class, replace  \.<class>  with  \.<prefix><class>
     # but only when preceded by a dot (selector context).
-    for cls in _COMPONENT_CLASSES:
+    for cls in _component_classes():
         # Escape for regex (class names use hyphens which are literal in regex)
         escaped = re.escape(cls)
         # Match .<class> when followed by a non-alphanumeric-hyphen char
