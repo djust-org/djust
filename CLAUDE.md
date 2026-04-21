@@ -60,7 +60,7 @@ djust/
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
 │   ├── backends/           # Presence backends (memory, redis)
-│   └── static/djust/       # Client JS (~5KB)
+│   └── static/djust/       # Client JS (~87 KB gzipped, 388 KB raw, 35 source modules)
 ├── crates/
 │   ├── djust/              # PyO3 bindings (entry point for Python)
 │   ├── djust_core/         # Core types, serialization, context
@@ -89,7 +89,7 @@ djust/
 - **Error handling**: Use `Result` types; no `unwrap()` in library code
 
 ### JavaScript
-- Client JS must stay minimal (~5KB). No new dependencies without discussion.
+- Client JS size budget: current ~87 KB gzipped (388 KB raw across 35 source modules in `static/djust/src/`); pre-minified distribution target for v0.6.0 is ~37 KB gzipped / ~30 KB brotli. When adding a feature, measure its gzipped delta — aim under 2 KB gzipped per new module. Top 3 modules (`12-vdom-patch.js`, `09-event-binding.js`, `03-websocket.js`) are 42% of the budget; reducing them requires structural care. No new dependencies without discussion.
 - **No `console.log`** without `if (globalThis.djustDebug)` guard — unguarded logging is auto-rejected
 - New JS feature files in `static/djust/src/` must have corresponding test files in `tests/js/`
 

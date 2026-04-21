@@ -38,7 +38,7 @@ issue or be explicitly closed with a reason.
 | 26 | Variable-height virtual list items via ResizeObserver | PR #796 | #797 | Open | ~200 LOC, v0.5.1 candidate |
 | 27 | `teardownVirtualList` should restore `originalChildren` | PR #796 | #798 | Open | — |
 | 28 | Server-side `stream_append(limit=N)` should trim inserts before sending | PR #796 | #799 | Open | — |
-| 29 | Clarify/update ~5 KB client JS budget claim in CLAUDE.md/manifesto | PR #796 | #800 | Open | client.js grew ~355→380 KB raw in v0.5.0 |
+| 29 | Clarify/update ~5 KB client JS budget claim in CLAUDE.md/manifesto | PR #796 | #800 | Closed | CLAUDE.md updated with accurate numbers; pre-minified distribution scoped as v0.6.0 P1 ROADMAP entry |
 | 30 | `stream_prune` `.children` filter redundancy in `17-streaming.js` | PR #796 | #801 | Open | Chore |
 | 31 | Block-handler loader access (deferred item 2b from PR #802) | PR #802 | #803 | Open | ~40 LOC Rust |
 | 32 | Parent-tag propagation for nested custom-tag handlers (deferred item 2c) | PR #802 | #804 | Open | — |
