@@ -98,6 +98,25 @@ def test_streaming_response_passes_through():
     assert "X-Djust-Main-Only-Response" not in out
 
 
+def test_3xx_redirect_is_still_trimmed():
+    """3xx responses (redirects) are below the >=400 gate and still get trimmed.
+
+    A 302 HTML body is rarely meaningful content, but if a shell-navigation
+    client requested main-only on a page that happens to return a 301/302
+    with a <main>, we still honor the opt-in — the status gate is specifically
+    for 4xx/5xx error pages.
+    """
+    rf = RequestFactory()
+    req = rf.get("/", HTTP_X_DJUST_MAIN_ONLY="1")
+    html = "<html><body><main>redirect body</main></body></html>"
+    inner = HttpResponse(html, content_type="text/html", status=302)
+    inner["Location"] = "/new/"
+    out = _run(None, req, inner)
+    assert out.status_code == 302
+    assert out.content == b"redirect body"
+    assert out["X-Djust-Main-Only-Response"] == "1"
+
+
 def test_error_response_4xx_is_not_trimmed():
     """Issue #828: 4xx error pages render full-page layouts, not main-area fragments.
 

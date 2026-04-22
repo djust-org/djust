@@ -11,22 +11,37 @@
 // The SW itself is served from /static/djust/service-worker.js and is NOT
 // part of the client.js bundle (SW scripts must be separate files).
 //
-// Known limitations:
+// Instant-shell swap — what works and what doesn't:
 //
-// - **Instant-shell innerHTML swap does NOT execute <script> tags inside the
-//   swapped <main>**. This is standard browser behavior for `.innerHTML = …`:
-//   script nodes are inserted but inert. Colocated hooks (dj-hook) and
-//   event-wired attributes (dj-click, dj-submit, etc.) continue to work
-//   because djust re-registers listeners on the new DOM via MutationObserver.
-//   If your <main> content ships inline <script> elements you need to run
-//   after a shell navigation, emit them outside <main> in a tag the shell
-//   doesn't swap, or restructure the work as a dj-hook that djust will
-//   re-bind automatically.
+// - `dj-click`, `dj-submit`, `dj-change`, `dj-input`, and the rest of djust's
+//   attribute-based event wiring all work post-swap. They use **document-level
+//   event delegation** (not MutationObserver) — a single listener on `document`
+//   dispatches based on `e.target.closest('[dj-click]')`, so newly inserted
+//   nodes participate automatically without any per-element binding.
 //
-// - **registerServiceWorker is idempotent** — a second call returns the
-//   cached registration promise without re-running `initInstantShell` or
-//   `initReconnectionBridge`, so drain listeners and WS sendMessage patches
-//   are applied at most once.
+// - `dj-hook` elements need re-binding after a swap because each hook runs
+//   per-element `mount`/`update` callbacks. After replacing the `<main>`
+//   innerHTML, we call `djust.reinitAfterDOMUpdate(placeholder)` which scans
+//   the swapped subtree for `[dj-hook]`, extracts colocated
+//   `<script type="djust/hook">` definitions, and primes dj-virtual /
+//   dj-viewport observers.
+//
+// - **Inline `<script>` tags inside `<main>` will NOT execute**. This is
+//   standard browser behavior for `.innerHTML = …`: script nodes are inserted
+//   into the tree but not evaluated. If you need JS to run after a shell
+//   navigation, either (a) emit the `<script>` OUTSIDE `<main>` in the shell
+//   layout so it runs on first load, (b) restructure as a `dj-hook` (which
+//   will be re-bound automatically), or (c) use a page-level load listener
+//   on the `djust:shell-swapped` CustomEvent dispatched after every swap.
+//
+// - `registerServiceWorker(options)` is **idempotent**: a second call returns
+//   the cached registration promise without re-running `initInstantShell` or
+//   `initReconnectionBridge`, so drain listeners and the WS sendMessage
+//   patch are applied at most once. **Options from the second call are
+//   ignored** — toggling `instantShell: false → true` across calls will NOT
+//   start the shell client. Pass both flags on the first call, or reload.
+//   If the first call failed (SW register() rejected), the cache is cleared
+//   so a retry can succeed.
 
 (function () {
     globalThis.djust = globalThis.djust || {};
@@ -76,8 +91,24 @@
                 // for the current URL (same-origin, trusted). No user input
                 // reaches this point.
                 placeholder.innerHTML = html;
+                // Re-run djust's DOM-update hook: binds dj-hook elements,
+                // extracts colocated <script type="djust/hook"> definitions,
+                // and primes dj-virtual / dj-viewport observers in the swapped
+                // region. Without this, dj-hook content inside <main> stays
+                // inert after a shell navigation (dj-click / dj-submit keep
+                // working because those use document-level event delegation
+                // and don't need per-element binding).
+                if (window.djust && typeof window.djust.reinitAfterDOMUpdate === 'function') {
+                    try {
+                        window.djust.reinitAfterDOMUpdate(placeholder);
+                    } catch (e) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[sw] reinitAfterDOMUpdate failed after shell swap', e);
+                        }
+                    }
+                }
                 // Notify the rest of the client that a shell-swap completed so
-                // hooks / navigation code can re-run if needed.
+                // any listeners that care about navigation can react.
                 window.dispatchEvent(new CustomEvent('djust:shell-swapped', {
                     detail: { url: url },
                 }));
