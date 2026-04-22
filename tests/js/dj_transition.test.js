@@ -101,6 +101,24 @@ describe('dj-transition', () => {
         expect(typeof dom.window.djust.djTransition._installDjTransitionFor).toBe('function');
     });
 
+    it('fallback timer on a removed element does not throw', async () => {
+        // An element removed mid-transition should not crash the
+        // fallback cleanup — classList.remove on a detached element is
+        // a no-op, and the WeakMap entry is orphaned but harmless.
+        dom = createDom('<div id="t" dj-transition="s a e"></div>');
+        const el = dom.window.document.getElementById('t');
+        await nextFrame(dom);
+        expect(el.classList.contains('a')).toBe(true);
+
+        el.remove();
+        // Wait past the fallback window — the setTimeout should fire
+        // against the detached element without throwing.
+        await new Promise((r) => setTimeout(r, 650));
+        // No crash — the test just reaching here means the fallback
+        // didn't error on the detached node.
+        expect(el.classList.contains('a')).toBe(false);
+    });
+
     it('re-runs the sequence when the attribute value changes', async () => {
         dom = createDom('<div id="t" dj-transition="s a e"></div>');
         const el = dom.window.document.getElementById('t');

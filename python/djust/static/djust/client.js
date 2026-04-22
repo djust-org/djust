@@ -10844,9 +10844,16 @@ globalThis.djust.djLayout = {
 //   </div>
 //
 // The attribute value is three space-separated tokens — start, active,
-// end — each of which may be a single class name. (A future enhancement
-// could accept parenthesised multi-class groups; one-class-per-phase is
-// the common case and keeps the parsing trivial.)
+// end — each a single class name. Commas, parens, or other separators
+// are NOT supported: `classList.add` would throw InvalidCharacterError
+// on the resulting tokens. (A future enhancement could accept
+// parenthesised multi-class groups; one-class-per-phase is the common
+// case and keeps the parsing trivial.)
+//
+// Re-trigger from JS: calling `el.setAttribute('dj-transition', spec)`
+// re-runs the sequence, even when `spec` is identical to the current
+// value — MutationObserver fires on any attribute set, not only value
+// changes.
 //
 // Lifecycle:
 //   Phase 1 (start):  applied synchronously when the attribute appears
