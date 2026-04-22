@@ -23,6 +23,10 @@ _STATIC_DIR = Path(__file__).resolve().parent.parent / "static" / "djust_theming
 # Pattern to extract CSS custom property references: var(--name, ...)
 _CSS_VAR_RE = re.compile(r"var\(\s*(--[a-zA-Z0-9_-]+)")
 
+# Allowlist for valid component identifiers — prevents path traversal
+# when building template paths from user-supplied names.
+_VALID_COMPONENT_NAME = re.compile(r"^[a-z0-9_-]+$")
+
 
 def get_component_template_source(component_name: str) -> str:
     """Read and return the raw HTML source of a default component template.
@@ -33,7 +37,13 @@ def get_component_template_source(component_name: str) -> str:
     Returns:
         Template source as a string, or empty string if not found.
     """
-    template_path = _COMPONENTS_DIR / f"{component_name}.html"
+    if not _VALID_COMPONENT_NAME.match(component_name):
+        return ""
+    template_path = (_COMPONENTS_DIR / f"{component_name}.html").resolve()
+    try:
+        template_path.relative_to(_COMPONENTS_DIR.resolve())
+    except ValueError:
+        return ""
     if not template_path.is_file():
         return ""
     return template_path.read_text()

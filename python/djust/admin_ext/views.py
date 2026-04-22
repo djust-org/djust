@@ -7,6 +7,7 @@ Includes plugin-aware context (plugin_nav, widgets) for the admin shell.
 
 import logging
 from functools import wraps
+from urllib.parse import urlencode
 
 from django.contrib.auth import authenticate, logout
 from django.core.paginator import Paginator
@@ -50,7 +51,7 @@ def admin_login_required(view_func):
         if not request.user.is_authenticated or not request.user.is_staff:
             admin_site_name = kwargs.get("admin_site_name", "djust_admin")
             login_url = reverse(f"{admin_site_name}:login")
-            return HttpResponseRedirect(f"{login_url}?next={request.path}")
+            return HttpResponseRedirect(f"{login_url}?{urlencode({'next': request.path})}")
         return view_func(request, *args, **kwargs)
 
     return wrapped_view
