@@ -976,6 +976,13 @@ class UploadMixin:
     """
 
     _upload_manager: Optional[UploadManager] = None
+    # Issue #889: record each ``allow_upload()`` call as a JSON-
+    # serializable dict so the WS consumer's state-restoration path
+    # (which skips ``mount()``) can replay them and rebuild the
+    # ``UploadManager``. The live ``_upload_manager`` instance itself
+    # is not JSON-serializable and is silently dropped by
+    # ``_get_private_state()``; this replay list is.
+    _upload_configs_saved: Optional[List[Dict[str, Any]]] = None
 
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
@@ -1008,12 +1015,18 @@ class UploadMixin:
                 ``UploadWriter`` and ``BufferedUploadWriter`` in
                 ``djust.uploads``. When omitted (default), uploads are
                 buffered to a temp file and validated by magic bytes.
+                ⚠️ Not session-serializable — views that use a
+                non-default writer and rely on the HTTP→WS state
+                restoration path (the default production flow) will
+                get a warning at restoration time and fall back to the
+                buffered writer. If you need a custom writer, ensure
+                your app uses a fresh-mount WS flow.
 
         Returns:
             UploadConfig object
         """
         mgr = self._ensure_upload_manager()
-        return mgr.configure(
+        cfg = mgr.configure(
             name=name,
             accept=accept,
             max_entries=max_entries,
@@ -1022,6 +1035,59 @@ class UploadMixin:
             auto_upload=auto_upload,
             writer=writer,
         )
+        # Issue #889: track the call args in a JSON-serializable list
+        # so the WS consumer's state-restoration path can replay them.
+        # ``writer=`` is intentionally excluded — classes don't
+        # JSON-serialize; documented above.
+        if self._upload_configs_saved is None:
+            self._upload_configs_saved = []
+        self._upload_configs_saved.append(
+            {
+                "name": name,
+                "accept": accept,
+                "max_entries": max_entries,
+                "max_file_size": max_file_size,
+                "chunk_size": chunk_size,
+                "auto_upload": auto_upload,
+                # writer deliberately omitted — see docstring caveat.
+                "_had_writer": writer is not None,
+            }
+        )
+        return cfg
+
+    def _restore_upload_configs(self) -> None:
+        """Replay the ``allow_upload()`` call list to rebuild the manager.
+
+        Called by the WebSocket consumer's state-restoration path (when
+        ``mount()`` is skipped because pre-rendered session state
+        exists). Without this, ``_upload_manager`` stays at the class-
+        default ``None`` and any upload request fails with "No uploads
+        configured for this view" (issue #889).
+
+        If any recorded call originally used a custom ``writer=``
+        class, log a warning at restoration time — the writer class
+        isn't session-round-trippable, so the restored config falls
+        back to the default buffered writer. Apps relying on custom
+        writers should arrange for a fresh-mount WS flow.
+        """
+        saved = self._upload_configs_saved
+        if not saved:
+            return
+        # Reset first so the replayed ``allow_upload`` calls re-populate
+        # the list on this instance — keeps the bookkeeping consistent
+        # across subsequent round-trips.
+        self._upload_configs_saved = None
+        for cfg in saved:
+            if cfg.pop("_had_writer", False):
+                logger.warning(
+                    "UploadMixin._restore_upload_configs: upload slot %r was "
+                    "originally configured with a custom writer= class, but "
+                    "writer classes are not session-serializable. Falling "
+                    "back to the default buffered writer. See issue #889 "
+                    "caveats.",
+                    cfg.get("name"),
+                )
+            self.allow_upload(**cfg)
 
     def consume_uploaded_entries(self, name: str) -> Generator[UploadEntry, None, None]:
         """

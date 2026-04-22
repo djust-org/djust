@@ -1555,6 +1555,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             private_state
                         )
 
+                    # Issue #889: imperative mixin config set by mount()
+                    # (e.g. UploadMixin.allow_upload) is not captured by
+                    # the public/private state round-trip because the
+                    # live manager instances aren't JSON-serializable.
+                    # Replay the saved config list so restored views
+                    # behave identically to fresh-mount views.
+                    if hasattr(self.view_instance, "_restore_upload_configs"):
+                        await sync_to_async(self.view_instance._restore_upload_configs)()
+
                     await sync_to_async(self.view_instance._initialize_temporary_assigns)()
                     await sync_to_async(self.view_instance._assign_component_ids)()
 
