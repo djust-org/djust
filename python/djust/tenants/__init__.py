@@ -58,6 +58,8 @@ Template usage::
     {{ tenant.id }}
 """
 
+from typing import TYPE_CHECKING
+
 from .resolvers import (
     TenantInfo,
     TenantResolver,
@@ -158,3 +160,26 @@ def __getattr__(name):
         module = importlib.import_module(_LAZY_IMPORTS[name], __package__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+if TYPE_CHECKING:
+    # Resolved at runtime by __getattr__ (see _LAZY_IMPORTS).
+    # TYPE_CHECKING block tells static analyzers the names exist without
+    # forcing eager imports that would trigger Django ORM setup too early.
+    from .middleware import (  # noqa: F401
+        TenantMiddleware,
+        get_current_tenant,
+        set_current_tenant,
+    )
+    from .managers import TenantManager, TenantQuerySet  # noqa: F401
+    from .audit import (  # noqa: F401
+        AuditBackend,
+        AuditEvent,
+        CallbackAuditBackend,
+        DatabaseAuditBackend,
+        LoggingAuditBackend,
+        audit_action,
+        emit_audit,
+        get_audit_backend,
+    )
+    from .security import SecurityHeadersMiddleware  # noqa: F401

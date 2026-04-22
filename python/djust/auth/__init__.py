@@ -26,6 +26,8 @@ Usage:
     ]
 """
 
+from typing import TYPE_CHECKING
+
 # Core auth functions (originally djust/auth.py) — safe to import eagerly
 # since they only depend on django.conf and django.core.exceptions
 from .core import (
@@ -73,3 +75,17 @@ def __getattr__(name):
         module = importlib.import_module(_LAZY_IMPORTS[name], __package__)
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+if TYPE_CHECKING:
+    # These names are resolved at runtime by __getattr__ (see _LAZY_IMPORTS).
+    # The TYPE_CHECKING block tells static analyzers (mypy, CodeQL, IDEs)
+    # that these names exist and where they come from, without forcing
+    # eager imports that would trigger Django ORM setup too early.
+    from .views import DjustLoginView, SignupView, logout_view  # noqa: F401
+    from .forms import SignupForm  # noqa: F401
+    from .mixins import (  # noqa: F401
+        LoginRequiredLiveViewMixin,
+        PermissionRequiredLiveViewMixin,
+    )
+    from .social import social_auth_providers  # noqa: F401
