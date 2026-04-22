@@ -11,6 +11,7 @@ Provides runtime validation of event handler signatures including:
 
 import inspect
 import logging
+import types
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 from uuid import UUID
@@ -392,6 +393,30 @@ def validate_parameter_types(
     return errors if errors else None
 
 
+def _type_display_name(hint: Any) -> str:
+    """Human-readable name for a type hint, including PEP 604 unions.
+
+    >>> _type_display_name(str)
+    'str'
+    >>> _type_display_name(str | None)
+    'str | None'
+    >>> _type_display_name(Optional[int])
+    'int | None'
+    """
+    if isinstance(hint, types.UnionType):
+        return " | ".join(_single_type_name(arg) for arg in hint.__args__)
+    origin = get_origin(hint)
+    if origin is Union:
+        return " | ".join(_single_type_name(arg) for arg in get_args(hint))
+    return _single_type_name(hint)
+
+
+def _single_type_name(t: Any) -> str:
+    if t is type(None):
+        return "None"
+    return getattr(t, "__name__", str(t))
+
+
 def get_handler_signature_info(handler: Callable) -> Dict[str, Any]:
     """
     Extract comprehensive signature information from handler.
@@ -442,7 +467,7 @@ def get_handler_signature_info(handler: Callable) -> Dict[str, Any]:
 
         param_info = {
             "name": name,
-            "type": type_hints.get(name, Any).__name__ if name in type_hints else "Any",
+            "type": _type_display_name(type_hints.get(name, Any)) if name in type_hints else "Any",
             "required": param.default == inspect.Parameter.empty,
             "default": str(param.default) if param.default != inspect.Parameter.empty else None,
         }

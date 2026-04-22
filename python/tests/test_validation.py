@@ -246,6 +246,34 @@ class TestGetHandlerSignatureInfo:
         assert info["accepts_kwargs"] is False
         assert info["description"] == "Handler with no parameters"
 
+    def test_signature_info_union_type(self):
+        """Test signature info for handler with PEP 604 union type (str | None).
+
+        Regression test for #899: UnionType has no __name__.
+        """
+
+        def handler_with_union(self, value: str | None = None, **kwargs):
+            pass
+
+        info = get_handler_signature_info(handler_with_union)
+        param = info["params"][0]
+        assert param["name"] == "value"
+        assert param["type"] == "str | None"
+        assert param["required"] is False
+
+    def test_signature_info_optional_type(self):
+        """Test signature info for handler with typing.Optional (same as X | None)."""
+        from typing import Optional
+
+        def handler_with_optional(self, value: Optional[int] = None, **kwargs):
+            pass
+
+        info = get_handler_signature_info(handler_with_optional)
+        param = info["params"][0]
+        assert param["name"] == "value"
+        assert "int" in param["type"]
+        assert "None" in param["type"]
+
 
 class TestValidationIntegration:
     """Integration tests combining validation functions"""
