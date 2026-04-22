@@ -540,3 +540,113 @@ class TestPartialRenderCorrectness:
         _assert_partial_matches_full(
             InlineIfInForView, mutate, expected_change_substring='class="on"'
         )
+
+    # --- Additional wrapper shapes per code-review feedback on #785 -----
+
+    def test_spaceless_wrapper(self):
+        """``{% spaceless %}`` strips whitespace between tags. Partial-render
+        must still pick up changes to variables referenced inside the block —
+        regression guard for dep propagation through Spaceless nodes."""
+
+        class SpacelessView(LiveView):
+            template = (
+                "<div dj-root>{% spaceless %}"
+                "<span>{{ x }}</span>"
+                "<span>{{ y }}</span>"
+                "{% endspaceless %}</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.x = "alpha"
+                self.y = "beta"
+
+        def mutate(v):
+            v.x = "zeta"
+
+        _assert_partial_matches_full(SpacelessView, mutate, expected_change_substring="zeta")
+
+    def test_nested_with_chain(self):
+        """Nested ``{% with %}`` blocks — the inner block must still see
+        outer-scope rebindings when the outer's source variable changes.
+        Regression guard for dep propagation across With node chains."""
+
+        class NestedWithView(LiveView):
+            template = (
+                "<div dj-root>"
+                "{% with outer=x %}"
+                "{% with inner=outer %}"
+                "<span>{{ inner }}</span>"
+                "{% endwith %}"
+                "{% endwith %}"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.x = "root-a"
+
+        def mutate(v):
+            v.x = "root-b"
+
+        _assert_partial_matches_full(NestedWithView, mutate, expected_change_substring="root-b")
+
+    def test_standalone_block_without_extends(self):
+        """``{% block %}`` used without ``{% extends %}`` is still valid as
+        a content wrapper. Changing a variable inside a standalone block
+        must trigger a partial re-render of that block."""
+
+        class StandaloneBlockView(LiveView):
+            template = (
+                "<div dj-root>"
+                "{% block header %}<h1>{{ title }}</h1>{% endblock %}"
+                "<p>body</p>"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.title = "old"
+
+        def mutate(v):
+            v.title = "new"
+
+        _assert_partial_matches_full(StandaloneBlockView, mutate, expected_change_substring="new")
+
+    def test_verbatim_island_does_not_break_sibling_deps(self):
+        """``{% verbatim %}`` prints its body literally. Crucially, a
+        variable reference INSIDE verbatim is NOT a real dep — but a sibling
+        variable outside the verbatim block must still re-render correctly.
+        Regression guard against mistakenly treating verbatim bodies as
+        real variable references."""
+
+        class VerbatimView(LiveView):
+            template = (
+                "<div dj-root>"
+                "<pre>{% verbatim %}{{ not_a_var }}{% endverbatim %}</pre>"
+                "<span>{{ real_var }}</span>"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.real_var = "before"
+
+        def mutate(v):
+            v.real_var = "after"
+
+        _assert_partial_matches_full(VerbatimView, mutate, expected_change_substring="after")
+
+    def test_filter_chain_on_attribute(self):
+        """Chained filters on a dotted attribute: changes to the root
+        attribute value must invalidate cached fragments referencing
+        ``obj.field|filter|another``."""
+
+        class FilterChainView(LiveView):
+            template = (
+                "<div dj-root>" "<span>{{ user.name|lower|truncatechars:10 }}</span>" "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self.user = {"name": "Alice"}
+
+        def mutate(v):
+            v.user = {"name": "BOB-The-Very-Very-Long"}
+
+        _assert_partial_matches_full(FilterChainView, mutate, expected_change_substring="bob")
