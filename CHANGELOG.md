@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dj-transition` — declarative CSS enter/leave transitions (v0.6.0)** — Phoenix `JS.transition` parity. Three-phase class orchestration so template authors can drive CSS transitions without writing a `dj-hook`. Attribute value is three space-separated class tokens — phase 1 (start) applied synchronously, phases 2 (active) + 3 (end) applied on the next animation frame so the browser commits the start layout before the transition begins. `transitionend` removes the active class (phase 3 stays as the final-state). 600 ms fallback timeout covers the `display: none` / zero-duration corner cases where `transitionend` never fires. Any attribute-value change re-runs the sequence so authors can retrigger from JS. New `static/djust/src/41-dj-transition.js` (~120 LOC); document-level MutationObserver matches the `dj-dialog` / `dj-mutation` / `dj-sticky-scroll` registration pattern. 7 JSDOM cases in `tests/js/dj_transition.test.js` cover spec parsing, phase-1 synchronous application, next-frame phase-2/3 application, transitionend cleanup, fallback-timeout cleanup, global export, and re-trigger-on-attribute-change. This is phase 1 of the v0.6.0 Animations & transitions work; FLIP, `dj-remove`, `dj-transition-group`, and skeleton components will ship as separate follow-ups. (`python/djust/static/djust/src/41-dj-transition.js`)
+
 ## [0.5.3rc1] - 2026-04-22
 
 ### Added
