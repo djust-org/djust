@@ -58,6 +58,7 @@ document.addEventListener('djust:layout-changed', (e) => {
 ## Known limitations
 
 - **`<head>` is not merged.** If your new layout needs different stylesheets or scripts, add them to the original layout's `<head>` at mount time. The swap only replaces `<body>`.
+- **Third-party scripts loaded in `<body>` are destroyed.** Analytics bootstraps, Intercom widgets, customer-support chat overlays, and any other JavaScript that lives in the old `<body>` — including any DOM elements they created and any timers/intervals they registered against those elements — are removed when `<body>` is replaced. Load third-party scripts from `<head>` instead, or re-initialize them from a `djust:layout-changed` event listener. If a third-party widget is critical, consider whether this feature is the right fit for your app.
 - **Outer-layout event listeners** (e.g. a click handler on a `<nav>` that the initial layout owned) are **lost** — the old `<body>` is replaced wholesale. Put such listeners on the document / use event delegation.
 - **`set_layout` is imperative.** No declarative `layout_template = "..."` class attribute — that's a separate future feature.
 - **One layout per render cycle.** Calling `set_layout` twice in the same handler keeps only the last call (intentional — the client only applies one swap).

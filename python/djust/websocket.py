@@ -392,12 +392,26 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def _flush_pending_layout(self) -> None:
         """Send a pending layout-swap command queued by the view (v0.6.0).
 
-        Called after each ``_send_update``. If ``view.set_layout(path)``
-        was called during the handler, render ``path`` with the view's
-        current context and emit a ``{"type": "layout", "path": ...,
-        "html": ...}`` frame. The client swaps the document body while
-        preserving the live ``[dj-root]`` element's identity (and
-        therefore all inner LiveView state).
+        Called after ``_flush_page_metadata`` so the layout swap
+        (replaces ``<body>``) is the last thing the client applies.
+        Any pending ``page_title`` / ``page_meta`` frames mutate
+        ``<head>`` and are delivered first; they survive the swap.
+
+        If ``view.set_layout(path)`` was called during the handler,
+        render ``path`` with the view's current context and emit a
+        ``{"type": "layout", "path": ..., "html": ...}`` frame. The
+        client swaps the document body while preserving the live
+        ``[dj-root]`` element's identity (and therefore all inner
+        LiveView state).
+
+        Error handling: ``TemplateDoesNotExist`` always warns and
+        skips. In DEBUG mode any other exception is re-raised so
+        programmer errors (``TemplateSyntaxError``, ``NoReverseMatch``,
+        attribute errors from ``get_context_data``) surface during
+        development. In production (``DEBUG=False``) the exception is
+        caught and logged so a broken layout template can't crash the
+        whole WebSocket consumer — the handler's VDOM patches still
+        flush.
         """
         if not self.view_instance:
             return
@@ -406,6 +420,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         layout_path = self.view_instance._drain_pending_layout()
         if not layout_path:
             return
+        from django.conf import settings as django_settings
         from django.template.exceptions import TemplateDoesNotExist
         from django.template.loader import render_to_string
 
@@ -427,6 +442,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "set_layout(%r) — template rendering raised; ignoring swap request",
                 layout_path,
             )
+            # In DEBUG, re-raise so programmer errors are visible.
+            # TemplateSyntaxError / NoReverseMatch / missing-context-key
+            # bugs need to surface loudly during iteration.
+            if getattr(django_settings, "DEBUG", False):
+                raise
             return
         await self.send_json(
             {

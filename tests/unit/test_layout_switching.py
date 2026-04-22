@@ -157,6 +157,56 @@ async def test_flush_pending_layout_view_none_is_safe():
     consumer.send_json.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_flush_pending_layout_get_context_raises_prod_swallowed(monkeypatch, caplog):
+    """When get_context_data() raises in production (DEBUG=False), the
+    exception is logged and the swap is skipped — the WS stays alive."""
+    import logging
+
+    from django.test import override_settings
+
+    from djust.websocket import LiveViewConsumer
+
+    class _BrokenContext(LayoutMixin):
+        def get_context_data(self, **kwargs):
+            raise AttributeError("missing_key")
+
+    consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+    view = _BrokenContext()
+    view.set_layout("layouts/x.html")
+    consumer.view_instance = view
+    consumer.send_json = AsyncMock()
+
+    with override_settings(DEBUG=False):
+        with caplog.at_level(logging.ERROR, logger="djust.websocket"):
+            await consumer._flush_pending_layout()
+
+    consumer.send_json.assert_not_awaited()
+    assert any("template rendering raised" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_layout_get_context_raises_debug_reraises(monkeypatch):
+    """In DEBUG, the exception re-raises so programmer errors surface."""
+    from django.test import override_settings
+
+    from djust.websocket import LiveViewConsumer
+
+    class _BrokenContext(LayoutMixin):
+        def get_context_data(self, **kwargs):
+            raise AttributeError("missing_key")
+
+    consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+    view = _BrokenContext()
+    view.set_layout("layouts/x.html")
+    consumer.view_instance = view
+    consumer.send_json = AsyncMock()
+
+    with override_settings(DEBUG=True):
+        with pytest.raises(AttributeError, match="missing_key"):
+            await consumer._flush_pending_layout()
+
+
 # ---------------------------------------------------------------------------
 # LiveView composition — the mixin is reachable from a real LiveView instance
 # ---------------------------------------------------------------------------
