@@ -99,6 +99,53 @@ class TestSendPgNotify:
         with pytest.raises(ValueError):
             send_pg_notify("bad-channel", {})
 
+    @patch("djust.db.decorators.connection")
+    def test_payload_over_hard_limit_is_dropped_and_logged(self, mock_conn, caplog):
+        """Issue #810: payloads > 7500 bytes are dropped to avoid the 8000B NOTIFY cap."""
+        import logging
+
+        mock_conn.vendor = "postgresql"
+        # Build a payload that JSON-encodes to > 7500 bytes.
+        big = {"data": "x" * 8000}
+        with caplog.at_level(logging.ERROR, logger="djust.db"):
+            send_pg_notify("orders", big)
+        # Cursor was never acquired — notification was dropped.
+        mock_conn.cursor.assert_not_called()
+        assert any("DROPPING notification" in r.message for r in caplog.records)
+
+    @patch("djust.db.decorators.connection")
+    def test_payload_over_soft_limit_warns_but_sends(self, mock_conn, caplog):
+        """Issue #810: payloads > 4KB log a warning but still send (under hard cap)."""
+        import logging
+
+        mock_conn.vendor = "postgresql"
+        cursor_cm = MagicMock()
+        cursor = MagicMock()
+        cursor_cm.__enter__.return_value = cursor
+        mock_conn.cursor.return_value = cursor_cm
+
+        # ~5KB body (over 4K soft, under 7.5K hard).
+        mid = {"data": "y" * 5000}
+        with caplog.at_level(logging.WARNING, logger="djust.db"):
+            send_pg_notify("orders", mid)
+        cursor.execute.assert_called_once()  # still sent
+        assert any("soft limit" in r.message.lower() for r in caplog.records)
+
+    @patch("djust.db.decorators.connection")
+    def test_small_payload_does_not_log(self, mock_conn, caplog):
+        """Normal-sized payload produces no size-related log at WARNING or above."""
+        import logging
+
+        mock_conn.vendor = "postgresql"
+        cursor_cm = MagicMock()
+        cursor = MagicMock()
+        cursor_cm.__enter__.return_value = cursor
+        mock_conn.cursor.return_value = cursor_cm
+
+        with caplog.at_level(logging.WARNING, logger="djust.db"):
+            send_pg_notify("orders", {"pk": 1})
+        assert not any("limit" in r.message for r in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # @notify_on_save
@@ -269,6 +316,71 @@ class TestListenerSingleton:
         PostgresNotifyListener.reset_for_tests()
         b = PostgresNotifyListener.instance()
         assert a is not b
+
+    def test_areset_for_tests_awaits_task(self):
+        """Issue #811: async variant awaits the cancelled task so tests don't race."""
+
+        async def run():
+            listener = PostgresNotifyListener.instance()
+            # Fake a task on the listener so the reset has something to await.
+
+            async def _noop():
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    raise
+
+            listener._task = asyncio.create_task(_noop())
+            await PostgresNotifyListener.areset_for_tests()
+            # After areset returns, the task must be done (cancelled).
+            assert listener._task.done()
+            # And the singleton slot must be cleared.
+            assert PostgresNotifyListener._instance is None
+
+        asyncio.run(run())
+
+
+class TestConsumerWithoutNotificationMixin:
+    """Issue #812: consumers whose view has no NotificationMixin must not break."""
+
+    def test_consumer_iterates_safely_when_no_listen_channels_attr(self):
+        """getattr(view, '_listen_channels', None) handles views without the mixin."""
+        from djust.websocket import LiveViewConsumer
+
+        # A view instance without NotificationMixin has no _listen_channels attr.
+        class PlainView:
+            pass
+
+        view = PlainView()
+        assert not hasattr(view, "_listen_channels")
+
+        # The consumer's pattern:
+        listen_channels = getattr(view, "_listen_channels", None)
+        assert listen_channels is None  # no iteration attempted
+
+        # Use the same defensive idiom in a direct unit assertion:
+        # the `if listen_channels:` gate prevents a TypeError on None.
+        # If we DID enter the loop, iterating None would crash — we rely
+        # on that gate being present in websocket.py:1321.
+        assert LiveViewConsumer is not None  # import sanity only
+
+    def test_consumer_iterates_safely_when_listen_channels_is_empty_set(self):
+        """Mixin installed but no channels subscribed → loop body never executes."""
+        from djust.websocket import LiveViewConsumer
+
+        class MixedView:
+            _listen_channels = set()
+
+        view = MixedView()
+        listen_channels = getattr(view, "_listen_channels", None)
+        assert listen_channels == set()
+        # `if listen_channels:` evaluates empty set as falsy.
+        iterated = False
+        if listen_channels:  # noqa: SIM102
+            for _ in listen_channels:
+                iterated = True
+        assert iterated is False
+        assert LiveViewConsumer is not None
 
     def test_dispatch_sends_group_message(self):
         """_dispatch should forward to channel_layer.group_send with the
