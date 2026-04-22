@@ -774,13 +774,13 @@ class OnboardingView(WizardMixin, LiveView):
         self.live_redirect(f'/dashboard/')
 ```
 
-**`dj-no-submit` — Prevent enter-key form submission** — Prevent forms from submitting when the user presses Enter in a text input. `<form dj-submit="save" dj-no-submit="enter">`. This is the #1 form UX annoyance in LiveView-style apps — users press Enter expecting to confirm a field, and accidentally submit the entire form. Currently requires a `dj-hook` or JavaScript. ~10 lines JS. *Tiny feature, huge DX impact — every multi-field form needs this.*
+~~**`dj-no-submit` — Prevent enter-key form submission**~~ ✅ **Shipped in v0.5.1rc1** (Form & submit polish batch) — `<form dj-submit="save" dj-no-submit="enter">`. Document-level keydown listener; textareas, submit buttons, and modified Enter (Shift/Ctrl) unaffected. See `python/djust/static/djust/src/34-form-polish.js`.
 
-### Milestone: v0.5.2 — Package Consolidation: Components
+### Milestone: v0.5.2 — Demo Harness Cleanup
 
-*Goal:* Complete the runtime package consolidation from [ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) with the largest fold (`djust-components`). Intentionally scoped as a single-feature release so the migration gets focused review bandwidth without competing with feature work. Deliberately placed between v0.5.1 and v0.6.0 so the full v0.5.x cycle has cleanly unified auth, tenants, theming, and components extras by the time generative UIs ship.
+*Goal:* Originally scoped around the `djust-components` fold, which actually shipped in v0.5.0 alongside auth / tenants / admin / theming (confirmed in the v0.5.0 retrospective). With the headline item retired, v0.5.2 becomes a narrow-scope cleanup release — the demo-project split into test harness + scaffold pointer.
 
-**Package consolidation: fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3)** — Largest fold of the three-phase consolidation. Move `djust-components/components/` (~64.2K LOC, 307 Python files) → `djust.components`. Migrate CSS assets, icon libraries, template tag registration, component-showcase assets. The `component_showcase/` demo app is NOT folded — it moves to `examples.djust.org` or stays as a demo repo. `markdown>=3.0` and `nh3>=0.2` become dependencies of the new `djust[components]` extra rather than core. Test migration is the biggest chunk — components' test suite is the largest of the folded packages. Ship `djust-components 0.5.0` as a compat shim that re-exports from `djust.components` with a `DeprecationWarning`. ~2-3 weeks of focused work; scoping this as its own milestone acknowledges the risk and gives it room to land cleanly.
+~~**Package consolidation: fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3)**~~ ✅ **Shipped in v0.5.0** as part of the "Full Package Consolidation" milestone. All 272 Python files already live under `python/djust/components/` (4.3 MB). The standalone `djust-components` repo continues to exist as a compat shim; its sunset is tracked under v0.6.0 Phase 4 along with auth/tenants/theming.
 
 **Strip `examples/demo_project` down to a test harness — P3 (opportunistic)** — The directory currently plays two roles: (1) the pytest/playwright test-harness (settings.py, urls.py, asgi.py — maintained) and (2) ~12 pseudo-demo apps (`demo_app`, `djust_homepage`, `djust_demos`, `djust_forms`, `djust_tests`, `djust_docs`, `djust_rentals`, `djust_shared` — unmaintained, bit-rotting). The real user-facing starter template is the sibling `djust-scaffold` repo. Split the two: move the test-harness to `tests/test_project/`, delete the 12 demo apps, and point users at `djust-scaffold`. Critical-path effort is ~2 hours (dependency audit already done) — 5 real couplings require ports (`test_query_optimizer*.py` needs `djust_rentals` models → move to `tests/test_project/test_rentals/`; `test_demo_views.py` needs inline tenant view; playwright tests need `/tests/loading/`, `/cache/`, `/draft-mode/` routes ported into a minimal `test_playwright_views` app). Also touches `pyproject.toml` `DJANGO_SETTINGS_MODULE`, `Makefile` 8 targets, `.github/workflows/test.yml` playwright job, `tests/conftest.py` sys.path. Full plan with file-by-file audit in `docs/plans/strip-demo-project-to-test-harness.md`. *Benefit is non-mechanical: stops the public repo from shipping a pretend-maintained demo that contradicts the real starter (djust-scaffold). Smaller repo, faster CI checkout, clearer story. One purpose per tree.*
 
@@ -930,17 +930,17 @@ Open questions that inform future direction:
 | **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** | **v0.5.0** |
 | **Testing utilities** | **`LiveViewTest`** | **Testing Library** | **Basic** (`LiveViewTestClient`) | **v0.5.1** |
 | **Error overlay (dev)** | Error page | **Next.js overlay** | ✅ Shipped (v0.5.1) | v0.5.1 |
-| Computed/derived state | — | `useMemo` | Not started | v0.5.1 |
+| Computed/derived state | — | `useMemo` | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Lazy component loading | — | `React.lazy()` | ✅ Shipped (LiveView-level, PR #54) | v0.5.1 |
-| Component context sharing | — | `useContext` | Not started | v0.5.1 |
-| Trigger form action | `phx-trigger-action` | — | Not started | v0.5.1 |
+| Component context sharing | — | `useContext` | ✅ Shipped (v0.5.1) | v0.5.1 |
+| Trigger form action | `phx-trigger-action` | — | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Nested forms | `inputs_for/4` | Formik nested | ✅ Shipped (v0.5.1) | v0.5.1 |
-| Scoped loading states | `phx-loading` | Suspense per-query | Not started | v0.5.1 |
+| Scoped loading states | `phx-loading` | Suspense per-query | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Error boundaries | — | `<ErrorBoundary>` | ✅ Shipped (PR #773) | v0.5.1 |
-| **Native `<dialog>`** | — | — | **Not started** | **v0.5.1** |
-| **Stable component IDs** | — | **`useId`** | **Not started** | **v0.5.1** |
+| **Native `<dialog>`** | — | — | ✅ Shipped (v0.5.1) | v0.5.1 |
+| **Stable component IDs** | — | **`useId`** | ✅ Shipped (v0.5.1) | v0.5.1 |
 | **Form status awareness** | — | **`useFormStatus`** | **Not started** | **v0.8.0** |
-| **Dirty tracking** | — | — | **Not started** | **v0.5.1** |
+| **Dirty tracking** | — | — | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Animations / transitions | `JS.transition` | `<AnimatePresence>` | Not started | v0.6.0 |
 | Transition groups (lists) | — | `<TransitionGroup>` | Not started | v0.6.0 |
 | Exit animations | `phx-remove` | `<AnimatePresence>` | Not started | v0.6.0 |
