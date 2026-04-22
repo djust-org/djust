@@ -42,6 +42,7 @@ How to build specific features.
 | **[Presence](guides/presence.md)**                     | Track online users, live cursors, typing indicators       |
 | **[Uploads](guides/uploads.md)**                       | Chunked binary file uploads via WebSocket                 |
 | **[Paste Events](guides/dj-paste.md)**                 | `dj-paste` — structured clipboard payloads + upload routing |
+| **[Declarative UX Attributes](guides/declarative-ux-attrs.md)** | `dj-mutation`, `dj-sticky-scroll`, `dj-track-static` — small attrs that replace custom hooks |
 | **[Loading States](guides/loading-states.md)**         | Spinners, skeleton screens, disabled states               |
 
 ### Client-Side Commands

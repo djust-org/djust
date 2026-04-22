@@ -663,3 +663,26 @@ def do_colocated_hook(parser, token):
     nodelist = parser.parse(("endcolocated_hook",))
     parser.delete_first_token()
     return ColocatedHookNode(name, nodelist, force_global)
+
+
+@register.simple_tag
+def djust_track_static():
+    """Emit the ``dj-track-static`` attribute marker (v0.6.0).
+
+    Convenience tag so template authors don't have to remember the exact
+    attribute spelling. Intended for ``<script>`` / ``<link>`` tags that
+    should be monitored for asset-hash changes across WebSocket
+    reconnects — see ``dj-track-static`` in
+    ``static/djust/src/39-dj-track-static.js``.
+
+    Usage::
+
+        {% load live_tags %}
+        <script {% djust_track_static %} src="{% static 'js/app.abc.js' %}"></script>
+        <link {% djust_track_static %} rel="stylesheet" href="...">
+
+    To force an automatic ``window.location.reload()`` when the asset
+    changes (instead of the default ``dj:stale-assets`` CustomEvent),
+    write the attribute literally: ``dj-track-static="reload"``.
+    """
+    return mark_safe("dj-track-static")

@@ -127,6 +127,10 @@ class LiveViewWebSocket {
                 if (window.djust) window.djust._isReconnect = true;
                 // Notify hooks of reconnection
                 notifyHooksReconnected();
+                // Public CustomEvent consumed by dj-track-static (v0.6.0)
+                // and available to application code that wants to react
+                // to reconnect without patching internal WS state.
+                document.dispatchEvent(new CustomEvent('djust:ws-reconnected'));
             }
             this.stats.connectedAt = Date.now();
         };
