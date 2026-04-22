@@ -195,3 +195,64 @@ class TestEndToEnd:
 
         out = render('{% call "card" %}{% slot header %}H{% endslot %}B{% endcall %}')
         assert out == "<div>H|B</div>"
+
+    def test_render_slot_dotted_path_resolves_slot_entry(self):
+        """Issue #790: `RenderSlotTagHandler` resolves `slots.col.0` to the first col slot.
+
+        Tests the dotted-path-with-list-index semantics at the handler level.
+        The full Rust-engine end-to-end path (``{% render_slot slots.col.0 %}``
+        inside a ``render_template`` call) has a separate registration gap
+        tracked under a new tech-debt issue — the handler's own logic is
+        exercised directly here.
+        """
+        from djust.components.function_component import RenderSlotTagHandler
+
+        ctx = {
+            "slots": {
+                "col": [
+                    {"name": "col", "attrs": {}, "content": "first-col-content"},
+                    {"name": "col", "attrs": {}, "content": "second-col-content"},
+                ],
+            }
+        }
+        handler = RenderSlotTagHandler()
+        # slots.col.0 → first entry's .content
+        assert handler.render(["slots.col.0"], ctx) == "first-col-content"
+        # slots.col.1 → second entry
+        assert handler.render(["slots.col.1"], ctx) == "second-col-content"
+        # slots.col.0.content → same as slots.col.0 (content fallback)
+        assert handler.render(["slots.col.0.content"], ctx) == "first-col-content"
+        # slots.missing.0 → empty (None value short-circuits)
+        assert handler.render(["slots.missing.0"], ctx) == ""
+        # slots.col.9 → empty (out-of-bounds index)
+        assert handler.render(["slots.col.9"], ctx) == ""
+
+    def test_slot_inside_for_loop_preserves_row_context(self, ensure_rust_handlers):
+        """Issue #789 (Risk 1 from PR #788's plan): slot sentinels emitted per loop iteration.
+
+        When `{% slot col %}` appears inside `{% for row in rows %}`, the sentinel
+        scanner at ``CallTagHandler.render`` sees the sentinels flat in the
+        body and groups them into `slots['col'] = [...]`. The iteration's loop
+        variable (``row.name``) must resolve to the per-iteration value on each
+        sentinel, not the last row's value.
+        """
+
+        captured = []
+
+        @component
+        def rowlist(assigns):
+            for s in assigns["slots"].get("col", []):
+                captured.append(s["content"])
+            return "<ol></ol>"
+
+        render(
+            '{% call "rowlist" %}'
+            "{% for row in rows %}"
+            "{% slot col %}row-{{ row.name }}{% endslot %}"
+            "{% endfor %}"
+            "{% endcall %}",
+            {"rows": [{"name": "A"}, {"name": "B"}, {"name": "C"}]},
+        )
+
+        # Exactly three col-slot sentinels, each carrying its own row's name.
+        assert captured == ["row-A", "row-B", "row-C"]
