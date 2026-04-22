@@ -46,6 +46,16 @@ from typing import Any, Dict, List, Optional, Set
 
 from django.core.management.base import BaseCommand
 
+from djust.management._introspect import (
+    app_label_for_class as _app_label,
+)
+from djust.management._introspect import (
+    is_user_class as _is_user_class,
+)
+from djust.management._introspect import (
+    walk_subclasses as _walk_subclasses,
+)
+
 
 # Names the framework always provides.
 _ALWAYS_AVAILABLE: Set[str] = {
@@ -87,25 +97,6 @@ _IDENT_RE = re.compile(r"([A-Za-z_][\w]*)")
 _NOQA_RE = re.compile(r"\{#\s*djust_typecheck:\s*noqa(?:\s+(\w+(?:\s*,\s*\w+)*))?\s*#\}")
 
 
-def _walk_subclasses(cls):
-    for sub in cls.__subclasses__():
-        yield sub
-        yield from _walk_subclasses(sub)
-
-
-def _is_user_class(cls) -> bool:
-    mod = getattr(cls, "__module__", "") or ""
-    if mod.startswith("djust.") or mod.startswith("djust_"):
-        if "test" not in mod and "example" not in mod:
-            return False
-    return True
-
-
-def _app_label(cls) -> str:
-    mod = getattr(cls, "__module__", "") or ""
-    return mod.split(".", 1)[0] if mod else ""
-
-
 def _public_class_attrs(cls) -> Set[str]:
     """Names declared directly on the class body (or inherited from user bases)."""
     names: Set[str] = set()
@@ -123,25 +114,54 @@ def _public_class_attrs(cls) -> Set[str]:
 def _extract_context_keys_from_ast(cls) -> Set[str]:
     """Best-effort static extraction of context-provided names.
 
-    Collects three sources from the class source:
+    Collects three sources from the class source, walking the MRO so keys
+    set on any user-code ancestor (mixins, base views) are visible to the
+    checker:
+
     1. Literal dict keys in ``get_context_data`` ``return {...}``.
     2. ``self.foo = ...`` attribute assignments anywhere in the class
        (``mount``, event handlers, helper methods — they all populate
        public state that templates can read).
     3. Properties declared on the class (``@property``-decorated methods).
+
+    Framework base classes (``djust.*`` / ``djust_*``) are skipped to avoid
+    surfacing internal helpers as user-visible context keys.
     """
     keys: Set[str] = set()
     import inspect
     import textwrap
 
-    try:
-        src = inspect.getsource(cls)
-    except (OSError, TypeError):
-        return keys
-    try:
-        tree = ast.parse(textwrap.dedent(src))
-    except SyntaxError:
-        return keys
+    for klass in cls.__mro__:
+        if klass is object:
+            continue
+        mod = getattr(klass, "__module__", "") or ""
+        # Skip framework classes: djust internals, Django, DRF, and builtins.
+        # Test / example modules that live under djust.* are kept so our own
+        # test helpers work.
+        if (mod.startswith("djust.") or mod.startswith("djust_")) and (
+            "test" not in mod and "example" not in mod
+        ):
+            continue
+        if mod.startswith("django.") or mod == "django":
+            continue
+        if mod.startswith("rest_framework.") or mod == "rest_framework":
+            continue
+        if mod == "builtins":
+            continue
+        try:
+            src = inspect.getsource(klass)
+        except (OSError, TypeError):
+            continue
+        try:
+            tree = ast.parse(textwrap.dedent(src))
+        except SyntaxError:
+            continue
+        _collect_context_keys_from_tree(tree, keys)
+    return keys
+
+
+def _collect_context_keys_from_tree(tree: ast.AST, keys: Set[str]) -> None:
+    """Walk a parsed class body and add discoverable context keys to ``keys``."""
     for node in ast.walk(tree):
         # 1. get_context_data literal returns
         if isinstance(node, ast.FunctionDef) and node.name == "get_context_data":
@@ -194,11 +214,10 @@ def _extract_context_keys_from_ast(cls) -> Set[str]:
                         name = deco.func.attr
                 if name == "property" and not node.name.startswith("_"):
                     keys.add(node.name)
-    return keys
 
 
 def _extract_template_locals(src: str) -> Set[str]:
-    """Names bound by the template itself (for/with loops)."""
+    """Names bound by the template itself (for/with/blocktrans loops)."""
     locals_: Set[str] = set()
     for match in _TAG_RE.finditer(src):
         tag = match.group(1)
@@ -217,11 +236,32 @@ def _extract_template_locals(src: str) -> Set[str]:
                     m = _IDENT_RE.match(name)
                     if m:
                         locals_.add(m.group(1))
+        elif tag == "blocktrans" or tag == "blocktranslate":
+            # `{% blocktrans with x=foo y=bar %}` → bind x, y.
+            # Also supports `count var=expr` which binds `var` the same way.
+            if "with" in args.split() or "count" in args.split():
+                for piece in args.split():
+                    if "=" in piece:
+                        name = piece.split("=", 1)[0].strip()
+                        m = _IDENT_RE.match(name)
+                        if m:
+                            locals_.add(m.group(1))
         elif tag == "inputs_for":
             # djust block tag: `{% inputs_for formset as form %}` → bind form
             parts = args.split()
             if len(parts) >= 3 and parts[1] == "as":
                 locals_.add(parts[2])
+        elif tag == "cycle":
+            # `{% cycle "odd" "even" as row_class %}` → bind row_class locally.
+            # The cycle args themselves are references (handled in
+            # _extract_referenced_names); the name after `as` is a local.
+            parts = args.split()
+            if "as" in parts:
+                idx = parts.index("as")
+                if idx + 1 < len(parts):
+                    m = _IDENT_RE.match(parts[idx + 1])
+                    if m:
+                        locals_.add(m.group(1))
     return locals_
 
 
@@ -261,6 +301,31 @@ def _extract_referenced_names(src: str) -> List[tuple]:
         elif tag in {"url", "static"}:
             # Positional args are name-strings, not context vars.
             continue
+        elif tag in {"firstof", "cycle"}:
+            # `{% firstof a b c %}` / `{% cycle a b c %}` — each non-literal token
+            # is a context variable. Skip string literals and numbers.
+            for token in args.split():
+                if not token or token[0] in {"'", '"'} or token.isdigit():
+                    continue
+                # `cycle` supports `as name` suffix which binds a loop var — skip
+                # the "as X" clause itself; X is a local, not a reference.
+                if token == "as":
+                    break
+                m = _IDENT_RE.match(token)
+                if m:
+                    refs.append((m.group(1), line))
+        elif tag in {"blocktrans", "blocktranslate"}:
+            # `{% blocktrans with x=expr y=expr %}` — the right-hand side of each
+            # x=expr pair is a context variable reference. `x` itself is a local
+            # (handled in _extract_template_locals).
+            for piece in args.split():
+                if "=" in piece:
+                    rhs = piece.split("=", 1)[1].strip()
+                    if not rhs or rhs[0] in {"'", '"'} or rhs.isdigit():
+                        continue
+                    m = _IDENT_RE.match(rhs)
+                    if m:
+                        refs.append((m.group(1), line))
     return refs
 
 

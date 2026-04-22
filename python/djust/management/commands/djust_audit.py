@@ -21,6 +21,12 @@ from typing import Dict
 
 from django.core.management.base import BaseCommand
 
+# Shared class-introspection helpers live in djust.management._introspect so
+# djust_audit and djust_typecheck stay in sync.
+from djust.management._introspect import app_label_for_class as _app_label_for_class
+from djust.management._introspect import is_user_class as _is_user_class
+from djust.management._introspect import walk_subclasses as _walk_subclasses
+
 logger = logging.getLogger(__name__)
 
 # Optional mixins that users explicitly add to their LiveView classes.
@@ -46,31 +52,6 @@ _DECORATOR_KEYS = {
     "client_state",
     "permission_required",
 }
-
-
-def _walk_subclasses(cls):
-    """Recursively yield all subclasses of cls."""
-    for sub in cls.__subclasses__():
-        yield sub
-        yield from _walk_subclasses(sub)
-
-
-def _is_user_class(cls):
-    """Return True if cls is a user-defined class (not internal djust framework)."""
-    module = getattr(cls, "__module__", "") or ""
-    if module.startswith("djust.") or module.startswith("djust_"):
-        if "test" not in module and "example" not in module:
-            return False
-    return True
-
-
-def _app_label_for_class(cls):
-    """Extract the Django app label from a class's module path."""
-    module = getattr(cls, "__module__", "") or ""
-    # The app label is typically the first component of the module path
-    # e.g., "demo_app.views" -> "demo_app"
-    parts = module.split(".")
-    return parts[0] if parts else ""
 
 
 def _get_handler_metadata(cls, base_classes=None):

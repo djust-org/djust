@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`djust_typecheck` — `{% firstof %}` / `{% cycle %}` / `{% blocktrans with %}` tag support (#850)** — The extractor now captures positional context-variable references in `{% firstof a b c %}` and `{% cycle a b c %}` (string literals and `as <name>` suffixes are correctly ignored), and the `with x=expr` (and `count x=expr`) clauses of `{% blocktrans %}` / `{% blocktranslate %}` produce both the template-local binding (`x`) and the reference (`expr`). Eliminates a class of false positives (blocktrans locals) and false negatives (firstof/cycle args). (`python/djust/management/commands/djust_typecheck.py`)
+
+### Changed
+
+- **`djust_typecheck` — walk MRO for parent-class `self.foo = ...` assigns (#851)** — `_extract_context_keys_from_ast` now iterates `cls.__mro__` (skipping `djust.*`, `djust_*`, `django.*`, and `builtins`), so a child view that relies on attributes set in a parent `mount()` no longer produces spurious "unresolved" reports. The filter drops Django's `View` / namespace-framework attrs (`request`, `head`, `kwargs`, `args`) that would otherwise surface from the base class. (`python/djust/management/commands/djust_typecheck.py`)
+- **Shared class-introspection helpers (#852)** — `_walk_subclasses`, `_is_user_class`, and `_app_label_for_class` are now a single source of truth in the new `djust.management._introspect` module; `djust_audit` and `djust_typecheck` both import from it. No behavior change; purely a refactor to prevent drift as the set of management commands grows. `_introspect.walk_subclasses` also gained cycle-safety (diamond-inheritance deduplication) which the old recursive implementation lacked. (`python/djust/management/_introspect.py`, `python/djust/management/commands/djust_audit.py`, `python/djust/management/commands/djust_typecheck.py`)
+
 ## [0.5.1rc4] - 2026-04-22
 
 ### Added
