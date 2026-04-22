@@ -68,6 +68,60 @@ def test_extract_template_locals_binds_inputs_for_as_var():
     assert "form" in locals_
 
 
+def test_extract_template_locals_binds_blocktrans_with_vars():
+    """Issue #850: `{% blocktrans with x=foo y=bar %}` → bind x, y as template locals."""
+    src = "{% blocktrans with name=first_name count=total %}Hi {{ name }} ({{ count }}){% endblocktrans %}"
+    locals_ = _extract_template_locals(src)
+    assert "name" in locals_
+    assert "count" in locals_
+
+
+def test_extract_template_locals_binds_blocktranslate_alias():
+    """`blocktranslate` is the newer Django alias for `blocktrans`."""
+    src = "{% blocktranslate with x=foo %}hi{% endblocktranslate %}"
+    locals_ = _extract_template_locals(src)
+    assert "x" in locals_
+
+
+def test_extract_referenced_names_extracts_firstof_args():
+    """Issue #850: `{% firstof a b c %}` — each non-literal token is a context var."""
+    src = "{% firstof primary fallback default %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert {"primary", "fallback", "default"} <= names
+
+
+def test_extract_referenced_names_extracts_cycle_args():
+    """Issue #850: `{% cycle a b c %}` — positional args are context vars."""
+    src = "{% cycle even odd %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert {"even", "odd"} <= names
+
+
+def test_extract_referenced_names_ignores_firstof_string_literals():
+    """String-literal tokens inside firstof must NOT be reported as variables."""
+    src = "{% firstof user_name 'anonymous' %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert "user_name" in names
+    assert "anonymous" not in names
+
+
+def test_extract_referenced_names_ignores_cycle_as_suffix():
+    """`{% cycle 'a' 'b' as row_class %}` — `row_class` is a local binding, not a var."""
+    src = "{% cycle odd_class even_class as row_class %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert "odd_class" in names
+    assert "even_class" in names
+    assert "row_class" not in names  # it's a local after `as`, not a reference
+
+
+def test_extract_referenced_names_extracts_blocktrans_with_rhs():
+    """`{% blocktrans with x=foo %}` — `foo` is a reference (`x` is the local)."""
+    src = "{% blocktrans with name=first_name count=total_items %}...{% endblocktrans %}"
+    names = {n for n, _ in _extract_referenced_names(src)}
+    assert "first_name" in names
+    assert "total_items" in names
+
+
 def test_public_class_attrs_returns_non_underscore_names():
     class _V(LiveView):
         foo = 1
@@ -111,6 +165,40 @@ def test_extract_context_keys_from_ast_finds_annotated_assignments():
 
     keys = _extract_context_keys_from_ast(_V)
     assert {"count", "label"} <= keys
+
+
+def test_extract_context_keys_from_ast_walks_mro_for_parent_assigns():
+    """Issue #851: self.foo = ... assignments on a user-code parent class must be visible.
+
+    Before the MRO walk, ChildView below would falsely flag `parent_attr` as
+    unresolved because the AST walker only inspected ChildView's own source.
+    """
+
+    class BaseView(LiveView):
+        def mount(self, request=None, **kwargs):
+            self.parent_attr = "set-by-parent"
+
+    class ChildView(BaseView):
+        def mount(self, request=None, **kwargs):
+            super().mount(request=request, **kwargs)
+            self.child_attr = "set-by-child"
+
+    keys = _extract_context_keys_from_ast(ChildView)
+    assert "parent_attr" in keys  # the MRO walk picked up BaseView.mount
+    assert "child_attr" in keys
+
+
+def test_extract_context_keys_from_ast_skips_django_framework_classes():
+    """MRO walk must not surface `request`/`head`/`kwargs`/`args` from django.views.View."""
+
+    class _V(LiveView):
+        def get_context_data(self, **kwargs):
+            return {"alpha": 1}
+
+    keys = _extract_context_keys_from_ast(_V)
+    # Django's View class has self.request = request and method names like head().
+    # Those must be filtered out — only user-code context keys belong here.
+    assert keys == {"alpha"}
 
 
 def test_extract_context_keys_from_ast_finds_property_methods():
