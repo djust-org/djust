@@ -1555,14 +1555,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             private_state
                         )
 
-                    # Issue #889: imperative mixin config set by mount()
-                    # (e.g. UploadMixin.allow_upload) is not captured by
-                    # the public/private state round-trip because the
-                    # live manager instances aren't JSON-serializable.
-                    # Replay the saved config list so restored views
-                    # behave identically to fresh-mount views.
+                    # Issues #889, #893, #894 — replay process-wide side
+                    # effects that mount() would have re-issued.
+                    # Pattern: session round-trip preserves instance
+                    # attrs but loses registrations with per-process
+                    # singletons (UploadManager, PresenceManager,
+                    # PostgresNotifyListener). Each affected mixin
+                    # exposes a _restore_* method that reconstructs
+                    # its side effects from the restored attrs.
                     if hasattr(self.view_instance, "_restore_upload_configs"):
                         await sync_to_async(self.view_instance._restore_upload_configs)()
+                    if hasattr(self.view_instance, "_restore_presence"):
+                        await sync_to_async(self.view_instance._restore_presence)()
+                    if hasattr(self.view_instance, "_restore_listen_channels"):
+                        await sync_to_async(self.view_instance._restore_listen_channels)()
 
                     await sync_to_async(self.view_instance._initialize_temporary_assigns)()
                     await sync_to_async(self.view_instance._assign_component_ids)()

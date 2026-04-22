@@ -79,6 +79,57 @@ class NotificationMixin:
         except Exception as exc:  # noqa: BLE001
             logger.warning("listen(%s): failed to start pg listener — %s", channel, exc)
 
+    def _restore_listen_channels(self) -> None:
+        """Re-issue ``LISTEN`` on every subscribed channel after state restoration.
+
+        Called by the WebSocket consumer's state-restoration path (issue
+        #894). When ``mount()`` is skipped because pre-rendered session
+        state exists, the ``self._listen_channels`` set survives the
+        JSON round-trip intact, but the side-effect registration with
+        :class:`PostgresNotifyListener` — the actual Postgres ``LISTEN
+        channel`` SQL statement — does NOT survive a process boundary.
+
+        Without this replay, a sticky-session load balancer or a
+        rolling-deploy restart that lands the HTTP mount and the WS
+        connection on different processes will leave the WS-side
+        process's listener with no subscriptions, and NOTIFYs will
+        never flow to ``handle_info``.
+
+        ``ensure_listening`` is already idempotent (it early-returns
+        on known channels) so calling it on the same process that
+        initially registered is harmless. Exceptions are logged and
+        swallowed — restoration must not break the WS.
+        """
+        channels = getattr(self, "_listen_channels", None)
+        if not channels:
+            return
+        try:
+            from ..db.notifications import PostgresNotifyListener
+        except ImportError:
+            return
+        from asgiref.sync import async_to_sync
+
+        for channel in list(channels):
+            try:
+                async_to_sync(PostgresNotifyListener.instance().ensure_listening)(channel)
+            except DatabaseNotificationNotSupported:
+                # Non-postgres backend — ``listen()`` would have raised
+                # at the original call site, so seeing this here means
+                # the backend changed between save and restore. Log and
+                # continue; other channels / mixins may still work.
+                logger.warning(
+                    "NotificationMixin._restore_listen_channels: postgres no longer "
+                    "available; channel %r will not receive NOTIFYs (issue #894).",
+                    channel,
+                )
+            except Exception as exc:  # noqa: BLE001 — restoration must never kill the WS
+                logger.warning(
+                    "NotificationMixin._restore_listen_channels: failed to re-issue "
+                    "LISTEN %s (issue #894): %s",
+                    channel,
+                    exc,
+                )
+
     def handle_info(self, message: Dict[str, Any]) -> None:
         """Receive out-of-band messages (e.g. pg_notify events).
 
