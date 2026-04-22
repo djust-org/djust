@@ -492,12 +492,23 @@ class LiveViewTestClient:
     def render_async(self) -> None:
         """Synchronously run any pending ``start_async`` / ``assign_async`` tasks.
 
-        The production WS consumer runs these tasks after the handler returns;
-        in unit tests we drain them inline so subsequent assertions see their
-        results. Each task's ``(callback, args, kwargs)`` tuple is called in
-        declaration order; exceptions propagate so test authors see real
-        failures instead of silent skips. Async callbacks are driven via
-        ``asgiref.sync.async_to_sync``.
+        The production WS consumer runs these tasks after the handler returns,
+        calling ``view.handle_async_result(name, result=, error=)`` when each
+        one completes (success path) or raises (error path). In unit tests we
+        drain the same way inline so subsequent assertions see the results and
+        any handle_async_result state mutations.
+
+        Each task's ``(callback, args, kwargs)`` tuple is called in declaration
+        order. On success, ``handle_async_result(name, result=result, error=None)``
+        is invoked if the view defines it. On exception, the exception is caught,
+        ``handle_async_result(name, result=None, error=exc)`` is called if
+        defined, and then the exception is re-raised so test authors see the
+        real failure rather than silent skips — unless a ``handle_async_result``
+        swallowed the error (common pattern: "if error: self.error = str(error)"),
+        in which case the test proceeds with whatever state mutation the callback
+        applied.
+
+        Async callbacks are driven via ``asgiref.sync.async_to_sync``.
 
         Raises:
             RuntimeError: View not mounted.
@@ -512,10 +523,25 @@ class LiveViewTestClient:
         # render_async() call (matches the production consumer semantics).
         pending = list(tasks.items())
         self.view_instance._async_tasks = {}
-        for _name, (callback, args, kwargs) in pending:
-            result = callback(*args, **kwargs)
-            if inspect.iscoroutine(result):
-                async_to_sync(_await_coro)(result)
+        has_handler = hasattr(self.view_instance, "handle_async_result")
+        for name, (callback, args, kwargs) in pending:
+            try:
+                result = callback(*args, **kwargs)
+                if inspect.iscoroutine(result):
+                    result = async_to_sync(_await_coro)(result)
+            except Exception as exc:
+                # Mirror the production consumer: give handle_async_result a
+                # chance to react before the exception propagates. If the
+                # handler chooses to swallow the exception (e.g. set an error
+                # attribute on the view), the test sees that state.
+                if has_handler:
+                    self.view_instance.handle_async_result(name, result=None, error=exc)
+                raise
+            else:
+                # Success path: invoke handle_async_result so tests see the
+                # same post-callback state that a WS client would see.
+                if has_handler:
+                    self.view_instance.handle_async_result(name, result=result, error=None)
 
     def follow_redirect(self) -> "LiveViewTestClient":
         """After a handler queued a ``live_redirect``, mount the destination.
@@ -529,7 +555,11 @@ class LiveViewTestClient:
             A new ``LiveViewTestClient`` pointed at the destination view.
 
         Raises:
-            AssertionError: No redirect was queued, or the URL resolves to a
+            AssertionError: No redirect was queued, more than one redirect
+                was queued (ambiguous intent — a handler that fires multiple
+                ``live_redirect`` calls is almost always a bug; make the
+                precedence explicit by fixing the handler rather than
+                silently picking the last one), or the URL resolves to a
                 non-LiveView view.
         """
         self._require_mounted()
@@ -539,7 +569,16 @@ class LiveViewTestClient:
             raise AssertionError(
                 "Expected a live_redirect to follow, but the handler queued no redirect."
             )
-        target = redirects[-1]
+        if len(redirects) > 1:
+            queued_paths = [r.get("path", "?") for r in redirects]
+            raise AssertionError(
+                f"follow_redirect: handler queued {len(redirects)} live_redirects "
+                f"(paths: {queued_paths!r}) — refusing to pick silently. "
+                f"A handler should fire at most one live_redirect per event; "
+                f"fix the handler or assert the intended precedence explicitly "
+                f"in the test."
+            )
+        target = redirects[0]
         from django.urls import resolve
 
         match = resolve(target["path"])

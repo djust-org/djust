@@ -199,6 +199,105 @@ def test_render_async_drains_so_recursive_tasks_are_not_auto_rerun():
     assert tracker["runs"] == 2
 
 
+def test_render_async_invokes_handle_async_result_on_success():
+    """Issue #843: render_async now calls handle_async_result(name, result=, error=None)
+    on success — mirrors the production WS consumer's behavior."""
+    calls = []
+
+    class V(LiveView):
+        def mount(self, request=None, **kwargs):
+            pass
+
+        @event_handler
+        def go(self, **kwargs):
+            self.start_async(self._work, name="my-task")
+
+        def _work(self):
+            return {"payload": 42}
+
+        def handle_async_result(self, name, result=None, error=None):
+            calls.append((name, result, error))
+
+    c = LiveViewTestClient(V).mount()
+    c.send_event("go")
+    c.render_async()
+    assert calls == [("my-task", {"payload": 42}, None)]
+
+
+def test_render_async_invokes_handle_async_result_on_error_and_reraises():
+    """Issue #843: on exception, call handle_async_result(name, result=None, error=exc)
+    then propagate so the test author sees the real failure."""
+    calls = []
+
+    class V(LiveView):
+        def mount(self, request=None, **kwargs):
+            pass
+
+        @event_handler
+        def go(self, **kwargs):
+            self.start_async(self._work, name="my-task")
+
+        def _work(self):
+            raise ValueError("kaboom")
+
+        def handle_async_result(self, name, result=None, error=None):
+            calls.append((name, result, type(error)))
+
+    c = LiveViewTestClient(V).mount()
+    c.send_event("go")
+    with pytest.raises(ValueError, match="kaboom"):
+        c.render_async()
+    # handle_async_result was called WITH the error before the raise.
+    assert calls == [("my-task", None, ValueError)]
+
+
+def test_render_async_without_handle_async_result_works_unchanged():
+    """View that doesn't define handle_async_result still gets its callbacks run."""
+
+    class V(LiveView):
+        count = 0
+
+        def mount(self, request=None, **kwargs):
+            self.count = 0
+
+        @event_handler
+        def go(self, **kwargs):
+            self.start_async(self._work, name="t")
+
+        def _work(self):
+            self.count += 1
+
+    c = LiveViewTestClient(V).mount()
+    c.send_event("go")
+    c.render_async()
+    assert c.view_instance.count == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# follow_redirect
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_follow_redirect_refuses_when_multiple_redirects_queued():
+    """Issue #844: follow_redirect must refuse to pick silently when the handler
+    queued more than one live_redirect — a handler firing two redirects is
+    almost always a bug; the test should surface the ambiguity explicitly."""
+
+    class V(LiveView):
+        def mount(self, request=None, **kwargs):
+            pass
+
+        @event_handler
+        def confused(self, **kwargs):
+            self.live_redirect("/first/")
+            self.live_redirect("/second/")
+
+    c = LiveViewTestClient(V).mount()
+    c.send_event("confused")
+    with pytest.raises(AssertionError, match=r"queued 2 live_redirects"):
+        c.follow_redirect()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # assert_stream_insert
 # ─────────────────────────────────────────────────────────────────────────────
