@@ -101,18 +101,39 @@
   }
 
   function inlineFormat(text) {
+    // Escape HTML FIRST so user input can't inject tags via markdown text.
+    // Markdown syntax chars (*, _, `, [, ], (, )) are not in the escape set,
+    // so the regex-based transforms below still match as intended.
+    text = escapeHtml(text);
     // Inline code
     text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
     // Bold
     text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
     // Italic
     text = text.replace(/\*(.+?)\*/g, "<em>$1</em>");
-    // Links
+    // Links — validate URL scheme to reject javascript:/data:/vbscript: etc.
     text = text.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
-      '<a href="$2">$1</a>'
+      function (_match, label, url) {
+        var safeUrl = _sanitizeUrl(url);
+        return '<a href="' + safeUrl + '">' + label + "</a>";
+      }
     );
     return text;
+  }
+
+  function _sanitizeUrl(url) {
+    // Reject dangerous URL schemes (case-insensitive, leading whitespace
+    // tolerated). Relative URLs, http(s), mailto, anchors etc. pass through.
+    var trimmed = String(url).trim().toLowerCase();
+    if (
+      trimmed.indexOf("javascript:") === 0 ||
+      trimmed.indexOf("data:") === 0 ||
+      trimmed.indexOf("vbscript:") === 0
+    ) {
+      return "#";
+    }
+    return url;
   }
 
   function initMarkdownTextarea(el) {

@@ -122,6 +122,23 @@ function splitShellAndMain(html) {
 // ---------------------------------------------------------------------------
 
 self.addEventListener('message', (event) => {
+    // Defense-in-depth origin check: only accept messages from WindowClient
+    // sources in this service worker's registration scope. Service workers
+    // are inherently same-origin (they cannot be loaded cross-origin), but
+    // restricting to WindowClient rejects unexpected source types and the
+    // scope check adds a belt-and-braces barrier against a compromised
+    // same-origin frame outside the SW's scope.
+    if (!event.source || event.source.type !== 'window') {
+        return;
+    }
+    if (
+        self.registration &&
+        self.registration.scope &&
+        event.source.url &&
+        event.source.url.indexOf(self.registration.scope) !== 0
+    ) {
+        return;
+    }
     const msg = event.data;
     if (!msg || typeof msg !== 'object' || !msg.type) {
         return;

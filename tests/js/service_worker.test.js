@@ -42,6 +42,9 @@ function loadSw() {
                 claim: () => Promise.resolve(),
                 matchAll: () => Promise.resolve([]),
             },
+            registration: {
+                scope: 'http://localhost:8000/',
+            },
         },
         caches: {
             open: async () => ({
@@ -89,9 +92,22 @@ describe('service-worker: shell/main split', () => {
 
 describe('service-worker: reconnection-bridge buffer', () => {
     function fireMessage(listeners, data, source) {
+        // Default source mimics a valid WindowClient in the SW scope so the
+        // new origin check passes. Individual tests can override.
+        const defaultSource = {
+            postMessage: vi.fn(),
+            type: 'window',
+            url: 'http://localhost:8000/page',
+        };
+        const src = source || defaultSource;
+        // Back-fill type/url on caller-supplied sources that omit them so
+        // pre-existing tests (which only set postMessage) still pass the
+        // origin check.
+        if (src && !src.type) src.type = 'window';
+        if (src && !src.url) src.url = 'http://localhost:8000/page';
         const event = {
             data: data,
-            source: source || { postMessage: vi.fn() },
+            source: src,
         };
         listeners.message(event);
         return event;
@@ -196,6 +212,70 @@ describe('service-worker: reconnection-bridge buffer', () => {
         fireMessage(listeners, { no_type: true }, src);
         expect(exports._internal.RECONNECT_BUFFER.size).toBe(0);
         expect(src.postMessage).not.toHaveBeenCalled();
+    });
+});
+
+describe('service-worker: message origin check (js/missing-origin-check)', () => {
+    function fireRaw(listeners, data, source) {
+        // Bypass fireMessage auto-fill — we want to test raw sources.
+        listeners.message({ data: data, source: source });
+    }
+
+    it('rejects messages with no source', () => {
+        const { listeners, exports } = loadSw();
+        fireRaw(
+            listeners,
+            { type: 'DJUST_BUFFER', connectionId: 'c1', payload: 'x' },
+            null
+        );
+        expect(exports._internal.RECONNECT_BUFFER.size).toBe(0);
+    });
+
+    it('rejects messages from non-WindowClient sources (worker / sharedworker)', () => {
+        const { listeners, exports } = loadSw();
+        fireRaw(
+            listeners,
+            { type: 'DJUST_BUFFER', connectionId: 'c1', payload: 'x' },
+            { type: 'worker', url: 'http://localhost:8000/w.js', postMessage: vi.fn() }
+        );
+        fireRaw(
+            listeners,
+            { type: 'DJUST_BUFFER', connectionId: 'c1', payload: 'x' },
+            {
+                type: 'sharedworker',
+                url: 'http://localhost:8000/sw.js',
+                postMessage: vi.fn(),
+            }
+        );
+        expect(exports._internal.RECONNECT_BUFFER.size).toBe(0);
+    });
+
+    it('rejects WindowClient sources whose URL is outside the SW scope', () => {
+        const { listeners, exports } = loadSw();
+        fireRaw(
+            listeners,
+            { type: 'DJUST_BUFFER', connectionId: 'c1', payload: 'x' },
+            {
+                type: 'window',
+                url: 'http://evil.example.com/page',
+                postMessage: vi.fn(),
+            }
+        );
+        expect(exports._internal.RECONNECT_BUFFER.size).toBe(0);
+    });
+
+    it('accepts WindowClient sources within the SW scope', () => {
+        const { listeners, exports } = loadSw();
+        fireRaw(
+            listeners,
+            { type: 'DJUST_BUFFER', connectionId: 'c1', payload: 'ok' },
+            {
+                type: 'window',
+                url: 'http://localhost:8000/some/page',
+                postMessage: vi.fn(),
+            }
+        );
+        expect(exports._internal.RECONNECT_BUFFER.get('c1')).toEqual(['ok']);
     });
 });
 
