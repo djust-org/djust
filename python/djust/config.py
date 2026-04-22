@@ -51,6 +51,18 @@ class LiveViewConfig:
         "event_security": "strict",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
+        # WebSocket per-message compression advisory flag (v0.6.0).
+        # permessage-deflate negotiation actually happens in the ASGI
+        # server — Uvicorn/Daphne both support it by default. This flag
+        # is the declarative "we want compression" signal that
+        # djust_audit / debug-panel introspection surface, and that
+        # application code can branch on (e.g. to skip a manual
+        # JSON.stringify optimization that only helps without the
+        # wire-level compress). Costs ~64 KB of zlib context per open
+        # connection — disable on extreme-connection-density
+        # deployments (100k+/worker). Override via
+        # settings.DJUST_WS_COMPRESSION.
+        "websocket_compression": True,
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
         "debug_components": False,  # Enable component lifecycle debug logs
@@ -186,6 +198,11 @@ class LiveViewConfig:
 
             if hasattr(settings, "LIVEVIEW_CONFIG"):
                 self._config.update(settings.LIVEVIEW_CONFIG)
+            # Top-level djust-specific settings — convenience aliases
+            # for the nested ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` dicts.
+            # Added for discoverability of operator-facing toggles.
+            if hasattr(settings, "DJUST_WS_COMPRESSION"):
+                self._config["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
         except ImportError:
             # Django not installed
             pass
