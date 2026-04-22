@@ -6,12 +6,16 @@ Provides three views:
 - ``gallery_view`` — legacy monolithic page with all components
 """
 
+import logging
+
 from django.http import HttpResponse, Http404
 from django.template import Template, Context
 from django.templatetags.static import static
 from django.utils.html import escape
 
 from .registry import get_gallery_data
+
+logger = logging.getLogger(__name__)
 
 
 # ── Theme helpers ──
@@ -584,13 +588,21 @@ def _render_component_cards(components, extra_context=None):
                     if extra_context:
                         ctx.update(extra_context)
                     rendered = t.render(Context(ctx))
-                except Exception as exc:
-                    rendered = f'<div style="color:red;">Render error: {exc}</div>'
+                except Exception:
+                    logger.exception(
+                        "gallery template render failed for variant %s",
+                        variant.get("name", "unknown"),
+                    )
+                    rendered = '<div style="color:red;">Render error — see server logs</div>'
             elif comp["type"] == "class":
                 try:
                     rendered = variant["render"]()
-                except Exception as exc:
-                    rendered = f'<div style="color:red;">Render error: {exc}</div>'
+                except Exception:
+                    logger.exception(
+                        "gallery class render failed for variant %s",
+                        variant.get("name", "unknown"),
+                    )
+                    rendered = '<div style="color:red;">Render error — see server logs</div>'
 
             parts.append('<div class="variant-section">')
             parts.append(f'<div class="variant-label">{variant["name"]}</div>')

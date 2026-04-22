@@ -280,13 +280,10 @@ class AccessibilityValidator:
             sum(r.overall_score for r in reports.values()) / total_themes if total_themes > 0 else 0
         )
 
-        html_parts = [
-            """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>djust-theming Accessibility Report</title>
-    <style>
+        # CSS is kept separate from the formatted HTML template so literal
+        # CSS braces are NOT interpreted as str.format placeholders
+        # (CodeQL: py/str-format/missing-named-argument).
+        _css_styles = """
         body { font-family: system-ui, sans-serif; margin: 2rem; }
         .summary { background: #f5f5f5; padding: 1rem; border-radius: 8px; margin-bottom: 2rem; }
         .theme-report { border: 1px solid #ddd; margin-bottom: 1rem; border-radius: 8px; }
@@ -303,7 +300,14 @@ class AccessibilityValidator:
         .contrast-fail { background: #fee2e2; }
         .issues { background: #fef3c7; padding: 1rem; border-radius: 4px; margin: 0.5rem 0; }
         .recommendations { background: #dbeafe; padding: 1rem; border-radius: 4px; margin: 0.5rem 0; }
-    </style>
+"""
+
+        _html_template = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>djust-theming Accessibility Report</title>
+    <style>{styles}</style>
 </head>
 <body>
     <h1>djust-theming Accessibility Report</h1>
@@ -315,7 +319,11 @@ class AccessibilityValidator:
         <p><strong>Average Score:</strong> {avg_score:.1f}%</p>
         <p><strong>Pass Rate:</strong> {pass_rate:.1f}%</p>
     </div>
-""".format(
+"""
+
+        html_parts = [
+            _html_template.format(
+                styles=_css_styles,
                 total_themes=total_themes,
                 passing_themes=passing_themes,
                 avg_score=avg_score,
