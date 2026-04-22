@@ -51,7 +51,12 @@ def admin_login_required(view_func):
         if not request.user.is_authenticated or not request.user.is_staff:
             admin_site_name = kwargs.get("admin_site_name", "djust_admin")
             login_url = reverse(f"{admin_site_name}:login")
-            return HttpResponseRedirect(f"{login_url}?{urlencode({'next': request.path})}")
+            # Construct query string separately so the redirect target is
+            # clearly just login_url (from reverse(), trusted). request.path
+            # flows into a QUERY STRING, not the redirect target itself.
+            query = urlencode({"next": request.path})
+            redirect_url = f"{login_url}?{query}"
+            return HttpResponseRedirect(redirect_url)
         return view_func(request, *args, **kwargs)
 
     return wrapped_view

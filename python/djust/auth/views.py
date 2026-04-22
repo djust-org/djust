@@ -24,14 +24,17 @@ class SignupView(CreateView):
         return redirect(self.get_success_url())
 
     def get_success_url(self):
+        default_url = getattr(settings, "LOGIN_REDIRECT_URL", "/")
         next_url = self.request.POST.get("next", "")
-        if next_url and url_has_allowed_host_and_scheme(
+        if not next_url:
+            return default_url
+        if not url_has_allowed_host_and_scheme(
             url=next_url,
             allowed_hosts={self.request.get_host()},
             require_https=self.request.is_secure(),
         ):
-            return next_url
-        return getattr(settings, "LOGIN_REDIRECT_URL", "/")
+            return default_url
+        return next_url
 
 
 class DjustLoginView(auth_views.LoginView):
