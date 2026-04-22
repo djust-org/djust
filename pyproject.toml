@@ -68,8 +68,6 @@ dev = [
     "pytest-asyncio>=0.21",
     "pytest-xdist>=3.0",  # Parallel test execution
     "pytest-benchmark>=4.0.0",  # Performance benchmarking
-    "black>=24.10.0; python_version == '3.9'",  # Best available for 3.9
-    "black>=26.3.1; python_version >= '3.10'",  # CVE fix for 3.10+
     "ruff>=0.1",
     "mypy>=1.0",
     "uvicorn[standard]>=0.30.0",
@@ -134,10 +132,6 @@ markers = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-
-[tool.black]
-line-length = 100
-target-version = ['py39', 'py310', 'py311', 'py312']
 
 [tool.ruff]
 line-length = 100

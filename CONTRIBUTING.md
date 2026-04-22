@@ -43,11 +43,10 @@ uvx pre-commit install --hook-type pre-push
 ### Python
 - Follow PEP 8
 - Use type hints where possible
-- Run `black` for formatting
-- Use `ruff` for linting
+- Use `ruff format` for formatting and `ruff check` for linting
 
 ```bash
-black python/
+ruff format python/
 ruff check python/
 mypy python/
 bandit -r python/djust/ -ll
