@@ -6,6 +6,8 @@ endpoint so the foundation PR is independently verifiable.
 
 from __future__ import annotations
 
+import logging
+
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -19,6 +21,8 @@ from djust.observability.registry import (
 from djust.observability.sql import get_queries_since
 from djust.observability.timings import get_timing_stats
 from djust.observability.tracebacks import get_recent_tracebacks
+
+logger = logging.getLogger(__name__)
 
 
 def _is_jsonable(value):
@@ -306,10 +310,11 @@ def reset_view_state(request):
 
     try:
         view.mount(mount_request, **mount_kwargs)
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        logger.exception("reset_view_state: mount() raised for session %s", session_id)
         return JsonResponse(
             {
-                "error": f"mount() raised: {type(e).__name__}: {e}",
+                "error": "mount() raised — see server logs",
                 "session_id": session_id,
             },
             status=500,
@@ -391,8 +396,9 @@ def eval_handler(request):
 
     try:
         body = _json.loads(request.body.decode("utf-8")) if request.body else {}
-    except (ValueError, UnicodeDecodeError) as e:
-        return JsonResponse({"error": f"invalid JSON body: {e}"}, status=400)
+    except (ValueError, UnicodeDecodeError):
+        logger.exception("eval_handler: invalid JSON body")
+        return JsonResponse({"error": "invalid JSON body — see server logs"}, status=400)
 
     handler_name = (body.get("handler_name") or "").strip()
     if not handler_name:
@@ -465,20 +471,22 @@ def eval_handler(request):
             dry_run_violations = list(ctx.violations)
         else:
             result = handler(**params) if params else handler()
-    except TypeError as e:
+    except TypeError:
+        logger.exception("eval_handler: handler call failed (TypeError) handler=%s", handler_name)
         return JsonResponse(
             {
-                "error": f"handler call failed: {type(e).__name__}: {e}",
+                "error": "handler call failed — see server logs",
                 "hint": "Check that params match the handler signature (use get_view_schema).",
                 "handler_name": handler_name,
                 "params": params,
             },
             status=400,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
+        logger.exception("eval_handler: handler raised handler=%s", handler_name)
         return JsonResponse(
             {
-                "error": f"handler raised: {type(e).__name__}: {e}",
+                "error": "handler raised — see server logs",
                 "handler_name": handler_name,
                 "params": params,
             },

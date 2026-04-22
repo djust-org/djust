@@ -7,6 +7,7 @@ and visual debugging capabilities for theme development.
 
 from typing import Dict, List, Any
 import json
+import logging
 from django.http import JsonResponse
 from django.template.response import TemplateResponse
 from django.views.decorators.http import require_http_methods
@@ -15,6 +16,8 @@ from django.views.decorators.csrf import csrf_exempt
 from .presets import get_preset, THEME_PRESETS
 from .theme_packs import get_design_system, get_all_design_systems
 from .design_system_css import generate_design_system_css
+
+logger = logging.getLogger(__name__)
 
 
 class ThemeInspector:
@@ -290,8 +293,12 @@ def theme_inspector_api(request):
         try:
             theme_info = inspector.get_theme_info(design, color)
             return JsonResponse(theme_info)
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("theme inspector API failed")
+            return JsonResponse(
+                {"error": "theme inspector failed — see server logs"},
+                status=500,
+            )
 
     elif request.method == "POST":
         # Compare themes or other operations
@@ -312,8 +319,12 @@ def theme_inspector_api(request):
             else:
                 return JsonResponse({"error": "Unknown action"}, status=400)
 
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=400)
+        except Exception:  # noqa: BLE001
+            logger.exception("theme inspector API failed")
+            return JsonResponse(
+                {"error": "theme inspector failed — see server logs"},
+                status=500,
+            )
 
 
 def theme_css_api(request):
@@ -327,5 +338,9 @@ def theme_css_api(request):
 
         return JsonResponse({"combination": f"{design}-{color}", "css": css, "size": len(css)})
 
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=400)
+    except Exception:  # noqa: BLE001
+        logger.exception("theme inspector API failed")
+        return JsonResponse(
+            {"error": "theme inspector failed — see server logs"},
+            status=500,
+        )

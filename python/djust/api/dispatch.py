@@ -375,13 +375,17 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         # Mirror the handler-invocation block: a PermissionDenied raised from
         # api_response() / serialize= must surface as 403, not 500.
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
-    except TypeError as exc:
+    except TypeError:
         logger.exception(
             "djust API serialize= misconfigured: slug=%s handler=%s",
             sanitize_for_log(view_slug),
             sanitize_for_log(handler_name),
         )
-        return api_error(500, "serialize_error", str(exc))
+        return api_error(
+            500,
+            "serialize_error",
+            "Response transform raised an unexpected error",
+        )
     except Exception:
         logger.exception(
             "djust API response transform raised: slug=%s handler=%s",
