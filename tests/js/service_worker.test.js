@@ -247,4 +247,63 @@ describe('client: djust.registerServiceWorker', () => {
         });
         expect(reg).toBeNull();
     });
+
+    it('retries after a failed first call (register() rejection)', async () => {
+        const { window } = createEnv();
+
+        let attempt = 0;
+        Object.defineProperty(window.navigator, 'serviceWorker', {
+            configurable: true,
+            value: {
+                register: async () => {
+                    attempt += 1;
+                    if (attempt === 1) throw new Error('register failed');
+                    return { scope: '/' };
+                },
+                addEventListener: () => {},
+                controller: null,
+            },
+        });
+
+        const first = await window.djust.registerServiceWorker({});
+        expect(first).toBeNull(); // failure path
+
+        const second = await window.djust.registerServiceWorker({});
+        expect(second).toEqual({ scope: '/' }); // retry succeeded
+        expect(attempt).toBe(2);
+    });
+
+    it('returns the cached promise on repeat calls (idempotency — #829)', async () => {
+        const { window } = createEnv();
+
+        // Stub navigator.serviceWorker so register() resolves.
+        let registerCallCount = 0;
+        const fakeRegistration = { scope: '/', active: null };
+        Object.defineProperty(window.navigator, 'serviceWorker', {
+            configurable: true,
+            value: {
+                register: async () => {
+                    registerCallCount += 1;
+                    return fakeRegistration;
+                },
+                addEventListener: () => {},
+                controller: null,
+            },
+        });
+
+        const first = await window.djust.registerServiceWorker({
+            instantShell: false,
+            reconnectionBridge: false,
+        });
+        const second = await window.djust.registerServiceWorker({
+            instantShell: false,
+            reconnectionBridge: false,
+        });
+
+        // navigator.serviceWorker.register() must have been called exactly once.
+        expect(registerCallCount).toBe(1);
+        // Both calls return the same cached registration.
+        expect(first).toBe(fakeRegistration);
+        expect(second).toBe(fakeRegistration);
+    });
 });

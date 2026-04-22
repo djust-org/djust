@@ -27,10 +27,27 @@ logger = logging.getLogger(__name__)
 _MAIN_RE = re.compile(r"<main\b[^>]*>([\s\S]*?)</main>", re.IGNORECASE)
 
 
+# Content-Type tokens that carry HTML shell content. Matched after the
+# MIME type is extracted (charset, boundary, etc. stripped). Kept small and
+# explicit — widening this is a deliberate act.
+_HTML_CONTENT_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+    }
+)
+
+
 def _is_html_response(response) -> bool:
-    """Return True when the response's Content-Type starts with text/html."""
+    """Return True when the response Content-Type is HTML or XHTML.
+
+    Charset and boundary suffixes are stripped before matching so
+    ``text/html; charset=utf-8`` and ``application/xhtml+xml`` both qualify.
+    JSON / binary / streaming responses are passed through untouched.
+    """
     content_type = response.get("Content-Type", "") or ""
-    return content_type.lower().split(";", 1)[0].strip() == "text/html"
+    mime = content_type.lower().split(";", 1)[0].strip()
+    return mime in _HTML_CONTENT_TYPES
 
 
 def _extract_main_inner(html: str) -> str:
@@ -71,6 +88,14 @@ class DjustMainOnlyMiddleware:
 
         # Only act on opt-in requests.
         if request.META.get("HTTP_X_DJUST_MAIN_ONLY") != "1":
+            return response
+
+        # Error pages (4xx/5xx) typically render a full-page layout — the
+        # user-facing error template, not a main-area fragment. Leaving them
+        # trimmed would strip context (status message, "go back" link, etc.)
+        # a shell-navigation client wouldn't otherwise see.
+        status = getattr(response, "status_code", 200)
+        if status >= 400:
             return response
 
         # Only touch HTML responses; pass JSON / binary through verbatim.

@@ -9695,6 +9695,38 @@ window.djust.bindModelElements = bindModelElements;
 //
 // The SW itself is served from /static/djust/service-worker.js and is NOT
 // part of the client.js bundle (SW scripts must be separate files).
+//
+// Instant-shell swap — what works and what doesn't:
+//
+// - `dj-click`, `dj-submit`, `dj-change`, `dj-input`, and the rest of djust's
+//   attribute-based event wiring all work post-swap. They use **document-level
+//   event delegation** (not MutationObserver) — a single listener on `document`
+//   dispatches based on `e.target.closest('[dj-click]')`, so newly inserted
+//   nodes participate automatically without any per-element binding.
+//
+// - `dj-hook` elements need re-binding after a swap because each hook runs
+//   per-element `mount`/`update` callbacks. After replacing the `<main>`
+//   innerHTML, we call `djust.reinitAfterDOMUpdate(placeholder)` which scans
+//   the swapped subtree for `[dj-hook]`, extracts colocated
+//   `<script type="djust/hook">` definitions, and primes dj-virtual /
+//   dj-viewport observers.
+//
+// - **Inline `<script>` tags inside `<main>` will NOT execute**. This is
+//   standard browser behavior for `.innerHTML = …`: script nodes are inserted
+//   into the tree but not evaluated. If you need JS to run after a shell
+//   navigation, either (a) emit the `<script>` OUTSIDE `<main>` in the shell
+//   layout so it runs on first load, (b) restructure as a `dj-hook` (which
+//   will be re-bound automatically), or (c) use a page-level load listener
+//   on the `djust:shell-swapped` CustomEvent dispatched after every swap.
+//
+// - `registerServiceWorker(options)` is **idempotent**: a second call returns
+//   the cached registration promise without re-running `initInstantShell` or
+//   `initReconnectionBridge`, so drain listeners and the WS sendMessage
+//   patch are applied at most once. **Options from the second call are
+//   ignored** — toggling `instantShell: false → true` across calls will NOT
+//   start the shell client. Pass both flags on the first call, or reload.
+//   If the first call failed (SW register() rejected), the cache is cleared
+//   so a retry can succeed.
 
 (function () {
     globalThis.djust = globalThis.djust || {};
@@ -9744,8 +9776,24 @@ window.djust.bindModelElements = bindModelElements;
                 // for the current URL (same-origin, trusted). No user input
                 // reaches this point.
                 placeholder.innerHTML = html;
+                // Re-run djust's DOM-update hook: binds dj-hook elements,
+                // extracts colocated <script type="djust/hook"> definitions,
+                // and primes dj-virtual / dj-viewport observers in the swapped
+                // region. Without this, dj-hook content inside <main> stays
+                // inert after a shell navigation (dj-click / dj-submit keep
+                // working because those use document-level event delegation
+                // and don't need per-element binding).
+                if (window.djust && typeof window.djust.reinitAfterDOMUpdate === 'function') {
+                    try {
+                        window.djust.reinitAfterDOMUpdate(placeholder);
+                    } catch (e) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[sw] reinitAfterDOMUpdate failed after shell swap', e);
+                        }
+                    }
+                }
                 // Notify the rest of the client that a shell-swap completed so
-                // hooks / navigation code can re-run if needed.
+                // any listeners that care about navigation can react.
                 window.dispatchEvent(new CustomEvent('djust:shell-swapped', {
                     detail: { url: url },
                 }));
@@ -9864,36 +9912,59 @@ window.djust.bindModelElements = bindModelElements;
     // Public API
     // -----------------------------------------------------------------
 
-    globalThis.djust.registerServiceWorker = async function (options) {
+    // Idempotency guard for registerServiceWorker. Calling it twice is a
+    // common init pattern (theme switch, settings toggle, dev-mode reload)
+    // and without this guard each call adds another drain listener and
+    // another sendMessage wrapper, causing buffered replays to double.
+    var _registerPromise = null;
+    var _bridgeInitialized = false;
+    var _shellInitialized = false;
+
+    globalThis.djust.registerServiceWorker = function (options) {
         options = options || {};
+        if (_registerPromise) {
+            if (globalThis.djustDebug) {
+                console.log('[sw] registerServiceWorker called again; returning cached registration');
+            }
+            return _registerPromise;
+        }
         if (!_swAvailable()) {
             if (globalThis.djustDebug) {
                 console.warn('[sw] navigator.serviceWorker unavailable; opt-in features disabled');
             }
-            return null;
+            // Don't cache a null — allow a later call after the env gains SW
+            // support (e.g. polyfill) to still try.
+            return Promise.resolve(null);
         }
         var swUrl = options.swUrl || '/static/djust/service-worker.js';
         var scope = options.scope || '/';
-        var registration = null;
-        try {
-            registration = await navigator.serviceWorker.register(swUrl, { scope: scope });
-        } catch (err) {
-            if (globalThis.djustDebug) {
-                console.warn('[sw] registration failed', err);
+        _registerPromise = (async function () {
+            var registration = null;
+            try {
+                registration = await navigator.serviceWorker.register(swUrl, { scope: scope });
+            } catch (err) {
+                if (globalThis.djustDebug) {
+                    console.warn('[sw] registration failed', err);
+                }
+                // Reset so a later call after fixing the cause can retry.
+                _registerPromise = null;
+                return null;
             }
-            return null;
-        }
-        if (options.instantShell) {
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initInstantShell);
-            } else {
-                initInstantShell();
+            if (options.instantShell && !_shellInitialized) {
+                _shellInitialized = true;
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', initInstantShell);
+                } else {
+                    initInstantShell();
+                }
             }
-        }
-        if (options.reconnectionBridge) {
-            initReconnectionBridge();
-        }
-        return registration;
+            if (options.reconnectionBridge && !_bridgeInitialized) {
+                _bridgeInitialized = true;
+                initReconnectionBridge();
+            }
+            return registration;
+        })();
+        return _registerPromise;
     };
 
     // Exposed for tests.
