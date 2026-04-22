@@ -108,9 +108,14 @@ def _instantiate_view(view_cls, request: HttpRequest):
 
     Mirrors the WS consumer's setup: set ``request``, call ``mount()`` (or the
     lighter-weight ``api_mount()`` hook if the view overrides it).
+
+    ``self._api_request`` is set to ``True`` BEFORE ``mount()`` runs so code
+    in ``mount`` can branch on transport if needed. WS never sets this flag.
     """
     instance = view_cls()
     instance.request = request
+    # Set the transport flag before mount so mount() can branch on it.
+    instance._api_request = True
     api_mount = getattr(instance, "api_mount", None)
     if callable(api_mount) and api_mount is not getattr(view_cls, "mount", None):
         _call_possibly_async(api_mount, request)
@@ -291,6 +296,8 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         return api_error(400, "invalid_json", "Request body must be a JSON object")
 
     # 5. Instantiate the view and run mount/api_mount.
+    # ``_instantiate_view`` sets ``instance._api_request = True`` before
+    # mount so mount() can branch on transport if needed.
     try:
         view = _instantiate_view(view_cls, request)
     except PermissionDenied as exc:
@@ -298,11 +305,6 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     except Exception:
         logger.exception("djust API: view instantiation failed for %s", view_slug)
         return api_error(500, "mount_failed", "View initialization failed")
-
-    # Flag this as an HTTP API request so handlers / @api_returns decorators
-    # can conditionally serialize data only when needed. The WebSocket path
-    # never sets this flag — handlers there return None / mutate state only.
-    view._api_request = True
 
     # 6. View-level auth (login_required + @permission_required on the class).
     try:
@@ -364,6 +366,10 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     # Both only run on the HTTP path — the WS consumer never reaches this code.
     try:
         return_value = _apply_response_transform(view, handler, return_value)
+    except PermissionDenied as exc:
+        # Mirror the handler-invocation block: a PermissionDenied raised from
+        # api_response() / serialize= must surface as 403, not 500.
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
     except TypeError as exc:
         logger.exception(
             "djust API serialize= misconfigured: slug=%s handler=%s", view_slug, handler_name

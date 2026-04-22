@@ -372,3 +372,110 @@ def test_dispatch_passthrough_when_nothing_overrides(http_request):
     register_api_view("pass.v", PassthroughView)
     payload = json.loads(dispatch_api(http_request({}), "pass.v", "ping").content)
     assert payload["result"] == {"direct": True}
+
+
+def test_dispatch_permission_denied_in_api_response_surfaces_403(http_request):
+    """Stage 11 regression: PermissionDenied raised from api_response() must be 403, not 500."""
+    from django.core.exceptions import PermissionDenied
+
+    class GuardedView(LiveView):
+        api_name = "guarded.v"
+
+        def api_response(self):
+            raise PermissionDenied("nope")
+
+        @event_handler(expose_api=True)
+        def ping(self, **kwargs):
+            return None
+
+    register_api_view("guarded.v", GuardedView)
+    response = dispatch_api(http_request({}), "guarded.v", "ping")
+    assert response.status_code == 403
+    payload = json.loads(response.content)
+    assert payload["error"] == "permission_denied"
+    assert payload["message"] == "nope"
+
+
+def test_dispatch_permission_denied_in_serialize_surfaces_403(http_request):
+    from django.core.exceptions import PermissionDenied
+
+    def serializer(self):
+        raise PermissionDenied("blocked by serializer")
+
+    class GuardedView(LiveView):
+        api_name = "guarded_ser.v"
+
+        @event_handler(expose_api=True, serialize=serializer)
+        def ping(self, **kwargs):
+            return None
+
+    register_api_view("guarded_ser.v", GuardedView)
+    response = dispatch_api(http_request({}), "guarded_ser.v", "ping")
+    assert response.status_code == 403
+    payload = json.loads(response.content)
+    assert payload["error"] == "permission_denied"
+    assert payload["message"] == "blocked by serializer"
+
+
+def test_api_request_flag_set_before_mount_runs(http_request):
+    """Stage 11 regression: _api_request must be True during mount(), not just after."""
+    captured = {}
+
+    class MountReadsFlagView(LiveView):
+        api_name = "mount_flag.v"
+
+        def mount(self, request=None, **kwargs):
+            captured["flag_in_mount"] = getattr(self, "_api_request", None)
+
+        @event_handler(expose_api=True)
+        def ping(self, **kwargs):
+            captured["flag_in_handler"] = getattr(self, "_api_request", None)
+
+    register_api_view("mount_flag.v", MountReadsFlagView)
+    response = dispatch_api(http_request({}), "mount_flag.v", "ping")
+    assert response.status_code == 200
+    assert captured["flag_in_mount"] is True
+    assert captured["flag_in_handler"] is True
+
+
+def test_api_response_returning_none_is_used_verbatim():
+    """An explicit None return from api_response() replaces the handler return."""
+
+    class V:
+        def api_response(self):
+            return None
+
+    handler = _make_handler()
+    assert _apply_response_transform(V(), handler, "would-have-been-returned") is None
+
+
+def test_serialize_str_resolves_staticmethod():
+    """staticmethods accessed via getattr(view, 'name') are regular functions.
+
+    The arity detector treats them as plain callables (not ismethod), so:
+    - 0 positional → called with no args
+    - 1 positional → called with (view,)
+    - 2+ positional → called with (view, result)
+    """
+
+    class V:
+        @staticmethod
+        def serialize_static():
+            return "static-zero-arg"
+
+    handler = _make_handler(serialize="serialize_static")
+    assert _apply_response_transform(V(), handler, None) == "static-zero-arg"
+
+
+def test_callable_class_instance_works_as_serializer():
+    """Callable-class-instance (with __call__) is treated as a plain callable."""
+
+    class Callable:
+        def __call__(self, view):
+            return f"called-{type(view).__name__}"
+
+    class V:
+        pass
+
+    handler = _make_handler(serialize=Callable())
+    assert _apply_response_transform(V(), handler, None) == "called-V"

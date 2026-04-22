@@ -240,10 +240,19 @@ class ClaimArchiveView(ClaimsApiMixin, LiveView):
 ### Escape hatch: `self._api_request`
 
 The dispatch view sets `self._api_request = True` on the view instance
-immediately after instantiation. Code paths that need to branch on transport
-without using the decorator or convention method can inspect the flag
-directly. Prefer `api_response()` or `serialize=` for the common case — the
-flag is an escape hatch for advanced scenarios.
+**before `mount()` runs** (and therefore also before any event handler), so
+`mount` can itself branch on transport if needed. Code paths that need to
+branch on transport without using the decorator or convention method can
+inspect the flag directly. Prefer `api_response()` or `serialize=` for the
+common case — the flag is an escape hatch for advanced scenarios.
+
+> **Note on `@classmethod` / `@staticmethod` serializers.** Instance methods
+> are the supported path for `serialize="name"` — arity is detected on the
+> bound method. `@staticmethod` works transparently (treated as a plain
+> callable). `@classmethod` is an edge case: it binds `cls`, not the
+> instance, so it can't read view state directly — pass the underlying
+> function explicitly (`serialize=MyView.cls_method.__func__`) if you
+> need one.
 
 ---
 
