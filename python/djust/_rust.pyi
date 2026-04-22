@@ -323,6 +323,24 @@ def register_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> Non
         tag_name: Opening tag name (e.g., "modal", "card")
         end_tag: Closing tag name (e.g., "endmodal", "endcard")
         handler: Python object with ``render(args, content, context)`` method
+
+    Known constraints:
+
+    * **No parent-tag propagation** (issue #804). A block tag handler
+      whose children include another block tag handler receives the
+      inner tag's output as a pre-rendered HTML string embedded in
+      ``content``; the inner handler is NOT informed that it is nested
+      inside a parent handler. If your outer tag needs to know about
+      nesting (e.g. to emit different markup when inside a ``<table>``
+      wrapper tag), stash the hint on ``context`` in the outer handler
+      and read it back in the inner handler rather than relying on
+      automatic propagation. Future enhancement tracked in issue #804.
+
+    * **No loader access in handlers** (issue #803). Block handlers
+      currently cannot call ``{% render_template name=... %}``-style
+      template loads. The ``FilesystemTemplateLoader`` is not exposed
+      through the Rust-to-Python bridge. Workaround: pre-render the
+      child template in your view and pass the result via context.
     """
     ...
 
