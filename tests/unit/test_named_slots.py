@@ -196,6 +196,33 @@ class TestEndToEnd:
         out = render('{% call "card" %}{% slot header %}H{% endslot %}B{% endcall %}')
         assert out == "<div>H|B</div>"
 
+    def test_render_slot_end_to_end_via_rust_engine(self, ensure_rust_handlers):
+        """Issue #861 regression: `{% render_slot %}` via the Rust template
+        engine used to return empty string for every input because the Rust
+        engine pre-resolves args (so the handler saw a JSON-encoded dict
+        rather than the literal path it expected). Handler now dual-dispatches
+        based on arg shape.
+        """
+        from djust._rust import render_template
+
+        ctx = {
+            "slots": {
+                "col": [
+                    {"name": "col", "attrs": {}, "content": "first-col-content"},
+                    {"name": "col", "attrs": {}, "content": "second-col-content"},
+                ],
+            },
+        }
+        # slots.col.0 → first entry's content (Rust resolves to dict, JSON-encoded)
+        assert render_template("{% render_slot slots.col.0 %}", ctx) == "first-col-content"
+        # slots.col.1 → second entry's content
+        assert render_template("{% render_slot slots.col.1 %}", ctx) == "second-col-content"
+        # slots.col.0.content → the string directly (Rust resolves to string scalar)
+        assert render_template("{% render_slot slots.col.0.content %}", ctx) == "first-col-content"
+        # Missing path → empty (Rust passes the unresolved path through; handler resolves against
+        # context, finds nothing, returns empty).
+        assert render_template("{% render_slot slots.missing.0 %}", ctx) == ""
+
     def test_render_slot_dotted_path_resolves_slot_entry(self):
         """Issue #790: `RenderSlotTagHandler` resolves `slots.col.0` to the first col slot.
 
