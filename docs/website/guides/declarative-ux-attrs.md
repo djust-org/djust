@@ -177,9 +177,49 @@ Works with any class-based CSS framework — Tailwind (`transition-*` / `duratio
 ### Scope
 
 This is phase 1 of the v0.6.0 Animations & transitions work. Separate follow-ups cover:
-- `dj-remove` — run an exit animation before element removal
+- ~~`dj-remove` — run an exit animation before element removal~~ ✅ — see below
 - FLIP / `dj-transition-group` — animate list-item reordering
 - Skeleton / shimmer loading-state components
+
+---
+
+## `dj-remove`
+
+Declarative CSS exit transitions. Phoenix `JS.hide` / `phx-remove` parity. When a VDOM patch would physically remove an element carrying `dj-remove="..."`, djust delays the removal until the CSS transition the attribute describes has completed.
+
+### Quick start
+
+```html
+<li id="toast-42" dj-remove="opacity-100 transition-opacity-300 opacity-0">
+  Saved!
+</li>
+
+<li id="toast-42" dj-remove="fade-out">Saved!</li>
+```
+
+When the server emits a `RemoveChild` patch for the element (or any other mechanism that would remove it), the client:
+
+1. Applies the start class synchronously (three-token form only).
+2. On the next animation frame, swaps in the active + end classes.
+3. Waits for `transitionend`, then physically detaches the element.
+
+A 600 ms fallback timer finalizes the removal if `transitionend` never fires. Override it with `dj-remove-duration="N"`:
+
+```html
+<li dj-remove="slide-out" dj-remove-duration="500">...</li>
+```
+
+### Cancellation
+
+If a subsequent patch removes the `dj-remove` attribute from a pending element, the pending removal cancels: the applied exit classes are stripped, the fallback timer clears, and the element stays mounted.
+
+### Interop with `dj-transition`
+
+`dj-transition` animates element *entry*. `dj-remove` animates element *exit*. An element can carry both — they don't overlap, because the removal hook only fires when a patch would take the element out of the DOM.
+
+### Scope
+
+Phase 2a of the v0.6.0 Animations & transitions work. Only the element that *carries* `dj-remove` is deferred — descendants travel with their parent.
 
 ---
 
