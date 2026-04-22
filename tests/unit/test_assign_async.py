@@ -211,3 +211,127 @@ def test_assign_async_forwards_args_and_kwargs():
 
     assert captured == {"args": (1, 2), "mode": "fast"}
     assert view.x.ok is True and view.x.result == "1:2:fast"
+
+
+# ---------------------------------------------------------------------------
+# Issue #793 — concurrent same-name cancellation semantics
+# ---------------------------------------------------------------------------
+
+
+def test_stale_loader_cannot_overwrite_newer_pending_state():
+    """A prior in-flight loader that completes *after* a newer
+    assign_async() call must NOT overwrite the fresh pending state.
+
+    Reproduces the race in issue #793: two assign_async("metrics",
+    loader) calls happen close together. The first loader is slow and
+    lands its setattr after the second call has already scheduled a new
+    task. Without the generation-counter guard, the stale succeeded()
+    would clobber the newer pending().
+    """
+    view = _View()
+
+    slow_returned = []
+
+    def _slow_loader():
+        slow_returned.append("slow")
+        return "stale"
+
+    def _fast_loader():
+        return "fresh"
+
+    # First call — captures the slow loader's closure.
+    view.assign_async("metrics", _slow_loader)
+    # Grab but do NOT execute the first runner.
+    slow_cb, slow_args, slow_kwargs = view._async_tasks.pop("assign_async:metrics")
+
+    # Second call supersedes the first. The attribute goes back to
+    # pending and a new runner is scheduled.
+    view.assign_async("metrics", _fast_loader)
+    assert view.metrics.loading is True
+
+    # Now the stale runner completes (as if its worker thread finally
+    # returned). It must NOT write over the fresh pending state.
+    slow_cb(*slow_args, **slow_kwargs)
+    assert slow_returned == ["slow"]  # the loader actually ran
+    assert (
+        view.metrics.loading is True
+    ), "stale runner overwrote fresh pending state — #793 regression"
+
+    # Now drain the fresh runner — it should succeed normally.
+    fast_cb, fast_args, fast_kwargs = view._async_tasks.pop("assign_async:metrics")
+    fast_cb(*fast_args, **fast_kwargs)
+    assert view.metrics.ok is True
+    assert view.metrics.result == "fresh"
+
+
+def test_stale_loader_error_cannot_overwrite_newer_pending_state():
+    """Mirror of the success-path guard for the error path — a stale
+    loader that raises must also not clobber fresh pending state.
+    """
+    view = _View()
+
+    def _slow_broken():
+        raise RuntimeError("stale error")
+
+    def _fast_loader():
+        return "fresh"
+
+    view.assign_async("x", _slow_broken)
+    slow_cb, slow_args, slow_kwargs = view._async_tasks.pop("assign_async:x")
+
+    view.assign_async("x", _fast_loader)
+    assert view.x.loading is True
+
+    # Stale error must not transition the state to failed.
+    slow_cb(*slow_args, **slow_kwargs)
+    assert view.x.loading is True, "stale error overwrote fresh pending — #793 regression"
+    assert view.x.failed is False
+
+    fast_cb, fast_args, fast_kwargs = view._async_tasks.pop("assign_async:x")
+    fast_cb(*fast_args, **fast_kwargs)
+    assert view.x.ok is True and view.x.result == "fresh"
+
+
+def test_generation_counter_bumps_on_every_assign():
+    """Internal sanity: the generation counter is bumped exactly once
+    per assign_async() call.
+    """
+    view = _View()
+    view.assign_async("a", lambda: 1)
+    view.assign_async("a", lambda: 2)
+    view.assign_async("a", lambda: 3)
+    view.assign_async("b", lambda: 4)
+    # _assign_async_gens per-name, independent counters.
+    assert view._assign_async_gens == {"a": 3, "b": 1}
+
+
+def test_async_loader_stale_result_is_discarded():
+    """Async-loader variant of the same guard (async runner path)."""
+    view = _View()
+
+    slow_completed = []
+
+    async def _slow_async():
+        slow_completed.append(True)
+        return "stale"
+
+    async def _fast_async():
+        return "fresh"
+
+    # First call, capture but don't drain.
+    view.assign_async("metrics", _slow_async)
+    slow_cb, slow_args, slow_kwargs = view._async_tasks.pop("assign_async:metrics")
+
+    # Second call supersedes.
+    view.assign_async("metrics", _fast_async)
+
+    # Stale runner completes — must not set state.
+    asyncio.new_event_loop().run_until_complete(slow_cb(*slow_args, **slow_kwargs))
+    assert slow_completed == [True]
+    assert view.metrics.loading is True
+
+    # Fresh runner drains normally.
+    fast_cb, fast_args, fast_kwargs = view._async_tasks.pop("assign_async:metrics")
+    asyncio.new_event_loop().run_until_complete(fast_cb(*fast_args, **fast_kwargs))
+    assert view.metrics.ok is True
+    assert view.metrics.result == "fresh"
