@@ -264,10 +264,21 @@ class PostProcessingMixin:
 
         from django.templatetags.static import static
 
+        # v0.6.0 P1: serve the pre-minified client.min.js in production.
+        # DEBUG=True continues to serve the readable client.js so stack
+        # traces point at meaningful line numbers and contributors can
+        # poke at source directly. An explicit override
+        # ``DJUST_CLIENT_JS_MINIFIED`` in settings (bool) takes precedence
+        # over the DEBUG heuristic if an operator wants to test the
+        # minified file locally.
+        client_js_name = "djust/client.js"
+        use_min = getattr(settings, "DJUST_CLIENT_JS_MINIFIED", not settings.DEBUG)
+        if use_min:
+            client_js_name = "djust/client.min.js"
         try:
-            client_js_url = static("djust/client.js")
+            client_js_url = static(client_js_name)
         except (ValueError, AttributeError):
-            client_js_url = "/static/djust/client.js"
+            client_js_url = f"/static/{client_js_name}"
 
         script = f'<script src="{client_js_url}" defer data-turbo-track="reload"></script>'
 

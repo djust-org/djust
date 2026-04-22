@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-minified `client.js` distribution (v0.6.0 P1)** — Production now serves `client.min.js` (terser-minified) instead of the 35-module readable concat, with `.gz` and `.br` pre-compressed siblings built alongside it for whitenoise / nginx static serving. Measured impact: `client.js` 410 KB → `client.min.js` 146 KB raw → 39 KB gzip → 33 KB brotli (~92% reduction wire-size over the raw file). `DEBUG=True` continues to serve the readable `client.js` so stack traces point at meaningful line numbers and contributors can poke at source directly. An explicit `DJUST_CLIENT_JS_MINIFIED` setting (bool) overrides the `DEBUG` heuristic in either direction so operators can validate the minified file locally or keep the readable build in production if they want to debug in-situ. `scripts/build-client.sh` gained a `minify_and_compress` helper that runs terser (from `node_modules/.bin/terser` or PATH), then gzip `-9` and brotli `-q 11`; the step is skipped gracefully when terser isn't installed so contributors can still iterate on raw sources without `npm install`. Source-maps (`.min.js.map`) are emitted for production-side debugging. `djust.C012` system check now recognizes both `client.js` and `client.min.js` in manual-loading detection. 6 tests in `tests/unit/test_client_minified.py` cover build-artifact presence + size reduction, DEBUG-vs-production script selection, and the explicit override in both directions. (`scripts/build-client.sh`, `python/djust/mixins/post_processing.py`, `python/djust/checks.py`, `package.json`)
+
 ### Fixed
 
 - **`send_pg_notify` payload size guard (#810)** — PostgreSQL caps `NOTIFY` payloads at 8000 bytes. `send_pg_notify()` now warns at 4KB (soft limit) and drops + error-logs at 7500 bytes (hard limit). (`python/djust/db/decorators.py`)
