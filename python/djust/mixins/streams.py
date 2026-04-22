@@ -65,6 +65,24 @@ class StreamsMixin:
         else:
             items_list = [items] if items is not None else []
 
+        # Issue #799: when `limit=N` is set, the server-side trim is
+        # already guaranteed by the client-side stream_prune op we emit
+        # below. Pre-trim the inserts themselves to at-most `limit` so we
+        # don't ship `items_list` over the wire only to have the client
+        # throw most of them away. This is pure bandwidth savings — the
+        # client-visible DOM is identical.
+        if limit is not None and limit >= 0 and len(items_list) > limit:
+            # Trim from the OPPOSITE edge of the insert direction so the
+            # items that would survive the prune on the client are the
+            # ones we actually send.
+            if at == 0:
+                # Prepending — client keeps the first `limit` items, so
+                # slice the leading `limit` of our inserts.
+                items_list = items_list[:limit]
+            else:
+                # Appending — client keeps the last `limit` items.
+                items_list = items_list[-limit:]
+
         for item in items_list:
             stream_obj.insert(item, at=at)
             self._stream_operations.append(

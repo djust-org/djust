@@ -102,3 +102,44 @@ def test_stream_ops_order_insert_then_prune() -> None:
     types = _op_types(h)
     # Two inserts then one prune.
     assert types == ["stream_insert", "stream_insert", "stream_prune"]
+
+
+def test_stream_limit_trims_emitted_inserts_on_append() -> None:
+    """Issue #799: with limit=N, only the last N inserts are emitted on append.
+
+    Previously all items_list entries generated stream_insert ops even though
+    the client's subsequent stream_prune would discard the first (len-N) of
+    them. This wastes bandwidth proportional to the oversupply.
+    """
+    h = _Harness()
+    # 10 items, limit=3 — only the last 3 should be emitted as inserts.
+    items = [_FakeItem(i) for i in range(1, 11)]
+    h.stream("feed", items, limit=3)
+    inserts = [op for op in h._stream_operations if op["type"] == "stream_insert"]
+    assert len(inserts) == 3
+    # The survivors on the client (after top-edge prune) are items 8, 9, 10.
+    assert [op["dom_id"] for op in inserts] == ["feed-8", "feed-9", "feed-10"]
+
+
+def test_stream_limit_trims_emitted_inserts_on_prepend() -> None:
+    """Issue #799: with limit=N and at=0, only the first N inserts are emitted.
+
+    Prepending triggers a bottom-edge prune on the client; the survivors are
+    the leading `limit` items of the insert batch.
+    """
+    h = _Harness()
+    items = [_FakeItem(i) for i in range(1, 11)]
+    h.stream("feed", items, at=0, limit=3)
+    inserts = [op for op in h._stream_operations if op["type"] == "stream_insert"]
+    assert len(inserts) == 3
+    # On prepend, the survivors after the bottom-edge prune are the first 3.
+    assert [op["dom_id"] for op in inserts] == ["feed-1", "feed-2", "feed-3"]
+
+
+def test_stream_limit_no_trim_when_under_limit() -> None:
+    """Fewer items than the limit → no trimming, all inserts emitted."""
+    h = _Harness()
+    h.stream("feed", [_FakeItem(1), _FakeItem(2)], limit=5)
+    inserts = [op for op in h._stream_operations if op["type"] == "stream_insert"]
+    # All 2 inserts flow through — the prune op is still emitted as a cap.
+    assert len(inserts) == 2

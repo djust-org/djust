@@ -101,7 +101,9 @@ function _applyStreamOp(op, streamName) {
             // the end) until `limit` or fewer element children remain.
             const limit = typeof op.limit === 'number' ? Math.max(0, op.limit) : 0;
             const edge = op.edge === 'bottom' ? 'bottom' : 'top';
-            let kids = Array.from(el.children).filter(c => c.nodeType === 1);
+            // `.children` is an HTMLCollection — always element-only, no
+            // nodeType filter needed (was redundant per review #801).
+            let kids = Array.from(el.children);
             while (kids.length > limit) {
                 const victim = edge === 'top' ? kids.shift() : kids.pop();
                 if (!victim) break;
