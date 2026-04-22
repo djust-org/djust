@@ -704,6 +704,12 @@ function morphChildren(existing, desired) {
     // Remove unmatched existing children
     for (const node of existingNodes) {
         if (!matched.has(node) && node.parentNode === existing) {
+            if (node.nodeType === Node.ELEMENT_NODE
+                && globalThis.djust
+                && typeof globalThis.djust.maybeDeferRemoval === 'function'
+                && globalThis.djust.maybeDeferRemoval(node)) {
+                continue;
+            }
             existing.removeChild(node);
         }
     }
@@ -729,6 +735,26 @@ function morphElement(existing, desired) {
         }
         // Clean up scoped (window/document) listeners before replacing
         _cleanupScopedListeners(existing);
+        if (globalThis.djust && typeof globalThis.djust.maybeDeferRemoval === 'function'
+            && existing.nodeType === Node.ELEMENT_NODE
+            && existing.hasAttribute('dj-remove')) {
+            // If a removal is already pending for this element, the replacement
+            // node was inserted by the prior patch — skip to avoid duplicates.
+            const alreadyPending = globalThis.djust.djRemove
+                && globalThis.djust.djRemove._pendingRemovals
+                && globalThis.djust.djRemove._pendingRemovals.has(existing);
+            if (alreadyPending) {
+                return;
+            }
+            const newNode = desired.cloneNode(true);
+            existing.parentNode.insertBefore(newNode, existing);
+            if (globalThis.djust.maybeDeferRemoval(existing)) {
+                return;
+            }
+            // Declined — fall through to the normal replace (newNode
+            // already inserted, drop duplicate first).
+            existing.parentNode.removeChild(newNode);
+        }
         existing.parentNode.replaceChild(desired.cloneNode(true), existing);
         return;
     }
@@ -939,6 +965,11 @@ function applyDjUpdateElements(existingRoot, newRoot) {
         if (existing.id && !handledIds.has(existing.id) && !newChildMap.has(existing.id)) {
             // Check if it's a dj-update element
             if (!existing.hasAttribute('dj-update')) {
+                if (globalThis.djust
+                    && typeof globalThis.djust.maybeDeferRemoval === 'function'
+                    && globalThis.djust.maybeDeferRemoval(existing)) {
+                    continue;
+                }
                 existing.remove();
             }
         }
@@ -1177,6 +1208,27 @@ function applySinglePatch(patch) {
                     }
                 }
                 const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
+                if (node.nodeType === Node.ELEMENT_NODE
+                    && globalThis.djust
+                    && typeof globalThis.djust.maybeDeferRemoval === 'function'
+                    && node.hasAttribute('dj-remove')) {
+                    // If a removal is already pending for this element, the
+                    // replacement node was inserted by the prior patch — skip
+                    // to avoid duplicates.
+                    const alreadyPending = globalThis.djust.djRemove
+                        && globalThis.djust.djRemove._pendingRemovals
+                        && globalThis.djust.djRemove._pendingRemovals.has(node);
+                    if (alreadyPending) {
+                        break;
+                    }
+                    node.parentNode.insertBefore(newNode, node);
+                    if (globalThis.djust.maybeDeferRemoval(node)) {
+                        break;
+                    }
+                    // Declined — drop the pre-inserted duplicate and fall
+                    // through to the normal replace path.
+                    node.parentNode.removeChild(newNode);
+                }
                 node.parentNode.replaceChild(newNode, node);
                 break;
 
@@ -1329,6 +1381,13 @@ function applySinglePatch(patch) {
                 if (child) {
                     const wasTextNode = child.nodeType === Node.TEXT_NODE;
                     const parentTag = node.tagName;
+                    if (!wasTextNode
+                        && child.nodeType === Node.ELEMENT_NODE
+                        && globalThis.djust
+                        && typeof globalThis.djust.maybeDeferRemoval === 'function'
+                        && globalThis.djust.maybeDeferRemoval(child)) {
+                        break;
+                    }
                     node.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)

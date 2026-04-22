@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dj-remove` — exit animations before element removal (v0.6.0)** — Phoenix `JS.hide` / `phx-remove` parity. When a VDOM patch, morph loop, or `dj-update` prune would physically remove an element carrying `dj-remove="..."`, djust delays the actual `removeChild()` until the CSS transition the attribute describes has played out (or a 600 ms fallback timer fires, overridable via `dj-remove-duration="N"`). Two forms: three-token `dj-remove="opacity-100 transition-opacity-300 opacity-0"` matches the `dj-transition` shape (start → active → end), and single-token `dj-remove="fade-out"` applies one class and waits for `transitionend`. If a subsequent patch strips the `dj-remove` attribute from a pending element, the pending removal cancels and the element stays mounted. Public hook `window.djust.maybeDeferRemoval(node)` is called from five removal sites in `12-vdom-patch.js`. Descendants of a `[dj-remove]` element are NOT independently deferred — they travel with their parent, matching Phoenix. New `static/djust/src/42-dj-remove.js`. 10 JSDOM cases in `tests/js/dj_remove.test.js`. Phase 2a of the v0.6.0 Animations & transitions work; FLIP / `dj-transition-group` / skeletons remain separate follow-ups.
+
 ## [0.5.4rc1] - 2026-04-22
 
 ### Fixed
