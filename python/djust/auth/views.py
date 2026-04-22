@@ -3,6 +3,7 @@ from django.contrib.auth import login, logout
 from django.contrib.auth import views as auth_views
 from django.http import HttpResponseNotAllowed
 from django.shortcuts import redirect
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import CreateView
 
 from .forms import SignupForm
@@ -23,10 +24,17 @@ class SignupView(CreateView):
         return redirect(self.get_success_url())
 
     def get_success_url(self):
-        return self.request.POST.get(
-            "next",
-            getattr(settings, "LOGIN_REDIRECT_URL", "/"),
-        )
+        default_url = getattr(settings, "LOGIN_REDIRECT_URL", "/")
+        next_url = self.request.POST.get("next", "")
+        if not next_url:
+            return default_url
+        if not url_has_allowed_host_and_scheme(
+            url=next_url,
+            allowed_hosts={self.request.get_host()},
+            require_https=self.request.is_secure(),
+        ):
+            return default_url
+        return next_url
 
 
 class DjustLoginView(auth_views.LoginView):

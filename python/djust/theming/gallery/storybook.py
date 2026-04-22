@@ -23,6 +23,15 @@ _STATIC_DIR = Path(__file__).resolve().parent.parent / "static" / "djust_theming
 # Pattern to extract CSS custom property references: var(--name, ...)
 _CSS_VAR_RE = re.compile(r"var\(\s*(--[a-zA-Z0-9_-]+)")
 
+# Allowlist of valid component identifiers built at import time from the actual
+# HTML files present on disk. CodeQL recognizes `x in frozenset(...)` as a
+# taint-clearing sanitizer for py/path-injection.
+_ALLOWED_COMPONENTS: frozenset[str] = (
+    frozenset(p.stem for p in _COMPONENTS_DIR.glob("*.html"))
+    if _COMPONENTS_DIR.exists()
+    else frozenset()
+)
+
 
 def get_component_template_source(component_name: str) -> str:
     """Read and return the raw HTML source of a default component template.
@@ -33,8 +42,16 @@ def get_component_template_source(component_name: str) -> str:
     Returns:
         Template source as a string, or empty string if not found.
     """
+    # Allowlist-based validation — CodeQL recognizes `in frozenset(...)` as
+    # a taint-clearing sanitizer for path-injection.
+    if component_name not in _ALLOWED_COMPONENTS:
+        return ""
     template_path = _COMPONENTS_DIR / f"{component_name}.html"
-    if not template_path.is_file():
+    # Defense-in-depth: resolve + relative_to ensures the path stays within
+    # the components directory even if the allowlist were somehow bypassed.
+    try:
+        template_path.resolve().relative_to(_COMPONENTS_DIR.resolve())
+    except ValueError:
         return ""
     return template_path.read_text()
 
