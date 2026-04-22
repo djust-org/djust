@@ -31,7 +31,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "Django>=4.2.29",
+    "Django>=4.2.29,<6",
     "channels[daphne]>=4.0.0",
     "msgpack>=1.0.0",
 ]
