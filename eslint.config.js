@@ -19,7 +19,8 @@ export default [
       "build/**",
       "target/**",
       ".venv/**",
-      "*.min.js",
+      "**/*.min.js",
+      "**/*.min.js.map",
     ],
 
     plugins: {

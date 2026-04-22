@@ -255,8 +255,11 @@ def _check_manual_client_js(errors):
                             with open(filepath, "r", encoding="utf-8") as f:
                                 lines = f.readlines()
                                 for line_num, line in enumerate(lines, 1):
-                                    # Look for manual client.js loading
-                                    if "djust/client.js" in line and "<script" in line:
+                                    # Look for manual client.js or client.min.js loading
+                                    has_manual_ref = (
+                                        "djust/client.js" in line or "djust/client.min.js" in line
+                                    )
+                                    if has_manual_ref and "<script" in line:
                                         # Make sure it's not a comment
                                         stripped = line.strip()
                                         if not stripped.startswith(
