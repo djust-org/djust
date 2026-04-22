@@ -237,7 +237,28 @@ class UploadWriter:
 
     def close(self) -> Any:
         """Called on upload completion. The return value is stored on
-        UploadEntry.writer_result (template-accessible)."""
+        ``UploadEntry.writer_result`` and surfaced to templates + JS via
+        ``get_upload_state``.
+
+        **The return value MUST be JSON-serializable.** The websocket
+        state-update pathway serializes every upload entry to the client
+        using ``DjangoJSONEncoder``; a non-JSON-serializable return (e.g.
+        a live boto3 client object, an open file handle, a custom class
+        without ``__json__``) will raise ``TypeError`` when the next state
+        update is emitted — *after* the upload has already succeeded.
+
+        Safe return shapes:
+
+        - ``None``
+        - Primitive scalars (``str``, ``int``, ``float``, ``bool``)
+        - Lists / tuples / dicts of the above (recursively)
+        - Objects that ``DjangoJSONEncoder`` can serialize (``datetime``,
+          ``Decimal``, ``UUID``, ``Promise``, etc.)
+
+        A good pattern is to return a ``dict`` describing the upload
+        outcome — URL, ETag, size, storage key — not the underlying
+        client handle.
+        """
         return None
 
     def abort(self, error: BaseException) -> None:
@@ -321,7 +342,17 @@ class BufferedUploadWriter(UploadWriter):
         self._finalized = False
 
     def write_chunk(self, chunk: bytes) -> None:
-        """Buffer the chunk; emit full parts while buffer exceeds threshold."""
+        """Buffer the chunk; emit full parts while buffer exceeds threshold.
+
+        Raises ``RuntimeError`` if called after ``close()`` has returned —
+        the upload manager is contracted not to do this (post-close calls
+        are treated as a framework bug, not a user error).
+        """
+        if self._finalized:
+            raise RuntimeError(
+                "write_chunk() called on a finalized BufferedUploadWriter — "
+                "the upload manager is expected to stop dispatching after close()"
+            )
         self._buf.extend(chunk)
         threshold = self.buffer_threshold
         while len(self._buf) >= threshold:
@@ -332,7 +363,14 @@ class BufferedUploadWriter(UploadWriter):
 
     def close(self) -> Any:
         """Flush any remaining buffered bytes as a final partial part,
-        then call on_complete() and return its value."""
+        then call on_complete() and return its value.
+
+        Repeated ``close()`` calls are a no-op — once finalized, the writer
+        returns the same ``on_complete()`` snapshot without re-emitting the
+        final partial part.
+        """
+        if self._finalized:
+            return self.on_complete()
         if self._buf:
             self._part_num += 1
             final_part = bytes(self._buf)
@@ -629,12 +667,23 @@ class UploadManager:
 
     def _finalize_writer(self, entry: UploadEntry) -> bool:
         """Call writer.close() and store the return value on
-        entry.writer_result. Returns True on success."""
+        entry.writer_result. Returns True on success.
+
+        The return value is validated as JSON-serializable (see
+        ``UploadWriter.close`` docstring). A non-serializable return is
+        logged at ERROR level and the upload is aborted, so a bad writer
+        implementation surfaces immediately instead of causing a
+        downstream state-update failure.
+        """
+        import json as _json
+
+        from django.core.serializers.json import DjangoJSONEncoder
+
         writer = entry.writer_instance
         if writer is None:
             return False
         try:
-            entry.writer_result = writer.close()
+            result = writer.close()
         except Exception as exc:  # noqa: BLE001
             entry._error = "Upload writer failed to finalize"
             logger.exception(
@@ -644,6 +693,30 @@ class UploadManager:
             )
             self._safe_abort_writer(entry, exc)
             return False
+
+        # Defensive: validate close() return is JSON-serializable before
+        # storing it on the entry. If it's not, the next state update
+        # would raise TypeError AFTER the upload has already succeeded —
+        # surface the misconfiguration loudly here instead.
+        try:
+            _json.dumps(result, cls=DjangoJSONEncoder)
+        except (TypeError, ValueError) as exc:
+            entry._error = (
+                "UploadWriter.close() returned a non-JSON-serializable value. "
+                "Return a dict / list / primitive describing the outcome, "
+                "not a client handle."
+            )
+            logger.error(
+                "UploadWriter.close() return not JSON-serializable for upload %s "
+                "(writer=%s): %s",
+                entry.ref,
+                type(writer).__name__,
+                exc,
+            )
+            self._safe_abort_writer(entry, exc)
+            return False
+
+        entry.writer_result = result
         entry._complete = True
         return True
 
@@ -715,6 +788,21 @@ class UploadManager:
         """
         entry = self._entries.get(ref)
         if not entry:
+            return None
+
+        # Fast-path: once an upload has been aborted (size limit, writer
+        # rejection, etc.) any in-flight chunks from the client still
+        # arrive for some round-trips before the client observes the
+        # error. Drop them at a single DEBUG log rather than re-entering
+        # the abort path / writer teardown for every trailing chunk.
+        # (#824: a real "stop sending" push-event to the client is a
+        # separate, larger work item — tracked as a follow-up.)
+        if entry._error is not None or entry._writer_aborted:
+            logger.debug(
+                "Dropping chunk for already-aborted upload %s (error=%r)",
+                ref,
+                entry._error,
+            )
             return None
 
         config = self._configs.get(entry.upload_name)

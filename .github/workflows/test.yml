@@ -357,6 +357,7 @@ jobs:
         run: |
           PYTHONPATH=. .venv/bin/python -m pytest \
             tests/unit/test_security_*.py \
+            tests/unit/test_upload_writer.py \
             python/tests/test_security*.py \
             -v \
             --cov=djust.security \
