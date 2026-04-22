@@ -185,21 +185,25 @@ describe('dj-virtual', () => {
         expect(shell.children[0].getAttribute('data-i')).toBe('new-0');
     });
 
-    it('teardownVirtualList removes the observer and frees state', () => {
+    it('teardownVirtualList removes the observer, frees state, and restores original children (#798)', () => {
         const dom = createDom(makeListHtml(10));
         const container = setupContainer(dom);
         dom.window.djust.teardownVirtualList(container);
-        // After teardown, refresh is a no-op (state map was cleared).
-        // We verify by mutating scrollTop and checking the shell doesn't
-        // repaint (visibleStart was not reset).
-        const shell = container.querySelector('[data-dj-virtual-shell]');
-        const beforeCount = shell.children.length;
+        // After teardown:
+        //  - the injected shell/spacer are gone (#798 — was leaky before)
+        //  - the original 10 children are back in the container
+        //  - refresh is a no-op (state map was cleared)
+        expect(container.querySelector('[data-dj-virtual-shell]')).toBeNull();
+        expect(container.querySelector('[data-dj-virtual-spacer]')).toBeNull();
+        expect(container.children.length).toBe(10);
+
+        // Sanity: refreshVirtualList after teardown must not blow up.
         Object.defineProperty(container, 'scrollTop', {
             configurable: true,
             writable: true,
             value: 80,
         });
         dom.window.djust.refreshVirtualList(container);
-        expect(shell.children.length).toBe(beforeCount);
+        expect(container.children.length).toBe(10);
     });
 });
