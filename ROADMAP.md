@@ -772,7 +772,7 @@ class OnboardingView(WizardMixin, LiveView):
         self.live_redirect(f'/dashboard/')
 ```
 
-**`dj-no-submit` — Prevent enter-key form submission** — Prevent forms from submitting when the user presses Enter in a text input. `<form dj-submit="save" dj-no-submit="enter">`. This is the #1 form UX annoyance in LiveView-style apps — users press Enter expecting to confirm a field, and accidentally submit the entire form. Currently requires a `dj-hook` or JavaScript. ~10 lines JS. *Tiny feature, huge DX impact — every multi-field form needs this.*
+~~**`dj-no-submit` — Prevent enter-key form submission**~~ ✅ **Shipped in v0.5.1rc1** (Form & submit polish batch) — `<form dj-submit="save" dj-no-submit="enter">`. Document-level keydown listener; textareas, submit buttons, and modified Enter (Shift/Ctrl) unaffected. See `python/djust/static/djust/src/34-form-polish.js`.
 
 ### Milestone: v0.5.2 — Package Consolidation: Components
 
@@ -928,17 +928,17 @@ Open questions that inform future direction:
 | **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** | **v0.5.0** |
 | **Testing utilities** | **`LiveViewTest`** | **Testing Library** | **Basic** (`LiveViewTestClient`) | **v0.5.1** |
 | **Error overlay (dev)** | Error page | **Next.js overlay** | ✅ Shipped (v0.5.1) | v0.5.1 |
-| Computed/derived state | — | `useMemo` | Not started | v0.5.1 |
+| Computed/derived state | — | `useMemo` | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Lazy component loading | — | `React.lazy()` | ✅ Shipped (LiveView-level, PR #54) | v0.5.1 |
-| Component context sharing | — | `useContext` | Not started | v0.5.1 |
-| Trigger form action | `phx-trigger-action` | — | Not started | v0.5.1 |
+| Component context sharing | — | `useContext` | ✅ Shipped (v0.5.1) | v0.5.1 |
+| Trigger form action | `phx-trigger-action` | — | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Nested forms | `inputs_for/4` | Formik nested | ✅ Shipped (v0.5.1) | v0.5.1 |
-| Scoped loading states | `phx-loading` | Suspense per-query | Not started | v0.5.1 |
+| Scoped loading states | `phx-loading` | Suspense per-query | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Error boundaries | — | `<ErrorBoundary>` | ✅ Shipped (PR #773) | v0.5.1 |
-| **Native `<dialog>`** | — | — | **Not started** | **v0.5.1** |
-| **Stable component IDs** | — | **`useId`** | **Not started** | **v0.5.1** |
+| **Native `<dialog>`** | — | — | ✅ Shipped (v0.5.1) | v0.5.1 |
+| **Stable component IDs** | — | **`useId`** | ✅ Shipped (v0.5.1) | v0.5.1 |
 | **Form status awareness** | — | **`useFormStatus`** | **Not started** | **v0.8.0** |
-| **Dirty tracking** | — | — | **Not started** | **v0.5.1** |
+| **Dirty tracking** | — | — | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Animations / transitions | `JS.transition` | `<AnimatePresence>` | Not started | v0.6.0 |
 | Transition groups (lists) | — | `<TransitionGroup>` | Not started | v0.6.0 |
 | Exit animations | `phx-remove` | `<AnimatePresence>` | Not started | v0.6.0 |
