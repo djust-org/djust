@@ -986,9 +986,18 @@ fn extract_from_nodes(
 ) {
     for node in nodes {
         match node {
-            Node::Variable(var_expr, _filters, _in_attr) => {
+            Node::Variable(var_expr, filters, _in_attr) => {
                 // Extract from variable: {{ variable.path }}
                 extract_from_variable(var_expr, variables);
+                // Extract from filter args: {{ a|default:fallback }} — `fallback`
+                // must be tracked as a dependency too, otherwise a nested
+                // {% if %}{{ x|default:dynamic }}{% endif %} silently drops
+                // when only `dynamic` changes (issue #787).
+                for (_name, arg) in filters {
+                    if let Some(arg) = arg {
+                        extract_from_filter_arg(arg, variables);
+                    }
+                }
             }
             Node::If {
                 condition,
@@ -1261,6 +1270,37 @@ fn extract_from_variable(
     }
 }
 
+/// Extract a variable reference from a filter argument.
+///
+/// Filter args can be bare identifiers (`|default:fallback`), literal
+/// strings (`|default:"none"` or `|default:'none'`), or numbers
+/// (`|default:0`). Only bare identifiers are variable references and
+/// need to be tracked as template dependencies (issue #787).
+fn extract_from_filter_arg(
+    arg: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // Skip quoted string literals.
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    {
+        return;
+    }
+    // Skip numeric literals (including signed / floating point).
+    if trimmed
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+')
+    {
+        return;
+    }
+    // Anything else looks like a bare identifier / dotted path.
+    extract_from_variable(trimmed, variables);
+}
+
 /// Extract variable paths from an expression (like in if tags)
 ///
 /// Handles:
@@ -1335,20 +1375,33 @@ fn parse_filter_specs(parts: &[String]) -> Vec<(String, Option<String>)> {
         .map(|filter_spec| {
             if let Some(colon_pos) = filter_spec.find(':') {
                 let filter_name = filter_spec[..colon_pos].trim().to_string();
-                let mut arg = filter_spec[colon_pos + 1..].trim().to_string();
-                // Strip surrounding quotes from the argument (single or double)
-                if ((arg.starts_with('"') && arg.ends_with('"'))
-                    || (arg.starts_with('\'') && arg.ends_with('\'')))
-                    && arg.len() >= 2
-                {
-                    arg = arg[1..arg.len() - 1].to_string();
-                }
+                let arg = filter_spec[colon_pos + 1..].trim().to_string();
+                // NOTE: surrounding quotes on literal args (e.g. `"none"`
+                // in `default:"none"`) are preserved here so the
+                // dep-tracking extractor (issue #787) can tell a literal
+                // apart from a bare-identifier variable reference. The
+                // quote-strip now happens at render time inside
+                // `strip_filter_arg_quotes`.
                 (filter_name, Some(arg))
             } else {
                 (filter_spec.clone(), None)
             }
         })
         .collect()
+}
+
+/// Strip surrounding single/double quotes from a filter argument when it
+/// was a literal at parse time. Called at render time so the extractor
+/// can still distinguish bare identifiers from quoted literals.
+pub fn strip_filter_arg_quotes(arg: &str) -> &str {
+    if arg.len() >= 2
+        && ((arg.starts_with('"') && arg.ends_with('"'))
+            || (arg.starts_with('\'') && arg.ends_with('\'')))
+    {
+        &arg[1..arg.len() - 1]
+    } else {
+        arg
+    }
 }
 
 #[cfg(test)]

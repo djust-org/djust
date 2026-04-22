@@ -264,10 +264,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
             for (filter_name, arg) in filter_specs {
+                // Strip quotes from literal filter args at render time —
+                // the parser preserves quotes so the dep-tracking
+                // extractor can tell literals from bare identifiers
+                // (issue #787).
+                let stripped = arg.as_deref().map(crate::parser::strip_filter_arg_quotes);
                 value = filters::apply_filter_with_context(
                     filter_name,
                     &value,
-                    arg.as_deref(),
+                    stripped,
                     Some(context),
                 )?;
             }
@@ -320,10 +325,11 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let mut value = get_value(expr, context)?;
 
             for (filter_name, arg) in filters {
+                let stripped = arg.as_deref().map(crate::parser::strip_filter_arg_quotes);
                 value = filters::apply_filter_with_context(
                     filter_name,
                     &value,
-                    arg.as_deref(),
+                    stripped,
                     Some(context),
                 )?;
             }
@@ -382,7 +388,16 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             nodes,
             empty_nodes,
         } => {
-            let iterable_value = context.get(iterable).cloned().unwrap_or(Value::Null);
+            // Use context.resolve() so dotted iterables walk getattr
+            // across Python/Django model boundaries (e.g. `{% for x in
+            // user.orders %}` resolving through a DB relation). Issue
+            // #806 — previously only context.get() was consulted, which
+            // only hits the value-stack so getattr-backed iterables
+            // silently rendered as empty.
+            let iterable_value = context
+                .resolve(iterable)
+                .or_else(|| context.get(iterable).cloned())
+                .unwrap_or(Value::Null);
 
             match iterable_value {
                 Value::List(items) => {
