@@ -5230,16 +5230,24 @@ function morphElement(existing, desired) {
     // Remove attributes not present in desired.
     // Exception: canvas width/height are set by scripts (e.g. Chart.js) and must
     // not be removed — doing so resets the canvas context and clears drawn content.
+    // Also: attributes listed in dj-ignore-attrs are client-owned — the morph
+    // path must not remove or overwrite them (mirrors the SetAttr guard at
+    // line ~1199, which only covered individual attribute patches).
     const isCanvas = existing.tagName === 'CANVAS';
+    const _isIgnored = (globalThis.djust && typeof globalThis.djust.isIgnoredAttr === 'function')
+        ? globalThis.djust.isIgnoredAttr
+        : null;
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
             if (isCanvas && (name === 'width' || name === 'height')) continue;
+            if (_isIgnored && _isIgnored(existing, name)) continue;
             existing.removeAttribute(name);
         }
     }
     // Set/update attributes from desired
     for (const attr of desired.attributes) {
+        if (_isIgnored && _isIgnored(existing, attr.name)) continue;
         if (existing.getAttribute(attr.name) !== attr.value) {
             existing.setAttribute(attr.name, attr.value);
         }
@@ -9582,9 +9590,15 @@ window.djust.bindModelElements = bindModelElements;
         if (!el || typeof el.getAttribute !== 'function') return false;
         const raw = el.getAttribute('dj-ignore-attrs');
         if (!raw) return false;
+        // Empty attribute name never matches a listed key.
+        if (!attrName) return false;
         // CSV with whitespace tolerance. Exact match on attribute name.
+        // Empty tokens (from "open,,close" or trailing "open,") are skipped
+        // so they don't accidentally match an empty attribute name.
         for (const item of raw.split(',')) {
-            if (item.trim() === attrName) return true;
+            const trimmed = item.trim();
+            if (!trimmed) continue;
+            if (trimmed === attrName) return true;
         }
         return false;
     };

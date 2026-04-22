@@ -107,4 +107,101 @@ describe('dj-ignore-attrs', () => {
         dom.window.djust._applySinglePatch(patch2);
         expect(el.getAttribute('title')).toBe('x');
     });
+
+    // ---------------------------------------------------------------------
+    // Issue #816 — CSV edge cases (empty / whitespace / double / trailing)
+    // ---------------------------------------------------------------------
+
+    it('empty dj-ignore-attrs string does not flag any attribute', () => {
+        const doc = dom.window.document;
+        const el = doc.createElement('div');
+        el.setAttribute('dj-ignore-attrs', '');
+        expect(dom.window.djust.isIgnoredAttr(el, 'open')).toBe(false);
+        expect(dom.window.djust.isIgnoredAttr(el, '')).toBe(false);
+    });
+
+    it('whitespace-only dj-ignore-attrs string does not flag any attribute', () => {
+        const doc = dom.window.document;
+        const el = doc.createElement('div');
+        el.setAttribute('dj-ignore-attrs', '   ');
+        expect(dom.window.djust.isIgnoredAttr(el, 'open')).toBe(false);
+        expect(dom.window.djust.isIgnoredAttr(el, 'class')).toBe(false);
+    });
+
+    it('double comma (empty middle entry) is tolerated', () => {
+        const doc = dom.window.document;
+        const el = doc.createElement('div');
+        el.setAttribute('dj-ignore-attrs', 'open,,close');
+        expect(dom.window.djust.isIgnoredAttr(el, 'open')).toBe(true);
+        expect(dom.window.djust.isIgnoredAttr(el, 'close')).toBe(true);
+        // The empty middle entry must not match an empty attribute name.
+        expect(dom.window.djust.isIgnoredAttr(el, '')).toBe(false);
+    });
+
+    it('trailing comma is tolerated', () => {
+        const doc = dom.window.document;
+        const el = doc.createElement('div');
+        el.setAttribute('dj-ignore-attrs', 'open,');
+        expect(dom.window.djust.isIgnoredAttr(el, 'open')).toBe(true);
+        expect(dom.window.djust.isIgnoredAttr(el, '')).toBe(false);
+    });
+
+    // ---------------------------------------------------------------------
+    // Issue #815 — Morph-path attribute sync/removal honors dj-ignore-attrs
+    // ---------------------------------------------------------------------
+
+    it('morph path: removal loop preserves dj-ignore-attrs attribute (#815)', () => {
+        // Build an existing element that has `open` set (client-owned) and
+        // a `desired` clone with `open` NOT set. Without the morph-path
+        // guard, the remove loop would strip `open`. With the guard, `open`
+        // stays because it's listed in dj-ignore-attrs. Exercises the
+        // equivalent of morphElement's remove loop at 12-vdom-patch.js:746.
+        const doc = dom.window.document;
+        const existing = doc.createElement('dialog');
+        existing.setAttribute('dj-ignore-attrs', 'open');
+        existing.setAttribute('open', '');
+        existing.setAttribute('class', 'keep-me');
+
+        const desired = doc.createElement('dialog');
+        desired.setAttribute('dj-ignore-attrs', 'open');
+        desired.setAttribute('class', 'keep-me');
+        // desired does NOT have `open` set.
+
+        const isIgnored = dom.window.djust.isIgnoredAttr;
+        for (let i = existing.attributes.length - 1; i >= 0; i--) {
+            const name = existing.attributes[i].name;
+            if (!desired.hasAttribute(name)) {
+                if (isIgnored(existing, name)) continue;
+                existing.removeAttribute(name);
+            }
+        }
+        // open must remain because it's ignored — without the guard it
+        // would have been stripped by the remove loop.
+        expect(existing.hasAttribute('open')).toBe(true);
+    });
+
+    it('morph path: set loop preserves dj-ignore-attrs attribute value (#815)', () => {
+        // Existing has open=""; desired has open="true". Without the guard,
+        // the set loop would overwrite. With the guard, existing keeps "".
+        // Exercises the equivalent of morphElement's set loop at
+        // 12-vdom-patch.js:754.
+        const doc = dom.window.document;
+        const existing = doc.createElement('dialog');
+        existing.setAttribute('dj-ignore-attrs', 'open');
+        existing.setAttribute('open', '');
+
+        const desired = doc.createElement('dialog');
+        desired.setAttribute('dj-ignore-attrs', 'open');
+        desired.setAttribute('open', 'true');  // server wants a different value
+
+        const isIgnored = dom.window.djust.isIgnoredAttr;
+        for (const attr of desired.attributes) {
+            if (isIgnored(existing, attr.name)) continue;
+            if (existing.getAttribute(attr.name) !== attr.value) {
+                existing.setAttribute(attr.name, attr.value);
+            }
+        }
+        // existing keeps the client-owned "" value.
+        expect(existing.getAttribute('open')).toBe('');
+    });
 });
