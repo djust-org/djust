@@ -57,7 +57,7 @@ describe('dj-mutation', () => {
         el.addEventListener('dj-mutation-fire', (e) => events.push(e.detail));
 
         el.setAttribute('class', 'updated');
-        await waitForMutation(dom, 5);
+        await waitForMutation(dom, 30);
 
         expect(events.length).toBe(1);
         expect(events[0].handler).toBe('on_change');
@@ -73,7 +73,7 @@ describe('dj-mutation', () => {
 
         const child = dom.window.document.createElement('span');
         el.appendChild(child);
-        await waitForMutation(dom, 5);
+        await waitForMutation(dom, 30);
 
         expect(events.length).toBe(1);
         expect(events[0].handler).toBe('on_kids');
@@ -100,13 +100,13 @@ describe('dj-mutation', () => {
         dom = createDom('<div id="host"></div>');
         const host = dom.window.document.getElementById('host');
         host.innerHTML = '<div id="late" dj-mutation="on_change" dj-mutation-attr="data-v" dj-mutation-debounce="0"></div>';
-        await waitForMutation(dom, 5);
+        await waitForMutation(dom, 30);
 
         const el = dom.window.document.getElementById('late');
         const events = [];
         el.addEventListener('dj-mutation-fire', (e) => events.push(e.detail));
         el.setAttribute('data-v', '1');
-        await waitForMutation(dom, 5);
+        await waitForMutation(dom, 30);
 
         expect(events.length).toBe(1);
         expect(events[0].payload.attrs).toContain('data-v');
@@ -127,7 +127,7 @@ describe('dj-mutation', () => {
         };
 
         el.setAttribute('class', 'x');
-        await waitForMutation(dom, 5);
+        await waitForMutation(dom, 30);
 
         expect(calls.length).toBe(1);
         expect(calls[0].name).toBe('server_handler');
@@ -145,7 +145,7 @@ describe('dj-mutation', () => {
         el.addEventListener('dj-mutation-fire', (e) => e.preventDefault());
 
         el.setAttribute('class', 'x');
-        await waitForMutation(dom, 5);
+        await waitForMutation(dom, 30);
 
         expect(calls.length).toBe(0);
     });

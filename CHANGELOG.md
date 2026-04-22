@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2rc1] - 2026-04-22
+
 ### Added
 
 - **WebSocket per-message compression toggle — `DJUST_WS_COMPRESSION` (v0.6.0)** — VDOM patches compress extremely well (repetitive HTML fragments + JSON structure → 60-80 % wire-size reduction via zlib). Uvicorn and Daphne both negotiate `permessage-deflate` with browsers out of the box, so the wire-level compression is already free in most deployments — this change adds the declarative config toggle + documentation so operators can verify it's active, reason about the ~64 KB per-connection zlib context cost, and disable it cleanly on extreme-connection-density deployments or when running behind a compressing CDN. New `websocket_compression` config key (default `True`) exposed via `djust.config.config`, bridged from a top-level `settings.DJUST_WS_COMPRESSION` for discoverability, and surfaced to the injected client bootstrap as `window.DJUST_WS_COMPRESSION` (application code can branch on it to skip manual `JSON.stringify` optimizations that only help without wire-level compression). 6 tests in `tests/unit/test_ws_compression_config.py` cover default, override to True/False, truthy/falsy coercion, and client-script emission. Deployment guide (`docs/website/guides/deployment.md`) gains a new "WebSocket per-message compression" section covering the memory tradeoff, CDN double-compression footgun, and Uvicorn/Daphne flags. (`python/djust/config.py`, `python/djust/mixins/post_processing.py`)
