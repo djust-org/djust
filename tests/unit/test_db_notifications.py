@@ -253,6 +253,85 @@ class TestNotifyOnSave:
 
 
 # ---------------------------------------------------------------------------
+# untrack() — signal-receiver cleanup (issue #809)
+# ---------------------------------------------------------------------------
+
+
+class TestUntrack:
+    def teardown_method(self):
+        post_save.receivers = []
+        post_delete.receivers = []
+
+    def test_disconnects_both_receivers(self):
+        from djust.db import untrack
+
+        Order = _make_fake_model("shop", "order")
+        decorated = notify_on_save(Order)
+        on_save, on_delete = decorated._djust_notify_receivers
+
+        # Pre-condition: both receivers attached
+        save_before = sum(1 for r in post_save.receivers if r[1] is on_save)
+        del_before = sum(1 for r in post_delete.receivers if r[1] is on_delete)
+        assert save_before == 1
+        assert del_before == 1
+
+        assert untrack(decorated) is True
+
+        save_after = sum(1 for r in post_save.receivers if r[1] is on_save)
+        del_after = sum(1 for r in post_delete.receivers if r[1] is on_delete)
+        assert save_after == 0
+        assert del_after == 0
+
+    def test_clears_introspection_metadata(self):
+        from djust.db import untrack
+
+        Order = _make_fake_model("shop", "order")
+        decorated = notify_on_save(Order)
+        assert hasattr(decorated, "_djust_notify_channel")
+        assert hasattr(decorated, "_djust_notify_receivers")
+
+        untrack(decorated)
+
+        assert not hasattr(decorated, "_djust_notify_channel")
+        assert not hasattr(decorated, "_djust_notify_receivers")
+
+    def test_untrack_is_idempotent(self):
+        from djust.db import untrack
+
+        Order = _make_fake_model("shop", "order")
+        decorated = notify_on_save(Order)
+        assert untrack(decorated) is True
+        # Second call: no receivers left, returns False, does not raise.
+        assert untrack(decorated) is False
+
+    def test_untrack_on_never_decorated_model(self):
+        from djust.db import untrack
+
+        Order = _make_fake_model("shop", "order")
+        # Never passed through notify_on_save.
+        assert untrack(Order) is False
+
+    def test_re_decorate_after_untrack_works_cleanly(self):
+        """After untrack(), re-decoration installs fresh receivers with
+        the new channel — no stale state from the prior round.
+        """
+        from djust.db import untrack
+
+        Order = _make_fake_model("shop", "order")
+        decorated = notify_on_save(Order)  # default channel "shop_order"
+        first_receivers = decorated._djust_notify_receivers
+        assert decorated._djust_notify_channel == "shop_order"
+
+        untrack(decorated)
+
+        # Re-decorate with a different channel.
+        redecorated = notify_on_save(channel="orders")(decorated)
+        assert redecorated._djust_notify_channel == "orders"
+        # Receivers are fresh instances (not the originals).
+        assert redecorated._djust_notify_receivers != first_receivers
+
+
+# ---------------------------------------------------------------------------
 # NotificationMixin
 # ---------------------------------------------------------------------------
 

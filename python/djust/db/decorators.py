@@ -174,3 +174,46 @@ def notify_on_save(
         channel = model_or_channel
 
     return decorate
+
+
+def untrack(model: type) -> bool:
+    """Disconnect the signal receivers previously wired by ``@notify_on_save``.
+
+    Primarily for test teardowns (issue #809) — decorating a model with
+    ``@notify_on_save`` registers two ``weak=False`` signal handlers
+    against ``post_save`` / ``post_delete``, which would otherwise live
+    for the process lifetime and fire during unrelated tests. Returns
+    ``True`` if receivers were disconnected, ``False`` if the model was
+    never decorated (idempotent / safe to call twice).
+
+    After ``untrack``, the model loses its ``_djust_notify_channel`` /
+    ``_djust_notify_receivers`` attributes so re-decorating works as if
+    the model had never been touched.
+
+    Example::
+
+        @notify_on_save
+        class Order(models.Model): ...
+
+        # Later — in a pytest teardown or cleanup fixture:
+        from djust.db import untrack
+        untrack(Order)
+    """
+    receivers = getattr(model, "_djust_notify_receivers", None)
+    if not receivers:
+        return False
+    on_save, on_delete = receivers
+    post_save.disconnect(on_save, sender=model)
+    post_delete.disconnect(on_delete, sender=model)
+    # Wipe the introspection metadata so a fresh @notify_on_save round-
+    # trips cleanly (re-decoration wires new receivers with a new
+    # channel; leaving stale attributes would mask the re-wire).
+    try:
+        del model._djust_notify_channel
+    except AttributeError:
+        pass
+    try:
+        del model._djust_notify_receivers
+    except AttributeError:
+        pass
+    return True
