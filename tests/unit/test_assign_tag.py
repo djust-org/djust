@@ -118,3 +118,63 @@ def test_assign_tag_emits_no_html():
     )
     # The `{% mk %}` slot is empty — no visible text there.
     assert html == "pre||post|ok"
+
+
+class _BrokenReturnsString:
+    """Handler returning a str (not a dict) — should be warned + treated as empty."""
+
+    def render(self, args, context):  # noqa: ARG002
+        return "this is not a dict"
+
+
+class _BrokenReturnsList:
+    """Handler returning a list — also non-dict."""
+
+    def render(self, args, context):  # noqa: ARG002
+        return ["not", "a", "dict"]
+
+
+class _BrokenReturnsNone:
+    """Handler returning None — the documented 'no updates' sentinel.
+
+    Must NOT warn (this is intentional 'I did work but have nothing to merge').
+    """
+
+    def render(self, args, context):  # noqa: ARG002
+        return None
+
+
+def test_non_dict_return_is_empty_merge(capfd):
+    """Issue #805: a handler returning a non-dict gets warned + treated as empty.
+
+    The misbehaving handler must not crash the render — subsequent lookups
+    of the intended key just fail silently (as they would without the tag).
+    Uses ``capfd`` (not ``capsys``) because Rust's ``eprintln!`` writes to
+    file descriptor 2 directly, which pytest's capsys doesn't intercept.
+    """
+    register_assign_tag_handler("broken", _BrokenReturnsString())
+    _render("pre|{% broken %}|{{ missing }}|post")
+    captured = capfd.readouterr()
+    assert "broken" in captured.err
+    assert "non-dict" in captured.err
+    assert "empty merge" in captured.err
+
+
+def test_non_dict_list_return_is_also_warned(capfd):
+    register_assign_tag_handler("broken_list", _BrokenReturnsList())
+    _render("{% broken_list %}")
+    captured = capfd.readouterr()
+    assert "broken_list" in captured.err
+    assert "non-dict" in captured.err
+
+
+def test_none_return_does_not_warn(capfd):
+    """Returning None is the documented 'no context updates' sentinel.
+
+    No warning should fire — that's the deliberate 'I did work but have
+    nothing to merge' path.
+    """
+    register_assign_tag_handler("noop_none", _BrokenReturnsNone())
+    _render("{% noop_none %}")
+    captured = capfd.readouterr()
+    assert "noop_none" not in captured.err

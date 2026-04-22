@@ -517,10 +517,32 @@ pub fn call_assign_handler(
         // Handlers may legitimately return None or something dict-like
         // but not a dict. Treat any extraction failure as an empty
         // merge (no-op) so a misbehaving handler can't crash the
-        // whole render.
+        // whole render. Warn once per handler when the coercion fails
+        // so the developer sees the silent-empty pattern rather than
+        // hunting for why their assign tag didn't set anything (#805).
         match result.extract::<HashMap<String, djust_core::Value>>() {
             Ok(map) => Ok(map),
-            Err(_) => Ok(HashMap::new()),
+            Err(err) => {
+                // None is the documented "no context updates" sentinel;
+                // don't warn on it — that's the deliberate "I did work
+                // but have nothing to merge" path.
+                let is_none = result.is_none();
+                if !is_none {
+                    let type_name = result
+                        .get_type()
+                        .qualname()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|_| "<unknown>".to_string());
+                    eprintln!(
+                        "[djust] assign tag handler '{}' returned a non-dict value \
+                         (type = {}); treating as empty merge. \
+                         Handlers must return a dict[str, Any] mapping of context updates, \
+                         or None. Coercion error: {}",
+                        name, type_name, err
+                    );
+                }
+                Ok(HashMap::new())
+            }
         }
     })
 }
