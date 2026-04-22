@@ -132,6 +132,11 @@ function _installRootObserver() {
             if (m.type === 'attributes' && m.attributeName === _GROUP_ATTR) {
                 if (m.target.hasAttribute(_GROUP_ATTR)) {
                     _install(m.target);
+                } else {
+                    // Attribute stripped: uninstall the per-parent observer so it
+                    // stops wiring new children. Symmetric with dj-remove's
+                    // cancel-on-strip behavior.
+                    _uninstall(m.target);
                 }
             } else if (m.type === 'childList') {
                 m.addedNodes.forEach(function (node) {

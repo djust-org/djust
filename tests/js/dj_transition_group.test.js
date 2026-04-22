@@ -247,4 +247,34 @@ describe('dj-transition-group', () => {
         await new Promise((r) => setTimeout(r, 700));
         expect(item.parentNode).toBeNull();
     });
+
+    it('stripping dj-transition-group at runtime uninstalls the per-parent observer', async () => {
+        // Symmetric with dj-remove's cancel-on-strip behavior: when the
+        // dj-transition-group attribute is removed at runtime, the root
+        // observer's attribute-mutation branch should uninstall the
+        // per-parent observer so it stops wiring new children.
+        dom = createDom('');
+        const doc = dom.window.document;
+        const api = dom.window.djust.djTransitionGroup;
+        const ul = doc.createElement('ul');
+        ul.id = 'u';
+        ul.setAttribute('dj-transition-group', '');
+        ul.setAttribute('dj-group-leave', 'x y z');
+        doc.querySelector('[dj-view]').appendChild(ul);
+        // Wait for the root observer to pick up the inserted [dj-transition-group]
+        // and call _install on it.
+        await new Promise((r) => setTimeout(r, 20));
+        expect(api._installedParents.has(ul)).toBe(true);
+        // Strip the attribute — the root observer's attribute-mutation
+        // branch should call _uninstall.
+        ul.removeAttribute('dj-transition-group');
+        await new Promise((r) => setTimeout(r, 20));
+        expect(api._installedParents.has(ul)).toBe(false);
+        // Append a new child; because the per-parent observer has been
+        // uninstalled, dj-remove should NOT be wired.
+        const li = doc.createElement('li');
+        ul.appendChild(li);
+        await new Promise((r) => setTimeout(r, 20));
+        expect(li.hasAttribute('dj-remove')).toBe(false);
+    });
 });
