@@ -340,6 +340,76 @@ class TestListenerSingleton:
         asyncio.run(run())
 
 
+class TestLoopBinding:
+    """Issue #808: the listener's AsyncConnection is bound to one loop.
+
+    Cross-loop use (e.g. from async_to_sync in a worker thread) would
+    race against the listener's background task. _assert_same_loop
+    rejects the call with a clear error.
+    """
+
+    def teardown_method(self):
+        # Undo any singleton state the tests may have created.
+        PostgresNotifyListener._instance = None
+
+    def test_no_error_before_loop_is_bound(self):
+        """Before the listener has ever been started, cross-loop calls
+        are fine because there's no AsyncConnection to race with.
+        """
+
+        async def run():
+            listener = PostgresNotifyListener()
+            # _loop is None → _assert_same_loop is a no-op.
+            listener._assert_same_loop()
+
+        asyncio.run(run())
+
+    def test_same_loop_call_passes(self):
+        """Calling from the same loop that bound the listener is fine."""
+
+        async def run():
+            listener = PostgresNotifyListener()
+            listener._loop = asyncio.get_running_loop()
+            # Should not raise.
+            listener._assert_same_loop()
+
+        asyncio.run(run())
+
+    def test_cross_loop_call_raises_runtimeerror(self):
+        """Call from a different loop than the listener's bound loop → RuntimeError.
+
+        Simulate a cross-loop situation by binding ``_loop`` to a
+        freshly-constructed loop, then asserting from a different
+        running loop.
+        """
+        other_loop = asyncio.new_event_loop()
+        try:
+            listener = PostgresNotifyListener()
+            listener._loop = other_loop  # pretend-bound to a different loop
+
+            async def run():
+                # Inside a different loop — must raise.
+                with pytest.raises(RuntimeError, match="different event loop"):
+                    listener._assert_same_loop()
+
+            asyncio.run(run())
+        finally:
+            other_loop.close()
+
+    def test_no_running_loop_noop(self):
+        """Called from sync context (no running loop) → no-op, not a raise."""
+        listener = PostgresNotifyListener()
+        # Fake that a loop was previously bound — but we're not in any
+        # loop right now, so the guard must be a no-op (not raise).
+        fake_loop = asyncio.new_event_loop()
+        try:
+            listener._loop = fake_loop
+            # No current running loop; must not raise.
+            listener._assert_same_loop()
+        finally:
+            fake_loop.close()
+
+
 class TestConsumerWithoutNotificationMixin:
     """Issue #812: consumers whose view has no NotificationMixin must not break."""
 
