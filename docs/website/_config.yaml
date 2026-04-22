@@ -161,6 +161,11 @@ navigation:
         file: guides/declarative-ux-attrs.md
         order: 6.65
         level: intermediate
+      - title: Runtime Layout Switching
+        slug: layouts
+        file: guides/layouts.md
+        order: 6.7
+        level: intermediate
       - title: Model Binding
         slug: model-binding
         file: guides/model-binding.md

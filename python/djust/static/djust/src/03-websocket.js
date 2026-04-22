@@ -623,6 +623,13 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'layout':
+                // Runtime layout switch (v0.6.0) — set_layout() on the server.
+                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+                    window.djust.djLayout.applyLayout(data);
+                }
+                break;
+
             case 'reload':
                 // Hot reload: file changed, refresh the page
                 window.location.reload();

@@ -39,6 +39,7 @@ from .mixins import (
     NavigationMixin,
     FlashMixin,
     PageMetadataMixin,
+    LayoutMixin,
     WaiterMixin,
     NotificationMixin,
 )
@@ -130,6 +131,7 @@ class LiveView(
     NavigationMixin,
     FlashMixin,
     PageMetadataMixin,
+    LayoutMixin,
     WaiterMixin,
     AsyncWorkMixin,
     NotificationMixin,
