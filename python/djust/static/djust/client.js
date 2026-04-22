@@ -7183,7 +7183,9 @@ function _applyStreamOp(op, streamName) {
             // the end) until `limit` or fewer element children remain.
             const limit = typeof op.limit === 'number' ? Math.max(0, op.limit) : 0;
             const edge = op.edge === 'bottom' ? 'bottom' : 'top';
-            let kids = Array.from(el.children).filter(c => c.nodeType === 1);
+            // `.children` is an HTMLCollection — always element-only, no
+            // nodeType filter needed (was redundant per review #801).
+            let kids = Array.from(el.children);
             while (kids.length > limit) {
                 const victim = edge === 'top' ? kids.shift() : kids.pop();
                 if (!victim) break;
@@ -9369,6 +9371,20 @@ window.djust.bindModelElements = bindModelElements;
         if (!state) return;
         container.removeEventListener('scroll', state.onScroll);
         if (state.resizeObserver) state.resizeObserver.disconnect();
+        // Restore the pre-virtualization children and remove the shell/spacer.
+        // Without this, removing `dj-virtual` from a live container leaves
+        // the injected wrapper elements in place and shows only the
+        // currently-visible slice — confusing for downstream consumers.
+        try {
+            container.textContent = '';
+            const frag = document.createDocumentFragment();
+            for (const node of state.items) frag.appendChild(node);
+            container.appendChild(frag);
+        } catch (e) {
+            if (globalThis.djustDebug) {
+                console.warn('[dj-virtual] teardown restore failed', e);
+            }
+        }
         STATE.delete(container);
     }
 

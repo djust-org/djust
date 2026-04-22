@@ -194,6 +194,20 @@
         if (!state) return;
         container.removeEventListener('scroll', state.onScroll);
         if (state.resizeObserver) state.resizeObserver.disconnect();
+        // Restore the pre-virtualization children and remove the shell/spacer.
+        // Without this, removing `dj-virtual` from a live container leaves
+        // the injected wrapper elements in place and shows only the
+        // currently-visible slice — confusing for downstream consumers.
+        try {
+            container.textContent = '';
+            const frag = document.createDocumentFragment();
+            for (const node of state.items) frag.appendChild(node);
+            container.appendChild(frag);
+        } catch (e) {
+            if (globalThis.djustDebug) {
+                console.warn('[dj-virtual] teardown restore failed', e);
+            }
+        }
         STATE.delete(container);
     }
 
