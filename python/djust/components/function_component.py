@@ -383,6 +383,13 @@ class SlotTagHandler:
         return _emit_slot_sentinel({"name": name, "attrs": attrs, "content": content})
 
 
+# Matches a bare identifier or a dotted chain of identifiers: `slot`,
+# `slot.0`, `slots.col.0.content`. Used by RenderSlotTagHandler to decide
+# whether a pre-resolved arg is still an unresolved path (resolution
+# failed upstream) vs. a resolved scalar value. See #861.
+_LOOKS_LIKE_PATH = re.compile(r"^[A-Za-z_][\w]*(?:\.[A-Za-z_0-9][\w]*)*$")
+
+
 class RenderSlotTagHandler:
     """Inline tag: ``{% render_slot REF %}``.
 
@@ -390,15 +397,66 @@ class RenderSlotTagHandler:
     like ``slots.col.0``). If the resolved value is a dict it is assumed to
     be a single slot entry; if a list, the first entry is emitted. The
     content is returned verbatim (already-escaped HTML from the parent).
+
+    **Dual-caller contract (#861)**: this handler is called from two paths
+    with different arg shapes:
+
+    1. **Rust template engine** — the engine pre-resolves variable args
+       before calling handlers. For `{% render_slot slots.col.0 %}`,
+       ``args[0]`` arrives already as the resolved slot dict, JSON-encoded
+       (because ``value_to_arg_string`` JSON-serializes ``List``/``Object``
+       values for transport across the FFI boundary). The handler's
+       ``_resolve_context_path`` call on a JSON string would then fail,
+       producing silent empty output — the exact #861 symptom.
+
+    2. **Direct Python call** — ``RenderSlotTagHandler().render(["slots.col.0"], ctx)``
+       passes the literal dotted-path string; the handler resolves against
+       ``context`` itself.
+
+    Resolution: try a JSON parse first (shape 1 — Rust-engine output).
+    If that yields a structured value, extract from it. Otherwise fall
+    back to the path-resolution semantics (shape 2 — direct callers).
+    This keeps end-to-end Rust rendering of named slots working and
+    preserves the existing direct-caller contract.
     """
 
     def render(self, args: list[str], context: dict[str, Any]) -> str:
         if not args:
             return ""
-        target = str(args[0])
-        value = _resolve_context_path(target, context)
-        if value is None:
-            return ""
+        raw = str(args[0])
+
+        # Shape 1: Rust-engine pre-resolved structured value (JSON string).
+        # Only treat as JSON if it parses AS a list or dict — bare strings,
+        # numbers, and bools pass through below.
+        try:
+            import json
+
+            parsed = json.loads(raw)
+            if isinstance(parsed, (list, dict)):
+                return self._render_value(parsed)
+        except (ValueError, TypeError):
+            pass
+
+        # Shape 2: the arg still LOOKS like a dotted path (no dots → simple
+        # identifier; with dots → multi-segment identifier). Under the Rust
+        # engine, an arg that still looks like an unresolved path means
+        # resolution failed upstream — preserve the old direct-caller
+        # contract and return empty on miss. This also handles the direct-
+        # Python-caller case where args[0] is a literal path.
+        if _LOOKS_LIKE_PATH.match(raw):
+            value = _resolve_context_path(raw, context)
+            if value is None:
+                return ""
+            return self._render_value(value)
+
+        # Shape 3: a pre-resolved scalar (Rust engine stringified a number,
+        # bool, or string). Emit as-is — this is the value the user asked
+        # for. Covers `{% render_slot slot.content %}` where the content is
+        # a string that doesn't itself look like a dotted identifier.
+        return raw
+
+    @staticmethod
+    def _render_value(value: Any) -> str:
         if isinstance(value, list):
             if not value:
                 return ""
