@@ -174,6 +174,37 @@ class TestBufferedUploadWriter:
         result = w.close()
         assert result == {"url": "s3://bucket/key"}
 
+    def test_write_chunk_after_close_raises_runtime_error(self):
+        """Issue #823: _finalized is now actively enforced (was dead code).
+
+        Calling write_chunk() after close() would have silently buffered
+        more bytes with no part emission — a framework-bug surface area.
+        Now the write_chunk method raises RuntimeError with a clear
+        message.
+        """
+        w = PartRecorder("u", "f", "t", None)
+        w.write_chunk(b"12345")
+        w.close()
+        with pytest.raises(RuntimeError, match="finalized"):
+            w.write_chunk(b"more")
+
+    def test_close_is_idempotent(self):
+        """Issue #823: repeated close() calls are a no-op.
+
+        The upload manager's abort/complete paths can both reach
+        writer.close() in pathological races; neither should produce
+        duplicate on_part calls or a doubled on_complete payload.
+        """
+        w = PartRecorder("u", "f", "t", None)
+        w.write_chunk(b"1234567")  # 7 bytes → 1 full part + buffered 2
+        first = w.close()
+        parts_after_first = list(w.parts)
+        second = w.close()
+        # Second close() must NOT emit another final partial.
+        assert w.parts == parts_after_first
+        # Both calls return the same on_complete() payload.
+        assert first == second == "DONE"
+
 
 # ============================================================================
 # UploadConfig / allow_upload wiring
@@ -247,6 +278,74 @@ class TestWriterLifecycle:
         assert entry.writer_result == {"url": "https://x/k"}
         assert entry.complete is True
         assert entry.writer_instance.closed is True
+
+    def test_non_json_serializable_close_return_aborts_upload(self, caplog):
+        """Issue #825: writer.close() must return a JSON-serializable value.
+
+        A writer returning a live boto3 client handle (or any non-JSON
+        type) would later break the state-update serialization — AFTER
+        the upload had already succeeded. The manager now validates the
+        return and aborts the upload with a clear error.
+        """
+        import logging
+
+        class ClientHandleWriter(RecordingWriter):
+            pass
+
+        mgr = UploadManager()
+        mgr.configure(name="avatar", max_file_size=1024, writer=ClientHandleWriter)
+        entry = _register(mgr, "avatar", size=50)
+        mgr.add_chunk(entry.ref, 0, b"data")
+        # Return a non-serializable value — a bare object instance.
+        entry.writer_instance.close_return = object()
+
+        with caplog.at_level(logging.ERROR, logger="djust.uploads"):
+            result_entry = mgr.complete_upload(entry.ref)
+
+        assert result_entry is None
+        assert entry.complete is False
+        assert entry.error is not None
+        assert "non-JSON-serializable" in entry.error
+        # Abort was invoked once with the underlying JSON error.
+        assert len(entry.writer_instance.aborted_with) == 1
+
+
+# ============================================================================
+# Abort / backpressure follow-ups (#824)
+# ============================================================================
+
+
+class TestAbortBackpressure:
+    """Issue #824: subsequent chunks after an abort must be dropped cheaply."""
+
+    def test_chunks_after_size_abort_are_dropped_silently(self):
+        # Client advertises a tiny size (fits the config limit) but actually
+        # sends more bytes via chunks — that's the path that triggers the
+        # per-chunk size abort.
+        mgr = UploadManager()
+        mgr.configure(name="avatar", max_file_size=5, writer=RecordingWriter)
+        entry = _register(mgr, "avatar", size=5)
+
+        # First chunk is under limit — accepted.
+        ok = mgr.add_chunk(entry.ref, 0, b"abc")
+        assert ok is not None
+
+        # Second chunk pushes total past 5B → abort.
+        aborted = mgr.add_chunk(entry.ref, 1, b"defgh")
+        assert aborted is None
+        assert entry.error == "File size exceeds limit"
+        before_abort_chunks = len(entry.writer_instance.chunks)
+
+        # Third + fourth chunks arrive while client hasn't yet seen the
+        # error. Each must return None without re-invoking the writer.
+        for i in (2, 3):
+            late = mgr.add_chunk(entry.ref, i, b"LATE-CHUNK-DATA")
+            assert late is None
+
+        # Writer's chunk list did NOT grow after the abort.
+        assert len(entry.writer_instance.chunks) == before_abort_chunks
+        # abort() was called exactly once (not once per trailing chunk).
+        assert len(entry.writer_instance.aborted_with) == 1
 
 
 # ============================================================================

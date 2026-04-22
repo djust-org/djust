@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **UploadWriter `close()` return validated as JSON-serializable (#825)** — Non-JSON returns (live boto3 client handles, open file descriptors, bare class instances) would previously succeed through `UploadWriter.close()` and then break the next WebSocket state-update with a `TypeError` *after* the upload had already finalized. The manager now runs `DjangoJSONEncoder` on the value and aborts the upload with a clear `"non-JSON-serializable"` error if it can't round-trip. Docstring on `UploadWriter.close()` documents the constraint and points at safe return shapes. (`python/djust/uploads.py`)
+- **BufferedUploadWriter `write_chunk()` after `close()` raises (#823)** — The `_finalized` flag was set but never read, so a post-close `write_chunk()` silently buffered bytes that would never emit a part. Now raises `RuntimeError` with a clear message (framework contract: upload manager is expected to stop dispatching after close). Repeated `close()` calls are idempotent and return the same `on_complete()` payload without re-emitting the final partial. (`python/djust/uploads.py`)
+- **Upload-manager drops chunks silently after abort (#824, partial)** — Once an upload has been aborted (size-limit exceeded, writer rejected, etc.), any in-flight chunks from the client still arrive for a few round-trips before the client observes the error. The manager now fast-paths these at a single DEBUG log rather than re-entering abort / writer teardown for each trailing chunk. A real "stop sending" push-event to the client is a separate, larger work item and remains open. (`python/djust/uploads.py`)
+
 ### Added
 
 - **`djust_typecheck` — `{% firstof %}` / `{% cycle %}` / `{% blocktrans with %}` tag support (#850)** — The extractor now captures positional context-variable references in `{% firstof a b c %}` and `{% cycle a b c %}` (string literals and `as <name>` suffixes are correctly ignored), and the `with x=expr` (and `count x=expr`) clauses of `{% blocktrans %}` / `{% blocktranslate %}` produce both the template-local binding (`x`) and the reference (`expr`). Eliminates a class of false positives (blocktrans locals) and false negatives (firstof/cycle args). (`python/djust/management/commands/djust_typecheck.py`)
