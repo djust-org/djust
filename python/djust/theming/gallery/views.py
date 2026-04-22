@@ -16,6 +16,7 @@ from django.http import (
     JsonResponse,
 )
 from django.template.loader import render_to_string
+from django.utils.html import escape
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 
 from .context import build_gallery_context, serialize_all_design_systems, serialize_all_presets
@@ -273,12 +274,12 @@ def storybook_detail_view(request, component_name):
     from .component_registry import _COMPONENT_TO_CATEGORY
 
     if component_name not in COMPONENT_CONTRACTS and component_name not in _COMPONENT_TO_CATEGORY:
-        return HttpResponseNotFound(f"Unknown component: {component_name}")
+        return HttpResponseNotFound(f"Unknown component: {escape(component_name)}")
 
     try:
         ctx = build_storybook_detail_context(component_name)
     except KeyError:
-        return HttpResponseNotFound(f"Unknown component: {component_name}")
+        return HttpResponseNotFound(f"Unknown component: {escape(component_name)}")
 
     ctx["request"] = request
     # Pass full component list for sidebar navigation
@@ -303,7 +304,7 @@ def storybook_category_view(request, category):
     from .component_registry import COMPONENT_CATEGORIES, get_all_components_with_metadata
 
     if category not in COMPONENT_CATEGORIES:
-        return HttpResponseNotFound(f"Unknown category: {category}")
+        return HttpResponseNotFound(f"Unknown category: {escape(category)}")
 
     all_components = get_all_components_with_metadata()
     category_components = [c for c in all_components if c["category"] == category]

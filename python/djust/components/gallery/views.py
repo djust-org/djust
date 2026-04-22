@@ -9,6 +9,7 @@ Provides three views:
 from django.http import HttpResponse, Http404
 from django.template import Template, Context
 from django.templatetags.static import static
+from django.utils.html import escape
 
 from .registry import get_gallery_data
 
@@ -52,28 +53,29 @@ def _resolve_theme(request):
     """
     presets, systems = _get_theme_options()
 
-    design_system = request.COOKIES.get("gallery_ds", "material")
-    if design_system not in systems:
-        design_system = "material"
+    _ds_raw = request.COOKIES.get("gallery_ds", "material")
+    design_system = _ds_raw if _ds_raw in systems else "material"
 
-    preset = request.COOKIES.get("gallery_preset", "default")
-    if preset not in presets:
-        preset = "default"
+    _preset_raw = request.COOKIES.get("gallery_preset", "default")
+    preset = _preset_raw if _preset_raw in presets else "default"
 
-    mode = request.COOKIES.get("gallery_mode", "light")
-    if mode not in ("light", "dark"):
-        mode = "light"
+    _mode_raw = request.COOKIES.get("gallery_mode", "light")
+    mode = _mode_raw if _mode_raw in ("light", "dark") else "light"
 
     theme_css = _get_theme_css(preset=preset, design_system=design_system, mode=mode)
 
+    # Defense-in-depth: `design_system` and `preset` are already constrained to the
+    # allowlists above, so they cannot contain HTML-special characters. We still
+    # escape() here so static analyzers (CodeQL py/reflective-xss) can see that
+    # cookie-derived data never reaches HTML output without sanitization.
     ds_options = "".join(
-        f'<option value="{s}"{" selected" if s == design_system else ""}>'
-        f"{s.replace('_', ' ').title()}</option>"
+        f'<option value="{escape(s)}"{" selected" if s == design_system else ""}>'
+        f"{escape(s.replace('_', ' ').title())}</option>"
         for s in systems
     )
     preset_options = "".join(
-        f'<option value="{p}"{" selected" if p == preset else ""}>'
-        f"{p.replace('_', ' ').title()}</option>"
+        f'<option value="{escape(p)}"{" selected" if p == preset else ""}>'
+        f"{escape(p.replace('_', ' ').title())}</option>"
         for p in presets
     )
 
@@ -682,7 +684,7 @@ def gallery_category_view(request, category_slug):
     from .examples import CATEGORIES, CATEGORY_ORDER
 
     if category_slug not in CATEGORIES:
-        raise Http404(f"Unknown category: {category_slug}")
+        raise Http404(f"Unknown category: {escape(category_slug)}")
 
     mode, theme_css, ds_options, preset_options = _resolve_theme(request)
     data = get_gallery_data()
