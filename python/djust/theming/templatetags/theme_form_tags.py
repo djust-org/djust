@@ -85,9 +85,12 @@ def theme_form(context, form, layout="stacked", **kwargs):
         field = bound_field.field
         label_text = bound_field.label
         field_id = bound_field.id_for_label
-        if label_text and not isinstance(
-            field.widget, template.library.InvalidTemplateLibrary if False else type(None)
-        ):
+        # Skip the label block when the field has no label (`label_text` empty)
+        # OR when there's explicitly no widget attached. `type(None)` handles the
+        # no-widget case; the earlier expression included a dead `if False` branch
+        # referencing `template.library.InvalidTemplateLibrary` that was never
+        # reached — dropped for clarity.
+        if label_text and not isinstance(field.widget, type(None)):
             escaped_label = conditional_escape(label_text)
             use_fieldset = (
                 bound_field.field.widget.use_fieldset
