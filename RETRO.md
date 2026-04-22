@@ -64,11 +64,98 @@ issue or be explicitly closed with a reason.
 | 52 | `DjustMainOnlyMiddleware` should early-return on 4xx/5xx responses | PR #826 | #828 | Open | — |
 | 53 | `registerServiceWorker` duplicate-call guard | PR #826 | #829 | Open | — |
 | 54 | Middleware should match `text/html` with charset variants | PR #826 | #830 | Open | — |
-| 55 | `djust_typecheck`: support `{% firstof %}`, `{% cycle %}`, `{% blocktrans with %}` | PR #849 | #850 | Open | Template-tag blind spots |
-| 56 | `djust_typecheck`: MRO walk for `self.foo = ...` assigns from parent classes | PR #849 | #851 | Open | — |
-| 57 | Extract shared `_walk_subclasses` / `_is_user_class` (3x duplication) | PR #849 | #852 | Open | Refactor |
-| 58 | `follow_redirect` silent drop on multiple redirects | PR #842 | #843 | Open | Should raise or compose |
-| 59 | `handle_async_result` callback not invoked in `render_async` | PR #842 | #844 | Open | — |
+| 55 | `djust_typecheck`: support `{% firstof %}`, `{% cycle %}`, `{% blocktrans with %}` | PR #849 | #850 | Closed | Shipped in PR #859 |
+| 56 | `djust_typecheck`: MRO walk for `self.foo = ...` assigns from parent classes | PR #849 | #851 | Closed | Shipped in PR #859 |
+| 57 | Extract shared `_walk_subclasses` / `_is_user_class` (2x duplication; reviewer claimed 3x) | PR #849 | #852 | Closed | Shipped in PR #859 |
+| 58 | `follow_redirect` silent drop on multiple redirects | PR #842 | #844 | Closed | Shipped in PR #865 |
+| 59 | `handle_async_result` callback not invoked in `render_async` | PR #842 | #843 | Closed | Shipped in PR #865 |
+| 60 | Document `<script>` limitation of instant-shell swap (SW + dj-hook) | PR #826 | #827 | Closed | Shipped in PR #860 (also found + fixed actual dj-hook re-bind bug via Stage 11) |
+| 61 | Middleware early-return on 4xx/5xx responses | PR #826 | #828 | Closed | Shipped in PR #860 |
+| 62 | `registerServiceWorker` idempotency guard | PR #826 | #829 | Closed | Shipped in PR #860 |
+| 63 | Middleware content-type widening (xhtml, charset/boundary tolerance) | PR #826 | #830 | Closed | Shipped in PR #860 |
+| 64 | Slot-in-for-loop end-to-end test coverage | PR #788 | #789 | Closed | Shipped in PR #862 |
+| 65 | `{% render_slot slots.col.0 %}` dotted-path end-to-end test | PR #788 | #790 | Closed | Shipped in PR #862 at handler level; surfaced new Rust bug #861 |
+| 66 | `{% render_slot %}` Rust engine returns empty for all input | (drain) | #861 | Open | Surfaced while writing coverage for #790 |
+| 67 | Morph-path should honor `dj-ignore-attrs` | PR #814 | #815 | Closed | Shipped in PR #863 |
+| 68 | `dj-ignore-attrs` CSV edge cases (empty/whitespace/trailing comma) | PR #814 | #816 | Closed | Shipped in PR #863 |
+| 69 | Namespacing `AttributeError` fallback regression test | PR #814 | #817 | Closed | Shipped in PR #863 |
+| 70 | `BufferedUploadWriter._finalized` flag dead code | PR #819 | #823 | Closed | Shipped in PR #864 |
+| 71 | Trailing-chunks-after-abort fast-path (partial #824) | PR #819 | #824 | Closed | Shipped in PR #864 as log fast-path; full "stop sending" push-event deferred |
+| 72 | Document JSON-serializability on `UploadWriter.close()` return | PR #819 | #825 | Closed | Shipped in PR #864 (+ runtime validation) |
+| 73 | `stream()` with `limit=N` pre-trims emitted inserts | PR #796 | #799 | Closed | Shipped in PR #866 |
+| 74 | `teardownVirtualList` restores original children | PR #796 | #798 | Closed | Shipped in PR #866 |
+| 75 | `stream_prune` `.children` filter redundancy | PR #796 | #801 | Closed | Shipped in PR #866 (cosmetic) |
+| 76 | `send_pg_notify` payload size guard | PR #807 | #810 | Closed | Shipped in PR #867 |
+| 77 | `PostgresNotifyListener.reset_for_tests` awaits cancellation | PR #807 | #811 | Closed | Shipped in PR #867 as `areset_for_tests` |
+| 78 | Regression test: consumer handles views without `NotificationMixin` | PR #807 | #812 | Closed | Shipped in PR #867 |
+| 79 | Document 100ms `db_notify` render-lock timeout semantics | PR #807 | #813 | Closed | Shipped in PR #867 |
+
+---
+
+## Tech-debt drain session (PRs #859–#867, 2026-04-22)
+
+**Date**: 2026-04-22
+**Scope**: Autonomous drain of 35 open tech-debt issues accumulated from Stage 11 reviews across the v0.5.0 / v0.5.1 cycle. Grouped into thematic clusters; shipped 8 PRs closing 24 issues. The remaining 11 were deferred with explicit rationale (async-design / Rust-engine / multi-repo work).
+**Tests at close**: Each cluster PR added regression coverage — typecheck 19→28→29 cases, middleware 9→13 cases, uploads 27→31, testing utilities 21→25, db-notify 39→43, plus JS test deltas in ignore_attrs.test.js, service_worker.test.js, virtual_list.test.js, and error_overlay.test.js.
+
+### Issue → PR map
+
+| Cluster | PR | Issues closed |
+|---|---|---|
+| typecheck follow-ups | #859 | #850, #851, #852 |
+| service worker + middleware | #860 | #827, #828, #829, #830 |
+| slot coverage | #862 | #789, #790 (+ filed new #861) |
+| morph / dj-ignore-attrs | #863 | #815, #816, #817 |
+| uploads | #864 | #823, #824, #825 |
+| testing utilities | #865 | #843, #844 |
+| streams / virtual | #866 | #798, #799, #801 |
+| db_notify smalls | #867 | #810, #811, #812, #813 |
+
+### What We Learned
+
+**1. Stage 11 still catches real defects even on tech-debt PRs.** Every single cluster PR tonight had Stage 11 surface something non-trivial that Stage 7 (self-review) missed: `AnnAssign` dropped in the AST extractor (#859); `PermissionDenied` masked as 500 (prior PR #856); `_api_request` flag set after mount (prior PR #856); `dj-hook` not re-bound after the instant-shell swap (#860 — the doc I wrote claimed MutationObserver was the mechanism; it wasn't, and the test-client-to-main parity wasn't wired at all); `{% cycle ... as row_class %}` locals binding missing (#859); the `isIgnoredAttr` empty-token match edge case (#863). At 9 consecutive PRs, "Stage 11 is load-bearing" has proven itself beyond argument.
+
+**Action taken**: No change — rule stays mandatory. The pattern is so consistent that any future proposal to skip Stage 11 to save time should be rejected on sight.
+
+**2. `Closes #X, #Y, #Z` in PR bodies only auto-closes the FIRST issue.** Several PRs merged with their second and third referenced issues still open. Fixed manually via 11 `gh issue close` calls; fixed the remaining PR bodies (#866, #867) to use `Closes #X` on separate lines — those auto-closed correctly on merge.
+
+**Action taken**: Use one `Closes #N` per line going forward. Tracked as a process memory for future PR body generation.
+
+**3. Branch-per-cluster → every CHANGELOG touches the same Unreleased section → every merge has a conflict.** Eight PRs, eight CHANGELOG conflicts. Each conflict was trivial to resolve (both sides wanted to add a bullet) but it added ~3–5 min of ceremony to every merge. Total tax: probably 30 minutes of pure git-surgery across the session.
+
+**Action taken**: For multi-PR sessions like this, consider a separate "consolidated CHANGELOG" PR at the end instead of per-branch edits. Or accept the conflict tax as the cost of isolation.
+
+**4. The drain surfaced a real bug.** While writing end-to-end coverage for #790 (`{% render_slot slots.col.0 %}`), the test exposed that the Rust engine returns empty string for *any* `{% render_slot %}` invocation — not just the dotted-path case. Filed as #861. The handler's own Python logic works correctly in isolation. Users today have to extract slot content in Python (`assigns["slots"][name][0]["content"]`); the documented `{% render_slot %}` tag is silently broken via the Rust path. Net: #790 closed at the handler level, plus one new bug discovered that has real user impact.
+
+**Action taken**: #861 on the backlog; worth prioritizing since it misrepresents shipped functionality in `docs/website/guides/components.md`.
+
+**5. A coverage gate in CI surfaced when the grab-bag PR didn't exercise the same test files the gate measures.** The `security-tests` job covers `djust.security` + `djust.uploads` + `djust.validation` and runs `tests/unit/test_security_*.py`. My #864 added defensive code in `djust.uploads` covered by `tests/unit/test_upload_writer.py` — not in the security glob. Coverage dropped to 63%, fail-under=75% failed. Fix: added `test_upload_writer.py` to the security-tests glob (CI config change). The lesson: coverage gates can catch "I added defensive code without the test file being in the right suite" but the diagnosis takes a round trip.
+
+**Action taken**: Added `test_upload_writer.py` to the security-tests CI run in PR #864. No rule change — but future PRs that add defensive code in `djust.uploads` should check the security-tests glob.
+
+**6. Deferred items had clear rationale.** The 11 issues I didn't tackle fall into four buckets: (a) async/event-loop design (#793 #808 #809), (b) Rust template engine (#787 #803 #804 #805 #806), (c) multi-repo archival work (#778), (d) actual features disguised as tech-debt (#797 ResizeObserver). Documenting *why* each was deferred — rather than silently skipping — means "morning me" can pick up any of them with full context.
+
+### Insights
+
+- **Cluster size of 3–4 issues per PR was the sweet spot.** Smaller clusters felt ceremonial (each has its own Stage 11 agent, CI run, merge conflict). Larger clusters would have strained Stage 11's reviewing capacity.
+- **Autonomous execution works when every stage is gated.** Eight PRs, eight Stage 11 reviews, eight CI cycles — no regressions on main. The rate-limiter was Stage 11's quality bar, not my output.
+- **Deferred ≠ ignored.** Every deferred issue has a written reason in the `### Open Items` list, so the deferral survives context loss. This is the compounding value of writing things down.
+- **The `render_slot` bug (#861) is the session's most valuable finding.** Not because it was fixed — it wasn't — but because without the drain, the test-coverage-gap reported in the review of #788 would have stayed silent. Coverage drove bug discovery.
+
+### Open Items (carried forward)
+
+- [ ] #861 — render_slot Rust integration returns empty (new bug; high user value)
+- [ ] #786 — broaden dep-extractor correctness harness matrix (tests only, safe)
+- [ ] #787 — extract filter-arg vars in `extract_from_variable` (Rust dep tracker)
+- [ ] #793 — assign_async concurrent same-name cancellation semantics (async design)
+- [ ] #797 — variable-height virtual list items via ResizeObserver (feature; ROADMAP-worthy)
+- [ ] #803 — block-handler loader access (deferred from #802; Rust)
+- [ ] #804 — parent-tag propagation for nested custom-tag handlers (Rust)
+- [ ] #805 — warn when assign_tag_handler returns non-dict (~5 LOC Rust; pair with other Rust items)
+- [ ] #806 — extend `Context::resolve` to for-iterables over Model instances (Rust + Django interop)
+- [ ] #808 — PostgresNotifyListener event-loop binding across async_to_sync (real bug; async design)
+- [ ] #809 — `untrack()` helper for `@notify_on_save` receiver cleanup (new public API)
+- [ ] #778 — ADR-007 package-shim sunset (multi-repo archival)
 
 ---
 
