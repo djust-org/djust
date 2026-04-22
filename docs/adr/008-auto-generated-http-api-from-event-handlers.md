@@ -152,15 +152,43 @@ The result is a static-enough document that we can cache it at process start and
 - **`mount()` vs. `api_mount()`?** Should the dispatch path call the full `mount()` or a lightweight `api_mount()` hook that skips WS-specific setup? Leaning toward: call `mount()`; allow views to override `api_mount()` to differ. Document the cost.
 - **`request.user` / `request` shape** on the instance — the fresh instance needs the same attribute surface the WS path provides. Audit what the WS consumer sets and mirror it in one helper.
 - **Return value vs. assigns in the response** — always include both? Let the handler suppress one via `@event_handler(expose_api=True, api_response="result-only")`? Default: send both; the caller reads what it needs.
-- **Transport-conditional return values** — Handlers designed for WebSocket only mutate state (return None). HTTP API consumers need actual data (e.g., search results, not just `{"assigns": {"search_query": "..."}}`). But serializing query results on every WebSocket keystroke is wasteful. **Resolved:** The dispatch view sets `self._api_request = True` on the view instance before invoking the handler. Handlers (or a decorator) can check this flag to conditionally return serialized data. A `@api_returns(serializer_fn)` decorator pattern is recommended:
+- **Transport-conditional return values** — Handlers designed for WebSocket only mutate state (return None). HTTP API consumers need actual data (e.g., search results, not just `{"assigns": {"search_query": "..."}}`). But serializing query results on every WebSocket keystroke is wasteful. **Resolved:** Three-tier resolution on the HTTP path (first match wins), zero overhead on WebSocket:
+
+  1. **Per-handler override:** `@event_handler(expose_api=True, serialize=<callable-or-str>)`.
+  2. **View-level convention:** `def api_response(self): ...` — one method shared by every API handler on the view.
+  3. **Passthrough:** whatever the handler returned.
+
+  The convention form is the primary DRY path — a view with N handlers all returning the same shape needs one `api_response()` method and zero per-handler decorator args:
+
   ```python
-  @event_handler(expose_api=True)
-  @api_returns(lambda self: serialize_claims_page(self._get_filtered_claims()))
-  def search(self, value: str = "", **kwargs):
-      self.search_query = value  # state mutation only — no serialization overhead on WS
+  class ClaimListView(LiveView):
+      def api_response(self):
+          return [c.as_dict() for c in self._filtered_claims()]
+
+      @event_handler(expose_api=True)
+      def search(self, value: str = "", **kwargs):
+          self.search_query = value  # WS: VDOM renders; HTTP: api_response() runs
+
+      @event_handler(expose_api=True)
+      def filter_by_status(self, status: str = "", **kwargs):
+          self.status = status
   ```
-  The decorator calls `serializer_fn(self)` only when `self._api_request` is True (HTTP path), returning the serialized data as the handler's return value. On WebSocket, the decorator is a no-op — zero extra DB queries, zero serialization. This preserves "one stack, one truth" while avoiding performance overhead on the WebSocket path.
-  **Implementation:** `dispatch.py` sets `view._api_request = True` (one line, before handler invocation). Projects define `@api_returns` as a thin wrapper. A framework-level `@api_returns` decorator may ship in a future release.
+
+  The per-handler override handles the exceptional case (one handler returns a different shape):
+
+  ```python
+  @event_handler(expose_api=True, serialize="serialize_saved_claim")
+  def save_claim(self, id: int = 0, **kwargs):
+      ...
+      return id
+
+  def serialize_saved_claim(self, result):
+      return Claim.objects.get(pk=result).as_dict()
+  ```
+
+  `serialize=` accepts a callable (arity-detected: `fn()` / `fn(view)` / `fn(view, result)`) or a method-name string (resolved against the view at dispatch time). Async serializers and async `api_response()` are both awaited. `serialize=` without `expose_api=True` raises `TypeError` at decoration.
+
+  **Implementation:** The dispatch view also sets `self._api_request = True` on the view instance (one line, before handler invocation) as an escape hatch for code paths that need transport awareness without going through the decorator or convention method. An earlier draft used a separate `@api_returns(serializer_fn)` decorator — replaced before release with the single-decorator convention-plus-override form, which avoids two-decorator stacking and gives zero per-handler wiring for the common case.
 - **URL namespace** — `/djust/api/...` vs. `/api/...`. The `djust/` prefix matches existing paths like `/djust/ws/` and keeps the feature out of the app's own URL namespace. Leaning `/djust/api/`.
 - **Slug derivation** — how to produce `<view_slug>` when the view isn't registered via `live_session()`. Options: class-level `api_name`, fallback to `app_label.ViewClassName`, or require explicit opt-in via `api_name`.
 - **Token auth scope** — a first-party token auth belongs in a separate ADR; this one ships only the pluggable interface + `SessionAuth`.

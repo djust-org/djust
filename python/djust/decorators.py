@@ -62,6 +62,7 @@ def event_handler(
     description: str = "",
     coerce_types: bool = True,
     expose_api: bool = False,
+    serialize: Optional[Union[Callable[..., Any], str]] = None,
 ) -> Callable[[F], F]:
     """
     Mark method as event handler with automatic signature introspection.
@@ -82,6 +83,23 @@ def event_handler(
             Default is False (WebSocket-only). When True, the same handler runs with
             identical validation, permissions, and rate limiting regardless of
             transport. See docs/adr/008-auto-generated-http-api-from-event-handlers.md.
+        serialize: Optional per-handler override for the HTTP API response shape.
+            Only applies when ``expose_api=True``. Either a callable or the name of
+            a method on the view. When set, replaces the handler's return value with
+            ``serializer(...)`` on the HTTP transport only; the WebSocket path is
+            unaffected (zero serialization overhead).
+
+            Callable arity is auto-detected: 0-arg is called as ``fn()``, 1-arg as
+            ``fn(view)``, 2-or-more-arg as ``fn(view, handler_return_value)``.
+
+            When the view defines an ``api_response(self)`` method *and* no
+            per-handler ``serialize=`` is set, the convention method is called
+            instead — giving DRY zero-wiring for views whose API handlers all
+            return the same shape. Resolution order on HTTP:
+            ``serialize=`` > ``api_response()`` > handler return value.
+
+            Raises ``TypeError`` at decoration time if ``serialize`` is set but
+            ``expose_api`` is False.
 
     Usage:
         @event_handler
@@ -119,6 +137,13 @@ def event_handler(
         # Import here to avoid circular dependency
         from djust.validation import get_handler_signature_info
 
+        if serialize is not None and not expose_api:
+            raise TypeError(
+                "@event_handler(serialize=...) requires expose_api=True. "
+                "The serializer only runs on the HTTP transport; setting it "
+                "without exposing the handler over HTTP is almost certainly a bug."
+            )
+
         # Extract comprehensive signature information
         sig_info = get_handler_signature_info(func)
 
@@ -144,6 +169,7 @@ def event_handler(
                 "optional": [p["name"] for p in sig_info["params"] if not p["required"]],
                 "coerce_types": coerce_types,  # Whether to coerce string params
                 "expose_api": expose_api,  # ADR-008: expose as HTTP API endpoint
+                "serialize": serialize,  # ADR-008 follow-up: per-handler HTTP response override
             },
         )
 
