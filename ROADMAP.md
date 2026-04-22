@@ -303,7 +303,7 @@ class DashboardView(LiveView):
 
 ~~**Latency simulator**~~ ✅ — Debug panel latency controls with presets (Off/50/100/200/500ms), custom value, jitter, localStorage persistence. Injected on both WebSocket send and receive. Badge on debug button shows active latency.
 
-**Profile & improve performance** — Use existing benchmarks in `tests/benchmarks/` as baselines. Profile the full request path: HTTP render, WebSocket mount, event, VDOM diff, patch. Target: <2ms per patch, <5ms for list updates.
+**Profile & improve performance** — *Moved forward to v0.6.0* — Full-request-path profiling with explicit targets was parked while v0.4.5 delivered the concrete Rust-side render-perf wins (phases 1-4 of #737). Revisit now that there's a stable baseline to measure against.
 
 #### Reconnection Resilience
 
@@ -491,15 +491,15 @@ The same 2026-04-10 pentest that surfaced #653/#654/#655 also surfaced a broader
 
 ~~**Lazy context via dependency map (#737 phase 4)**~~ ✅ — Investigation complete: the incremental sync in `_sync_state_to_rust()` already only sends changed keys to Rust (3-layer detection at lines 299-330), and SafeString/normalization scanning only runs on the changed subset. `get_context_data()` is user code that can't be lazily evaluated without API changes. The 20ms Python overhead is dominated by `get_context_data()`, `sync_to_async`, and Django session access — none of which benefit from the dep map. Closed as already optimized.
 
-**#758 — eval_handler dry_run misses bulk ORM writes** — `DryRunContext` patches `Model.save` / `Model.delete` but `QuerySet.update` / `QuerySet.delete` / `bulk_create` / `bulk_update` bypass per-instance hooks. Raw SQL, `cache.set`, and Celery `.delay()` are also uncovered. Handlers using these surface as "pure" to dry_run while actually committing writes. Fix: extend `_install_orm` in `python/djust/observability/dry_run.py` to patch the queryset methods; cache + Celery patches are a secondary scope.
+~~**#758 — eval_handler dry_run misses bulk ORM writes**~~ ✅ **Shipped in v0.4.5 (PR #769)** — `DryRunContext` now patches `QuerySet.update` / `QuerySet.delete` / `bulk_create` / `bulk_update` in addition to `Model.save` / `Model.delete`.
 
-**#759 — DryRunContext._uninstall swallows setattr errors** — When patches can't be restored on context exit, the process runs indefinitely with a wrapped `Model.save` — catastrophic for a dev server. Replace `except Exception: pass` with a `logger.getLogger("djust.observability").warning(...)` so the failure is at least visible.
+~~**#759 — DryRunContext._uninstall swallows setattr errors**~~ ✅ **Shipped in v0.4.5 (PR #765)** — Restore failures now log at warning level instead of silently continuing with a wrapped `Model.save`.
 
-**#760 — observability dry_run tests over-claim what they verify** — Two tests in `test_observability_dry_run.py` don't actually verify the invariants their names imply. `test_context_records_without_blocking_when_block_false` catches the original's exception but doesn't assert the original was called. `test_endpoint_dry_run_record_mode_no_block` uses a pure-state view so record mode has nothing to record. Tighten with explicit mock assertions.
+~~**#760 — observability dry_run tests over-claim what they verify**~~ ✅ **Shipped in v0.4.5 (PR #766)** — Test assertions tightened with explicit mock verification.
 
-**#761 — client.js unguarded console.log violates project rule** — `djust/CLAUDE.md` says *"No console.log in JS without if (globalThis.djustDebug) guard — unguarded logging is auto-rejected."* Each LiveView event emits 7 unguarded log lines (`[Loading] Started`, `[LiveView] Received`, patch-apply confirmations, `pong` heartbeats). Wrap each with `if (globalThis.djustDebug)` or add a `djLog()` helper.
+~~**#761 — client.js unguarded console.log violates project rule**~~ ✅ **Shipped in v0.4.5 (PR #768)** — All client-side logs now gated on `globalThis.djustDebug` or the `djLog()` helper.
 
-**#763 — hot-reload sends 14KB empty-patch message on unrelated file changes** — When a Python file changes that isn't the mounted view, hot-reload still broadcasts a 14 KB payload with `patches: []` + full `_debug` dump to every connected session. Bandwidth waste proportional to number of dev sessions. Early-return when computed patches are empty AND the trigger was a file change.
+~~**#763 — hot-reload sends 14KB empty-patch message on unrelated file changes**~~ ✅ **Shipped in v0.4.5 (PR #767)** — Empty-patch early-return when the trigger was a file-watch event.
 
 ### Milestone: v0.5.0 — Full Package Consolidation
 
@@ -787,6 +787,8 @@ class OnboardingView(WizardMixin, LiveView):
 ### Milestone: v0.6.0 — Production Hardening, Interactivity & Generative UIs
 
 *Goal:* Make djust production-ready for teams deploying real apps, close the remaining interactivity gap with client-side frameworks, and ship the capture-and-promote generative UI story as the headline feature.
+
+**Profile & improve performance — P2 (moved from v0.4.0)** — Use existing benchmarks in `tests/benchmarks/` (`test_e2e.py`, `test_serialization.py`, `test_tag_registry.py`, `test_template_render.py`) as baselines. Profile the full request path end-to-end: HTTP render, WebSocket mount, event dispatch, VDOM diff, patch application. Targets: **<2ms per patch**, **<5ms for list updates**. v0.4.5's Rust-side render-partial work (`extract_per_node_deps`, `render_nodes_partial`) gives a stable floor to measure against — but there has been no systematic profile since the WS consumer, streaming, and VDOM features shipped. Deliverables: (1) a reproducible profiling harness (py-spy / cProfile wiring), (2) a written record of current timings for each path segment, (3) a punch-list of hot spots ranked by time saved vs. engineering cost, (4) fixes for anything over the target bounds. Scope does NOT include optimizing paths already within target.
 
 **Pre-minified `client.js` distribution — P1** — djust's release pipeline runs `terser` (or `esbuild`) during build and ships both a readable `client.js` (388 KB raw, 35 source modules — preserved for audit/debugging/source-map target) and a `client.min.js` (~134 KB minified, ~37 KB gzipped, ~30 KB brotli) inside the pip package. Users never run a build — they just `pip install djust` and the minified file is served by default via `{% djust_scripts %}`. The raw file remains available at `/static/djust/client.js` for anyone who wants to audit; the minified file is wired to `/static/djust/client.min.js` with a source-map link to the readable one. **Wire-size reduction: ~66% (from today's ~87 KB gzipped of the concat to ~30 KB brotli).** Also emit `.br` / `.gz` pre-compressed siblings during release so whitenoise/Django static serving picks them without runtime compression cost. Sourced from the v0.5.0 retro's CLAUDE.md-"~5 KB" claim correction; motivated by ~25 KB raw growth in v0.5.0 (client.js went 355→388 KB across #796, #814, #826). Scope: single terser call in `scripts/build-client.sh`, one new static file, `{% djust_scripts %}` template tag update, tests for the tag's output paths. Does NOT include code-splitting / feature toggles (deferred to v0.6.x) or ESM refactor (deferred indefinitely). ~200 LOC + one npm dev-dependency for the release script.
 
