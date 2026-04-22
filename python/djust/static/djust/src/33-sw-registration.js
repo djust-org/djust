@@ -10,6 +10,23 @@
 //
 // The SW itself is served from /static/djust/service-worker.js and is NOT
 // part of the client.js bundle (SW scripts must be separate files).
+//
+// Known limitations:
+//
+// - **Instant-shell innerHTML swap does NOT execute <script> tags inside the
+//   swapped <main>**. This is standard browser behavior for `.innerHTML = …`:
+//   script nodes are inserted but inert. Colocated hooks (dj-hook) and
+//   event-wired attributes (dj-click, dj-submit, etc.) continue to work
+//   because djust re-registers listeners on the new DOM via MutationObserver.
+//   If your <main> content ships inline <script> elements you need to run
+//   after a shell navigation, emit them outside <main> in a tag the shell
+//   doesn't swap, or restructure the work as a dj-hook that djust will
+//   re-bind automatically.
+//
+// - **registerServiceWorker is idempotent** — a second call returns the
+//   cached registration promise without re-running `initInstantShell` or
+//   `initReconnectionBridge`, so drain listeners and WS sendMessage patches
+//   are applied at most once.
 
 (function () {
     globalThis.djust = globalThis.djust || {};
@@ -179,36 +196,59 @@
     // Public API
     // -----------------------------------------------------------------
 
-    globalThis.djust.registerServiceWorker = async function (options) {
+    // Idempotency guard for registerServiceWorker. Calling it twice is a
+    // common init pattern (theme switch, settings toggle, dev-mode reload)
+    // and without this guard each call adds another drain listener and
+    // another sendMessage wrapper, causing buffered replays to double.
+    var _registerPromise = null;
+    var _bridgeInitialized = false;
+    var _shellInitialized = false;
+
+    globalThis.djust.registerServiceWorker = function (options) {
         options = options || {};
+        if (_registerPromise) {
+            if (globalThis.djustDebug) {
+                console.log('[sw] registerServiceWorker called again; returning cached registration');
+            }
+            return _registerPromise;
+        }
         if (!_swAvailable()) {
             if (globalThis.djustDebug) {
                 console.warn('[sw] navigator.serviceWorker unavailable; opt-in features disabled');
             }
-            return null;
+            // Don't cache a null — allow a later call after the env gains SW
+            // support (e.g. polyfill) to still try.
+            return Promise.resolve(null);
         }
         var swUrl = options.swUrl || '/static/djust/service-worker.js';
         var scope = options.scope || '/';
-        var registration = null;
-        try {
-            registration = await navigator.serviceWorker.register(swUrl, { scope: scope });
-        } catch (err) {
-            if (globalThis.djustDebug) {
-                console.warn('[sw] registration failed', err);
+        _registerPromise = (async function () {
+            var registration = null;
+            try {
+                registration = await navigator.serviceWorker.register(swUrl, { scope: scope });
+            } catch (err) {
+                if (globalThis.djustDebug) {
+                    console.warn('[sw] registration failed', err);
+                }
+                // Reset so a later call after fixing the cause can retry.
+                _registerPromise = null;
+                return null;
             }
-            return null;
-        }
-        if (options.instantShell) {
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initInstantShell);
-            } else {
-                initInstantShell();
+            if (options.instantShell && !_shellInitialized) {
+                _shellInitialized = true;
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', initInstantShell);
+                } else {
+                    initInstantShell();
+                }
             }
-        }
-        if (options.reconnectionBridge) {
-            initReconnectionBridge();
-        }
-        return registration;
+            if (options.reconnectionBridge && !_bridgeInitialized) {
+                _bridgeInitialized = true;
+                initReconnectionBridge();
+            }
+            return registration;
+        })();
+        return _registerPromise;
     };
 
     // Exposed for tests.

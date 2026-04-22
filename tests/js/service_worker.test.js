@@ -247,4 +247,38 @@ describe('client: djust.registerServiceWorker', () => {
         });
         expect(reg).toBeNull();
     });
+
+    it('returns the cached promise on repeat calls (idempotency — #829)', async () => {
+        const { window } = createEnv();
+
+        // Stub navigator.serviceWorker so register() resolves.
+        let registerCallCount = 0;
+        const fakeRegistration = { scope: '/', active: null };
+        Object.defineProperty(window.navigator, 'serviceWorker', {
+            configurable: true,
+            value: {
+                register: async () => {
+                    registerCallCount += 1;
+                    return fakeRegistration;
+                },
+                addEventListener: () => {},
+                controller: null,
+            },
+        });
+
+        const first = await window.djust.registerServiceWorker({
+            instantShell: false,
+            reconnectionBridge: false,
+        });
+        const second = await window.djust.registerServiceWorker({
+            instantShell: false,
+            reconnectionBridge: false,
+        });
+
+        // navigator.serviceWorker.register() must have been called exactly once.
+        expect(registerCallCount).toBe(1);
+        // Both calls return the same cached registration.
+        expect(first).toBe(fakeRegistration);
+        expect(second).toBe(fakeRegistration);
+    });
 });

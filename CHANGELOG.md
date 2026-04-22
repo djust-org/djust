@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Service worker + main-only middleware follow-ups to PR #826 (closes #827/#828/#829/#830)** —
+  - **#828** — `DjustMainOnlyMiddleware` now early-returns on responses with `status_code >= 400`. Error pages render full-page layouts (status message, "go back" link, etc.); trimming them to `<main>` would strip that context from shell-navigation clients. Regression tests cover 4xx and 5xx.
+  - **#830** — HTML response detection widened to include `application/xhtml+xml` in addition to `text/html`. Charset and boundary suffixes (`text/html; charset=utf-8; boundary=xyz`) are stripped before matching. Defensive test confirms `application/rss+xml` is still treated as non-HTML.
+  - **#829** — `djust.registerServiceWorker()` is now idempotent. A second call returns the cached registration promise without re-running `initInstantShell` / `initReconnectionBridge`, so drain listeners and the WS `sendMessage` patch are applied at most once. Previous behavior caused buffered replays to double on repeat init.
+  - **#827** — Documented the inherent `<script>` limitation of the instant-shell `innerHTML` swap at the top of `33-sw-registration.js`. djust-wired attributes (`dj-click`, `dj-hook`, etc.) continue to work because djust re-binds on DOM changes via MutationObserver. Inline `<script>` emitted inside `<main>` is inert post-swap — restructure as a hook or emit outside the swapped region.
+
+  Tests: 9 → 12 Python cases in `tests/unit/test_main_only_middleware.py`, +1 JS case in `tests/js/service_worker.test.js` (11 total). (`python/djust/middleware.py`, `python/djust/static/djust/src/33-sw-registration.js`)
+
 ## [0.5.1rc4] - 2026-04-22
 
 ### Added

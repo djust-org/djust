@@ -96,3 +96,65 @@ def test_streaming_response_passes_through():
     inner = StreamingHttpResponse(_gen(), content_type="text/html")
     out = _run(None, req, inner)
     assert "X-Djust-Main-Only-Response" not in out
+
+
+def test_error_response_4xx_is_not_trimmed():
+    """Issue #828: 4xx error pages render full-page layouts, not main-area fragments.
+
+    Trimming them strips the error context (status message, "go back" link, etc.)
+    a shell-navigation client wouldn't otherwise see. Error responses must pass
+    through untouched.
+    """
+    rf = RequestFactory()
+    req = rf.get("/", HTTP_X_DJUST_MAIN_ONLY="1")
+    html = "<html><body><main>404 error page</main></body></html>"
+    inner = HttpResponse(html, content_type="text/html", status=404)
+    out = _run(None, req, inner)
+    assert out.status_code == 404
+    assert out.content == html.encode("utf-8")
+    assert "X-Djust-Main-Only-Response" not in out
+
+
+def test_error_response_5xx_is_not_trimmed():
+    """Issue #828: same as 4xx — 5xx server errors pass through unchanged."""
+    rf = RequestFactory()
+    req = rf.get("/", HTTP_X_DJUST_MAIN_ONLY="1")
+    html = "<html><body><main>500 error page</main></body></html>"
+    inner = HttpResponse(html, content_type="text/html", status=500)
+    out = _run(None, req, inner)
+    assert out.status_code == 500
+    assert out.content == html.encode("utf-8")
+    assert "X-Djust-Main-Only-Response" not in out
+
+
+def test_xhtml_content_type_is_treated_as_html():
+    """Issue #830: application/xhtml+xml also carries HTML shell content."""
+    rf = RequestFactory()
+    req = rf.get("/", HTTP_X_DJUST_MAIN_ONLY="1")
+    html = "<html><body><main>xhtml body</main></body></html>"
+    inner = HttpResponse(html, content_type="application/xhtml+xml")
+    out = _run(None, req, inner)
+    assert out.content == b"xhtml body"
+    assert out["X-Djust-Main-Only-Response"] == "1"
+
+
+def test_html_content_type_with_charset_and_boundary_suffix():
+    """Issue #830: charset/boundary suffix must not prevent HTML detection."""
+    rf = RequestFactory()
+    req = rf.get("/", HTTP_X_DJUST_MAIN_ONLY="1")
+    html = "<html><body><main>hi</main></body></html>"
+    inner = HttpResponse(html, content_type="text/html; charset=utf-8; boundary=xyz")
+    out = _run(None, req, inner)
+    assert out.content == b"hi"
+
+
+def test_rss_feed_content_type_passes_through():
+    """Defensive: non-HTML XML dialects (RSS, Atom) are NOT treated as HTML shells."""
+    rf = RequestFactory()
+    req = rf.get("/", HTTP_X_DJUST_MAIN_ONLY="1")
+    inner = HttpResponse(
+        "<?xml version='1.0'?><rss><channel><title>feed</title></channel></rss>",
+        content_type="application/rss+xml",
+    )
+    out = _run(None, req, inner)
+    assert "X-Djust-Main-Only-Response" not in out
