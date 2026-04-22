@@ -33,6 +33,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
+from djust._log_utils import sanitize_for_log
 from djust.api.auth import resolve_auth_classes
 from djust.api.errors import api_error
 from djust.api.registry import resolve_api_view
@@ -303,7 +304,7 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     except PermissionDenied as exc:
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     except Exception:
-        logger.exception("djust API: view instantiation failed for %s", view_slug)
+        logger.exception("djust API: view instantiation failed for %s", sanitize_for_log(view_slug))
         return api_error(500, "mount_failed", "View initialization failed")
 
     # 6. View-level auth (login_required + @permission_required on the class).
@@ -358,7 +359,11 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     except PermissionDenied as exc:
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     except Exception:
-        logger.exception("djust API handler raised: slug=%s handler=%s", view_slug, handler_name)
+        logger.exception(
+            "djust API handler raised: slug=%s handler=%s",
+            sanitize_for_log(view_slug),
+            sanitize_for_log(handler_name),
+        )
         return api_error(500, "handler_error", "Handler raised an unexpected error")
 
     # 12b. Apply per-handler ``serialize=`` override or ``api_response()``
@@ -372,14 +377,16 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     except TypeError as exc:
         logger.exception(
-            "djust API serialize= misconfigured: slug=%s handler=%s", view_slug, handler_name
+            "djust API serialize= misconfigured: slug=%s handler=%s",
+            sanitize_for_log(view_slug),
+            sanitize_for_log(handler_name),
         )
         return api_error(500, "serialize_error", str(exc))
     except Exception:
         logger.exception(
             "djust API response transform raised: slug=%s handler=%s",
-            view_slug,
-            handler_name,
+            sanitize_for_log(view_slug),
+            sanitize_for_log(handler_name),
         )
         return api_error(500, "serialize_error", "Response transform raised an unexpected error")
 
