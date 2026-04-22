@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Refresh `uv.lock` to pull in CVE-fix versions for 8 packages** — Addresses 23 open Dependabot alerts (13 unique CVEs). Bumps: Django 4.2.29 → 5.2.13 (CVE floor 4.2.30; tightened `pyproject.toml` ceiling to `<6` to keep the major-version jump out of a security-only PR), cryptography 46.0.5 → 46.0.7 (buffer overflow + DNS name constraints), orjson 3.11.5 → 3.11.8 (deep-recursion DoS, floor 3.11.6), requests 2.32.5 → 2.33.1 (insecure temp-file reuse, floor 2.33.0), Pygments 2.19.2 → 2.20.0 (GUID-matching ReDoS), pytest 8.4.2 → 9.0.3 (tmpdir vulnerability), black 25.11.0 → 26.3.1 (arbitrary file writes from unsanitized cache input, dev-only), python-dotenv 1.2.1 → 1.2.2 (symlink following in `set_key`). Full Python test suite passes (3428 cases); full JS suite passes (1264 cases). No app code or test changes; lockfile + `pyproject.toml` Django ceiling only. Also catches `Cargo.lock` up to the v0.5.5rc1 crate versions (stale at 0.5.3rc1 on origin/main).
 
+### Changed
+
+- **Drop `black` dev dependency; `ruff format` is now the canonical formatter** — Pre-commit config has used `ruff` + `ruff-format` hooks since v0.5.x; no `Makefile` / CI / import site references black. Removed `black>=24.10.0` / `black>=26.3.1` from the `dev` group in `pyproject.toml` and the `[tool.black]` config section. Ruff already has matching `line-length = 100` and `target-version = "py39"`. Permanently closes the Dependabot `black` CVE alert on the Python 3.9 resolution train (black 26.x dropped 3.9 so that alert couldn't be patched; dropping black removes the surface entirely).
+
 ## [0.5.4rc1] - 2026-04-22
 
 ### Fixed
