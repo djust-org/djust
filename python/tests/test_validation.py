@@ -271,8 +271,30 @@ class TestGetHandlerSignatureInfo:
         info = get_handler_signature_info(handler_with_optional)
         param = info["params"][0]
         assert param["name"] == "value"
-        assert "int" in param["type"]
-        assert "None" in param["type"]
+        assert param["type"] == "int | None"
+
+    def test_signature_info_multi_union_type(self):
+        """Test signature info for handler with multi-type PEP 604 union."""
+
+        def handler_with_multi_union(self, value: str | int | None = None, **kwargs):
+            pass
+
+        info = get_handler_signature_info(handler_with_multi_union)
+        param = info["params"][0]
+        assert param["name"] == "value"
+        assert param["type"] == "str | int | None"
+
+    def test_signature_info_any_type(self):
+        """Test signature info for handler with typing.Any."""
+        from typing import Any
+
+        def handler_with_any(self, value: Any = None, **kwargs):
+            pass
+
+        info = get_handler_signature_info(handler_with_any)
+        param = info["params"][0]
+        assert param["name"] == "value"
+        assert param["type"] == "Any"
 
 
 class TestValidationIntegration:

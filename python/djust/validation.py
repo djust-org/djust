@@ -375,7 +375,8 @@ def validate_parameter_types(
 
         expected_type = type_hints[param_name]
 
-        # Skip complex types (Union, Optional, etc.) and Any
+        # Skip complex types (Union, Optional, UnionType, etc.) and Any.
+        # This guard means .__name__ below is safe — only simple types pass.
         if not isinstance(expected_type, type) or expected_type is Any:
             continue
 
@@ -412,6 +413,7 @@ def _type_display_name(hint: Any) -> str:
 
 
 def _single_type_name(t: Any) -> str:
+    """Display name for a single type, mapping NoneType → 'None'."""
     if t is type(None):
         return "None"
     return getattr(t, "__name__", str(t))
