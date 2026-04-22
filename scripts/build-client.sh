@@ -54,7 +54,12 @@ minify_and_compress() {
     # runtime compression cost. -k keeps the original; -f overwrites a
     # stale sibling from a previous build.
     if command -v gzip >/dev/null 2>&1; then
-        gzip -k -f -9 "$output_min"
+        # -n: do NOT embed original name + mtime in the gzip header.
+        # Without this, each build produces different bytes even when
+        # the input is unchanged, which trips the pre-commit build-js
+        # hook into an infinite "files were modified by this hook"
+        # loop on re-commits.
+        gzip -n -k -f -9 "$output_min"
         echo "  gzipped → $(basename "$output_min").gz ($(wc -c < "$output_min.gz" | tr -d ' ') bytes)"
     fi
     if command -v brotli >/dev/null 2>&1; then

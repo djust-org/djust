@@ -566,6 +566,10 @@ class LiveViewWebSocket {
                 if (window.djust) window.djust._isReconnect = true;
                 // Notify hooks of reconnection
                 notifyHooksReconnected();
+                // Public CustomEvent consumed by dj-track-static (v0.6.0)
+                // and available to application code that wants to react
+                // to reconnect without patching internal WS state.
+                document.dispatchEvent(new CustomEvent('djust:ws-reconnected'));
             }
             this.stats.connectedAt = Date.now();
         };
@@ -10394,3 +10398,362 @@ globalThis.djust.djDialog = {
         };
     }
 })();
+
+// dj-mutation — declarative DOM mutation → server event (v0.6.0)
+//
+// Fires a server event when attributes or children of the marked element
+// change. Replaces the custom dj-hook authors had to write to bridge
+// third-party widgets (charts, maps, rich-text editors) that mutate the
+// DOM outside djust's control.
+//
+// Usage:
+//   <div dj-mutation="handle_change" dj-mutation-attr="class,style">
+//   <div dj-mutation="on_children_update">
+//   <div dj-mutation="on_change" dj-mutation-debounce="300">
+//
+// Semantics:
+//   - If dj-mutation-attr="a,b,c" is set, observe attribute changes on
+//     those attrs and dispatch {mutation: "attributes", attrs: [...]}.
+//   - Otherwise observe childList changes and dispatch
+//     {mutation: "childList", added: N, removed: N}.
+//   - dj-mutation-debounce (ms, default 150) coalesces bursts so a chart
+//     library re-rendering 50 times in 10ms produces one server event.
+//
+// Dispatch path:
+//   1. A local cancelable `dj-mutation-fire` CustomEvent bubbles from
+//      the element, carrying detail={handler, payload}. Application
+//      code can preventDefault() to short-circuit the server call.
+//   2. If not cancelled, the payload is forwarded to the server via
+//      the standard djust event pipeline (window.djust.handleEvent),
+//      invoking the @event_handler method named in dj-mutation=.
+//
+// Don't list sensitive attributes (e.g. password field `value`) in
+// dj-mutation-attr: the attribute name is included in the server
+// payload, which is noisy for audit logs.
+
+const _djMutationObservers = new WeakMap();
+
+function _parseAttrList(raw) {
+    return (raw || '')
+        .split(',')
+        .map(function (s) { return s.trim(); })
+        .filter(function (s) { return s.length > 0; });
+}
+
+function _installDjMutationFor(el) {
+    if (_djMutationObservers.has(el)) return;
+    const handlerName = el.getAttribute('dj-mutation');
+    if (!handlerName) return;
+
+    const attrList = _parseAttrList(el.getAttribute('dj-mutation-attr'));
+    const rawDebounce = parseInt(el.getAttribute('dj-mutation-debounce') || '150', 10);
+    const debounceMs = Number.isFinite(rawDebounce) && rawDebounce >= 0 ? rawDebounce : 150;
+
+    let timer = null;
+    let pending = null;
+
+    function _dispatch() {
+        const payload = pending;
+        pending = null;
+        timer = null;
+        if (!payload) return;
+        // Local CustomEvent first — lets application code intercept or
+        // short-circuit via preventDefault before the server roundtrip.
+        const ev = new CustomEvent('dj-mutation-fire', {
+            bubbles: true,
+            cancelable: true,
+            detail: { handler: handlerName, payload: payload },
+        });
+        const proceed = el.dispatchEvent(ev);
+        if (!proceed) return;
+        // Route to the standard djust event pipeline so the server-side
+        // handler named in dj-mutation="..." actually runs.
+        if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
+            globalThis.djust.handleEvent(handlerName, payload);
+        }
+    }
+
+    const observer = new MutationObserver(function (mutations) {
+        let attrsChanged = null;
+        let added = 0, removed = 0;
+        mutations.forEach(function (m) {
+            if (m.type === 'attributes') {
+                attrsChanged = attrsChanged || new Set();
+                attrsChanged.add(m.attributeName);
+            } else if (m.type === 'childList') {
+                added += m.addedNodes.length;
+                removed += m.removedNodes.length;
+            }
+        });
+        if (attrsChanged) {
+            pending = { mutation: 'attributes', attrs: Array.from(attrsChanged) };
+        } else if (added || removed) {
+            pending = { mutation: 'childList', added: added, removed: removed };
+        }
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(_dispatch, debounceMs);
+    });
+
+    const opts = attrList.length > 0
+        ? { attributes: true, attributeFilter: attrList }
+        : { childList: true };
+    observer.observe(el, opts);
+    _djMutationObservers.set(el, { observer: observer, clear: function () {
+        if (timer) { clearTimeout(timer); timer = null; pending = null; }
+    }});
+}
+
+function _tearDownDjMutation(el) {
+    const entry = _djMutationObservers.get(el);
+    if (entry) {
+        entry.observer.disconnect();
+        // Cancel any in-flight debounced dispatch so a setTimeout
+        // doesn't fire on a detached element after removal.
+        entry.clear();
+        _djMutationObservers.delete(el);
+    }
+}
+
+function _installDjMutationObserver() {
+    document.querySelectorAll('[dj-mutation]').forEach(_installDjMutationFor);
+
+    const rootObserver = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+            m.addedNodes.forEach(function (node) {
+                if (node.nodeType !== 1) return;
+                if (node.hasAttribute && node.hasAttribute('dj-mutation')) {
+                    _installDjMutationFor(node);
+                }
+                if (node.querySelectorAll) {
+                    node.querySelectorAll('[dj-mutation]').forEach(_installDjMutationFor);
+                }
+            });
+            m.removedNodes.forEach(function (node) {
+                if (node.nodeType !== 1) return;
+                if (_djMutationObservers.has(node)) _tearDownDjMutation(node);
+                if (node.querySelectorAll) {
+                    node.querySelectorAll('[dj-mutation]').forEach(_tearDownDjMutation);
+                }
+            });
+        });
+    });
+    rootObserver.observe(document.documentElement, { subtree: true, childList: true });
+}
+
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _installDjMutationObserver);
+    } else {
+        _installDjMutationObserver();
+    }
+}
+
+globalThis.djust = globalThis.djust || {};
+globalThis.djust.djMutation = {
+    _installDjMutationFor,
+    _tearDownDjMutation,
+};
+
+// dj-sticky-scroll — auto-scroll preservation (v0.6.0)
+//
+// Keeps a scrollable container pinned to the bottom when new content is
+// appended, but backs off when the user scrolls up to read history.
+// Resumes auto-scroll when the user scrolls back to the bottom.
+//
+// Usage:
+//   <div dj-sticky-scroll style="overflow-y: auto; height: 400px">
+//       {% for msg in messages %}
+//       <div>{{ msg.text }}</div>
+//       {% endfor %}
+//   </div>
+//
+// Use cases: chat messages, log viewers, terminal output, live feeds.
+// Replaces the custom dj-hook authors otherwise wrote with ~30 lines of
+// scroll-position math.
+
+const _djStickyObservers = new WeakMap();
+// 1px tolerance for sub-pixel scroll math (clientHeight and scrollHeight
+// can round differently in some layouts).
+const _STICKY_TOLERANCE = 1;
+
+function _isAtBottom(el) {
+    return el.scrollTop + el.clientHeight >= el.scrollHeight - _STICKY_TOLERANCE;
+}
+
+function _scrollToBottom(el) {
+    el.scrollTop = el.scrollHeight;
+}
+
+function _installDjStickyScrollFor(el) {
+    if (_djStickyObservers.has(el)) return;
+
+    // Seed: assume we start at bottom so the first append scrolls.
+    el._djStickyAtBottom = true;
+    _scrollToBottom(el);
+
+    function onScroll() {
+        el._djStickyAtBottom = _isAtBottom(el);
+    }
+    el.addEventListener('scroll', onScroll, { passive: true });
+
+    const observer = new MutationObserver(function () {
+        if (el._djStickyAtBottom) {
+            _scrollToBottom(el);
+        }
+    });
+    observer.observe(el, { childList: true, subtree: true });
+
+    _djStickyObservers.set(el, { observer: observer, onScroll: onScroll });
+}
+
+function _tearDownDjStickyScroll(el) {
+    const entry = _djStickyObservers.get(el);
+    if (!entry) return;
+    entry.observer.disconnect();
+    el.removeEventListener('scroll', entry.onScroll);
+    _djStickyObservers.delete(el);
+    delete el._djStickyAtBottom;
+}
+
+function _installDjStickyScrollObserver() {
+    document.querySelectorAll('[dj-sticky-scroll]').forEach(_installDjStickyScrollFor);
+
+    const rootObserver = new MutationObserver(function (mutations) {
+        mutations.forEach(function (m) {
+            m.addedNodes.forEach(function (node) {
+                if (node.nodeType !== 1) return;
+                if (node.hasAttribute && node.hasAttribute('dj-sticky-scroll')) {
+                    _installDjStickyScrollFor(node);
+                }
+                if (node.querySelectorAll) {
+                    node.querySelectorAll('[dj-sticky-scroll]').forEach(_installDjStickyScrollFor);
+                }
+            });
+            m.removedNodes.forEach(function (node) {
+                if (node.nodeType !== 1) return;
+                if (_djStickyObservers.has(node)) _tearDownDjStickyScroll(node);
+                if (node.querySelectorAll) {
+                    node.querySelectorAll('[dj-sticky-scroll]').forEach(_tearDownDjStickyScroll);
+                }
+            });
+        });
+    });
+    rootObserver.observe(document.documentElement, { subtree: true, childList: true });
+}
+
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _installDjStickyScrollObserver);
+    } else {
+        _installDjStickyScrollObserver();
+    }
+}
+
+globalThis.djust = globalThis.djust || {};
+globalThis.djust.djStickyScroll = {
+    _installDjStickyScrollFor,
+    _tearDownDjStickyScroll,
+    _isAtBottom,
+};
+
+// dj-track-static — stale asset detection on WS reconnect (v0.6.0)
+//
+// Phoenix phx-track-static parity. Without this, clients on long-lived
+// WebSocket connections silently run stale JavaScript after a server
+// deploy — zero-downtime on the server, broken behavior on connected
+// clients.
+//
+// Usage:
+//   <script dj-track-static src="{% static 'js/app.abc123.js' %}"></script>
+//   <link dj-track-static rel="stylesheet" href="...">
+//   <script dj-track-static="reload" src="..."></script>
+//
+// Behavior:
+//   On the FIRST djust:ws-reconnected event the snapshot is empty, so
+//   the first connect seeds it. On every subsequent reconnect, each
+//   [dj-track-static] element's src/href is compared against the
+//   initial snapshot. If any differ, dispatch a dj:stale-assets
+//   CustomEvent (detail = { changed: [...urls] }). If any of the
+//   changed elements carried dj-track-static="reload", call
+//   window.location.reload() instead.
+
+let _djTrackStaticSnapshot = null;
+
+function _urlOf(el) {
+    return el.getAttribute('src') || el.getAttribute('href') || '';
+}
+
+function _snapshotAssets() {
+    const snap = new Map();
+    document.querySelectorAll('[dj-track-static]').forEach(function (el) {
+        snap.set(el, _urlOf(el));
+    });
+    return snap;
+}
+
+function _checkStale() {
+    // Normally the snapshot is seeded at DOMContentLoaded and
+    // _checkStale is never called with a null snapshot. This branch
+    // only triggers after _resetSnapshot() — it's a test hook for
+    // exercising the seed path without reloading the document.
+    if (_djTrackStaticSnapshot === null) {
+        _djTrackStaticSnapshot = _snapshotAssets();
+        return null;
+    }
+    const changed = [];
+    let shouldReload = false;
+    _djTrackStaticSnapshot.forEach(function (oldUrl, el) {
+        // If the tracked element is no longer in the document (VDOM
+        // morphed it out entirely), we can't tell whether its
+        // replacement carries a new URL or was simply removed. Treat
+        // it as unchanged — avoids false-positive reloads on benign
+        // morphs. A future enhancement could re-query live
+        // [dj-track-static] elements and diff by URL identity.
+        if (!el.isConnected) return;
+        const currentUrl = _urlOf(el);
+        if (currentUrl !== oldUrl) {
+            changed.push(currentUrl);
+            if ((el.getAttribute('dj-track-static') || '').trim() === 'reload') {
+                shouldReload = true;
+            }
+        }
+    });
+    return { changed: changed, shouldReload: shouldReload };
+}
+
+function _onWsReconnected() {
+    const result = _checkStale();
+    if (!result) return;  // First connect — snapshot was just seeded.
+    if (result.changed.length === 0) return;
+    if (result.shouldReload) {
+        window.location.reload();
+        return;
+    }
+    document.dispatchEvent(new CustomEvent('dj:stale-assets', {
+        detail: { changed: result.changed },
+    }));
+}
+
+function _installDjTrackStatic() {
+    // Seed snapshot on page load (the \"first connect\" for SSR / full page
+    // load case). The subsequent djust:ws-reconnected events compare
+    // against this baseline.
+    _djTrackStaticSnapshot = _snapshotAssets();
+    document.addEventListener('djust:ws-reconnected', _onWsReconnected);
+}
+
+if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _installDjTrackStatic);
+    } else {
+        _installDjTrackStatic();
+    }
+}
+
+globalThis.djust = globalThis.djust || {};
+globalThis.djust.djTrackStatic = {
+    _snapshotAssets,
+    _checkStale,
+    _onWsReconnected,
+    _resetSnapshot: function () { _djTrackStaticSnapshot = null; },
+};

@@ -156,6 +156,11 @@ navigation:
         file: guides/dj-paste.md
         order: 6.6
         level: intermediate
+      - title: Declarative UX Attributes
+        slug: declarative-ux-attrs
+        file: guides/declarative-ux-attrs.md
+        order: 6.65
+        level: intermediate
       - title: Model Binding
         slug: model-binding
         file: guides/model-binding.md
