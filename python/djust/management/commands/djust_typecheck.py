@@ -135,14 +135,18 @@ def _extract_context_keys_from_ast(cls) -> Set[str]:
         if klass is object:
             continue
         mod = getattr(klass, "__module__", "") or ""
-        # Skip framework classes: djust internals, Django, rest_framework,
-        # and anything else under a well-known namespace package. Test / example
-        # modules that live under djust.* are kept so our own test helpers work.
+        # Skip framework classes: djust internals, Django, DRF, and builtins.
+        # Test / example modules that live under djust.* are kept so our own
+        # test helpers work.
         if (mod.startswith("djust.") or mod.startswith("djust_")) and (
             "test" not in mod and "example" not in mod
         ):
             continue
-        if mod.startswith("django.") or mod in {"django", "django.views", "builtins"}:
+        if mod.startswith("django.") or mod == "django":
+            continue
+        if mod.startswith("rest_framework.") or mod == "rest_framework":
+            continue
+        if mod == "builtins":
             continue
         try:
             src = inspect.getsource(klass)
@@ -247,6 +251,17 @@ def _extract_template_locals(src: str) -> Set[str]:
             parts = args.split()
             if len(parts) >= 3 and parts[1] == "as":
                 locals_.add(parts[2])
+        elif tag == "cycle":
+            # `{% cycle "odd" "even" as row_class %}` → bind row_class locally.
+            # The cycle args themselves are references (handled in
+            # _extract_referenced_names); the name after `as` is a local.
+            parts = args.split()
+            if "as" in parts:
+                idx = parts.index("as")
+                if idx + 1 < len(parts):
+                    m = _IDENT_RE.match(parts[idx + 1])
+                    if m:
+                        locals_.add(m.group(1))
     return locals_
 
 

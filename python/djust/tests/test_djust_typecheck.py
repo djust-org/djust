@@ -114,6 +114,17 @@ def test_extract_referenced_names_ignores_cycle_as_suffix():
     assert "row_class" not in names  # it's a local after `as`, not a reference
 
 
+def test_extract_template_locals_binds_cycle_as_var():
+    """Stage 11 regression: `{% cycle a b as row_class %}` — row_class is a template local.
+
+    Without this, a subsequent `{{ row_class }}` would be falsely flagged as
+    unresolved because it's not declared anywhere else on the view.
+    """
+    src = "{% cycle 'odd' 'even' as row_class %}<tr class='{{ row_class }}'></tr>"
+    locals_ = _extract_template_locals(src)
+    assert "row_class" in locals_
+
+
 def test_extract_referenced_names_extracts_blocktrans_with_rhs():
     """`{% blocktrans with x=foo %}` — `foo` is a reference (`x` is the local)."""
     src = "{% blocktrans with name=first_name count=total_items %}...{% endblocktrans %}"
