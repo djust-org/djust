@@ -233,6 +233,39 @@ class PresenceMixin:
             except Exception as e:
                 logger.exception("Error in handle_presence_join: %s", e)
 
+    def _restore_presence(self) -> None:
+        """Re-register this view's presence with the process-wide manager.
+
+        Called by the WebSocket consumer's state-restoration path (issue
+        #893). When ``mount()`` is skipped because pre-rendered session
+        state exists, the restored ``_presence_tracked`` / ``_presence_user_id``
+        / ``_presence_meta`` attrs survive the JSON round-trip, but the
+        side-effect registration with :class:`PresenceManager` does not
+        — it lives in a per-process singleton. This method replays the
+        registration so other users see the restored user and so
+        ``handle_presence_join`` for this user's own join fires.
+
+        No-op if the view was never tracked, if required attrs are
+        missing, or if the backend raises (logged but swallowed —
+        restoration must not break the WS).
+        """
+        if not getattr(self, "_presence_tracked", False):
+            return
+        user_id = getattr(self, "_presence_user_id", None)
+        if not user_id:
+            return
+        meta = getattr(self, "_presence_meta", None) or {}
+        try:
+            presence_key = self.get_presence_key()
+            PresenceManager.join_presence(presence_key, user_id, meta)
+        except Exception as exc:  # noqa: BLE001 — restoration must never kill the WS
+            logger.warning(
+                "PresenceMixin._restore_presence: failed to re-register presence "
+                "for user_id=%s (issue #893): %s",
+                user_id,
+                exc,
+            )
+
     def untrack_presence(self):
         """Stop tracking this user's presence."""
         if not self._presence_tracked:
