@@ -1,10 +1,11 @@
 # Declarative UX Attributes
 
-Three small declarative HTML attributes that replace custom `dj-hook` code every production djust app ends up writing:
+Small declarative HTML attributes that replace custom `dj-hook` code every production djust app ends up writing:
 
 - [`dj-mutation`](#dj-mutation) — fire a server event when DOM mutates
 - [`dj-sticky-scroll`](#dj-sticky-scroll) — keep a container pinned to the bottom as content appends
 - [`dj-track-static`](#dj-track-static) — warn / reload when JS or CSS assets change on a deploy
+- [`dj-transition`](#dj-transition) — declarative CSS enter/leave transitions
 
 ---
 
@@ -135,6 +136,50 @@ Any one `[dj-track-static="reload"]` element going stale triggers `window.locati
 
 - The snapshot is taken once at page load. If an asset is removed from the DOM by a VDOM morph, it's treated as unchanged (we can't distinguish "removed" from "replaced"). Low-impact in practice because `[dj-track-static]` elements live in `<head>` and rarely get morphed.
 - The `djust:ws-reconnected` CustomEvent (dispatched by `03-websocket.js` on every reconnect) is the trigger. Application code can listen for that event too if you want custom reconnect behavior — it's a public contract.
+
+---
+
+## `dj-transition`
+
+Declarative CSS enter/leave transitions. Phoenix `JS.transition` parity. Runs a three-phase class application (start → active → end) so template authors can trigger CSS transitions without writing a `dj-hook`.
+
+### Quick start
+
+```html
+<!-- Fades in from 0 to 100 opacity over 300 ms (Tailwind) -->
+<div dj-transition="opacity-0 transition-opacity-300 opacity-100">
+    Hello
+</div>
+```
+
+The attribute value is **three space-separated class tokens**:
+
+| Phase | Class | Timing |
+|---|---|---|
+| 1 (start) | first token | applied synchronously when the attribute appears |
+| 2 (active) | second token | applied on the next animation frame (transition begins) |
+| 3 (end) | third token | applied on the next animation frame (final state) |
+
+On `transitionend` the phase-2 class is removed; phase-3 stays as the final-state class. A 600 ms fallback timeout cleans up phase-2 if `transitionend` never fires (e.g. `display: none` during the animation).
+
+### Re-triggering from JS
+
+Any change to the attribute value re-runs the sequence:
+
+```js
+el.setAttribute('dj-transition', 'scale-0 transition-transform-200 scale-100');
+```
+
+### Interop with existing CSS frameworks
+
+Works with any class-based CSS framework — Tailwind (`transition-*` / `duration-*`), Bootstrap 5 (`fade` / `show`), or hand-rolled classes. The attribute only orchestrates the class application; it doesn't ship any CSS itself.
+
+### Scope
+
+This is phase 1 of the v0.6.0 Animations & transitions work. Separate follow-ups cover:
+- `dj-remove` — run an exit animation before element removal
+- FLIP / `dj-transition-group` — animate list-item reordering
+- Skeleton / shimmer loading-state components
 
 ---
 
