@@ -43,6 +43,7 @@ How to build specific features.
 | **[Uploads](guides/uploads.md)**                       | Chunked binary file uploads via WebSocket                 |
 | **[Paste Events](guides/dj-paste.md)**                 | `dj-paste` — structured clipboard payloads + upload routing |
 | **[Declarative UX Attributes](guides/declarative-ux-attrs.md)** | `dj-mutation`, `dj-sticky-scroll`, `dj-track-static` — small attrs that replace custom hooks |
+| **[Runtime Layout Switching](guides/layouts.md)** | `self.set_layout(path)` — swap outer layout without losing inner state |
 | **[Loading States](guides/loading-states.md)**         | Spinners, skeleton screens, disabled states               |
 
 ### Client-Side Commands

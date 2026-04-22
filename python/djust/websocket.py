@@ -389,6 +389,53 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+    async def _flush_pending_layout(self) -> None:
+        """Send a pending layout-swap command queued by the view (v0.6.0).
+
+        Called after each ``_send_update``. If ``view.set_layout(path)``
+        was called during the handler, render ``path`` with the view's
+        current context and emit a ``{"type": "layout", "path": ...,
+        "html": ...}`` frame. The client swaps the document body while
+        preserving the live ``[dj-root]`` element's identity (and
+        therefore all inner LiveView state).
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_pending_layout"):
+            return
+        layout_path = self.view_instance._drain_pending_layout()
+        if not layout_path:
+            return
+        from django.template.exceptions import TemplateDoesNotExist
+        from django.template.loader import render_to_string
+
+        try:
+            context = (
+                self.view_instance.get_context_data()
+                if hasattr(self.view_instance, "get_context_data")
+                else {}
+            )
+            layout_html = render_to_string(layout_path, context)
+        except TemplateDoesNotExist:
+            logger.warning(
+                "set_layout(%r) — template not found; ignoring swap request",
+                layout_path,
+            )
+            return
+        except Exception:  # noqa: BLE001 — layout errors must not kill the WS
+            logger.exception(
+                "set_layout(%r) — template rendering raised; ignoring swap request",
+                layout_path,
+            )
+            return
+        await self.send_json(
+            {
+                "type": "layout",
+                "path": layout_path,
+                "html": layout_html,
+            }
+        )
+
     async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:
         """
         Send a lightweight noop acknowledgment to the client.
@@ -672,6 +719,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_push_events()
             await self._flush_flash()
             await self._flush_page_metadata()
+            await self._flush_pending_layout()
 
         except Exception as e:
             error = e
@@ -831,6 +879,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._flush_push_events()
                 await self._flush_flash()
                 await self._flush_page_metadata()
+                await self._flush_pending_layout()
                 await self._flush_navigation()
                 await self._flush_accessibility()
                 await self._flush_i18n()
@@ -857,6 +906,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_push_events()
             await self._flush_flash()
             await self._flush_page_metadata()
+            await self._flush_pending_layout()
             await self._flush_navigation()
             await self._flush_accessibility()
             await self._flush_i18n()
@@ -2069,6 +2119,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             await self._flush_push_events()
                             await self._flush_flash()
                             await self._flush_page_metadata()
+                            await self._flush_pending_layout()
                             await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
                                 await self._dispatch_async_work()
@@ -2194,6 +2245,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_push_events()
                     await self._flush_flash()
                     await self._flush_page_metadata()
+                    await self._flush_pending_layout()
                     await self._flush_navigation()
                     await self._flush_i18n()
                 else:
@@ -3002,6 +3054,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_push_events()
                     await self._flush_flash()
                     await self._flush_page_metadata()
+                    await self._flush_pending_layout()
                     await self._send_noop()
                     return
 
@@ -3026,6 +3079,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_push_events()
                     await self._flush_flash()
                     await self._flush_page_metadata()
+                    await self._flush_pending_layout()
             finally:
                 self._render_lock.release()
 
@@ -3117,6 +3171,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_push_events()
                     await self._flush_flash()
                     await self._flush_page_metadata()
+                    await self._flush_pending_layout()
                     await self._send_noop()
                     return
 
@@ -3138,6 +3193,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_push_events()
                     await self._flush_flash()
                     await self._flush_page_metadata()
+                    await self._flush_pending_layout()
             finally:
                 self._render_lock.release()
         except Exception as e:  # noqa: BLE001

@@ -809,7 +809,7 @@ class OnboardingView(WizardMixin, LiveView):
 
 ~~**WebSocket per-message compression (permessage-deflate)**~~ ✅ **Shipped (v0.6.0)** — Uvicorn and Daphne both negotiate `permessage-deflate` with browsers out of the box, so the actual wire-level compression (60-80 % reduction for VDOM patches) was already free. Shipped the declarative config toggle (`DJUST_WS_COMPRESSION`, default `True`) + `websocket_compression` config key + `window.DJUST_WS_COMPRESSION` client bootstrap, plus a deployment-guide section on the ~64 KB/connection zlib context cost, the CDN double-compression footgun, and Uvicorn/Daphne flags to enforce the decision at server level. 6 tests in `tests/unit/test_ws_compression_config.py`.
 
-**Runtime layout switching** — Change the base layout template during a LiveView session without a full page reload. `self.set_layout('layouts/fullscreen.html')` in an event handler swaps the surrounding layout (nav, sidebar, footer) while preserving the inner LiveView state. Use cases: toggle between admin layout and public layout, switch to fullscreen mode for a presentation or editor, show a minimal layout during onboarding then switch to the full app layout. Phoenix 1.1 added runtime layout support. Implementation: the layout is rendered server-side and sent as a special WS message; the client replaces everything outside `[data-djust-root]`. ~80 lines Python + ~30 lines JS. *This is how real apps work — layouts aren't static. A document editor that goes fullscreen, a dashboard that hides the sidebar, an onboarding flow that uses a minimal layout then switches to the app layout on completion. Without runtime layout switching, these patterns require a full page reload, losing all state.*
+~~**Runtime layout switching**~~ ✅ **Shipped (v0.6.0)** — `self.set_layout(path)` queues a layout swap; the WS consumer renders the layout with the view's current context and emits a `layout` frame; the client splices the live `[dj-root]` into the new layout and swaps `<body>`, preserving form state / scroll / focus. Fires `djust:layout-changed` CustomEvent. 18 tests (12 Python + 6 JSDOM). User guide at `docs/website/guides/layouts.md`. Known limitation: `<head>` merging is out of scope for v1 — add dynamic stylesheets to the initial layout's `<head>`.
 
 **Advanced service worker features** — VDOM patch caching (cache last rendered DOM per page; diff against fresh response on back-navigation). LiveView state snapshots (serialize on unmount, restore on back-nav). Request batching for multi-component pages.
 
@@ -989,7 +989,7 @@ Open questions that inform future direction:
 | ~~**`djust_audit --live` runtime header probe**~~ | — | — | ✅ **Shipped (#661, PR #667)** | v0.4.1 |
 | **Scroll into view** | — | **`scrollIntoView`** | **Not started** | **v0.4.0** |
 | **WS compression** | **Built-in (Cowboy)** | — | **Not started** | **v0.6.0** |
-| **Runtime layout switching** | **Runtime layouts (1.1)** | — | **Not started** | **v0.6.0** |
+| ~~**Runtime layout switching**~~ ✅ | Runtime layouts (1.1) | — | **Shipped v0.6.0** | **v0.6.0** |
 | **i18n live switching** | — | — | **Not started** | **v0.7.0** |
 
 ---
