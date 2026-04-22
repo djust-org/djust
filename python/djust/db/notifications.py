@@ -18,6 +18,19 @@ Architecture:
   missed during the drop window are lost — callers recover via the
   normal ``mount()`` re-fetch on WS reconnect. This limitation is
   documented in ``docs/website/guides/database-notifications.md``.
+* **Event-loop binding (issue #808).** ``_ensure_task_started`` captures
+  the running loop on the first call to ``ensure_listening()``. All
+  subsequent coroutine calls that touch ``self._conn`` (``_listen_on``,
+  the ``_run`` iterator, cancellation from ``areset_for_tests``) MUST
+  execute on that same loop — psycopg's ``AsyncConnection`` is not
+  safe to share across loops. If a second loop calls
+  ``ensure_listening()`` (e.g. from ``async_to_sync`` running in a
+  worker thread with its own event loop), the call is rejected with a
+  ``RuntimeError`` rather than silently racing against the listener
+  loop. Practical consequence: the singleton should be used from the
+  ASGI worker's main event loop — which is the common path —
+  ``self.listen(channel)`` from a LiveView's ``mount()`` is the
+  supported entry point.
 """
 
 import asyncio
@@ -161,8 +174,14 @@ class PostgresNotifyListener:
         On first call, starts the background listener task. Subsequent
         calls are cheap: they add to the channel set and issue a
         ``LISTEN`` on the active connection if one exists.
+
+        Raises ``RuntimeError`` if called from a different event loop
+        than the one that first started the listener (issue #808) —
+        psycopg's ``AsyncConnection`` is not safe to share across loops,
+        so a cross-loop call would race against the background task.
         """
         _validate_channel(channel)
+        self._assert_same_loop()
         if channel in self._channels:
             return
         self._channels.add(channel)
@@ -172,6 +191,30 @@ class PostgresNotifyListener:
         # the next reconnect cycle.
         if self._conn is not None:
             await self._listen_on(self._conn, channel)
+
+    def _assert_same_loop(self) -> None:
+        """Reject calls from a different event loop than the listener's.
+
+        Issue #808: the singleton binds its psycopg ``AsyncConnection``
+        to whatever loop first calls ``ensure_listening``. Any later
+        caller on a different loop — typically an ``async_to_sync``
+        wrapper running in a worker thread that spun up its own
+        loop — would race against the listener's ``_run`` coroutine.
+        Fail loudly instead of silently corrupting connection state.
+        """
+        if self._loop is None:
+            return  # Not started yet — the next call will bind a loop.
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # Not in an event loop — caller can't race us.
+        if current is not self._loop:
+            raise RuntimeError(
+                "PostgresNotifyListener singleton is bound to a different "
+                "event loop than the calling coroutine. Cross-loop use of "
+                "the psycopg AsyncConnection is unsafe — see issue #808. "
+                "Use self.listen(channel) from the ASGI worker's main loop."
+            )
 
     async def _ensure_task_started(self) -> None:
         if self._task is not None and not self._task.done():
