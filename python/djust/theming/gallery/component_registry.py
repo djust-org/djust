@@ -14,6 +14,8 @@ import importlib
 import inspect
 import logging
 
+from djust._log_utils import sanitize_for_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -517,10 +519,16 @@ def render_python_component_example(component_name: str, kwargs_dict: dict) -> s
         instance = cls(**kwargs_dict)
         return instance.render()
     except ImportError:
-        logger.debug("djust_components not available for component: %s", component_name)
+        logger.debug(
+            "djust_components not available for component: %s", sanitize_for_log(component_name)
+        )
         return ""
     except Exception as exc:
-        logger.debug("Could not render component %s: %s", component_name, exc)
+        logger.debug(
+            "Could not render component %s: %s",
+            sanitize_for_log(component_name),
+            sanitize_for_log(str(exc)),
+        )
         return ""
 
 
