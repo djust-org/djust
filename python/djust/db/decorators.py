@@ -73,6 +73,32 @@ def send_pg_notify(channel: str, payload: Dict[str, Any]) -> None:
         )
         return
     body = json.dumps(payload, separators=(",", ":"), default=str)
+    # Issue #810: PostgreSQL NOTIFY caps payload at 8000 bytes (documented
+    # limit; some versions raise at 8191). Warn at ~4KB (half of that) so
+    # callers can redesign before hitting the hard cap; drop above 7500B to
+    # avoid a psycopg-level exception breaking the request path.
+    size = len(body.encode("utf-8"))
+    _NOTIFY_SOFT_LIMIT = 4_096
+    _NOTIFY_HARD_LIMIT = 7_500
+    if size > _NOTIFY_HARD_LIMIT:
+        logger.error(
+            "send_pg_notify(%s) payload %d bytes exceeds hard limit %d — "
+            "DROPPING notification. Postgres NOTIFY caps payload at 8000 bytes. "
+            "Redesign to send a lookup key the listener resolves lazily.",
+            channel,
+            size,
+            _NOTIFY_HARD_LIMIT,
+        )
+        return
+    if size > _NOTIFY_SOFT_LIMIT:
+        logger.warning(
+            "send_pg_notify(%s) payload %d bytes exceeds soft limit %d — "
+            "nearing Postgres's 8000-byte NOTIFY cap. Consider sending an ID "
+            "the listener resolves from the database instead of inlining the body.",
+            channel,
+            size,
+            _NOTIFY_SOFT_LIMIT,
+        )
     with connection.cursor() as cur:
         # channel is regex-validated above; Postgres NOTIFY takes no bind
         # parameters for the channel identifier.

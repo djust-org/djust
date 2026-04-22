@@ -112,7 +112,13 @@ class PostgresNotifyListener:
 
     @classmethod
     def reset_for_tests(cls) -> None:
-        """Discard the process-wide singleton. Test-only helper."""
+        """Discard the process-wide singleton (fire-and-forget cancel). Test-only.
+
+        Cancels the background task but does NOT await its completion — the
+        event loop may not be running in the test context (e.g. sync test
+        teardown). Tests that need to await the cancellation should use
+        :meth:`areset_for_tests` from an async context.
+        """
         with cls._class_lock:
             inst = cls._instance
             cls._instance = None
@@ -122,6 +128,32 @@ class PostgresNotifyListener:
                 inst._task.cancel()
             except Exception:  # noqa: BLE001
                 logger.debug("reset_for_tests: task cancel raised", exc_info=True)
+
+    @classmethod
+    async def areset_for_tests(cls) -> None:
+        """Async variant of :meth:`reset_for_tests` that awaits task cancellation.
+
+        Issue #811: sync ``reset_for_tests`` requests cancellation but doesn't
+        wait for the listener loop to actually exit. Tests that assert "the
+        listener is stopped" can race the not-yet-cancelled task. Use this
+        async helper from an ``async def`` test fixture / teardown to ensure
+        the cancellation has been fully observed before the next test runs.
+        """
+        import asyncio
+
+        with cls._class_lock:
+            inst = cls._instance
+            cls._instance = None
+        if inst is None or inst._task is None or inst._task.done():
+            return
+        inst._stopping = True
+        inst._task.cancel()
+        try:
+            await inst._task
+        except asyncio.CancelledError:
+            pass  # Expected — we just cancelled it.
+        except Exception:  # noqa: BLE001
+            logger.debug("areset_for_tests: awaited task raised", exc_info=True)
 
     async def ensure_listening(self, channel: str) -> None:
         """Idempotently subscribe the listener to ``channel``.

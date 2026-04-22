@@ -3059,6 +3059,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
              ticks and user events).
           2. Re-sync state to Rust and emit VDOM patches via the same
              ``source="broadcast"`` path as ``server_push``.
+
+        **Best-effort under contention (#813).** The render lock is acquired
+        with a 100ms timeout; if a user event or earlier notification is
+        still holding the lock, this db_notify is **silently dropped**
+        (debug-logged). The dropped notification does NOT queue — under
+        bursty notification streams, some re-renders will be skipped. If
+        strict "every notify causes a render" semantics are required,
+        de-dupe by primary key in your ``handle_info`` and use
+        ``self.server_push`` / ``self.live_patch`` from a handler that
+        owns the lock. The tradeoff here is deliberate: NOTIFY messages
+        carry no delivery guarantee anyway (Postgres drops them on
+        connection failure), and silently dropping contended renders is
+        preferable to deadlock or unbounded queue growth.
         """
         if not self.view_instance:
             return
