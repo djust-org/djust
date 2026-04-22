@@ -53,17 +53,14 @@ def _resolve_theme(request):
     """
     presets, systems = _get_theme_options()
 
-    design_system = request.COOKIES.get("gallery_ds", "material")
-    if design_system not in systems:
-        design_system = "material"
+    _ds_raw = request.COOKIES.get("gallery_ds", "material")
+    design_system = _ds_raw if _ds_raw in systems else "material"
 
-    preset = request.COOKIES.get("gallery_preset", "default")
-    if preset not in presets:
-        preset = "default"
+    _preset_raw = request.COOKIES.get("gallery_preset", "default")
+    preset = _preset_raw if _preset_raw in presets else "default"
 
-    mode = request.COOKIES.get("gallery_mode", "light")
-    if mode not in ("light", "dark"):
-        mode = "light"
+    _mode_raw = request.COOKIES.get("gallery_mode", "light")
+    mode = _mode_raw if _mode_raw in ("light", "dark") else "light"
 
     theme_css = _get_theme_css(preset=preset, design_system=design_system, mode=mode)
 
@@ -687,7 +684,7 @@ def gallery_category_view(request, category_slug):
     from .examples import CATEGORIES, CATEGORY_ORDER
 
     if category_slug not in CATEGORIES:
-        raise Http404(f"Unknown category: {category_slug}")
+        raise Http404(f"Unknown category: {escape(category_slug)}")
 
     mode, theme_css, ds_options, preset_options = _resolve_theme(request)
     data = get_gallery_data()

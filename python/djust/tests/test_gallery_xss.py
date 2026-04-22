@@ -88,6 +88,28 @@ def test_components_gallery_theme_cookies_escaped(rf):
     assert "<img" not in preset_options
 
 
+def test_components_gallery_unknown_category_escaped_in_404(rf):
+    """Http404 in components gallery category view must not reflect raw user input.
+
+    Mitigated in prod by the URL slug-converter regex (``[-a-zA-Z0-9_]+``) and
+    Django's default 404 template not echoing exception messages, but we escape
+    the slug for defense-in-depth and to protect DEBUG-mode exposure.
+    """
+    from django.http import Http404
+
+    from djust.components.gallery.views import gallery_category_view
+
+    payload = "foo<script>alert(1)</script>"
+    request = rf.get(f"/gallery/{payload}/")
+
+    with pytest.raises(Http404) as exc_info:
+        gallery_category_view(request, category_slug=payload)
+
+    msg = str(exc_info.value)
+    assert "<script>" not in msg
+    assert "&lt;script&gt;" in msg
+
+
 def test_components_gallery_valid_cookie_still_works(rf):
     """Sanity check: a valid allowlisted cookie value still renders normally."""
     from djust.components.gallery.views import _get_theme_options, _resolve_theme
