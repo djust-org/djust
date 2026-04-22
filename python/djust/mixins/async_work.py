@@ -167,15 +167,39 @@ class AsyncWorkMixin:
         # Deferred import avoids a circular dependency at package-init time.
         from ..async_result import AsyncResult
 
+        # Issue #793: concurrent same-name cancellation.
+        # Each assign_async() call bumps a per-attribute generation
+        # counter. The runner captures the counter at creation time and
+        # only writes the AsyncResult back if the captured generation
+        # still matches — older in-flight loaders become no-ops and
+        # can't overwrite a fresher pending state with stale data.
+        if not hasattr(self, "_assign_async_gens"):
+            self._assign_async_gens: dict = {}
+        self._assign_async_gens[name] = self._assign_async_gens.get(name, 0) + 1
+        gen = self._assign_async_gens[name]
+
         setattr(self, name, AsyncResult.pending())
+
+        def _superseded() -> bool:
+            return self._assign_async_gens.get(name) != gen
 
         if inspect.iscoroutinefunction(loader):
 
             async def _async_runner() -> None:
                 try:
                     result = await loader(*args, **kwargs)
+                    if _superseded():
+                        logger.debug("assign_async(%s) succeeded but superseded — discarding", name)
+                        return
                     setattr(self, name, AsyncResult.succeeded(result))
                 except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    if _superseded():
+                        logger.debug(
+                            "assign_async(%s) raised but superseded — discarding: %s",
+                            name,
+                            exc,
+                        )
+                        return
                     setattr(self, name, AsyncResult.errored(exc))
                     logger.debug("assign_async loader for %s raised: %s", name, exc)
 
@@ -185,8 +209,18 @@ class AsyncWorkMixin:
             def _sync_runner() -> None:
                 try:
                     result = loader(*args, **kwargs)
+                    if _superseded():
+                        logger.debug("assign_async(%s) succeeded but superseded — discarding", name)
+                        return
                     setattr(self, name, AsyncResult.succeeded(result))
                 except BaseException as exc:  # noqa: BLE001 — surface all failures in AsyncResult
+                    if _superseded():
+                        logger.debug(
+                            "assign_async(%s) raised but superseded — discarding: %s",
+                            name,
+                            exc,
+                        )
+                        return
                     setattr(self, name, AsyncResult.errored(exc))
                     logger.debug("assign_async loader for %s raised: %s", name, exc)
 
