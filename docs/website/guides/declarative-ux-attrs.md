@@ -6,6 +6,8 @@ Small declarative HTML attributes that replace custom `dj-hook` code every produ
 - [`dj-sticky-scroll`](#dj-sticky-scroll) — keep a container pinned to the bottom as content appends
 - [`dj-track-static`](#dj-track-static) — warn / reload when JS or CSS assets change on a deploy
 - [`dj-transition`](#dj-transition) — declarative CSS enter/leave transitions
+- [`dj-remove`](#dj-remove) — exit animations before element removal
+- [`dj-transition-group`](#dj-transition-group) — enter/leave animations for every child of a list container
 
 ---
 
@@ -178,7 +180,8 @@ Works with any class-based CSS framework — Tailwind (`transition-*` / `duratio
 
 This is phase 1 of the v0.6.0 Animations & transitions work. Separate follow-ups cover:
 - ~~`dj-remove` — run an exit animation before element removal~~ ✅ — see below
-- FLIP / `dj-transition-group` — animate list-item reordering
+- ~~`dj-transition-group` — animate children of a list container (React `<TransitionGroup>` / Vue `<transition-group>` equivalent)~~ ✅ — see below
+- FLIP — animate list-item reordering
 - Skeleton / shimmer loading-state components
 
 ---
@@ -220,6 +223,79 @@ If a subsequent patch removes the `dj-remove` attribute from a pending element, 
 ### Scope
 
 Phase 2a of the v0.6.0 Animations & transitions work. Only the element that *carries* `dj-remove` is deferred — descendants travel with their parent.
+
+---
+
+## `dj-transition-group`
+
+Orchestrate enter/leave animations for every child of a list container — without hand-writing `dj-transition` and `dj-remove` on each child. React `<TransitionGroup>` / Vue `<transition-group>` parity.
+
+This attribute does not introduce a new animation runner. It wires the existing [`dj-transition`](#dj-transition) (enter) and [`dj-remove`](#dj-remove) (leave) specs onto each child by setting the corresponding attributes automatically.
+
+### Quick start — long form (preferred)
+
+```django
+<ul dj-transition-group
+    dj-group-enter="opacity-0 transition-opacity-300 opacity-100"
+    dj-group-leave="opacity-100 transition-opacity-300 opacity-0">
+    {% for toast in toasts %}
+        <li id="toast-{{ toast.id }}">{{ toast.text }}</li>
+    {% endfor %}
+</ul>
+```
+
+New `<li>` children animate in via `dj-transition`. Children removed by a VDOM patch animate out via `dj-remove` (the deferral hook is already wired in `12-vdom-patch.js`).
+
+### Short form — pipe-separated halves
+
+```html
+<ul dj-transition-group="fade-in | fade-out">
+    <li>A</li>
+    <li>B</li>
+</ul>
+```
+
+The short form splits on `|` into enter / leave halves. Each half accepts the same shapes as `dj-transition` / `dj-remove`:
+
+- Three tokens (phase-cycling): `"opacity-0 transition-opacity-300 opacity-100"`
+- Single token (one-class + `transitionend`): `"fade-out"`
+
+An empty half or a missing pipe makes the short form invalid (silently ignored) — use the long form if either half isn't needed.
+
+### Initial children
+
+By default, only the **leave** spec is copied onto each child that's present when the group mounts — so they animate out if later removed, but nothing animates in on first paint.
+
+Opt initial children into first-paint enter animation with `dj-group-appear`:
+
+```html
+<ul dj-transition-group dj-group-appear
+    dj-group-enter="opacity-0 transition-opacity-300 opacity-100"
+    dj-group-leave="fade-out">
+    <li>Initial 1</li>
+    <li>Initial 2</li>
+</ul>
+```
+
+### Interop — never overwrites per-child attributes
+
+If a child already carries `dj-transition` or `dj-remove`, the group leaves those attributes alone. This is the escape hatch for per-item overrides:
+
+```html
+<ul dj-transition-group="fade-in | fade-out">
+    <li>Regular child — gets fade-out on leave</li>
+    <li dj-remove="slide-out-left">Custom — group respects this</li>
+</ul>
+```
+
+### Limitations
+
+- **Direct DOM removal doesn't animate.** `dj-transition-group` orchestrates the animation by setting `dj-remove` on children, then relies on the VDOM-patch integration to defer the removal. If app code calls `child.remove()` directly (bypassing `maybeDeferRemoval`), the removal is immediate. This matches how `dj-remove` works on its own.
+- **No FLIP yet.** Reordering a list without insert/remove is not animated — you get fade-in/fade-out on added/removed children, not smooth transforms for moves. FLIP is a separate follow-up.
+
+### Scope
+
+Phase 2c of the v0.6.0 Animations & transitions work.
 
 ---
 
