@@ -30,9 +30,15 @@
         if (!el || typeof el.getAttribute !== 'function') return false;
         const raw = el.getAttribute('dj-ignore-attrs');
         if (!raw) return false;
+        // Empty attribute name never matches a listed key.
+        if (!attrName) return false;
         // CSV with whitespace tolerance. Exact match on attribute name.
+        // Empty tokens (from "open,,close" or trailing "open,") are skipped
+        // so they don't accidentally match an empty attribute name.
         for (const item of raw.split(',')) {
-            if (item.trim() === attrName) return true;
+            const trimmed = item.trim();
+            if (!trimmed) continue;
+            if (trimmed === attrName) return true;
         }
         return false;
     };

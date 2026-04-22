@@ -119,3 +119,38 @@ class TestNamespacing:
         # `global` keyword → bare name even when strict namespacing is on
         assert 'data-hook="Chart"' in out
         assert "DashboardView" not in out
+
+    @override_settings(DJUST_CONFIG={"hook_namespacing": "strict"})
+    def test_namespacing_degrades_gracefully_when_view_type_lacks_module_qualname(self):
+        """Issue #817: AttributeError fallback in _namespace must hold.
+
+        All real Python classes carry ``__module__`` and ``__qualname__``,
+        so the ``except AttributeError`` fallback at live_tags.py:616 is
+        dead code under normal conditions. But nothing prevents a user
+        from passing a dynamic / proxy object as ``view`` whose class
+        exposes descriptors that raise AttributeError for those names
+        (C-extension shims, certain mocking libraries). This regression
+        test pins graceful degradation so a later refactor doesn't turn
+        the fallback into an outright crash.
+
+        Uses a metaclass whose ``__qualname__`` property raises
+        ``AttributeError`` on class-level access. ``type(view).__qualname__``
+        then triggers the fallback path without touching the class's real
+        attrs.
+        """
+
+        class _RaisingMeta(type):
+            def __getattribute__(cls, name):
+                if name == "__qualname__":
+                    raise AttributeError("simulated C-extension quirk")
+                return super().__getattribute__(name)
+
+        class _OddView(metaclass=_RaisingMeta):
+            pass
+
+        out = _render(
+            '{% colocated_hook "Chart" %}hook.mounted=function(){};{% endcolocated_hook %}',
+            context={"view": _OddView()},
+        )
+        # Must degrade to bare "Chart" rather than raising AttributeError.
+        assert 'data-hook="Chart"' in out
