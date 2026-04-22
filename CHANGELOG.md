@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Morph-path honors `dj-ignore-attrs` (#815)** — The VDOM morph loop at `python/djust/static/djust/src/12-vdom-patch.js:746-758` previously stripped and overwrote attributes without consulting `djust.isIgnoredAttr`. Attributes listed in `dj-ignore-attrs` would survive individual `SetAttr` patches (the guard added in PR #814) but could still get wiped during a full-element morph. The morph-path remove-loop and set-loop both now skip ignored attribute names. Two regression tests in `tests/js/ignore_attrs.test.js` cover remove-loop and set-loop preservation. (`python/djust/static/djust/src/12-vdom-patch.js`)
+
+### Changed
+
+- **`dj-ignore-attrs` CSV empty-token hardening (#816)** — `isIgnoredAttr` now skips empty tokens produced by double-comma (`"open,,close"`) or trailing-comma (`"open,"`) CSV values, and rejects empty attribute-name queries. Previously those edge cases could accidentally match an empty attribute name. Four regression tests in `tests/js/ignore_attrs.test.js` cover empty string, whitespace-only, double comma, and trailing comma. (`python/djust/static/djust/src/31-ignore-attrs.js`)
+
 ### Added
 
 - **`djust_typecheck` — `{% firstof %}` / `{% cycle %}` / `{% blocktrans with %}` tag support (#850)** — The extractor now captures positional context-variable references in `{% firstof a b c %}` and `{% cycle a b c %}` (string literals and `as <name>` suffixes are correctly ignored), and the `with x=expr` (and `count x=expr`) clauses of `{% blocktrans %}` / `{% blocktranslate %}` produce both the template-local binding (`x`) and the reference (`expr`). Eliminates a class of false positives (blocktrans locals) and false negatives (firstof/cycle args). (`python/djust/management/commands/djust_typecheck.py`)
