@@ -130,6 +130,29 @@ gunicorn myproject.asgi:application \
 
 Worker count formula: `(2 x CPU cores) + 1`
 
+### WebSocket per-message compression (permessage-deflate)
+
+VDOM patches are highly compressible — typical gzip ratios of **60-80% reduction in wire size** for repetitive HTML fragments and JSON patch structures. Both Uvicorn (with the `websockets` library) and Daphne support the `permessage-deflate` WebSocket extension out of the box and negotiate it with any modern browser client.
+
+**No code change needed in your djust app** — the compression is transparent. To verify it's active:
+
+```python
+# Confirm the djust config reflects compression state
+from djust.config import config
+config.get("websocket_compression")  # True by default
+```
+
+**Memory tradeoff.** Each active connection holds a zlib compression context, roughly **~64 KB per connection**. For typical deployments (<10k concurrent WebSockets per worker) this is fine — the bandwidth savings dwarf the RSS cost. High-connection-density deployments (100k+ per worker) may want to disable compression:
+
+```python
+# settings.py
+DJUST_WS_COMPRESSION = False  # disable permessage-deflate negotiation
+```
+
+Note that disabling compression in djust's config is **advisory** — the actual wire-level compression is negotiated by the ASGI server. To enforce the no-compression decision at the server level, pass the appropriate flag to Uvicorn / Daphne (e.g. Uvicorn's `--ws-per-message-deflate=false` when using `websockets`). See the [deployment runbook](#production-checklist) for the full set of ASGI-server flags.
+
+**Do not combine with a compressing CDN.** Cloudflare, AWS CloudFront, and similar CDNs will double-compress and burn CPU on both sides. Either turn off compression at the CDN for the `/ws/` path, or disable it in djust.
+
 ## Nginx Configuration
 
 ```nginx
