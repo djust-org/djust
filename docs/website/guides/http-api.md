@@ -110,6 +110,149 @@ On failure the response body is:
 | 404 | `handler_not_exposed` | Handler exists but lacks `expose_api=True` |
 | 429 | `rate_limited` | `@rate_limit` bucket exhausted |
 | 500 | `handler_error` | Handler raised. **The exception message is logged server-side but never included in the response body.** |
+| 500 | `serialize_error` | `api_response()` or the handler's `serialize=` raised, or `serialize="name"` pointed at a missing method. |
+
+---
+
+## Transport-conditional returns
+
+A handler serving both transports often has split needs: the WebSocket caller
+only wants state mutation (the VDOM diff renders the UI), but the HTTP caller
+wants real data in the response. Serializing a query result on every
+WebSocket keystroke is wasteful — DB work and JSON overhead the WS path
+throws away.
+
+djust gives you three ways to specify the HTTP response, in resolution order:
+
+1. **Per-handler override** — `@event_handler(expose_api=True, serialize=...)`
+2. **View-level convention** — `def api_response(self): ...` on the view
+3. **Passthrough** — whatever the handler returned
+
+None of them fire on the WebSocket path — zero overhead there.
+
+### Convention — zero per-handler wiring
+
+Define one `api_response()` method on the view. Every
+`@event_handler(expose_api=True)` handler falls through to it unless it
+sets its own `serialize=` override:
+
+```python
+class ClaimListView(LiveView):
+    api_name = "claims"
+
+    def api_response(self):
+        # Runs only on the HTTP path. The WS path never calls this.
+        return [c.as_dict() for c in self._filtered_claims()]
+
+    @event_handler(expose_api=True)
+    def search(self, value: str = "", **kwargs):
+        self.search_query = value  # state mutation only
+
+    @event_handler(expose_api=True)
+    def filter_by_status(self, status: str = "", **kwargs):
+        self.status = status
+
+    @event_handler(expose_api=True)
+    def clear(self, **kwargs):
+        self.search_query = ""
+        self.status = ""
+```
+
+Three handlers, one serializer, zero per-handler decorator args. Adding a
+fourth handler that returns the same shape is one line:
+`@event_handler(expose_api=True)`.
+
+`api_response()` may accept one optional positional arg (the handler's return
+value) if you want to incorporate it:
+
+```python
+def api_response(self, handler_return):
+    return {"echo": handler_return, "hits": self._filtered_claims()}
+```
+
+### Per-handler override with `serialize=`
+
+When a single handler needs a different response shape, set `serialize=`
+to skip the convention for that handler only:
+
+```python
+class ClaimListView(LiveView):
+    def api_response(self):
+        return [c.as_dict() for c in self._filtered_claims()]
+
+    @event_handler(expose_api=True, serialize="serialize_saved_claim")
+    def save_claim(self, id: int = 0, **kwargs):
+        c = Claim.objects.get(pk=id)
+        c.status = "saved"
+        c.save()
+        return id
+
+    def serialize_saved_claim(self, result):
+        # result is whatever save_claim returned (the id)
+        return Claim.objects.get(pk=result).as_dict()
+```
+
+`serialize=` accepts:
+
+- **A method-name string** — `serialize="serialize_saved_claim"`. Resolved
+  against the view at dispatch time. Best for reusable serializers shared
+  across handlers. Method arity is flexible: `(self)` or `(self, result)`.
+- **A callable** — `serialize=lambda self: [...]` or
+  `serialize=lambda self, result: {...}`. Arity is auto-detected: zero-arg
+  callables are called as `fn()`, one-arg as `fn(view)`, two-or-more-arg
+  as `fn(view, handler_return_value)`.
+- **`None`** (default) — falls through to `api_response()` or the handler's
+  return value.
+
+Async serializers and async `api_response()` methods are both supported —
+the dispatch view awaits them.
+
+### Validation and errors
+
+- Decoration-time: `@event_handler(serialize=...)` without `expose_api=True`
+  raises `TypeError` at import time. The serializer only runs on HTTP, so
+  setting it without exposing the handler over HTTP is almost certainly a bug.
+- Dispatch-time: `serialize="name"` pointing at a missing method → 500
+  `serialize_error`.
+- Dispatch-time: `api_response()` or the serializer raising → 500
+  `serialize_error`. Exception details are logged server-side only, never
+  leaked in the response body.
+
+### Sharing `api_response` via mixins
+
+`api_response()` is just a regular Python method, so it resolves through
+the normal MRO. Define it once in a mixin and every subclass inherits it:
+
+```python
+class ClaimsApiMixin:
+    def api_response(self):
+        return [c.as_dict() for c in self._filtered_claims()]
+
+
+class ClaimListView(ClaimsApiMixin, LiveView):
+    ...
+
+
+class ClaimArchiveView(ClaimsApiMixin, LiveView):
+    ...
+```
+
+### Escape hatch: `self._api_request`
+
+The dispatch view sets `self._api_request = True` on the view instance
+**before `mount()` runs** (and therefore also before any event handler), so
+`mount` can itself branch on transport if needed. Code paths that need to
+branch on transport without using the decorator or convention method can
+inspect the flag directly. Prefer `api_response()` or `serialize=` for the
+common case — the flag is an escape hatch for advanced scenarios.
+
+> **Note on `@classmethod` / `@staticmethod` serializers.** Instance methods
+> are the supported path for `serialize="name"` — arity is detected on the
+> bound method. `@staticmethod` works transparently (treated as a plain
+> callable). `@classmethod` is an edge case: it binds `cls`, not the
+> instance, so it can't read view state directly — pass the underlying
+> function explicitly (`serialize=MyView.cls_method.__func__`) if you
+> need one.
 
 ---
 

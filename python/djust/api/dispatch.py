@@ -108,9 +108,14 @@ def _instantiate_view(view_cls, request: HttpRequest):
 
     Mirrors the WS consumer's setup: set ``request``, call ``mount()`` (or the
     lighter-weight ``api_mount()`` hook if the view overrides it).
+
+    ``self._api_request`` is set to ``True`` BEFORE ``mount()`` runs so code
+    in ``mount`` can branch on transport if needed. WS never sets this flag.
     """
     instance = view_cls()
     instance.request = request
+    # Set the transport flag before mount so mount() can branch on it.
+    instance._api_request = True
     api_mount = getattr(instance, "api_mount", None)
     if callable(api_mount) and api_mount is not getattr(view_cls, "mount", None):
         _call_possibly_async(api_mount, request)
@@ -147,6 +152,92 @@ def _public_assigns_snapshot_diff(view_instance, changed_keys):
         except AttributeError:
             continue
     return diff
+
+
+def _resolve_serializer(spec, view):
+    """Turn a ``serialize=`` spec into a callable; return None if unset.
+
+    Raises ``TypeError`` if ``spec`` is a string that doesn't name a callable
+    attribute on ``view``, or if ``spec`` is neither None, callable, nor str.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, str):
+        method = getattr(view, spec, None)
+        if not callable(method):
+            raise TypeError(f"serialize={spec!r} names no callable method on {type(view).__name__}")
+        return method
+    if callable(spec):
+        return spec
+    raise TypeError(
+        f"serialize must be None, a callable, or a method-name string; got {type(spec).__name__}"
+    )
+
+
+def _call_serializer(fn, view, return_value):
+    """Call ``fn`` with arity-appropriate args; await if the result is a coroutine.
+
+    Two shapes are supported:
+
+    - **Bound method** (e.g. ``view.api_response`` or ``view.serialize_claims``
+      resolved from a string name): ``self`` is already bound, so the remaining
+      positional params are inspected. 0 positional → called as ``fn()``;
+      1 positional → called as ``fn(return_value)``.
+    - **Plain callable** (lambda / unbound function): 0 positional → ``fn()``;
+      1 positional → ``fn(view)``; 2+ positional → ``fn(view, return_value)``.
+    """
+    sig = inspect.signature(fn)
+    positional = [
+        p for p in sig.parameters.values() if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+    n = len(positional)
+
+    if inspect.ismethod(fn):
+        # Bound method: self is implicit; first positional maps to return_value.
+        if n >= 1:
+            call_args: tuple = (return_value,)
+        else:
+            call_args = ()
+    else:
+        # Plain callable: first positional maps to view, second to return_value.
+        if n >= 2:
+            call_args = (view, return_value)
+        elif n == 1:
+            call_args = (view,)
+        else:
+            call_args = ()
+
+    result = fn(*call_args)
+    if inspect.iscoroutine(result):
+        return async_to_sync(_await)(result)
+    return result
+
+
+def _apply_response_transform(view, handler, return_value):
+    """Resolve per-handler ``serialize=`` or view-level ``api_response()``; fall through otherwise.
+
+    Resolution order (first match wins):
+    1. ``@event_handler(expose_api=True, serialize=...)`` on the handler.
+    2. ``api_response()`` method on the view (convention — DRY for shared shapes).
+    3. Pass-through: whatever the handler returned.
+    """
+    metadata = getattr(handler, "_djust_decorators", {}).get("event_handler", {})
+    spec = metadata.get("serialize")
+
+    if spec is not None:
+        serializer = _resolve_serializer(spec, view)
+        return _call_serializer(serializer, view, return_value)
+
+    api_response = getattr(view, "api_response", None)
+    if callable(api_response):
+        return _call_serializer(api_response, view, return_value)
+    if api_response is not None:
+        logger.debug(
+            "djust API: %s.api_response is not callable; falling through to handler return",
+            type(view).__name__,
+        )
+
+    return return_value
 
 
 @method_decorator(csrf_exempt, name="dispatch")
@@ -205,6 +296,8 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         return api_error(400, "invalid_json", "Request body must be a JSON object")
 
     # 5. Instantiate the view and run mount/api_mount.
+    # ``_instantiate_view`` sets ``instance._api_request = True`` before
+    # mount so mount() can branch on transport if needed.
     try:
         view = _instantiate_view(view_cls, request)
     except PermissionDenied as exc:
@@ -267,6 +360,28 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     except Exception:
         logger.exception("djust API handler raised: slug=%s handler=%s", view_slug, handler_name)
         return api_error(500, "handler_error", "Handler raised an unexpected error")
+
+    # 12b. Apply per-handler ``serialize=`` override or ``api_response()``
+    # convention. Resolution order: serialize= > api_response() > passthrough.
+    # Both only run on the HTTP path — the WS consumer never reaches this code.
+    try:
+        return_value = _apply_response_transform(view, handler, return_value)
+    except PermissionDenied as exc:
+        # Mirror the handler-invocation block: a PermissionDenied raised from
+        # api_response() / serialize= must surface as 403, not 500.
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+    except TypeError as exc:
+        logger.exception(
+            "djust API serialize= misconfigured: slug=%s handler=%s", view_slug, handler_name
+        )
+        return api_error(500, "serialize_error", str(exc))
+    except Exception:
+        logger.exception(
+            "djust API response transform raised: slug=%s handler=%s",
+            view_slug,
+            handler_name,
+        )
+        return api_error(500, "serialize_error", "Response transform raised an unexpected error")
 
     # 13. Snapshot post-state and compute diff.
     post = _snapshot_assigns(view)
