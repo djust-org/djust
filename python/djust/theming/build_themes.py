@@ -41,7 +41,7 @@ class BuildTimeGenerator:
         self.output_dir = Path(output_dir)
         self.minify = minify
         self.include_source_maps = include_source_maps
-        self.generate_manifest = generate_manifest
+        self._generate_manifest = generate_manifest
 
         # Ensure output directory exists
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -259,7 +259,7 @@ class BuildTimeGenerator:
         Returns:
             Path to generated manifest file
         """
-        if not self.generate_manifest:
+        if not self._generate_manifest:
             return ""
 
         logger.info("Generating theme manifest...")
