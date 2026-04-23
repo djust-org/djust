@@ -596,12 +596,12 @@ class TestFormChoices:
 
         for field_name, choices in view.form_choices.items():
             for value, label in choices:
-                assert isinstance(
-                    value, str
-                ), f"{field_name} choice value {value!r} is not a string"
-                assert isinstance(
-                    label, str
-                ), f"{field_name} choice label {label!r} is not a string"
+                assert isinstance(value, str), (
+                    f"{field_name} choice value {value!r} is not a string"
+                )
+                assert isinstance(label, str), (
+                    f"{field_name} choice label {label!r} is not a string"
+                )
 
 
 class TestFormInstanceProperty:

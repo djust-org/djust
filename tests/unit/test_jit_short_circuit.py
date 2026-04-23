@@ -27,9 +27,12 @@ class TestJITShortCircuitNonDB:
 
         view = PlainView()
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", wraps=view._get_template_content
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(
+                view, "_get_template_content", wraps=view._get_template_content
+            ) as mock_gtc,
+        ):
             ctx = view.get_context_data()
 
         mock_gtc.assert_not_called()
@@ -46,9 +49,12 @@ class TestJITShortCircuitNonDB:
 
         view = DictListView()
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", wraps=view._get_template_content
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(
+                view, "_get_template_content", wraps=view._get_template_content
+            ) as mock_gtc,
+        ):
             ctx = view.get_context_data()
 
         mock_gtc.assert_not_called()
@@ -72,9 +78,10 @@ class TestJITShortCircuitWithDB:
 
         view = DBView()
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", return_value=view.template
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(view, "_get_template_content", return_value=view.template) as mock_gtc,
+        ):
             view.get_context_data()
 
         mock_gtc.assert_called_once()
@@ -92,9 +99,10 @@ class TestJITShortCircuitWithDB:
         view = ModelView()
         view.profile = user
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", return_value=view.template
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(view, "_get_template_content", return_value=view.template) as mock_gtc,
+        ):
             view.get_context_data()
 
         mock_gtc.assert_called_once()
@@ -112,9 +120,10 @@ class TestJITShortCircuitWithDB:
         view = ListModelView()
         view.users = users_list
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", return_value=view.template
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(view, "_get_template_content", return_value=view.template) as mock_gtc,
+        ):
             view.get_context_data()
 
         mock_gtc.assert_called_once()
@@ -131,9 +140,12 @@ class TestJITShortCircuitEdgeCases:
 
         view = EmptyView()
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", wraps=view._get_template_content
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(
+                view, "_get_template_content", wraps=view._get_template_content
+            ) as mock_gtc,
+        ):
             view.get_context_data()
 
         mock_gtc.assert_not_called()
@@ -150,9 +162,12 @@ class TestJITShortCircuitEdgeCases:
 
         view = MixedView()
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", wraps=view._get_template_content
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(
+                view, "_get_template_content", wraps=view._get_template_content
+            ) as mock_gtc,
+        ):
             view.get_context_data()
 
         mock_gtc.assert_not_called()
@@ -167,9 +182,12 @@ class TestJITShortCircuitEdgeCases:
 
         view = EmptyListView()
 
-        with patch.object(context_module, "JIT_AVAILABLE", True), patch.object(
-            view, "_get_template_content", wraps=view._get_template_content
-        ) as mock_gtc:
+        with (
+            patch.object(context_module, "JIT_AVAILABLE", True),
+            patch.object(
+                view, "_get_template_content", wraps=view._get_template_content
+            ) as mock_gtc,
+        ):
             view.get_context_data()
 
         mock_gtc.assert_not_called()

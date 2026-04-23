@@ -253,9 +253,9 @@ def test_stale_loader_cannot_overwrite_newer_pending_state():
     # returned). It must NOT write over the fresh pending state.
     slow_cb(*slow_args, **slow_kwargs)
     assert slow_returned == ["slow"]  # the loader actually ran
-    assert (
-        view.metrics.loading is True
-    ), "stale runner overwrote fresh pending state — #793 regression"
+    assert view.metrics.loading is True, (
+        "stale runner overwrote fresh pending state — #793 regression"
+    )
 
     # Now drain the fresh runner — it should succeed normally.
     fast_cb, fast_args, fast_kwargs = view._async_tasks.pop("assign_async:metrics")

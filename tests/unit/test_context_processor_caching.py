@@ -145,6 +145,6 @@ class TestSettingChangedSignalClearsCaches:
             for r in receivers
             if r[1]() is not None
         )
-        assert (
-            handler_connected
-        ), "_clear_processor_caches is not connected to setting_changed signal"
+        assert handler_connected, (
+            "_clear_processor_caches is not connected to setting_changed signal"
+        )

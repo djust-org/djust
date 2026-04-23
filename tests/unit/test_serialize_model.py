@@ -54,9 +54,9 @@ class TestSerializeModelSafelyPrimaryId:
         result = encoder._serialize_model_safely(obj)
 
         assert result["id"] == 42
-        assert isinstance(
-            result["id"], int
-        ), f"Expected int for 'id', got {type(result['id']).__name__!r}"
+        assert isinstance(result["id"], int), (
+            f"Expected int for 'id', got {type(result['id']).__name__!r}"
+        )
 
     def test_pk_is_native_int(self):
         encoder = DjangoJSONEncoder()
@@ -113,9 +113,9 @@ class TestSerializeModelSafelyShallowRepr:
         assert "owner" in result
         owner_repr = result["owner"]
         assert owner_repr["id"] == 77
-        assert isinstance(
-            owner_repr["id"], int
-        ), f"Expected int for shallow repr 'id', got {type(owner_repr['id']).__name__!r}"
+        assert isinstance(owner_repr["id"], int), (
+            f"Expected int for shallow repr 'id', got {type(owner_repr['id']).__name__!r}"
+        )
         assert owner_repr["pk"] == 77
         assert isinstance(owner_repr["pk"], int)
 
@@ -155,9 +155,9 @@ class TestJitSerializeModelNoJit:
         result = tmpl._jit_serialize_model(obj, "todo")
 
         assert result["id"] == 42
-        assert isinstance(
-            result["id"], int
-        ), f"Expected int for JIT-fallback 'id', got {type(result['id']).__name__!r}"
+        assert isinstance(result["id"], int), (
+            f"Expected int for JIT-fallback 'id', got {type(result['id']).__name__!r}"
+        )
 
     def test_fallback_pk_present_and_native_int(self, monkeypatch):
         import djust.template.rendering as rendering_module
@@ -203,9 +203,9 @@ class TestJitSerializeModelErrorFallback:
         result = tmpl._jit_serialize_model(obj, "todo")
 
         assert result["id"] == 42
-        assert isinstance(
-            result["id"], int
-        ), f"Expected int for error-fallback 'id', got {type(result['id']).__name__!r}"
+        assert isinstance(result["id"], int), (
+            f"Expected int for error-fallback 'id', got {type(result['id']).__name__!r}"
+        )
 
     def test_error_fallback_pk_present_and_native_int(self, monkeypatch):
         import djust.template.rendering as rendering_module

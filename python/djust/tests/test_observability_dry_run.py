@@ -117,9 +117,9 @@ def test_context_records_without_blocking_when_block_false():
     kinds = {v["kind"] for v in ctx.violations}
     assert "email" in kinds, "expected block=False to record an email violation"
     # 2. Original call-through actually fired.
-    assert (
-        fake_send.call_count == 1
-    ), "block=False must invoke the original callable — not just record the attempt"
+    assert fake_send.call_count == 1, (
+        "block=False must invoke the original callable — not just record the attempt"
+    )
 
 
 def test_context_unpatch_on_exit():
@@ -164,9 +164,9 @@ def test_context_uninstall_failure_is_logged_not_swallowed(caplog):
         ctx.__exit__(None, None, None)
 
     # _uninstall should have logged the failure, not silently swallowed.
-    assert any(
-        "failed to restore" in rec.getMessage() for rec in caplog.records
-    ), "DryRunContext._uninstall must log when setattr fails"
+    assert any("failed to restore" in rec.getMessage() for rec in caplog.records), (
+        "DryRunContext._uninstall must log when setattr fails"
+    )
     # And the patch table is cleared regardless.
     assert ctx._patches == []
 
@@ -315,9 +315,9 @@ def test_endpoint_dry_run_record_mode_no_block():
 
     # Recorded side effect surfaces in the response.
     recorded = data.get("recorded_side_effects", [])
-    assert any(
-        v.get("kind") == "http" for v in recorded
-    ), "dry_run_block=False must record the http attempt"
+    assert any(v.get("kind") == "http" for v in recorded), (
+        "dry_run_block=False must record the http attempt"
+    )
 
     # Original callable actually ran.
     assert fake_get.call_count == 1, "original requests.get should have been invoked"

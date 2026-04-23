@@ -159,9 +159,9 @@ class TestSubdomainResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: ["www", "api", "admin"]
-            if key == "TENANT_SUBDOMAIN_EXCLUDE"
-            else default,
+            side_effect=lambda key, default=None: (
+                ["www", "api", "admin"] if key == "TENANT_SUBDOMAIN_EXCLUDE" else default
+            ),
         ):
             tenant = resolver.resolve(request)
 
@@ -178,9 +178,9 @@ class TestSubdomainResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: ["www", "api", "admin"]
-            if key == "TENANT_SUBDOMAIN_EXCLUDE"
-            else default,
+            side_effect=lambda key, default=None: (
+                ["www", "api", "admin"] if key == "TENANT_SUBDOMAIN_EXCLUDE" else default
+            ),
         ):
             tenant = resolver.resolve(request)
 
@@ -253,11 +253,13 @@ class TestPathResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: 1
-            if key == "TENANT_PATH_POSITION"
-            else ["admin", "api", "static", "media"]
-            if key == "TENANT_PATH_EXCLUDE"
-            else default,
+            side_effect=lambda key, default=None: (
+                1
+                if key == "TENANT_PATH_POSITION"
+                else ["admin", "api", "static", "media"]
+                if key == "TENANT_PATH_EXCLUDE"
+                else default
+            ),
         ):
             tenant = resolver.resolve(request)
 
@@ -275,11 +277,13 @@ class TestPathResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: 2
-            if key == "TENANT_PATH_POSITION"
-            else ["admin", "api"]
-            if key == "TENANT_PATH_EXCLUDE"
-            else default,
+            side_effect=lambda key, default=None: (
+                2
+                if key == "TENANT_PATH_POSITION"
+                else ["admin", "api"]
+                if key == "TENANT_PATH_EXCLUDE"
+                else default
+            ),
         ):
             tenant = resolver.resolve(request)
 
@@ -297,11 +301,13 @@ class TestPathResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: 1
-            if key == "TENANT_PATH_POSITION"
-            else ["admin", "api", "static", "media"]
-            if key == "TENANT_PATH_EXCLUDE"
-            else default,
+            side_effect=lambda key, default=None: (
+                1
+                if key == "TENANT_PATH_POSITION"
+                else ["admin", "api", "static", "media"]
+                if key == "TENANT_PATH_EXCLUDE"
+                else default
+            ),
         ):
             tenant = resolver.resolve(request)
 
@@ -331,11 +337,13 @@ class TestPathResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: 1
-            if key == "TENANT_PATH_POSITION"
-            else []
-            if key == "TENANT_PATH_EXCLUDE"
-            else default,
+            side_effect=lambda key, default=None: (
+                1
+                if key == "TENANT_PATH_POSITION"
+                else []
+                if key == "TENANT_PATH_EXCLUDE"
+                else default
+            ),
         ):
             tenant = resolver.resolve(request)
 
@@ -356,11 +364,13 @@ class TestPathResolver:
             with patch.object(
                 resolver,
                 "get_config",
-                side_effect=lambda key, default=None: 1
-                if key == "TENANT_PATH_POSITION"
-                else []
-                if key == "TENANT_PATH_EXCLUDE"
-                else default,
+                side_effect=lambda key, default=None: (
+                    1
+                    if key == "TENANT_PATH_POSITION"
+                    else []
+                    if key == "TENANT_PATH_EXCLUDE"
+                    else default
+                ),
             ):
                 tenant = resolver.resolve(request)
 
@@ -443,9 +453,9 @@ class TestSessionResolver:
         with patch.object(
             resolver,
             "get_config",
-            side_effect=lambda key, default=None: "tenant_id"
-            if key in ("TENANT_SESSION_KEY", "TENANT_JWT_CLAIM")
-            else default,
+            side_effect=lambda key, default=None: (
+                "tenant_id" if key in ("TENANT_SESSION_KEY", "TENANT_JWT_CLAIM") else default
+            ),
         ):
             tenant = resolver.resolve(request)
 

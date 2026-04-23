@@ -87,8 +87,7 @@ def _extract_client_src(html_with_injected_script: str) -> str:
     )
     if not m:
         raise AssertionError(
-            f"no djust client <script> tag found in injected HTML: "
-            f"{html_with_injected_script!r}"
+            f"no djust client <script> tag found in injected HTML: {html_with_injected_script!r}"
         )
     return m.group(1)
 
@@ -108,9 +107,9 @@ def test_debug_uses_unminified_client_js():
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
     src = _extract_client_src(injected)
-    assert src.endswith("client.js") and not src.endswith(
-        ".min.js"
-    ), f"expected client.js in debug; got {src!r}"
+    assert src.endswith("client.js") and not src.endswith(".min.js"), (
+        f"expected client.js in debug; got {src!r}"
+    )
 
 
 @override_settings(DEBUG=True, DJUST_CLIENT_JS_MINIFIED=True)
@@ -128,6 +127,6 @@ def test_explicit_override_forces_raw_in_production():
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
     src = _extract_client_src(injected)
-    assert src.endswith("client.js") and not src.endswith(
-        ".min.js"
-    ), f"override should force raw; got {src!r}"
+    assert src.endswith("client.js") and not src.endswith(".min.js"), (
+        f"override should force raw; got {src!r}"
+    )

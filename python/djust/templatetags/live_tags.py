@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional
 from django import template
 from django.conf import settings
 from django.template import Node, TemplateSyntaxError
+from django.utils.html import escape
 from django.utils.safestring import mark_safe
 
 from .._html import build_tag
@@ -628,13 +629,18 @@ class ColocatedHookNode(Node):
         # the matched text inside the escaped form so the body remains
         # readable to a human auditor.
         safe_body = _SCRIPT_CLOSE_RE.sub(r"<\\/\1>", body)
+        # Escape the namespaced name for the data-hook attribute as
+        # defense-in-depth: names are developer-controlled (not user input),
+        # but a stray quote or HTML-special char would break the attribute.
+        # The banner uses the raw name — it's inside a JS comment, not markup.
+        safe_hook_name = escape(namespaced)
         banner = "/* COLOCATED HOOK: " + namespaced + " */"
         # Build the tag via concatenation (no f-string interpolation with
-        # mark_safe per CLAUDE.md rules). `namespaced` is a template-author
-        # supplied identifier; `safe_body` has been </script>-escaped above.
+        # mark_safe per CLAUDE.md rules). `safe_hook_name` is HTML-escaped
+        # above; `safe_body` has been </script>-escaped above.
         html = (
             '<script type="djust/hook" data-hook="'
-            + namespaced
+            + safe_hook_name
             + '">'
             + banner
             + "\n"

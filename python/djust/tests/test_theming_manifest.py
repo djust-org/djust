@@ -343,9 +343,9 @@ class TestVersionValidation:
             manifest = ThemeManifest(name="test", version=version)
             errors = manifest.validate()
             version_errors = [e for e in errors if "version" in e.lower()]
-            assert (
-                version_errors == []
-            ), f"Version '{version}' should be valid but got: {version_errors}"
+            assert version_errors == [], (
+                f"Version '{version}' should be valid but got: {version_errors}"
+            )
 
     def test_invalid_semver_versions(self):
         for version in ("not-a-version", "1.0", "1", "v1.0.0", "1.0.0.0", "foo.bar.baz"):

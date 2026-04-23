@@ -22,9 +22,9 @@ def test_tag_input_renders_name_attribute():
     comp = TagInput(name="skills", tags=["python", "rust"])
     html = comp._render_custom()
 
-    assert (
-        'name="skills"' in html
-    ), "TagInput output must carry a `name=` attribute so form POSTs include the field value"
+    assert 'name="skills"' in html, (
+        "TagInput output must carry a `name=` attribute so form POSTs include the field value"
+    )
 
 
 def test_tag_input_hidden_input_carries_csv_of_tags():

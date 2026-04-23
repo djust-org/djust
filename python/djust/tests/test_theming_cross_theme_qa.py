@@ -209,17 +209,17 @@ class TestCSSGeneration:
         """Generated CSS must be substantial — not a stub."""
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            len(css) >= 10_000
-        ), f"{preset}+{design_system}: CSS is only {len(css)} bytes — expected ≥10 KB"
+        assert len(css) >= 10_000, (
+            f"{preset}+{design_system}: CSS is only {len(css)} bytes — expected ≥10 KB"
+        )
 
     def test_css_layer_declaration(self, theme_combo, all_generated_css):
         """@layer declaration must appear and include expected layers."""
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            "@layer base, tokens, components" in css
-        ), f"{preset}+{design_system}: Missing @layer declaration"
+        assert "@layer base, tokens, components" in css, (
+            f"{preset}+{design_system}: Missing @layer declaration"
+        )
 
     def test_tokens_layer_present(self, theme_combo, all_generated_css):
         preset, design_system = theme_combo
@@ -243,18 +243,18 @@ class TestLightModeTokens:
     def test_root_selector_present(self, theme_combo, all_generated_css):
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            ":root {" in css or ":root\n{" in css
-        ), f"{preset}+{design_system}: No :root token block found"
+        assert ":root {" in css or ":root\n{" in css, (
+            f"{preset}+{design_system}: No :root token block found"
+        )
 
     @pytest.mark.parametrize("token", REQUIRED_LIGHT_TOKENS)
     def test_required_token_in_root(self, token, theme_combo, all_generated_css):
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
         # Token must appear somewhere in a :root-scope or html[data-theme="light"]
-        assert re.search(
-            rf"{re.escape(token)}\s*:", css
-        ), f"{preset}+{design_system}: Required token '{token}' not found in CSS"
+        assert re.search(rf"{re.escape(token)}\s*:", css), (
+            f"{preset}+{design_system}: Required token '{token}' not found in CSS"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -268,24 +268,24 @@ class TestDarkModeTokens:
     def test_dark_theme_selector_present(self, theme_combo, all_generated_css):
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            'html[data-theme="dark"]' in css
-        ), f"{preset}+{design_system}: No html[data-theme=dark] selector"
+        assert 'html[data-theme="dark"]' in css, (
+            f"{preset}+{design_system}: No html[data-theme=dark] selector"
+        )
 
     def test_prefers_color_scheme_dark_media_query(self, theme_combo, all_generated_css):
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            "@media (prefers-color-scheme: dark)" in css
-        ), f"{preset}+{design_system}: Missing prefers-color-scheme: dark media query"
+        assert "@media (prefers-color-scheme: dark)" in css, (
+            f"{preset}+{design_system}: Missing prefers-color-scheme: dark media query"
+        )
 
     def test_light_theme_explicit_selector(self, theme_combo, all_generated_css):
         """html[data-theme=light] must also be defined for explicit switching."""
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            'html[data-theme="light"]' in css
-        ), f"{preset}+{design_system}: No html[data-theme=light] explicit selector"
+        assert 'html[data-theme="light"]' in css, (
+            f"{preset}+{design_system}: No html[data-theme=light] explicit selector"
+        )
 
     @pytest.mark.parametrize("token", REQUIRED_DARK_TOKENS)
     def test_dark_block_contains_token(self, token, theme_combo, all_generated_css):
@@ -307,9 +307,9 @@ class TestDarkModeTokens:
                     break
         dark_block = css[brace_start:end]
 
-        assert re.search(
-            rf"{re.escape(token)}\s*:", dark_block
-        ), f"{preset}+{design_system}: Dark block missing token '{token}'"
+        assert re.search(rf"{re.escape(token)}\s*:", dark_block), (
+            f"{preset}+{design_system}: Dark block missing token '{token}'"
+        )
 
     def test_dark_background_differs_from_light(self, theme_combo, all_generated_css):
         """Dark --background must be a different value than light --background."""
@@ -319,16 +319,16 @@ class TestDarkModeTokens:
         light_match = re.search(r'html\[data-theme="light"\]\s*\{([^}]+)\}', css, re.DOTALL)
         dark_match = re.search(r'html\[data-theme="dark"\]\s*\{([^}]+)\}', css, re.DOTALL)
 
-        assert (
-            light_match and dark_match
-        ), f"{preset}+{design_system}: Could not find light/dark theme blocks"
+        assert light_match and dark_match, (
+            f"{preset}+{design_system}: Could not find light/dark theme blocks"
+        )
 
         light_bg = re.search(r"--background:\s*([^;]+);", light_match.group(1))
         dark_bg = re.search(r"--background:\s*([^;]+);", dark_match.group(1))
 
-        assert (
-            light_bg and dark_bg
-        ), f"{preset}+{design_system}: --background not found in light or dark block"
+        assert light_bg and dark_bg, (
+            f"{preset}+{design_system}: --background not found in light or dark block"
+        )
         assert light_bg.group(1).strip() != dark_bg.group(1).strip(), (
             f"{preset}+{design_system}: Light and dark --background are identical "
             f"({light_bg.group(1).strip()}) — dark mode has no effect"
@@ -355,9 +355,9 @@ class TestThemeSwitching:
         """Users with reduced-motion preference should not see transitions."""
         preset, design_system = theme_combo
         css = all_generated_css[(preset, design_system)]
-        assert (
-            "prefers-reduced-motion" in css
-        ), f"{preset}+{design_system}: Missing prefers-reduced-motion support"
+        assert "prefers-reduced-motion" in css, (
+            f"{preset}+{design_system}: Missing prefers-reduced-motion support"
+        )
 
     def test_root_tokens_before_dark_section(self, theme_combo, all_generated_css):
         """CSS cascade must define :root tokens before dark overrides."""
@@ -393,9 +393,9 @@ class TestComponentRendering:
         with patch.object(settings, "LIVEVIEW_CONFIG", {}, create=True):
             result = str(tag_fn(ctx, **args))
 
-        assert (
-            result is not None
-        ), f"{preset}+{design_system}/{component_name}: render returned None"
+        assert result is not None, (
+            f"{preset}+{design_system}/{component_name}: render returned None"
+        )
 
     @pytest.mark.parametrize("component_name", sorted(COMPONENT_MINIMAL_ARGS.keys()))
     def test_component_output_not_empty(self, component_name, theme_combo):
@@ -420,9 +420,9 @@ class TestComponentRendering:
         with patch.object(settings, "LIVEVIEW_CONFIG", {}, create=True):
             result = str(tag_fn(ctx, **args))
 
-        assert (
-            "<" in result
-        ), f"{preset}+{design_system}/{component_name}: output contains no HTML tags"
+        assert "<" in result, (
+            f"{preset}+{design_system}/{component_name}: output contains no HTML tags"
+        )
 
 
 # ---------------------------------------------------------------------------
