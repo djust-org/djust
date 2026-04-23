@@ -9247,7 +9247,7 @@ window.djust.bindModelElements = bindModelElements;
 })();
 
 // ============================================================================
-// dj-virtual — Virtual / windowed lists with DOM recycling (v0.5.0)
+// dj-virtual — Virtual / windowed lists with DOM recycling (v0.5.0+)
 // ============================================================================
 //
 // Render only the visible slice of a large list. All items outside the
@@ -9256,10 +9256,15 @@ window.djust.bindModelElements = bindModelElements;
 //
 // Required attributes on the container:
 //   dj-virtual="items_var_name"       — context variable driving the list
-//   dj-virtual-item-height="48"       — fixed pixel height per item
+//
+// Height modes (pick one):
+//   dj-virtual-item-height="48"       — FIXED pixel height per item
+//   dj-virtual-variable-height        — VARIABLE heights (ResizeObserver)
 //
 // Optional:
 //   dj-virtual-overscan="5"           — rows rendered above/below (default 3)
+//   dj-virtual-estimated-height="60"  — default baseline for unmeasured
+//                                       items in variable mode (default 50)
 //
 // The container itself must have a fixed height (e.g. style="height: 600px")
 // and `overflow: auto`. Direct children must be pre-rendered server-side for
@@ -9277,6 +9282,7 @@ window.djust.bindModelElements = bindModelElements;
 (function initVirtualListModule() {
     const STATE = new WeakMap();
     const DEFAULT_OVERSCAN = 3;
+    const DEFAULT_ESTIMATED_HEIGHT = 50;
 
     function parseIntAttr(el, name, fallback) {
         const raw = el.getAttribute(name);
@@ -9285,15 +9291,34 @@ window.djust.bindModelElements = bindModelElements;
         return Number.isFinite(n) && n >= 0 ? n : fallback;
     }
 
+    function hasBoolAttr(el, name) {
+        return el.hasAttribute(name);
+    }
+
     function setup(container) {
-        const itemHeight = parseIntAttr(container, 'dj-virtual-item-height', 0);
-        if (!itemHeight) {
+        const fixedItemHeight = parseIntAttr(container, 'dj-virtual-item-height', 0);
+        const variableMode = hasBoolAttr(container, 'dj-virtual-variable-height');
+
+        // Mode detection:
+        //  - fixed: dj-virtual-item-height set (> 0). variableMode ignored
+        //    even if attribute is also present (fixed wins; deterministic).
+        //  - variable: no valid item-height AND dj-virtual-variable-height is
+        //    present.
+        //  - otherwise: no-op (mirrors original behaviour).
+        if (!fixedItemHeight && !variableMode) {
             if (globalThis.djustDebug) {
-                console.warn('[dj-virtual] Missing or invalid dj-virtual-item-height on', container);
+                console.warn(
+                    '[dj-virtual] Missing dj-virtual-item-height and ' +
+                    'dj-virtual-variable-height on', container
+                );
             }
             return;
         }
+
         const overscan = parseIntAttr(container, 'dj-virtual-overscan', DEFAULT_OVERSCAN);
+        const estimatedHeight = parseIntAttr(
+            container, 'dj-virtual-estimated-height', DEFAULT_ESTIMATED_HEIGHT
+        ) || DEFAULT_ESTIMATED_HEIGHT;
 
         // Snapshot the pre-rendered children as the full item pool.
         const originalChildren = Array.from(container.children).filter(
@@ -9325,15 +9350,21 @@ window.djust.bindModelElements = bindModelElements;
             container,
             shell,
             spacer,
-            itemHeight,
+            mode: fixedItemHeight ? 'fixed' : 'variable',
+            itemHeight: fixedItemHeight,       // fixed mode only
+            estimatedHeight,                   // variable mode fallback
+            heights: new Map(),                // variable mode: index -> px
+            offsets: null,                     // variable mode: prefix-sum cache (lazy)
             overscan,
-            items: originalChildren, // data source: cloned DOM nodes
+            items: originalChildren,
             visibleStart: 0,
             visibleEnd: 0,
             rafPending: false,
             onScroll: null,
             onResize: null,
             resizeObserver: null,
+            itemObserver: null,                // variable mode: per-item RO
+            nodeToIndex: new WeakMap(),        // variable mode: reverse lookup
         };
 
         state.onScroll = () => requestFrame(state);
@@ -9343,6 +9374,38 @@ window.djust.bindModelElements = bindModelElements;
         if (typeof ResizeObserver !== 'undefined') {
             state.resizeObserver = new ResizeObserver(state.onResize);
             state.resizeObserver.observe(container);
+
+            if (state.mode === 'variable') {
+                // Per-item observer: every item that scrolls into the window
+                // gets measured; cache lookups drive the offset math.
+                state.itemObserver = new ResizeObserver((entries) => {
+                    let dirty = false;
+                    for (const entry of entries) {
+                        const node = entry.target;
+                        const idx = state.nodeToIndex.get(node);
+                        if (idx == null) continue;
+                        // Prefer borderBox for layout-accurate measurement;
+                        // fall back to getBoundingClientRect for older engines
+                        // (jsdom's ResizeObserver stub often omits both).
+                        let h = 0;
+                        if (entry.borderBoxSize && entry.borderBoxSize.length) {
+                            h = entry.borderBoxSize[0].blockSize;
+                        } else if (entry.contentRect) {
+                            h = entry.contentRect.height;
+                        }
+                        if (!h) h = node.getBoundingClientRect().height;
+                        h = Math.round(h);
+                        if (h > 0 && state.heights.get(idx) !== h) {
+                            state.heights.set(idx, h);
+                            dirty = true;
+                        }
+                    }
+                    if (dirty) {
+                        state.offsets = null; // invalidate prefix-sum cache
+                        requestFrame(state);
+                    }
+                });
+            }
         }
 
         STATE.set(container, state);
@@ -9361,7 +9424,60 @@ window.djust.bindModelElements = bindModelElements;
         });
     }
 
+    // --- variable-mode geometry helpers --------------------------------------
+
+    function avgMeasuredHeight(state) {
+        const n = state.heights.size;
+        if (!n) return state.estimatedHeight;
+        let total = 0;
+        for (const h of state.heights.values()) total += h;
+        return total / n;
+    }
+
+    function heightFor(state, idx) {
+        const cached = state.heights.get(idx);
+        if (cached != null) return cached;
+        return state.estimatedHeight;
+    }
+
+    // Build the prefix-sum offset array lazily. `offsets[i]` = sum of heights
+    // for items [0..i). `offsets[total]` = virtual total height.
+    function ensureOffsets(state) {
+        if (state.offsets) return state.offsets;
+        const total = state.items.length;
+        const offsets = new Float64Array(total + 1);
+        let acc = 0;
+        for (let i = 0; i < total; i++) {
+            offsets[i] = acc;
+            acc += heightFor(state, i);
+        }
+        offsets[total] = acc;
+        state.offsets = offsets;
+        return offsets;
+    }
+
+    // Binary search: first index whose offset + height > scrollTop.
+    function firstVisibleIndex(offsets, scrollTop, total) {
+        if (scrollTop <= 0 || total === 0) return 0;
+        let lo = 0;
+        let hi = total;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (offsets[mid + 1] <= scrollTop) lo = mid + 1;
+            else hi = mid;
+        }
+        return Math.min(lo, Math.max(0, total - 1));
+    }
+
     function render(state) {
+        if (state.mode === 'variable') {
+            renderVariable(state);
+        } else {
+            renderFixed(state);
+        }
+    }
+
+    function renderFixed(state) {
         const { container, shell, spacer, itemHeight, overscan, items } = state;
         const total = items.length;
 
@@ -9408,6 +9524,90 @@ window.djust.bindModelElements = bindModelElements;
         state.visibleEnd = end;
     }
 
+    function renderVariable(state) {
+        const { container, shell, spacer, overscan, items } = state;
+        const total = items.length;
+
+        if (total === 0) {
+            spacer.style.height = '0px';
+            shell.innerHTML = '';
+            shell.style.transform = 'translateY(0px)';
+            state.visibleStart = 0;
+            state.visibleEnd = 0;
+            return;
+        }
+
+        const offsets = ensureOffsets(state);
+        spacer.style.height = offsets[total] + 'px';
+
+        const viewportHeight = container.clientHeight || 0;
+        const scrollTop = container.scrollTop || 0;
+
+        const firstVisible = firstVisibleIndex(offsets, scrollTop, total);
+
+        // Walk forward from firstVisible until we've covered viewportHeight.
+        const avg = avgMeasuredHeight(state) || state.estimatedHeight;
+        let end = firstVisible;
+        let covered = 0;
+        while (end < total && covered < viewportHeight) {
+            covered += heightFor(state, end);
+            end++;
+        }
+        // If we never reached viewportHeight (e.g. list shorter), end === total.
+        end = Math.min(total, end + overscan);
+        const start = Math.max(0, firstVisible - overscan);
+
+        // Attach slice nodes, register with the per-item observer.
+        shell.textContent = '';
+        const frag = document.createDocumentFragment();
+        // Disconnect + re-observe only items currently on-screen. Using a
+        // single WeakMap (nodeToIndex) lets us update index bindings cheaply
+        // when the slice shifts.
+        if (state.itemObserver) {
+            // We don't disconnect wholesale — ResizeObserver keeps per-target
+            // entries, and re-calling observe() on the same node is a no-op.
+            // We DO need to seed the nodeToIndex map so resize callbacks can
+            // resolve node -> current index.
+        }
+        for (let i = start; i < end; i++) {
+            const node = items[i];
+            node.style.boxSizing = 'border-box';
+            // DO NOT set a fixed height — variable mode lets content size
+            // itself, and ResizeObserver reports back.
+            state.nodeToIndex.set(node, i);
+            frag.appendChild(node);
+            if (state.itemObserver) {
+                try {
+                    state.itemObserver.observe(node);
+                } catch (e) {
+                    // Some jsdom versions throw on re-observe of same node.
+                    if (globalThis.djustDebug) {
+                        console.warn('[dj-virtual] itemObserver.observe failed', e);
+                    }
+                }
+            } else {
+                // No RO available (very old environment): read the height
+                // synchronously so at least the prefix-sum converges after
+                // the first render pass.
+                const rect = typeof node.getBoundingClientRect === 'function'
+                    ? node.getBoundingClientRect()
+                    : null;
+                if (rect && rect.height > 0) {
+                    const h = Math.round(rect.height);
+                    if (state.heights.get(i) !== h) {
+                        state.heights.set(i, h);
+                        state.offsets = null; // recompute next frame
+                    }
+                }
+            }
+        }
+        shell.appendChild(frag);
+        shell.style.transform = 'translateY(' + offsets[start] + 'px)';
+
+        state.visibleStart = start;
+        state.visibleEnd = end;
+    }
+
     function initVirtualLists(root) {
         const scope = root || document;
         const containers = scope.querySelectorAll
@@ -9432,6 +9632,13 @@ window.djust.bindModelElements = bindModelElements;
             delete container.__djVirtualItems;
             state.visibleStart = -1;
             state.visibleEnd = -1;
+            // In variable mode, replacing the pool invalidates cached
+            // heights (indices may point to different items now).
+            if (state.mode === 'variable') {
+                state.heights = new Map();
+                state.offsets = null;
+                state.nodeToIndex = new WeakMap();
+            }
         }
         render(state);
     }
@@ -9441,6 +9648,7 @@ window.djust.bindModelElements = bindModelElements;
         if (!state) return;
         container.removeEventListener('scroll', state.onScroll);
         if (state.resizeObserver) state.resizeObserver.disconnect();
+        if (state.itemObserver) state.itemObserver.disconnect();
         // Restore the pre-virtualization children and remove the shell/spacer.
         // Without this, removing `dj-virtual` from a live container leaves
         // the injected wrapper elements in place and shows only the
