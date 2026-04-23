@@ -1,0 +1,33 @@
+{% extends "sticky_demo/base.html" %}
+{% load live_tags %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div dj-view dj-root>
+    <h1>Settings</h1>
+    <p>Theme: <span class="tag">{{ theme }}</span></p>
+    <p>
+        <button dj-click="set_theme" dj-value-value="light">Light</button>
+        <button dj-click="set_theme" dj-value-value="dark">Dark</button>
+    </p>
+    <p><em>Note: the sticky widgets below carry over from Dashboard
+       (same Python instance, same DOM subtree, same ``is_playing``
+       state). Click back to Dashboard — they persist again.</em></p>
+</div>
+{% endblock %}
+
+{# Settings declares BOTH slots so both stickies re-attach. #}
+{% block audio_slot %}
+    <div dj-sticky-slot="audio-player" class="widget">
+        <em>(audio slot — waiting for reattach)</em>
+    </div>
+{% endblock %}
+{% block notifications_slot %}
+    <div dj-sticky-slot="notification-center" class="widget">
+        <em>(notifications slot — waiting for reattach)</em>
+    </div>
+{% endblock %}
+{# No live_render inside this template — the stickies arrive via the
+   client-side reattach flow, not a fresh mount. #}
+{% block sticky_embeds %}{% endblock %}

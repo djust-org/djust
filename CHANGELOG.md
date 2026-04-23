@@ -9,67 +9,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Sticky LiveViews — preservation across `live_redirect` (v0.6.0 Phase B of Sticky LiveViews)** —
-  Mark a LiveView class with `sticky = True` + non-empty `sticky_id` and embed it via
-  `{% live_render "myapp.Audio" sticky=True %}` to keep it mounted across `live_redirect`
-  navigations. State, WS channel groups, background tasks, and DOM subtree (form values,
-  scroll, focus) all survive — the Python instance is the same object on both sides of
-  the navigation. Authentication is re-checked against the NEW request's session via
-  the new `djust.auth.check_view_auth_lightweight(view, request) -> bool` wrapper; a
-  sticky view whose permissions are revoked mid-session is unmounted at the next
-  navigation, never silently retained. Destination layouts mark the re-attachment
-  point with `<div dj-sticky-slot="<id>"></div>`. Client-side: the sticky subtree
-  (`[dj-sticky-view]`) is detached into an in-memory stash before the navigation
-  (triggered in `18-navigation.js` BEFORE the outbound `live_redirect_mount` send)
-  and re-attached at `[dj-sticky-slot="<id>"]` in the new layout via `replaceWith()`
-  — DOM node identity preserved. Apps can listen to `djust:sticky-preserved` /
-  `djust:sticky-unmounted` CustomEvents (reason: `server-unmount` or `no-slot`)
-  to react to sticky-lifecycle transitions. Multiple sticky views per page coexist
-  (relative re-attach order unspecified; apps needing ordering should sequence
-  their own post-hook). Two `{% live_render %}` with the same `sticky_id` raise
-  `TemplateSyntaxError` at render time.
-  Wire protocol: new `sticky_hold` frame (sent BEFORE `mount` on live_redirect)
-  lists surviving view_ids so the client reconciles its stash against an
-  authoritative list. New `sticky_update` frame carries per-child VDOM patches,
-  applied via a new scoped-applier variant `applyPatches(patches, rootEl?)` in
-  `12-vdom-patch.js` — when `rootEl` is non-null, node lookups / focus save-restore
-  / autofocus queries all scope to that subtree so a sticky child's dj-id namespace
-  can't collide with the parent's. Phase A's `child_update` path (WIRE-ONLY in
-  v0.5.7) is now fully wired via the same scoped applier.
-  Also ships: per-view VDOM version tracking (`clientVdomVersions: Map<view_id, number>`
-  with `"__root"` sentinel for top-level), `[dj-root]` audit across 3 client modules
-  (`40-dj-layout.js`, `24-page-loading.js`, `12-vdom-patch.js` autofocus sites)
-  adding `:not([dj-sticky-root])` scoping so sticky children don't masquerade as
-  layout / navigation roots. ADR-011 in Phase C documents the full wire protocol +
-  security model.
-  11 Python unit tests in `tests/unit/test_sticky_preserve.py` (HTML-parsed),
-  10 JSDOM tests in `tests/js/sticky_preserve.test.js` (createDom + nextFrame
-  pattern), and 3 end-to-end integration tests in
-  `tests/integration/test_sticky_redirect_flow.py` covering Dashboard→Settings
-  preservation, rapid A→B→A instance identity, and the no-slot reconcile path.
+- **Sticky LiveViews (v0.6.0)** — Phoenix `live_render sticky: true` parity.
+  Shipped across three PRs: #966 (Phase A — embedding primitive), #967 (Phase B —
+  preservation across `live_redirect`), #968 (Phase C — ADR-011, user guide, demo app).
+  Mark a LiveView class with `sticky = True` + `sticky_id` and embed it via
+  `{% live_render "myapp.views.AudioPlayerView" sticky=True %}`. Destination
+  layouts declare `<div dj-sticky-slot="<id>"></div>` at the re-attachment point;
+  the same Python instance, DOM subtree, form values, scroll/focus, and background
+  tasks all survive `live_redirect` navigation. Use case: app-shell widgets (audio
+  players, sidebars, notification centers), wizard preview panes.
 
-- **Embedded LiveViews via `{% live_render %}` (v0.6.0 Phase A of Sticky LiveViews)** —
-  New template tag embeds a LiveView as a child of another LiveView (Phoenix nested-LV parity).
-  `{% live_render "myapp.views.ChildView" foo=1 %}` resolves the dotted path, validates
-  it's a `LiveView` subclass, runs the child's `mount(request, **kwargs) -> get_context_data ->
-  render`, stamps the assigned view_id as `data-djust-embedded` inside every dj-event-bearing
-  tag, and registers the child on the parent so inbound events route by `view_id`. Children
-  get independent event dispatch, independent render, and their own background tasks. New
-  `StickyChildRegistry` mixin composed into `LiveView` provides `_register_child`,
-  `_unregister_child`, `_get_all_child_views`, `_assign_view_id`. New wire frame
-  `{"type":"child_update", "view_id":..., "patches":[...], "version":N}` with
-  `LiveViewConsumer._send_child_update` helper; client-side dispatch in new
-  `static/djust/src/45-child-view.js` scopes its root lookup to
-  `[dj-view][data-djust-embedded="..."]` and fires `djust:child-mounted` /
-  `djust:child-updated` CustomEvents. Phase A is WIRE-ONLY for `child_update` patches —
-  scoped VDOM patch application lands in Phase B. Security: the child's
-  `check_view_auth()` is invoked against the parent's request before mount; an optional
-  `DJUST_LIVE_RENDER_ALLOWED_MODULES` prefix-allowlist restricts which dotted paths
-  the tag may resolve (unset = permit-all, backward compatible). This is the foundation
-  for sticky LiveViews — Phase B (follow-up PR) adds `sticky=True` preservation across
-  `live_redirect` plus the scoped patch applier, and Phase C ships ADR-011 + the user
-  guide. 24 Python tests in `tests/unit/test_live_render_tag.py` (HTML-parsed, not
-  substring-matched) + 7 JSDOM tests in `tests/js/child_view.test.js`.
+  **User-facing API**
+  - `LiveView.sticky: bool = False` + `sticky_id: Optional[str] = None` class attrs.
+  - `{% live_render "dotted.path" sticky=True %}` template tag (validates class
+    opt-in at render time; `TemplateSyntaxError` on mismatch).
+  - `[dj-sticky-slot="<id>"]` slot markers in destination layouts.
+  - `djust:sticky-preserved` / `djust:sticky-unmounted` CustomEvents for
+    lifecycle hooks (reasons: `server-unmount`, `no-slot`, `auth`).
+  - `_on_sticky_unmount()` per-instance hook (default: cancels pending
+    `start_async` tasks).
+
+  **Wire protocol**
+  - `child_update` (Phase A) — scoped VDOM patches for embedded non-sticky children.
+  - `sticky_hold` (server→client, sent BEFORE `mount` on `live_redirect`) —
+    enumerates surviving sticky_ids so the client reconciles its stash against
+    the authoritative list. Ordering is load-bearing: the mount handler eagerly
+    reattaches, so a late `sticky_hold` would reattach auth-revoked views.
+  - `sticky_update` (server→client) — per-child VDOM patches scoped to
+    `[dj-sticky-view="<id>"]` via a new `applyPatches(patches, rootEl)` variant
+    in `12-vdom-patch.js` (when `rootEl` is non-null, node lookups / focus
+    save-restore / autofocus queries all scope to that subtree).
+  - Per-view VDOM version tracking via `clientVdomVersions: Map<view_id, number>`
+    with `"__root"` sentinel for top-level patches.
+
+  **Client-side**
+  - `static/djust/src/45-child-view.js` — `stickyStash` Map; `stashStickySubtrees()`
+    (detach on outbound nav), `reconcileStickyHold(views)` (drop non-authoritative),
+    `reattachStickyAfterMount()` (replace `[dj-sticky-slot]` with stashed subtree
+    via `replaceWith()` — DOM identity preserved), `handleStickyUpdate(msg)`
+    (scoped patch apply), `clearStash()` (abnormal-close cleanup).
+  - `18-navigation.js` calls `stashStickySubtrees()` BEFORE outbound
+    `live_redirect_mount` (and before `popstate`-triggered redirects).
+  - `03-websocket.js` onclose calls `clearStash()` on abnormal disconnect.
+  - `[dj-root]` audit across `40-dj-layout.js`, `24-page-loading.js`, `12-vdom-patch.js`
+    autofocus sites adds `:not([dj-sticky-root])` so sticky children don't
+    masquerade as layout / page roots.
+
+  **Security**
+  - Per-sticky auth re-check via new `djust.auth.check_view_auth_lightweight(view, request) -> bool`;
+    a sticky view whose permissions are revoked mid-session is unmounted on the
+    next navigation.
+  - `DJUST_LIVE_RENDER_ALLOWED_MODULES` prefix-allowlist gates dotted-path resolution
+    (unset = permit-all, backward compatible).
+  - `sticky_id` HTML-escaped via server-side `escape()` + `CSS.escape` on client-side
+    selectors.
+  - Client stash bounded by developer-authored content; idempotent `stashStickySubtrees`
+    coalesces duplicates; cleared on abnormal WS close.
+  - Inbound `sticky_update` / `sticky_hold` frames rejected by the consumer's
+    allowlist (server-to-client only).
+
+  **Testing (32 Python + 20 JSDOM + 6 integration)**
+  - 11 Phase A tests in `tests/unit/test_live_render_tag.py` (HTML-parsed) +
+    21 Phase B/C tests in `tests/unit/test_sticky_preserve.py`.
+  - 7 Phase A tests in `tests/js/child_view.test.js` + 15 Phase B/C tests in
+    `tests/js/sticky_preserve.test.js`.
+  - 3 end-to-end tests in `tests/integration/test_sticky_redirect_flow.py`
+    (Dashboard→Settings preservation, rapid A→B→A instance identity, no-slot
+    reconcile path) + 3 demo-app smoke tests covering the full navigation
+    cycle.
+  - Phase C regression tests: `skipMountHtml` mount branch reattaches sticky
+    subtrees (Fix F1); `disconnect()` drains `_sticky_preserved` so background
+    tasks don't leak (Fix F2).
+
+  **Documentation**
+  - [ADR-011](docs/adr/011-sticky-liveviews.md) — wire protocol, DOM attributes,
+    client/server flow diagrams, full security model + threat matrix, failure
+    modes, relationship to v0.7.0 `dj-activity`.
+  - [User guide](docs/website/guides/sticky-liveviews.md) — quick start,
+    common patterns, limitations, debugging, FAQ.
+  - Runnable demo app in `examples/demo_project/sticky_demo/` — Dashboard,
+    Settings, Reports pages with sticky AudioPlayer + NotificationCenter widgets
+    showing preservation + `no-slot` unmount.
 
 - **FLIP list-reorder animations (v0.6.0 animations milestone finale)** —
   Opt-in per container via `dj-flip`. Declarative attribute on a list parent animates direct-child reorders using First-Last-Invert-Play. Tunables: `dj-flip-duration` (default 300ms, parsed via `Number` + `isFinite` + clamp `[0, 30000]` — trailing garbage rejects to fallback), `dj-flip-easing` (default `cubic-bezier(.2,.8,.2,1)`, strings containing `;"'<>` rejected to defeat CSS-property-breakout). Respects `prefers-reduced-motion`. Nested `[dj-flip]` isolated via `subtree: false`. Author-specified inline `transform` on children is preserved across the animation. Overlapping reorders are guarded against cache corruption via an in-flight-transition check. Works with keyed lists where items carry stable `id=` (Rust VDOM emits MoveChild). Lands in `static/djust/src/44-dj-flip.js` (~260 LOC). 12 JSDOM tests in `tests/js/dj_flip.test.js`.

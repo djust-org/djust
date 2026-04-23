@@ -1,0 +1,31 @@
+{% extends "sticky_demo/base.html" %}
+{% load live_tags %}
+
+{% block title %}Reports{% endblock %}
+
+{% block content %}
+<div dj-view dj-root>
+    <h1>Reports</h1>
+    <p>This page deliberately omits the <code>audio-player</code> slot —
+       so navigating here from Dashboard/Settings will UNMOUNT the audio
+       player (``djust:sticky-unmounted`` with ``reason='no-slot'``)
+       while keeping the notification center alive.</p>
+    <table>
+        <thead><tr><th>Month</th><th>Revenue</th></tr></thead>
+        <tbody>
+            {% for row in rows %}
+                <tr><td>{{ row.month }}</td><td>${{ row.revenue }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{# Reports declares ONLY the notification slot. #}
+{% block audio_slot %}{% endblock %}
+{% block notifications_slot %}
+    <div dj-sticky-slot="notification-center" class="widget">
+        <em>(notifications slot — waiting for reattach)</em>
+    </div>
+{% endblock %}
+{% block sticky_embeds %}{% endblock %}

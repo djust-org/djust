@@ -1,0 +1,17 @@
+{% comment %}
+AudioPlayerView template. Rendered inside a sticky wrapper
+(``<div dj-view dj-sticky-view="audio-player" dj-sticky-root ...>``) by
+the ``{% live_render %}`` tag — do not add another ``dj-view`` here.
+{% endcomment %}
+<div class="widget">
+    <h3>Audio Player (sticky)</h3>
+    <p>Now playing: <strong>{{ track_title }}</strong></p>
+    <p>Elapsed: {{ elapsed_seconds }}s</p>
+    <p>
+        <button dj-click="toggle_play">
+            {% if is_playing %}Pause{% else %}Play{% endif %}
+        </button>
+        <button dj-click="next_track">Next</button>
+    </p>
+    <p><small>State survives navigation — try it.</small></p>
+</div>

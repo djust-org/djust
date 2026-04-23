@@ -1,0 +1,20 @@
+{% comment %}
+NotificationCenterView template. Rendered inside a sticky wrapper —
+do not add another ``dj-view`` here.
+{% endcomment %}
+<div class="widget">
+    <h3>Notifications (sticky)</h3>
+    {% if notifications %}
+        <ul>
+            {% for n in notifications %}
+                <li>
+                    {{ n.text }}
+                    <button dj-click="dismiss" dj-value-id="{{ n.id }}">Dismiss</button>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p><em>No notifications.</em></p>
+    {% endif %}
+    <p><button dj-click="add_demo">Add demo notification</button></p>
+</div>

@@ -317,6 +317,17 @@ class LiveViewWebSocket {
                         if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
                     }
                     this.skipMountHtml = false;
+                    // Sticky LiveViews (Phase C Fix F1): the skipMountHtml
+                    // branch is used when turbo-nav has pre-rendered the
+                    // HTML (HTTP GET first). It was previously missing the
+                    // post-mount sticky reattach — unreachable from
+                    // ``live_redirect_mount`` today, but a foot-gun the
+                    // moment a future path sets skipMountHtml=true on a
+                    // redirect. Same no-op guard as the normal branch
+                    // when stickyStash is empty.
+                    if (window.djust.stickyPreserve && window.djust.stickyPreserve.reattachStickyAfterMount) {
+                        window.djust.stickyPreserve.reattachStickyAfterMount();
+                    }
                     // FIX #619: Defer reinitAfterDOMUpdate() to the next animation
                     // frame on pre-rendered mounts. Calling it synchronously here
                     // forces the browser to recalc layout mid-paint, which causes

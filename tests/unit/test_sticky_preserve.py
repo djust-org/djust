@@ -1005,3 +1005,139 @@ class TestOnStickyUnmountCancelsAsync:
 
         # Must not propagate.
         view._on_sticky_unmount()
+
+
+# ---------------------------------------------------------------------------
+# Phase C Fix F2: disconnect() drains consumer-staged sticky_preserved map.
+# ---------------------------------------------------------------------------
+
+
+class TestDisconnectDrainsStickyPreserved:
+    """Regression test for Fix F2 — the WS disconnect path must call
+    ``_on_sticky_unmount`` on any sticky child left in
+    ``self._sticky_preserved`` (narrow window during a live_redirect where
+    the old view has staged survivors but ``handle_mount`` of the new view
+    has not yet reattached them).
+
+    Without this drain, a disconnect that lands between
+    ``_preserve_sticky_children`` and a successful ``handle_mount`` would
+    leak each sticky child's background tasks on a zombie consumer.
+    """
+
+    def test_disconnect_drains_sticky_preserved(self):
+        from djust.websocket import LiveViewConsumer
+
+        # Build a fake sticky child with a spy on _on_sticky_unmount.
+        unmount_calls: list[str] = []
+
+        class _FakeStickyChild:
+            sticky = True
+            sticky_id = "audio-player"
+
+            def _on_sticky_unmount(self):
+                unmount_calls.append("audio-player")
+
+        class _FakeStickyChildB:
+            sticky = True
+            sticky_id = "chat-widget"
+
+            def _on_sticky_unmount(self):
+                unmount_calls.append("chat-widget")
+
+        # Minimal consumer shim that stubs the async state-heavy methods
+        # the real ``disconnect`` touches (channel layer, tick task,
+        # upload cleanup). We only care that the sticky-drain block runs.
+        class _FakeConsumer(LiveViewConsumer):
+            def __init__(self):  # type: ignore[no-untyped-def]
+                # Seed the attributes the real disconnect reads BEFORE
+                # the sticky-drain block executes.
+                self.session_id = "s"
+                self._client_ip = None
+                self.channel_name = "ch"
+                self._view_group = None
+                self._presence_group = None
+                self._db_notify_channels = None
+                self.view_instance = None  # no view to avoid presence/upload paths
+                self._tick_task = None
+                self.use_actors = False
+                self.actor_handle = None
+                self._sticky_preserved = {
+                    "audio-player": _FakeStickyChild(),
+                    "chat-widget": _FakeStickyChildB(),
+                }
+
+            # Stub the channel layer access — disconnect calls
+            # ``channel_layer.group_discard`` on the hotreload group.
+            @property
+            def channel_layer(self):  # type: ignore[override]
+                class _CL:
+                    async def group_discard(self, *args, **kwargs):  # noqa: D401, ANN001
+                        return None
+
+                return _CL()
+
+        consumer = _FakeConsumer()
+        import asyncio
+
+        asyncio.run(consumer.disconnect(1000))
+
+        # Both sticky children had their cleanup hook invoked.
+        assert sorted(unmount_calls) == ["audio-player", "chat-widget"]
+        # And the map is drained.
+        assert consumer._sticky_preserved == {}
+
+    def test_disconnect_with_raising_sticky_hook_does_not_propagate(self):
+        """A sticky child whose ``_on_sticky_unmount`` raises must not
+        break the disconnect loop — the other sticky children still get
+        their cleanup, and ``disconnect()`` returns normally."""
+        from djust.websocket import LiveViewConsumer
+
+        calls: list[str] = []
+
+        class _GoodSticky:
+            sticky = True
+            sticky_id = "good"
+
+            def _on_sticky_unmount(self):
+                calls.append("good")
+
+        class _BadSticky:
+            sticky = True
+            sticky_id = "bad"
+
+            def _on_sticky_unmount(self):
+                raise RuntimeError("boom")
+
+        class _FakeConsumer(LiveViewConsumer):
+            def __init__(self):  # type: ignore[no-untyped-def]
+                self.session_id = "s"
+                self._client_ip = None
+                self.channel_name = "ch"
+                self._view_group = None
+                self._presence_group = None
+                self._db_notify_channels = None
+                self.view_instance = None
+                self._tick_task = None
+                self.use_actors = False
+                self.actor_handle = None
+                self._sticky_preserved = {
+                    "good": _GoodSticky(),
+                    "bad": _BadSticky(),
+                }
+
+            @property
+            def channel_layer(self):  # type: ignore[override]
+                class _CL:
+                    async def group_discard(self, *args, **kwargs):  # noqa: D401, ANN001
+                        return None
+
+                return _CL()
+
+        consumer = _FakeConsumer()
+        import asyncio
+
+        # Must not raise.
+        asyncio.run(consumer.disconnect(1000))
+
+        assert calls == ["good"]
+        assert consumer._sticky_preserved == {}
