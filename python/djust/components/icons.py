@@ -29,8 +29,11 @@ Custom icon sets::
 """
 
 import html as _html
+import logging
 
 from django.utils.safestring import mark_safe
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Size presets: name -> pixel value
@@ -144,8 +147,9 @@ def _get_icon_sets():
         user_sets = getattr(settings, "DJUST_COMPONENTS_ICON_SETS", None)
         if user_sets and isinstance(user_sets, dict):
             merged.update(user_sets)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Custom icon sets are optional; any settings/import error falls back to built-ins.
+        logger.debug("Custom DJUST_COMPONENTS_ICON_SETS unavailable: %s", exc)
 
     _icon_sets_cache = merged
     return merged

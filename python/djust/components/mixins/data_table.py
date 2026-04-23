@@ -377,6 +377,7 @@ class DataTableMixin:
         try:
             self.table_page = int(value)
         except (ValueError, TypeError):
+            # Ignore non-integer page values; keep current page.
             pass
 
     # ── Phase 2 Event Handlers ──
@@ -874,7 +875,8 @@ class DataTableMixin:
                     try:
                         values.append(float(val))
                     except (ValueError, TypeError):
-                        pass
+                        # Skip non-numeric cells during aggregation.
+                        continue
             if not values:
                 result[col_key] = ""
                 continue
@@ -951,7 +953,8 @@ class DataTableMixin:
                     try:
                         values.append(float(val))
                     except (ValueError, TypeError):
-                        pass
+                        # Skip non-numeric cells when computing column stats.
+                        continue
             if values:
                 stats[key] = {
                     "min": min(values),

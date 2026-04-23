@@ -32,7 +32,6 @@ export const TtydTerminalHook = {
     this._fit.fit();
 
     const encoder = new TextEncoder();
-    const decoder = new TextDecoder("utf-8");
 
     this._ws = new WebSocket(url);
     this._ws.binaryType = "arraybuffer";

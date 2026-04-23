@@ -413,7 +413,6 @@
             this.uiUpdateTimer = setTimeout(() => {
                 requestAnimationFrame(() => {
                     const mode = this.getMode();
-                    const resolvedMode = this.getResolvedMode();
 
                     // Update mode toggle buttons
                     const modeButtons = document.querySelectorAll('.theme-mode-btn');
@@ -446,11 +445,6 @@
 
     // --- Theme Panel interaction ---
     function initThemePanel() {
-        function getCookie(name) {
-            var m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
-            return m ? m[1] : '';
-        }
-
         // Toggle panel open/close
         document.addEventListener('click', function(e) {
             var trigger = e.target.closest('.theme-panel-trigger');

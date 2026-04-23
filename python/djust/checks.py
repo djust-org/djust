@@ -1154,7 +1154,7 @@ def _check_tutorial_mixin_mro(errors, LiveView):
                 cls_file = inspect.getfile(cls)
                 cls_line = inspect.getsourcelines(cls)[1]
             except (OSError, TypeError):
-                pass
+                pass  # Source introspection may fail for built-in or C-extension classes
             errors.append(
                 DjustError(
                     "%s: TutorialMixin must be listed before LiveView in bases." % cls_label,

@@ -9,11 +9,14 @@ Registers an Authentication plugin with:
 Only active when djust.admin_ext (or djust-admin) is installed.
 """
 
+import logging
 from datetime import timedelta
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 try:
     from djust.admin_ext import DjustModelAdmin, site
@@ -73,8 +76,9 @@ if DjustModelAdmin is not None:
                         registry.load()
                     oauth_count = len(registry.get_class_list())
                     oauth_users = SocialAccount.objects.values("user").distinct().count()
-            except Exception:
-                pass
+            except Exception as exc:
+                # django-allauth is an optional dependency; its registry/models may be missing.
+                logger.debug("OAuth provider/user stats unavailable: %s", exc)
 
             return {
                 "total_users": User.objects.count(),

@@ -1,5 +1,6 @@
 """LiveView pages for the djust auth admin plugin."""
 
+import logging
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -8,6 +9,8 @@ from django.db.models import Max, Q
 from django.utils import timezone
 from djust import LiveView
 from djust.decorators import debounce, event_handler, state
+
+logger = logging.getLogger(__name__)
 
 try:
     from djust.admin_ext.views import AdminBaseMixin
@@ -48,8 +51,9 @@ class OAuthProvidersView(AdminBaseMixin, LiveView):
                 total_oauth_users = SocialAccount.objects.values("user").distinct().count()
                 if total_users > 0:
                     oauth_percentage = round((total_oauth_users / total_users) * 100, 1)
-            except Exception:
-                pass
+            except Exception as exc:
+                # django-allauth is optional; its models may not be available or migrated.
+                logger.debug("OAuth stats unavailable (allauth probe failed): %s", exc)
 
         return {
             **self.get_admin_context(),
@@ -158,8 +162,9 @@ class OAuthProvidersView(AdminBaseMixin, LiveView):
                     .distinct()
                     .count()
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # Per-provider stats are optional; skip if the provider schema isn't available.
+                logger.debug("Per-provider active-user stats unavailable: %s", exc)
 
             # Build full callback URL from request
             scheme = "https" if request.is_secure() else "http"
