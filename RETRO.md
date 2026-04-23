@@ -26,7 +26,7 @@ issue or be explicitly closed with a reason.
 | 14 | admin_ext: silent `except Exception: pass` blocks should log at DEBUG | PR #771 | #775 | Closed | Fixed in PR #781 |
 | 15 | admin_ext: `redirect_url` should use `\|escapejs` in JS context | PR #771 | #776 | Closed | Fixed in PR #781 |
 | 16 | Theming/components template tests need dedicated Django settings | Retro v0.5.0 | #777 | Closed | Fixed in PR #782 (demo INSTALLED_APPS) |
-| 17 | Ship final standalone package versions as deprecation shims | Retro v0.5.0 | #778 | Open | 5 packages need final releases with DeprecationWarning |
+| 17 | Ship final standalone package versions as deprecation shims | Retro v0.5.0 | #778 | Closed | Shipped in sibling repos (djust-{auth,tenants,admin,theming,components}) as v99.0.0 DeprecationWarning shims, 2026-04-22 |
 | 18 | Broaden dep-extractor correctness harness matrix (Spaceless, standalone CustomTag, nested With, standalone Block, ReactComponent, RustComponent) | PR #785 | #786 | Open | — |
 | 19 | Extract filter-arg vars as deps in `extract_from_variable` | PR #785 | #787 | Open | `{{ a\|default:fallback }}` drops `fallback` |
 | 20 | Slot-in-for-loop test coverage (Risk 1 from plan) | PR #788 | #789 | Open | — |
@@ -278,7 +278,7 @@ issue or be explicitly closed with a reason.
 - [ ] #806 — extend `Context::resolve` to for-iterables over Model instances (Rust + Django interop)
 - [ ] #808 — PostgresNotifyListener event-loop binding across async_to_sync (real bug; async design)
 - [ ] #809 — `untrack()` helper for `@notify_on_save` receiver cleanup (new public API)
-- [ ] #778 — ADR-007 package-shim sunset (multi-repo archival)
+- [x] #778 — ADR-007 package-shim sunset (multi-repo archival) — Shipped as v99.0.0 DeprecationWarning shims across djust-{auth,tenants,admin,theming,components}, 2026-04-22
 
 ---
 
@@ -424,7 +424,7 @@ The djust-auth package's `logout_view` was a plain function that called `logout(
 - [ ] admin_ext silent except-pass blocks should log at DEBUG — Action Tracker #14 (#775)
 - [ ] admin_ext redirect_url should use |escapejs — Action Tracker #15 (#776)
 - [ ] Theming/components template tests need dedicated Django settings — Action Tracker #16 (#777)
-- [ ] Ship final standalone package versions as deprecation shims — Action Tracker #17 (#778)
+- [x] Ship final standalone package versions as deprecation shims — Action Tracker #17 (#778) — Done 2026-04-22 (5 sibling repos tagged v99.0.0)
 
 ---
 
