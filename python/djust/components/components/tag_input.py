@@ -1,12 +1,20 @@
 """TagInput component."""
 
 import html
+import json
 
 from djust import Component
 
 
 class TagInput(Component):
     """Tag input component for adding/removing tags.
+
+    The hidden form field carries the serialized tag list as **JSON** so
+    values containing commas round-trip intact (#949). Server-side, parse
+    with ``json.loads(request.POST["<name>"])`` to recover the list.
+    Prior versions comma-joined the values, which was ambiguous when a
+    tag contained a comma; existing tags without commas still decode
+    cleanly under the new format.
 
     Args:
         name: form field name
@@ -64,7 +72,13 @@ class TagInput(Component):
         # Hidden input carries the serialized tag list under the field name
         # so that form submissions POST the current tags, even though the
         # visible `.tag-input-field` is a transient "type to add" input.
-        hidden_value = html.escape(",".join(str(t) for t in tags))
+        #
+        # Serialized as JSON (#949) so tag values containing commas
+        # round-trip intact. `ensure_ascii=True` keeps the HTML attribute
+        # ASCII-clean; `html.escape` escapes the `"` characters JSON
+        # emits so the attribute is well-formed even for tags containing
+        # `<`, `&`, or quotes.
+        hidden_value = html.escape(json.dumps([str(t) for t in tags]))
         hidden_html = (
             f'<input type="hidden" name="{e_name}" value="{hidden_value}">' if self.name else ""
         )

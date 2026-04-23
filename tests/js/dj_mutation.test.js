@@ -8,43 +8,16 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { JSDOM } from 'jsdom';
-import fs from 'fs';
-
-const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
+import { createDom as sharedCreateDom, nextFrame } from './_helpers.js';
 
 function createDom(bodyHtml = '') {
-    const dom = new JSDOM(`<!DOCTYPE html>
-<html><head></head>
-<body>
-  <div dj-view="test.views.TestView" dj-root>
-    ${bodyHtml}
-  </div>
-</body>
-</html>`, { runScripts: 'dangerously', url: 'http://localhost/' });
-
-    class MockWebSocket {
-        static CONNECTING = 0;
-        static OPEN = 1;
-        static CLOSING = 2;
-        static CLOSED = 3;
-        constructor() {
-            this.readyState = MockWebSocket.OPEN;
-            this.onopen = null; this.onclose = null; this.onmessage = null;
-        }
-        send() {}
-        close() {}
-    }
-    dom.window.WebSocket = MockWebSocket;
-    dom.window.DJUST_USE_WEBSOCKET = false;
-
-    dom.window.eval(clientCode);
-    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
-    return dom;
+    // Match this file's historical `dj-view` host ("test.views.TestView")
+    // so tests that assume that exact string keep passing.
+    return sharedCreateDom(bodyHtml, { view: 'test.views.TestView' });
 }
 
 function waitForMutation(dom, ms = 0) {
-    return new Promise((resolve) => dom.window.setTimeout(resolve, ms));
+    return nextFrame(dom, ms);
 }
 
 describe('dj-mutation', () => {

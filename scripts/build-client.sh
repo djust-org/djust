@@ -73,6 +73,17 @@ CLIENT_OUT="$STATIC_DIR/client.js"
 if ls "$SRC_DIR"/[0-9]*.js 1>/dev/null 2>&1; then
     cat "$SRC_DIR"/[0-9]*.js > "$CLIENT_OUT"
     echo "Built client.js from $(ls "$SRC_DIR"/[0-9]*.js | wc -l | tr -d ' ') modules ($(wc -c < "$CLIENT_OUT" | tr -d ' ') bytes)"
+    # Guardrail (#953): tests/js/_helpers.js is a TEST-ONLY shim. If any
+    # of its signatures ever leak into the production bundle, terser
+    # still happily ships the code — but it bloats the client + exposes
+    # the `./_helpers.js` import path in the minified map. Fail the
+    # build loudly if that happens.
+    if grep -q "Shared JSDOM test helpers" "$CLIENT_OUT" \
+       || grep -q "from '\./_helpers\.js'" "$CLIENT_OUT"; then
+        echo "ERROR: tests/js/_helpers.js content found in client.js bundle" >&2
+        echo "       (a source module under src/ is importing test-only helpers)" >&2
+        exit 1
+    fi
     minify_and_compress "$CLIENT_OUT"
 fi
 

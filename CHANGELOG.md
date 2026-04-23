@@ -71,6 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JS-centric batch (closes #949, #951, #953)** — tag_input hidden-input payload now JSON-encoded
+  instead of comma-separated, so tag values containing commas round-trip intact (#949). dj-virtual
+  variable-height cache now keyed by `data-key` attribute (configurable via `dj-virtual-key-attr`),
+  falling back to index when absent — cached heights survive item reorders (#951). Consolidated
+  JSDOM test helpers at `tests/js/_helpers.js` (`createDom`, `nextFrame`, `fireDomContentLoaded`,
+  `makeMessageEvent`, `mountAndWait`) and refactored 3 test files to use them (#953). 2 new Python
+  regression tests (commas + quotes round-trip) and 3 new JSDOM cases (reorder survival, index
+  fallback, custom key attribute). Guardrail added to `scripts/build-client.sh` to fail fast if
+  `tests/js/_helpers.js` ever leaks into the production bundle.
 - **Hygiene batch (closes #791, #794, #795, #818, #948)** — bumped `ruff-pre-commit` from v0.8.4 to
   v0.15.11 (#948) and applied `ruff format` to all resulting drift (#791 — expanded beyond the
   original 5 files due to modern-ruff disagreements; 19 files total across `python/djust/` and
@@ -206,9 +215,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gallery. Fixed by wiring both helpers into `get_gallery_data()` as a cross-check: any
   registered tag / component class missing an example entry emits a `logger.debug` warning
   naming the missing entries, and discovery failures are caught so the gallery never breaks
-  at runtime. 12 regression tests across `python/djust/tests/test_form_array_930.py`,
+  at runtime. 14 regression tests across `python/djust/tests/test_form_array_930.py`,
   `python/djust/tests/test_tag_input_932.py`, `python/djust/tests/test_gallery_registry_933.py`
-  (7 of which fail on main pre-fix). No behavior change for non-broken inputs.
+  (7 of which fail on main pre-fix; 2 added later under #949 for commas-in-values round-trip).
+  No behavior change for non-broken inputs.
   (`python/djust/components/templatetags/djust_components.py`,
   `python/djust/components/components/tag_input.py`,
   `python/djust/components/gallery/registry.py`)

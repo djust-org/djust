@@ -18,6 +18,12 @@
 //   dj-virtual-overscan="5"           — rows rendered above/below (default 3)
 //   dj-virtual-estimated-height="60"  — default baseline for unmeasured
 //                                       items in variable mode (default 50)
+//   dj-virtual-key-attr="data-key"    — attribute on each item used as the
+//                                       height-cache key in VARIABLE mode
+//                                       (default "data-key"). Keeps cached
+//                                       heights bound to their item when
+//                                       the list is reordered; missing
+//                                       attribute falls back to index.
 //
 // The container itself must have a fixed height (e.g. style="height: 600px")
 // and `overflow: auto`. Direct children must be pre-rendered server-side for
@@ -36,6 +42,19 @@
     const STATE = new WeakMap();
     const DEFAULT_OVERSCAN = 3;
     const DEFAULT_ESTIMATED_HEIGHT = 50;
+    const DEFAULT_KEY_ATTR = 'data-key';
+
+    // Build the stable cache key for an item in variable-height mode.
+    // Prefer the configured data-key attribute so heights survive
+    // reorders; fall back to the index string for back-compat with lists
+    // that don't mark items with a key.
+    function itemKey(state, node, idx) {
+        if (state.keyAttr && node && node.nodeType === 1) {
+            const k = node.getAttribute(state.keyAttr);
+            if (k != null && k !== '') return 'k:' + k;
+        }
+        return 'i:' + idx;
+    }
 
     function parseIntAttr(el, name, fallback) {
         const raw = el.getAttribute(name);
@@ -72,6 +91,10 @@
         const estimatedHeight = parseIntAttr(
             container, 'dj-virtual-estimated-height', DEFAULT_ESTIMATED_HEIGHT
         ) || DEFAULT_ESTIMATED_HEIGHT;
+        // Attribute name whose value becomes the height-cache key. Empty
+        // string (explicit opt-out) falls back to index-based keying.
+        const keyAttrRaw = container.getAttribute('dj-virtual-key-attr');
+        const keyAttr = keyAttrRaw == null ? DEFAULT_KEY_ATTR : keyAttrRaw;
 
         // Snapshot the pre-rendered children as the full item pool.
         const originalChildren = Array.from(container.children).filter(
@@ -106,7 +129,8 @@
             mode: fixedItemHeight ? 'fixed' : 'variable',
             itemHeight: fixedItemHeight,       // fixed mode only
             estimatedHeight,                   // variable mode fallback
-            heights: new Map(),                // variable mode: index -> px
+            keyAttr,                           // variable mode: item key source
+            heights: new Map(),                // variable mode: itemKey -> px
             offsets: null,                     // variable mode: prefix-sum cache (lazy)
             overscan,
             items: originalChildren,
@@ -148,8 +172,9 @@
                         }
                         if (!h) h = node.getBoundingClientRect().height;
                         h = Math.round(h);
-                        if (h > 0 && state.heights.get(idx) !== h) {
-                            state.heights.set(idx, h);
+                        const cacheKey = itemKey(state, node, idx);
+                        if (h > 0 && state.heights.get(cacheKey) !== h) {
+                            state.heights.set(cacheKey, h);
                             dirty = true;
                         }
                     }
@@ -188,7 +213,9 @@
     }
 
     function heightFor(state, idx) {
-        const cached = state.heights.get(idx);
+        const node = state.items[idx];
+        const cacheKey = itemKey(state, node, idx);
+        const cached = state.heights.get(cacheKey);
         if (cached != null) return cached;
         return state.estimatedHeight;
     }
@@ -347,8 +374,9 @@
                     : null;
                 if (rect && rect.height > 0) {
                     const h = Math.round(rect.height);
-                    if (state.heights.get(i) !== h) {
-                        state.heights.set(i, h);
+                    const cacheKey = itemKey(state, node, i);
+                    if (state.heights.get(cacheKey) !== h) {
+                        state.heights.set(cacheKey, h);
                         state.offsets = null; // recompute next frame
                     }
                 }
@@ -386,9 +414,22 @@
             state.visibleStart = -1;
             state.visibleEnd = -1;
             // In variable mode, replacing the pool invalidates cached
-            // heights (indices may point to different items now).
+            // heights keyed by index (item i may be a different item
+            // now). Heights keyed by `data-key` survive reorders, so we
+            // only drop index-keyed entries and keep `k:*` entries.
             if (state.mode === 'variable') {
-                state.heights = new Map();
+                if (state.keyAttr) {
+                    const preserved = new Map();
+                    for (const [k, v] of state.heights) {
+                        if (typeof k === 'string' && k.charCodeAt(0) === 107) {
+                            // starts with 'k:' — data-key entry
+                            preserved.set(k, v);
+                        }
+                    }
+                    state.heights = preserved;
+                } else {
+                    state.heights = new Map();
+                }
                 state.offsets = null;
                 state.nodeToIndex = new WeakMap();
             }
