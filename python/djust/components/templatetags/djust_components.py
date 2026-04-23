@@ -8091,10 +8091,25 @@ class FormArrayNode(template.Node):
         can_add = row_count < max_rows
         can_remove = row_count > min_rows
 
-        # Render template content for each row, or default inputs
+        # Render template content for each row, or default inputs.
+        #
+        # If the `{% form_array %}...{% endform_array %}` block contains inner
+        # template markup, that nodelist is rendered once per row with the
+        # loop variables ``row``, ``forloop`` and ``row_index`` pushed onto the
+        # context stack. This lets callers customize per-row layout, e.g.::
+        #
+        #     {% form_array name="items" rows=rows %}
+        #       <input name="items[{{ row_index }}][label]" value="{{ row.label }}">
+        #       <input name="items[{{ row_index }}][value]" value="{{ row.value }}">
+        #     {% endform_array %}
+        #
+        # If the nodelist is empty (self-closing-style usage), fall back to the
+        # single-input-per-row default rendering.
+        has_inner = bool(self.nodelist) and any(
+            not (isinstance(n, template.base.TextNode) and not n.s.strip()) for n in self.nodelist
+        )
         rows_html = []
         for i, row in enumerate(rows):
-            val = conditional_escape(str(row.get("value", "") if isinstance(row, dict) else row))
             remove_html = ""
             if can_remove:
                 remove_html = (
@@ -8102,12 +8117,35 @@ class FormArrayNode(template.Node):
                     f'dj-click="{e_remove_event}" data-value="{i}" '
                     f'aria-label="Remove row {i + 1}">&times;</button>'
                 )
-            rows_html.append(
-                f'<div class="dj-form-array__row" data-index="{i}">'
-                f'<input type="text" name="{e_name}[{i}]" value="{val}" '
-                f'class="dj-form-array__input">'
-                f"{remove_html}</div>"
-            )
+
+            if has_inner:
+                # Render the inner block with per-row context
+                row_ctx = {
+                    "row": row,
+                    "row_index": i,
+                    "forloop": {
+                        "counter": i + 1,
+                        "counter0": i,
+                        "first": i == 0,
+                        "last": i == len(rows) - 1,
+                    },
+                }
+                with context.push(**row_ctx):
+                    inner_html = self.nodelist.render(context)
+                rows_html.append(
+                    f'<div class="dj-form-array__row" data-index="{i}">'
+                    f"{inner_html}{remove_html}</div>"
+                )
+            else:
+                val = conditional_escape(
+                    str(row.get("value", "") if isinstance(row, dict) else row)
+                )
+                rows_html.append(
+                    f'<div class="dj-form-array__row" data-index="{i}">'
+                    f'<input type="text" name="{e_name}[{i}]" value="{val}" '
+                    f'class="dj-form-array__input">'
+                    f"{remove_html}</div>"
+                )
 
         add_disabled = "" if can_add else " disabled"
         add_html = (

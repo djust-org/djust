@@ -47,6 +47,7 @@ class TagInput(Component):
         cls = "tag-input"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
+        e_name = html.escape(self.name)
         e_label = html.escape(self.label)
         e_placeholder = html.escape(self.placeholder)
         dj_event = html.escape(self.event or self.name)
@@ -60,8 +61,16 @@ class TagInput(Component):
                 f'dj-click="{dj_event}" data-value="remove:{e_tag}">&times;</button>'
                 f"</span>"
             )
+        # Hidden input carries the serialized tag list under the field name
+        # so that form submissions POST the current tags, even though the
+        # visible `.tag-input-field` is a transient "type to add" input.
+        hidden_value = html.escape(",".join(str(t) for t in tags))
+        hidden_html = (
+            f'<input type="hidden" name="{e_name}" value="{hidden_value}">' if self.name else ""
+        )
         return (
             f'<div class="{cls}">{label_html}'
+            f"{hidden_html}"
             f'<div class="tag-input-tags">{"".join(tag_parts)}</div>'
             f'<input type="text" class="tag-input-field" placeholder="{e_placeholder}">'
             f"</div>"
