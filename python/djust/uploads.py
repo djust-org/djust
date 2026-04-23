@@ -1180,3 +1180,39 @@ class UploadMixin:
         if self._upload_manager:
             self._upload_manager.cleanup()
             self._upload_manager = None
+
+
+# ============================================================================
+# Object-storage error taxonomy (re-exported from djust.contrib.uploads.errors)
+# ============================================================================
+# Surfaces ``UploadError`` and friends at ``djust.uploads.UploadError`` so
+# application code can ``except UploadError`` without importing the
+# contrib subpackage (which may pull in optional vendor SDKs in its own
+# submodules). The contrib package is the source of truth; this import
+# is purely re-export for API convenience.
+
+from djust.contrib.uploads.errors import (  # noqa: E402  — re-export
+    UploadCredentialError,
+    UploadError,
+    UploadNetworkError,
+    UploadQuotaError,
+)
+
+__all__ = [
+    # Pre-existing public surface
+    "UploadWriter",
+    "BufferedUploadWriter",
+    "UploadConfig",
+    "UploadEntry",
+    "UploadManager",
+    "UploadMixin",
+    "validate_magic_bytes",
+    "mime_from_extension",
+    "parse_upload_frame",
+    "build_progress_message",
+    # v0.5.7 — object-storage error taxonomy (#820, #822)
+    "UploadError",
+    "UploadNetworkError",
+    "UploadCredentialError",
+    "UploadQuotaError",
+]

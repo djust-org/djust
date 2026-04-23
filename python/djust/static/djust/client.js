@@ -6658,6 +6658,80 @@ if (document.readyState === 'loading') {
     }
 
     /**
+     * Upload a single file DIRECTLY to a pre-signed URL (e.g. S3 PUT).
+     *
+     * Used by the "mode: 'presigned'" flow (#820): the server signs a
+     * PUT URL and returns it as an upload spec; the client streams
+     * bytes straight to the object store, bypassing the djust
+     * WebSocket entirely. Progress is reported via XHR upload events
+     * (fetch streams still don't expose upload progress in 2026).
+     *
+     * @param {Object} spec - { url, key, fields } from server
+     * @param {File}   file - the file to PUT
+     * @param {Object} hooks - { onProgress(percent), onComplete(result), onError(err) }
+     * @returns {Promise<{ key: string, status: number }>}
+     */
+    function uploadFilePresigned(spec, file, hooks) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', spec.url, true);
+
+            // Apply server-specified fields as request headers. Content-Type
+            // MUST match what was passed at presign time or S3 returns 403.
+            const fields = (spec && spec.fields) || {};
+            for (const name of Object.keys(fields)) {
+                try { xhr.setRequestHeader(name, fields[name]); } catch (_) { /* ignore */ }
+            }
+
+            if (xhr.upload) {
+                xhr.upload.onprogress = (ev) => {
+                    if (!ev.lengthComputable) return;
+                    const pct = Math.round((ev.loaded / ev.total) * 100);
+                    if (hooks && typeof hooks.onProgress === 'function') {
+                        hooks.onProgress(pct);
+                    }
+                    // Also dispatch the same public event as the WS path
+                    // so app code doesn't care which transport we used.
+                    window.dispatchEvent(new CustomEvent('djust:upload:progress', {
+                        detail: { ref: spec.key, progress: pct, status: 'uploading', mode: 'presigned' }
+                    }));
+                };
+            }
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    const result = { key: spec.key, status: xhr.status };
+                    if (hooks && typeof hooks.onComplete === 'function') {
+                        hooks.onComplete(result);
+                    }
+                    window.dispatchEvent(new CustomEvent('djust:upload:progress', {
+                        detail: { ref: spec.key, progress: 100, status: 'complete', mode: 'presigned' }
+                    }));
+                    resolve(result);
+                } else {
+                    const err = new Error('Presigned PUT failed: HTTP ' + xhr.status);
+                    if (hooks && typeof hooks.onError === 'function') hooks.onError(err);
+                    window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                        detail: { file: file.name, error: err.message, mode: 'presigned' }
+                    }));
+                    reject(err);
+                }
+            };
+
+            xhr.onerror = () => {
+                const err = new Error('Presigned PUT network failure');
+                if (hooks && typeof hooks.onError === 'function') hooks.onError(err);
+                window.dispatchEvent(new CustomEvent('djust:upload:error', {
+                    detail: { file: file.name, error: err.message, mode: 'presigned' }
+                }));
+                reject(err);
+            };
+
+            xhr.send(file);
+        });
+    }
+
+    /**
      * Cancel an active upload.
      */
     function cancelUpload(ws, ref) {
@@ -6942,6 +7016,10 @@ if (document.readyState === 'loading') {
         cancelUpload: (ref) => cancelUpload(liveViewWS, ref),
         activeUploads: activeUploads,
         queueClipboardFiles: queueClipboardFiles,
+        // v0.5.7 (#820) — pre-signed S3 PUT: client-direct upload to
+        // object storage. Server returns { mode: 'presigned', url, key,
+        // fields }; app code calls uploadPresigned(spec, file, hooks).
+        uploadPresigned: uploadFilePresigned,
     };
 
 })();

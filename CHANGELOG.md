@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Upload writers — S3 pre-signed PUT URLs + first-class GCS/Azure backends (v0.5.7 — closes #820, #822)** —
+  New `djust.contrib.uploads.s3_presigned` module lets clients upload directly to S3 via a pre-signed
+  URL; djust only signs and observes completion via S3 event webhook. New
+  `djust.contrib.uploads.gcs.GCSMultipartWriter` and `djust.contrib.uploads.azure.AzureBlockBlobWriter`
+  ship as first-class `UploadWriter` subclasses with consistent error taxonomy
+  (`UploadError`, `UploadNetworkError`, `UploadCredentialError`, `UploadQuotaError`,
+  re-exported from `djust.uploads`). Client-side `djust.uploads.uploadPresigned(spec, file, hooks)`
+  streams bytes straight to object storage via XHR (progress via `xhr.upload.onprogress`),
+  bypassing the WS upload machinery. Optional extras: `djust[s3]`, `djust[gcs]`, `djust[azure]`.
+  ~650 LOC + 50 regression tests (mocked SDKs) across
+  `python/djust/tests/test_presigned_s3_820.py`, `python/djust/tests/test_gcs_upload_writer_822.py`,
+  `python/djust/tests/test_azure_upload_writer_822.py`.
 - **Docs cleanup: 4 issues closed** — dj-remove no-CSS-transition gotcha (#902), dj-transition-group
   long-form precedence (#907), Django 5.1 + 5.2 classifiers in `pyproject.toml` (#912), new guide
   page for `dj-virtual` variable-height mode at `docs/website/guides/virtual-lists.md` (#952).
