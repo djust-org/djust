@@ -1,9 +1,10 @@
 name: "djust CodeQL config"
 
 # Extension packs — teach CodeQL about djust-specific sanitizers/sinks.
-# See .github/codeql/models/djust-sanitizers.model.yml (closes #934).
+# Path is resolved relative to the repository root. See
+# .github/codeql/models/djust-sanitizers.model.yml (closes #934).
 packs:
-  - ./models
+  - .github/codeql/models
 
 paths-ignore:
   # JS source fragments — concatenated into client.js/debug-panel.js at build time.
