@@ -41,11 +41,15 @@ del _submodule, importlib
 
 # Re-export helpers moved to sub-modules for backward compatibility
 # (importing from _forms also triggers its @register decorators at load time)
-from djust.components.templatetags._forms import (  # noqa: F401, E402
-    _get_field_type,
-    _infer_columns,
-    _queryset_to_rows,
+from djust.components.templatetags._forms import (  # noqa: E402
+    _get_field_type,  # noqa: F401
+    _infer_columns,  # noqa: F401
+    _queryset_to_rows,  # noqa: F401
 )
+
+# Explicit re-export so `from djust_components import _get_field_type` works
+# and static analyzers (CodeQL) recognize these as public re-exports.
+__all__ = ("_get_field_type", "_infer_columns", "_queryset_to_rows", "register")
 
 
 # ---------------------------------------------------------------------------
@@ -6713,6 +6717,7 @@ class SourceCitationNode(template.Node):
                     f'<span class="dj-citation__relevance">Relevance: {pct:.0f}%</span>'
                 )
             except (ValueError, TypeError):
+                # Relevance is optional; skip if not coercible to float.
                 pass
 
         popover_html = "".join(popover_parts)
@@ -7611,6 +7616,7 @@ class TimePickerNode(template.Node):
                 hour = int(parts[0])
                 minute = int(parts[1]) if len(parts) > 1 else 0
             except (ValueError, IndexError):
+                # Malformed time string; fall back to hour=0, minute=0 defaults above.
                 pass
 
         parts_html = []

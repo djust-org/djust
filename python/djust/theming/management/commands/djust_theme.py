@@ -454,6 +454,8 @@ class Command(BaseCommand):
                     "]\n"
                 )
         except Exception:
+            # Settings inspection is an optional diagnostic; silently skip if it fails
+            # (e.g., settings not configured in a standalone invocation).
             pass
 
         # Generate tailwind config if requested

@@ -195,6 +195,7 @@ def theme_framework_overrides(context):
                 "<style data-djust-framework-overrides>{}</style>", mark_safe(fw_css)
             )
     except (ValueError, ImportError):
+        # Pack CSS generator is optional (older installs / missing pack); emit nothing.
         pass
 
     return ""

@@ -612,6 +612,7 @@ class LiveComponent(ContextProviderMixin):
 
             handler = eh_decorator(handler)
         except ImportError:
+            # @event_handler is optional here; skip decoration if decorators module isn't available.
             pass
 
         return handler

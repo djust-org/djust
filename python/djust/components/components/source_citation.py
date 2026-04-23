@@ -91,6 +91,7 @@ class SourceCitation(Component):
                     f'<span class="dj-citation__relevance">Relevance: {pct:.0f}%</span>'
                 )
             except (ValueError, TypeError):
+                # Relevance is optional; skip if not coercible to float.
                 pass
 
         popover_html = "".join(popover_parts)

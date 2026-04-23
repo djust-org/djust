@@ -102,7 +102,8 @@ class Heatmap(Component):
                 try:
                     all_vals.append(float(v))
                 except (ValueError, TypeError):
-                    pass
+                    # Skip non-numeric cells; heatmap scale ignores them.
+                    continue
         min_val = min(all_vals) if all_vals else 0
         max_val = max(all_vals) if all_vals else 1
         val_range = max_val - min_val if max_val != min_val else 1

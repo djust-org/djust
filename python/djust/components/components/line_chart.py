@@ -97,7 +97,8 @@ class LineChart(Component):
                     try:
                         all_vals.append(float(v))
                     except (ValueError, TypeError):
-                        pass
+                        # Skip non-numeric values; chart scales ignore them.
+                        continue
         max_val = max(all_vals) if all_vals else 1
         min_val = min(all_vals) if all_vals else 0
         val_range = max_val - min_val if max_val != min_val else 1

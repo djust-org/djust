@@ -200,7 +200,8 @@ class LineChartNode(template.Node):
                     try:
                         all_vals.append(float(v))
                     except (ValueError, TypeError):
-                        pass
+                        # Skip non-numeric values; chart scales ignore them.
+                        continue
         max_val = max(all_vals) if all_vals else 1
         min_val = min(all_vals) if all_vals else 0
         val_range = max_val - min_val if max_val != min_val else 1
@@ -374,7 +375,8 @@ class PieChartNode(template.Node):
                 try:
                     total += float(seg.get("value", 0))
                 except (ValueError, TypeError):
-                    pass
+                    # Skip segments whose value isn't numeric.
+                    continue
 
         if total <= 0:
             return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
@@ -658,7 +660,8 @@ class HeatmapNode(template.Node):
                 try:
                     all_vals.append(float(v))
                 except (ValueError, TypeError):
-                    pass
+                    # Skip non-numeric cells; heatmap scale ignores them.
+                    continue
         min_v = min(all_vals) if all_vals else 0
         max_v = max(all_vals) if all_vals else 1
         val_range = max_v - min_v if max_v != min_v else 1
@@ -946,7 +949,8 @@ class CalendarHeatmapNode(template.Node):
             try:
                 vals.append(float(v))
             except (ValueError, TypeError):
-                pass
+                # Skip non-numeric values; heatmap scale ignores them.
+                continue
         max_val = max(vals) if vals else 1
 
         label_left = 30 if show_day_labels else 0

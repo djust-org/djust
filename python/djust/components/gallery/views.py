@@ -94,8 +94,9 @@ def _render_head(mode, theme_css, title="djust-components Gallery"):
     theming_base_link = ""
     try:
         theming_base_link = f'<link rel="stylesheet" href="{static("djust_theming/css/base.css")}">'
-    except Exception:
-        pass
+    except Exception as exc:
+        # djust_theming may not be installed / staticfiles may not resolve it; skip silently.
+        logger.debug("Optional djust_theming base CSS link unavailable: %s", exc)
 
     return f"""\
 <head>

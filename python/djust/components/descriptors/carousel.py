@@ -29,4 +29,5 @@ class Carousel(LiveComponent):
         try:
             state.active = int(value) % state.total if state.total > 0 else 0
         except (ValueError, TypeError):
+            # Non-numeric value; keep current active index.
             pass

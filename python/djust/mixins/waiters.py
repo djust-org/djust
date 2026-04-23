@@ -230,6 +230,7 @@ class WaiterMixin:
         try:
             bucket.remove(waiter)
         except ValueError:
+            # Waiter already removed (race with another cleanup path); nothing to do.
             pass
         if not bucket:
             self._waiters.pop(waiter.event_name, None)

@@ -1805,7 +1805,8 @@ class DataTableHandler:
                                 try:
                                     vals.append(float(v))
                                 except (ValueError, TypeError):
-                                    pass
+                                    # Skip non-numeric cells during aggregation.
+                                    continue
                     agg_val = ""
                     if vals:
                         if agg_type == "sum":
@@ -5488,6 +5489,7 @@ class SourceCitationHandler:
                     f'<span class="dj-citation__relevance">Relevance: {pct:.0f}%</span>'
                 )
             except (ValueError, TypeError):
+                # Relevance is optional; skip if not coercible to float.
                 pass
 
         popover_html = "".join(popover_parts)
@@ -6274,6 +6276,7 @@ class TimePickerHandler:
                 hour = int(parts[0])
                 minute = int(parts[1]) if len(parts) > 1 else 0
             except (ValueError, IndexError):
+                # Malformed time string; fall back to hour=0, minute=0 defaults above.
                 pass
 
         parts_html = []
@@ -7730,7 +7733,8 @@ class LineChartHandler:
                     try:
                         all_vals.append(float(v))
                     except (ValueError, TypeError):
-                        pass
+                        # Skip non-numeric values; chart scales ignore them.
+                        continue
         max_val = max(all_vals) if all_vals else 1
         min_val = min(all_vals) if all_vals else 0
         val_range = max_val - min_val if max_val != min_val else 1
@@ -7888,7 +7892,8 @@ class PieChartHandler:
                 try:
                     total += float(seg.get("value", 0))
                 except (ValueError, TypeError):
-                    pass
+                    # Skip segments whose value isn't numeric.
+                    continue
         if total <= 0:
             return mark_safe(f'<div class="{class_str}"><svg></svg></div>')
 
@@ -8142,7 +8147,8 @@ class HeatmapHandler:
                 try:
                     all_vals.append(float(v))
                 except (ValueError, TypeError):
-                    pass
+                    # Skip non-numeric cells; heatmap scale ignores them.
+                    continue
         min_v = min(all_vals) if all_vals else 0
         max_v = max(all_vals) if all_vals else 1
         val_range = max_v - min_v if max_v != min_v else 1
@@ -8394,7 +8400,8 @@ class CalendarHeatmapHandler:
             try:
                 vals.append(float(v))
             except (ValueError, TypeError):
-                pass
+                # Skip non-numeric values; calendar heatmap ignores them.
+                continue
         max_val = max(vals) if vals else 1
 
         label_left = 30 if show_day_labels else 0
@@ -10061,6 +10068,7 @@ class ActivityFeedHandler:
         try:
             max_items = int(kw.get("max", 50))
         except (ValueError, TypeError):
+            # Keep the default (50) if caller passed a non-int.
             pass
         custom_class = kw.get("class", "")
 

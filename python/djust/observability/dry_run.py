@@ -215,6 +215,7 @@ class DryRunContext:
                         try:
                             details["count"] = len(a[0])
                         except TypeError:
+                            # First arg isn't sized (e.g., a generator); count is best-effort.
                             pass
                     return _self._record_or_raise(kind_tag, target, details, orig, (self_, *a), kw)
 

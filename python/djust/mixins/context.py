@@ -150,8 +150,9 @@ class ContextMixin:
                     if hasattr(value, "__get__") and hasattr(value, "__set_name__"):
                         try:
                             value = getattr(self, key)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            # Descriptor resolution is best-effort; keep raw class-level value on failure.
+                            logger.debug("Descriptor resolution failed for %s: %s", key, exc)
                     _all_items.append((key, value))
 
         # Collect keys that came from class-level attrs (not instance __dict__)

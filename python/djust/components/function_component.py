@@ -433,6 +433,7 @@ class RenderSlotTagHandler:
             if isinstance(parsed, (list, dict)):
                 return self._render_value(parsed)
         except (ValueError, TypeError):
+            # Not valid JSON; fall through to other resolution shapes below.
             pass
 
         # Shape 2: the arg still LOOKS like a dotted path (no dots → simple
@@ -487,6 +488,7 @@ def _resolve_context_path(path: str, context: dict[str, Any]) -> Any:
                     current = current[int_key]
                     continue
             except ValueError:
+                # `part` isn't an integer key; fall through to return None below.
                 pass
             return None
         if isinstance(current, (list, tuple)):

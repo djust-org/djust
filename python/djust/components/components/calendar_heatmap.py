@@ -116,7 +116,8 @@ class CalendarHeatmap(Component):
             try:
                 vals.append(float(v))
             except (ValueError, TypeError):
-                pass
+                # Skip non-numeric values; heatmap scale ignores them.
+                continue
         max_val = max(vals) if vals else 1
 
         label_left = 30 if self.show_day_labels else 0
