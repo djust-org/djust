@@ -1,8 +1,12 @@
+import logging
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import redirect
+from django.utils.http import url_has_allowed_host_and_scheme
+
+logger = logging.getLogger(__name__)
 
 
 class LoginRequiredLiveViewMixin:
@@ -18,6 +22,20 @@ class LoginRequiredLiveViewMixin:
         if not request.user.is_authenticated:
             login_url = self.login_url or getattr(settings, "LOGIN_URL", "/accounts/login/")
             url = f"{login_url}?{urlencode({'next': request.get_full_path()})}"
+            # Defensive validation — login_url is developer-provided config,
+            # not user input, but we validate to prevent misconfigurations
+            # from producing open redirects.
+            if not url_has_allowed_host_and_scheme(
+                url=url,
+                allowed_hosts={request.get_host()},
+                require_https=request.is_secure(),
+            ):
+                logger.warning(
+                    "LoginRequiredLiveViewMixin: login_url %r is off-site; "
+                    "falling back to '/accounts/login/'",
+                    login_url,
+                )
+                return redirect("/accounts/login/")
             return redirect(url)
         return super().dispatch(request, *args, **kwargs)
 

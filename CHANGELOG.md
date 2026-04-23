@@ -56,6 +56,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Security + cleanup: pre-existing test failures, redirect audit, dep ceilings, edge tests — closes #910, #921, #922, #935** —
+  **#935**: fixed 3 stale test assertions that were checking for leaked
+  exception-class names in API error responses. The implementations in
+  `api/dispatch.py`, `observability/views.py` deliberately sanitize
+  error payloads (don't echo `RuntimeError` / internal method names to
+  clients; send to server logs instead). Tests now verify the sanitized
+  contract (`"server logs"` in `error`, handler_name / session_id echo)
+  rather than the leaked details. Fixes
+  `test_api_response.py::test_dispatch_serialize_str_missing_method_returns_500`,
+  `test_observability_eval_handler.py::test_eval_500_when_handler_raises`,
+  and `test_observability_reset_view.py::test_reset_500_when_mount_raises`.
+  **#921**: expanded open-redirect audit beyond PR #920 — `mixins/request.py`
+  now validates `hook_redirect` returned by developer-defined `on_mount`
+  hooks via `url_has_allowed_host_and_scheme`, falling back to `"/"` and
+  logging a WARNING on unsafe targets. `auth/mixins.py`
+  `LoginRequiredLiveViewMixin.dispatch` now validates the computed login
+  URL as defense-in-depth against misconfigured `settings.LOGIN_URL`,
+  falling back to `"/accounts/login/"`.
+  **#922**: 7 new regression tests in
+  `python/djust/tests/test_security_redirects_paths.py` —
+  `javascript:` scheme rejection, HTTPS-to-HTTP downgrade, null-byte
+  path-injection, uppercase/case-sensitive allowlist, hook_redirect
+  off-site rejection, hook_redirect same-site acceptance, and off-site
+  `LOGIN_URL` fallback.
+  **#910**: added upper-bound ceilings to all runtime + dev dependencies in
+  `pyproject.toml` (e.g. `requests>=2.28,<3`, `orjson>=3.11.6,<4`,
+  `nh3>=0.2,<1`). Prevents uncontrolled major bumps during `uv lock`
+  refresh (see PR #909 which caught Django 6.x resolving under `>=4.2`).
+  Ceiling policy documented in a comment above `[project.dependencies]`.
+  Verified with `uv lock` — only material change is `redis` 7.3 -> 6.4
+  (stays under new `<7` ceiling).
 - **UploadMixin defensive replay for schema-changed configs — closes #892** —
   `_restore_upload_configs` now wraps each per-slot `allow_upload(**cfg)`
   in try/except `TypeError`. On signature mismatch (kwarg added / renamed

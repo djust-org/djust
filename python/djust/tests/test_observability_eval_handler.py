@@ -156,7 +156,11 @@ def test_eval_500_when_handler_raises():
     resp = eval_handler(_post({"handler_name": "explode"}))
     assert resp.status_code == 500
     data = json.loads(resp.content)
-    assert "RuntimeError" in data["error"]
+    # Error payload is sanitized (doesn't leak exception class names to the client).
+    # Details go to server logs. Verify we still surface a useful hint plus the
+    # handler_name echoed back for the client.
+    assert "server logs" in data["error"]
+    assert data["handler_name"] == "explode"
 
 
 @override_settings(DEBUG=True)
