@@ -89,20 +89,26 @@ issue or be explicitly closed with a reason.
 | 77 | `PostgresNotifyListener.reset_for_tests` awaits cancellation | PR #807 | #811 | Closed | Shipped in PR #867 as `areset_for_tests` |
 | 78 | Regression test: consumer handles views without `NotificationMixin` | PR #807 | #812 | Closed | Shipped in PR #867 |
 | 79 | Document 100ms `db_notify` render-lock timeout semantics | PR #807 | #813 | Closed | Shipped in PR #867 |
-| 80 | FormArrayNode drops inner template content (block body parsed but never rendered) | PR #929 | #930 | Open | Latent bug surfaced during note-severity cleanup |
-| 81 | `tag_input` widget missing `name` attribute — form submissions drop value | PR #929 | #932 | Open | Latent bug surfaced during note-severity cleanup |
-| 82 | `gallery/registry.py get_gallery_data` never consumes `discover_*` results | PR #929 | #933 | Open | Dead code / missing call — needs investigation |
+| 80 | FormArrayNode drops inner template content (block body parsed but never rendered) | PR #929 | #930 | Closed | Shipped in PR #939 — renders self.nodelist per row |
+| 81 | `tag_input` widget missing `name` attribute — form submissions drop value | PR #929 | #932 | Closed | Shipped in PR #939 — hidden input with name + CSV payload |
+| 82 | `gallery/registry.py get_gallery_data` never consumes `discover_*` results | PR #929 | #933 | Closed | Shipped in PR #939 — wires discovery as drift-detector |
 | 83 | `_registry.py` F401 unused-import alerts may need explicit `# noqa` post-rescan | PR #929 | — | Open | No issue filed; revisit after CodeQL rescan |
-| 84 | Add CodeQL MaD model for `sanitize_for_log` to close log-injection FP class | PRs #913/#923 | #934 | Open | Also consider for `url_has_allowed_host_and_scheme` and set-membership allowlists |
-| 85 | Pre-existing main test failures (`test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view`) | Arc #898–#931 | #935 | Open | Reproduced on `origin/main`; traced to prior commits (#856, #756, #755) |
+| 84 | Add CodeQL MaD model for `sanitize_for_log` to close log-injection FP class | PRs #913/#923 | #934 | Closed | Shipped in PR #945 — `.github/codeql/models/djust-sanitizers.model.yml` |
+| 85 | Pre-existing main test failures (`test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view`) | Arc #898–#931 | #935 | Closed | Shipped in PR #946 — 3 tests fixed, main now clean |
 | 86 | Verify post-#928 CodeQL rescan closed the 872 cyclic-import alerts | PR #928 | — | Closed | Confirmed 2026-04-23: open alerts dropped from ~1130 to 37 |
 | 87 | `dispatch.py:295` vs `observability:399` JSON-parse error message consistency | PR #919 | — | Open | Style-only follow-up |
 | 88 | Replace `inspect.getsource + substring` test with behavior-level test | PR #919 | — | Open | Test quality |
-| 89 | `javascript:` scheme + HTTPS downgrade + null-byte storybook rejection tests | PR #920 | — | Open | Test coverage gap |
-| 90 | Audit ALL `HttpResponseRedirect`/`redirect()` sites for `url_has_allowed_host_and_scheme` guards | PR #920 | — | Open | Stage 11 flagged `mixins/request.py:75` + `auth/mixins.py:21` as unflagged surfaces |
+| 89 | `javascript:` scheme + HTTPS downgrade + null-byte storybook rejection tests | PR #920 | #922 | Closed | Shipped in PR #946 — 4 edge tests added |
+| 90 | Audit ALL `HttpResponseRedirect`/`redirect()` sites for `url_has_allowed_host_and_scheme` guards | PR #920 | #921 | Closed | Shipped in PR #946 — audited + fixed mixins/request.py, auth/mixins.py |
 | 91 | Shared `conftest.py` staff-user fixture for auth-gated view tests | PR #918 | — | Open | Tooling |
 | 92 | `docs/internal/codeql-patterns.md` taint-flow cheat sheet | PR #918 | — | Open | Docs |
-| 93 | Automate CHANGELOG test-count validation (3rd recurrence across #898/#904/#885) | PRs #898/#904 | — | Open | Pre-commit hook or `make` target |
+| 93 | Automate CHANGELOG test-count validation (3rd recurrence across #898/#904/#885) | PRs #898/#904 | #908 | Closed | Shipped in PR #945 — scripts/check-changelog-test-counts.py + pre-commit hook |
+| 94 | Bump `.pre-commit-config.yaml` ruff-pre-commit from v0.8.4 to current | PR #940 retro | #948 | Open | Local ruff disagreements with pinned hook cause spurious format churn |
+| 95 | tag_input CSV serialization ambiguous for commas-in-values | PR #939 retro | #949 | Open | Escape, multiple inputs, or JSON-encode — decide and document |
+| 96 | pipeline-run outer loop should verify retro comment before `completed_at` | PR #946 retro | #950 | Open | Retro dropout caught in drain — add artifact gate |
+| 97 | dj-virtual variable-height: data-key-based cache survives reorders | PR #947 retro | #951 | Open | Currently index-keyed; reorders bind heights to wrong items |
+| 98 | dj-virtual variable-height guide page | PR #947 retro | #952 | Open | Tuning estimated-height, scrollbar-jump tradeoffs, data-key story |
+| 99 | Consolidate JSDOM test helpers (DOMContentLoaded wait + repo-root cwd) | Retros #885/#918/#925/#943 | #953 | Open | 4 PRs have reinvented variants; extract to tests/js/_helpers.js |
 
 ---
 
