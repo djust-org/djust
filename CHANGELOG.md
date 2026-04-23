@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **dj-virtual variable-height items via ResizeObserver — closes #797** —
+  PR #796 shipped `dj-virtual` with fixed-height items only. This adds
+  opt-in variable-height support via a new `dj-virtual-variable-height`
+  boolean attribute. Implementation: ResizeObserver per rendered item
+  feeds a `Map<index, number>` height cache; a lazily-computed prefix-sum
+  array drives offset math and the virtual spacer total. Unmeasured items
+  fall back to a configurable `dj-virtual-estimated-height` (default 50px).
+  Fixed-height mode (`dj-virtual-item-height="N"`) is unchanged — tested
+  explicitly as a regression guard. Updated `29-virtual-list.js` (~180 LOC
+  net) and 4 new JSDOM cases in `tests/js/virtual_list.test.js` covering
+  attribute activation, mixed-height prefix-sum math, RO-driven cache
+  updates, and fixed-mode regression.
 - **Tooling: CHANGELOG test-count validator — closes #908** — new
   `scripts/check-changelog-test-counts.py` parses phrases like
   `N JSDOM cases`, `N regression tests`, `N unit tests`,
