@@ -18,7 +18,17 @@
 //   - Dispatches djust:layout-changed on document for app-level hooks.
 
 function _findRoot(scope) {
-    return scope.querySelector('[data-djust-root]') || scope.querySelector('[dj-root]');
+    // Sticky LiveViews (Phase B): exclude [dj-sticky-root] wrappers so
+    // a sticky child embedded via {% live_render ... sticky=True %}
+    // does not masquerade as the layout root. Sticky subtrees carry
+    // [dj-sticky-root] on their outermost [dj-view]; the parent view's
+    // [dj-root] is always outside of them.
+    return (
+        scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
+        || scope.querySelector('[dj-root]:not([dj-sticky-root])')
+        || scope.querySelector('[data-djust-root]')
+        || scope.querySelector('[dj-root]')
+    );
 }
 
 function _applyLayout(payload) {

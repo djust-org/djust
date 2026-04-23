@@ -135,3 +135,79 @@ class StickyChildRegistry:
     def _get_child_view(self, view_id: str) -> Optional[Any]:
         """Return a specific child by ``view_id``, or None."""
         return self._get_all_child_views().get(view_id)
+
+    # ------------------------------------------------------------------
+    # Sticky preservation (Phase B)
+    # ------------------------------------------------------------------
+
+    def _on_sticky_unmount(self) -> None:
+        """Called when a sticky child is discarded during a navigation
+        (new layout has no matching ``[dj-sticky-slot]``, or an auth
+        re-check failed).
+
+        The default implementation cancels any in-flight background
+        tasks via :meth:`AsyncWorkMixin.cancel_async_all` (if the view
+        mixes it in — most LiveViews do, via the base class). Without
+        this, a sticky with running ``start_async`` tasks that gets
+        unmounted would leak the tasks: they'd keep executing against
+        a detached view whose ``request`` is stale and whose consumer
+        reference may already be gone.
+
+        Subclasses that override this to release other resources
+        (audio streams, open files, etc.) should call
+        ``super()._on_sticky_unmount()`` to preserve task cleanup.
+
+        This hook is ONLY called during a live_redirect transition that
+        discards the sticky — a full WS disconnect takes the normal
+        :meth:`_unregister_child` -> ``_cleanup_on_unregister`` path.
+        """
+        cancel_all = getattr(self, "cancel_async_all", None)
+        if callable(cancel_all):
+            try:
+                cancel_all()
+            except Exception:  # noqa: BLE001 — cleanup hook must not raise
+                logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
+        return None
+
+    def _preserve_sticky_children(self, new_request: Any) -> Dict[str, Any]:
+        """Stage sticky children for preservation across a live_redirect.
+
+        Walks :attr:`_child_views`, filters to children with
+        ``sticky is True``, and re-checks each child's auth against
+        ``new_request`` via
+        :func:`djust.auth.core.check_view_auth_lightweight`. Survivors
+        are returned in a ``{sticky_id: child}`` map (keyed by each
+        child's ``sticky_id`` class attr) for the consumer to stash on
+        ``self._sticky_preserved``.
+
+        Non-sticky children and auth-denied sticky children are NOT
+        included; the caller is responsible for letting the normal
+        unmount flow run on the old view.
+        """
+        # Lazy import to avoid circular: auth.core -> live_view -> mixins -> auth.
+        from ..auth.core import check_view_auth_lightweight
+
+        survivors: Dict[str, Any] = {}
+        for _view_id, child in self._get_all_child_views().items():
+            if getattr(child, "sticky", False) is not True:
+                continue
+            sticky_id = getattr(child, "sticky_id", None) or _view_id
+            if not check_view_auth_lightweight(child, new_request):
+                logger.info(
+                    "Sticky child %s auth denied for new request; discarding",
+                    sticky_id,
+                )
+                hook = getattr(child, "_on_sticky_unmount", None)
+                if callable(hook):
+                    try:
+                        hook()
+                    except Exception:  # noqa: BLE001 — defensive
+                        logger.exception("sticky child %s _on_sticky_unmount raised", sticky_id)
+                continue
+            # Update request back-reference so handlers see the new request.
+            try:
+                child.request = new_request
+            except AttributeError:
+                pass
+            survivors[sticky_id] = child
+        return survivors

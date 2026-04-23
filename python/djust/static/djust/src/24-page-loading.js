@@ -61,8 +61,11 @@
             }
         });
 
-        // Add navigating class to dj-root for CSS-based transitions
-        const root = document.querySelector('[dj-root]');
+        // Add navigating class to dj-root for CSS-based transitions.
+        // Sticky LiveViews (Phase B): exclude [dj-sticky-root] wrappers
+        // so a sticky child doesn't incorrectly receive the navigating
+        // class — the class is a whole-page transition cue.
+        const root = document.querySelector('[dj-root]:not([dj-sticky-root])') || document.querySelector('[dj-root]');
         if (root) root.classList.add('djust-navigating');
 
         // Dispatch lifecycle event
@@ -72,8 +75,9 @@
     function finish() {
         if (!barElement) return;
 
-        // Remove navigating class from dj-root
-        const root = document.querySelector('[dj-root]');
+        // Remove navigating class from dj-root (exclude sticky roots,
+        // matching start()).
+        const root = document.querySelector('[dj-root]:not([dj-sticky-root])') || document.querySelector('[dj-root]');
         if (root) root.classList.remove('djust-navigating');
 
         // Dispatch lifecycle event

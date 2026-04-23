@@ -117,6 +117,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "page_slug",
         "page_title",
         "temporary_assigns",
+        "sticky",
+        "sticky_id",
     }
 )
 
@@ -296,6 +298,19 @@ class LiveView(
     api_name: Optional[str] = None
     api_auth_classes: Optional[List[Any]] = None
 
+    # Sticky LiveViews (Phase B of v0.6.0 Sticky LiveViews).
+    #
+    # When ``sticky = True`` and the view is embedded via
+    # ``{% live_render "dotted.path" sticky=True %}``, the instance, its
+    # DOM subtree, form values, scroll/focus, and background tasks
+    # SURVIVE ``live_redirect`` navigations — provided the destination
+    # layout contains a matching ``<div dj-sticky-slot="<id>">`` element.
+    # ``sticky_id`` is the stable identifier shared between server and
+    # client; if left ``None``, the template tag errors at render time
+    # because there is no slot key to match.
+    sticky: bool = False
+    sticky_id: Optional[str] = None
+
     # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================
@@ -317,6 +332,14 @@ class LiveView(
         # Initialize child-view registry (Phase A of Sticky LiveViews).
         # Required before any {% live_render %} tag tries to register.
         self._init_sticky()
+
+        # Phase B: per-instance stash of sticky children preserved across
+        # a live_redirect. Populated by the consumer's
+        # ``handle_live_redirect_mount`` flow via
+        # :meth:`_preserve_sticky_children` before the old view is torn
+        # down. Re-registered onto the new parent once its template
+        # surfaces matching ``[dj-sticky-slot]`` elements.
+        self._sticky_preserved: Dict[str, Any] = {}
 
         # Track user-defined _private attr names (populated by
         # _snapshot_user_private_attrs after mount, or _restore_private_state).

@@ -1231,6 +1231,15 @@ function throttle(func, limit) {
 }
 
 // Helper: Get LiveView root element
+//
+// Sticky LiveViews (Phase B) invariant: the parent view's [dj-view] is
+// stamped in DOM order BEFORE its sticky child (the parent template tag
+// runs before {% live_render %} resolves), so the first matching
+// [dj-view] in document order is the parent. Calling code that needs to
+// operate on the PARENT (mainline patch application, form helpers,
+// etc.) relies on this ordering and MUST NOT be changed to select
+// [dj-sticky-root] subtrees. Sticky targets are reached via the scoped
+// applier in 45-child-view.js, NOT via getLiveViewRoot().
 function getLiveViewRoot() {
     return document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document.body;
 }

@@ -35,11 +35,13 @@ from .core import (
     PermissionRequiredMixin,
     check_handler_permission,
     check_view_auth,
+    check_view_auth_lightweight,
 )
 
 __all__ = [
     # Core auth (WebSocket-level)
     "check_view_auth",
+    "check_view_auth_lightweight",
     "check_handler_permission",
     "LoginRequiredMixin",
     "PermissionRequiredMixin",
