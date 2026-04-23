@@ -9,6 +9,7 @@ from contextlib import contextmanager
 
 from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.utils.decorators import method_decorator
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.db import models
 
@@ -72,6 +73,19 @@ class RequestMixin:
         # Run on_mount hooks (auth guards, etc.) before mount
         hook_redirect = run_on_mount_hooks(self, request, **kwargs)
         if hook_redirect:
+            # Validate hook-returned URL to prevent open-redirect via
+            # a developer-defined hook echoing untrusted request data.
+            # Falls back to "/" on any off-site/malicious target.
+            if not url_has_allowed_host_and_scheme(
+                url=hook_redirect,
+                allowed_hosts={request.get_host()},
+                require_https=request.is_secure(),
+            ):
+                logger.warning(
+                    "on_mount hook returned unsafe redirect URL for %s; " "falling back to '/'",
+                    self.__class__.__name__,
+                )
+                return HttpResponseRedirect("/")
             return HttpResponseRedirect(hook_redirect)
 
         # IMPORTANT: mount() must be called first to initialize clean state

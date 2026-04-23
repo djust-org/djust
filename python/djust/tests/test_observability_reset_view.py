@@ -127,7 +127,11 @@ def test_reset_500_when_mount_raises():
     resp = reset_view_state(rf.post("/?session_id=s"))
     assert resp.status_code == 500
     data = json.loads(resp.content)
-    assert "RuntimeError" in data["error"]
+    # Error payload is sanitized (no exception class leak to client). Details
+    # go to server logs. Verify the sanitized contract + session_id echo.
+    assert "mount()" in data["error"]
+    assert "server logs" in data["error"]
+    assert data["session_id"] == "s"
 
 
 @override_settings(DEBUG=False)

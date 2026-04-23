@@ -341,7 +341,10 @@ def test_dispatch_serialize_str_missing_method_returns_500(http_request):
     assert response.status_code == 500
     payload = json.loads(response.content)
     assert payload["error"] == "serialize_error"
-    assert "missing_method" in payload["message"]
+    # Error payload is sanitized (doesn't leak the serializer method name
+    # or exception internals to the client). Details go to server logs.
+    # Verify the generic sanitized message is returned.
+    assert "Response transform" in payload["message"]
 
 
 def test_dispatch_serializer_exception_returns_500(http_request):
