@@ -7,181 +7,96 @@ A DesignSystem defines the non-color aspects of UI:
 - Visual patterns (borders, shadows, textures)
 - Animation behaviors
 - Interaction feedback
+
+Note: the dataclass types and the shared style instances
+(``PATTERN_*``, ``ILLUST_*``, pack-level ``ICON_*``, ``ANIM_*``, and
+``INTERACT_*``) live in ``_types.py`` and ``_constants.py`` respectively.
+Keeping them out of this module lets ``themes/_base.py`` import them
+without forming a cycle back through this module. They are re-exported
+from here for backward compatibility.
 """
 
-from dataclasses import dataclass
 from typing import Dict, Optional
 
-
-@dataclass
-class TypographyStyle:
-    """Typography configuration."""
-
-    name: str
-
-    # Font families
-    heading_font: str = "system-ui"  # "system-ui", "serif", "mono", "display"
-    body_font: str = "system-ui"
-
-    # Scale and sizing
-    base_size: str = "16px"
-    heading_scale: float = 1.25  # Multiplier between heading levels
-    line_height: str = "1.5"
-    body_line_height: str = "1.6"  # Relaxed line-height for body/paragraph text
-
-    # Weight and style
-    heading_weight: str = "600"  # "300", "400", "500", "600", "700", "800", "900"
-    section_heading_weight: str = "700"  # Weight for section h2s (often lighter than hero)
-    body_weight: str = "400"
-    letter_spacing: str = "normal"  # CSS value: "normal", "-0.025em", "0.025em"
-
-    # Form labels — how form field labels look (consumed by djust-components .form-label)
-    form_label_weight: str = "500"  # "400" for BS4/gov, "500" for modern/djust default
-    form_label_size: str = "0.875rem"  # var(--text-sm) by default; "1rem" for BS4
-
-    # Measure
-    prose_max_width: str = "42rem"  # Max width for readable text blocks
-    badge_radius: str = "9999px"  # Badge border-radius (pill by default)
-
-
-@dataclass
-class LayoutStyle:
-    """Layout and spacing configuration."""
-
-    name: str
-
-    # Spacing system
-    space_unit: str = "1rem"  # Base unit for spacing
-    space_scale: float = 1.5  # Ratio between spacing levels
-
-    # Border radius system
-    border_radius_sm: str = "0.25rem"
-    border_radius_md: str = "0.5rem"
-    border_radius_lg: str = "1rem"
-
-    # Component shapes
-    button_shape: str = "rounded"  # "sharp", "rounded", "pill", "organic"
-    card_shape: str = "rounded"
-    input_shape: str = "rounded"
-
-    # Grid and layout
-    container_width: str = "1200px"
-    grid_gap: str = "1.5rem"
-    section_spacing: str = "3rem"
-
-    # Form layout — spacing between form fields and internal gaps
-    form_group_margin: str = "1rem"  # Vertical space between form fields
-    form_group_gap: str = "0.25rem"  # Internal gap (label → input)
-    form_focus_ring_width: str = "3px"  # Focus outline thickness
-    form_focus_ring_opacity: str = "0.2"  # Focus outline opacity (0–1)
-
-    # Hero section
-    hero_padding_top: str = "8rem"
-    hero_padding_bottom: str = "5rem"
-    hero_line_height: str = "1.1"
-    hero_max_width: str = "64rem"  # Content width within hero
-
-
-@dataclass
-class SurfaceStyle:
-    """Surface treatments and visual depth."""
-
-    name: str
-
-    # Shadow system
-    shadow_sm: str = "0 1px 2px rgba(0,0,0,0.1)"
-    shadow_md: str = "0 4px 6px rgba(0,0,0,0.1)"
-    shadow_lg: str = "0 10px 15px rgba(0,0,0,0.1)"
-
-    # Border system
-    border_width: str = "1px"
-    border_style: str = "solid"  # "solid", "dashed", "dotted", "none"
-
-    # Background treatments
-    surface_treatment: str = "flat"  # "flat", "glass", "textured", "gradient"
-    backdrop_blur: str = "0px"
-    noise_opacity: float = 0.0
-
-
-@dataclass
-class IconStyle:
-    """Icon styling configuration."""
-
-    name: str
-    style: str  # "outlined", "filled", "rounded", "sharp", "duotone"
-    weight: str  # "thin", "regular", "bold"
-    size_scale: float = 1.0  # Multiplier for icon sizes
-
-    # CSS properties
-    stroke_width: str = "2"
-    corner_rounding: str = "0"  # For rounded style
-
-
-@dataclass
-class AnimationStyle:
-    """Animation and motion configuration."""
-
-    name: str
-
-    # Entrance/Exit
-    entrance_effect: str = "fade"  # "fade", "slide", "scale", "bounce", "none"
-    exit_effect: str = "fade"
-
-    # Hover behaviors
-    hover_effect: str = "lift"  # "lift", "scale", "glow", "none"
-    hover_scale: float = 1.02
-    hover_translate_y: str = "-2px"
-
-    # Click feedback
-    click_effect: str = "ripple"  # "ripple", "pulse", "bounce", "none"
-
-    # Loading states
-    loading_style: str = "spinner"  # "spinner", "skeleton", "progress", "pulse"
-
-    # Transition characteristics
-    transition_style: str = "smooth"  # "smooth", "snappy", "bouncy", "instant"
-    duration_fast: str = "0.15s"
-    duration_normal: str = "0.3s"
-    duration_slow: str = "0.5s"
-    easing: str = "cubic-bezier(0.4, 0, 0.2, 1)"
-
-
-@dataclass
-class InteractionStyle:
-    """User interaction feedback."""
-
-    name: str
-
-    # Hover effects
-    button_hover: str = "lift"  # "lift", "scale", "glow", "darken", "none"
-    link_hover: str = "underline"  # "underline", "color", "background", "none"
-    card_hover: str = "lift"  # "lift", "scale", "border", "shadow", "none"
-
-    # Focus effects
-    focus_style: str = "ring"  # "ring", "outline", "glow", "underline"
-    focus_ring_width: str = "2px"
-
-
-@dataclass
-class DesignSystem:
-    """
-    Complete design system - all visual aspects EXCEPT colors.
-
-    This allows any design system to be combined with any color preset.
-    """
-
-    name: str
-    display_name: str
-    description: str
-    category: str  # "minimal", "bold", "elegant", "playful", "industrial"
-
-    # Core styling components
-    typography: TypographyStyle
-    layout: LayoutStyle
-    surface: SurfaceStyle
-    icons: IconStyle
-    animation: AnimationStyle
-    interaction: InteractionStyle
+from ._constants import (
+    # Design-system-level (used by DESIGN_* below)
+    ANIM_BRUTALIST,
+    ANIM_CORPORATE,
+    ANIM_DENSE,
+    ANIM_DJUST,
+    ANIM_ELEGANT,
+    ANIM_FLUENT,
+    ANIM_IOS,
+    ANIM_MATERIAL,
+    ANIM_MINIMAL,
+    ANIM_ORGANIC,
+    ANIM_PLAYFUL,
+    ANIM_RETRO,
+    ICON_BRUTALIST,
+    ICON_CORPORATE,
+    ICON_DENSE,
+    ICON_DJUST,
+    ICON_ELEGANT,
+    ICON_FLUENT,
+    ICON_IOS,
+    ICON_MATERIAL,
+    ICON_MINIMAL,
+    ICON_ORGANIC,
+    ICON_PLAYFUL,
+    ICON_RETRO,
+    INTERACT_BRUTALIST,
+    INTERACT_CORPORATE,
+    INTERACT_DENSE,
+    INTERACT_DJUST,
+    INTERACT_ELEGANT,
+    INTERACT_FLUENT,
+    INTERACT_IOS,
+    INTERACT_MATERIAL,
+    INTERACT_ORGANIC,
+    INTERACT_RETRO,
+    # Pack-level
+    ANIM_BOUNCY,
+    ANIM_GENTLE,
+    ANIM_INSTANT,
+    ANIM_SMOOTH,
+    ANIM_SNAPPY,
+    ICON_FILLED,
+    ICON_OUTLINED,
+    ICON_ROUNDED,
+    ICON_SHARP,
+    ICON_THIN,
+    ILLUST_3D,
+    ILLUST_FLAT,
+    ILLUST_HAND_DRAWN,
+    ILLUST_LINE,
+    ILLUST_RETRO,
+    INTERACT_BOLD,
+    INTERACT_MINIMAL,
+    INTERACT_PLAYFUL,
+    INTERACT_SUBTLE,
+    PATTERN_DOTS,
+    PATTERN_GLASS,
+    PATTERN_GRADIENT,
+    PATTERN_GRID,
+    PATTERN_MINIMAL,
+    PATTERN_NOISE,
+    # Internal DS-level names for the two cases that the pack-level
+    # INTERACT_MINIMAL / INTERACT_PLAYFUL would otherwise shadow
+    _INTERACT_MINIMAL_DS,
+    _INTERACT_PLAYFUL_DS,
+)
+from ._types import (
+    AnimationStyle,
+    DesignSystem,
+    IconStyle,
+    IllustrationStyle,
+    InteractionStyle,
+    LayoutStyle,
+    PatternStyle,
+    SurfaceStyle,
+    ThemePack,
+    TypographyStyle,
+)
 
 
 # =============================================================================
@@ -723,427 +638,9 @@ SURFACE_DJUST = SurfaceStyle(
 )
 
 
-# =============================================================================
-# Icon Style Presets
-# =============================================================================
-
-ICON_MATERIAL = IconStyle(
-    name="material",
-    style="filled",
-    weight="regular",
-    size_scale=1.0,
-    stroke_width="2",
-    corner_rounding="0px",
-)
-
-ICON_IOS = IconStyle(
-    name="ios",
-    style="outlined",
-    weight="thin",
-    size_scale=1.0,
-    stroke_width="1.5",
-    corner_rounding="4px",
-)
-
-ICON_FLUENT = IconStyle(
-    name="fluent",
-    style="outlined",
-    weight="regular",
-    size_scale=1.0,
-    stroke_width="2",
-    corner_rounding="0px",
-)
-
-ICON_PLAYFUL = IconStyle(
-    name="playful",
-    style="rounded",
-    weight="regular",
-    size_scale=1.1,
-    stroke_width="2",
-    corner_rounding="8px",
-)
-
-ICON_CORPORATE = IconStyle(
-    name="corporate",
-    style="outlined",
-    weight="regular",
-    size_scale=1.0,
-    stroke_width="2",
-    corner_rounding="0px",
-)
-
-ICON_DENSE = IconStyle(
-    name="dense",
-    style="outlined",
-    weight="thin",
-    size_scale=0.85,
-    stroke_width="1.5",
-    corner_rounding="0px",
-)
-
-ICON_MINIMAL = IconStyle(
-    name="minimal",
-    style="outlined",
-    weight="thin",
-    size_scale=0.9,  # Smaller icons
-    stroke_width="1.5",
-    corner_rounding="2px",
-)
-
-ICON_BRUTALIST = IconStyle(
-    name="brutalist",
-    style="filled",
-    weight="bold",
-    size_scale=1.2,  # Larger, bold icons
-    stroke_width="3",
-    corner_rounding="0px",
-)
-
-ICON_ELEGANT = IconStyle(
-    name="elegant",
-    style="outlined",
-    weight="thin",
-    size_scale=1.0,
-    stroke_width="1",  # Very thin strokes
-    corner_rounding="4px",
-)
-
-ICON_RETRO = IconStyle(
-    name="retro",
-    style="filled",
-    weight="regular",
-    size_scale=1.0,
-    stroke_width="2",
-    corner_rounding="0px",  # Sharp pixels
-)
-
-ICON_ORGANIC = IconStyle(
-    name="organic",
-    style="rounded",
-    weight="regular",
-    size_scale=1.1,
-    stroke_width="2",
-    corner_rounding="8px",  # Very rounded
-)
-
-ICON_DJUST = IconStyle(
-    name="djust",
-    style="outlined",
-    weight="regular",
-    size_scale=1.0,
-    stroke_width="2",
-    corner_rounding="0px",
-)
-
-
-# =============================================================================
-# Animation Style Presets
-# =============================================================================
-
-ANIM_MATERIAL = AnimationStyle(
-    name="material",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="lift",
-    hover_scale=1.02,
-    hover_translate_y="-2px",
-    click_effect="ripple",
-    loading_style="spinner",
-    transition_style="smooth",
-    duration_fast="0.1s",
-    duration_normal="0.2s",
-    duration_slow="0.3s",
-    easing="cubic-bezier(0.4, 0, 0.2, 1)",
-)
-
-ANIM_IOS = AnimationStyle(
-    name="ios",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="scale",
-    hover_scale=1.05,
-    hover_translate_y="0px",
-    click_effect="none",
-    loading_style="spinner",
-    transition_style="snappy",
-    duration_fast="0.15s",
-    duration_normal="0.25s",
-    duration_slow="0.35s",
-    easing="cubic-bezier(0.42, 0, 0.58, 1)",
-)
-
-ANIM_FLUENT = AnimationStyle(
-    name="fluent",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="lift",
-    hover_scale=1.02,
-    hover_translate_y="-2px",
-    click_effect="ripple",
-    loading_style="progress",
-    transition_style="smooth",
-    duration_fast="0.167s",
-    duration_normal="0.25s",
-    duration_slow="0.367s",
-    easing="cubic-bezier(0.1, 0.9, 0.2, 1)",
-)
-
-ANIM_PLAYFUL = AnimationStyle(
-    name="playful",
-    entrance_effect="bounce",
-    exit_effect="scale",
-    hover_effect="scale",
-    hover_scale=1.05,
-    hover_translate_y="0px",
-    click_effect="bounce",
-    loading_style="pulse",
-    transition_style="bouncy",
-    duration_fast="0.2s",
-    duration_normal="0.3s",
-    duration_slow="0.5s",
-    easing="cubic-bezier(0.68, -0.55, 0.265, 1.55)",
-)
-
-ANIM_CORPORATE = AnimationStyle(
-    name="corporate",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="lift",
-    hover_scale=1.01,
-    hover_translate_y="-1px",
-    click_effect="none",
-    loading_style="progress",
-    transition_style="smooth",
-    duration_fast="0.15s",
-    duration_normal="0.2s",
-    duration_slow="0.3s",
-    easing="cubic-bezier(0.4, 0, 0.2, 1)",
-)
-
-ANIM_DENSE = AnimationStyle(
-    name="dense",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="none",
-    hover_scale=1.0,
-    hover_translate_y="0px",
-    click_effect="none",
-    loading_style="progress",
-    transition_style="instant",
-    duration_fast="0.05s",
-    duration_normal="0.1s",
-    duration_slow="0.15s",
-    easing="linear",
-)
-
-ANIM_MINIMAL = AnimationStyle(
-    name="minimal",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="none",  # No hover effects
-    hover_scale=1.0,
-    hover_translate_y="0px",
-    click_effect="none",
-    loading_style="progress",
-    transition_style="smooth",
-    duration_fast="0.2s",
-    duration_normal="0.3s",
-    duration_slow="0.4s",
-    easing="ease-out",
-)
-
-ANIM_BRUTALIST = AnimationStyle(
-    name="brutalist",
-    entrance_effect="none",  # Instant appearance
-    exit_effect="none",
-    hover_effect="scale",
-    hover_scale=1.05,  # Bold scale
-    hover_translate_y="0px",
-    click_effect="pulse",
-    loading_style="spinner",
-    transition_style="instant",
-    duration_fast="0.05s",  # Very fast
-    duration_normal="0.1s",
-    duration_slow="0.15s",
-    easing="linear",  # No easing curves
-)
-
-ANIM_ELEGANT = AnimationStyle(
-    name="elegant",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="lift",
-    hover_scale=1.02,  # Subtle
-    hover_translate_y="-4px",  # Gentle lift
-    click_effect="none",  # No aggressive feedback
-    loading_style="skeleton",
-    transition_style="smooth",
-    duration_fast="0.4s",  # Slower, more graceful
-    duration_normal="0.6s",
-    duration_slow="0.8s",
-    easing="cubic-bezier(0.25, 0.46, 0.45, 0.94)",  # Elegant curve
-)
-
-ANIM_RETRO = AnimationStyle(
-    name="retro",
-    entrance_effect="slide",  # Old-school slide
-    exit_effect="slide",
-    hover_effect="glow",
-    hover_scale=1.0,  # No scaling
-    hover_translate_y="0px",
-    click_effect="bounce",  # Arcade-style
-    loading_style="progress",
-    transition_style="snappy",
-    duration_fast="0.1s",
-    duration_normal="0.2s",
-    duration_slow="0.3s",
-    easing="cubic-bezier(0.68, -0.55, 0.265, 1.55)",  # Bouncy
-)
-
-ANIM_ORGANIC = AnimationStyle(
-    name="organic",
-    entrance_effect="scale",  # Organic growth
-    exit_effect="scale",
-    hover_effect="glow",
-    hover_scale=1.03,
-    hover_translate_y="-2px",
-    click_effect="ripple",  # Natural ripple
-    loading_style="pulse",
-    transition_style="bouncy",
-    duration_fast="0.3s",
-    duration_normal="0.5s",
-    duration_slow="0.8s",
-    easing="cubic-bezier(0.34, 1.56, 0.64, 1)",  # Organic bounce
-)
-
-ANIM_DJUST = AnimationStyle(
-    name="djust",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="lift",
-    hover_scale=1.02,
-    hover_translate_y="-2px",
-    click_effect="ripple",
-    loading_style="spinner",
-    transition_style="smooth",
-    duration_fast="0.15s",
-    duration_normal="0.2s",
-    duration_slow="0.3s",
-    easing="cubic-bezier(0.4, 0, 0.2, 1)",
-)
-
-
-# =============================================================================
-# Interaction Style Presets
-# =============================================================================
-
-INTERACT_MATERIAL = InteractionStyle(
-    name="material",
-    button_hover="lift",
-    link_hover="underline",
-    card_hover="lift",
-    focus_style="ring",
-    focus_ring_width="2px",
-)
-
-INTERACT_IOS = InteractionStyle(
-    name="ios",
-    button_hover="scale",
-    link_hover="color",
-    card_hover="shadow",
-    focus_style="ring",
-    focus_ring_width="2px",
-)
-
-INTERACT_FLUENT = InteractionStyle(
-    name="fluent",
-    button_hover="lift",
-    link_hover="underline",
-    card_hover="shadow",
-    focus_style="ring",
-    focus_ring_width="2px",
-)
-
-INTERACT_PLAYFUL = InteractionStyle(
-    name="playful",
-    button_hover="glow",
-    link_hover="background",
-    card_hover="lift",
-    focus_style="glow",
-    focus_ring_width="3px",
-)
-
-INTERACT_CORPORATE = InteractionStyle(
-    name="corporate",
-    button_hover="darken",
-    link_hover="underline",
-    card_hover="border",
-    focus_style="ring",
-    focus_ring_width="2px",
-)
-
-INTERACT_DENSE = InteractionStyle(
-    name="dense",
-    button_hover="darken",
-    link_hover="underline",
-    card_hover="none",
-    focus_style="outline",
-    focus_ring_width="1px",
-)
-
-INTERACT_MINIMAL = InteractionStyle(
-    name="minimal",
-    button_hover="darken",  # Subtle color change
-    link_hover="underline",
-    card_hover="none",  # No card hover
-    focus_style="underline",
-    focus_ring_width="1px",
-)
-
-INTERACT_BRUTALIST = InteractionStyle(
-    name="brutalist",
-    button_hover="glow",  # Bold glow effect
-    link_hover="background",
-    card_hover="shadow",  # Hard shadow change
-    focus_style="outline",
-    focus_ring_width="4px",  # Thick focus ring
-)
-
-INTERACT_ELEGANT = InteractionStyle(
-    name="elegant",
-    button_hover="lift",
-    link_hover="color",  # Subtle color shift
-    card_hover="shadow",  # Soft shadow lift
-    focus_style="glow",
-    focus_ring_width="2px",
-)
-
-INTERACT_RETRO = InteractionStyle(
-    name="retro",
-    button_hover="scale",  # Arcade-style scale
-    link_hover="background",
-    card_hover="border",  # Pixel border change
-    focus_style="outline",
-    focus_ring_width="2px",
-)
-
-INTERACT_ORGANIC = InteractionStyle(
-    name="organic",
-    button_hover="glow",  # Soft organic glow
-    link_hover="color",
-    card_hover="lift",  # Natural lift
-    focus_style="glow",
-    focus_ring_width="3px",
-)
-
-INTERACT_DJUST = InteractionStyle(
-    name="djust",
-    button_hover="lift",
-    link_hover="underline",
-    card_hover="shadow",
-    focus_style="ring",
-    focus_ring_width="2px",
-)
+# DS-level ICON_*, ANIM_*, INTERACT_* instances moved to _constants.py
+# to break the themes/_base -> presets -> themes cyclic import.
+# They are re-exported via the imports at the top of this file.
 
 
 # =============================================================================
@@ -1199,7 +696,7 @@ DESIGN_PLAYFUL = DesignSystem(
     surface=SURFACE_PLAYFUL,
     icons=ICON_PLAYFUL,
     animation=ANIM_PLAYFUL,
-    interaction=INTERACT_PLAYFUL,
+    interaction=_INTERACT_PLAYFUL_DS,
 )
 
 DESIGN_CORPORATE = DesignSystem(
@@ -1238,7 +735,7 @@ DESIGN_MINIMAL = DesignSystem(
     surface=SURFACE_MINIMAL,
     icons=ICON_MINIMAL,
     animation=ANIM_MINIMAL,
-    interaction=INTERACT_MINIMAL,
+    interaction=_INTERACT_MINIMAL_DS,
 )
 
 DESIGN_BRUTALIST = DesignSystem(
@@ -1344,397 +841,11 @@ def get_all_design_systems() -> Dict[str, DesignSystem]:
     return result
 
 
-# =============================================================================
-# Legacy Theme Packs (for backward compatibility)
-# =============================================================================
-
-
-@dataclass
-class PatternStyle:
-    """Background patterns and textures."""
-
-    name: str
-
-    # Pattern types
-    background_pattern: str = "none"  # "dots", "grid", "noise", "gradient", "geometric", "none"
-    pattern_opacity: float = 0.05
-    pattern_scale: str = "1rem"
-
-    # Surface treatment
-    surface_style: str = "flat"  # "flat", "glass", "neumorphic", "elevated"
-
-    # Blur/frosting for glassmorphism
-    backdrop_blur: str = "0px"
-
-    # Noise for texture
-    noise_intensity: float = 0.0
-
-
-@dataclass
-class InteractionStyle:
-    """User interaction feedback."""
-
-    name: str
-
-    # Hover effects
-    button_hover: str = "lift"  # "lift", "scale", "glow", "darken", "none"
-    link_hover: str = "underline"  # "underline", "color", "background", "none"
-    card_hover: str = "lift"  # "lift", "scale", "border", "shadow", "none"
-
-    # Click effects
-    button_click: str = "scale"  # "scale", "ripple", "pulse", "none"
-
-    # Focus effects
-    focus_style: str = "ring"  # "ring", "outline", "glow", "underline"
-    focus_ring_width: str = "2px"
-    focus_ring_offset: str = "2px"
-
-    # Cursor
-    cursor_style: str = "pointer"  # "pointer", "default", "custom"
-
-
-@dataclass
-class IllustrationStyle:
-    """Illustration and imagery treatment."""
-
-    name: str
-
-    # Illustration style
-    illustration_type: str = (
-        "flat"  # "flat", "isometric", "3d", "line-art", "hand-drawn", "abstract"
-    )
-
-    # Image treatment
-    image_border_radius: str = "0.5rem"
-    image_filter: str = "none"  # "none", "grayscale", "sepia", "vibrant", "duotone"
-
-    # Aspect ratios preference
-    preferred_aspect: str = "16:9"  # "1:1", "16:9", "4:3", "3:4"
-
-
-@dataclass
-class ThemePack:
-    """
-    Complete design system combining all styling dimensions.
-
-    A ThemePack provides a cohesive design experience by bundling:
-    - Core design (typography, spacing, shadows)
-    - Color palette
-    - Icon styling
-    - Animation behavior
-    - Background patterns
-    - Interaction feedback
-    - Illustration style
-    """
-
-    name: str
-    display_name: str
-    description: str
-    category: str  # "professional", "playful", "minimal", "bold", "elegant", "retro"
-
-    # Core components
-    design_theme: str  # Reference to Theme name (e.g., "material", "elegant")
-    color_preset: str  # Reference to ColorPreset name (e.g., "blue", "purple")
-
-    # Style dimensions
-    icon_style: IconStyle
-    animation_style: AnimationStyle
-    pattern_style: PatternStyle
-    interaction_style: InteractionStyle
-    illustration_style: IllustrationStyle
-
-
-# ============================================
-# Icon Style Presets
-# ============================================
-
-ICON_OUTLINED = IconStyle(
-    name="outlined",
-    style="outlined",
-    weight="regular",
-    stroke_width="2",
-    corner_rounding="0",
-)
-
-ICON_FILLED = IconStyle(
-    name="filled",
-    style="filled",
-    weight="regular",
-    stroke_width="0",
-    corner_rounding="0",
-)
-
-ICON_ROUNDED = IconStyle(
-    name="rounded",
-    style="rounded",
-    weight="regular",
-    stroke_width="2",
-    corner_rounding="4px",
-)
-
-ICON_SHARP = IconStyle(
-    name="sharp",
-    style="sharp",
-    weight="bold",
-    stroke_width="2.5",
-    corner_rounding="0",
-)
-
-ICON_THIN = IconStyle(
-    name="thin",
-    style="outlined",
-    weight="thin",
-    stroke_width="1",
-    corner_rounding="0",
-)
-
-
-# ============================================
-# Animation Style Presets
-# ============================================
-
-ANIM_SMOOTH = AnimationStyle(
-    name="smooth",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="lift",
-    hover_scale=1.02,
-    hover_translate_y="-2px",
-    click_effect="ripple",
-    loading_style="spinner",
-    transition_style="smooth",
-    duration_fast="0.15s",
-    duration_normal="0.3s",
-    duration_slow="0.5s",
-    easing="cubic-bezier(0.4, 0, 0.2, 1)",
-)
-
-ANIM_SNAPPY = AnimationStyle(
-    name="snappy",
-    entrance_effect="scale",
-    exit_effect="scale",
-    hover_effect="scale",
-    hover_scale=1.05,
-    hover_translate_y="0px",
-    click_effect="pulse",
-    loading_style="progress",
-    transition_style="snappy",
-    duration_fast="0.08s",
-    duration_normal="0.12s",
-    duration_slow="0.2s",
-    easing="cubic-bezier(0.68, -0.55, 0.265, 1.55)",
-)
-
-ANIM_BOUNCY = AnimationStyle(
-    name="bouncy",
-    entrance_effect="bounce",
-    exit_effect="scale",
-    hover_effect="scale",
-    hover_scale=1.1,
-    hover_translate_y="0px",
-    click_effect="bounce",
-    loading_style="pulse",
-    transition_style="bouncy",
-    duration_fast="0.2s",
-    duration_normal="0.4s",
-    duration_slow="0.6s",
-    easing="cubic-bezier(0.34, 1.56, 0.64, 1)",
-)
-
-ANIM_INSTANT = AnimationStyle(
-    name="instant",
-    entrance_effect="none",
-    exit_effect="none",
-    hover_effect="none",
-    hover_scale=1.0,
-    hover_translate_y="0px",
-    click_effect="none",
-    loading_style="spinner",
-    transition_style="instant",
-    duration_fast="0.05s",
-    duration_normal="0.1s",
-    duration_slow="0.15s",
-    easing="linear",
-)
-
-ANIM_GENTLE = AnimationStyle(
-    name="gentle",
-    entrance_effect="fade",
-    exit_effect="fade",
-    hover_effect="glow",
-    hover_scale=1.0,
-    hover_translate_y="0px",
-    click_effect="none",
-    loading_style="skeleton",
-    transition_style="smooth",
-    duration_fast="0.3s",
-    duration_normal="0.5s",
-    duration_slow="0.8s",
-    easing="cubic-bezier(0.25, 0.46, 0.45, 0.94)",
-)
-
-
-# ============================================
-# Pattern Style Presets
-# ============================================
-
-PATTERN_MINIMAL = PatternStyle(
-    name="minimal",
-    background_pattern="none",
-    pattern_opacity=0.0,
-    pattern_scale="1rem",
-    surface_style="flat",
-    backdrop_blur="0px",
-    noise_intensity=0.0,
-)
-
-PATTERN_DOTS = PatternStyle(
-    name="dots",
-    background_pattern="dots",
-    pattern_opacity=0.05,
-    pattern_scale="1.5rem",
-    surface_style="flat",
-    backdrop_blur="0px",
-    noise_intensity=0.0,
-)
-
-PATTERN_GRID = PatternStyle(
-    name="grid",
-    background_pattern="grid",
-    pattern_opacity=0.03,
-    pattern_scale="2rem",
-    surface_style="flat",
-    backdrop_blur="0px",
-    noise_intensity=0.0,
-)
-
-PATTERN_NOISE = PatternStyle(
-    name="noise",
-    background_pattern="noise",
-    pattern_opacity=0.02,
-    pattern_scale="1rem",
-    surface_style="flat",
-    backdrop_blur="0px",
-    noise_intensity=0.15,
-)
-
-PATTERN_GLASS = PatternStyle(
-    name="glass",
-    background_pattern="none",
-    pattern_opacity=0.0,
-    pattern_scale="1rem",
-    surface_style="glass",
-    backdrop_blur="12px",
-    noise_intensity=0.0,
-)
-
-PATTERN_GRADIENT = PatternStyle(
-    name="gradient",
-    background_pattern="gradient",
-    pattern_opacity=0.1,
-    pattern_scale="100%",
-    surface_style="flat",
-    backdrop_blur="0px",
-    noise_intensity=0.0,
-)
-
-
-# ============================================
-# Interaction Style Presets
-# ============================================
-
-INTERACT_SUBTLE = InteractionStyle(
-    name="subtle",
-    button_hover="lift",
-    link_hover="underline",
-    card_hover="shadow",
-    button_click="scale",
-    focus_style="ring",
-    focus_ring_width="2px",
-    focus_ring_offset="2px",
-    cursor_style="pointer",
-)
-
-INTERACT_BOLD = InteractionStyle(
-    name="bold",
-    button_hover="scale",
-    link_hover="background",
-    card_hover="lift",
-    button_click="pulse",
-    focus_style="outline",
-    focus_ring_width="3px",
-    focus_ring_offset="0px",
-    cursor_style="pointer",
-)
-
-INTERACT_MINIMAL = InteractionStyle(
-    name="minimal",
-    button_hover="darken",
-    link_hover="color",
-    card_hover="border",
-    button_click="none",
-    focus_style="underline",
-    focus_ring_width="1px",
-    focus_ring_offset="0px",
-    cursor_style="default",
-)
-
-INTERACT_PLAYFUL = InteractionStyle(
-    name="playful",
-    button_hover="glow",
-    link_hover="background",
-    card_hover="lift",
-    button_click="ripple",
-    focus_style="glow",
-    focus_ring_width="3px",
-    focus_ring_offset="3px",
-    cursor_style="pointer",
-)
-
-
-# ============================================
-# Illustration Style Presets
-# ============================================
-
-ILLUST_FLAT = IllustrationStyle(
-    name="flat",
-    illustration_type="flat",
-    image_border_radius="0.5rem",
-    image_filter="none",
-    preferred_aspect="16:9",
-)
-
-ILLUST_3D = IllustrationStyle(
-    name="3d",
-    illustration_type="3d",
-    image_border_radius="1rem",
-    image_filter="vibrant",
-    preferred_aspect="1:1",
-)
-
-ILLUST_LINE = IllustrationStyle(
-    name="line-art",
-    illustration_type="line-art",
-    image_border_radius="0.25rem",
-    image_filter="none",
-    preferred_aspect="4:3",
-)
-
-ILLUST_HAND_DRAWN = IllustrationStyle(
-    name="hand-drawn",
-    illustration_type="hand-drawn",
-    image_border_radius="1.5rem",
-    image_filter="none",
-    preferred_aspect="16:9",
-)
-
-ILLUST_RETRO = IllustrationStyle(
-    name="retro",
-    illustration_type="flat",
-    image_border_radius="0px",
-    image_filter="none",
-    preferred_aspect="4:3",
-)
+# Legacy dataclass types (PatternStyle, InteractionStyle,
+# IllustrationStyle, ThemePack) moved to _types.py and shared
+# pack-level instances (ICON_*, ANIM_*, PATTERN_*, INTERACT_*,
+# ILLUST_*) moved to _constants.py to break the themes/_base ->
+# presets -> themes cyclic import. Re-exported via imports above.
 
 
 # ============================================
@@ -2117,3 +1228,112 @@ def get_all_theme_packs() -> Dict[str, ThemePack]:
     result = THEME_PACKS.copy()
     result.update(reg.list_packs())
     return result
+
+
+# Backward-compat re-exports. These names used to be defined in this module;
+# they now live in ``_types.py`` / ``_constants.py`` but must remain importable
+# from ``djust.theming.theme_packs`` for third-party code. Listing them in
+# ``__all__`` also silences ruff's F401 on the top-level re-export imports.
+__all__ = [
+    # Types
+    "AnimationStyle",
+    "DesignSystem",
+    "IconStyle",
+    "IllustrationStyle",
+    "InteractionStyle",
+    "LayoutStyle",
+    "PatternStyle",
+    "SurfaceStyle",
+    "ThemePack",
+    "TypographyStyle",
+    # Pack-level shared instances
+    "ANIM_BOUNCY",
+    "ANIM_GENTLE",
+    "ANIM_INSTANT",
+    "ANIM_SMOOTH",
+    "ANIM_SNAPPY",
+    "ICON_FILLED",
+    "ICON_OUTLINED",
+    "ICON_ROUNDED",
+    "ICON_SHARP",
+    "ICON_THIN",
+    "ILLUST_3D",
+    "ILLUST_FLAT",
+    "ILLUST_HAND_DRAWN",
+    "ILLUST_LINE",
+    "ILLUST_RETRO",
+    "INTERACT_BOLD",
+    "INTERACT_MINIMAL",
+    "INTERACT_PLAYFUL",
+    "INTERACT_SUBTLE",
+    "PATTERN_DOTS",
+    "PATTERN_GLASS",
+    "PATTERN_GRADIENT",
+    "PATTERN_GRID",
+    "PATTERN_MINIMAL",
+    "PATTERN_NOISE",
+    # Design-system-level shared instances
+    "ANIM_BRUTALIST",
+    "ANIM_CORPORATE",
+    "ANIM_DENSE",
+    "ANIM_DJUST",
+    "ANIM_ELEGANT",
+    "ANIM_FLUENT",
+    "ANIM_IOS",
+    "ANIM_MATERIAL",
+    "ANIM_MINIMAL",
+    "ANIM_ORGANIC",
+    "ANIM_PLAYFUL",
+    "ANIM_RETRO",
+    "ICON_BRUTALIST",
+    "ICON_CORPORATE",
+    "ICON_DENSE",
+    "ICON_DJUST",
+    "ICON_ELEGANT",
+    "ICON_FLUENT",
+    "ICON_IOS",
+    "ICON_MATERIAL",
+    "ICON_MINIMAL",
+    "ICON_ORGANIC",
+    "ICON_PLAYFUL",
+    "ICON_RETRO",
+    "INTERACT_BRUTALIST",
+    "INTERACT_CORPORATE",
+    "INTERACT_DENSE",
+    "INTERACT_DJUST",
+    "INTERACT_ELEGANT",
+    "INTERACT_FLUENT",
+    "INTERACT_IOS",
+    "INTERACT_MATERIAL",
+    "INTERACT_ORGANIC",
+    "INTERACT_RETRO",
+    # Design systems and packs
+    "DESIGN_BRUTALIST",
+    "DESIGN_CORPORATE",
+    "DESIGN_DENSE",
+    "DESIGN_DJUST",
+    "DESIGN_ELEGANT",
+    "DESIGN_FLUENT",
+    "DESIGN_IOS",
+    "DESIGN_MATERIAL",
+    "DESIGN_MINIMAL",
+    "DESIGN_ORGANIC",
+    "DESIGN_PLAYFUL",
+    "DESIGN_RETRO",
+    "DESIGN_SYSTEMS",
+    "PACK_BRUTALIST",
+    "PACK_CORPORATE",
+    "PACK_ELEGANT",
+    "PACK_METALLIC",
+    "PACK_NATURE",
+    "PACK_OCEAN",
+    "PACK_PLAYFUL",
+    "PACK_RETRO",
+    "PACK_SUNSET",
+    "THEME_PACKS",
+    # Registry helpers
+    "get_all_design_systems",
+    "get_all_theme_packs",
+    "get_design_system",
+    "get_theme_pack",
+]

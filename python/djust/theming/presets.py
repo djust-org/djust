@@ -3,209 +3,17 @@ Theme preset definitions using HSL color tokens.
 
 Based on shadcn/ui theming system with CSS custom properties.
 Each preset is defined in its own file under themes/.
+
+Note: the dataclass types (``ColorScale``, ``ThemeTokens``, ``SurfaceTreatment``,
+``ThemePreset``) now live in ``_types.py`` so that ``themes/_base.py`` can
+import them without going back through this module — avoiding the cyclic
+import that CodeQL's ``py/unsafe-cyclic-import`` flagged across ~55 theme
+files. They are re-exported from this module for backward compatibility so
+existing consumers like ``from djust.theming.presets import ColorScale``
+keep working unchanged.
 """
 
-from dataclasses import dataclass
-from typing import Tuple
-
-
-@dataclass
-class ColorScale:
-    """HSL color representation for CSS custom properties."""
-
-    h: int  # Hue 0-360
-    s: int  # Saturation 0-100
-    lightness: int  # Lightness 0-100
-
-    def to_hsl(self) -> str:
-        """Return HSL values for CSS variable (without hsl() wrapper)."""
-        return f"{self.h} {self.s}% {self.lightness}%"
-
-    def to_hsl_func(self) -> str:
-        """Return complete hsl() function."""
-        return f"hsl({self.h}, {self.s}%, {self.lightness}%)"
-
-    def to_hex(self) -> str:
-        """Return hex color string, e.g. '#3b82f6'."""
-        from .colors import hsl_to_hex
-
-        return hsl_to_hex(self.h, self.s, self.lightness)
-
-    def to_rgb(self) -> Tuple[int, int, int]:
-        """Return RGB tuple (0-255 each)."""
-        from .colors import hsl_to_rgb
-
-        return hsl_to_rgb(self.h, self.s, self.lightness)
-
-    def to_rgb_func(self) -> str:
-        """Return complete rgb() CSS function string, e.g. 'rgb(59, 130, 246)'."""
-        r, g, b = self.to_rgb()
-        return f"rgb({r}, {g}, {b})"
-
-    @classmethod
-    def from_hex(cls, hex_str: str) -> "ColorScale":
-        """Create ColorScale from hex string (#RRGGBB or #RGB)."""
-        from .colors import hex_to_hsl
-
-        h, s, l = hex_to_hsl(hex_str)
-        return cls(h, s, l)
-
-    @classmethod
-    def from_rgb(cls, r: int, g: int, b: int) -> "ColorScale":
-        """Create ColorScale from RGB values (0-255 each)."""
-        from .colors import rgb_to_hsl
-
-        h, s, l = rgb_to_hsl(r, g, b)
-        return cls(h, s, l)
-
-    def with_lightness(self, new_lightness: int) -> "ColorScale":
-        """Return a new ColorScale with modified lightness."""
-        return ColorScale(self.h, self.s, new_lightness)
-
-    def with_saturation(self, new_saturation: int) -> "ColorScale":
-        """Return a new ColorScale with modified saturation."""
-        return ColorScale(self.h, new_saturation, self.lightness)
-
-
-@dataclass
-class ThemeTokens:
-    """
-    Complete token set for a theme mode.
-
-    Follows shadcn/ui naming conventions with extensions for
-    success, warning, info, and additional semantic states.
-    """
-
-    # Backgrounds
-    background: ColorScale
-    foreground: ColorScale
-
-    # Card surfaces
-    card: ColorScale
-    card_foreground: ColorScale
-
-    # Popover surfaces
-    popover: ColorScale
-    popover_foreground: ColorScale
-
-    # Primary action color
-    primary: ColorScale
-    primary_foreground: ColorScale
-
-    # Secondary/muted action
-    secondary: ColorScale
-    secondary_foreground: ColorScale
-
-    # Muted backgrounds
-    muted: ColorScale
-    muted_foreground: ColorScale
-
-    # Accent for highlights
-    accent: ColorScale
-    accent_foreground: ColorScale
-
-    # Destructive/error
-    destructive: ColorScale
-    destructive_foreground: ColorScale
-
-    # Success state (extension)
-    success: ColorScale
-    success_foreground: ColorScale
-
-    # Warning state (extension)
-    warning: ColorScale
-    warning_foreground: ColorScale
-
-    # Info state (extension)
-    info: ColorScale
-    info_foreground: ColorScale
-
-    # Link color (extension)
-    link: ColorScale
-    link_hover: ColorScale
-
-    # Code/mono background (extension)
-    code: ColorScale
-    code_foreground: ColorScale
-
-    # Selection/highlight (extension)
-    selection: ColorScale
-    selection_foreground: ColorScale
-
-    # Brand/signature color (extension)
-    # The distinctive identity color beyond primary. Dracula Pink, Nord Frost,
-    # Catppuccin Rosewater, Itten Blue, etc. Themes without a distinct brand
-    # color should set this to match primary.
-    brand: ColorScale
-    brand_foreground: ColorScale
-
-    # UI elements
-    border: ColorScale
-    input: ColorScale
-    ring: ColorScale
-
-    # Surface levels for complex dark layouts (e.g., landing pages)
-    # surface_1: darkest (ultra-dark background)
-    # surface_2: mid-level (panels, navbar)
-    # surface_3: elevated (cards, elevated elements)
-    surface_1: ColorScale
-    surface_2: ColorScale
-    surface_3: ColorScale
-
-
-@dataclass
-class SurfaceTreatment:
-    """Surface styling treatments for glass panels, gradients, and noise effects."""
-
-    style: str = "glass"  # "glass" | "gradient" | "noise"
-
-    # Glass surface properties
-    glass_background: str = "rgba(21, 27, 43, 0.7)"
-    glass_border: str = "rgba(255, 255, 255, 0.1)"
-    glass_blur: str = "12px"
-    surface_radius: str | None = None  # None means use --radius
-
-    # Gradient surface properties
-    gradient_direction: str = "180deg"
-    gradient_from: str = "#1e293b"
-    gradient_to: str = "#0f172a"
-
-    # Noise surface properties
-    noise_opacity: float = 0.03
-
-
-@dataclass
-class ThemePreset:
-    """A complete theme with light and dark mode tokens."""
-
-    name: str
-    display_name: str
-    light: ThemeTokens
-    dark: ThemeTokens
-    description: str = ""
-    radius: float = 0.5  # Border radius multiplier (output as --radius: {val}rem)
-
-    # Which mode is the default (emitted in :root)?
-    # "light" = :root gets light tokens (standard shadcn behavior)
-    # "dark" = :root gets dark tokens (for dark-first themes like djust.org)
-    default_mode: str = "light"
-
-    # Extra CSS custom properties beyond the standard shadcn set.
-    # Use this for brand-specific variables like --color-brand-rust,
-    # --background-image-grid-pattern, --animation-pulse-slow, etc.
-    # These are emitted in the base :root block.
-    extra_css_vars: dict | None = None
-
-    # Per-mode brand CSS variables for light and dark modes.
-    # Use these for brand surface colors that need to differ between modes
-    # (e.g., --color-brand-dark: #0B0F19 in dark, #f8fafc in light).
-    # If None, extra_css_vars is used for both modes.
-    extra_css_vars_light: dict | None = None
-    extra_css_vars_dark: dict | None = None
-
-    # Surface treatment for glass panels, gradients, etc.
-    surface: SurfaceTreatment | None = None
-
+from ._types import ColorScale, SurfaceTreatment, ThemePreset, ThemeTokens
 
 # =============================================================================
 # Theme Imports — each theme is defined in its own file under themes/
@@ -360,3 +168,16 @@ def list_presets() -> list[dict]:
         }
         for preset in THEME_PRESETS.values()
     ]
+
+
+__all__ = [
+    # Re-exported types (back-compat)
+    "ColorScale",
+    "ThemeTokens",
+    "SurfaceTreatment",
+    "ThemePreset",
+    # Registry / helpers
+    "THEME_PRESETS",
+    "get_preset",
+    "list_presets",
+]
