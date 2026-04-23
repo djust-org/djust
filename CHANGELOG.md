@@ -10,10 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **FLIP list-reorder animations (v0.6.0 animations milestone finale)** —
-  Opt-in per container via `dj-flip`. Declarative attribute on a list parent animates direct-child reorders using First-Last-Invert-Play. Tunables: `dj-flip-duration` (default 300ms), `dj-flip-easing` (default `cubic-bezier(.2,.8,.2,1)`). Respects `prefers-reduced-motion`. Nested `[dj-flip]` isolated via `subtree: false`. Works with keyed lists where items carry stable `id=` (Rust VDOM emits MoveChild). Lands in `static/djust/src/44-dj-flip.js` (~250 LOC). 8 JSDOM tests in `tests/js/dj_flip.test.js`.
+  Opt-in per container via `dj-flip`. Declarative attribute on a list parent animates direct-child reorders using First-Last-Invert-Play. Tunables: `dj-flip-duration` (default 300ms, parsed via `Number` + `isFinite` + clamp `[0, 30000]` — trailing garbage rejects to fallback), `dj-flip-easing` (default `cubic-bezier(.2,.8,.2,1)`, strings containing `;"'<>` rejected to defeat CSS-property-breakout). Respects `prefers-reduced-motion`. Nested `[dj-flip]` isolated via `subtree: false`. Author-specified inline `transform` on children is preserved across the animation. Overlapping reorders are guarded against cache corruption via an in-flight-transition check. Works with keyed lists where items carry stable `id=` (Rust VDOM emits MoveChild). Lands in `static/djust/src/44-dj-flip.js` (~260 LOC). 12 JSDOM tests in `tests/js/dj_flip.test.js`.
 
 - **`{% djust_skeleton %}` shimmer placeholder (v0.6.0 animations milestone finale)** —
-  Template tag for placeholder blocks. Props: `shape` (line|circle|rect), `width`, `height`, `count`, `class_`. All values HTML-escaped via `build_tag()`. Shimmer `@keyframes` emitted once per render via `context.render_context`. Integrates with existing `dj-loading` shorthand and with `{% if async_pending %}` server blocks. 18 Python tests in `tests/unit/test_djust_skeleton_tag.py`.
+  Template tag for placeholder blocks. Props: `shape` (line|circle|rect, whitelist-validated), `width`/`height` (regex-whitelisted against `^[\d.]+(px|em|rem|%|vh|vw|ch)?$`, invalid falls back to shape default), `count` (clamped to `[1, 100]`), `class_`. All values HTML-escaped via `build_tag()`. Shimmer `@keyframes` emitted once per render via `context.render_context`. Integrates with existing `dj-loading` shorthand and with `{% if async_pending %}` server blocks. 21 Python tests in `tests/unit/test_djust_skeleton_tag.py`.
 
 ## [0.5.7rc1] - 2026-04-23
 
