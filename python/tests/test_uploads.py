@@ -10,9 +10,15 @@ import tempfile
 import uuid
 from unittest import TestCase
 
-# Import uploads.py directly to avoid djust/__init__.py (which pulls in channels/Django)
-_uploads_path = Path(__file__).resolve().parent.parent / "djust" / "uploads.py"
-_spec = importlib.util.spec_from_file_location("djust_uploads", _uploads_path)
+# Import uploads directly to avoid djust/__init__.py (which pulls in channels/Django).
+# uploads is a package as of v0.5.7 (#821) — load its __init__.py under a standalone
+# module name so submodule imports (from .storage import ...) still resolve.
+_uploads_path = Path(__file__).resolve().parent.parent / "djust" / "uploads" / "__init__.py"
+_spec = importlib.util.spec_from_file_location(
+    "djust_uploads",
+    _uploads_path,
+    submodule_search_locations=[str(_uploads_path.parent)],
+)
 uploads = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(uploads)
 

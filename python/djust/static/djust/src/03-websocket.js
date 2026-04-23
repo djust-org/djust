@@ -510,6 +510,15 @@ class LiveViewWebSocket {
                 if (globalThis.djustDebug) console.log('[Upload] Registered: %s for %s', String(data.ref), String(data.upload_name));
                 break;
 
+            case 'upload_resumed':
+                // Resumable upload — server replied to upload_resume
+                // with the last accepted offset. Dispatched to the
+                // pending resume promise inside 15-uploads.js. (#821)
+                if (window.djust.uploads && window.djust.uploads.handleResumed) {
+                    window.djust.uploads.handleResumed(data);
+                }
+                break;
+
             case 'stream':
                 // Streaming partial DOM updates (LLM chat, live feeds)
                 if (window.djust.handleStreamMessage) {

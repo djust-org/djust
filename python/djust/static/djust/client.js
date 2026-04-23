@@ -949,6 +949,15 @@ class LiveViewWebSocket {
                 if (globalThis.djustDebug) console.log('[Upload] Registered: %s for %s', String(data.ref), String(data.upload_name));
                 break;
 
+            case 'upload_resumed':
+                // Resumable upload — server replied to upload_resume
+                // with the last accepted offset. Dispatched to the
+                // pending resume promise inside 15-uploads.js. (#821)
+                if (window.djust.uploads && window.djust.uploads.handleResumed) {
+                    window.djust.uploads.handleResumed(data);
+                }
+                break;
+
             case 'stream':
                 // Streaming partial DOM updates (LLM chat, live feeds)
                 if (window.djust.handleStreamMessage) {
@@ -6525,6 +6534,139 @@ if (document.readyState === 'loading') {
     // Upload configs from server mount response
     let uploadConfigs = {};
 
+    // ========================================================================
+    // Resumable upload persistence (ADR-010, #821)
+    // ========================================================================
+    //
+    // When a slot is configured with resumable=True the client keeps a
+    // small record in IndexedDB keyed by file "hint" (name + size +
+    // lastModified — a poor-man's fingerprint that survives within a
+    // single browser session without requiring full-file hashing on
+    // upload start).
+    //
+    // On WS reconnect the client sends `upload_resume` with the saved
+    // ref; server replies with bytes_received + chunks_received and
+    // the client seeks past them. If IndexedDB is unavailable
+    // (private mode, old browser) we fall back to in-memory only —
+    // resume works within the same tab load but not across reloads.
+
+    const RESUMABLE_DB_NAME = 'djust_uploads';
+    const RESUMABLE_STORE_NAME = 'pending';
+    const RESUMABLE_DB_VERSION = 1;
+    let _resumableDbPromise = null;
+
+    function _hasIndexedDB() {
+        try {
+            return typeof indexedDB !== 'undefined' && indexedDB !== null;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /**
+     * Open (or lazily create) the IndexedDB backing the resumable
+     * upload cache. Returns a Promise<IDBDatabase|null> — null on
+     * failure (private mode, SecurityError, etc.) so callers can
+     * degrade gracefully to in-memory.
+     */
+    function openResumableDb() {
+        if (!_hasIndexedDB()) return Promise.resolve(null);
+        if (_resumableDbPromise) return _resumableDbPromise;
+        _resumableDbPromise = new Promise((resolve) => {
+            let req;
+            try {
+                req = indexedDB.open(RESUMABLE_DB_NAME, RESUMABLE_DB_VERSION);
+            } catch (err) {
+                resolve(null);
+                return;
+            }
+            req.onupgradeneeded = (ev) => {
+                const db = ev.target.result;
+                if (!db.objectStoreNames.contains(RESUMABLE_STORE_NAME)) {
+                    db.createObjectStore(RESUMABLE_STORE_NAME, { keyPath: 'fileHint' });
+                }
+            };
+            req.onsuccess = (ev) => resolve(ev.target.result);
+            req.onerror = () => resolve(null);
+            req.onblocked = () => resolve(null);
+        });
+        return _resumableDbPromise;
+    }
+
+    /**
+     * Build a file "hint" key — not a cryptographic hash, just a
+     * best-effort fingerprint. Good enough to spot "is this the same
+     * file the user selected last session?" without reading bytes.
+     */
+    function fileHintKey(file) {
+        if (!file) return null;
+        const name = file.name || '';
+        const size = Number(file.size || 0);
+        const lm = Number(file.lastModified || 0);
+        return `${name}|${size}|${lm}`;
+    }
+
+    async function saveResumableRecord(record) {
+        const db = await openResumableDb();
+        if (!db) return false;
+        return new Promise((resolve) => {
+            try {
+                const tx = db.transaction(RESUMABLE_STORE_NAME, 'readwrite');
+                tx.objectStore(RESUMABLE_STORE_NAME).put(record);
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = () => resolve(false);
+                tx.onabort = () => resolve(false);
+            } catch (_) {
+                resolve(false);
+            }
+        });
+    }
+
+    async function loadResumableRecord(fileHint) {
+        const db = await openResumableDb();
+        if (!db) return null;
+        return new Promise((resolve) => {
+            try {
+                const tx = db.transaction(RESUMABLE_STORE_NAME, 'readonly');
+                const req = tx.objectStore(RESUMABLE_STORE_NAME).get(fileHint);
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => resolve(null);
+            } catch (_) {
+                resolve(null);
+            }
+        });
+    }
+
+    async function deleteResumableRecord(fileHint) {
+        const db = await openResumableDb();
+        if (!db) return false;
+        return new Promise((resolve) => {
+            try {
+                const tx = db.transaction(RESUMABLE_STORE_NAME, 'readwrite');
+                tx.objectStore(RESUMABLE_STORE_NAME).delete(fileHint);
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = () => resolve(false);
+            } catch (_) {
+                resolve(false);
+            }
+        });
+    }
+
+    async function listResumableRecords() {
+        const db = await openResumableDb();
+        if (!db) return [];
+        return new Promise((resolve) => {
+            try {
+                const tx = db.transaction(RESUMABLE_STORE_NAME, 'readonly');
+                const req = tx.objectStore(RESUMABLE_STORE_NAME).getAll();
+                req.onsuccess = () => resolve(req.result || []);
+                req.onerror = () => resolve([]);
+            } catch (_) {
+                resolve([]);
+            }
+        });
+    }
+
     /**
      * Initialize upload configs from server mount data.
      * Called when mount response includes upload configuration.
@@ -6585,35 +6727,107 @@ if (document.readyState === 'loading') {
     }
 
     /**
-     * Upload a single file via chunked binary WebSocket frames.
+     * Parse a UUID string back into its 16-byte representation.
+     * Used when resuming an upload — we have the ref string but need
+     * the bytes for binary frames.
      */
-    async function uploadFile(ws, uploadName, file, config) {
-        const refBytes = uuidBytes();
-        const ref = uuidToString(refBytes);
-        const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
+    function uuidStringToBytes(s) {
+        const hex = String(s || '').replace(/-/g, '');
+        if (hex.length !== 32) return null;
+        const bytes = new Uint8Array(16);
+        for (let i = 0; i < 16; i++) {
+            bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+        }
+        return bytes;
+    }
 
-        // Announce the upload to the server via JSON
-        ws.sendMessage({
-            type: 'upload_register',
-            upload_name: uploadName,
-            ref: ref,
-            client_name: file.name,
-            client_type: file.type,
-            client_size: file.size,
-        });
+    /**
+     * Upload a single file via chunked binary WebSocket frames.
+     *
+     * Options (all optional):
+     *   - resumeRef / resumeRefBytes — previously saved upload_id to
+     *     resume. When present, the client skips `upload_register` and
+     *     sends `upload_resume` first; the server replies with
+     *     bytes_received and the client seeks past the already-
+     *     uploaded chunks.
+     *   - resumable — when true, the client persists a record to
+     *     IndexedDB so it can resume after a tab reload.
+     */
+    async function uploadFile(ws, uploadName, file, config, opts) {
+        opts = opts || {};
+        const chunkSize = (config && config.chunk_size) || DEFAULT_CHUNK_SIZE;
+        const isResumable = !!(opts.resumable || (config && config.resumable));
+
+        let refBytes;
+        let ref;
+        let startOffset = 0;
+        let startChunkIndex = 0;
+
+        if (opts.resumeRef) {
+            ref = opts.resumeRef;
+            refBytes = uuidStringToBytes(ref) || uuidBytes();
+        } else {
+            refBytes = uuidBytes();
+            ref = uuidToString(refBytes);
+        }
+
+        const fileHint = fileHintKey(file);
+
+        // Resumable path: try to resume first.
+        if (opts.resumeRef) {
+            const resumePayload = await sendResumeAndWait(ws, ref);
+            if (resumePayload && resumePayload.status === 'resumed') {
+                startOffset = Number(resumePayload.bytes_received || 0);
+                if (startOffset > file.size) startOffset = file.size;
+                startChunkIndex = Math.floor(startOffset / chunkSize);
+                if (globalThis.djustDebug) {
+                    console.log('[Upload] Resuming %s at %d bytes', String(file.name), startOffset);
+                }
+            } else {
+                // not_found or locked — fall back to a fresh register.
+                if (fileHint) deleteResumableRecord(fileHint);
+                refBytes = uuidBytes();
+                ref = uuidToString(refBytes);
+            }
+        }
+
+        // Fresh (or fallback) registration.
+        if (startOffset === 0) {
+            ws.sendMessage({
+                type: 'upload_register',
+                upload_name: uploadName,
+                ref: ref,
+                client_name: file.name,
+                client_type: file.type,
+                client_size: file.size,
+                resumable: isResumable,
+            });
+        }
+
+        if (isResumable && fileHint) {
+            saveResumableRecord({
+                fileHint,
+                ref,
+                uploadName,
+                clientName: file.name,
+                clientSize: file.size,
+                savedAt: Date.now(),
+            });
+        }
 
         return new Promise((resolve, reject) => {
             activeUploads.set(ref, {
                 file, config, uploadName, refBytes, resolve, reject,
-                chunkIndex: 0, sent: 0,
+                chunkIndex: startChunkIndex, sent: startOffset,
+                resumable: isResumable, fileHint,
             });
 
             // Read file and send chunks
             const reader = new FileReader();
             reader.onload = function() {
                 const buffer = reader.result;
-                let offset = 0;
-                let chunkIndex = 0;
+                let offset = startOffset;
+                let chunkIndex = startChunkIndex;
 
                 function sendNextChunk() {
                     if (offset >= buffer.byteLength) {
@@ -6655,6 +6869,70 @@ if (document.readyState === 'loading') {
 
             reader.readAsArrayBuffer(file);
         });
+    }
+
+    /**
+     * Pending promises for in-flight `upload_resume` handshakes —
+     * resolved when the server replies with `upload_resumed`.
+     */
+    const pendingResumes = new Map();
+
+    /**
+     * Send `upload_resume` and return a Promise that resolves with the
+     * server's `upload_resumed` payload. Times out after 5 s so a
+     * silent server doesn't stall the upload forever.
+     */
+    function sendResumeAndWait(ws, ref) {
+        return new Promise((resolve) => {
+            let done = false;
+            const timer = setTimeout(() => {
+                if (done) return;
+                done = true;
+                pendingResumes.delete(ref);
+                resolve(null);
+            }, 5000);
+            pendingResumes.set(ref, (payload) => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                pendingResumes.delete(ref);
+                resolve(payload);
+            });
+            try {
+                ws.sendMessage({ type: 'upload_resume', ref });
+            } catch (err) {
+                if (!done) {
+                    done = true;
+                    clearTimeout(timer);
+                    pendingResumes.delete(ref);
+                    resolve(null);
+                }
+            }
+        });
+    }
+
+    /**
+     * Handle `upload_resumed` messages delivered by the WS frame
+     * handler. Exposed as `window.djust.uploads.handleResumed` so
+     * 03-websocket.js can call it without creating a circular import.
+     *
+     * Security: `data` arrives from the WebSocket wire, so `data.ref`
+     * is attacker-controlled. We only dispatch when:
+     *   1. `ref` is a non-empty string (no lookup-by-object tricks);
+     *   2. `pending` is a function we placed in the Map ourselves
+     *      (validated via `typeof` — a Map.get() that misses returns
+     *      undefined, never a prototype method from the Map class).
+     * This prevents a malicious server from steering `pending(data)`
+     * into an unintended dispatch.
+     */
+    function handleUploadResumed(data) {
+        if (!data || typeof data.ref !== 'string' || data.ref.length === 0) {
+            return;
+        }
+        const pending = pendingResumes.get(data.ref);
+        if (typeof pending === 'function') {
+            pending(data);
+        }
     }
 
     /**
@@ -6773,10 +7051,17 @@ if (document.readyState === 'loading') {
             if (upload && upload.resolve) {
                 upload.resolve({ ref, status: 'complete' });
             }
+            if (upload && upload.fileHint) {
+                // Clear the IndexedDB resumable record — upload is done.
+                deleteResumableRecord(upload.fileHint);
+            }
             activeUploads.delete(ref);
         } else if (status === 'error') {
             if (upload && upload.reject) {
                 upload.reject(new Error('Upload failed on server'));
+            }
+            if (upload && upload.fileHint) {
+                deleteResumableRecord(upload.fileHint);
             }
             activeUploads.delete(ref);
         }
@@ -7020,6 +7305,19 @@ if (document.readyState === 'loading') {
         // object storage. Server returns { mode: 'presigned', url, key,
         // fields }; app code calls uploadPresigned(spec, file, hooks).
         uploadPresigned: uploadFilePresigned,
+        // v0.5.7 (#821) — resumable uploads across WS disconnects.
+        handleResumed: handleUploadResumed,
+        openResumableDb,
+        saveResumableRecord,
+        loadResumableRecord,
+        deleteResumableRecord,
+        listResumableRecords,
+        fileHintKey,
+        uuidStringToBytes,
+        uploadFile: (file, uploadName, opts) => {
+            const cfg = uploadConfigs[uploadName];
+            return uploadFile(liveViewWS, uploadName, file, cfg, opts || {});
+        },
     };
 
 })();

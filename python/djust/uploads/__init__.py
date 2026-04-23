@@ -268,6 +268,38 @@ class UploadWriter:
         return None
 
 
+# Cache mapping writer class → accepts-chunk-index? Keeps the per-chunk
+# dispatch path fast (no inspect.signature() call on every chunk).
+_WRITER_ACCEPTS_CHUNK_INDEX_CACHE: Dict[Type[UploadWriter], bool] = {}
+
+
+def _writer_accepts_chunk_index(writer: UploadWriter) -> bool:
+    """Return True if ``writer.write_chunk`` accepts a ``chunk_index`` kwarg.
+
+    Introspects the bound ``write_chunk`` method once per class and
+    caches the result. Resumable writers declare
+    ``write_chunk(self, chunk, chunk_index=0)``; legacy writers declare
+    ``write_chunk(self, chunk)`` and we keep calling them that way so
+    existing third-party writer subclasses keep working.
+    """
+    import inspect
+
+    cls = type(writer)
+    cached = _WRITER_ACCEPTS_CHUNK_INDEX_CACHE.get(cls)
+    if cached is not None:
+        return cached
+    try:
+        sig = inspect.signature(writer.write_chunk)
+    except (TypeError, ValueError):
+        _WRITER_ACCEPTS_CHUNK_INDEX_CACHE[cls] = False
+        return False
+    accepts = "chunk_index" in sig.parameters or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    _WRITER_ACCEPTS_CHUNK_INDEX_CACHE[cls] = accepts
+    return accepts
+
+
 class BufferedUploadWriter(UploadWriter):
     """UploadWriter helper that accumulates chunks until a configurable
     threshold, then emits fixed-size parts.
@@ -401,6 +433,12 @@ class UploadConfig:
     accepted_extensions: Set[str] = field(default_factory=set)
     accepted_mimes: Set[str] = field(default_factory=set)
     writer: Optional[Type[UploadWriter]] = None  # If set, bypass disk buffering
+    # v0.5.7 (#821) — opt-in resumable upload protocol. When True, the
+    # UploadManager wraps the configured writer (or uses a default
+    # tempfile-backed resumable writer if none is set) so chunks are
+    # persisted into an external state store, surviving WS disconnects.
+    # See docs/adr/010-resumable-uploads.md.
+    resumable: bool = False
 
     def __post_init__(self):
         if self.accept:
@@ -572,6 +610,7 @@ class UploadManager:
         chunk_size: int = 64 * 1024,
         auto_upload: bool = True,
         writer: Optional[Type[UploadWriter]] = None,
+        resumable: bool = False,
     ) -> UploadConfig:
         """Configure an upload slot."""
         config = UploadConfig(
@@ -582,6 +621,7 @@ class UploadManager:
             chunk_size=chunk_size,
             auto_upload=auto_upload,
             writer=writer,
+            resumable=resumable,
         )
         self._configs[name] = config
         if name not in self._name_to_refs:
@@ -608,12 +648,23 @@ class UploadManager:
         except Exception:  # noqa: BLE001 — abort() must never raise
             logger.exception("UploadWriter.abort() raised for upload %s", entry.ref)
 
-    def _add_chunk_via_writer(self, entry: UploadEntry, config: UploadConfig, data: bytes) -> bool:
+    def _add_chunk_via_writer(
+        self,
+        entry: UploadEntry,
+        config: UploadConfig,
+        data: bytes,
+        chunk_index: int = 0,
+    ) -> bool:
         """Route a chunk through the writer. Returns True on success.
 
         Lazily instantiates the writer and calls open() on the first chunk.
         On any exception from open() or write_chunk(), calls writer.abort()
         and marks the entry failed.
+
+        ``chunk_index`` is forwarded to writers whose ``write_chunk``
+        signature accepts it (e.g. :class:`~djust.uploads.resumable.
+        ResumableUploadWriter`). Writers with the base
+        ``write_chunk(self, chunk)`` signature see the raw bytes only.
         """
         writer_cls = config.writer
         assert writer_cls is not None  # caller guards
@@ -652,7 +703,17 @@ class UploadManager:
                 return False
             entry._writer_opened = True
         try:
-            entry.writer_instance.write_chunk(data)
+            # Forward chunk_index to writers that accept it (e.g.
+            # ResumableUploadWriter). Base UploadWriter subclasses with
+            # ``write_chunk(self, chunk)`` keep the original 1-arg
+            # signature — we detect the accept-chunk-index variant via
+            # a quick signature peek and cache the result on the
+            # writer class to keep the per-chunk path fast.
+            writer = entry.writer_instance
+            if _writer_accepts_chunk_index(writer):
+                writer.write_chunk(data, chunk_index=chunk_index)
+            else:
+                writer.write_chunk(data)
         except Exception as exc:  # noqa: BLE001
             entry._error = "Upload writer rejected chunk"
             logger.exception(
@@ -815,7 +876,7 @@ class UploadManager:
             return None
 
         if config is not None and config.writer is not None:
-            if not self._add_chunk_via_writer(entry, config, data):
+            if not self._add_chunk_via_writer(entry, config, data, chunk_index=chunk_index):
                 return None
             return entry.progress
 
@@ -918,6 +979,7 @@ class UploadManager:
                     "max_file_size": config.max_file_size,
                     "chunk_size": config.chunk_size,
                     "auto_upload": config.auto_upload,
+                    "resumable": config.resumable,
                 },
                 "entries": [
                     {
@@ -1003,6 +1065,7 @@ class UploadMixin:
         chunk_size: int = 64 * 1024,
         auto_upload: bool = True,
         writer: Optional[Type[UploadWriter]] = None,
+        resumable: bool = False,
     ) -> UploadConfig:
         """
         Configure a named upload slot.
@@ -1039,6 +1102,7 @@ class UploadMixin:
             chunk_size=chunk_size,
             auto_upload=auto_upload,
             writer=writer,
+            resumable=resumable,
         )
         # Issue #889: track the call args in a JSON-serializable list
         # so the WS consumer's state-restoration path can replay them.
@@ -1054,6 +1118,7 @@ class UploadMixin:
                 "max_file_size": max_file_size,
                 "chunk_size": chunk_size,
                 "auto_upload": auto_upload,
+                "resumable": resumable,
                 # writer deliberately omitted — see docstring caveat.
                 "_had_writer": writer is not None,
                 # Issue #892: tag each saved dict with the schema
@@ -1216,3 +1281,42 @@ __all__ = [
     "UploadCredentialError",
     "UploadQuotaError",
 ]
+
+# Re-export resumable bits so ``from djust.uploads import
+# ResumableUploadWriter`` works — the submodules are the source of
+# truth, this is just convenience.
+try:
+    from .resumable import ResumableUploadWriter, resolve_resume_request  # noqa: F401  — re-export
+
+    __all__.extend(["ResumableUploadWriter", "resolve_resume_request"])
+except ImportError:
+    # Resumable subsystem depends on nothing optional today, but guard
+    # the import so a partial install can't break the base package.
+    pass
+
+try:
+    from .storage import (  # noqa: F401  — re-export
+        InMemoryUploadState,
+        RedisUploadState,
+        UploadStateStore,
+        UploadStateTooLarge,
+        get_default_store,
+        set_default_store,
+    )
+
+    __all__.extend(
+        [
+            "InMemoryUploadState",
+            "RedisUploadState",
+            "UploadStateStore",
+            "UploadStateTooLarge",
+            "get_default_store",
+            "set_default_store",
+        ]
+    )
+except ImportError:
+    # Storage submodule depends on nothing optional today (Redis client
+    # is imported lazily by RedisUploadState), but guard the import so a
+    # partial install can't break the base package. Intentionally silent
+    # — this is a best-effort re-export, not a required code path.
+    pass
