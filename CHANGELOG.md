@@ -45,6 +45,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dj-remove follow-ups — closes #900, #901** — Extracted shared `_teardownState(el, state)` helper in `42-dj-remove.js` so `_finalizeRemoval` and `_cancelRemoval` no longer duplicate the clearTimeout + removeEventListener + observer.disconnect + _pendingRemovals.delete block (Stage 11 nit from PR #898). Added a debug warning (gated on `globalThis.djustDebug`) when `_parseRemoveSpec` encounters a 2-token value like `dj-remove="fade-out 300"` — previously silent fall-through. 2 new JSDOM regression cases in `tests/js/dj_remove.test.js` (12/12 passing).
 
+- **dj-transition edge cases — closes #886, #887, #888** —
+  **#886** `_parseSpec` in `41-dj-transition.js` now rejects comma, paren,
+  and bracket separators up front (returns `null` and emits a debug
+  warning gated on `globalThis.djustDebug`) instead of letting
+  `classList.add` throw `InvalidCharacterError` at runtime — matches the
+  dj-remove #901 loud-in-debug / silent-in-prod pattern.
+  **#887** The `cleanup` callback (both `transitionend` handler and 600 ms
+  fallback path) now guards with `el.isConnected` — if the element has
+  been detached from the DOM before cleanup fires, we skip classList and
+  listener work and just drop the `_djTransitionState` entry. Prevents
+  any future `parentNode.X` access from NPE'ing on a detached node.
+  **#888** Unskipped the two previously-flaky `transitionend` tests in
+  `tests/js/dj_transition.test.js` by swapping timing-sensitive
+  `setTimeout(..., 30)` waits for synchronous
+  `el.dispatchEvent(new Event('transitionend'))` — deterministic under
+  vitest parallel load. Added one new test covering the #886 parser
+  rejection path. All 9 dj-transition tests pass deterministically.
+
 ## [0.5.6rc1] - 2026-04-23
 
 ### BREAKING CHANGES

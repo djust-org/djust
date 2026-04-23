@@ -43,7 +43,18 @@ const _djTransitionState = new WeakMap();
 const _FALLBACK_MS = 600;
 
 function _parseSpec(raw) {
-    const parts = (raw || '').trim().split(/\s+/).filter(Boolean);
+    const input = (raw || '').trim();
+    // Reject comma, paren, or bracket separators. `classList.add` throws
+    // InvalidCharacterError on tokens containing these characters — catch
+    // malformed specs up front and log in debug mode instead of letting
+    // the error surface at runtime.
+    if (/[,()[\]]/.test(input)) {
+        if (globalThis.djustDebug) {
+            console.warn('[djust] dj-transition: commas, parens, and brackets are not supported in spec:', raw);
+        }
+        return null;
+    }
+    const parts = input.split(/\s+/).filter(Boolean);
     if (parts.length < 3) return null;
     return { start: parts[0], active: parts[1], end: parts[2] };
 }
@@ -69,6 +80,15 @@ function _runTransition(el, spec) {
         el.classList.add(spec.end);
 
         function cleanup() {
+            // Guard against detached elements — if the node has been
+            // removed from the DOM before this fires (typically the 600 ms
+            // fallback path), skip classList/listener work. classList on
+            // a detached node is technically safe but any parentNode
+            // access downstream would NPE.
+            if (!el.isConnected) {
+                _djTransitionState.delete(el);
+                return;
+            }
             el.classList.remove(spec.active);
             if (state.fallback) clearTimeout(state.fallback);
             el.removeEventListener('transitionend', onEnd);
