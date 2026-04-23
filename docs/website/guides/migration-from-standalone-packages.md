@@ -12,7 +12,7 @@ You're using one or more of the legacy standalone packages:
 | `djust-tenants` | v99.0.0 | `djust[tenants]` (+ `djust[tenants-redis]` or `djust[tenants-postgres]` for backends) |
 | `djust-theming` | v99.0.0 | `djust[theming]` |
 | `djust-components` | v99.0.0 | `djust[components]` |
-| `djust-admin` | v99.0.0 | `djust[admin]` |
+| `djust-admin` | v99.0.0 | `djust[admin]` (module is `djust.admin_ext` — see note below) |
 
 All standalone packages were frozen at `v99.0.0` on 2026-04-23 ([ADR-007](../../adr/007-package-taxonomy-and-consolidation.md) Phase 4). They stay installable from PyPI forever for legacy projects, but no new releases will ship. All future work happens in `djust[<name>]` extras.
 
@@ -64,19 +64,23 @@ For `djust-tenants` users: pick the backend-specific extra that matches your ten
 
 ```python
 # Before
-from djust_auth import RoleRequiredMixin
+from djust_auth import LoginRequiredLiveViewMixin, PermissionRequiredLiveViewMixin
 from djust_tenants import TenantMiddleware
-from djust_theming.palette import Palette
+from djust_theming import PaletteGenerator, ThemeManager
 from djust_components.data import TableComponent
+from djust_admin import AdminLiveViewMixin
 
 # After
-from djust.auth import RoleRequiredMixin
+from djust.auth import LoginRequiredLiveViewMixin, PermissionRequiredLiveViewMixin
 from djust.tenants import TenantMiddleware
-from djust.theming.palette import Palette
+from djust.theming import PaletteGenerator, ThemeManager
 from djust.components.data import TableComponent
+from djust.admin_ext import AdminLiveViewMixin   # note: module renamed to `admin_ext`
 ```
 
-A mechanical sed script handles the 90% case:
+**Module name caveat — `djust.admin_ext`:** the extra is spelled `djust[admin]` but the Python module is `djust.admin_ext` (to avoid colliding with Django's `django.contrib.admin`). All your `from djust_admin import ...` lines become `from djust.admin_ext import ...`, not `from djust.admin import ...`.
+
+A mechanical sed script handles the 90% case. Note that `djust_admin` → `djust.admin_ext` (not `djust.admin` — Django's `django.contrib.admin` would collide):
 
 ```bash
 # Back up first!
@@ -89,8 +93,8 @@ find . -name "*.py" -exec sed -i.bak \
     -e 's/import djust_theming/import djust.theming/g' \
     -e 's/from djust_components/from djust.components/g' \
     -e 's/import djust_components/import djust.components/g' \
-    -e 's/from djust_admin/from djust.admin/g' \
-    -e 's/import djust_admin/import djust.admin/g' \
+    -e 's/from djust_admin/from djust.admin_ext/g' \
+    -e 's/import djust_admin/import djust.admin_ext/g' \
     {} +
 ```
 
@@ -98,23 +102,41 @@ Review the diffs (`grep -r 'djust_' . --include='*.py'` for stragglers) before d
 
 ### 3. Update Django `INSTALLED_APPS`
 
-The app labels change from `djust_<name>` to `djust.<name>`:
+Not every consolidated package is a full Django app. Only the ones with an `AppConfig` need to be registered:
+
+| Consolidated module | Is a Django app? | `INSTALLED_APPS` entry |
+|---|---|---|
+| `djust.auth` | ✅ yes | `"djust.auth"` |
+| `djust.tenants` | ❌ no (library only — middleware + helpers) | _do not add_ |
+| `djust.theming` | ✅ yes | `"djust.theming"` |
+| `djust.components` | ✅ yes | `"djust.components"` |
+| `djust.admin_ext` | ✅ yes | `"djust.admin_ext"` (note: `_ext` suffix) |
 
 ```python
 # Before
 INSTALLED_APPS = [
     "djust",
     "djust_auth",
-    "djust_tenants",
+    "djust_tenants",         # was registered as app in old packaging
+    "djust_theming",
     "djust_components",
+    "djust_admin",
 ]
 
 # After
 INSTALLED_APPS = [
     "djust",
     "djust.auth",
-    "djust.tenants",
+    # djust.tenants — NOT an app; drop this line. Register middleware instead.
+    "djust.theming",
     "djust.components",
+    "djust.admin_ext",       # note: admin_ext, not admin
+]
+
+MIDDLEWARE = [
+    # ... standard Django middleware ...
+    "djust.tenants.TenantMiddleware",   # new location (was djust_tenants.TenantMiddleware)
+    # ... rest of MIDDLEWARE ...
 ]
 ```
 
@@ -148,6 +170,14 @@ Verify with `pip list | grep djust` — only `djust` should remain.
 ### Can I use `djust.auth` without installing the `auth` extra?
 
 Technically yes — `python/djust/auth/` ships inside the core wheel. The extra exists mainly for discoverability (`djust[auth]` is self-documenting in `pyproject.toml`) and for future-proofing if `auth` gains its own optional dependencies. For now, `djust[auth]` has no deps beyond core djust.
+
+### Why is the extra `djust[admin]` but the module `djust.admin_ext`?
+
+Django already ships `django.contrib.admin`. A module named `djust.admin` would collide at import time with any project that mixes `django.contrib.admin` and `djust` (which is nearly all of them). `djust.admin_ext` (ext = "extensions") is the safe name that avoids the collision. The extra is still spelled `djust[admin]` because the package-level name is short and intuitive; only the Python module picks up the `_ext` suffix.
+
+### Why isn't `djust.tenants` in `INSTALLED_APPS`?
+
+`djust.tenants` is a library, not a Django app — it ships `TenantMiddleware` and schema-isolation helpers but doesn't register models, admin, or management commands of its own. Register the middleware in `MIDDLEWARE`; leave `INSTALLED_APPS` alone. (In the old `djust-tenants` package, `djust_tenants` was registered as a Django app with an AppConfig; that AppConfig was removed during consolidation because nothing in the module needed it.)
 
 ### What about the `djust.tenants` backend deps?
 
