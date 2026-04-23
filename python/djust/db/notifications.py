@@ -152,8 +152,6 @@ class PostgresNotifyListener:
         async helper from an ``async def`` test fixture / teardown to ensure
         the cancellation has been fully observed before the next test runs.
         """
-        import asyncio
-
         with cls._class_lock:
             inst = cls._instance
             cls._instance = None

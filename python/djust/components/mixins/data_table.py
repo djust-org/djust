@@ -383,8 +383,6 @@ class DataTableMixin:
 
     def on_table_cell_edit(self, value, **kwargs):
         """Handle inline cell edit. value is JSON: {row_key, column, value}."""
-        import json
-
         try:
             data = json.loads(str(value)) if isinstance(value, str) else value
         except (json.JSONDecodeError, TypeError):

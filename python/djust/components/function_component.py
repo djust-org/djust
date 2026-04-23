@@ -429,8 +429,6 @@ class RenderSlotTagHandler:
         # Only treat as JSON if it parses AS a list or dict — bare strings,
         # numbers, and bools pass through below.
         try:
-            import json
-
             parsed = json.loads(raw)
             if isinstance(parsed, (list, dict)):
                 return self._render_value(parsed)

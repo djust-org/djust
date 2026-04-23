@@ -38,11 +38,8 @@ class CodeBlock(Component):
 
     def _render_custom(self) -> str:
         """Render the codeblock HTML."""
-        import re
-
         e_language = html.escape(self.language or "text")
         e_code = html.escape(self.code)
-        safe_theme = self.theme if re.match(r"^[a-zA-Z0-9_-]+$", str(self.theme)) else "github-dark"
         cls = "code-block"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"

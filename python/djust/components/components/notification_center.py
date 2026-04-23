@@ -47,7 +47,6 @@ class NotificationCenter(Component):
             cls += f" {html.escape(self.custom_class)}"
         e_open = html.escape(self.open_event)
         e_read = html.escape(self.mark_read_event)
-        e_clear = html.escape(self.clear_event)
         badge_html = (
             f'<span class="notif-badge">{self.unread_count}</span>' if self.unread_count > 0 else ""
         )

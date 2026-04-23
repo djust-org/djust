@@ -119,11 +119,6 @@ class TimePicker(Component):
         )
 
         # Hour select
-        if self.format_24h:
-            hour_max = 24
-        else:
-            hour_max = 13
-            hour_start = 1
         parts.append('<div class="dj-time-picker__controls">')
 
         hour_options = []

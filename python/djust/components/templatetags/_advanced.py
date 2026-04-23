@@ -137,7 +137,6 @@ class CalendarViewNode(template.Node):
         events = kw.get("events", [])
         month = kw.get("month", 1)
         year = kw.get("year", 2026)
-        view = kw.get("view", "month")
         start_day = kw.get("start_day", 0)
         event = kw.get("event", "")
         custom_class = kw.get("class", "")
@@ -589,9 +588,9 @@ def do_diff_viewer(parser, token):
 
 class PivotTableNode(template.Node):
     AGG_FUNCS = {
-        "sum": lambda vals: sum(vals),
+        "sum": sum,
         "avg": lambda vals: sum(vals) / len(vals) if vals else 0,
-        "count": lambda vals: len(vals),
+        "count": len,
         "min": lambda vals: min(vals) if vals else 0,
         "max": lambda vals: max(vals) if vals else 0,
     }

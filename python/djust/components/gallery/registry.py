@@ -19,9 +19,9 @@ def discover_component_classes():
 
     Returns a dict of {class_name: class_object}.
     """
-    from djust.components.components import __all__ as class_names
     import djust.components.components as comp_module
 
+    class_names = comp_module.__all__
     return {name: getattr(comp_module, name) for name in class_names}
 
 
@@ -32,9 +32,6 @@ def get_gallery_data():
         dict with 'categories' key mapping to {category_name: [component_info, ...]}
     """
     from .examples import EXAMPLES, CLASS_EXAMPLES, CATEGORIES
-
-    tags = discover_template_tags()
-    classes = discover_component_classes()
 
     # Group template tag examples by category
     categories = {}

@@ -1501,7 +1501,6 @@ def model_table(
     e_sort_event = conditional_escape(sort_event)
     e_search_event = conditional_escape(search_event)
     e_filter_event = conditional_escape(filter_event)
-    e_page_event = conditional_escape(page_event)
     e_prev_event = conditional_escape(prev_event)
     e_next_event = conditional_escape(next_event)
     e_select_event = conditional_escape(select_event)

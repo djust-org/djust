@@ -24,7 +24,7 @@ class BaseAuth(Protocol):
     csrf_exempt: bool
 
     def authenticate(self, request) -> Optional[object]:  # pragma: no cover - protocol
-        ...
+        """Return the authenticated user, or None if this auth class cannot handle the request."""
 
 
 class SessionAuth:

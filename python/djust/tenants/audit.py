@@ -30,7 +30,8 @@ class AuditEvent:
 
 class AuditBackend(ABC):
     @abstractmethod
-    def emit(self, event: AuditEvent) -> None: ...
+    def emit(self, event: AuditEvent) -> None:
+        """Emit an audit event to the backing store."""
 
 
 class LoggingAuditBackend(AuditBackend):
