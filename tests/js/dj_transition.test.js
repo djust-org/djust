@@ -71,6 +71,17 @@ describe('dj-transition', () => {
         expect(dom.window.djust.djTransition._parseSpec(null)).toBeNull();
     });
 
+    it('parseSpec rejects comma, paren, and bracket separators', () => {
+        // Commas/parens/brackets would cause classList.add to throw
+        // InvalidCharacterError at runtime — the parser must reject
+        // them up front and return null.
+        dom = createDom('');
+        expect(dom.window.djust.djTransition._parseSpec('a,b,c')).toBeNull();
+        expect(dom.window.djust.djTransition._parseSpec('(a b c)')).toBeNull();
+        expect(dom.window.djust.djTransition._parseSpec('[a b c]')).toBeNull();
+        expect(dom.window.djust.djTransition._parseSpec('a, b, c')).toBeNull();
+    });
+
     it('applies start class synchronously, active/end on next frame', async () => {
         dom = createDom('<div id="t" dj-transition="start-cls active-cls end-cls"></div>');
         const el = dom.window.document.getElementById('t');
@@ -89,12 +100,7 @@ describe('dj-transition', () => {
         expect(el.classList.contains('end-cls')).toBe(true);
     });
 
-    // Skipped — known flake under vitest parallel load (issue TBD).
-    // The transitionend-handler cleanup path is indirectly covered by
-    // the 600 ms fallback-timeout test, which is stable. The two
-    // transitionend-dispatch tests are timing-sensitive in a way that
-    // jsdom + high parallelism make unreliable.
-    it.skip('transitionend removes the active class but keeps the end class', async () => {
+    it('transitionend removes the active class but keeps the end class', async () => {
         dom = createDom('<div id="t" dj-transition="s a e"></div>');
         const el = dom.window.document.getElementById('t');
         // Wait until the active class has been applied (listener
@@ -102,9 +108,9 @@ describe('dj-transition', () => {
         await waitForClass(el, 'a');
 
         // Simulate the browser firing transitionend on the element.
+        // Synchronous dispatch — the handler runs inline on the same
+        // tick, so no subsequent timer wait is required.
         el.dispatchEvent(new dom.window.Event('transitionend', { bubbles: true }));
-        // Give the handler a tick to clean up.
-        await new Promise((r) => setTimeout(r, 30));
 
         expect(el.classList.contains('a')).toBe(false);
         expect(el.classList.contains('e')).toBe(true);
@@ -129,8 +135,9 @@ describe('dj-transition', () => {
 
     it('fallback timer on a removed element does not throw', async () => {
         // An element removed mid-transition should not crash the
-        // fallback cleanup — classList.remove on a detached element is
-        // a no-op, and the WeakMap entry is orphaned but harmless.
+        // fallback cleanup — the isConnected guard short-circuits
+        // cleanup on detached nodes, so classList state is left as-is
+        // and any parentNode access (if added later) is skipped.
         dom = createDom('<div id="t" dj-transition="s a e"></div>');
         const el = dom.window.document.getElementById('t');
         await nextFrame(dom);
@@ -141,21 +148,20 @@ describe('dj-transition', () => {
         // against the detached element without throwing.
         await new Promise((r) => setTimeout(r, 650));
         // No crash — the test just reaching here means the fallback
-        // didn't error on the detached node.
-        expect(el.classList.contains('a')).toBe(false);
+        // didn't error on the detached node. The isConnected guard
+        // leaves the detached element's classList untouched.
+        expect(el.isConnected).toBe(false);
     });
 
-    // Skipped — known flake under vitest parallel load (issue TBD).
-    // See comment on the skipped transitionend cleanup test above.
-    it.skip('re-runs the sequence when the attribute value changes', async () => {
+    it('re-runs the sequence when the attribute value changes', async () => {
         dom = createDom('<div id="t" dj-transition="s a e"></div>');
         const el = dom.window.document.getElementById('t');
         // Wait for the listener registration to complete (rAF fired).
         await waitForClass(el, 'a');
 
+        // Synchronous dispatch — handler runs inline, classList updates
+        // are observable immediately.
         el.dispatchEvent(new dom.window.Event('transitionend', { bubbles: true }));
-        // Give the handler a tick to clean up.
-        await new Promise((r) => setTimeout(r, 30));
         expect(el.classList.contains('a')).toBe(false);
 
         // Re-trigger by swapping the spec.
