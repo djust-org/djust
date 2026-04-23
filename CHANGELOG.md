@@ -71,6 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Framework cleanup (closes #762, #890)** — djust.A010 / A011 system checks now recognize
+  proxy-trusted deployments: when `SECURE_PROXY_SSL_HEADER` + `DJUST_TRUSTED_PROXIES` are both set,
+  `ALLOWED_HOSTS=['*']` is accepted (supports AWS ALB, Cloudflare, Fly.io, and other L7 load
+  balancers where task private IPs rotate). Also filters ~25 framework-internal attrs
+  (`sync_safe`, `login_required`, `template_name`, `http_method_names`, `on_mount_count`,
+  `page_meta`, etc.) from `LiveView.get_state()`, the WS `_snapshot_assigns` change-detection
+  path, and the `_debug.state_sizes` observability payload — user's reactive state is no longer
+  swamped by framework config. Non-breaking fix via a new `live_view._FRAMEWORK_INTERNAL_ATTRS`
+  frozenset; attribute names unchanged. 14 new regression tests in
+  `python/djust/tests/test_a010_proxy_trusted_890.py` and
+  `python/djust/tests/test_get_state_filter_762.py`. Deployment guide updated with the
+  proxy-trusted escape-hatch pattern.
 - **JS-centric batch (closes #949, #951, #953)** — tag_input hidden-input payload now JSON-encoded
   instead of comma-separated, so tag values containing commas round-trip intact (#949). dj-virtual
   variable-height cache now keyed by `data-key` attribute (configurable via `dj-virtual-key-attr`),

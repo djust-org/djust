@@ -74,6 +74,52 @@ __all__ = [
 ]
 
 
+# Framework-internal attributes that MUST NOT be surfaced as reactive user state
+# in get_state(), _snapshot_assigns(), or observability debug payloads (#762).
+#
+# Three buckets of leakage:
+#   1. Django ``View``-inherited (set by ``as_view()``):
+#      http_method_names, args, kwargs, response_class, content_type
+#   2. djust ``LiveView``/mixin-set config attrs that happen to live on
+#      ``self.__dict__`` rather than on the class — without this filter they
+#      get mistaken for reactive state.
+#   3. Static config surfaced by mixins (PageMetadataMixin, LayoutMixin, etc.).
+#
+# This is the non-breaking fix: attribute names are unchanged. Renaming these
+# to ``_*`` would break every downstream template / integration that reads
+# e.g. ``template_name`` from the context.
+_FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
+    {
+        # Django View-inherited (set by as_view())
+        "http_method_names",
+        "args",
+        "kwargs",
+        "response_class",
+        "content_type",
+        # djust LiveView base config
+        "sync_safe",
+        "use_actors",
+        "view_is_async",
+        "tick_interval",
+        "login_required",
+        "login_url",
+        "permission_required",
+        "allowed_model_fields",
+        "on_mount",
+        "on_mount_count",
+        "static_assigns",
+        "static_assigns_count",
+        "template",
+        "template_name",
+        "base_template",
+        "page_meta",
+        "page_slug",
+        "page_title",
+        "temporary_assigns",
+    }
+)
+
+
 class LiveView(
     ContextProviderMixin,
     StreamsMixin,
@@ -545,6 +591,11 @@ class LiveView(
         state = {}
         for key, value in self.__dict__.items():
             if key.startswith("_"):
+                continue
+
+            # #762: Skip framework-internal attrs so they don't pollute
+            # user-facing reactive state.
+            if key in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
 
             if callable(value):

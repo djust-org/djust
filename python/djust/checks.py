@@ -566,7 +566,15 @@ def check_configuration(app_configs, **kwargs):
 
     # A010/A011/A012 -- ALLOWED_HOSTS wildcard footguns (#659)
     allowed_hosts = list(getattr(settings, "ALLOWED_HOSTS", []) or [])
-    if not getattr(settings, "DEBUG", False):
+    # Proxy-trusted escape hatch (#890): a deployer behind AWS ALB / Cloudflare /
+    # Fly.io / similar L7 load balancers can't enumerate rotating task private IPs.
+    # If both SECURE_PROXY_SSL_HEADER and DJUST_TRUSTED_PROXIES are set, the
+    # deployer is explicitly asserting a trusted proxy terminates requests, so
+    # the wildcard Host check at the Django layer is redundant.
+    trusted_proxies = getattr(settings, "DJUST_TRUSTED_PROXIES", None)
+    proxy_ssl_header = getattr(settings, "SECURE_PROXY_SSL_HEADER", None)
+    proxy_trusted = bool(trusted_proxies) and bool(proxy_ssl_header)
+    if not getattr(settings, "DEBUG", False) and not proxy_trusted:
         if "*" in allowed_hosts and len(allowed_hosts) == 1:
             errors.append(
                 DjustError(
@@ -575,12 +583,17 @@ def check_configuration(app_configs, **kwargs):
                         "Wildcard ALLOWED_HOSTS disables Django's Host header defense "
                         "entirely. Combined with AllowedHostsOriginValidator this also "
                         "re-opens CSWSH (#653) because the validator reads ALLOWED_HOSTS. "
-                        "Set ALLOWED_HOSTS to explicit hostnames."
+                        "Set ALLOWED_HOSTS to explicit hostnames, or set "
+                        "DJUST_TRUSTED_PROXIES + SECURE_PROXY_SSL_HEADER if you're behind "
+                        "a trusted proxy (AWS ALB, Cloudflare, Fly.io, etc.)."
                     ),
                     id="djust.A010",
                     fix_hint=(
                         "In settings.py, set ALLOWED_HOSTS to the explicit hostnames your "
-                        "app serves (e.g. ['myapp.example.com', 'api.example.com'])."
+                        "app serves (e.g. ['myapp.example.com', 'api.example.com']). "
+                        "Or, if you're behind a trusted L7 load balancer, set both "
+                        "SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO', 'https') and "
+                        "DJUST_TRUSTED_PROXIES=['<proxy-identifier>'] to suppress A010."
                     ),
                 )
             )
@@ -593,12 +606,15 @@ def check_configuration(app_configs, **kwargs):
                         "Django accepts any Host header as soon as '*' is present, so "
                         "listing 'myapp.example.com' alongside '*' is a common footgun — "
                         "the explicit host is ignored. Remove '*' and keep only the "
-                        "explicit hostnames."
+                        "explicit hostnames, or set DJUST_TRUSTED_PROXIES + "
+                        "SECURE_PROXY_SSL_HEADER if you're behind a trusted proxy."
                     ),
                     id="djust.A011",
                     fix_hint=(
                         "In settings.py, remove '*' from ALLOWED_HOSTS and keep only the "
-                        "explicit hostnames."
+                        "explicit hostnames. Or, if you're behind a trusted L7 load "
+                        "balancer, set both SECURE_PROXY_SSL_HEADER and "
+                        "DJUST_TRUSTED_PROXIES to suppress A011."
                     ),
                 )
             )
