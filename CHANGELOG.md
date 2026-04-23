@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6rc1] - 2026-04-23
+
 ### BREAKING CHANGES
 
 - **Dropped Python 3.9 support** (`requires-python = ">=3.10"`). Python 3.9 reached end-of-life on 2025-10-05; the ecosystem has since moved on (orjson, pytest, python-dotenv, requests, and mcp have all dropped py3.9 support in versions that carry security fixes). Keeping py3.9 in the `requires-python` constraint kept 4 Dependabot alerts stuck open against the py3.9 resolution train — alerts which had no upstream patch available on py3.9. Closes Dependabot alerts #41 (orjson recursion DoS), #87 (pytest tmpdir race), #89 (python-dotenv symlink follow in `set_key`), #62 (requests insecure temp file reuse). Existing py3.9 users can continue installing djust v0.5.x from PyPI; v0.5.6+ requires py3.10+. Also bumped `[tool.ruff] target-version` to `py310` and `[tool.mypy] python_version` to `3.10`; collapsed the orjson / mcp conditional pins (previously carried a py3.9-stuck floor).
