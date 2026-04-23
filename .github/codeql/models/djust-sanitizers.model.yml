@@ -1,0 +1,24 @@
+# MaD (Models as Data) extension — djust-specific sanitizer models.
+#
+# Teaches CodeQL that djust's internal log-value sanitizer is a valid
+# sanitizer for the log-injection taint-flow query. Closes #934.
+#
+# Reference:
+#   https://codeql.github.com/docs/codeql-language-guides/customizing-library-models-for-python/
+#   https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning#extending-codeql-coverage-with-codeql-model-packs
+#
+# sanitizerModel tuple shape (Python):
+#   [namespace, type, subtypes, name, signature, ext, input, kind]
+#
+# For log-injection, `input` is "Argument[0]" of the sanitize call and `kind`
+# is "log-injection". The easier form below uses the "extensible" form
+# (sinkSanitizerModel on a barrier), which expresses:
+#     "the ReturnValue of djust._log_utils.sanitize_for_log sanitizes data
+#      for the log-injection query".
+extensions:
+  - addsTo:
+      pack: codeql/python-queries
+      extensible: sanitizerModel
+    data:
+      # namespace, type, subtypes, name, signature, ext, input, output, kind
+      - ["djust._log_utils", "", False, "sanitize_for_log", "", "", "Argument[0]", "ReturnValue", "log-injection"]

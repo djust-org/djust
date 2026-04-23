@@ -639,6 +639,48 @@ Done! The script adapts to TypeScript, runs your quality gates, and completes al
 
 ## Other Scripts
 
+### codeql-triage.sh
+
+Dumps open CodeQL alerts from the GitHub code-scanning API as a
+grouped markdown table (grouped by `rule.id`, sorted within each group
+by file/line). Pipe the output into a PR comment or a triage doc to
+turn a raw alert dump into something reviewable.
+
+```bash
+# All open alerts, every rule
+scripts/codeql-triage.sh
+
+# Just one rule
+scripts/codeql-triage.sh py/empty-except > /tmp/empty-except-triage.md
+```
+
+Output shape:
+
+```markdown
+# CodeQL open alerts — 2026-04-23
+
+Repo: `djust-org/djust` — state=open
+
+## py/empty-except (36)
+
+| # | file | line | severity | snippet |
+|---|------|------|----------|---------|
+| 2143 | components/function_component.py | 435 | note | Empty except clause |
+...
+
+## py/stack-trace-exposure (3)
+...
+```
+
+Requires: authenticated `gh` CLI + `jq`. Closes #916.
+
+### check-changelog-test-counts.py
+
+Validates test-count phrases in `CHANGELOG.md`'s `[Unreleased]` section
+against the actual tests in referenced files. See the docstring in
+`scripts/check-changelog-test-counts.py`. Wired into `.pre-commit-config.yaml`
+and available as `make check-changelog`. Closes #908.
+
 ### open_intellij.sh
 
 Opens the project in IntelliJ IDEA with proper Rust + Python configuration.
