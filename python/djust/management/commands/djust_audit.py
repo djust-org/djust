@@ -486,12 +486,14 @@ class Command(BaseCommand):
         # --live: runtime probe (#661). Mutually informative with other modes
         # but runs independently — no LiveView collection needed.
         if live_url:
-            return self._run_live_audit(options)
+            self._run_live_audit(options)
+            return None
 
         # --ast: static anti-pattern scanner (#660). Runs independently of
         # LiveView introspection — walks source files on disk.
         if ast_mode:
-            return self._run_ast_audit(options)
+            self._run_ast_audit(options)
+            return None
 
         audits = self._collect_audits(app_label, verbose)
 
@@ -507,7 +509,7 @@ class Command(BaseCommand):
             except PermissionsDocumentError as exc:
                 self.stderr.write(self.style.ERROR(str(exc)))
                 raise SystemExit(1) from exc
-            return
+            return None
 
         # --permissions: validate against a committed permissions document
         findings = []
@@ -525,6 +527,8 @@ class Command(BaseCommand):
             has_failures = any(f.severity in ("error", "warning") for f in findings)
             if has_failures:
                 raise SystemExit(1)
+
+        return None
 
     def _run_ast_audit(self, options):
         """Run the AST security anti-pattern scanner (#660)."""

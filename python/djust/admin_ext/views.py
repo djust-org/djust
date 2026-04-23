@@ -385,11 +385,11 @@ class ModelListView(AdminBaseMixin, LiveView):
     def run_action(self, action_name: str):
         """Execute a bulk action on selected items."""
         if not self.selected_ids:
-            return
+            return None
 
         actions = self._model_admin.get_actions(self.request)
         if action_name not in actions:
-            return
+            return None
 
         queryset = self._model.objects.filter(pk__in=self.selected_ids)
         action_func = actions[action_name]["func"]

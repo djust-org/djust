@@ -371,7 +371,7 @@ class Component(ABC):
         return self.render()
 
 
-from djust.live_view import ContextProviderMixin
+from djust._context_provider import ContextProviderMixin
 
 
 class LiveComponent(ContextProviderMixin):
