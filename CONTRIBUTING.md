@@ -17,7 +17,7 @@ Thank you for your interest in contributing! We welcome contributions from every
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - Rust 1.70+
 - Django 3.2+
 

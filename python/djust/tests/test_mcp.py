@@ -7,15 +7,8 @@ Tests the static/framework-only tools that don't require Django setup:
 """
 
 import json
-import sys
 
 import pytest
-
-# ``mcp[cli]`` dropped Python 3.9 support at v1.0.0 (djust's floor is 3.9).
-# Skip the whole module on 3.9 rather than fighting the dep resolver; on
-# 3.10+ the dev dep installs normally and these tests run.
-if sys.version_info < (3, 10):
-    pytest.skip("mcp requires Python >= 3.10", allow_module_level=True)
 
 
 # ---------------------------------------------------------------------------
