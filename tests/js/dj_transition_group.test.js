@@ -217,10 +217,13 @@ describe('dj-transition-group', () => {
         // appended to a group, the group wires dj-remove onto it, and
         // when the VDOM patch later removes it, dj-remove defers the
         // physical detach (single-token fade-out is applied on the next
-        // frame; the 600 ms fallback finalizes the removal).
+        // frame; the dj-remove-duration fallback finalizes the removal).
+        // We pin dj-remove-duration="50" on the child so the fallback
+        // fires in ~50 ms instead of the 600 ms default — keeps this
+        // integration test's wallclock under 100 ms per run.
         dom = createDom(
             '<ul id="list" dj-transition-group="fade-in | fade-out">' +
-            '  <li id="a">A</li>' +
+            '  <li id="a" dj-remove-duration="50">A</li>' +
             '</ul>'
         );
         await new Promise((r) => setTimeout(r, 0));
@@ -239,12 +242,12 @@ describe('dj-transition-group', () => {
         // patch (the RemoveChild handler called maybeDeferRemoval and
         // skipped the physical removeChild).
         expect(item.parentNode).toBe(list);
-        await nextFrame(dom);
+        // Phase 2 fade-out class lands on the next frame (~16 ms), well
+        // before the 50 ms fallback fires.
+        await new Promise((r) => dom.window.setTimeout(r, 30));
         expect(item.classList.contains('fade-out')).toBe(true);
-        // Still mounted before the fallback fires.
-        expect(item.parentNode).toBe(list);
-        // After the 600 ms fallback, physically gone.
-        await new Promise((r) => setTimeout(r, 700));
+        // After the 50 ms fallback, physically gone. Give it some margin.
+        await new Promise((r) => setTimeout(r, 80));
         expect(item.parentNode).toBeNull();
     });
 
@@ -276,5 +279,35 @@ describe('dj-transition-group', () => {
         ul.appendChild(li);
         await new Promise((r) => setTimeout(r, 20));
         expect(li.hasAttribute('dj-remove')).toBe(false);
+    });
+
+    it('nested [dj-transition-group] parents each have their own observer', async () => {
+        // Regression: a nested group inside another group must wire new
+        // children against the NEAREST parent's enter/leave specs. Each
+        // [dj-transition-group] installs its own per-parent observer with
+        // subtree:false, so a mutation at the inner group is not seen by
+        // the outer group's observer — otherwise the outer's spec would
+        // win and override the inner's.
+        dom = createDom(`
+            <div id="outer" dj-transition-group
+                 dj-group-enter="s-outer a-outer e-outer"
+                 dj-group-leave="x-outer y-outer z-outer">
+                <div id="inner" dj-transition-group
+                     dj-group-enter="s-inner a-inner e-inner"
+                     dj-group-leave="x-inner y-inner z-inner">
+                </div>
+            </div>
+        `);
+        await new Promise((r) => setTimeout(r, 30));
+
+        // Append a child to the INNER group.
+        const inner = dom.window.document.getElementById('inner');
+        const newChild = dom.window.document.createElement('span');
+        inner.appendChild(newChild);
+        await new Promise((r) => setTimeout(r, 30));
+
+        // The new child must get the INNER group's specs, not the outer's.
+        expect(newChild.getAttribute('dj-remove')).toBe('x-inner y-inner z-inner');
+        expect(newChild.getAttribute('dj-transition')).toBe('s-inner a-inner e-inner');
     });
 });
