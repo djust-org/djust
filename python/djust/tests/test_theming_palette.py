@@ -185,18 +185,16 @@ class TestWCAGContrast:
     def test_all_fg_bg_pairs_pass_aa_light(self, preset):
         for name, fg, bg in _all_fg_bg_pairs(preset.light):
             ratio = self.validator.calculate_contrast_ratio(fg, bg)
-            assert ratio >= 4.5, (
-                f"Light {name}: contrast {ratio:.2f} < 4.5:1 "
-                f"(fg={fg.to_hsl()}, bg={bg.to_hsl()})"
-            )
+            assert (
+                ratio >= 4.5
+            ), f"Light {name}: contrast {ratio:.2f} < 4.5:1 (fg={fg.to_hsl()}, bg={bg.to_hsl()})"
 
     def test_all_fg_bg_pairs_pass_aa_dark(self, preset):
         for name, fg, bg in _all_fg_bg_pairs(preset.dark):
             ratio = self.validator.calculate_contrast_ratio(fg, bg)
-            assert ratio >= 4.5, (
-                f"Dark {name}: contrast {ratio:.2f} < 4.5:1 "
-                f"(fg={fg.to_hsl()}, bg={bg.to_hsl()})"
-            )
+            assert (
+                ratio >= 4.5
+            ), f"Dark {name}: contrast {ratio:.2f} < 4.5:1 (fg={fg.to_hsl()}, bg={bg.to_hsl()})"
 
     def test_border_contrast_minimum_light(self, preset):
         ratio = self.validator.calculate_contrast_ratio(

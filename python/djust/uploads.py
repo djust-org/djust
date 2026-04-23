@@ -707,8 +707,7 @@ class UploadManager:
                 "not a client handle."
             )
             logger.error(
-                "UploadWriter.close() return not JSON-serializable for upload %s "
-                "(writer=%s): %s",
+                "UploadWriter.close() return not JSON-serializable for upload %s (writer=%s): %s",
                 entry.ref,
                 type(writer).__name__,
                 exc,
