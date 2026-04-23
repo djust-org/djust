@@ -421,4 +421,72 @@ describe('45-child-view.js — sticky preservation (Phase B)', () => {
         // Stash unchanged.
         expect(api._stash.size).toBe(stashSizeBefore);
     });
+
+    // -------------------------------------------------------------------
+    // Phase C Fix F1 — skipMountHtml branch reattaches sticky subtrees
+    // -------------------------------------------------------------------
+    it('14. skipMountHtml branch in 03-websocket.js calls reattachStickyAfterMount', async () => {
+        // Static-source assertion: the ``skipMountHtml`` branch of the
+        // mount handler MUST invoke ``reattachStickyAfterMount()`` — the
+        // sibling ``data.html`` branch already does, but skipMountHtml
+        // was a foot-gun if any future path sets it on a redirect. This
+        // anchors the invariant in source so it can't regress silently.
+        const fs = require('fs');
+        const src = fs.readFileSync(
+            './python/djust/static/djust/src/03-websocket.js',
+            'utf-8'
+        );
+        // Locate the ``if (this.skipMountHtml)`` block opening brace.
+        const skipIdx = src.indexOf('if (this.skipMountHtml)');
+        expect(skipIdx).toBeGreaterThan(-1);
+        // And the sibling ``else if (data.html)`` closing off the branch.
+        const elseIfIdx = src.indexOf('else if (data.html)', skipIdx);
+        expect(elseIfIdx).toBeGreaterThan(-1);
+        const branchBody = src.slice(skipIdx, elseIfIdx);
+        // The branch must contain a call to reattachStickyAfterMount.
+        expect(branchBody.indexOf('reattachStickyAfterMount')).toBeGreaterThan(-1);
+    });
+
+    it('15. reattachStickyAfterMount called via skipMountHtml-style path replaces slot with stashed subtree', async () => {
+        // Runtime equivalent of the F1 scenario: a turbo-nav pre-rendered
+        // DOM already contains ``[dj-sticky-slot]`` when the mount frame
+        // arrives. The skipMountHtml branch doesn't replace innerHTML but
+        // MUST still reattach from the stash. We exercise the public
+        // surface (``reattachStickyAfterMount``) directly since the
+        // consumer's mount handler ultimately calls that same helper.
+        const dom = createDomWithSticky();
+        await nextFrame(dom);
+        const doc = dom.window.document;
+
+        // Capture the original sticky subtree, then stash it (simulating
+        // the outbound live_redirect_mount handler running stash first).
+        const originalSticky = doc.querySelector('[dj-sticky-view="audio-player"]');
+        expect(originalSticky).not.toBeNull();
+        const api = dom.window.djust.stickyPreserve;
+        api.stashStickySubtrees();
+        expect(doc.querySelector('[dj-sticky-view="audio-player"]')).toBeNull();
+        expect(api._stash.has('audio-player')).toBe(true);
+
+        // Simulate turbo-nav pre-rendered DOM — the destination layout
+        // containing a ``[dj-sticky-slot]`` is already present BEFORE
+        // the mount frame arrives. skipMountHtml=true means the mount
+        // handler does NOT touch innerHTML.
+        const host = doc.querySelector('[dj-view]');
+        host.innerHTML =
+            '<h1>Settings</h1><div dj-sticky-slot="audio-player"></div>';
+
+        // Per Fix F1, reattachStickyAfterMount is called inside the
+        // skipMountHtml branch. Exercise it directly — the contract the
+        // source-static test above anchors is "this helper runs".
+        api.reattachStickyAfterMount();
+
+        // The slot element was replaced by the stashed subtree — DOM
+        // identity preserved (exact same node reference).
+        const reattached = doc.querySelector('[dj-sticky-view="audio-player"]');
+        expect(reattached).toBe(originalSticky);
+        // And the sentinel slot is gone.
+        expect(doc.querySelector('[dj-sticky-slot]')).toBeNull();
+        // Stash is drained.
+        expect(api._stash.size).toBe(0);
+    });
 });

@@ -1,0 +1,38 @@
+{% extends "sticky_demo/base.html" %}
+{% load live_tags %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div dj-view dj-root>
+    <h1>Dashboard</h1>
+    <p>Today's metrics. The audio player and notification center below
+       are <strong>sticky</strong> — navigate to Settings and they will
+       not restart.</p>
+    <div class="metric"><span class="tag">visitors</span> {{ metric_visitors }}</div>
+    <div class="metric"><span class="tag">orders</span> {{ metric_orders }}</div>
+    <p><button dj-click="refresh_metrics">Refresh metrics</button></p>
+
+    {# First render on dashboard — instantiate BOTH stickies here. #}
+    <div class="shell-widgets">
+        {% live_render "sticky_demo.views.AudioPlayerView" sticky=True %}
+        {% live_render "sticky_demo.views.NotificationCenterView" sticky=True %}
+    </div>
+</div>
+{% endblock %}
+
+{% comment %}
+Dashboard is the demo's canonical entry point: it INSTANTIATES both
+stickies inline via {% live_render %} in the content block above.
+The base.html default slot blocks would otherwise render empty
+[dj-sticky-slot] placeholders below the widgets — since the stickies
+are already mounted inline, we suppress those placeholders.
+
+NOTE (limitation): returning to Dashboard from Settings/Reports will
+re-mount the stickies fresh (server collision — see ADR-011's
+"Failure modes" section and README step 4). Dashboard -> Settings ->
+Reports is the preservation happy path demonstrated here.
+{% endcomment %}
+{% block sticky_embeds %}{% endblock %}
+{% block audio_slot %}{% endblock %}
+{% block notifications_slot %}{% endblock %}

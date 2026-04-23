@@ -858,7 +858,7 @@ class OnboardingView(WizardMixin, LiveView):
 
 **Animations & transitions** — *(phases 1 + 2a + 2c + 2d shipped in v0.6.0; milestone complete.)* ~~Declarative `dj-transition` attribute for enter/leave CSS transitions with three-phase class application (start → active → end), matching Phoenix's `JS.transition`.~~ ✅ **Shipped (v0.6.0)** — `41-dj-transition.js`, 7 JSDOM tests, guide updated. ~~`dj-remove` (exit animations before element removal).~~ ✅ **Shipped (v0.6.0)** — `42-dj-remove.js`, hooks into 5 VDOM-patch removal sites, 10 JSDOM tests. ~~`dj-transition-group` (React `<TransitionGroup>` / Vue `<transition-group>` equivalent).~~ ✅ **Shipped (v0.6.0)** — `43-dj-transition-group.js`, 11 JSDOM tests, guide updated. ~~FLIP technique for list reordering, Skeleton/shimmer loading-state components.~~ ✅ **Shipped (v0.6.0)** — `44-dj-flip.js` (FLIP list reorder, `dj-flip` / `dj-flip-duration` / `dj-flip-easing`, reduced-motion bypass, `Number`-based duration parsing, CSS-property-breakout guard on easing, author-transform restoration, overlapping-reorder cache-stomp guard, 12 JSDOM tests in `tests/js/dj_flip.test.js`) + `{% djust_skeleton %}` template tag (shape=line|circle|rect, width/height regex-whitelisted, count clamped to `[1,100]`, XSS-escaped via `build_tag()`, shimmer `@keyframes` deduped via `render_context`, 21 Python tests in `tests/unit/test_djust_skeleton_tag.py`). *(View Transitions API integration was promoted to v0.5.0.)*
 
-**Sticky LiveViews** — Mark a LiveView as `sticky=True` in `live_render()` to keep it alive across live navigations. Use case: persistent audio/video player, sidebar, notification center. The sticky view doesn't unmount/remount when the user navigates — it stays connected and retains state. Phoenix added this and it's a big win for app-shell patterns.
+~~**Sticky LiveViews**~~ ✅ **Shipped (v0.6.0)** — three PRs: #966 (embedding primitive), #967 (preservation), #969 (ADR + guide + demo). `sticky = True` class attr + `{% live_render 'X' sticky=True %}` tag + `[dj-sticky-slot]` markers. Audit: 32 Python + 20 JSDOM + 6 integration tests. ADR-011 documents wire protocol + security model + failure modes.
 
 ~~**`dj-mutation` — DOM mutation events**~~ ✅ **Shipped (v0.6.0)** — Fires a `dj-mutation-fire` CustomEvent when the marked element's attributes or children change via MutationObserver. `<div dj-mutation="handle_change" dj-mutation-attr="class,style">` filters attribute changes; omitting `dj-mutation-attr` observes childList instead. `dj-mutation-debounce="N"` (default 150 ms) coalesces bursts. Lands in `static/djust/src/37-dj-mutation.js`. 5 JSDOM tests in `tests/js/dj_mutation.test.js`.
 
@@ -1007,7 +1007,7 @@ Open questions that inform future direction:
 | Exit animations | `phx-remove` | `<AnimatePresence>` | Not started | v0.6.0 |
 | Streaming initial render | — | `renderToPipeableStream` | Not started | v0.6.0 |
 | Time-travel debugging | — | Redux DevTools | Not started | v0.6.0 |
-| Sticky LiveViews | `sticky: true` | — | Not started | v0.6.0 |
+| ~~Sticky LiveViews~~ ✅ | `sticky: true` | — | Shipped v0.6.0 | v0.6.0 |
 | DOM mutation events | — | MutationObserver | Not started | v0.6.0 |
 | Sticky scroll | — | Chat/log UX | Not started | v0.6.0 |
 | CSP nonce | Built-in | — | Not started | v0.6.0 |

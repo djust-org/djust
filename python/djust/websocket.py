@@ -533,11 +533,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         Phase A of Sticky LiveViews introduces the ``child_update`` wire
         frame: the client's ``45-child-view.js`` module scopes the patches
-        to the child's subtree (selector ``[dj-view][view_id="..."]``) so
-        patch coordinates don't collide with the parent view's VDOM.
+        to the child's subtree (selector
+        ``[dj-view][data-djust-embedded="..."]``) so patch coordinates
+        don't collide with the parent view's VDOM.
 
-        Phase B will add ``sticky_update`` (a sibling frame for sticky
-        preservation across live_redirect).
+        Phase B added the sibling ``sticky_update`` frame for sticky
+        preservation across live_redirect (see :meth:`_send_sticky_update`).
 
         Args:
             view_id: The child's ``view_id`` as assigned by
@@ -1234,6 +1235,25 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     self.view_instance._unregister_child(child_id)
             except Exception as e:
                 logger.warning("Error cleaning up embedded children: %s", e)
+
+        # Sticky LiveViews (Phase C Fix F2): drain any sticky children that
+        # were staged on the consumer during a live_redirect but for which
+        # ``handle_mount`` has not yet completed. Without this, a WS
+        # disconnect mid-redirect (rare but reachable) leaves the preserved
+        # sticky instances alive with their background tasks still running
+        # on a "zombie" consumer whose view is gone.
+        if self._sticky_preserved:
+            for sticky_id, child in list(self._sticky_preserved.items()):
+                hook = getattr(child, "_on_sticky_unmount", None)
+                if callable(hook):
+                    try:
+                        hook()
+                    except Exception:  # noqa: BLE001 — cleanup must not raise
+                        logger.exception(
+                            "sticky %s _on_sticky_unmount during disconnect failed",
+                            sanitize_for_log(sticky_id),
+                        )
+            self._sticky_preserved = {}
 
         # Clean up session state
         self.view_instance = None
