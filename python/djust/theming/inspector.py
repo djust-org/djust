@@ -326,6 +326,9 @@ def theme_inspector_api(request):
                 status=500,
             )
 
+    # Method Not Allowed for anything other than GET/POST.
+    return JsonResponse({"error": "Method not allowed"}, status=405)
+
 
 def theme_css_api(request):
     """API endpoint to get CSS for a theme combination."""
