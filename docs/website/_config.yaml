@@ -111,6 +111,11 @@ navigation:
         file: guides/large-lists.md
         order: 1.5
         level: intermediate
+      - title: Virtual Lists (`dj-virtual`)
+        slug: virtual-lists
+        file: guides/virtual-lists.md
+        order: 1.6
+        level: intermediate
       - title: Presence
         slug: presence
         file: guides/presence.md

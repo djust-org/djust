@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Docs cleanup: 4 issues closed** — dj-remove no-CSS-transition gotcha (#902), dj-transition-group
+  long-form precedence (#907), Django 5.1 + 5.2 classifiers in `pyproject.toml` (#912), new guide
+  page for `dj-virtual` variable-height mode at `docs/website/guides/virtual-lists.md` (#952).
 - **dj-virtual variable-height items via ResizeObserver — closes #797** —
   PR #796 shipped `dj-virtual` with fixed-height items only. This adds
   opt-in variable-height support via a new `dj-virtual-variable-height`

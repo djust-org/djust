@@ -212,6 +212,11 @@ A 600 ms fallback timer finalizes the removal if `transitionend` never fires. Ov
 <li dj-remove="slide-out" dj-remove-duration="500">...</li>
 ```
 
+> **Gotcha — no CSS transition defined**: if the classes in your `dj-remove` spec don't define a
+> `transition:` property, `transitionend` will never fire. The element stays visible for the full
+> 600 ms fallback timer before being removed. Override with `dj-remove-duration="N"` (ms) if your
+> element should disappear faster when the transition is absent.
+
 ### Cancellation
 
 If a subsequent patch removes the `dj-remove` attribute from a pending element, the pending removal cancels: the applied exit classes are stripped, the fallback timer clears, and the element stays mounted.
@@ -261,6 +266,11 @@ The short form splits on `|` into enter / leave halves. Each half accepts the sa
 - Single token (one-class + `transitionend`): `"fade-out"`
 
 An empty half or a missing pipe makes the short form invalid (silently ignored) — use the long form if either half isn't needed.
+
+> **Precedence**: when both short-form (`dj-transition-group="enter | leave"`) and long-form
+> (`dj-group-enter="..."` / `dj-group-leave="..."`) attributes are present on the same parent,
+> the **long form wins**. This lets you use the compact short form as a default and selectively
+> override one half with the long form per-parent.
 
 ### Initial children
 
