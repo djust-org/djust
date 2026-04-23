@@ -584,6 +584,19 @@ class LiveViewWebSocket {
                 }
                 break;
 
+            case 'child_update':
+                // Sticky LiveViews Phase A: VDOM patch frame targeted at
+                // a specific child view via view_id. Routed to 45-child-view.js.
+                if (window.djust.childView && window.djust.childView.handleChildUpdate) {
+                    window.djust.childView.handleChildUpdate(data);
+                }
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
             case 'rate_limit_exceeded':
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
                 // codeql[js/log-injection] -- data.message is a server-controlled rate limit message

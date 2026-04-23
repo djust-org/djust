@@ -481,6 +481,37 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             msg["ref"] = ref
         await self.send_json(msg)
 
+    async def _send_child_update(
+        self,
+        view_id: str,
+        patches: list,
+        version: int,
+    ) -> None:
+        """Send a VDOM patch frame targeted at a specific child view.
+
+        Phase A of Sticky LiveViews introduces the ``child_update`` wire
+        frame: the client's ``45-child-view.js`` module scopes the patches
+        to the child's subtree (selector ``[dj-view][view_id="..."]``) so
+        patch coordinates don't collide with the parent view's VDOM.
+
+        Phase B will add ``sticky_update`` (a sibling frame for sticky
+        preservation across live_redirect).
+
+        Args:
+            view_id: The child's ``view_id`` as assigned by
+                ``StickyChildRegistry._assign_view_id``.
+            patches: VDOM patch list, same shape as ``html_update``.
+            version: Child-local VDOM version number.
+        """
+        await self.send_json(
+            {
+                "type": "child_update",
+                "view_id": view_id,
+                "patches": patches,
+                "version": version,
+            }
+        )
+
     async def _flush_navigation(self) -> None:
         """
         Send any pending navigation commands (live_patch / live_redirect)
@@ -1809,29 +1840,47 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("View not mounted. Please reload the page.")
             return
 
-        # Route to embedded child view if view_id is specified
+        # Route to embedded child view if view_id is specified.
+        # The registry is provided by StickyChildRegistry (composed into
+        # LiveView since v0.6.0 / Sticky LiveViews Phase A). The hasattr
+        # guard stays for one release as defense in depth against custom
+        # subclasses that override __init__ without calling super().
         view_id = params.pop("view_id", None)
         target_view = self.view_instance
         if view_id and view_id != getattr(self.view_instance, "_view_id", None):
-            # Look up child view by view_id
-            all_children = {}
-            if hasattr(self.view_instance, "_get_all_child_views"):
-                all_children = self.view_instance._get_all_child_views()
+            all_children = (
+                self.view_instance._get_all_child_views()
+                if hasattr(self.view_instance, "_get_all_child_views")
+                else {}
+            )
             target_view = all_children.get(view_id)
             if target_view is None:
-                await self.send_error(f"Embedded view not found: {view_id}")
+                # Security: don't echo a client-supplied view_id into the
+                # user-facing error string. The id is already logged via
+                # the structured event in callers that need to trace it.
+                await self.send_error(
+                    "Embedded view not found",
+                    extra={"view_id": sanitize_for_log(view_id)},
+                )
                 return
 
         # Handle the event
 
-        if self.use_actors and self.actor_handle:
+        # Determine actor eligibility — embedded children do NOT have their
+        # own actor in Phase A, so an event targeting a child must take the
+        # sync path even when the parent consumer runs in actor mode.
+        is_embedded_child_target = target_view is not self.view_instance
+
+        if self.use_actors and self.actor_handle and not is_embedded_child_target:
             # Phase 5: Use actor system for event handling
             try:
                 logger.info("Handling event '%s' with actor system", event_name)
 
-                # Security checks (shared with non-actor paths)
+                # Security checks (shared with non-actor paths) — run on the
+                # RESOLVED target (may be an embedded child) so a child's
+                # handler is what gets validated/called, not the parent's.
                 handler = await _validate_event_security(
-                    self, event_name, self.view_instance, self._rate_limiter
+                    self, event_name, target_view, self._rate_limiter
                 )
                 if handler is None:
                     return
