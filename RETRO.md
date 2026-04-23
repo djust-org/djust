@@ -114,6 +114,87 @@ issue or be explicitly closed with a reason.
 | 102 | v0.6.0 or v0.7.0 decision: breaking rename of framework-internal attrs to `_*` prefix | Retro v0.5.7 / PR #957 | #962 | Open | #762 shipped non-breaking filter; rename still on table |
 | 103 | Weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers | Retro v0.5.7 / PR #958 | #963 | Open | All SDK tests are mocked; no real-cloud end-to-end |
 | 104 | Document `key_template` UUID-prefix convention for `s3_events.parse_s3_event` | Retro v0.5.7 / PR #958 | #964 | Open | Silent fallback to full key otherwise |
+| 105 | Substring-matching tests in other existing suites should be rewritten to parse HTML | Retro v0.6.0 / PR #966 | — | Open | Tech-debt sweep |
+| 106 | Silent cache-write failures in `03-websocket.js:386` should log under `djustDebug` | Retro v0.6.0 / PR #970 | — | Open | Tech-debt |
+| 107 | No version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully | Retro v0.6.0 / PR #970 | — | Open | Tech-debt |
+| 108 | Dashboard→Dashboard re-mount limitation in sticky LiveView demo; `{% live_render %}` doesn't auto-detect preserved stickies | Retro v0.6.0 / PR #969 | — | Open | v0.6.x/v0.7.0 enhancement — teach tag to emit slot markers automatically |
+| 109 | `djust[admin]` extra vs `djust.admin_ext` module name divergence | Retro v0.6.0 / PR #971 | — | Open | Rename one or the other in v0.7.0 |
+| 110 | Hardcoded `TARGET_LIST_UPDATE_S * 20` for WS mount target in perf tests should become named `TARGET_WS_MOUNT_S` | Retro v0.6.0 / PR #972 | — | Open | Tech-debt |
+| 111 | cProfile top-N table in `docs/performance/v0.6.0-profile.md` is a single-run snapshot; add "not canonical" disclaimer | Retro v0.6.0 / PR #972 | — | Open | Tech-debt |
+| 112 | `_assert_benchmark_under` helper should move to `tests/benchmarks/conftest.py` for shared scope | Retro v0.6.0 / PR #972 | — | Open | Tech-debt |
+
+---
+
+## v0.6.0 — Production Hardening, Interactivity, and Advanced UX Primitives (PRs #885–#973)
+
+**Date**: 2026-04-23
+**Scope**: v0.6.0 shipped as 9+ merged features across multiple autonomous-pipeline sessions. This retro consolidates the 9 PRs merged in the final autonomous run (#965, #966, #967, #969, #970, #971, #972, #973) plus the earlier-merged v0.6.0 work (dj-mutation, dj-sticky-scroll, dj-track-static, runtime-layout-switching, WS compression). Headline features shipped: dj-transition CSS enter/leave, FLIP + skeleton animation, embedding primitive, sticky LiveViews (ADR + demo + scroll/attr preservation), service-worker advanced features, package-consolidation sunset, performance profiling guards, and `@starting-style` browser-native confirmation.
+**Tests at close**: 6070+ Python, 1349+ JS.
+
+### What We Learned
+
+**1. Pre-commit Self-Review is load-bearing, NOT optional on "small" PRs.**
+The three-layer review model (Self-Review + Security + Stage 11) caught 19 🔴 pre-commit findings across 4 PRs where Stage 11 alone would have let many ship. Two PRs (#969 sticky demo, #971 package sunset) tried to skip Self-Review as "mostly docs" and each got caught with multiple 🔴 accuracy bugs (5 total) at Stage 11 instead. The skipping-is-cheaper hypothesis is falsified; the cost of fixing 🔴 at Stage 11 (commit cycle + CI re-run + review re-post) exceeds the cost of a 3-minute Self-Review agent. **Rule going forward: Self-Review runs on EVERY PR with new code, including templates, JS modules, and user-facing docs with code examples.**
+
+**2. "Scaffolding shipped, plumbing missing" is a distinct failure mode.**
+PR #970 (SW advanced features) had wire-level scaffolding (message handlers, frame types) but 2 of 3 features were dead code end-to-end — no application path invoked the new APIs. Tests passed because they fired the wire handlers directly. Self-Review caught all three (`_clientState` never populated, popstate race, `cacheVdom`/`lookupVdom` never called). **Lesson: every new exported function/method needs a WIRING_CHECK — grep for callers; if the only callers are tests, the feature is unwired.**
+
+**3. Substring-match tests mask critical bugs.**
+PR #966 (embedding primitive) had 6 🔴 of which most were caught BECAUSE the fix pass mandated rewriting tests to use `html.parser` instead of substring matching. The original tests asserted `'view_id="X"' in rendered_html` — which passed while `view_id=X` was actually lodged OUTSIDE the tag as text content (not as an attribute). **Lesson: any test that checks rendered-HTML attributes must parse HTML. Applied consistently in subsequent PRs (#967, #969, #970) and caught zero new regressions of the same class.**
+
+**4. Planner-discovered scope icebergs.**
+PR #966 planning agent found that djust had `hasattr`-gated stubs for child-view embedding but no production implementation. Sticky LiveViews (originally one ROADMAP line) became 3 PRs (#967 attr preservation, #969 ADR + demo, supporting scroll preservation). Per-phase scope stayed tractable (~1-2k LOC per PR) instead of a single 2,600-LOC blob. **Lesson: planning-stage subagent is worth its context cost when the ROADMAP entry touches the framework's surface — the planner catches iceberg patterns that implementers miss.**
+
+**5. Browser-native features sometimes mean zero framework work.**
+PR #973 (`@starting-style`) was a pure docs PR — djust's VDOM insert path already honors browser-native CSS, so the deliverable was confirming + documenting rather than implementing. **Lesson: before committing to framework support for a new browser capability, ask whether the native capability already works through the existing insert path.**
+
+**6. CI xdist is incompatible with pytest-benchmark stats.**
+PR #972 caught this the hard way — local tests passed (sequential) but CI failed all 8 benchmarks because `benchmark.stats["mean"]` raises under `--benchmark-disable` (auto-set by xdist). Fix is a small guard helper. **Lesson: local verification must include `pytest -n auto --benchmark-disable` for any PR adding benchmark assertions — that's the exact CI invocation.**
+
+### Insights
+
+- **Three-layer review (Self-Review + Security + Stage 11) is canonical for v0.6.x.** Every PR that ran all three had 0 🔴 at Stage 11. Every PR that skipped one had 🔴 or 🟡 at Stage 11.
+- **Planning subagent for features touching core framework surfaces.** Saved 2-3 scope icebergs across the run.
+- **Mandatory retro-artifact gate (from v0.5.7).** Zero retro dropouts across 9 PRs.
+- **Bundle-size budget held.** Nine new features added ~3.8 KB gzipped cumulatively to the client — well under a notional 10 KB-per-minor budget.
+
+### Process Improvements Applied
+
+**CLAUDE.md additions needed**:
+- "Parse HTML, don't grep" rule for rendered-HTML tests.
+- "WIRING_CHECK" — grep for non-test callers of every new exported function/method.
+- "Run `pytest -n auto --benchmark-disable` locally before push if adding benchmark assertions."
+
+**Pipeline-run skill updates needed**:
+- Never skip Self-Review on any PR with new code, INCLUDING templates/docs with code examples.
+- Post-retry commit messages: don't pull from `git log HEAD --pretty=%B` (risks pulling wrong message after hook-modified retry).
+
+**Checklist additions**:
+- New template tag / JS module → grep for 3 real caller sites before marking Implementation stage passed.
+- New benchmark assertion → verify under both `--benchmark-only` AND `-n auto --benchmark-disable`.
+
+**Skill updates shipped during the run**:
+- (none — deferred to post-milestone sweep)
+
+### Review Stats
+
+| Metric | #965 | #966 | #967 | #969 | #970 | #971 | #972 | #973 | Total |
+|---|---|---|---|---|---|---|---|---|---|
+| Python tests added | 21 | 24 | 22 | 2 | 37 | 0 | 8 | 0 | 114 |
+| JS tests added | 12 | 7 | 13 | 2 | 12 | 0 | 0 | 0 | 46 |
+| 🔴 Pre-commit | 5🟡 | 6 | 5 | 0 | 3 | 0 | 0 | 0 | 19 🔴 / 15 🟡 |
+| 🔴 Stage 11 | 0 | 0 | 0 | 3 | 0 | 2 | 0 | 0 | 5 |
+| CodeQL iters | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| CI iters | 1 | 2 | 1 | 2 | 1 | 1 | 2 | 1 | 11 |
+| Bundle +gzipped | +780 B | +368 B | +680 B | +6 B | +1749 B | 0 | 0 | 0 | +3583 B |
+
+### Open Items
+
+Tracked as Action Tracker rows #105–#112 above. Note: row #83 (stale docstring `websocket.py:494` from #966) was resolved in PR #969 and is already closed upstream. Each new open row needs a GitHub issue (tech-debt label) created as a follow-up run — the implementer did not create GH issues inline.
+
+### Status
+
+✅ v0.6.0 milestone **CLOSED (rc1 to cut next)**. 9 features shipped from this autonomous run plus earlier-v0.6.0 work (dj-mutation, dj-sticky-scroll, dj-track-static, runtime-layout-switching, WS compression). Remaining v0.6.0 wish-list items (ADR-006 AI-generated UIs, Streaming initial render, Time-travel debugging, Hot View Replacement) are substantial and become v0.6.x / v0.7.0 work. The milestone as shipped is defensible and complete.
 
 ---
 
