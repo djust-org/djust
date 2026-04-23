@@ -26,7 +26,7 @@ issue or be explicitly closed with a reason.
 | 14 | admin_ext: silent `except Exception: pass` blocks should log at DEBUG | PR #771 | #775 | Closed | Fixed in PR #781 |
 | 15 | admin_ext: `redirect_url` should use `\|escapejs` in JS context | PR #771 | #776 | Closed | Fixed in PR #781 |
 | 16 | Theming/components template tests need dedicated Django settings | Retro v0.5.0 | #777 | Closed | Fixed in PR #782 (demo INSTALLED_APPS) |
-| 17 | Ship final standalone package versions as deprecation shims | Retro v0.5.0 | #778 | Closed | Shipped in sibling repos (djust-{auth,tenants,admin,theming,components}) as v99.0.0 DeprecationWarning shims, 2026-04-22 |
+| 17 | Ship final standalone package versions as deprecation shims | Retro v0.5.0 | #778 | Closed | Shipped as v99.0.0 git tags + DeprecationWarning shims in all 5 sibling repos (djust-{auth,tenants,admin,theming,components}), 2026-04-23. **PyPI publish deliberately deferred (Path A)**: existing PyPI versions stay as-is; new users are directed to `pip install djust` via the updated READMEs. Rationale: sibling packages had low/no PyPI download volume; the forced `djust>=0.5.6rc1` shim dep would pull full framework + Rust wheels into users who only wanted a narrow subset. Can publish later if user feedback surfaces. |
 | 18 | Broaden dep-extractor correctness harness matrix (Spaceless, standalone CustomTag, nested With, standalone Block, ReactComponent, RustComponent) | PR #785 | #786 | Open | — |
 | 19 | Extract filter-arg vars as deps in `extract_from_variable` | PR #785 | #787 | Open | `{{ a\|default:fallback }}` drops `fallback` |
 | 20 | Slot-in-for-loop test coverage (Risk 1 from plan) | PR #788 | #789 | Open | — |
