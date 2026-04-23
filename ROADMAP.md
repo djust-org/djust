@@ -108,6 +108,34 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P0** | `AssistantMixin` + LLM provider abstraction ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 5, [ADR-003](docs/adr/003-llm-provider-abstraction.md), [ADR-004](docs/adr/004-undo-for-llm-driven-actions.md)) | Voice/chat-driven djust apps; market window is ~12 months; largest revenue angle | v0.5.x |
 | **P0** | AI-generated UIs with capture-and-promote ([ADR-006](docs/adr/006-ai-generated-uis-with-capture-and-promote.md)) | "User builds an app with an LLM" — v0.6.0 headline feature; lossless export to Python | v0.6.0 |
 | **P1 ⭐** | **Auto-generated HTTP API from `@event_handler`** ([ADR-008](docs/adr/008-auto-generated-http-api-from-event-handlers.md)) | **v0.5.1 headline feature (pulled forward from v0.7.0).** Opt-in `expose_api=True` turns handlers into `POST /djust/api/<view>/<handler>/` endpoints with OpenAPI schema — unlocks mobile, S2S, CLI, and AI-agent callers without duplicating logic. Transport adapter over the existing handler stack (same coercion, permissions, rate limiter) → manifesto principle #4 preserved. | v0.5.1 |
+| **P1** | 3 pre-existing main test failures (#935) | `test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view` — failing on main, surfaced during PR #924 | v0.5.2 |
+| **P1** | FormArrayNode drops inner template content (#930) | Latent bug — `{% form_array %}inner{% endform_array %}` silently loses markup | v0.5.2 |
+| **P1** | tag_input missing `name=` attribute (#932) | Form submissions silently drop field values | v0.5.2 |
+| **P1** | Audit all HttpResponseRedirect sites (#921) | `url_has_allowed_host_and_scheme` coverage — close open-redirect category | v0.5.2 |
+| **P2** | Drop redundant `ch == ' '` in sanitize_for_log (#914) | 1-line simplification; ASCII space is printable | v0.5.2 |
+| **P2** | gallery/registry.py dead discover_* path (#933) | `get_gallery_data` never consumes discovery results | v0.5.2 |
+| **P2** | add javascript: + HTTPS-downgrade + path-traversal edge tests (#922) | Test coverage gaps flagged in PR #920 review | v0.5.2 |
+| **P2** | 10 py-format-drift files (#915) | Pre-existing ruff-format drift; bulk reformat | v0.5.2 |
+| **P2** | dj-remove teardown dedupe via _teardownState (#900) | Code-quality refactor; Stage 11 nit from PR #898 | v0.5.2 |
+| **P2** | dj-remove 2-token-form debug warn (#901) | Silent fall-through on malformed spec; debug-only warn | v0.5.2 |
+| **P2** | dj-transition-group reduce 700ms test wallclock (#905) | Override `dj-remove-duration=50` in the integration test | v0.5.2 |
+| **P2** | dj-transition-group nested-group regression test (#906) | Verify inner groups install independently | v0.5.2 |
+| **P2** | dj-transition parser reject comma/paren separators (#886) | Input validation; avoid silent coercion | v0.5.2 |
+| **P2** | dj-transition fallback timer vs detached element (#887) | Timer fires against node already removed from DOM | v0.5.2 |
+| **P2** | dj-transition stabilize transitionend-dispatch tests (#888) | 2 tests skipped in PR #885 — fix under vitest parallel load | v0.5.2 |
+| **P2** | dj-mutation test for pre-debounce removal (#882) | Assert no CustomEvent fires when element removed before debounce | v0.5.2 |
+| **P2** | dj-mutation/sticky-scroll observer misses attr removal (#879) | Root observer doesn't re-scan when attribute removed on kept element | v0.5.2 |
+| **P2** | dj-sticky-scroll document scroll-to-bottom install behavior (#881) | Unconditional on install — explicit doc | v0.5.2 |
+| **P2** | dj-track-static document Map-vs-WeakMap choice (#880) | `39-dj-track-static.js` — explain non-weak reference | v0.5.2 |
+| **P2** | UploadMixin schema-changed saved-configs replay (#892) | Defensive replay when allow_upload kwargs shift between versions | v0.5.2 |
+| **P2** | _restore_listen_channels vs _assert_same_loop (#896) | Cross-loop restore interaction — verify no AssertionError | v0.5.2 |
+| **P2** | ADR for mixin-side-effect replay pattern (#897) | Document the `_restore_*` pattern formally | v0.5.2 |
+| **P2** | CodeQL MaD model for sanitize_for_log (#934) | Teach CodeQL the custom sanitizer — close FP class | v0.5.2 |
+| **P2** | Automate CHANGELOG test-count validation (#908) | Pre-commit hook or make target; 3 retros flagged drift | v0.5.2 |
+| **P2** | codeql-triage.sh script (#916) | Dump alerts as markdown triage table | v0.5.2 |
+| **P2** | Audit open-ended dep ceilings (#910) | `requests>=2.28`, `markdown>=3.0` etc. — add upper bounds | v0.5.2 |
+| **P3** | Variable-height virtual-list items via ResizeObserver (#797) | ~200 LOC; extends virtual-list to variable row heights | v0.5.x |
+| **P3** | Ship final standalone package compat shims (#778) | djust-auth/tenants/theming/components final PyPI releases | v0.6.0 |
 
 ---
 
@@ -781,6 +809,17 @@ class OnboardingView(WizardMixin, LiveView):
 *Goal:* Originally scoped around the `djust-components` fold, which actually shipped in v0.5.0 alongside auth / tenants / admin / theming (confirmed in the v0.5.0 retrospective). With the headline item retired, v0.5.2 becomes a narrow-scope cleanup release — the demo-project split into test harness + scaffold pointer.
 
 ~~**Package consolidation: fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3)**~~ ✅ **Shipped in v0.5.0** as part of the "Full Package Consolidation" milestone. All 272 Python files already live under `python/djust/components/` (4.3 MB). The standalone `djust-components` repo continues to exist as a compat shim; its sunset is tracked under v0.6.0 Phase 4 along with auth/tenants/theming.
+
+**Tech-debt drain (28 open issues, P1–P3)** — Overnight drain batch 2026-04-23. Process through pipeline-run grouping where related. Grouped as:
+
+- **Real bugs** (P1): #930 FormArrayNode drops inner content, #932 tag_input missing `name=`, #935 3 pre-existing main test failures.
+- **Security audit** (P1–P2): #921 redirect site audit for `url_has_allowed_host_and_scheme`, #922 javascript:/HTTPS-downgrade/path-traversal edge tests.
+- **dj-remove / dj-transition / dj-transition-group follow-ups** (P2): #900 teardown dedupe, #901 2-token warn, #886 parser, #887 detached timer, #888 stabilize skipped tests, #905 reduce 700ms wallclock, #906 nested-group test.
+- **Other JS observer fixes** (P2): #879 attr-removal miss, #882 dj-mutation pre-debounce, #880/#881 docs.
+- **Mixin-replay** (P2): #892 UploadMixin schema change, #896 _restore_listen_channels cross-loop, #897 ADR for replay pattern.
+- **Tooling** (P2): #908 CHANGELOG test-count check, #916 codeql-triage.sh, #934 CodeQL MaD for sanitize_for_log.
+- **Mechanical cleanup** (P2): #914 redundant char check, #915 10 py-format-drift files, #933 gallery/registry dead path, #910 audit dep ceilings.
+- **Larger / deferred** (P3): #797 variable-height virtual-list, #778 standalone package compat shims.
 
 **Strip `examples/demo_project` down to a test harness — P3 (opportunistic)** — The directory currently plays two roles: (1) the pytest/playwright test-harness (settings.py, urls.py, asgi.py — maintained) and (2) ~12 pseudo-demo apps (`demo_app`, `djust_homepage`, `djust_demos`, `djust_forms`, `djust_tests`, `djust_docs`, `djust_rentals`, `djust_shared` — unmaintained, bit-rotting). The real user-facing starter template is the sibling `djust-scaffold` repo. Split the two: move the test-harness to `tests/test_project/`, delete the 12 demo apps, and point users at `djust-scaffold`. Critical-path effort is ~2 hours (dependency audit already done) — 5 real couplings require ports (`test_query_optimizer*.py` needs `djust_rentals` models → move to `tests/test_project/test_rentals/`; `test_demo_views.py` needs inline tenant view; playwright tests need `/tests/loading/`, `/cache/`, `/draft-mode/` routes ported into a minimal `test_playwright_views` app). Also touches `pyproject.toml` `DJANGO_SETTINGS_MODULE`, `Makefile` 8 targets, `.github/workflows/test.yml` playwright job, `tests/conftest.py` sys.path. Full plan with file-by-file audit in `docs/plans/strip-demo-project-to-test-harness.md`. *Benefit is non-mechanical: stops the public repo from shipping a pretend-maintained demo that contradicts the real starter (djust-scaffold). Smaller repo, faster CI checkout, clearer story. One purpose per tree.*
 
