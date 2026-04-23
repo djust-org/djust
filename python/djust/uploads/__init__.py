@@ -1315,4 +1315,8 @@ try:
         ]
     )
 except ImportError:
+    # Storage submodule depends on nothing optional today (Redis client
+    # is imported lazily by RedisUploadState), but guard the import so a
+    # partial install can't break the base package. Intentionally silent
+    # — this is a best-effort re-export, not a required code path.
     pass

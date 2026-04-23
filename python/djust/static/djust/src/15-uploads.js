@@ -407,10 +407,24 @@
      * Handle `upload_resumed` messages delivered by the WS frame
      * handler. Exposed as `window.djust.uploads.handleResumed` so
      * 03-websocket.js can call it without creating a circular import.
+     *
+     * Security: `data` arrives from the WebSocket wire, so `data.ref`
+     * is attacker-controlled. We only dispatch when:
+     *   1. `ref` is a non-empty string (no lookup-by-object tricks);
+     *   2. `pending` is a function we placed in the Map ourselves
+     *      (validated via `typeof` — a Map.get() that misses returns
+     *      undefined, never a prototype method from the Map class).
+     * This prevents a malicious server from steering `pending(data)`
+     * into an unintended dispatch.
      */
     function handleUploadResumed(data) {
+        if (!data || typeof data.ref !== 'string' || data.ref.length === 0) {
+            return;
+        }
         const pending = pendingResumes.get(data.ref);
-        if (pending) pending(data);
+        if (typeof pending === 'function') {
+            pending(data);
+        }
     }
 
     /**

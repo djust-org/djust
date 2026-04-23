@@ -82,7 +82,6 @@ class UploadStateStore(Protocol):
 
     def get(self, upload_id: str) -> Optional[Dict[str, Any]]:
         """Return the state dict for ``upload_id`` or ``None`` if absent."""
-        ...
 
     def set(self, upload_id: str, state: Dict[str, Any], ttl: int) -> None:
         """Overwrite the state entry for ``upload_id`` with ``state`` and
@@ -91,7 +90,6 @@ class UploadStateStore(Protocol):
         Raises :exc:`UploadStateTooLarge` if the JSON-encoded state
         exceeds :data:`MAX_STATE_SIZE_BYTES`.
         """
-        ...
 
     def update(self, upload_id: str, partial: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Merge ``partial`` into the existing entry for ``upload_id``.
@@ -100,11 +98,9 @@ class UploadStateStore(Protocol):
         exist (update is a no-op — we never resurrect a deleted entry).
         TTL is preserved from the prior entry.
         """
-        ...
 
     def delete(self, upload_id: str) -> None:
         """Remove the state entry for ``upload_id``. No-op if absent."""
-        ...
 
 
 # ---------------------------------------------------------------------------

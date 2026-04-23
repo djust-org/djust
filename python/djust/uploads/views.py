@@ -41,6 +41,7 @@ from django.http import JsonResponse
 from django.urls import path
 from django.views import View
 
+from .._log_utils import sanitize_for_log
 from .resumable import expand_ranges
 from .storage import UploadStateStore, get_default_store
 
@@ -108,10 +109,14 @@ class UploadStatusView(View):
         try:
             entry = self._get_store().get(upload_id)
         except Exception as exc:  # noqa: BLE001
+            # sanitize_for_log() breaks the taint chain from the URL
+            # param; _UUID_RE.match() above already rejects anything but
+            # hex+hyphens, so this is belt-and-suspenders against a
+            # future regex loosening.
             logger.warning(
                 "UploadStatusView: state store read failed for %s: %s",
-                upload_id,
-                exc,
+                sanitize_for_log(upload_id),
+                sanitize_for_log(str(exc)),
             )
             return _not_found_response()
 
