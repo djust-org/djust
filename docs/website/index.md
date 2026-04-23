@@ -164,6 +164,12 @@ Rust powers the core rendering engine:
 
 ---
 
+## Migrating
+
+- **[From standalone djust packages](guides/migration-from-standalone-packages.md)** — moving from `pip install djust-auth` / `djust-tenants` / `djust-theming` / `djust-components` / `djust-admin`? Replace with `djust[auth]` / `djust[tenants]` / etc. extras. Mechanical sed script + FAQ included. ([ADR-007](../adr/007-package-taxonomy-and-consolidation.md) Phase 4 — sunset as of v0.6.0.)
+
+---
+
 ## Community
 
 - [GitHub](https://github.com/johnrtipton/djust) — Source, issues, PRs

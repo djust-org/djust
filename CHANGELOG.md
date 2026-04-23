@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Package consolidation sunset — ADR-007 Phase 4 closure (v0.6.0)** — the
+  three-phase consolidation that started in v0.5.0 is now complete. The five
+  sibling repos (`djust-auth`, `djust-tenants`, `djust-theming`,
+  `djust-components`, `djust-admin`) are sunset at `v99.0.0` — each retains a
+  shim-only `__init__.py` that re-exports from `djust.<name>` and emits a
+  `DeprecationWarning`. Path A was chosen over PyPI publish: existing releases
+  remain installable indefinitely for legacy projects; no new PyPI versions
+  will ship. djust core now exposes the consolidation via
+  `[project.optional-dependencies]` — `djust[auth]`, `djust[tenants]` (with
+  `djust[tenants-redis]` and `djust[tenants-postgres]` backend-specific
+  sub-extras), `djust[theming]`, `djust[components]`, `djust[admin]`. Two new
+  extras (`auth`, `tenants`) added in this release; the others shipped in
+  v0.5.0. ADR-007 status updated from "Proposed" → "Accepted + Phase 4
+  complete". New migration guide:
+  `docs/website/guides/migration-from-standalone-packages.md` (mechanical sed
+  script + FAQ + edge cases). Cosmetic tech-debt: sibling repos retain dead
+  pre-consolidation source files next to the shim — cleanup tracked
+  separately; no user impact.
+
 ### Added
 
 - **Service Worker advanced features (v0.6.0)** — three SW-backed optimizations
