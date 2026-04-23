@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0rc1] - 2026-04-23
+
 ### Documentation
 
 - **CSS `@starting-style` guide section (v0.6.0)** — documents that
