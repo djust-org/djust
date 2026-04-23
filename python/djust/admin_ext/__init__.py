@@ -30,9 +30,6 @@ def autodiscover():
     autodiscover_modules("djust_admin", register_to=site)
 
 
-default_app_config = "djust.admin_ext.apps.DjustAdminConfig"
-
-
 __all__ = [
     "DjustAdminSite",
     "DjustModelAdmin",

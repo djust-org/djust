@@ -97,5 +97,3 @@ __all__ = [
 ]
 
 __version__ = "0.4.0rc4"
-
-default_app_config = "djust.theming.apps.DjustThemingConfig"

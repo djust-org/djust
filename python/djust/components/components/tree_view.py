@@ -79,7 +79,5 @@ class TreeView(Component):
         cls = "tree"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_expand = html.escape(self.expand_event)
-        e_select = html.escape(self.select_event)
         nodes_html = "".join(self._render_node(n, 0) for n in self.nodes)
         return f'<div class="{cls}">{nodes_html}</div>'

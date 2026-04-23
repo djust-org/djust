@@ -885,7 +885,6 @@ class DataTableHandler:
         export_event = conditional_escape(kw.get("export_event", "table_export"))
         export_formats = kw.get("export_formats") or ["csv", "json"]
         group_by = str(kw.get("group_by", ""))
-        group_event = conditional_escape(kw.get("group_event", "table_group"))
         group_toggle_event = conditional_escape(kw.get("group_toggle_event", "table_group_toggle"))
         collapsible_groups = kw.get("collapsible_groups", True)
         collapsed_groups = kw.get("collapsed_groups") or []
@@ -920,7 +919,6 @@ class DataTableHandler:
         importable = kw.get("importable", False)
         import_event = conditional_escape(kw.get("import_event", "table_import"))
         import_formats = kw.get("import_formats") or ["csv", "json"]
-        import_preview = kw.get("import_preview", True)
         import_preview_data = kw.get("import_preview_data") or []
         import_errors = kw.get("import_errors") or []
         import_pending = kw.get("import_pending", False)
@@ -2581,12 +2579,10 @@ class SplitPaneHandler:
         # For Rust engine, content is pre-rendered; we just wrap it
         kwargs = _parse_args(args, context)
         direction = kwargs.get("direction", "horizontal")
-        initial = kwargs.get("initial", "50")
         from django.utils.html import conditional_escape as ce
         import uuid as _uuid
 
         uid = f"sp-{_uuid.uuid4().hex[:6]}"
-        size_prop = "width" if direction == "horizontal" else "height"
         return mark_safe(
             f'<div class="split-pane split-pane-{ce(direction)}" id="{uid}">{content}</div>'
         )
@@ -3125,7 +3121,6 @@ class StatusIndicatorHandler:
         pulse = kw.get("pulse", False)
         size = conditional_escape(kw.get("size", "md"))
 
-        e_status = conditional_escape(status)
         e_label = conditional_escape(str(label))
 
         status_colors = {
@@ -4448,7 +4443,6 @@ class SidebarHandler:
     def render(self, args, content, context):
         kw = _parse_args(args, context)
         sidebar_id = conditional_escape(kw.get("id", "sidebar"))
-        active = kw.get("active", "")
         collapsed = kw.get("collapsed", False)
         title = kw.get("title", "")
         toggle_event = conditional_escape(kw.get("toggle_event", "toggle_sidebar"))
@@ -4796,9 +4790,7 @@ class FilterBarHandler:
     def render(self, args, content, context):
         kw = _parse_args(args, context)
         bar_id = conditional_escape(kw.get("id", "filter-bar"))
-        event = conditional_escape(kw.get("event", "filter_change"))
         custom_class = conditional_escape(kw.get("class", ""))
-        clear_event = conditional_escape(kw.get("clear_event", "filter_clear"))
 
         cls = "dj-filter-bar"
         if custom_class:
@@ -9499,9 +9491,9 @@ class PivotTableHandler:
     """Inline handler for {% pivot_table data=data rows="category" cols="quarter" values="revenue" agg="sum" %}"""
 
     AGG_FUNCS = {
-        "sum": lambda vals: sum(vals),
+        "sum": sum,
         "avg": lambda vals: sum(vals) / len(vals) if vals else 0,
-        "count": lambda vals: len(vals),
+        "count": len,
         "min": lambda vals: min(vals) if vals else 0,
         "max": lambda vals: max(vals) if vals else 0,
     }

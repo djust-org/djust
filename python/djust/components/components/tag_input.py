@@ -47,7 +47,6 @@ class TagInput(Component):
         cls = "tag-input"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_name = html.escape(self.name)
         e_label = html.escape(self.label)
         e_placeholder = html.escape(self.placeholder)
         dj_event = html.escape(self.event or self.name)

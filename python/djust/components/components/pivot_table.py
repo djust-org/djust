@@ -40,9 +40,9 @@ class PivotTable(Component):
     """
 
     AGG_FUNCS = {
-        "sum": lambda vals: sum(vals),
+        "sum": sum,
         "avg": lambda vals: sum(vals) / len(vals) if vals else 0,
-        "count": lambda vals: len(vals),
+        "count": len,
         "min": lambda vals: min(vals) if vals else 0,
         "max": lambda vals: max(vals) if vals else 0,
     }

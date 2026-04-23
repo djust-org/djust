@@ -131,13 +131,7 @@ class BreadcrumbDropdown(Component):
         label = html.escape(str(item.get("label", "")))
         url = item.get("url", "")
 
-        sep_html = ""
-        if not is_last:
-            sep_html = ""  # separator is prepended by next item
-        # For first item no separator, otherwise prepend
-        # Actually, let's put separator before all items except first
-        # We handle this by always including separator for non-first items
-        # But since we build items sequentially, we add separator inside the item
+        # Separators are rendered between items by the caller; no per-item separator here.
 
         aria = ' aria-current="page"' if is_last else ""
 

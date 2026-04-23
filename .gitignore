@@ -75,3 +75,4 @@ packages/
 .playwright-mcp/
 docs/website/guides/scaffolding.md
 python/djust/libdjust_live.dylib.dSYM/
+context/

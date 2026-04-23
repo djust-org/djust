@@ -17,6 +17,18 @@ from djust.components.utils import interpolate_color  # noqa: F401
 
 register = template.Library()
 
+# Re-exports for sub-modules (see _charts.py, _forms.py, etc.)
+__all__ = [
+    "register",
+    "uuid",
+    "conditional_escape",
+    "mark_safe",
+    "CURRENCY_SYMBOLS",
+    "interpolate_color",
+    "_resolve",
+    "_parse_kv_args",
+]
+
 
 def _resolve(value, context):
     """Resolve a template variable or return the literal value."""

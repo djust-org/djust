@@ -35,8 +35,6 @@ descriptors, mixins, rust handlers, gallery).
 
 __version__ = "0.5.4rc1"
 
-default_app_config = "djust.components.apps.DjustComponentsConfig"
-
 # ---------------------------------------------------------------------------
 # Core component classes (original djust.components)
 # ---------------------------------------------------------------------------

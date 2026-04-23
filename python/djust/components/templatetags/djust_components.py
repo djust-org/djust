@@ -27,13 +27,21 @@ from django.utils.safestring import mark_safe
 from djust.components.templatetags._registry import register  # noqa: F401
 
 # Import sub-modules so their @register decorators execute at load time.
-import djust.components.templatetags._charts  # noqa: F401
-import djust.components.templatetags._dev_tools  # noqa: F401
-import djust.components.templatetags._advanced  # noqa: F401
-import djust.components.templatetags._forms  # noqa: F401
+# Done via importlib so static analyzers don't flag them as "unused imports" —
+# the import is purely for the side effect of running each module's top-level code.
+import importlib
+
+for _submodule in (
+    "djust.components.templatetags._charts",
+    "djust.components.templatetags._dev_tools",
+    "djust.components.templatetags._advanced",
+):
+    importlib.import_module(_submodule)
+del _submodule, importlib
 
 # Re-export helpers moved to sub-modules for backward compatibility
-from djust.components.templatetags._forms import (  # noqa: F401
+# (importing from _forms also triggers its @register decorators at load time)
+from djust.components.templatetags._forms import (  # noqa: F401, E402
     _get_field_type,
     _infer_columns,
     _queryset_to_rows,
@@ -87,7 +95,6 @@ class ModalNode(template.Node):
 
     def render(self, context):
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        modal_id = kw.get("id", "modal")
         title = kw.get("title", "")
         is_open = kw.get("open", False)
         size = kw.get("size", "md")  # sm, md, lg, xl
@@ -1667,7 +1674,6 @@ def code_block(
     e_language = conditional_escape(language or "text")
     e_filename = conditional_escape(filename)
     e_code = conditional_escape(code)
-    e_event = conditional_escape(copy_event)
     # Theme is interpolated inside a <script> — HTML escaping is insufficient.
     # Restrict to alphanumeric, hyphens, and underscores to prevent injection.
     safe_theme = theme if _re.match(r"^[a-zA-Z0-9_-]+$", str(theme)) else "github-dark"
@@ -2335,7 +2341,6 @@ def tree_view(nodes=None, expand_event="tree_expand", select_event="tree_select"
 
     e_expand = conditional_escape(expand_event)
     e_select = conditional_escape(select_event)
-    e_selected = conditional_escape(selected)
 
     def render_node(node, depth=0):
         if not isinstance(node, dict):
@@ -2735,7 +2740,6 @@ def file_dropzone(
     e_name = conditional_escape(name)
     e_label = conditional_escape(label)
     e_accept = conditional_escape(accept)
-    e_event = conditional_escape(event)
     e_helper = conditional_escape(helper)
     e_max = conditional_escape(str(max_size_mb))
 
@@ -2807,7 +2811,6 @@ class SplitPaneNode(template.Node):
         content1 = self.pane1.render(context)
         content2 = self.pane2.render(context)
 
-        flex_dir = "row" if direction == "horizontal" else "column"
         size_prop = "width" if direction == "horizontal" else "height"
 
         js = (
@@ -2856,7 +2859,6 @@ def table_of_contents(items=None, title="Contents", active="", event=""):
         return mark_safe("")
 
     e_title = conditional_escape(title)
-    e_active = conditional_escape(active)
     e_event = conditional_escape(event) if event else ""
 
     def render_item(item):
@@ -3103,7 +3105,6 @@ def rich_text_editor(
             toolbar_html += '<div class="rte-sep"></div>'
         else:
             e_cmd = conditional_escape(cmd)
-            e_arg = conditional_escape(arg)
             e_lbl = conditional_escape(lbl)
             toolbar_html += (
                 f'<button class="rte-btn" type="button" title="{e_cmd}" '
@@ -3111,12 +3112,6 @@ def rich_text_editor(
                 f"document.execCommand('{e_cmd}',false,{repr(arg)});\">"
                 f"{e_lbl}</button>"
             )
-
-    sync_js = (
-        f"var ed=document.getElementById('{uid}-editor');"
-        f"var hid=document.getElementById('{uid}-hidden');"
-        f"if(ed&&hid){{hid.value=ed.innerHTML;}}"
-    )
 
     return mark_safe(
         f'<div class="form-group">'
@@ -3976,7 +3971,6 @@ class DescriptionListNode(template.Node):
         layout = kw.get("layout", "vertical")
         custom_class = kw.get("custom_class", "")
 
-        e_layout = conditional_escape(str(layout))
         e_custom_class = conditional_escape(str(custom_class))
 
         cls = "dj-dl"
@@ -4264,7 +4258,6 @@ class StatusIndicatorNode(template.Node):
         size = kw.get("size", "md")
         custom_class = kw.get("custom_class", "")
 
-        e_status = conditional_escape(str(status))
         e_label = conditional_escape(str(label))
         e_size = conditional_escape(str(size))
         e_custom_class = conditional_escape(str(custom_class))
@@ -8093,7 +8086,6 @@ class FormArrayNode(template.Node):
         can_remove = row_count > min_rows
 
         # Render template content for each row, or default inputs
-        content = self.nodelist.render(context)
         rows_html = []
         for i, row in enumerate(rows):
             val = conditional_escape(str(row.get("value", "") if isinstance(row, dict) else row))

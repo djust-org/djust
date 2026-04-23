@@ -37,8 +37,6 @@ class Icon(Component):
         e_name = html.escape(self.name)
         e_size = html.escape(self.size)
         e_set = html.escape(self.icon_set)
-        sizes = {"xs": "12", "sm": "16", "md": "20", "lg": "24"}
-        px = sizes.get(self.size, "20")
         cls = f"dj-icon dj-icon--{e_size}"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"

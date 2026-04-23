@@ -90,7 +90,6 @@ class Terminal(Component):
     @classmethod
     def _ansi_to_html(cls, text: str) -> str:
         """Convert ANSI escape codes to styled spans."""
-        escaped = html.escape(text)
         result = []
         open_spans = 0
         last_end = 0
