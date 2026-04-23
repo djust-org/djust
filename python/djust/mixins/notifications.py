@@ -99,6 +99,16 @@ class NotificationMixin:
         on known channels) so calling it on the same process that
         initially registered is harmless. Exceptions are logged and
         swallowed — restoration must not break the WS.
+
+        Cross-loop handoff (issue #896): if the singleton's bound loop
+        is different from the loop currently running the consumer
+        (server restart with a fresh ASGI loop, test harnesses that
+        spin up per-test loops, or a worker thread that created its
+        own loop for ``async_to_sync``), ``ensure_listening`` would
+        raise ``RuntimeError`` via ``_assert_same_loop``. We detect
+        the mismatch up-front and call ``reset_for_new_loop()`` to
+        drop the stale singleton; the next ``ensure_listening`` call
+        creates a fresh instance bound to the current loop.
         """
         channels = getattr(self, "_listen_channels", None)
         if not channels:
@@ -109,9 +119,38 @@ class NotificationMixin:
             return
         from asgiref.sync import async_to_sync
 
+        # Issue #896: check for cross-loop mismatch before
+        # ``ensure_listening`` can raise. ``async_to_sync`` runs the
+        # coroutine on its own event loop in a worker thread, so
+        # ``asyncio.get_running_loop()`` here (sync context) gives us
+        # the *current-thread* loop — not the one the coroutine will
+        # actually run on. Use the singleton's own ``_loop`` attr to
+        # compare: if it's set AND its loop is closed, the singleton
+        # is stranded on a dead loop and must be reset.
+        listener = PostgresNotifyListener.instance()
+        stranded = False
+        bound_loop = getattr(listener, "_loop", None)
+        if bound_loop is not None:
+            try:
+                if bound_loop.is_closed():
+                    stranded = True
+            except Exception:  # noqa: BLE001
+                # Any error introspecting the loop means we should
+                # err on the side of resetting rather than risk a
+                # ``_assert_same_loop`` crash below.
+                stranded = True
+        if stranded:
+            logger.info(
+                "NotificationMixin._restore_listen_channels: existing "
+                "PostgresNotifyListener is bound to a closed event loop — "
+                "resetting singleton before replay (issue #896).",
+            )
+            PostgresNotifyListener.reset_for_new_loop()
+            listener = PostgresNotifyListener.instance()
+
         for channel in list(channels):
             try:
-                async_to_sync(PostgresNotifyListener.instance().ensure_listening)(channel)
+                async_to_sync(listener.ensure_listening)(channel)
             except DatabaseNotificationNotSupported:
                 # Non-postgres backend — ``listen()`` would have raised
                 # at the original call site, so seeing this here means
@@ -122,6 +161,38 @@ class NotificationMixin:
                     "available; channel %r will not receive NOTIFYs (issue #894).",
                     channel,
                 )
+            except RuntimeError as exc:
+                # _assert_same_loop guard (issue #896) or a deeper
+                # cross-loop race we didn't catch with the pre-check.
+                # Reset the singleton and try once more on a fresh
+                # instance — if that also fails, give up on this
+                # channel (without killing the WS).
+                if "event loop" in str(exc).lower() or "different" in str(exc).lower():
+                    logger.info(
+                        "NotificationMixin._restore_listen_channels: cross-loop "
+                        "ensure_listening failed for %r (%s) — resetting "
+                        "singleton and retrying once (issue #896).",
+                        channel,
+                        exc,
+                    )
+                    PostgresNotifyListener.reset_for_new_loop()
+                    listener = PostgresNotifyListener.instance()
+                    try:
+                        async_to_sync(listener.ensure_listening)(channel)
+                    except Exception as retry_exc:  # noqa: BLE001
+                        logger.warning(
+                            "NotificationMixin._restore_listen_channels: retry "
+                            "after cross-loop reset still failed for %r: %s",
+                            channel,
+                            retry_exc,
+                        )
+                else:
+                    logger.warning(
+                        "NotificationMixin._restore_listen_channels: failed to "
+                        "re-issue LISTEN %s (issue #894): %s",
+                        channel,
+                        exc,
+                    )
             except Exception as exc:  # noqa: BLE001 — restoration must never kill the WS
                 logger.warning(
                     "NotificationMixin._restore_listen_channels: failed to re-issue "

@@ -143,6 +143,31 @@ class PostgresNotifyListener:
                 logger.debug("reset_for_tests: task cancel raised", exc_info=True)
 
     @classmethod
+    def reset_for_new_loop(cls) -> None:
+        """Discard the singleton when its event loop has gone away.
+
+        Issue #896: ``PostgresNotifyListener`` is bound to whichever event
+        loop first called ``ensure_listening``. If that loop has since been
+        closed / replaced (server restart with a fresh ASGI loop, test
+        harnesses that spin up per-test loops, sticky-session LB sending the
+        WS connection to a different worker thread), the singleton's
+        ``_conn`` / ``_task`` are bound to a dead loop and any later
+        coroutine call fails ``_assert_same_loop``.
+
+        The WS state-restoration path uses this to safely recycle the
+        singleton before replaying ``_restore_listen_channels``: if the
+        old loop is gone, drop the reference so the next
+        ``ensure_listening`` call from the current loop creates a fresh
+        singleton bound to this loop.
+
+        Unlike :meth:`reset_for_tests`, this is idempotent and makes NO
+        attempt to gracefully cancel the stale task — the old loop is
+        assumed unreachable. Garbage collection reaps the old instance.
+        """
+        with cls._class_lock:
+            cls._instance = None
+
+    @classmethod
     async def areset_for_tests(cls) -> None:
         """Async variant of :meth:`reset_for_tests` that awaits task cancellation.
 

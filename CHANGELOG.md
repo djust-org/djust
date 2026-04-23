@@ -7,7 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ADR-009: Mixin side-effect replay on WebSocket state restoration —
+  closes #897** — formalizes the `_restore_<concept>()` pattern first
+  shipped ad-hoc in PRs #891 (UploadMixin, #889) and #895 (PresenceMixin
+  + NotificationMixin, #893 / #894). Codifies the serialization contract
+  (JSON-only saved attrs), error handling (WARNING-level wrap, never
+  kill the WS), convergence/idempotency requirement, naming convention
+  (`_restore_<concept>`), and call ordering in `LiveViewConsumer`.
+  Documents the rejected alternatives: don't-skip-mount (perf cost),
+  snapshot-entire-managers (serialization complexity), pickle-to-session
+  (security + format stability). New file:
+  `docs/adr/009-mixin-side-effect-replay.md`.
+
 ### Fixed
+
+- **UploadMixin defensive replay for schema-changed configs — closes #892** —
+  `_restore_upload_configs` now wraps each per-slot `allow_upload(**cfg)`
+  in try/except `TypeError`. On signature mismatch (kwarg added / renamed
+  / removed between djust versions), logs a WARNING identifying the slot
+  + the mismatched kwarg, then falls back to `allow_upload(slot_name)`
+  — bare-minimum replay — so uploads for that slot still work with
+  default config. One broken saved dict no longer kills replay for every
+  other slot on the page. Each saved dict is now tagged with
+  `_upload_configs_version = 1` for future explicit migrations.
+  Regression tests in
+  `tests/unit/test_mixin_replay_schema_cross_loop_892_896.py`.
+- **NotificationMixin cross-loop restore — closes #896** —
+  `_restore_listen_channels` now detects when the
+  `PostgresNotifyListener` singleton is stranded on a closed event loop
+  (server restart with fresh ASGI loop, test harness per-test loops,
+  sticky-session LB cross-worker handoff) and calls a new
+  `PostgresNotifyListener.reset_for_new_loop()` classmethod to drop the
+  singleton before replay. The pre-check inspects
+  `listener._loop.is_closed()`; a per-channel `except RuntimeError`
+  branch handles the race where the loop closes between the pre-check
+  and the `ensure_listening` call (resets and retries once). Prevents
+  silent NOTIFY drops on cross-loop restore. Regression tests in
+  `tests/unit/test_mixin_replay_schema_cross_loop_892_896.py`.
+
+
 
 - **Observer JS — closes #879, #880, #881, #882** —
   **#879**: `37-dj-mutation.js` and `38-dj-sticky-scroll.js` document-level

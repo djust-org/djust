@@ -982,6 +982,12 @@ class UploadMixin:
     # is not JSON-serializable and is silently dropped by
     # ``_get_private_state()``; this replay list is.
     _upload_configs_saved: Optional[List[Dict[str, Any]]] = None
+    # Issue #892: version tag for saved config dicts. Bumped whenever
+    # the replay contract changes (new kwarg added/renamed/removed on
+    # ``allow_upload``). ``_restore_upload_configs`` uses this to
+    # decide how defensively to replay — unknown / older versions fall
+    # back to the "bare-minimum replay" path. See ADR-009.
+    _upload_configs_version: int = 1
 
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
@@ -1050,6 +1056,10 @@ class UploadMixin:
                 "auto_upload": auto_upload,
                 # writer deliberately omitted — see docstring caveat.
                 "_had_writer": writer is not None,
+                # Issue #892: tag each saved dict with the schema
+                # version that produced it, so restores in a later
+                # djust version can decide how defensively to replay.
+                "_version": self._upload_configs_version,
             }
         )
         return cfg
@@ -1068,6 +1078,18 @@ class UploadMixin:
         isn't session-round-trippable, so the restored config falls
         back to the default buffered writer. Apps relying on custom
         writers should arrange for a fresh-mount WS flow.
+
+        Schema-change defensive replay (issue #892): if a saved dict
+        contains kwargs the *current* ``allow_upload`` signature doesn't
+        recognize (djust upgrade between session save and WS connect),
+        or is missing a now-required kwarg, the per-dict ``**kwargs``
+        call raises ``TypeError``. We catch it, log a WARNING with the
+        slot + the mismatched keys, and fall back to
+        ``allow_upload(name)`` — bare-minimum replay — so uploads for
+        that slot still work, just without the custom config (extension
+        filter, size limit, etc.). Better than killing the whole
+        restoration and losing every other slot on the page. See
+        ADR-009 for the pattern.
         """
         saved = self._upload_configs_saved
         if not saved:
@@ -1077,7 +1099,11 @@ class UploadMixin:
         # across subsequent round-trips.
         self._upload_configs_saved = None
         for cfg in saved:
-            if cfg.pop("_had_writer", False):
+            # Strip bookkeeping-only keys before the ``**cfg`` splat —
+            # they're not ``allow_upload`` kwargs.
+            cfg.pop("_version", None)
+            had_writer = cfg.pop("_had_writer", False)
+            if had_writer:
                 logger.warning(
                     "UploadMixin._restore_upload_configs: upload slot %r was "
                     "originally configured with a custom writer= class, but "
@@ -1086,7 +1112,36 @@ class UploadMixin:
                     "caveats.",
                     cfg.get("name"),
                 )
-            self.allow_upload(**cfg)
+            try:
+                self.allow_upload(**cfg)
+            except TypeError as exc:
+                # Schema drift — djust version changed between save and
+                # restore. Fall back to a bare-minimum replay so the
+                # slot still works (issue #892).
+                slot_name = cfg.get("name")
+                logger.warning(
+                    "UploadMixin._restore_upload_configs: saved config for slot "
+                    "%r has kwargs incompatible with the current "
+                    "allow_upload() signature (%s) — falling back to "
+                    "allow_upload(%r) with defaults. See issue #892 / "
+                    "ADR-009.",
+                    slot_name,
+                    exc,
+                    slot_name,
+                )
+                if not slot_name:
+                    # Can't even recover a slot name — skip entirely,
+                    # don't want to crash the restore path.
+                    continue
+                try:
+                    self.allow_upload(slot_name)
+                except Exception as fallback_exc:  # noqa: BLE001
+                    logger.warning(
+                        "UploadMixin._restore_upload_configs: fallback "
+                        "allow_upload(%r) also failed: %s",
+                        slot_name,
+                        fallback_exc,
+                    )
 
     def consume_uploaded_entries(self, name: str) -> Generator[UploadEntry, None, None]:
         """
