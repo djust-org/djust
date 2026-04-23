@@ -395,4 +395,111 @@ describe('dj-virtual', () => {
         expect(shell.children[0].getAttribute('data-i')).toBe('18'); // 20-2
         expect(shell.style.transform).toBe('translateY(360px)');     // 18*20
     });
+
+    // -----------------------------------------------------------------
+    // #951 — variable-height cache keyed by data-key survives reorders
+    // -----------------------------------------------------------------
+
+    function makeKeyedVariableList(keys) {
+        const items = keys.map(
+            (k) => `<div class="row" data-key="${k}" data-k="${k}">Row ${k}</div>`
+        ).join('');
+        return `<div id="list" dj-virtual="items" dj-virtual-variable-height dj-virtual-overscan="0" dj-virtual-estimated-height="50" style="height: 500px; overflow: auto;">${items}</div>`;
+    }
+
+    it('test_variable_height_with_data_key_survives_reorder (#951)', () => {
+        // Render 3 keyed items and feed heights [30, 60, 90] through the
+        // RO stub. Then reorder via refreshVirtualList(__djVirtualItems=[c,a,b])
+        // and verify the spacer sum + per-slot transforms still reflect the
+        // original per-key heights (90, 30, 60) — not the original per-index
+        // cache (which would wrongly bind 30 to the new item at index 0).
+        const dom = createDom(makeKeyedVariableList(['a', 'b', 'c']));
+        installStubResizeObserver(dom);
+        const container = setupContainer(dom, { clientHeight: 500 });
+        const shell = container.querySelector('[data-dj-virtual-shell]');
+        const spacer = container.querySelector('[data-dj-virtual-spacer]');
+
+        // Feed heights for the initial order [a, b, c] = [30, 60, 90].
+        const heightByKey = { a: 30, b: 60, c: 90 };
+        const initial = new Map();
+        for (const node of shell.children) {
+            initial.set(node, heightByKey[node.getAttribute('data-key')]);
+        }
+        dom.window.__djRoResize(initial);
+        dom.window.djust.refreshVirtualList(container);
+        expect(spacer.style.height).toBe('180px'); // 30+60+90
+
+        // Reorder to [c, a, b]. Under the old index-keyed cache this would
+        // bind index-0's cached 30 to item `c` (really 90) and throw the
+        // offsets off. Under data-key caching, heights follow the item.
+        const reordered = [];
+        const byKey = {};
+        for (const node of shell.children) byKey[node.getAttribute('data-key')] = node;
+        for (const k of ['c', 'a', 'b']) reordered.push(byKey[k]);
+        container.__djVirtualItems = reordered;
+        dom.window.djust.refreshVirtualList(container);
+
+        // Spacer total is unchanged (same 3 items).
+        expect(spacer.style.height).toBe('180px');
+        // Row at index 1 should now be `a` with offset = height(c) = 90.
+        // Scroll to 90 — firstVisibleIndex should resolve to 1.
+        Object.defineProperty(container, 'scrollTop', {
+            configurable: true, writable: true, value: 90,
+        });
+        dom.window.djust.refreshVirtualList(container);
+        expect(shell.style.transform).toBe('translateY(90px)');
+        // First rendered node at scrollTop=90 is the item whose offset is 90
+        // — that's `a` in the reordered list.
+        expect(shell.children[0].getAttribute('data-key')).toBe('a');
+    });
+
+    it('test_variable_height_without_data_key_falls_back_to_index (#951)', () => {
+        // Items WITHOUT data-key use index-based cache — back-compat path.
+        // After feeding heights [40, 40, 40], the spacer reflects the
+        // measured total (3 * 40 = 120), identical to pre-#951 behaviour.
+        const dom = createDom(makeVariableListHtml(3));
+        installStubResizeObserver(dom);
+        const container = setupContainer(dom, { clientHeight: 500 });
+        const shell = container.querySelector('[data-dj-virtual-shell]');
+        const spacer = container.querySelector('[data-dj-virtual-spacer]');
+
+        expect(spacer.style.height).toBe('150px'); // 3 * 50 estimated
+
+        const measured = new Map();
+        for (const node of shell.children) measured.set(node, 40);
+        dom.window.__djRoResize(measured);
+        dom.window.djust.refreshVirtualList(container);
+        expect(spacer.style.height).toBe('120px');
+    });
+
+    it('dj-virtual-key-attr lets authors pick a different attribute (#951)', () => {
+        // Render items using a custom attribute name for the cache key.
+        const keys = ['x', 'y', 'z'];
+        const items = keys.map(
+            (k) => `<div class="row" data-id="${k}">Row ${k}</div>`
+        ).join('');
+        const html = `<div id="list" dj-virtual="items" dj-virtual-variable-height dj-virtual-key-attr="data-id" dj-virtual-overscan="0" dj-virtual-estimated-height="50" style="height: 500px; overflow: auto;">${items}</div>`;
+        const dom = createDom(html);
+        installStubResizeObserver(dom);
+        const container = setupContainer(dom, { clientHeight: 500 });
+        const shell = container.querySelector('[data-dj-virtual-shell]');
+        const spacer = container.querySelector('[data-dj-virtual-spacer]');
+
+        // Feed distinct heights keyed by data-id.
+        const heightByKey = { x: 25, y: 50, z: 100 };
+        const measured = new Map();
+        for (const node of shell.children) {
+            measured.set(node, heightByKey[node.getAttribute('data-id')]);
+        }
+        dom.window.__djRoResize(measured);
+        dom.window.djust.refreshVirtualList(container);
+        expect(spacer.style.height).toBe('175px'); // 25 + 50 + 100
+
+        // Reorder via refresh. Heights must follow the items.
+        const byKey = {};
+        for (const node of shell.children) byKey[node.getAttribute('data-id')] = node;
+        container.__djVirtualItems = [byKey.z, byKey.x, byKey.y];
+        dom.window.djust.refreshVirtualList(container);
+        expect(spacer.style.height).toBe('175px');
+    });
 });

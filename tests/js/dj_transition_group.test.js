@@ -10,36 +10,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { JSDOM } from 'jsdom';
-import fs from 'fs';
+import { createDom, nextFrame as sharedNextFrame } from './_helpers.js';
 
-const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
-
-function createDom(bodyHtml = '') {
-    const dom = new JSDOM(
-        `<!DOCTYPE html><html><head></head><body>
-            <div dj-view="test.V" dj-root>${bodyHtml}</div>
-        </body></html>`,
-        { runScripts: 'dangerously', url: 'http://localhost/' }
-    );
-    class MockWebSocket {
-        static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
-        constructor() { this.readyState = MockWebSocket.OPEN; }
-        send() {} close() {}
-    }
-    dom.window.WebSocket = MockWebSocket;
-    dom.window.DJUST_USE_WEBSOCKET = false;
-    dom.window.eval(clientCode);
-    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
-    return dom;
-}
-
+// dj-transition-group tests use the 60 ms nextFrame budget historically
+// chosen to survive vitest parallel load. Wrap the shared helper so
+// existing tests keep their timing semantics.
 function nextFrame(dom) {
-    // requestAnimationFrame in jsdom is backed by setTimeout(_, 16) in
-    // the client module's fallback path. Under vitest parallel load
-    // the 16 ms can stretch; 60 ms is a generous margin that matches
-    // the conventions used elsewhere in this suite.
-    return new Promise((resolve) => dom.window.setTimeout(resolve, 60));
+    return sharedNextFrame(dom, 60);
 }
 
 describe('dj-transition-group', () => {
