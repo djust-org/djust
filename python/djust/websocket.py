@@ -172,10 +172,15 @@ def _snapshot_assigns(view_instance):
     are NOT detected. For those, use self._changed_keys or @event_handler
     which explicitly marks state as dirty.
     """
+    # #762: Filter framework-internal attrs so change detection doesn't fire
+    # on attrs like ``template_name`` / ``http_method_names`` that the user
+    # never touches.
+    from .live_view import _FRAMEWORK_INTERNAL_ATTRS
+
     _static_skip = set(getattr(view_instance, "static_assigns", []))
     snapshot = {}
     for k, v in view_instance.__dict__.items():
-        if k.startswith("_") or k in _static_skip:
+        if k.startswith("_") or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
             continue
         # Identity + shallow fingerprint for mutable containers
         vid = id(v)

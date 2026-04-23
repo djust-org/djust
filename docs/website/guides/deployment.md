@@ -279,6 +279,38 @@ def health_check(request):
         return JsonResponse({'status': 'unhealthy', 'error': str(e)}, status=503)
 ```
 
+## Deploying Behind an L7 Load Balancer (AWS ALB, Cloudflare, Fly.io)
+
+When djust runs behind a trusted L7 load balancer that terminates TLS and health-checks
+task IPs directly (AWS ALB, Cloudflare, Fly.io, GCP External HTTP(S) LB, etc.), the task's
+private IP rotates on every redeploy or autoscale event. Enumerating them in
+`ALLOWED_HOSTS` is not feasible, and setting `ALLOWED_HOSTS = ['*']` normally trips
+the `djust.A010` system check.
+
+djust provides an explicit opt-in for this topology: set **both** `SECURE_PROXY_SSL_HEADER`
+and a new `DJUST_TRUSTED_PROXIES` list/tuple, and `djust.A010` / `djust.A011` will recognize
+that the trusted proxy has already performed Host validation at the edge.
+
+```python
+# settings.py — only when you really are behind a trusted L7 proxy
+
+ALLOWED_HOSTS = ['*']  # task IPs rotate; edge proxy performs Host validation
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Identify the trusted proxy terminating requests. Any non-empty list/tuple
+# opts in — contents are informational and can be used by your middleware.
+DJUST_TRUSTED_PROXIES = ['aws-alb']  # or ['cloudflare'], ['fly-edge'], etc.
+```
+
+**Security warning.** Only use this escape hatch if you are actually behind a trusted L7
+proxy that performs Host validation at the edge. On a raw VM / bare-metal with no proxy in
+front, `ALLOWED_HOSTS = ['*']` opens you up to Host-header attacks — don't paper over the
+system check with this setting.
+
+If only one of the two settings is present, `djust.A010` / `djust.A011` still fire — both are
+required so a single typo can't accidentally disable the check.
+
 ## Deployment Checklist
 
 ### Infrastructure

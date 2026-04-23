@@ -99,9 +99,15 @@ class PostProcessingMixin:
 
     def _debug_state_sizes(self) -> Dict[str, Dict[str, Any]]:
         """Return size breakdown of public state variables for debug toolbar."""
+        # #762: Filter framework-internal attrs from the observability payload
+        # so state_sizes reflects user-owned reactive state, not framework config.
+        from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
+
         sizes: Dict[str, Dict[str, Any]] = {}
         for attr_name in sorted(vars(self)):
             if attr_name.startswith("_"):
+                continue
+            if attr_name in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
             value = getattr(self, attr_name)
             if callable(value):
@@ -127,10 +133,15 @@ class PostProcessingMixin:
         this returns only the parts that change per event: variables and view class.
         Handlers are static and only sent on initial mount via get_debug_info().
         """
+        # #762: Filter framework-internal attrs from the observability payload.
+        from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
+
         variables = {}
 
         for name in dir(self):
             if name.startswith("_"):
+                continue
+            if name in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
 
             try:
