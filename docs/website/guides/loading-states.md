@@ -431,8 +431,9 @@ Each `AsyncResult` exposes three mutually-exclusive booleans:
 Templates read the flags directly:
 
 ```html
+{% load live_tags %}
 {% if metrics.loading %}
-  <div class="skeleton-card"></div>
+  {% djust_skeleton shape="rect" width="100%" height="120px" %}
 {% endif %}
 {% if metrics.ok %}
   <div class="metric-card">{{ metrics.result.total_users }}</div>
@@ -441,6 +442,11 @@ Templates read the flags directly:
   <div class="error">Failed to load: {{ metrics.error }}</div>
 {% endif %}
 ```
+
+The `{% djust_skeleton %}` template tag (v0.6.0) emits a shimmer placeholder with no
+bespoke CSS required — see the [declarative UX attributes guide](declarative-ux-attrs.md#-djust_skeleton---template-tag)
+for the full argument list. You can still hand-roll your own `<div class="skeleton-card">`
+styles if you prefer bespoke shapes.
 
 `AsyncResult` is also truthy only when `.ok`, so `{% if metrics %}…` is
 shorthand for "loaded successfully".
