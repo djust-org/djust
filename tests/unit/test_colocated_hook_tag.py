@@ -66,9 +66,9 @@ class TestScriptTagEscaping:
             # rfind to isolate the body region.)
             closing_idx = out.rfind("</script>")
             body_region = out[:closing_idx]
-            assert (
-                bad.lower() not in body_region.lower()
-            ), f"Raw {bad!r} leaked into body region: {body_region!r}"
+            assert bad.lower() not in body_region.lower(), (
+                f"Raw {bad!r} leaked into body region: {body_region!r}"
+            )
             # Escaped form preserves original casing.
             expected_escaped = bad.replace("</", "<\\/")
             assert expected_escaped in out, f"Expected escaped {expected_escaped!r} in {out!r}"

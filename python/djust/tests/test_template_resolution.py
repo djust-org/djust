@@ -138,6 +138,6 @@ def test_duplicate_base_templates_use_first():
             "templates/base.html MUST have dependencies_css block "
             "(this is the file Django finds first!)"
         )
-        assert (
-            "dependencies_css" in demo_app_content
-        ), "demo_app/templates/base.html should also have dependencies_css block for consistency"
+        assert "dependencies_css" in demo_app_content, (
+            "demo_app/templates/base.html should also have dependencies_css block for consistency"
+        )

@@ -77,13 +77,13 @@ def _patches_list(patches_json):
 def _assert_produces_patch(html, patches_json, *, new_value, old_value=""):
     """Common assertions across all variants."""
     patches = _patches_list(patches_json)
-    assert (
-        f'value="{new_value}"' in html
-    ), f"rendered HTML must reflect the new |safe value; html={html!r}"
+    assert f'value="{new_value}"' in html, (
+        f"rendered HTML must reflect the new |safe value; html={html!r}"
+    )
     if old_value:
-        assert (
-            f'value="{old_value}"' not in html
-        ), f"rendered HTML must no longer contain the old value {old_value!r}"
+        assert f'value="{old_value}"' not in html, (
+            f"rendered HTML must no longer contain the old value {old_value!r}"
+        )
     assert patches is not None and len(patches) > 0, (
         f"expected non-empty patches; patches={patches!r} — "
         "empty patches with diff_ms=0 is the #783 symptom."
@@ -156,9 +156,9 @@ class TestDerivedSafeBlobDiff:
         # OR a None/absent patches field are both acceptable — the websocket
         # layer may emit a full-html update instead of patches when
         # _force_full_html is set.
-        assert not (
-            patches is not None and len(patches) == 0
-        ), f"empty patches with _force_full_html is the #783 symptom; got patches={patches!r}"
+        assert not (patches is not None and len(patches) == 0), (
+            f"empty patches with _force_full_html is the #783 symptom; got patches={patches!r}"
+        )
 
     def test_step_index_plus_data_change(self):
         """Simulates the ``demo_autofill`` → ``next_step`` sequence:
@@ -194,12 +194,12 @@ class TestDerivedSafeBlobDiff:
         html, patches_json, version = _simulate_event_cycle(view, mutate)
         patches = _patches_list(patches_json)
         assert version == 2
-        assert (
-            'name="incident_type"' in html
-        ), f"step swap must surface the new branch's field; html={html!r}"
-        assert (
-            patches is not None and len(patches) > 0
-        ), f"step swap must produce patches; patches={patches!r}"
+        assert 'name="incident_type"' in html, (
+            f"step swap must surface the new branch's field; html={html!r}"
+        )
+        assert patches is not None and len(patches) > 0, (
+            f"step swap must produce patches; patches={patches!r}"
+        )
 
 
 class TestDerivedSafeBlobDiffExtends:
@@ -322,12 +322,12 @@ class TestSafeBlobDiffNestedInclude:
         html, patches_json, version = _simulate_event_cycle(view, mutate)
         patches = _patches_list(patches_json)
         assert version == 2
-        assert (
-            html.count('class="active"') == 3
-        ), f"inline-if condition change must re-render the for body; html={html!r}"
-        assert (
-            patches is not None and len(patches) > 0
-        ), f"expected non-empty patches; got {patches!r} — latent #783 sibling."
+        assert html.count('class="active"') == 3, (
+            f"inline-if condition change must re-render the for body; html={html!r}"
+        )
+        assert patches is not None and len(patches) > 0, (
+            f"expected non-empty patches; got {patches!r} — latent #783 sibling."
+        )
 
     def test_if_include_wrapping_produces_patches(self, template_dir):
         class NestedWizard(_WizardLike):
@@ -596,10 +596,7 @@ class TestPartialRenderCorrectness:
 
         class StandaloneBlockView(LiveView):
             template = (
-                "<div dj-root>"
-                "{% block header %}<h1>{{ title }}</h1>{% endblock %}"
-                "<p>body</p>"
-                "</div>"
+                "<div dj-root>{% block header %}<h1>{{ title }}</h1>{% endblock %}<p>body</p></div>"
             )
 
             def mount(self, request, **kwargs):
@@ -639,9 +636,7 @@ class TestPartialRenderCorrectness:
         ``obj.field|filter|another``."""
 
         class FilterChainView(LiveView):
-            template = (
-                "<div dj-root>" "<span>{{ user.name|lower|truncatechars:10 }}</span>" "</div>"
-            )
+            template = "<div dj-root><span>{{ user.name|lower|truncatechars:10 }}</span></div>"
 
             def mount(self, request, **kwargs):
                 self.user = {"name": "Alice"}

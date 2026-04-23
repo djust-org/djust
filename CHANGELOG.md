@@ -71,6 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hygiene batch (closes #791, #794, #795, #818, #948)** — bumped `ruff-pre-commit` from v0.8.4 to
+  v0.15.11 (#948) and applied `ruff format` to all resulting drift (#791 — expanded beyond the
+  original 5 files due to modern-ruff disagreements; 19 files total across `python/djust/` and
+  `tests/`). Added `logger.debug` notice in `components/suspense.py` when
+  `{% dj_suspense await=X %}` receives a non-AsyncResult value so a typo surfaces during
+  development (#794), simplified a redundant `or not value.ok` check near `suspense.py:138` given
+  the AsyncResult mutually-exclusive-flag invariant (#795), wrapped the namespaced `data-hook`
+  attribute value with `django.utils.html.escape()` for defense-in-depth in
+  `templatetags/live_tags.py` (#818), and corrected stale test-count claims in two historical
+  CHANGELOG bullets (`test_assign_async.py` 11 → 18, `test_suspense.py` 11 → 12) flagged by
+  the #795 reviewer. No behavior change.
+
 - **Security + cleanup: pre-existing test failures, redirect audit, dep ceilings, edge tests — closes #910, #921, #922, #935** —
   **#935**: fixed 3 stale test assertions that were checking for leaked
   exception-class names in API error responses. The implementations in
@@ -428,8 +440,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - **Regression coverage for `temporary_assigns`** — `tests/unit/test_temporary_assigns.py` covers reset-after-render semantics, default-value cloning per type (list / dict / set / scalar), idempotent initialization, pre-existing-attribute preservation, instance-level override, and the empty-mapping no-op path.
-- **Unit tests for `assign_async` / `AsyncResult`** — `tests/unit/test_assign_async.py` (11 tests) covers state-flag invariants, frozen dataclass immutability, pending-is-set-immediately, success & failure propagation, multi-concurrent scheduling, cancellation interop with `cancel_async`, sync and async loaders, and args/kwargs forwarding.
-- **Unit tests for `{% dj_suspense %}`** — `tests/unit/test_suspense.py` (11 tests) covers ok → body, loading → fallback, failed → error-div, HTML-escaped error messages, no-`await=` passthrough, unknown / non-`AsyncResult` refs defaulting to loading, default spinner, Django template fallback, template-error graceful degradation, nesting, and whitespace-tolerant comma-separated lists.
+- **Unit tests for `assign_async` / `AsyncResult`** — `tests/unit/test_assign_async.py` (18 tests) covers state-flag invariants, frozen dataclass immutability, pending-is-set-immediately, success & failure propagation, multi-concurrent scheduling, cancellation interop with `cancel_async`, sync and async loaders, args/kwargs forwarding, and the generation-counter / stale-loader regression cases added in #793.
+- **Unit tests for `{% dj_suspense %}`** — `tests/unit/test_suspense.py` (12 tests) covers ok → body, loading → fallback, failed → error-div, HTML-escaped error messages, no-`await=` passthrough, unknown / non-`AsyncResult` refs defaulting to loading, default spinner, Django template fallback, template-error graceful degradation, nesting, and whitespace-tolerant comma-separated lists.
 - **Regression suite for `|safe` HTML blob diff ([#783](https://github.com/djust-org/djust/issues/783))** — `tests/test_rust_vdom_safe_diff_783.py` exercises the WizardMixin-style pattern where `field_html` is derived in `get_context_data()` from an instance attribute. Covers dict reassignment, in-place nested mutation, the `_force_full_html` codepath, an `{% if %}` branch swap, a `{% extends %}`/`{% block %}` inheritance chain, and the exact NYC-Claims-style `{% extends %} + {% if %} + {% include %}` structure that originally exhibited the bug. All variants assert non-empty VDOM patches on state change.
 - **Dep-extractor hardening ([#783](https://github.com/djust-org/djust/issues/783) follow-up, P0)** — Three-part hardening against silent dep-drop regressions in `crates/djust_templates/src/parser.rs::extract_from_nodes`:
   - **Rust unit tests for `extract_per_node_deps`** — table-driven assertions on representative AST shapes (simple Variable, If-wrapping-Include, For with tuple unpacking, With + body, InlineIf condition, nested For, Block recursion, plain Text). Explicit `"*"` wildcard membership checks for nested `Include` / `CustomTag` shapes.

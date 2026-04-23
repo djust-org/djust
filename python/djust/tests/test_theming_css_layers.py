@@ -275,9 +275,9 @@ class TestStaticComponentsCSS:
         )
         # And no stray @layer blocks snuck in. (The substring "@layer" may
         # appear inside the header comment — match the actual block syntax.)
-        assert not re.search(
-            r"@layer\s+\w+\s*\{", css
-        ), "components.css should not contain any @layer blocks"
+        assert not re.search(r"@layer\s+\w+\s*\{", css), (
+            "components.css should not contain any @layer blocks"
+        )
 
 
 # ---------------------------------------------------------------------------

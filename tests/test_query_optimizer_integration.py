@@ -181,9 +181,9 @@ class QueryOptimizationIntegrationTestCase(TestCase):
         queries_with = len(ctx_opt.captured_queries)
 
         # Should reduce queries significantly
-        assert (
-            queries_with < queries_without
-        ), f"Expected fewer queries with optimization: {queries_with} vs {queries_without}"
+        assert queries_with < queries_without, (
+            f"Expected fewer queries with optimization: {queries_with} vs {queries_without}"
+        )
         # Should ideally be 1 query
         assert queries_with <= 2, f"Expected <= 2 queries with optimization, got {queries_with}"
 
@@ -390,9 +390,9 @@ class PerformanceTestCase(TestCase):
 
         # Should reduce from ~41 queries to 1 query
         # (1 for leases + 20 for properties + 20 for tenants -> 1 query with JOINs)
-        assert (
-            queries_without >= 40
-        ), f"Expected >= 40 queries without optimization, got {queries_without}"
+        assert queries_without >= 40, (
+            f"Expected >= 40 queries without optimization, got {queries_without}"
+        )
         assert queries_with == 1, f"Expected 1 query with optimization, got {queries_with}"
 
         # Calculate improvement

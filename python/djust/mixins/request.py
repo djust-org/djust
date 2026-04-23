@@ -82,7 +82,7 @@ class RequestMixin:
                 require_https=request.is_secure(),
             ):
                 logger.warning(
-                    "on_mount hook returned unsafe redirect URL for %s; " "falling back to '/'",
+                    "on_mount hook returned unsafe redirect URL for %s; falling back to '/'",
                     self.__class__.__name__,
                 )
                 return HttpResponseRedirect("/")

@@ -87,9 +87,9 @@ class TestHandleMountLifecycleHooks:
             view._ensure_tenant(request)
         view.mount(request)
 
-        assert (
-            view._hook_called_before_mount_body
-        ), "_ensure_tenant() was not called before the mount() body executed"
+        assert view._hook_called_before_mount_body, (
+            "_ensure_tenant() was not called before the mount() body executed"
+        )
 
     def test_no_error_when_hook_absent(self):
         """Views without _ensure_tenant should mount without error."""

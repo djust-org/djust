@@ -135,12 +135,23 @@ class SuspenseTagHandler:
                 if value.failed:
                     any_failed_error = value.error
                     break
-                if value.loading or not value.ok:
+                # AsyncResult guarantees exactly one of loading/ok/failed is
+                # True (see AsyncResult.__post_init__), so `not value.ok` is
+                # redundant once `failed` is ruled out — `value.loading` is
+                # sufficient.
+                if value.loading:
                     any_loading = True
             else:
                 # Unknown / missing / non-AsyncResult refs are treated as
                 # loading — defensive default so a typo doesn't silently
-                # render stale content.
+                # render stale content. Emit a debug log so the typo case
+                # surfaces during development.
+                if value is not None:
+                    logger.debug(
+                        "dj_suspense await=%s expected AsyncResult, got %s",
+                        ref_name,
+                        type(value).__name__,
+                    )
                 any_loading = True
 
         if any_failed_error is not None:
