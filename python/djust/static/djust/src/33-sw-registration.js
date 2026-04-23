@@ -224,6 +224,145 @@
     }
 
     // -----------------------------------------------------------------
+    // v0.6.0 — VDOM cache + state snapshot
+    // -----------------------------------------------------------------
+
+    // Map requestId -> resolve() function. Populated by lookupVdom /
+    // lookupState; drained by the SW-message listener below.
+    var _pendingLookups = {};
+    var _requestIdCounter = 0;
+
+    function _nextRequestId(prefix) {
+        _requestIdCounter += 1;
+        return (prefix || 'rq') + '-' + _requestIdCounter + '-' + Date.now().toString(36);
+    }
+
+    function _swController() {
+        if (!navigator.serviceWorker) return null;
+        return navigator.serviceWorker.controller;
+    }
+
+    function initVdomCache() {
+        if (!_swAvailable()) return;
+        if (!navigator.serviceWorker) return;
+        navigator.serviceWorker.addEventListener('message', function (event) {
+            var data = event.data;
+            if (!data || data.type !== 'VDOM_CACHE_REPLY') return;
+            var rid = data.requestId;
+            if (rid && _pendingLookups[rid]) {
+                try {
+                    _pendingLookups[rid](data);
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[sw] VDOM_CACHE_REPLY handler threw', e);
+                    }
+                }
+                delete _pendingLookups[rid];
+            }
+        });
+    }
+
+    function initStateSnapshot() {
+        if (!_swAvailable()) return;
+        if (!navigator.serviceWorker) return;
+        navigator.serviceWorker.addEventListener('message', function (event) {
+            var data = event.data;
+            if (!data || data.type !== 'STATE_SNAPSHOT_REPLY') return;
+            var rid = data.requestId;
+            if (rid && _pendingLookups[rid]) {
+                try {
+                    _pendingLookups[rid](data);
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[sw] STATE_SNAPSHOT_REPLY handler threw', e);
+                    }
+                }
+                delete _pendingLookups[rid];
+            }
+        });
+    }
+
+    function cacheVdom(url, html, version) {
+        var ctrl = _swController();
+        if (!ctrl) return;
+        ctrl.postMessage({
+            type: 'VDOM_CACHE',
+            url: url,
+            html: html,
+            version: typeof version === 'number' ? version : 0,
+            ts: Date.now(),
+        });
+    }
+
+    function lookupVdom(url) {
+        return new Promise(function (resolve) {
+            var ctrl = _swController();
+            if (!ctrl) {
+                resolve({ hit: false, stale: false, html: null });
+                return;
+            }
+            var rid = _nextRequestId('vdom');
+            _pendingLookups[rid] = function (reply) { resolve(reply); };
+            ctrl.postMessage({
+                type: 'VDOM_CACHE_LOOKUP',
+                requestId: rid,
+                url: url,
+            });
+            // Safety timeout so callers are never stuck if the SW goes away.
+            setTimeout(function () {
+                if (_pendingLookups[rid]) {
+                    delete _pendingLookups[rid];
+                    resolve({ hit: false, stale: false, html: null });
+                }
+            }, 500);
+        });
+    }
+
+    function captureState(url, viewSlug, stateJson) {
+        var ctrl = _swController();
+        if (!ctrl) return;
+        // Clamp payload at 64 KB — defense-in-depth against accidental
+        // dumps of large collections. SW also enforces 256 KB.
+        if (typeof stateJson !== 'string') return;
+        if (stateJson.length > 64 * 1024) {
+            if (globalThis.djustDebug) {
+                console.warn('[sw] STATE_SNAPSHOT payload > 64KB; dropping');
+            }
+            return;
+        }
+        ctrl.postMessage({
+            type: 'STATE_SNAPSHOT',
+            url: url,
+            view_slug: viewSlug,
+            state_json: stateJson,
+            ts: Date.now(),
+        });
+    }
+
+    function lookupState(url) {
+        return new Promise(function (resolve) {
+            var ctrl = _swController();
+            if (!ctrl) {
+                resolve({ hit: false, view_slug: null, state_json: null });
+                return;
+            }
+            var rid = _nextRequestId('state');
+            _pendingLookups[rid] = function (reply) { resolve(reply); };
+            ctrl.postMessage({
+                type: 'STATE_SNAPSHOT_LOOKUP',
+                requestId: rid,
+                url: url,
+            });
+            setTimeout(function () {
+                if (_pendingLookups[rid]) {
+                    delete _pendingLookups[rid];
+                    resolve({ hit: false, view_slug: null, state_json: null });
+                }
+            }, 500);
+        });
+    }
+
+    // -----------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------
 
@@ -234,6 +373,8 @@
     var _registerPromise = null;
     var _bridgeInitialized = false;
     var _shellInitialized = false;
+    var _vdomCacheInitialized = false;
+    var _stateSnapshotInitialized = false;
 
     globalThis.djust.registerServiceWorker = function (options) {
         options = options || {};
@@ -277,14 +418,28 @@
                 _bridgeInitialized = true;
                 initReconnectionBridge();
             }
+            if (options.vdomCache && !_vdomCacheInitialized) {
+                _vdomCacheInitialized = true;
+                initVdomCache();
+            }
+            if (options.stateSnapshot && !_stateSnapshotInitialized) {
+                _stateSnapshotInitialized = true;
+                initStateSnapshot();
+            }
             return registration;
         })();
         return _registerPromise;
     };
 
-    // Exposed for tests.
+    // Exposed for tests and for the navigation / popstate code paths.
     globalThis.djust._sw = {
         initInstantShell: initInstantShell,
         initReconnectionBridge: initReconnectionBridge,
+        initVdomCache: initVdomCache,
+        initStateSnapshot: initStateSnapshot,
+        cacheVdom: cacheVdom,
+        lookupVdom: lookupVdom,
+        captureState: captureState,
+        lookupState: lookupState,
     };
 })();

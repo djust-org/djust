@@ -166,6 +166,51 @@ const lazyHydrationManager = {
         if (globalThis.djustDebug) console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
         const mounts = this.pendingMounts.slice();
         this.pendingMounts = [];
+
+        // Mount-batch optimization (v0.6.0): when 2+ lazy views are
+        // hydrating together, send one mount_batch WebSocket frame
+        // instead of N separate mount frames. Opt out via
+        // window.DJUST_USE_MOUNT_BATCH = false.
+        const useBatch = (
+            mounts.length >= 2
+            && window.DJUST_USE_MOUNT_BATCH !== false
+            && liveViewWS
+            && typeof liveViewWS.sendMessage === 'function'
+            && isWSConnected()
+        );
+        if (useBatch) {
+            const viewEntries = [];
+            const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+            mounts.forEach(({ element, viewPath }) => {
+                const targetId = element.getAttribute('data-djust-target')
+                    || element.id
+                    || ('dj-target-' + Math.random().toString(36).slice(2, 10));
+                if (!element.getAttribute('data-djust-target')) {
+                    element.setAttribute('data-djust-target', targetId);
+                }
+                const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
+                viewEntries.push({
+                    view: viewPath,
+                    params: urlParams,
+                    url: window.location.pathname,
+                    target_id: targetId,
+                    has_prerendered: !!hasContent,
+                });
+                element.removeAttribute('dj-lazy');
+                element.setAttribute('data-live-hydrated', 'true');
+            });
+            let clientTimezone = null;
+            try {
+                clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            } catch (_e) { /* tz detect failure — omit */ }
+            liveViewWS.sendMessage({
+                type: 'mount_batch',
+                views: viewEntries,
+                client_timezone: clientTimezone,
+            });
+            return;
+        }
+
         mounts.forEach(({ element, viewPath }) => {
             this.mountElement(element, viewPath);
         });

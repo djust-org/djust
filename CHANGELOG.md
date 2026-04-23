@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Service Worker advanced features (v0.6.0)** — three SW-backed optimizations
+  landed in one PR:
+  - **VDOM patch cache**: per-URL HTML snapshots served instantly on popstate,
+    then reconciled against the live WebSocket mount reply. Configurable via
+    `DJUST_VDOM_CACHE_ENABLED` / `DJUST_VDOM_CACHE_TTL_SECONDS` /
+    `DJUST_VDOM_CACHE_MAX_ENTRIES`. New system checks `djust.C301` / `C302` /
+    `C303` guard config ranges.
+  - **LiveView state snapshots**: opt-in per view via
+    `enable_state_snapshot = True` on a `LiveView` subclass. Client captures
+    JSON-serializable public state on `djust:before-navigate`; server restores
+    via `_restore_snapshot(state)` in lieu of `mount()` when the user hits
+    back. Views override `_should_restore_snapshot(request)` to reject stale
+    snapshots. System check `djust.C304` warns when a snapshot-opt-in view
+    declares attributes matching PII naming patterns.
+  - **Mount batching**: when multiple `dj-lazy` LiveViews hydrate together,
+    the client sends one `mount_batch` WebSocket frame instead of N separate
+    `mount` frames. Server responds with one `mount_batch` carrying all
+    rendered views; per-view failures are isolated in a `failed[]` array
+    (atomicity relaxed so one bad view doesn't kill the batch). Opt out via
+    `window.DJUST_USE_MOUNT_BATCH = false`.
+  - New client module `46-state-snapshot.js` (~120 LOC); new senders on
+    `djust._sw.cacheVdom/lookupVdom/captureState/lookupState`.
+  - `registerServiceWorker({vdomCache: true, stateSnapshot: true})` gates
+    the new behaviors alongside existing `instantShell` / `reconnectionBridge`
+    options.
+
+### Changed
+
+- `LiveViewConsumer.handle_mount()` accepts new `state_snapshot` kwarg;
+  dispatches to the snapshot-restore path when the view opts in and the
+  payload's `view_slug` matches. New method `handle_mount_batch()` +
+  `_mount_one()` collector seam enable the mount-batch path without
+  regressing the single-view `mount` flow.
+
+### Security
+
+- State snapshots are JSON-only (no pickle). `safe_setattr` blocks dunder keys
+  and private (`_`-prefixed) attributes during restoration. SW enforces a
+  256 KB upper bound on `state_json` payloads; client clamps at 64 KB.
+  System check `djust.C304` warns when snapshot-opt-in views declare
+  attribute names matching `password|token|secret|api_key|pii`.
+
 - **Sticky LiveViews (v0.6.0)** — Phoenix `live_render sticky: true` parity.
   Shipped across three PRs: #966 (Phase A — embedding primitive), #967 (Phase B —
   preservation across `live_redirect`), #969 (Phase C — ADR-011, user guide, demo app).

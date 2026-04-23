@@ -275,6 +275,17 @@ class LiveViewWebSocket {
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
 
+                // Fix #1 — stash server-emitted public view state so the
+                // state-snapshot capture on next before-navigate has
+                // something to serialize. The server includes
+                // ``public_state`` only when ``enable_state_snapshot``
+                // is True on the view class; non-opt-in views never
+                // have state cached by the SW.
+                if (data.public_state && typeof data.public_state === 'object' && data.view) {
+                    if (!window.djust._clientState) window.djust._clientState = {};
+                    window.djust._clientState[data.view] = data.public_state;
+                }
+
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
 
@@ -360,6 +371,19 @@ class LiveViewWebSocket {
                         runPostMount();
                     }
                 } else if (data.html) {
+                    // Fix #3 — cache the mount HTML for fast back-nav
+                    // paint. Non-invasive: only runs when the SW bridge
+                    // is present and we actually have HTML from the
+                    // server (skipped when the client used pre-rendered
+                    // HTTP content).
+                    try {
+                        if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            const cacheUrl = (typeof window !== 'undefined' && window.location)
+                                ? window.location.pathname
+                                : '/';
+                            window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
+                        }
+                    } catch (_e) { /* best-effort cache put */ }
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
                         if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
@@ -400,6 +424,66 @@ class LiveViewWebSocket {
                     }
                 }
                 break;
+
+            case 'mount_batch': {
+                // Mount-batch response (v0.6.0) — carries N per-view payloads.
+                // Apply each to [data-djust-target="<target_id>"] within a
+                // [dj-view] element, track per-target VDOM versions, and run
+                // reinitAfterDOMUpdate() ONCE after the batch is applied.
+                this.viewMounted = true;
+                const views = Array.isArray(data.views) ? data.views : [];
+                const failed = Array.isArray(data.failed) ? data.failed : [];
+                if (!window.djust._clientVdomVersions) {
+                    window.djust._clientVdomVersions = {};
+                }
+                for (const entry of views) {
+                    const targetId = entry && entry.target_id;
+                    if (!targetId) continue;
+                    const container = document.querySelector(
+                        '[dj-view][data-djust-target="' + CSS.escape(String(targetId)) + '"]'
+                    );
+                    if (!container) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[LiveView] mount_batch: target not found: %s', String(targetId));
+                        }
+                        continue;
+                    }
+                    if (typeof entry.html === 'string') {
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        container.innerHTML = entry.html;
+                    }
+                    if (typeof entry.version === 'number') {
+                        window.djust._clientVdomVersions[targetId] = entry.version;
+                    }
+                }
+                for (const f of failed) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[LiveView] mount_batch failed: %s %o', String(f.view || ''), f);
+                    }
+                }
+                // Fix #4 — forward any navigate entries emitted by
+                // on_mount redirect hooks to the navigation dispatcher.
+                const navigates = Array.isArray(data.navigate) ? data.navigate : [];
+                for (const nav of navigates) {
+                    if (!nav || typeof nav.to !== 'string') continue;
+                    if (window.djust.navigation && typeof window.djust.navigation.handleNavigation === 'function') {
+                        window.djust.navigation.handleNavigation({
+                            type: 'navigation',
+                            action: 'live_redirect',
+                            path: nav.to,
+                        });
+                    } else if (typeof window !== 'undefined' && window.location) {
+                        // Fallback — hard navigation if the dispatcher
+                        // isn't wired (non-LiveView pages).
+                        window.location.href = nav.to;
+                    }
+                }
+                if (views.length > 0) {
+                    reinitAfterDOMUpdate();
+                    window.djust._mountReady = true;
+                }
+                break;
+            }
 
             case 'patch':
             case 'html_update': {
