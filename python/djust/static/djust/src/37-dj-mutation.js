@@ -119,6 +119,16 @@ function _installDjMutationObserver() {
 
     const rootObserver = new MutationObserver(function (mutations) {
         mutations.forEach(function (m) {
+            // #879: if the dj-mutation attribute itself is removed from an
+            // already-observed element, tear down the observer so we don't
+            // leave a stale MutationObserver attached.
+            if (m.type === 'attributes' && m.attributeName === 'dj-mutation') {
+                const target = m.target;
+                if (target && target.nodeType === 1 && !target.hasAttribute('dj-mutation')) {
+                    if (_djMutationObservers.has(target)) _tearDownDjMutation(target);
+                }
+                return;
+            }
             m.addedNodes.forEach(function (node) {
                 if (node.nodeType !== 1) return;
                 if (node.hasAttribute && node.hasAttribute('dj-mutation')) {
@@ -137,7 +147,12 @@ function _installDjMutationObserver() {
             });
         });
     });
-    rootObserver.observe(document.documentElement, { subtree: true, childList: true });
+    rootObserver.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['dj-mutation'],
+    });
 }
 
 if (typeof document !== 'undefined') {

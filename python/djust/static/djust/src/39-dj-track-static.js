@@ -20,6 +20,12 @@
 //   changed elements carried dj-track-static="reload", call
 //   window.location.reload() instead.
 
+// #880: Using `Map` (not `WeakMap`) deliberately: the reconnect-diff step
+// iterates ALL tracked elements to compare snapshot URLs with current URLs.
+// WeakMap does not support iteration, so we accept the weak-reference
+// tradeoff. If an element is removed from the DOM, the `isConnected` check
+// in `_checkStale` skips it — we don't leak observers, just map entries
+// that are cleared on the next `_snapshotAssets()` seed.
 let _djTrackStaticSnapshot = null;
 
 function _urlOf(el) {
@@ -27,6 +33,7 @@ function _urlOf(el) {
 }
 
 function _snapshotAssets() {
+    // See #880 comment above: Map chosen for iteration support.
     const snap = new Map();
     document.querySelectorAll('[dj-track-static]').forEach(function (el) {
         snap.set(el, _urlOf(el));

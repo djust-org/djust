@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Observer JS — closes #879, #880, #881, #882** —
+  **#879**: `37-dj-mutation.js` and `38-dj-sticky-scroll.js` document-level
+  root observers now detect attribute REMOVAL on already-observed elements
+  (via `attributes: true` + `attributeFilter: ['dj-mutation']` /
+  `['dj-sticky-scroll']`) and call the module's teardown helper. Previously
+  removing the attribute from an element left a stale `MutationObserver` +
+  scroll listener attached.
+  **#880**: documented the `Map`-vs-`WeakMap` choice in
+  `39-dj-track-static.js` — the reconnect-diff iterates all tracked
+  elements to compare snapshot URLs, and `WeakMap` does not support
+  iteration; the `isConnected` check in `_checkStale` handles detached
+  elements.
+  **#881**: documented unconditional scroll-to-bottom on install in
+  `38-dj-sticky-scroll.js` — matches Phoenix phx-auto-scroll / Ember
+  scroll-into-view behavior (sticky-scroll is an "opt into bottom-pinning"
+  attribute; authors want the initial view pinned to the most recent
+  content: chat, log output).
+  **#882**: regression test in `tests/js/dj_mutation.test.js` — no
+  `dj-mutation-fire` CustomEvent fires when the element is removed before
+  the debounce timer expires (existing `_tearDownDjMutation` path
+  correctly clears the pending timer on removal).
+
 ### Tests
 
 - **dj-transition-group follow-ups — closes #905, #906** —
