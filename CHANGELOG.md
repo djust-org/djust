@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Mechanical cleanup — closes #914, #915** —
+  **#914**: dropped redundant `ch == " "` clause in `_log_utils.sanitize_for_log` —
+  ASCII space is already printable so the explicit check was dead.
+  **#915**: bulk-applied `ruff format` (pinned pre-commit version 0.8.4) to 4 pre-drifted
+  files (3 theming test files + `uploads.py`) to bring them to canonical form.
+  No behavior change in either fix.
+
 - **3 latent bugs caught by prior CodeQL-cleanup audits — closes #930, #932, #933** —
   **#930 FormArrayNode inner content**: `{% form_array %}...{% endform_array %}` parsed the block
   body into a nodelist via `parser.parse(("endform_array",))` but `FormArrayNode.render` never

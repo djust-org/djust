@@ -59,7 +59,7 @@ pytestmark = pytest.mark.theming
 
 def get_theme_manifest():
     return ThemeManifest(
-        name="{pkg_name.replace('_', '-')}",
+        name="{pkg_name.replace("_", "-")}",
         version="1.0.0",
         description="Test theme package",
         design_system="material",

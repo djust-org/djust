@@ -32,7 +32,7 @@ def sanitize_for_log(value: Any) -> str:
     # Replace control chars (C0 range, excluding space) with a visible marker.
     cleaned_chars = []
     for ch in value:
-        if ch == " " or ch.isprintable():
+        if ch.isprintable():
             cleaned_chars.append(ch)
         else:
             cleaned_chars.append("?")

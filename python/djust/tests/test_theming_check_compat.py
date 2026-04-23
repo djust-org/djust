@@ -68,7 +68,7 @@ class TestCheckThemeCompat:
     def test_missing_required_attr(self, theme_dir):
         """alert.html with <div> but no role='alert' produces an error."""
         alert = theme_dir / "components" / "alert.html"
-        alert.write_text('<div class="alert">\n' "  {{ message }}\n" "</div>\n")
+        alert.write_text('<div class="alert">\n  {{ message }}\n</div>\n')
         issues = check_theme_compat(theme_dir)
         errors = [i for i in issues if i.severity == "error"]
         assert len(errors) >= 1
@@ -106,11 +106,7 @@ class TestCheckThemeCompat:
         dropdown = theme_dir / "components" / "dropdown.html"
         # Has <div> and <button> but no aria-haspopup="true"
         dropdown.write_text(
-            '<div class="dropdown">\n'
-            "  {{ id }}\n"
-            "  {{ label }}\n"
-            "  <button>Toggle</button>\n"
-            "</div>\n"
+            '<div class="dropdown">\n  {{ id }}\n  {{ label }}\n  <button>Toggle</button>\n</div>\n'
         )
         issues = check_theme_compat(theme_dir)
         errors = [i for i in issues if i.severity == "error"]
@@ -126,7 +122,7 @@ class TestCheckThemeCompat:
     def test_context_var_detected_in_if_tag(self, theme_dir):
         """Required context var used in {% if var %} is not flagged."""
         button = theme_dir / "components" / "button.html"
-        button.write_text("<button>\n" "  {% if text %}{{ text }}{% endif %}\n" "</button>\n")
+        button.write_text("<button>\n  {% if text %}{{ text }}{% endif %}\n</button>\n")
         issues = check_theme_compat(theme_dir)
         errors = [i for i in issues if i.severity == "error" and "text" in i.message]
         assert errors == []
