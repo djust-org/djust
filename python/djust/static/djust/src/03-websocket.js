@@ -182,6 +182,18 @@ class LiveViewWebSocket {
                 return;
             }
 
+            // Sticky LiveViews (Phase B): abnormal close invalidates
+            // any detached sticky subtrees. The server will re-mount
+            // sticky views from scratch on reconnect (new session,
+            // new instances), so stash entries from the dead
+            // connection cannot reattach — they'd only surface as
+            // ``no-slot`` unmount events on the next navigation, or
+            // worse, shadow a freshly re-mounted sticky. Clear the
+            // stash before the reconnect attempt runs.
+            if (window.djust && window.djust.stickyPreserve && window.djust.stickyPreserve.clearStash) {
+                window.djust.stickyPreserve.clearStash();
+            }
+
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 this.reconnectAttempts++;
                 const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
@@ -341,13 +353,25 @@ class LiveViewWebSocket {
                     if (hasDataDjAttrs) {
                         if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
                     }
-                    let container = document.querySelector('[dj-view]');
+                    // Sticky LiveViews (Phase B): select a container that
+                    // is NOT a sticky subtree root. When the old view is
+                    // still in the DOM just before its innerHTML is
+                    // replaced, a naive ``[dj-view]`` pick could return
+                    // the sticky itself. ``[dj-sticky-root]`` is set by
+                    // the server template tag on sticky wrappers —
+                    // exclude them from container selection.
+                    let container = document.querySelector('[dj-view]:not([dj-sticky-root])');
                     if (!container) {
                         container = document.querySelector('[dj-root]');
                     }
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
+                        // Post-mount sticky reattach (Phase B). No-op
+                        // when stickyStash is empty.
+                        if (window.djust.stickyPreserve && window.djust.stickyPreserve.reattachStickyAfterMount) {
+                            window.djust.stickyPreserve.reattachStickyAfterMount();
+                        }
                         reinitAfterDOMUpdate();
                     }
                     this.skipMountHtml = false;
@@ -589,6 +613,34 @@ class LiveViewWebSocket {
                 // a specific child view via view_id. Routed to 45-child-view.js.
                 if (window.djust.childView && window.djust.childView.handleChildUpdate) {
                     window.djust.childView.handleChildUpdate(data);
+                }
+                if (this.lastEventName) {
+                    globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
+                break;
+
+            case 'sticky_hold':
+                // Sticky LiveViews Phase B: authoritative list of
+                // preserved sticky view_ids. Emitted BEFORE the
+                // companion ``mount`` frame so the client can drop
+                // stash entries the server is NOT preserving
+                // (permission revoked, no matching slot, etc.) before
+                // the new HTML is applied.
+                if (window.djust.stickyPreserve && window.djust.stickyPreserve.reconcileStickyHold) {
+                    window.djust.stickyPreserve.reconcileStickyHold(data.views || []);
+                }
+                break;
+
+            case 'sticky_update':
+                // Sticky LiveViews Phase B: VDOM patch frame scoped to
+                // a sticky subtree. Applies via the new
+                // ``applyPatches(patches, rootEl)`` variant — the
+                // sticky's dj-id namespace is independent of the
+                // parent's, so doc-wide lookups would be incorrect.
+                if (window.djust.stickyPreserve && window.djust.stickyPreserve.handleStickyUpdate) {
+                    window.djust.stickyPreserve.handleStickyUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);

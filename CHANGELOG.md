@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sticky LiveViews — preservation across `live_redirect` (v0.6.0 Phase B of Sticky LiveViews)** —
+  Mark a LiveView class with `sticky = True` + non-empty `sticky_id` and embed it via
+  `{% live_render "myapp.Audio" sticky=True %}` to keep it mounted across `live_redirect`
+  navigations. State, WS channel groups, background tasks, and DOM subtree (form values,
+  scroll, focus) all survive — the Python instance is the same object on both sides of
+  the navigation. Authentication is re-checked against the NEW request's session via
+  the new `djust.auth.check_view_auth_lightweight(view, request) -> bool` wrapper; a
+  sticky view whose permissions are revoked mid-session is unmounted at the next
+  navigation, never silently retained. Destination layouts mark the re-attachment
+  point with `<div dj-sticky-slot="<id>"></div>`. Client-side: the sticky subtree
+  (`[dj-sticky-view]`) is detached into an in-memory stash before the navigation
+  (triggered in `18-navigation.js` BEFORE the outbound `live_redirect_mount` send)
+  and re-attached at `[dj-sticky-slot="<id>"]` in the new layout via `replaceWith()`
+  — DOM node identity preserved. Apps can listen to `djust:sticky-preserved` /
+  `djust:sticky-unmounted` CustomEvents (reason: `server-unmount` or `no-slot`)
+  to react to sticky-lifecycle transitions. Multiple sticky views per page coexist
+  (relative re-attach order unspecified; apps needing ordering should sequence
+  their own post-hook). Two `{% live_render %}` with the same `sticky_id` raise
+  `TemplateSyntaxError` at render time.
+  Wire protocol: new `sticky_hold` frame (sent BEFORE `mount` on live_redirect)
+  lists surviving view_ids so the client reconciles its stash against an
+  authoritative list. New `sticky_update` frame carries per-child VDOM patches,
+  applied via a new scoped-applier variant `applyPatches(patches, rootEl?)` in
+  `12-vdom-patch.js` — when `rootEl` is non-null, node lookups / focus save-restore
+  / autofocus queries all scope to that subtree so a sticky child's dj-id namespace
+  can't collide with the parent's. Phase A's `child_update` path (WIRE-ONLY in
+  v0.5.7) is now fully wired via the same scoped applier.
+  Also ships: per-view VDOM version tracking (`clientVdomVersions: Map<view_id, number>`
+  with `"__root"` sentinel for top-level), `[dj-root]` audit across 3 client modules
+  (`40-dj-layout.js`, `24-page-loading.js`, `12-vdom-patch.js` autofocus sites)
+  adding `:not([dj-sticky-root])` scoping so sticky children don't masquerade as
+  layout / navigation roots. ADR-011 in Phase C documents the full wire protocol +
+  security model.
+  11 Python unit tests in `tests/unit/test_sticky_preserve.py` (HTML-parsed),
+  10 JSDOM tests in `tests/js/sticky_preserve.test.js` (createDom + nextFrame
+  pattern), and 3 end-to-end integration tests in
+  `tests/integration/test_sticky_redirect_flow.py` covering Dashboard→Settings
+  preservation, rapid A→B→A instance identity, and the no-slot reconcile path.
+
 - **Embedded LiveViews via `{% live_render %}` (v0.6.0 Phase A of Sticky LiveViews)** —
   New template tag embeds a LiveView as a child of another LiveView (Phoenix nested-LV parity).
   `{% live_render "myapp.views.ChildView" foo=1 %}` resolves the dotted path, validates

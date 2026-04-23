@@ -15,9 +15,14 @@ function sanitizeIdForLog(id) {
  * Save the current focus state (active element, selection, scroll position).
  * Call before DOM mutations that may destroy focus. Pairs with restoreFocusState().
  *
+ * @param {HTMLElement|null} [rootEl=null] — optional scoping root. When
+ *   provided, the positional-fallback index is computed relative to this
+ *   root (used by scoped sticky patch application so the focus index for
+ *   a child view doesn't collide with the parent view's positional
+ *   indices).
  * @returns {Object|null} Saved focus state, or null if no form element is focused.
  */
-function saveFocusState() {
+function saveFocusState(rootEl = null) {
     const active = document.activeElement;
     if (!active || active === document.body || active === document.documentElement) {
         return null;
@@ -48,9 +53,11 @@ function saveFocusState() {
         state.findBy = 'dj-id';
         state.key = active.getAttribute('dj-id');
     } else {
-        // Positional: index among same-tag siblings in the nearest dj-view
+        // Positional: index among same-tag siblings in the nearest dj-view.
+        // Sticky patch applier passes rootEl so the index is scoped to the
+        // sticky subtree, not the whole document.
         state.findBy = 'index';
-        const root = active.closest('[dj-view]') || document.body;
+        const root = rootEl || active.closest('[dj-view]') || document.body;
         const siblings = root.querySelectorAll(active.tagName.toLowerCase());
         state.key = Array.from(siblings).indexOf(active);
     }
@@ -72,20 +79,27 @@ function saveFocusState() {
  * focus, selection range, and scroll position.
  *
  * @param {Object|null} state - Saved state from saveFocusState()
+ * @param {HTMLElement|null} [rootEl=null] — optional scoping root. When
+ *   provided, the lookup queries against ``rootEl`` instead of
+ *   ``document``, so sticky/child patches don't resurrect a matching
+ *   id-carrying element outside their own subtree.
  */
-function restoreFocusState(state) {
+function restoreFocusState(state, rootEl = null) {
     if (!state) return;
 
+    const scope = rootEl || document;
     let el = null;
     if (state.findBy === 'id') {
-        el = document.getElementById(state.key);
+        el = (rootEl && rootEl.querySelector)
+            ? rootEl.querySelector('#' + CSS.escape(state.key))
+            : document.getElementById(state.key);
     } else if (state.findBy === 'name') {
-        el = document.querySelector(`[name="${CSS.escape(state.key)}"]`);
+        el = scope.querySelector(`[name="${CSS.escape(state.key)}"]`);
     } else if (state.findBy === 'dj-id') {
-        el = document.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
+        el = scope.querySelector(`[dj-id="${CSS.escape(state.key)}"]`);
     } else {
-        // Positional fallback
-        const root = document.querySelector('[dj-view]') || document.body;
+        // Positional fallback — scoped to rootEl when provided.
+        const root = rootEl || document.querySelector('[dj-view]') || document.body;
         const candidates = root.querySelectorAll(state.tag.toLowerCase());
         el = candidates[state.key] || null;
     }
@@ -122,12 +136,17 @@ function restoreFocusState(state) {
  *
  * @param {Array<number>} path - Index-based path (fallback)
  * @param {string|null} djustId - Compact djust ID for direct lookup (e.g., "1a")
+ * @param {HTMLElement|null} [rootEl=null] — optional scoping root. When
+ *   provided, both the dj-id lookup and the path traversal are scoped to
+ *   ``rootEl``. Sticky LiveViews (Phase B) pass the sticky subtree here
+ *   so a child's dj-id doesn't match the parent's.
  * @returns {Node|null} - Found node or null
  */
-function getNodeByPath(path, djustId = null) {
+function getNodeByPath(path, djustId = null, rootEl = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
-        const byId = document.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
+        const scope = rootEl || document;
+        const byId = scope.querySelector(`[dj-id="${CSS.escape(djustId)}"]`);
         if (byId) {
             return byId;
         }
@@ -139,7 +158,7 @@ function getNodeByPath(path, djustId = null) {
     }
 
     // Strategy 2: Index-based path traversal (fallback)
-    let node = getLiveViewRoot();
+    let node = rootEl || getLiveViewRoot();
 
     if (path.length === 0) {
         return node;
@@ -1180,9 +1199,12 @@ window.djust._sortPatches = _sortPatches;
  * - `path`: Index-based path (fallback)
  * - `d`: Compact djust ID for O(1) querySelector lookup
  */
-function applySinglePatch(patch) {
-    // Use ID-based resolution (d field) with path as fallback
-    const node = getNodeByPath(patch.path, patch.d);
+function applySinglePatch(patch, rootEl = null) {
+    // Use ID-based resolution (d field) with path as fallback.
+    // rootEl is threaded in by the scoped applier (Sticky LiveViews
+    // Phase B) so child / sticky patches don't resolve against the
+    // parent view's dj-id namespace.
+    const node = getNodeByPath(patch.path, patch.d, rootEl);
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
@@ -1449,14 +1471,26 @@ function applySinglePatch(patch) {
  * - Groups patches by parent path for batch operations
  * - Uses DocumentFragment for consecutive InsertChild patches on same parent
  * - Skips batching overhead for small patch sets (<=10 patches)
+ *
+ * @param {Array} patches - VDOM patch list (server-authoritative).
+ * @param {HTMLElement|null} [rootEl=null] — optional scoping root for
+ *   the patch application. When null (the default path used by every
+ *   pre-Phase-B caller), the live view root is resolved via
+ *   ``getLiveViewRoot()`` exactly as before — zero regressions for
+ *   top-level patches. When non-null (used by Sticky LiveViews Phase B
+ *   and the now-wired Phase A child_update path), node lookups,
+ *   focus save/restore, and the autofocus query are all scoped to
+ *   ``rootEl`` so they cannot spill into or from another view's
+ *   subtree.
  */
-function applyPatches(patches) {
+function applyPatches(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
 
     // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
-    const focusState = saveFocusState();
+    const focusState = saveFocusState(rootEl);
+    const autofocusScope = rootEl || document;
 
     // Sort patches in 4-phase order for correct DOM mutation sequencing
     _sortPatches(patches);
@@ -1466,7 +1500,7 @@ function applyPatches(patches) {
         let failedCount = 0;
         const failedIndices = [];
         for (let _pi = 0; _pi < patches.length; _pi++) {
-            if (!applySinglePatch(patches[_pi])) {
+            if (!applySinglePatch(patches[_pi], rootEl)) {
                 failedCount++;
                 failedIndices.push(_pi);
             }
@@ -1475,12 +1509,12 @@ function applyPatches(patches) {
             console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (indices: ${failedIndices.join(', ')})`);
             // Still handle autofocus even when some patches failed (#617)
             if (!focusState || !focusState.id) {
-                const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+                const autoFocusEl = autofocusScope.querySelector('[autofocus]');
                 if (autoFocusEl && document.activeElement !== autoFocusEl) {
                     autoFocusEl.focus();
                 }
             }
-            restoreFocusState(focusState);
+            restoreFocusState(focusState, rootEl);
             return false;
         }
         // Note: updateHooks() and bindModelElements() are called by
@@ -1490,12 +1524,12 @@ function applyPatches(patches) {
         // Browser only honors autofocus on initial page load, so we
         // manually focus the first element with autofocus after a patch.
         if (!focusState || !focusState.id) {
-            const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+            const autoFocusEl = autofocusScope.querySelector('[autofocus]');
             if (autoFocusEl && document.activeElement !== autoFocusEl) {
                 autoFocusEl.focus();
             }
         }
-        restoreFocusState(focusState);
+        restoreFocusState(focusState, rootEl);
         return true;
     }
 
@@ -1534,7 +1568,7 @@ function applyPatches(patches) {
         //    descending-index-sorted by _sortPatches, so they're safe to
         //    apply sequentially without index drift.
         for (const patch of nonInsertPatches) {
-            if (applySinglePatch(patch)) {
+            if (applySinglePatch(patch, rootEl)) {
                 successCount++;
             } else {
                 failedCount++;
@@ -1553,7 +1587,7 @@ function applyPatches(patches) {
                 if (consecutiveGroup.length < 3) continue;
 
                 const firstPatch = consecutiveGroup[0];
-                const parentNode = getNodeByPath(firstPatch.path, firstPatch.d);
+                const parentNode = getNodeByPath(firstPatch.path, firstPatch.d, rootEl);
 
                 if (parentNode) {
                     try {
@@ -1588,7 +1622,7 @@ function applyPatches(patches) {
         //    groups or group size < 3) individually.
         for (const patch of insertPatches) {
             if (batchedInserts.has(patch)) continue;
-            if (applySinglePatch(patch)) {
+            if (applySinglePatch(patch, rootEl)) {
                 successCount++;
             } else {
                 failedCount++;
@@ -1600,12 +1634,12 @@ function applyPatches(patches) {
         console.error(`[LiveView] ${failedCount}/${patches.length} patches failed (${successCount} succeeded)`);
         // Still handle autofocus even when some patches failed (#617)
         if (!focusState || !focusState.id) {
-            const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+            const autoFocusEl = autofocusScope.querySelector('[autofocus]');
             if (autoFocusEl && document.activeElement !== autoFocusEl) {
                 autoFocusEl.focus();
             }
         }
-        restoreFocusState(focusState);
+        restoreFocusState(focusState, rootEl);
         return false;
     }
 
@@ -1617,12 +1651,12 @@ function applyPatches(patches) {
     // Browser only honors autofocus on initial page load, so we
     // manually focus the first element with autofocus after a patch.
     if (!focusState || !focusState.id) {
-        const autoFocusEl = document.querySelector('[dj-view] [autofocus]');
+        const autoFocusEl = autofocusScope.querySelector('[autofocus]');
         if (autoFocusEl && document.activeElement !== autoFocusEl) {
             autoFocusEl.focus();
         }
     }
 
-    restoreFocusState(focusState);
+    restoreFocusState(focusState, rootEl);
     return true;
 }

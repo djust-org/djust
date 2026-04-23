@@ -123,6 +123,25 @@ def _has_custom_check_permissions(view_instance) -> bool:
     return False
 
 
+def check_view_auth_lightweight(view_instance, request) -> bool:
+    """Return True if ``view_instance`` is allowed to mount under ``request``.
+
+    Thin wrapper around :func:`check_view_auth` that returns a boolean
+    instead of the redirect-url / None contract. Used by Sticky LiveViews
+    (Phase B) to re-check a preserved child's auth posture against the
+    NEW request at ``live_redirect`` time — a sticky view whose
+    permissions are revoked mid-session must be unmounted at the next
+    navigation, never silently retained.
+
+    ``True`` = authorized (mount-eligible).
+    ``False`` = denied (redirect required or permission missing).
+    """
+    try:
+        return check_view_auth(view_instance, request) is None
+    except PermissionDenied:
+        return False
+
+
 def check_handler_permission(handler, request) -> bool:
     """Check handler-level @permission_required. Returns True if OK.
 

@@ -100,6 +100,12 @@ function handleServerResponse(data, eventName, triggerElement) {
             // tell preserveFormValues to accept remote content instead of
             // restoring the focused element's stale local value.
             _isBroadcastUpdate = !!data.broadcast;
+            // Sticky LiveViews (Phase B): this path handles ROOT patches
+            // only. Sticky-targeted patches arrive via the ``sticky_update``
+            // frame and are routed through 45-child-view.js's
+            // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
+            // here — calling applyPatches(data.patches) with the default
+            // null rootEl is correct for the root view.
             const success = applyPatches(data.patches);
             _isBroadcastUpdate = false;
 

@@ -302,6 +302,43 @@ def _emit_full_html_update(
     )
 
 
+def _find_sticky_slot_ids(html: str) -> set[str]:
+    """Return the set of ``dj-sticky-slot`` attribute values in ``html``.
+
+    Uses ``html.parser.HTMLParser`` (stdlib) — NEVER a regex — so that
+    quoted attribute values containing ``>`` and other HTML5 edge cases
+    don't derail the scan. The caller is
+    :meth:`LiveViewConsumer.handle_live_redirect_mount`, which uses the
+    result to decide which preserved sticky children to reattach on the
+    new parent.
+    """
+    if not html:
+        return set()
+    from html.parser import HTMLParser as _HTMLParser
+
+    class _SlotCollector(_HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.ids: set[str] = set()
+
+        def handle_starttag(self, tag, attrs):
+            for name, value in attrs:
+                if name == "dj-sticky-slot" and value:
+                    self.ids.add(value)
+
+        def handle_startendtag(self, tag, attrs):
+            self.handle_starttag(tag, attrs)
+
+    p = _SlotCollector()
+    try:
+        p.feed(html)
+        p.close()
+    except Exception:  # noqa: BLE001 — defensive; malformed HTML must not crash redirect
+        logger.warning("sticky-slot parse failed; returning empty set", exc_info=True)
+        return set()
+    return p.ids
+
+
 class LiveViewConsumer(AsyncWebsocketConsumer):
     """
     WebSocket consumer for handling LiveView connections.
@@ -324,6 +361,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
         self._tick_task = None
+        # Sticky LiveViews (Phase B): per-connection stash of preserved
+        # sticky children staged in handle_live_redirect_mount BEFORE the
+        # old view is torn down. Re-registered on the new parent after
+        # its mount completes.
+        self._sticky_preserved: Dict[str, Any] = {}
         # Render lock: serializes tick and event render operations so they
         # cannot concurrently access view_instance state or increment the
         # VDOM version. This prevents the version mismatch race in #560.
@@ -506,6 +548,38 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self.send_json(
             {
                 "type": "child_update",
+                "view_id": view_id,
+                "patches": patches,
+                "version": version,
+            }
+        )
+
+    async def _send_sticky_update(
+        self,
+        view_id: str,
+        patches: list,
+        version: int,
+    ) -> None:
+        """Send a VDOM patch frame targeted at a preserved sticky child.
+
+        Phase B of Sticky LiveViews. ``sticky_update`` is the sibling of
+        ``child_update`` (Phase A) — same ``{view_id, patches, version}``
+        shape, but the client scopes the patches to the sticky subtree
+        (``[dj-sticky-view="<id>"]``) via the new
+        ``applyPatches(patches, rootEl)`` variant rather than the parent
+        view's root. This lets the sticky child re-render without
+        colliding with the parent's VDOM coordinates.
+
+        Args:
+            view_id: The sticky child's ``sticky_id`` (also its
+                ``view_id`` on the parent registry).
+            patches: VDOM patch list, same shape as ``html_update``.
+            version: Per-child VDOM version number; tracked on the client
+                via ``clientVdomVersions: Map<view_id, number>``.
+        """
+        await self.send_json(
+            {
+                "type": "sticky_update",
                 "view_id": view_id,
                 "patches": patches,
                 "version": version,
@@ -1267,12 +1341,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             await self.send_json(response)
 
-    async def handle_mount(self, data: Dict[str, Any]):
+    async def handle_mount(
+        self,
+        data: Dict[str, Any],
+        sticky_preserved: Optional[Dict[str, Any]] = None,
+    ):
         """
         Handle view mounting with proper view resolution.
 
         Dynamically imports and instantiates a LiveView class, creates a request
         context, mounts the view, and returns the initial HTML.
+
+        Sticky LiveViews (Phase B): when ``sticky_preserved`` is provided
+        (passed by ``handle_live_redirect_mount``), a ``sticky_hold``
+        frame is emitted immediately BEFORE the ``mount`` frame so the
+        client can reconcile its stickyStash against the authoritative
+        survivor list BEFORE ``reattachStickyAfterMount`` runs inside
+        the mount-frame handler. The survivor set is computed by
+        slot-scanning the just-rendered HTML; survivors whose
+        ``sticky_id`` has no matching ``[dj-sticky-slot]`` get
+        ``_on_sticky_unmount()`` called and are dropped from the dict
+        (which the caller stores on ``self._sticky_preserved``).
         """
         from django.test import RequestFactory
         from django.conf import settings
@@ -1800,6 +1889,67 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["upload_configs"] = {
                     name: info["config"] for name, info in upload_state.items()
                 }
+
+        # Sticky LiveViews (Phase B): if the caller passed a
+        # ``sticky_preserved`` dict (i.e. we're on the live_redirect
+        # path), compute the authoritative survivor set by scanning the
+        # just-rendered HTML for ``[dj-sticky-slot="<id>"]`` and emit
+        # the ``sticky_hold`` frame BEFORE the ``mount`` frame. Ordering
+        # matters: the client's mount handler calls
+        # reattachStickyAfterMount() which walks stickyStash and
+        # replaces matching slot elements — if sticky_hold arrived
+        # AFTER the mount frame, auth-revoked stickys would already be
+        # reattached and reconcileStickyHold would no-op on them.
+        if sticky_preserved:
+            try:
+                matched_ids = _find_sticky_slot_ids(html or "")
+                survivors_final: Dict[str, Any] = {}
+                for sticky_id, child in sticky_preserved.items():
+                    if sticky_id in matched_ids:
+                        # Re-register onto the new parent. _register_child
+                        # updates child._parent_view and child._view_id.
+                        if hasattr(self.view_instance, "_register_child"):
+                            try:
+                                self.view_instance._register_child(sticky_id, child)
+                                survivors_final[sticky_id] = child
+                            except ValueError:
+                                # sticky_id collided with a freshly-embedded
+                                # (non-preserved) child in the new template —
+                                # discard the preserved one.
+                                logger.warning(
+                                    "sticky_id %s collided with new child on reattach",
+                                    sticky_id,
+                                )
+                                hook = getattr(child, "_on_sticky_unmount", None)
+                                if callable(hook):
+                                    try:
+                                        hook()
+                                    except Exception:  # noqa: BLE001
+                                        logger.exception("sticky child _on_sticky_unmount raised")
+                    else:
+                        hook = getattr(child, "_on_sticky_unmount", None)
+                        if callable(hook):
+                            try:
+                                hook()
+                            except Exception:  # noqa: BLE001
+                                logger.exception("sticky child _on_sticky_unmount raised")
+                # Update caller-visible dict so handle_live_redirect_mount
+                # sees the final survivors (it stashes this on
+                # self._sticky_preserved for app-level introspection).
+                self._sticky_preserved = survivors_final
+
+                # Emit sticky_hold BEFORE the mount frame. Even an empty
+                # list is meaningful — tells the client "drop everything
+                # in your stash". Only skip when the caller passed an
+                # empty dict (pure defensive, no stickys staged).
+                await self.send_json(
+                    {
+                        "type": "sticky_hold",
+                        "views": list(survivors_final.keys()),
+                    }
+                )
+            except Exception:  # noqa: BLE001 — defensive: never break mount
+                logger.exception("failed to emit sticky_hold frame before mount")
 
         await self.send_json(response)
 
@@ -3025,10 +3175,60 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         The client sends this after receiving a live_redirect navigation command.
         We unmount the current view and mount the new one on the same connection.
+
+        Sticky LiveViews (Phase B):
+
+        * Before teardown, stage the old view's sticky children via
+          :meth:`LiveView._preserve_sticky_children`, passing a
+          reconstructed request for the new URL so auth is re-checked
+          against the new posture. Survivors are stashed on
+          ``self._sticky_preserved`` — they hold strong references to
+          the sticky ``LiveView`` instances so the normal old-view
+          cleanup doesn't GC them.
+        * After the new view mounts + renders, scan the rendered HTML
+          for ``[dj-sticky-slot="<id>"]`` markers. For each match, call
+          ``new_parent._register_child(id, child)`` to transplant the
+          preserved instance onto the new parent. Unmatched survivors
+          get ``_on_sticky_unmount()`` called and are discarded.
+        * Emit a ``sticky_hold`` frame BEFORE the ``mount`` frame listing
+          the final survivor ids, so the client reconciles its
+          stickyStash against an authoritative list.
         """
         # Reuse handle_mount — it already handles everything
-        # But first, clean up the old view instance
+        # But first, stage the old view's sticky children (Phase B).
         old_view = self.view_instance
+        sticky_preserved: Dict[str, Any] = {}
+        if old_view is not None and hasattr(old_view, "_preserve_sticky_children"):
+            try:
+                new_request = self._build_live_redirect_request(data)
+                if new_request is None:
+                    # URL resolution failed — treat as "auth cannot be
+                    # re-checked" and drop every staged sticky by calling
+                    # their unmount hooks. Better to unmount than to
+                    # retain a sticky whose auth posture we can't
+                    # validate against the new URL.
+                    for _vid, child in list(
+                        old_view._get_all_child_views().items()
+                        if hasattr(old_view, "_get_all_child_views")
+                        else []
+                    ):
+                        if getattr(child, "sticky", False) is True:
+                            hook = getattr(child, "_on_sticky_unmount", None)
+                            if callable(hook):
+                                try:
+                                    hook()
+                                except Exception:  # noqa: BLE001
+                                    logger.exception("sticky child _on_sticky_unmount raised")
+                    sticky_preserved = {}
+                else:
+                    sticky_preserved = await sync_to_async(old_view._preserve_sticky_children)(
+                        new_request
+                    )
+            except Exception:  # noqa: BLE001 — defensive: never break redirect
+                logger.exception("sticky children staging failed; proceeding without preservation")
+                sticky_preserved = {}
+        # Stash on the consumer for post-mount reattachment.
+        self._sticky_preserved = sticky_preserved
 
         # Leave old view's channel group
         if self._view_group:
@@ -3046,6 +3246,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         # Clean up old view
         if old_view:
+            # Before cleanup_uploads, drop sticky children from the old
+            # view's registry so the normal unregister path doesn't call
+            # their _cleanup_on_unregister hook — sticky children SURVIVE
+            # this navigation and keep running on their stash refs.
+            if hasattr(old_view, "_child_views"):
+                for sticky_id, sticky_child in sticky_preserved.items():
+                    # Child may have been registered under its auto-
+                    # generated view_id OR under its sticky_id. Find by
+                    # identity because sticky_id may differ from the
+                    # original registered view_id.
+                    for vid, c in list(old_view._child_views.items()):
+                        if c is sticky_child:
+                            # Pop WITHOUT calling _unregister_child (which
+                            # would invoke _cleanup_on_unregister). Sticky
+                            # children keep running.
+                            old_view._child_views.pop(vid, None)
+                            break
             if hasattr(old_view, "_cleanup_uploads"):
                 try:
                     old_view._cleanup_uploads()
@@ -3054,8 +3271,85 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         self.view_instance = None
 
-        # Now mount the new view using the standard mount flow
-        await self.handle_mount(data)
+        # Now mount the new view using the standard mount flow. We pass
+        # ``sticky_preserved`` so ``handle_mount`` can emit the
+        # ``sticky_hold`` frame BEFORE its ``mount`` frame — ordering
+        # is load-bearing (see Fix #1 / issue tag). ``handle_mount``
+        # mutates ``self._sticky_preserved`` to the final survivor set
+        # after the slot scan; if it raises mid-flight we drain any
+        # staged children so their background tasks don't leak.
+        try:
+            await self.handle_mount(data, sticky_preserved=sticky_preserved)
+        except Exception:
+            # Drain any staged stickys so their async tasks / groups
+            # clean up. Without this, a render/auth failure on the NEW
+            # view would leave preserved sticky instances alive on the
+            # consumer with background work still running on a
+            # "zombie" instance whose parent is gone.
+            for child in list(self._sticky_preserved.values()):
+                hook = getattr(child, "_on_sticky_unmount", None)
+                if callable(hook):
+                    try:
+                        hook()
+                    except Exception:  # noqa: BLE001 — best-effort cleanup
+                        logger.exception(
+                            "sticky child _on_sticky_unmount failed during redirect cleanup"
+                        )
+            self._sticky_preserved = {}
+            raise
+
+    def _build_live_redirect_request(self, data: Dict[str, Any]):
+        """Reconstruct a minimal Django request for the live_redirect target.
+
+        Used to re-check sticky children's auth against the destination
+        URL. Mirrors the request-construction block inside
+        :meth:`handle_mount` — session + user come from the WS scope,
+        path from the client message. Kept as a distinct helper so the
+        sticky staging step can run BEFORE handle_mount destroys the
+        old view.
+
+        Returns ``None`` when the destination URL fails to resolve (no
+        matching URL pattern) — sticky views whose ``check_permissions``
+        relies on ``request.resolver_match.kwargs`` would otherwise
+        ``AttributeError`` or silently pass using stale data from the
+        old request. The caller treats a ``None`` return as "staging
+        impossible, unmount all staged stickys".
+        """
+        from django.test import RequestFactory
+        from django.urls import resolve, Resolver404
+
+        factory = RequestFactory()
+        page_url = data.get("url", "/")
+        request = factory.get(page_url)
+        # Session — same source as handle_mount.
+        try:
+            from django.contrib.sessions.backends.db import SessionStore
+        except Exception:  # noqa: BLE001
+            SessionStore = None  # type: ignore[assignment]
+        scope_session = self.scope.get("session") if hasattr(self, "scope") else None
+        session_key = getattr(scope_session, "session_key", None) if scope_session else None
+        if SessionStore is not None:
+            request.session = (
+                SessionStore(session_key=session_key) if session_key else SessionStore()
+            )
+        # User — Channels scope user is a LazyObject; assign directly.
+        if hasattr(self, "scope") and "user" in self.scope:
+            request.user = self.scope["user"]
+        # Resolve the destination URL so ``request.resolver_match`` is
+        # populated. Sticky views using ``check_permissions(request)``
+        # may reference ``request.resolver_match.kwargs`` (e.g.
+        # permissions keyed by the PK from the NEW URL). Without this,
+        # they'd either ``AttributeError`` or read stale data from the
+        # old request.
+        try:
+            request.resolver_match = resolve(page_url)
+        except Resolver404:
+            logger.warning(
+                "resolve() failed for live_redirect URL %s; sticky auth cannot be re-checked",
+                sanitize_for_log(page_url),
+            )
+            return None
+        return request
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]):
         """Handle presence heartbeat from client."""

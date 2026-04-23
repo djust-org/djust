@@ -105,6 +105,17 @@
             // Look up the view path for the new URL from the route map
             const viewPath = resolveViewPath(newUrl.pathname);
             if (viewPath) {
+                // Sticky LiveViews (Phase B): BEFORE the outbound
+                // live_redirect_mount message, detach any
+                // [dj-sticky-view] subtrees into the module-local
+                // stash so they survive the mount-frame innerHTML
+                // replacement. If stashing happens AFTER the mount
+                // frame arrives, the subtree has already been
+                // destroyed.
+                if (window.djust.stickyPreserve && window.djust.stickyPreserve.stashStickySubtrees) {
+                    window.djust.stickyPreserve.stashStickySubtrees();
+                }
+
                 const urlParams = Object.fromEntries(newUrl.searchParams);
                 liveViewWS.sendMessage({
                     type: 'live_redirect_mount',
@@ -175,6 +186,17 @@
             // Different view — need to remount
             const viewPath = resolveViewPath(url.pathname);
             if (viewPath) {
+                // Sticky LiveViews (Phase B): detach sticky subtrees
+                // into the stash BEFORE the outbound
+                // live_redirect_mount message. Mirrors the stash call
+                // in handleLiveRedirect() — popstate is another entry
+                // point into the same cross-view remount flow, and
+                // without it a back-button navigation with sticky
+                // views in the current layout would destroy them on
+                // the next innerHTML replacement.
+                if (window.djust.stickyPreserve && window.djust.stickyPreserve.stashStickySubtrees) {
+                    window.djust.stickyPreserve.stashStickySubtrees();
+                }
                 liveViewWS.sendMessage({
                     type: 'live_redirect_mount',
                     view: viewPath,

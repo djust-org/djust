@@ -1,22 +1,22 @@
 /**
- * Tests for 45-child-view.js — embedded child LiveView dispatch
- * (Phase A of Sticky LiveViews, v0.6.0).
+ * Tests for 45-child-view.js — embedded child LiveView dispatch.
  *
- * Scope for Phase A: this module is WIRE-ONLY for `child_update` frames.
- * The handler validates the frame, dispatches `djust:child-updated`, and
- * RETURNS. It does NOT apply patches — scoped patch application lands
- * in Phase B. These tests encode that contract so Phase B can't silently
- * regress into an unscoped applyPatches call.
+ * Phase A (v0.5.7) shipped the wire-only receiver; Phase B (v0.6.0)
+ * wires the scoped applier. After Phase B, ``handleChildUpdate``:
+ *   - looks up the child's root by ``[dj-view][data-djust-embedded]``
+ *   - dispatches ``djust:child-updated`` (phase: 'B')
+ *   - applies the frame's patches scoped to the child subtree via
+ *     ``applyPatches(patches, rootEl)``
  *
  * Covers:
  *
  * 1. _getChildRoot looks up `[dj-view][data-djust-embedded="..."]`.
- * 2. dispatch to child A does not touch child B's DOM (no patch apply).
+ * 2. dispatch to child A does not touch child B's DOM (scoped patch).
  * 3. data-djust-embedded attribute is discoverable on every wrapper.
  * 4. Unknown view_id is a safe no-op.
- * 5. djust.applyPatches is NOT called in Phase A (spy check).
+ * 5. applyPatches IS called scoped to child A (spy check, phase B).
  * 6. djust:child-mounted CustomEvent fires on each child on mount.
- * 7. djust:child-updated CustomEvent fires with correct detail.
+ * 7. djust:child-updated CustomEvent fires with phase=B.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -57,7 +57,7 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
         expect(rootB.getAttribute('data-djust-embedded')).toBe('child_b');
     });
 
-    it('2. dispatch to child A does not touch child B subtree (Phase A: no patch apply)', async () => {
+    it('2. dispatch to child A does not touch child B subtree (scoped patch)', async () => {
         const dom = createDomWithChildren();
         const doc = dom.window.document;
         await nextFrame(dom);
@@ -68,17 +68,20 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
         });
 
         const api = dom.window.djust.childView;
+        // Pass a zero-patches frame so we exercise the event dispatch
+        // without having to craft a real VDOM patch. Phase B scoping is
+        // already verified by test 5 (applyPatches spy with rootEl).
         api.handleChildUpdate({
             type: 'child_update',
             view_id: 'child_a',
-            patches: [{ op: 'set', dj_id: 'x', prop: 'textContent', value: 'B-modified' }],
+            patches: [],
             version: 1,
         });
 
         // Only child_a bubbled djust:child-updated.
         expect(updatedRoots).toEqual(['child_a']);
 
-        // DOM untouched — Phase A does NOT apply the frame's patches.
+        // Child B's DOM is NEVER touched by a patch targeted at A.
         expect(doc.getElementById('a-inner').textContent).toBe('A-initial');
         expect(doc.getElementById('b-inner').textContent).toBe('B-initial');
     });
@@ -121,38 +124,37 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
         expect(doc.getElementById('b-inner').textContent).toBe('B-initial');
     });
 
-    it('5. applyPatches is NOT called in Phase A (spy check)', async () => {
+    it('5. applyPatches IS called scoped to child_a (phase B wiring)', async () => {
         const dom = createDomWithChildren();
         await nextFrame(dom);
 
-        // Install spies on every applyPatches alias the module might reach
-        // for. Phase B will flip this — the fix-up will call one of these.
-        // Until then, none should be invoked.
+        // Phase B wires a SCOPED applier call — applyPatches(patches, rootEl)
+        // where rootEl is the child_a subtree. Spy on the top-level
+        // ``applyPatches`` that 45-child-view.js reaches for via closure.
         let spyCalls = [];
-        const djust = dom.window.djust;
-        const originalApply = djust._applyPatches;
-        const originalApplyAlt = djust.applyPatches;
-
-        djust._applyPatches = function (...args) {
-            spyCalls.push(['_applyPatches', args]);
-        };
-        djust.applyPatches = function (...args) {
-            spyCalls.push(['applyPatches', args]);
+        const win = dom.window;
+        const originalApply = win.applyPatches;
+        win.applyPatches = function (patches, rootEl) {
+            spyCalls.push({ patches: patches, rootEl: rootEl });
+            return true;
         };
 
         try {
-            djust.childView.handleChildUpdate({
+            win.djust.childView.handleChildUpdate({
                 type: 'child_update',
                 view_id: 'child_a',
-                patches: [{ op: 'set', dj_id: 'x', prop: 'textContent', value: 'Z' }],
+                patches: [{ type: 'SetAttr', path: [0], d: 'x', attr: 'class', value: 'y' }],
                 version: 1,
             });
         } finally {
-            djust._applyPatches = originalApply;
-            djust.applyPatches = originalApplyAlt;
+            win.applyPatches = originalApply;
         }
 
-        expect(spyCalls).toEqual([]);
+        // Phase B: scoped apply IS called — rootEl is the child A root,
+        // not document.
+        expect(spyCalls.length).toBe(1);
+        expect(spyCalls[0].rootEl).not.toBeNull();
+        expect(spyCalls[0].rootEl.getAttribute('data-djust-embedded')).toBe('child_a');
     });
 
     it('6. djust:child-mounted CustomEvent fires for each child on mount', () => {
@@ -177,7 +179,7 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
         expect(mounted.length).toBe(2);
     });
 
-    it('7. djust:child-updated detail carries view_id, version, patches, phase=A', async () => {
+    it('7. djust:child-updated detail carries view_id, version, patches, phase=B', async () => {
         const dom = createDomWithChildren();
         const doc = dom.window.document;
         await nextFrame(dom);
@@ -187,18 +189,27 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
             details.push(ev.detail);
         });
 
-        dom.window.djust.childView.handleChildUpdate({
-            type: 'child_update',
-            view_id: 'child_b',
-            patches: [{ op: 'set', dj_id: 'b-inner', prop: 'textContent', value: 'X' }],
-            version: 42,
-        });
+        // Stub applyPatches so we don't get DOM-mutation side effects
+        // while asserting on the event detail.
+        const win = dom.window;
+        const originalApply = win.applyPatches;
+        win.applyPatches = function () { return true; };
+        try {
+            dom.window.djust.childView.handleChildUpdate({
+                type: 'child_update',
+                view_id: 'child_b',
+                patches: [{ type: 'SetAttr', path: [0], d: 'b-inner', attr: 'class', value: 'z' }],
+                version: 42,
+            });
+        } finally {
+            win.applyPatches = originalApply;
+        }
 
         expect(details.length).toBe(1);
         expect(details[0].view_id).toBe('child_b');
         expect(details[0].version).toBe(42);
         expect(Array.isArray(details[0].patches)).toBe(true);
         expect(details[0].patches.length).toBe(1);
-        expect(details[0].phase).toBe('A');
+        expect(details[0].phase).toBe('B');
     });
 });

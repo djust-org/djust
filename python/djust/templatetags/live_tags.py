@@ -971,6 +971,12 @@ def _stamp_view_id(html: str, view_id: str) -> str:
     return _MASK_PLACEHOLDER_RE.sub(_unmask, stamped)
 
 
+# Context-render-local scratch key for tracking sticky_ids already
+# registered in the current parent render pass. Used to raise
+# TemplateSyntaxError on ``{% live_render 'X' sticky=True %}`` collisions.
+_STICKY_IDS_SEEN_KEY = "_djust_sticky_ids_seen"
+
+
 @register.simple_tag(takes_context=True)
 def live_render(context, view_path: str, **kwargs) -> Any:
     """Embed a LiveView as a child of the current view (Phoenix nested-LV parity).
@@ -991,8 +997,21 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         </div>
 
     Phase A ships this non-sticky embedding primitive only. Phase B
-    (follow-up PR) will add ``sticky=True`` preservation across
-    ``live_redirect``.
+    (this PR) adds ``sticky=True`` preservation across
+    ``live_redirect``:
+
+        {% live_render "myapp.views.AudioPlayer" sticky=True %}
+
+    The child class must declare ``sticky = True`` and a non-empty
+    ``sticky_id``. In the destination page's template, mark the
+    re-attachment point with::
+
+        <div dj-sticky-slot="audio-player"></div>
+
+    The client detaches the sticky subtree BEFORE sending the
+    live_redirect, then ``replaceWith`` it onto the matching slot in
+    the new layout — DOM identity, form values, scroll, and focus all
+    preserved.
 
     Security notes:
 
@@ -1079,6 +1098,37 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     # 4. Instantiate + mount the child.
     request = context.get("request")
     preferred_view_id = kwargs.pop("view_id", None)
+    # Phase B: sticky kwarg — if the caller asks for sticky preservation,
+    # the child class must opt in (``sticky = True`` + non-empty
+    # ``sticky_id``). Reject mismatched pairs at render time with
+    # TemplateSyntaxError so template authors don't discover the
+    # mis-configuration only when a live_redirect fails silently.
+    sticky_kwarg = bool(kwargs.pop("sticky", False))
+    sticky_id_value = None
+    if sticky_kwarg:
+        if getattr(child_cls, "sticky", False) is not True:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} sticky=True requires %r to set "
+                "``sticky = True`` as a class attribute; the child is NOT "
+                "sticky-enabled." % view_path
+            )
+        sticky_id_value = getattr(child_cls, "sticky_id", None)
+        if not sticky_id_value:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} sticky=True requires %r to set a "
+                "non-empty ``sticky_id`` class attribute; no slot key." % view_path
+            )
+        # Enforce sticky_id uniqueness across the current render pass.
+        seen = context.render_context.setdefault(_STICKY_IDS_SEEN_KEY, set())
+        if sticky_id_value in seen:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} sticky_id %r is used by more than "
+                "one embed in this page; sticky_ids must be unique per "
+                "parent." % sticky_id_value
+            )
+        seen.add(sticky_id_value)
+        # Pin the sticky_id as the view_id for register/dispatch.
+        preferred_view_id = sticky_id_value
     child = child_cls()
     child.request = request
 
@@ -1144,7 +1194,29 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     #    the client's DOM walker (``getEmbeddedViewId`` in
     #    01-dom-helpers-turbo.js) reads ``dataset.djustEmbedded`` to
     #    surface the id on outbound events as ``view_id``.
+    #
+    #    Phase B sticky branch: also carries ``dj-sticky-view="<id>"`` +
+    #    ``dj-sticky-root`` attributes. The client's
+    #    ``45-child-view.js`` module walks ``[dj-sticky-view]`` before a
+    #    live_redirect is sent and detaches the subtree into an
+    #    in-memory stash; after the new mount arrives, the server sends
+    #    a ``sticky_hold`` frame listing surviving ids and the client
+    #    re-attaches each stashed subtree at ``[dj-sticky-slot="<id>"]``
+    #    in the new DOM via ``replaceWith()``.
+    #
+    #    Non-sticky branch behavior is unchanged (the Phase A contract).
     escaped_id = escape(view_id)
+    if sticky_kwarg:
+        escaped_sticky_id = escape(sticky_id_value)
+        return mark_safe(
+            '<div dj-view dj-sticky-view="'
+            + escaped_sticky_id
+            + '" dj-sticky-root data-djust-embedded="'
+            + escaped_id
+            + '">'
+            + rendered_stamped
+            + "</div>"
+        )
     return mark_safe(
         '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
     )
