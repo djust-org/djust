@@ -56,6 +56,18 @@ performance = [
     "orjson>=3.11.6,<4",
     "zstandard>=0.22.0,<1",
 ]
+# ADR-007 Phase 4 — consolidated packages. Each extra is `pip install
+# djust[<name>]`; the standalone `djust-<name>` PyPI packages are sunset
+# (final v99.0.0 tag, DeprecationWarning on import, re-exports from
+# djust.<name>). Migration guide: docs/website/guides/migration-from-standalone-packages.md
+auth = []  # No extra deps beyond djust core
+tenants = []  # No extra deps beyond djust core; use [tenants-redis] / [tenants-postgres] for backend-specific
+tenants-redis = [
+    "redis>=5.0.0,<7",
+]
+tenants-postgres = [
+    "psycopg[binary]>=3.1,<4",
+]
 theming = []  # No extra deps beyond djust core
 admin = []  # No extra deps beyond djust core
 deploy = [

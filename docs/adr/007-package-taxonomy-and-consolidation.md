@@ -1,10 +1,34 @@
 # ADR-007: Package Taxonomy and Consolidation Strategy
 
-**Status**: Proposed
-**Date**: 2026-04-11
+**Status**: Accepted — Phase 4 (sunset) shipped 2026-04-23 in v0.6.0
+**Date**: 2026-04-11 (proposed) · 2026-04-23 (Phase 4 closure)
 **Deciders**: Project maintainers
 **Target version**: v0.5.0+ (rules apply going forward; existing packages stay where they are)
 **Related**: [ADR-002](002-backend-driven-ui-automation.md), [ADR-003](003-llm-provider-abstraction.md), [ADR-006](006-ai-generated-uis-with-capture-and-promote.md)
+
+## Phase 4 closure note (2026-04-23)
+
+All five sibling repos (`djust-auth`, `djust-tenants`, `djust-theming`, `djust-components`, `djust-admin`) are sunset. Each:
+
+- Ships a `v99.0.0` git tag as the canonical "frozen" release marker.
+- Preserves its final shim-only `__init__.py`, which re-exports from `djust.<name>` and emits a `DeprecationWarning` on import.
+- Has a `MIGRATION.md` pointing users at `pip install djust[<name>]`.
+
+**Path A was chosen** over PyPI publish: the v99.0.0 tags are authoritative; no new PyPI releases are planned. Existing PyPI versions remain installable indefinitely for legacy projects.
+
+djust core now exposes the consolidation via extras in `pyproject.toml`:
+
+| Extra | Replaces | Deps |
+|---|---|---|
+| `djust[auth]` | `djust-auth` | none beyond core |
+| `djust[tenants]` | `djust-tenants` | none (use `[tenants-redis]` / `[tenants-postgres]` for backend-specific) |
+| `djust[theming]` | `djust-theming` | none beyond core |
+| `djust[components]` | `djust-components` | `markdown`, `nh3` |
+| `djust[admin]` | `djust-admin` | none beyond core |
+
+User-facing migration guide: [`docs/website/guides/migration-from-standalone-packages.md`](../website/guides/migration-from-standalone-packages.md).
+
+Remaining tech-debt (not blocking milestone close): the sibling repos retain legacy pre-consolidation `src/djust_<name>/{mixins,views,urls,...}.py` files next to the shim `__init__.py`. These are dead code (no longer imported — the `__init__.py` re-exports from `djust.<name>`). Cleaning them up is cosmetic and tracked as a workspace hygiene task; does not affect users.
 
 ---
 
