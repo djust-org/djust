@@ -1206,6 +1206,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_live_redirect_mount(data)
             elif msg_type == "upload_register":
                 await self._handle_upload_register(data)
+            elif msg_type == "upload_resume":
+                await self._handle_upload_resume(data)
             elif msg_type == "presence_heartbeat":
                 await self.handle_presence_heartbeat(data)
             elif msg_type == "cursor_move":
@@ -2559,6 +2561,65 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
         else:
             await self.send_error("Upload rejected (check file type, size, or max entries)")
+
+    async def _handle_upload_resume(self, data: Dict[str, Any]) -> None:
+        """Handle ``upload_resume`` — client-initiated resume of an
+        upload whose state survived a WebSocket disconnect (#821 /
+        ADR-010).
+
+        Client payload:
+
+            {"type": "upload_resume", "ref": "<upload_id>"}
+
+        Reply (always a ``upload_resumed`` JSON message with one of
+        three ``status`` values):
+
+            {"type": "upload_resumed", "ref": "...",
+             "status": "resumed" | "not_found" | "locked",
+             "bytes_received": N, "chunks_received": [0, 1, 2, ...]}
+
+        Session-scoped access: the state entry's stored ``session_key``
+        must match the current WS session, else we reply ``not_found``
+        (same response as missing — prevents existence-probe leak).
+        """
+        from .uploads.resumable import resolve_resume_request
+
+        upload_id = data.get("ref") or data.get("upload_id")
+        if not upload_id or not isinstance(upload_id, str):
+            await self.send_error("upload_resume requires a ref")
+            return
+
+        session_key = None
+        try:
+            session = self.scope.get("session") if hasattr(self, "scope") else None
+            if session is not None:
+                # Session object may need loading — access .session_key
+                # synchronously; Channels' SessionMiddlewareStack
+                # guarantees the key is available by the time the WS
+                # message loop is running.
+                session_key = getattr(session, "session_key", None)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("upload_resume: failed to read session key: %s", exc)
+
+        # Active-ref check: is another in-flight upload using this id?
+        active = False
+        try:
+            if self.view_instance and hasattr(self.view_instance, "_upload_manager"):
+                mgr = self.view_instance._upload_manager
+                if mgr is not None:
+                    existing = mgr._entries.get(upload_id)
+                    if existing and not existing._complete and not existing._error:
+                        active = True
+        except Exception:  # noqa: BLE001
+            # Defensive — resume must never crash the consumer.
+            logger.exception("upload_resume: active-ref check failed")
+
+        payload = resolve_resume_request(
+            upload_id=upload_id,
+            session_key=session_key,
+            active_refs=(lambda _uid, _a=active: _a),
+        )
+        await self.send_json(payload)
 
     async def _handle_upload_frame(self, data: bytes) -> None:
         """Handle binary upload frame (chunk, complete, cancel)."""

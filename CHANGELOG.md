@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Resumable uploads across WebSocket disconnects (v0.5.7 — closes #821)** —
+  Long mobile uploads now survive network hiccups, backgrounded tabs, and
+  brief WS drops. New `djust.uploads.resumable.ResumableUploadWriter` wraps
+  any existing `UploadWriter` (S3 MPU, GCS, Azure, tempfile) and persists
+  chunk-level state into a pluggable `UploadStateStore`. Two stores ship
+  in core: `InMemoryUploadState` (default, single-process) and
+  `RedisUploadState` (requires `djust[redis]`, multi-process / multi-host).
+  New WS message `{"type":"upload_resume","ref":X}` returns
+  `{"type":"upload_resumed","status":"resumed|not_found|locked","bytes_received":N,"chunks_received":[...]}`.
+  New HTTP status endpoint `GET /djust/uploads/<upload_id>/status`
+  (session-scoped, cross-user probes blocked). Client-side IndexedDB
+  cache in `15-uploads.js` lets tabs resume uploads after reload if the
+  file reference can be re-selected. State is capped at 16 KB per
+  upload_id (run-length-compressed chunk ranges) with 24-hour default
+  TTL. Opt-in per slot: `allow_upload("video", writer=S3Resumable,
+  resumable=True)`. ~1,050 LOC net across `python/djust/uploads/`
+  (`__init__.py` modified, `resumable.py`, `storage.py`, `views.py`
+  added), `python/djust/websocket.py`, `python/djust/static/djust/src/15-uploads.js`
+  (+ `03-websocket.js` dispatch), full wire-protocol spec +
+  failure-mode + security analysis in `docs/adr/010-resumable-uploads.md`.
+  44 unit tests in `python/djust/tests/test_resumable_uploads_821.py`
+  (compaction, in-memory + fake-Redis roundtrip, writer lifecycle,
+  resume resolution, TTL expiry via mock clock, concurrent-resume
+  rejection, HTTP status view) plus 2 async WS handler cases in the
+  same file, plus 9 JSDOM cases in
+  `tests/js/upload_resume.test.js` (file-hint fingerprint, UUID
+  round-trip, IDB shim roundtrip, cleanup on complete).
 - **Upload writers — S3 pre-signed PUT URLs + first-class GCS/Azure backends (v0.5.7 — closes #820, #822)** —
   New `djust.contrib.uploads.s3_presigned` module lets clients upload directly to S3 via a pre-signed
   URL; djust only signs and observes completion via S3 event webhook. New
