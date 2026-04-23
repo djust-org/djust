@@ -8,7 +8,7 @@ version = "0.5.5rc1"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 keywords = ["django", "rust", "reactive", "server-side-rendering", "websocket"]
 classifiers = [
@@ -19,7 +19,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -44,8 +43,7 @@ compression = [
     "zstandard>=0.22.0",  # zstd compression for state backend
 ]
 performance = [
-    "orjson>=3.10.15; python_version == '3.9'",  # Best available for 3.9
-    "orjson>=3.11.6; python_version >= '3.10'",  # CVE fix for 3.10+
+    "orjson>=3.11.6",
     "zstandard>=0.22.0",
 ]
 theming = []  # No extra deps beyond djust core
@@ -74,12 +72,11 @@ dev = [
     "redis>=5.0.0",
     "watchdog>=3.0.0",  # File system monitoring for hot reload
     "zstandard>=0.22.0",  # Compression support
-    "orjson>=3.10.15; python_version == '3.9'",  # Best available for 3.9
-    "orjson>=3.11.6; python_version >= '3.10'",  # CVE fix for 3.10+
+    "orjson>=3.11.6",
     "click>=8.0",  # Deploy CLI
     "requests>=2.28",  # Deploy CLI
     "requests-mock>=1.11",  # HTTP mocking for deploy CLI tests
-    "mcp[cli]>=1.2.0; python_version >= '3.10'",  # djust.mcp server tests (test_mcp.py); mcp dropped Python 3.9 support
+    "mcp[cli]>=1.2.0",  # djust.mcp server tests (test_mcp.py)
 ]
 
 [project.scripts]
@@ -135,10 +132,10 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

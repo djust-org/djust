@@ -61,12 +61,10 @@ jobs:
       fail-fast: false  # Continue building other platforms if one fails
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12']
         exclude:
           # Windows builds are slower; only build latest Python versions
           # Users on older Python can use Linux/macOS wheels or build from source
-          - os: windows-latest
-            python-version: '3.9'
           - os: windows-latest
             python-version: '3.10'
         include:
