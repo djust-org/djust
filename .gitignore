@@ -64,6 +64,11 @@ marketing-site/
 .serena/
 wheels/
 
+# Profile harness output (scripts/profile-request-path.py)
+artifacts/profile-*.txt
+artifacts/profile-*.pstats
+artifacts/profile-*.svg
+
 # Claude Code
 .claude/
 .pipeline-log.md

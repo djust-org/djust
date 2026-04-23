@@ -347,11 +347,17 @@ health: ## Run health checks on djust backends
 	@cd examples/demo_project && uv run python -m djust health
 
 .PHONY: profile
-profile: ## Show profiling statistics
+profile: ## Run the v0.6.0 request-path profiling harness (artifacts/profile-<ts>.txt)
+	@echo "$(GREEN)Running request-path profile...$(NC)"
+	@mkdir -p artifacts
+	@.venv/bin/python scripts/profile-request-path.py
+
+.PHONY: profile-stats
+profile-stats: ## Show runtime profiling statistics (legacy)
 	@cd examples/demo_project && uv run python -m djust profile
 
 .PHONY: profile-verbose
-profile-verbose: ## Show detailed profiling statistics
+profile-verbose: ## Show detailed runtime profiling statistics (legacy)
 	@cd examples/demo_project && uv run python -m djust profile -v
 
 .PHONY: analyze

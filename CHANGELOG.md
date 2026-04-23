@@ -30,6 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Request-path profiling harness (v0.6.0, investigative, ROADMAP Group 5
+  P2)** — reproducible profile of the mount → event → VDOM diff → patch
+  path. New `scripts/profile-request-path.py` (cProfile wrapper, optional
+  py-spy hint, writes `artifacts/profile-<timestamp>.{txt,pstats}`; exits
+  non-zero on target-miss for CI). New `tests/benchmarks/test_request_path.py`
+  with eight pytest-benchmark cases across four groups (HTTP render,
+  WebSocket mount, event dispatch, VDOM diff+patch) with hard assertions
+  against the 2 ms per-event / 5 ms list-update budgets. New
+  `docs/performance/v0.6.0-profile.md` reporting all measured timings
+  (mount 0.07 ms, event 4 µs, VDOM diff 4 µs, list reorder 0.38 ms — all
+  within targets by at least 5x). New `make profile` target wired to the
+  harness (the prior `make profile` runtime-stats target is now
+  `make profile-stats`). No optimizations were required; the profile
+  confirms the existing Rust-side architecture is well under target.
+
 - **Service Worker advanced features (v0.6.0)** — three SW-backed optimizations
   landed in one PR:
   - **VDOM patch cache**: per-URL HTML snapshots served instantly on popstate,
