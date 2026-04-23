@@ -176,6 +176,18 @@ class LiveViewConfig:
             "main_selector": "main",  # element whose innerHTML is the "main" swap target
             "shell_cache_name": "djust-shell-v1",  # Cache API bucket key for the cached shell
             "reconnect_buffer_cap": 50,  # max buffered WS messages per connection id
+            # VDOM patch cache (v0.6.0) — per-URL HTML snapshots served
+            # instantly on popstate, then reconciled against the live
+            # WebSocket mount reply. Top-level setting aliases are
+            # ``DJUST_VDOM_CACHE_ENABLED`` / ``DJUST_VDOM_CACHE_TTL_SECONDS``
+            # / ``DJUST_VDOM_CACHE_MAX_ENTRIES``.
+            "vdom_cache_enabled": True,
+            "vdom_cache_ttl_seconds": 1800,  # 30 minutes
+            "vdom_cache_max_entries": 50,
+            # State snapshot (v0.6.0) — opt-in per-view via
+            # ``LiveView.enable_state_snapshot = True``. Master switch
+            # also toggled via ``DJUST_STATE_SNAPSHOT_ENABLED``.
+            "state_snapshot_enabled": True,
         },
         # @loading attribute configuration (Phase 5)
         "loading_grouping_classes": [
@@ -203,6 +215,21 @@ class LiveViewConfig:
             # Added for discoverability of operator-facing toggles.
             if hasattr(settings, "DJUST_WS_COMPRESSION"):
                 self._config["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
+            # Service-worker advanced features (v0.6.0) — top-level aliases
+            # for the ``service_worker`` nested dict. Modifying the nested
+            # dict directly also works; these aliases exist for operator
+            # discoverability and to match the
+            # ``DJUST_{VDOM_CACHE,STATE_SNAPSHOT}_*`` naming seen in the
+            # v0.6.0 release notes.
+            sw_cfg = self._config.setdefault("service_worker", {})
+            if hasattr(settings, "DJUST_VDOM_CACHE_ENABLED"):
+                sw_cfg["vdom_cache_enabled"] = bool(settings.DJUST_VDOM_CACHE_ENABLED)
+            if hasattr(settings, "DJUST_VDOM_CACHE_TTL_SECONDS"):
+                sw_cfg["vdom_cache_ttl_seconds"] = int(settings.DJUST_VDOM_CACHE_TTL_SECONDS)
+            if hasattr(settings, "DJUST_VDOM_CACHE_MAX_ENTRIES"):
+                sw_cfg["vdom_cache_max_entries"] = int(settings.DJUST_VDOM_CACHE_MAX_ENTRIES)
+            if hasattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED"):
+                sw_cfg["state_snapshot_enabled"] = bool(settings.DJUST_STATE_SNAPSHOT_ENABLED)
         except ImportError:
             # Django not installed
             pass

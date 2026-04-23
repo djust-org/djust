@@ -720,6 +720,17 @@ class LiveViewWebSocket {
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
 
+                // Fix #1 — stash server-emitted public view state so the
+                // state-snapshot capture on next before-navigate has
+                // something to serialize. The server includes
+                // ``public_state`` only when ``enable_state_snapshot``
+                // is True on the view class; non-opt-in views never
+                // have state cached by the SW.
+                if (data.public_state && typeof data.public_state === 'object' && data.view) {
+                    if (!window.djust._clientState) window.djust._clientState = {};
+                    window.djust._clientState[data.view] = data.public_state;
+                }
+
                 // Remove dj-cloak from all elements (FOUC prevention)
                 document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
 
@@ -805,6 +816,19 @@ class LiveViewWebSocket {
                         runPostMount();
                     }
                 } else if (data.html) {
+                    // Fix #3 — cache the mount HTML for fast back-nav
+                    // paint. Non-invasive: only runs when the SW bridge
+                    // is present and we actually have HTML from the
+                    // server (skipped when the client used pre-rendered
+                    // HTTP content).
+                    try {
+                        if (window.djust && window.djust._sw && typeof window.djust._sw.cacheVdom === 'function') {
+                            const cacheUrl = (typeof window !== 'undefined' && window.location)
+                                ? window.location.pathname
+                                : '/';
+                            window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
+                        }
+                    } catch (_e) { /* best-effort cache put */ }
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
                         if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
@@ -845,6 +869,66 @@ class LiveViewWebSocket {
                     }
                 }
                 break;
+
+            case 'mount_batch': {
+                // Mount-batch response (v0.6.0) — carries N per-view payloads.
+                // Apply each to [data-djust-target="<target_id>"] within a
+                // [dj-view] element, track per-target VDOM versions, and run
+                // reinitAfterDOMUpdate() ONCE after the batch is applied.
+                this.viewMounted = true;
+                const views = Array.isArray(data.views) ? data.views : [];
+                const failed = Array.isArray(data.failed) ? data.failed : [];
+                if (!window.djust._clientVdomVersions) {
+                    window.djust._clientVdomVersions = {};
+                }
+                for (const entry of views) {
+                    const targetId = entry && entry.target_id;
+                    if (!targetId) continue;
+                    const container = document.querySelector(
+                        '[dj-view][data-djust-target="' + CSS.escape(String(targetId)) + '"]'
+                    );
+                    if (!container) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[LiveView] mount_batch: target not found: %s', String(targetId));
+                        }
+                        continue;
+                    }
+                    if (typeof entry.html === 'string') {
+                        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        container.innerHTML = entry.html;
+                    }
+                    if (typeof entry.version === 'number') {
+                        window.djust._clientVdomVersions[targetId] = entry.version;
+                    }
+                }
+                for (const f of failed) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[LiveView] mount_batch failed: %s %o', String(f.view || ''), f);
+                    }
+                }
+                // Fix #4 — forward any navigate entries emitted by
+                // on_mount redirect hooks to the navigation dispatcher.
+                const navigates = Array.isArray(data.navigate) ? data.navigate : [];
+                for (const nav of navigates) {
+                    if (!nav || typeof nav.to !== 'string') continue;
+                    if (window.djust.navigation && typeof window.djust.navigation.handleNavigation === 'function') {
+                        window.djust.navigation.handleNavigation({
+                            type: 'navigation',
+                            action: 'live_redirect',
+                            path: nav.to,
+                        });
+                    } else if (typeof window !== 'undefined' && window.location) {
+                        // Fallback — hard navigation if the dispatcher
+                        // isn't wired (non-LiveView pages).
+                        window.location.href = nav.to;
+                    }
+                }
+                if (views.length > 0) {
+                    reinitAfterDOMUpdate();
+                    window.djust._mountReady = true;
+                }
+                break;
+            }
 
             case 'patch':
             case 'html_update': {
@@ -6427,6 +6511,51 @@ const lazyHydrationManager = {
         if (globalThis.djustDebug) console.log(`[LiveView:lazy] Processing ${this.pendingMounts.length} pending mounts`);
         const mounts = this.pendingMounts.slice();
         this.pendingMounts = [];
+
+        // Mount-batch optimization (v0.6.0): when 2+ lazy views are
+        // hydrating together, send one mount_batch WebSocket frame
+        // instead of N separate mount frames. Opt out via
+        // window.DJUST_USE_MOUNT_BATCH = false.
+        const useBatch = (
+            mounts.length >= 2
+            && window.DJUST_USE_MOUNT_BATCH !== false
+            && liveViewWS
+            && typeof liveViewWS.sendMessage === 'function'
+            && isWSConnected()
+        );
+        if (useBatch) {
+            const viewEntries = [];
+            const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+            mounts.forEach(({ element, viewPath }) => {
+                const targetId = element.getAttribute('data-djust-target')
+                    || element.id
+                    || ('dj-target-' + Math.random().toString(36).slice(2, 10));
+                if (!element.getAttribute('data-djust-target')) {
+                    element.setAttribute('data-djust-target', targetId);
+                }
+                const hasContent = element.innerHTML && element.innerHTML.trim().length > 0;
+                viewEntries.push({
+                    view: viewPath,
+                    params: urlParams,
+                    url: window.location.pathname,
+                    target_id: targetId,
+                    has_prerendered: !!hasContent,
+                });
+                element.removeAttribute('dj-lazy');
+                element.setAttribute('data-live-hydrated', 'true');
+            });
+            let clientTimezone = null;
+            try {
+                clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            } catch (_e) { /* tz detect failure — omit */ }
+            liveViewWS.sendMessage({
+                type: 'mount_batch',
+                views: viewEntries,
+                client_timezone: clientTimezone,
+            });
+            return;
+        }
+
         mounts.forEach(({ element, viewPath }) => {
             this.mountElement(element, viewPath);
         });
@@ -8019,13 +8148,29 @@ window.djust.getActiveStreams = getActiveStreams;
                     window.djust.stickyPreserve.stashStickySubtrees();
                 }
 
+                // State-snapshot capture (v0.6.0) — fire the public event
+                // so 46-state-snapshot.js can post the current view's
+                // public state to the SW cache BEFORE this URL leaves.
+                try {
+                    window.dispatchEvent(new CustomEvent('djust:before-navigate', {
+                        detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                    }));
+                } catch (_e) { /* CustomEvent may fail in old environments */ }
+
                 const urlParams = Object.fromEntries(newUrl.searchParams);
-                liveViewWS.sendMessage({
+                const outgoing = {
                     type: 'live_redirect_mount',
                     view: viewPath,
                     params: urlParams,
                     url: newUrl.pathname,
-                });
+                };
+                // Attach pending state-snapshot (populated by popstate
+                // handler in 46-state-snapshot.js when the user hits back).
+                if (window.djust && window.djust._pendingStateSnapshot) {
+                    outgoing.state_snapshot = window.djust._pendingStateSnapshot;
+                    window.djust._pendingStateSnapshot = null;
+                }
+                liveViewWS.sendMessage(outgoing);
             } else {
                 // Fallback: full page navigation if we can't resolve the view
                 console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
@@ -8074,8 +8219,19 @@ window.djust.getActiveStreams = getActiveStreams;
 
     /**
      * Listen for browser back/forward (popstate) and send url_change to server.
+     *
+     * Fix #2: the handler is async so the state-snapshot lookup can be
+     * awaited BEFORE sending ``live_redirect_mount`` — the synchronous
+     * version captured ``_pendingStateSnapshot`` before the async
+     * lookup populated it, causing the first popstate to go out without
+     * its cached snapshot.
+     *
+     * Fix #3: before the live_redirect_mount goes out we also fast-paint
+     * cached HTML via ``djust._sw.lookupVdom`` so the user sees
+     * something instantly on back-nav; the live WS reply reconciles
+     * afterwards via the normal mount handler.
      */
-    window.addEventListener('popstate', function (event) {
+    window.addEventListener('popstate', async function (event) {
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
@@ -8091,21 +8247,58 @@ window.djust.getActiveStreams = getActiveStreams;
             if (viewPath) {
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
-                // live_redirect_mount message. Mirrors the stash call
-                // in handleLiveRedirect() — popstate is another entry
-                // point into the same cross-view remount flow, and
-                // without it a back-button navigation with sticky
-                // views in the current layout would destroy them on
-                // the next innerHTML replacement.
+                // live_redirect_mount message.
                 if (window.djust.stickyPreserve && window.djust.stickyPreserve.stashStickySubtrees) {
                     window.djust.stickyPreserve.stashStickySubtrees();
                 }
-                liveViewWS.sendMessage({
+
+                // Fix #3 — VDOM cache fast-paint. If the SW has a
+                // recently-cached HTML snapshot for this URL, paint it
+                // into the existing ``[dj-view]`` container NOW so the
+                // user sees something instantly. The incoming
+                // ``mount`` frame's innerHTML replacement reconciles
+                // the DOM shortly after.
+                try {
+                    if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
+                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
+                        if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
+                            let fastContainer = document.querySelector('[dj-view]:not([dj-sticky-root])');
+                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
+                            if (fastContainer) {
+                                // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
+                                fastContainer.innerHTML = vdomReply.html;
+                                window.dispatchEvent(new CustomEvent('djust:vdom-cache-applied', {
+                                    detail: { url: url.pathname, version: vdomReply.version },
+                                }));
+                            }
+                        }
+                    }
+                } catch (_e) { /* fast-paint is best-effort */ }
+
+                // Fix #2 — await the state-snapshot lookup before we
+                // send the outbound ``live_redirect_mount`` frame.
+                let stateSnapshot = null;
+                try {
+                    if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname);
+                    } else if (window.djust && window.djust._pendingStateSnapshot) {
+                        // Back-compat fallback — if the older async-race
+                        // slot happens to be populated, honor it.
+                        stateSnapshot = window.djust._pendingStateSnapshot;
+                        window.djust._pendingStateSnapshot = null;
+                    }
+                } catch (_e) { stateSnapshot = null; }
+
+                const outgoing = {
                     type: 'live_redirect_mount',
                     view: viewPath,
                     params: params,
                     url: url.pathname,
-                });
+                };
+                if (stateSnapshot) {
+                    outgoing.state_snapshot = stateSnapshot;
+                }
+                liveViewWS.sendMessage(outgoing);
             } else {
                 // Fallback
                 window.location.reload();
@@ -10785,6 +10978,145 @@ window.djust.bindModelElements = bindModelElements;
     }
 
     // -----------------------------------------------------------------
+    // v0.6.0 — VDOM cache + state snapshot
+    // -----------------------------------------------------------------
+
+    // Map requestId -> resolve() function. Populated by lookupVdom /
+    // lookupState; drained by the SW-message listener below.
+    var _pendingLookups = {};
+    var _requestIdCounter = 0;
+
+    function _nextRequestId(prefix) {
+        _requestIdCounter += 1;
+        return (prefix || 'rq') + '-' + _requestIdCounter + '-' + Date.now().toString(36);
+    }
+
+    function _swController() {
+        if (!navigator.serviceWorker) return null;
+        return navigator.serviceWorker.controller;
+    }
+
+    function initVdomCache() {
+        if (!_swAvailable()) return;
+        if (!navigator.serviceWorker) return;
+        navigator.serviceWorker.addEventListener('message', function (event) {
+            var data = event.data;
+            if (!data || data.type !== 'VDOM_CACHE_REPLY') return;
+            var rid = data.requestId;
+            if (rid && _pendingLookups[rid]) {
+                try {
+                    _pendingLookups[rid](data);
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[sw] VDOM_CACHE_REPLY handler threw', e);
+                    }
+                }
+                delete _pendingLookups[rid];
+            }
+        });
+    }
+
+    function initStateSnapshot() {
+        if (!_swAvailable()) return;
+        if (!navigator.serviceWorker) return;
+        navigator.serviceWorker.addEventListener('message', function (event) {
+            var data = event.data;
+            if (!data || data.type !== 'STATE_SNAPSHOT_REPLY') return;
+            var rid = data.requestId;
+            if (rid && _pendingLookups[rid]) {
+                try {
+                    _pendingLookups[rid](data);
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[sw] STATE_SNAPSHOT_REPLY handler threw', e);
+                    }
+                }
+                delete _pendingLookups[rid];
+            }
+        });
+    }
+
+    function cacheVdom(url, html, version) {
+        var ctrl = _swController();
+        if (!ctrl) return;
+        ctrl.postMessage({
+            type: 'VDOM_CACHE',
+            url: url,
+            html: html,
+            version: typeof version === 'number' ? version : 0,
+            ts: Date.now(),
+        });
+    }
+
+    function lookupVdom(url) {
+        return new Promise(function (resolve) {
+            var ctrl = _swController();
+            if (!ctrl) {
+                resolve({ hit: false, stale: false, html: null });
+                return;
+            }
+            var rid = _nextRequestId('vdom');
+            _pendingLookups[rid] = function (reply) { resolve(reply); };
+            ctrl.postMessage({
+                type: 'VDOM_CACHE_LOOKUP',
+                requestId: rid,
+                url: url,
+            });
+            // Safety timeout so callers are never stuck if the SW goes away.
+            setTimeout(function () {
+                if (_pendingLookups[rid]) {
+                    delete _pendingLookups[rid];
+                    resolve({ hit: false, stale: false, html: null });
+                }
+            }, 500);
+        });
+    }
+
+    function captureState(url, viewSlug, stateJson) {
+        var ctrl = _swController();
+        if (!ctrl) return;
+        // Clamp payload at 64 KB — defense-in-depth against accidental
+        // dumps of large collections. SW also enforces 256 KB.
+        if (typeof stateJson !== 'string') return;
+        if (stateJson.length > 64 * 1024) {
+            if (globalThis.djustDebug) {
+                console.warn('[sw] STATE_SNAPSHOT payload > 64KB; dropping');
+            }
+            return;
+        }
+        ctrl.postMessage({
+            type: 'STATE_SNAPSHOT',
+            url: url,
+            view_slug: viewSlug,
+            state_json: stateJson,
+            ts: Date.now(),
+        });
+    }
+
+    function lookupState(url) {
+        return new Promise(function (resolve) {
+            var ctrl = _swController();
+            if (!ctrl) {
+                resolve({ hit: false, view_slug: null, state_json: null });
+                return;
+            }
+            var rid = _nextRequestId('state');
+            _pendingLookups[rid] = function (reply) { resolve(reply); };
+            ctrl.postMessage({
+                type: 'STATE_SNAPSHOT_LOOKUP',
+                requestId: rid,
+                url: url,
+            });
+            setTimeout(function () {
+                if (_pendingLookups[rid]) {
+                    delete _pendingLookups[rid];
+                    resolve({ hit: false, view_slug: null, state_json: null });
+                }
+            }, 500);
+        });
+    }
+
+    // -----------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------
 
@@ -10795,6 +11127,8 @@ window.djust.bindModelElements = bindModelElements;
     var _registerPromise = null;
     var _bridgeInitialized = false;
     var _shellInitialized = false;
+    var _vdomCacheInitialized = false;
+    var _stateSnapshotInitialized = false;
 
     globalThis.djust.registerServiceWorker = function (options) {
         options = options || {};
@@ -10838,15 +11172,29 @@ window.djust.bindModelElements = bindModelElements;
                 _bridgeInitialized = true;
                 initReconnectionBridge();
             }
+            if (options.vdomCache && !_vdomCacheInitialized) {
+                _vdomCacheInitialized = true;
+                initVdomCache();
+            }
+            if (options.stateSnapshot && !_stateSnapshotInitialized) {
+                _stateSnapshotInitialized = true;
+                initStateSnapshot();
+            }
             return registration;
         })();
         return _registerPromise;
     };
 
-    // Exposed for tests.
+    // Exposed for tests and for the navigation / popstate code paths.
     globalThis.djust._sw = {
         initInstantShell: initInstantShell,
         initReconnectionBridge: initReconnectionBridge,
+        initVdomCache: initVdomCache,
+        initStateSnapshot: initStateSnapshot,
+        cacheVdom: cacheVdom,
+        lookupVdom: lookupVdom,
+        captureState: captureState,
+        lookupState: lookupState,
     };
 })();
 
@@ -12937,4 +13285,157 @@ globalThis.djust.djTransitionGroup = {
     } else {
         emitChildMountedEvents();
     }
+})();
+
+// ============================================================================
+// State Snapshot — client half (v0.6.0)
+// ============================================================================
+//
+// Captures the current view's public state on before-navigate and posts it to
+// the Service Worker's state cache. On popstate (back-button), looks up a
+// cached state and stashes it on window.djust._pendingStateSnapshot so the
+// next outbound live_redirect_mount can include it.
+//
+// Per-view opt-in: the server-side LiveView must declare
+// `enable_state_snapshot = True`. The client sends the snapshot regardless
+// (belt-and-braces); the server ignores snapshots for non-opt-in views.
+//
+// Non-invasive: this module only wires listeners and reads/writes one
+// globalThis slot. It never mutates the DOM or WebSocket directly.
+
+(function () {
+    globalThis.djust = globalThis.djust || {};
+
+    function _swBridge() {
+        return globalThis.djust && globalThis.djust._sw;
+    }
+
+    function _currentViewSlug(fromUrl) {
+        // The route map has pathname -> view-slug entries. When a caller
+        // passes ``fromUrl`` (the source URL captured at dispatch time —
+        // see Fix #9), prefer that over ``location.pathname`` since
+        // pushState() in 18-navigation.js runs BEFORE the
+        // ``djust:before-navigate`` dispatch, leaving
+        // ``location.pathname`` already pointing at the DESTINATION.
+        var pathname = fromUrl
+            || ((typeof window !== 'undefined' && window.location)
+                ? window.location.pathname
+                : '/');
+        var routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
+        if (routeMap[pathname]) return routeMap[pathname];
+        if (typeof document !== 'undefined') {
+            var container = document.querySelector('[dj-view]');
+            if (container) return container.getAttribute('dj-view') || '';
+        }
+        return '';
+    }
+
+    function _serializeCurrentState(slug) {
+        // The server-side view state is mirrored client-side through the
+        // state bus (`05-state-bus.js`) for hydration hints — but the
+        // canonical record lives on `window.djust._clientState`, a
+        // per-view-slug snapshot dict populated by the mount handler
+        // when the server includes ``public_state`` in the mount frame
+        // (emitted only when ``enable_state_snapshot = True`` on the
+        // view class — see Fix #1).
+        if (!slug) return null;
+        var bag = (globalThis.djust && globalThis.djust._clientState) || {};
+        var state = bag[slug];
+        if (!state) return null;
+        try {
+            return JSON.stringify(state);
+        } catch (e) {
+            if (globalThis.djustDebug) {
+                console.warn('[state-snapshot] JSON.stringify failed', e);
+            }
+            return null;
+        }
+    }
+
+    function _captureBeforeNavigate(event) {
+        var bridge = _swBridge();
+        if (!bridge || typeof bridge.captureState !== 'function') return;
+        // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
+        // detail so we capture under the SOURCE URL, not the post-
+        // pushState destination.
+        var fromUrl = (event && event.detail && event.detail.fromUrl)
+            || ((typeof window !== 'undefined' && window.location)
+                ? window.location.pathname
+                : '/');
+        var slug = _currentViewSlug(fromUrl);
+        if (!slug) return;
+        var json = _serializeCurrentState(slug);
+        if (!json) return;
+        try {
+            bridge.captureState(fromUrl, slug, json);
+        } catch (e) {
+            if (globalThis.djustDebug) {
+                console.warn('[state-snapshot] captureState threw', e);
+            }
+        }
+    }
+
+    // Fix #2: kept for backwards-compat — prewarm the pending slot via
+    // an async lookup. Does NOT gate popstate send (the popstate handler
+    // in 18-navigation.js now awaits ``lookupStateForUrl`` directly).
+    function _popstateLookup(_popstateEvent) {
+        var bridge = _swBridge();
+        if (!bridge || typeof bridge.lookupState !== 'function') return;
+        var url = (typeof window !== 'undefined' && window.location)
+            ? window.location.pathname
+            : '/';
+        bridge.lookupState(url).then(function (reply) {
+            if (!reply || !reply.hit) {
+                globalThis.djust._pendingStateSnapshot = null;
+                return;
+            }
+            globalThis.djust._pendingStateSnapshot = {
+                view_slug: reply.view_slug,
+                state_json: reply.state_json,
+                ts: reply.ts,
+            };
+            if (globalThis.djustDebug) {
+                console.log('[state-snapshot] restored pending snapshot for', url);
+            }
+        }).catch(function () {
+            globalThis.djust._pendingStateSnapshot = null;
+        });
+    }
+
+    // Public awaitable used by 18-navigation.js popstate handler (Fix
+    // #2). Resolves to ``{view_slug, state_json, ts}`` on hit, or
+    // ``null`` on miss / unavailable bridge. Does NOT mutate
+    // ``_pendingStateSnapshot`` — the caller owns that slot.
+    function lookupStateForUrl(url) {
+        var bridge = _swBridge();
+        if (!bridge || typeof bridge.lookupState !== 'function') {
+            return Promise.resolve(null);
+        }
+        return bridge.lookupState(url).then(function (reply) {
+            if (!reply || !reply.hit) return null;
+            return {
+                view_slug: reply.view_slug,
+                state_json: reply.state_json,
+                ts: reply.ts,
+            };
+        }).catch(function () { return null; });
+    }
+
+    if (typeof window !== 'undefined') {
+        // before-navigate — fired by 18-navigation.js on live_redirect /
+        // dj-navigate / popstate-cross-view. Capture BEFORE the WS frame
+        // goes out so the cache entry for the CURRENT URL is fresh.
+        window.addEventListener('djust:before-navigate', _captureBeforeNavigate);
+        // popstate — lookup the cached snapshot for the destination URL
+        // so 18-navigation.js can attach it to the outbound
+        // live_redirect_mount frame.
+        window.addEventListener('popstate', _popstateLookup);
+    }
+
+    globalThis.djust._stateSnapshot = {
+        _capture: _captureBeforeNavigate,
+        _lookupOnPopstate: _popstateLookup,
+        _serialize: _serializeCurrentState,
+        lookupStateForUrl: lookupStateForUrl,
+    };
 })();

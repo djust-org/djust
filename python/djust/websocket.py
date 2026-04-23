@@ -1323,6 +1323,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_event(data)
             elif msg_type == "mount":
                 await self.handle_mount(data)
+            elif msg_type == "mount_batch":
+                await self.handle_mount_batch(data)
             elif msg_type == "ping":
                 await self.send_json({"type": "pong"})
             elif msg_type == "url_change":
@@ -1365,6 +1367,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self,
         data: Dict[str, Any],
         sticky_preserved: Optional[Dict[str, Any]] = None,
+        state_snapshot: Optional[Dict[str, Any]] = None,
     ):
         """
         Handle view mounting with proper view resolution.
@@ -1382,6 +1385,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         ``sticky_id`` has no matching ``[dj-sticky-slot]`` get
         ``_on_sticky_unmount()`` called and are dropped from the dict
         (which the caller stores on ``self._sticky_preserved``).
+
+        State snapshot (v0.6.0): when ``state_snapshot`` is provided
+        AND the view class opts in via ``enable_state_snapshot = True``
+        AND ``view_slug`` matches the view path AND
+        ``_should_restore_snapshot(request)`` returns True, the view's
+        public state is restored from the snapshot in lieu of calling
+        ``mount()``. Authentication and ``on_mount`` hooks still run
+        before restoration; malformed JSON or restore errors fall back
+        to a fresh ``mount()`` call.
         """
         from django.test import RequestFactory
         from django.conf import settings
@@ -1748,8 +1760,90 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 except Exception:
                     pass  # URL may not resolve (e.g., root "/") — that's fine
 
-                # Run synchronous view operations in a thread pool
-                await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
+                # State snapshot restore path (v0.6.0) — when the client
+                # sends a state_snapshot with live_redirect_mount AND the
+                # view opts in, restore the public state dict in lieu of
+                # calling mount(). Auth + on_mount hooks already ran above.
+                mounted_from_snapshot = False
+                # Fix #11 — operator-level master switch. Allows ops to
+                # disable snapshot restoration globally (e.g. during an
+                # incident) without touching each view class.
+                state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+                if (
+                    state_master_on
+                    and state_snapshot
+                    and getattr(self.view_instance, "enable_state_snapshot", False)
+                ):
+                    snapshot_slug = state_snapshot.get("view_slug", "")
+                    if snapshot_slug == view_path:
+                        state_dict = None
+                        raw_state = state_snapshot.get("state_json", "{}")
+                        # Fix #6 — hard server-side size cap on inbound
+                        # snapshot JSON. Matches the 64 KB client clamp
+                        # and guards against oversized payloads that
+                        # bypass the client.
+                        if isinstance(raw_state, str) and len(raw_state) > 65536:
+                            logger.warning(
+                                "state_snapshot state_json too large "
+                                "(%d bytes > 64KB) for %s; ignoring",
+                                len(raw_state),
+                                sanitize_for_log(view_path),
+                            )
+                            state_dict = None
+                        else:
+                            try:
+                                state_dict = json.loads(raw_state)
+                            except (ValueError, TypeError):
+                                logger.warning(
+                                    "state_snapshot malformed JSON for view %s; "
+                                    "proceeding with fresh mount",
+                                    sanitize_for_log(view_path),
+                                )
+                                state_dict = None
+                            # Fix #8 — enforce dict type after decode.
+                            # JSON allows arrays, numbers, strings — any
+                            # of which would trip over ``state.items()``
+                            # in ``_restore_snapshot``.
+                            if state_dict is not None and not isinstance(state_dict, dict):
+                                logger.warning(
+                                    "state_snapshot state_json is not a dict "
+                                    "(got %s) for %s; ignoring",
+                                    type(state_dict).__name__,
+                                    sanitize_for_log(view_path),
+                                )
+                                state_dict = None
+                            # Fix #7 — keyset DoS cap. Real views have
+                            # <20 public attrs; 256 is an absurd upper
+                            # bound that still fits legitimate bulk
+                            # views while blocking adversarial payloads
+                            # that exhaust CPU via safe_setattr calls.
+                            if state_dict is not None and len(state_dict) > 256:
+                                logger.warning(
+                                    "state_snapshot keyset too large "
+                                    "(%d keys > 256) for %s; ignoring",
+                                    len(state_dict),
+                                    sanitize_for_log(view_path),
+                                )
+                                state_dict = None
+                        if state_dict is not None and await sync_to_async(
+                            self.view_instance._should_restore_snapshot
+                        )(request):
+                            try:
+                                await sync_to_async(self.view_instance._restore_snapshot)(
+                                    state_dict
+                                )
+                                mounted_from_snapshot = True
+                            except Exception:  # noqa: BLE001
+                                logger.exception(
+                                    "state_snapshot _restore_snapshot failed "
+                                    "for %s; falling back to mount()",
+                                    sanitize_for_log(view_path),
+                                )
+                                mounted_from_snapshot = False
+
+                if not mounted_from_snapshot:
+                    # Run synchronous view operations in a thread pool
+                    await sync_to_async(self.view_instance.mount)(request, **mount_kwargs)
                 # Stash request + kwargs so observability/reset_view_state/
                 # can replay mount() without page reload. Minor memory cost
                 # (one request ref per live view) in exchange for a cheap
@@ -1883,6 +1977,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             "version": version,  # Include VDOM version for client sync
         }
 
+        # Fix #1 — end-to-end wiring for state-snapshot capture.
+        # When the view opts in via ``enable_state_snapshot = True`` AND
+        # the master switch is enabled, emit the JSON-serializable
+        # public state alongside the mount frame so the client can
+        # populate ``djust._clientState[<view_slug>]`` for the next
+        # before-navigate capture. Non-opt-in views never have their
+        # state shipped — matches the security posture of the
+        # opt-in-only model.
+        try:
+            state_master_on = getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+            if state_master_on and getattr(self.view_instance, "enable_state_snapshot", False):
+                snapshot_fn = getattr(self.view_instance, "_capture_snapshot_state", None)
+                if callable(snapshot_fn):
+                    public_state = await sync_to_async(snapshot_fn)()
+                    if isinstance(public_state, dict) and public_state:
+                        response["public_state"] = public_state
+        except Exception:  # noqa: BLE001 — snapshot emission must never break mount
+            logger.exception(
+                "Failed to emit public_state for %s; proceeding without snapshot",
+                sanitize_for_log(view_path),
+            )
+
         # Only include HTML if it was generated (not skipped due to pre-rendering)
         if html is not None:
             response["html"] = html
@@ -1971,6 +2087,181 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception:  # noqa: BLE001 — defensive: never break mount
                 logger.exception("failed to emit sticky_hold frame before mount")
 
+        await self.send_json(response)
+
+    async def _mount_one(self, data_view: Dict[str, Any]):
+        """Mount + render a single view and return a payload WITHOUT sending.
+
+        Collector seam for :meth:`handle_mount_batch`. Delegates to
+        ``handle_mount`` but replaces ``send_json`` on this consumer with
+        a capture list so no frames actually flow to the client. The
+        caller aggregates captured frames into a single ``mount_batch``
+        frame.
+
+        Returns a ``(success: bool, payload: dict, error: Optional[str],
+        navigate_frame: Optional[dict])`` tuple:
+
+        - ``success=True`` and ``payload`` is the captured ``mount`` frame
+          merged with the caller-supplied ``target_id``.
+        - ``success=False`` and ``error`` is the human-readable error
+          message; the caller stashes ``{target_id, view, error}`` in the
+          batch frame's ``failed[]`` array.
+        - ``navigate_frame`` (Fix #4): when the view's ``on_mount`` hook
+          or auth stage redirects, ``handle_mount`` emits a
+          ``{"type":"navigate","to":...}`` frame instead of a ``mount``
+          frame. The collector preserves it so
+          ``handle_mount_batch`` can forward the redirect to the client
+          in the batch response — without this, the frame was silently
+          dropped and the user was never redirected.
+
+        Isolation: errors in one view MUST NOT propagate and kill the
+        batch (see plan §2.3 "atomicity relaxed").
+        """
+        target_id = data_view.get("target_id") or ""
+        view_path = data_view.get("view") or ""
+
+        # Temporarily swap send_json with a collector so handle_mount's
+        # frame-sending becomes a frame-collecting call. Restore on exit.
+        captured: list = []
+        orig_send_json = self.send_json
+
+        async def _collect(payload):
+            captured.append(payload)
+
+        self.send_json = _collect  # type: ignore[assignment]
+        # Mount-batch is never combined with sticky preservation (sticky
+        # only runs through live_redirect_mount which doesn't batch) or
+        # state_snapshot (snapshot is for popstate restoration, also
+        # live_redirect_mount path). Always pass None for both.
+        try:
+            await self.handle_mount(
+                data_view,
+                sticky_preserved=None,
+                state_snapshot=None,
+            )
+        except Exception as exc:  # noqa: BLE001 — isolate per-view failures
+            self.send_json = orig_send_json  # type: ignore[assignment]
+            logger.exception(
+                "mount_batch: _mount_one raised for view %s",
+                sanitize_for_log(view_path),
+            )
+            from django.conf import settings as _settings
+
+            # Fix #12 — do not leak exception text in production. In
+            # DEBUG mode we still expose a truncated string to help
+            # diagnose template / auth errors.
+            safe_err = "mount failed"
+            if getattr(_settings, "DEBUG", False):
+                safe_err = str(exc)[:200]
+            return False, {"target_id": target_id, "view": view_path}, safe_err, None
+        finally:
+            # Only restore if the try-block didn't already restore (else
+            # we'd double-restore harmlessly). Idempotent.
+            self.send_json = orig_send_json  # type: ignore[assignment]
+
+        # Extract the successful mount frame; any "error" frame means failure.
+        # Fix #4: capture "navigate" frames too — those are emitted when
+        # auth or on_mount hooks redirect instead of mounting, and were
+        # previously silently dropped.
+        mount_frame = None
+        error_frame = None
+        navigate_frame = None
+        for frame in captured:
+            ftype = frame.get("type")
+            if ftype == "mount":
+                mount_frame = frame
+            elif ftype == "error":
+                error_frame = frame
+            elif ftype == "navigate":
+                navigate_frame = frame
+
+        if navigate_frame is not None:
+            # Redirect — surface through the batch response so the
+            # client dispatcher can navigate. target_id is included so
+            # the client can associate the redirect with the originating
+            # lazy element.
+            nav_payload = dict(navigate_frame)
+            nav_payload["target_id"] = target_id
+            nav_payload["view"] = view_path
+            return False, {"target_id": target_id, "view": view_path}, None, nav_payload
+
+        if error_frame is not None:
+            err_msg = error_frame.get("message", "mount failed")
+            return False, {"target_id": target_id, "view": view_path}, err_msg, None
+
+        if mount_frame is None:
+            return (
+                False,
+                {"target_id": target_id, "view": view_path},
+                "mount produced no frame",
+                None,
+            )
+
+        # Inject target_id for client-side per-view DOM targeting.
+        mount_frame["target_id"] = target_id
+        return True, mount_frame, None, None
+
+    async def handle_mount_batch(self, data: Dict[str, Any]):
+        """Mount multiple views in one frame and reply with one batch frame.
+
+        Wire format:
+        - Inbound: ``{"type":"mount_batch", "views":[{view, params, url,
+          target_id, has_prerendered}, ...], "client_timezone"}``.
+        - Outbound: ``{"type":"mount_batch", "session_id", "views":[...
+          per-view payload with target_id...], "failed":[{target_id,
+          view, error}...], "navigate":[{target_id, view, to, ...}...]}``.
+
+        The optional ``navigate`` array (Fix #4) carries redirect
+        targets for views whose ``on_mount`` or auth stage returned a
+        redirect. The client's ``case 'mount_batch':`` iterates
+        ``navigate[]`` and dispatches each.
+
+        Atomicity is relaxed: one view's failure does NOT abort the
+        batch — survivors ship, failures are isolated in ``failed[]``.
+        """
+        views_list = data.get("views", [])
+        if not isinstance(views_list, list):
+            await self.send_error("mount_batch: 'views' must be a list")
+            return
+
+        client_timezone = data.get("client_timezone")
+
+        successes: list = []
+        failures: list = []
+        navigates: list = []
+        for view_data in views_list:
+            if not isinstance(view_data, dict):
+                failures.append(
+                    {
+                        "target_id": "",
+                        "view": "",
+                        "error": "mount_batch entry is not a dict",
+                    }
+                )
+                continue
+            # Propagate shared client_timezone if not per-view.
+            if client_timezone and "client_timezone" not in view_data:
+                view_data = dict(view_data)
+                view_data["client_timezone"] = client_timezone
+            ok, payload, err, nav = await self._mount_one(view_data)
+            if ok:
+                successes.append(payload)
+                continue
+            if nav is not None:
+                navigates.append(nav)
+                continue
+            failed = dict(payload)
+            failed["error"] = err or "unknown"
+            failures.append(failed)
+
+        response: Dict[str, Any] = {
+            "type": "mount_batch",
+            "session_id": self.session_id,
+            "views": successes,
+            "failed": failures,
+        }
+        if navigates:
+            response["navigate"] = navigates
         await self.send_json(response)
 
     async def handle_event(self, data: Dict[str, Any]):
@@ -3291,6 +3582,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         self.view_instance = None
 
+        # Parse state_snapshot if the client sent one (v0.6.0) so it can
+        # be forwarded to handle_mount for back-nav state restoration.
+        # Per-view opt-in is still enforced inside handle_mount via the
+        # class-level ``enable_state_snapshot`` flag + slug match.
+        state_snapshot = data.get("state_snapshot")
+        if state_snapshot is not None and not isinstance(state_snapshot, dict):
+            # Malformed payload — ignore and proceed with fresh mount.
+            logger.warning("state_snapshot payload is not a dict for live_redirect_mount; ignoring")
+            state_snapshot = None
+
         # Now mount the new view using the standard mount flow. We pass
         # ``sticky_preserved`` so ``handle_mount`` can emit the
         # ``sticky_hold`` frame BEFORE its ``mount`` frame — ordering
@@ -3299,7 +3600,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # after the slot scan; if it raises mid-flight we drain any
         # staged children so their background tasks don't leak.
         try:
-            await self.handle_mount(data, sticky_preserved=sticky_preserved)
+            await self.handle_mount(
+                data,
+                sticky_preserved=sticky_preserved,
+                state_snapshot=state_snapshot,
+            )
         except Exception:
             # Drain any staged stickys so their async tasks / groups
             # clean up. Without this, a render/auth failure on the NEW

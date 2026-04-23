@@ -116,13 +116,29 @@
                     window.djust.stickyPreserve.stashStickySubtrees();
                 }
 
+                // State-snapshot capture (v0.6.0) — fire the public event
+                // so 46-state-snapshot.js can post the current view's
+                // public state to the SW cache BEFORE this URL leaves.
+                try {
+                    window.dispatchEvent(new CustomEvent('djust:before-navigate', {
+                        detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+                    }));
+                } catch (_e) { /* CustomEvent may fail in old environments */ }
+
                 const urlParams = Object.fromEntries(newUrl.searchParams);
-                liveViewWS.sendMessage({
+                const outgoing = {
                     type: 'live_redirect_mount',
                     view: viewPath,
                     params: urlParams,
                     url: newUrl.pathname,
-                });
+                };
+                // Attach pending state-snapshot (populated by popstate
+                // handler in 46-state-snapshot.js when the user hits back).
+                if (window.djust && window.djust._pendingStateSnapshot) {
+                    outgoing.state_snapshot = window.djust._pendingStateSnapshot;
+                    window.djust._pendingStateSnapshot = null;
+                }
+                liveViewWS.sendMessage(outgoing);
             } else {
                 // Fallback: full page navigation if we can't resolve the view
                 console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
@@ -171,8 +187,19 @@
 
     /**
      * Listen for browser back/forward (popstate) and send url_change to server.
+     *
+     * Fix #2: the handler is async so the state-snapshot lookup can be
+     * awaited BEFORE sending ``live_redirect_mount`` — the synchronous
+     * version captured ``_pendingStateSnapshot`` before the async
+     * lookup populated it, causing the first popstate to go out without
+     * its cached snapshot.
+     *
+     * Fix #3: before the live_redirect_mount goes out we also fast-paint
+     * cached HTML via ``djust._sw.lookupVdom`` so the user sees
+     * something instantly on back-nav; the live WS reply reconciles
+     * afterwards via the normal mount handler.
      */
-    window.addEventListener('popstate', function (event) {
+    window.addEventListener('popstate', async function (event) {
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
@@ -188,21 +215,58 @@
             if (viewPath) {
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
-                // live_redirect_mount message. Mirrors the stash call
-                // in handleLiveRedirect() — popstate is another entry
-                // point into the same cross-view remount flow, and
-                // without it a back-button navigation with sticky
-                // views in the current layout would destroy them on
-                // the next innerHTML replacement.
+                // live_redirect_mount message.
                 if (window.djust.stickyPreserve && window.djust.stickyPreserve.stashStickySubtrees) {
                     window.djust.stickyPreserve.stashStickySubtrees();
                 }
-                liveViewWS.sendMessage({
+
+                // Fix #3 — VDOM cache fast-paint. If the SW has a
+                // recently-cached HTML snapshot for this URL, paint it
+                // into the existing ``[dj-view]`` container NOW so the
+                // user sees something instantly. The incoming
+                // ``mount`` frame's innerHTML replacement reconciles
+                // the DOM shortly after.
+                try {
+                    if (window.djust && window.djust._sw && typeof window.djust._sw.lookupVdom === 'function') {
+                        const vdomReply = await window.djust._sw.lookupVdom(url.pathname);
+                        if (vdomReply && vdomReply.hit && !vdomReply.stale && typeof vdomReply.html === 'string') {
+                            let fastContainer = document.querySelector('[dj-view]:not([dj-sticky-root])');
+                            if (!fastContainer) fastContainer = document.querySelector('[dj-root]');
+                            if (fastContainer) {
+                                // codeql[js/xss] -- html is server-rendered; only reads from SW cache keyed by same-origin url
+                                fastContainer.innerHTML = vdomReply.html;
+                                window.dispatchEvent(new CustomEvent('djust:vdom-cache-applied', {
+                                    detail: { url: url.pathname, version: vdomReply.version },
+                                }));
+                            }
+                        }
+                    }
+                } catch (_e) { /* fast-paint is best-effort */ }
+
+                // Fix #2 — await the state-snapshot lookup before we
+                // send the outbound ``live_redirect_mount`` frame.
+                let stateSnapshot = null;
+                try {
+                    if (window.djust && window.djust._stateSnapshot && typeof window.djust._stateSnapshot.lookupStateForUrl === 'function') {
+                        stateSnapshot = await window.djust._stateSnapshot.lookupStateForUrl(url.pathname);
+                    } else if (window.djust && window.djust._pendingStateSnapshot) {
+                        // Back-compat fallback — if the older async-race
+                        // slot happens to be populated, honor it.
+                        stateSnapshot = window.djust._pendingStateSnapshot;
+                        window.djust._pendingStateSnapshot = null;
+                    }
+                } catch (_e) { stateSnapshot = null; }
+
+                const outgoing = {
                     type: 'live_redirect_mount',
                     view: viewPath,
                     params: params,
                     url: url.pathname,
-                });
+                };
+                if (stateSnapshot) {
+                    outgoing.state_snapshot = stateSnapshot;
+                }
+                liveViewWS.sendMessage(outgoing);
             } else {
                 // Fallback
                 window.location.reload();

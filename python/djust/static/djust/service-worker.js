@@ -1,6 +1,6 @@
-// djust service worker (v0.5.0)
+// djust service worker (v0.6.0)
 // =============================
-// Two opt-in features:
+// Opt-in features:
 //
 // 1. Instant page shell — on the first successful navigate request, the SW
 //    caches the response split into "shell" (everything outside <main>) and
@@ -13,13 +13,34 @@
 //    (per connection_id, capped at 50). On reconnect the client issues a
 //    DJUST_DRAIN and replays each message in order.
 //
+// 3. VDOM patch cache (v0.6.0) — per-URL HTML snapshots served instantly on
+//    popstate / back navigation, before the WebSocket mount reply arrives.
+//    TTL enforced on lookup; LRU capped on insertion.
+//
+// 4. State snapshot cache (v0.6.0) — per-URL JSON snapshots of public
+//    LiveView state, posted on before-navigate and restored on popstate.
+//    Opt-in per-view via `enable_state_snapshot = True` on the server.
+//
 // Opt-in only: this file is NOT auto-registered. Users call
-// `djust.registerServiceWorker({ instantShell: true, reconnectionBridge: true })`
+// `djust.registerServiceWorker({ instantShell, reconnectionBridge, vdomCache, stateSnapshot })`
 // from their own init code.
 
 const SHELL_CACHE = 'djust-shell-v1';
 const SHELL_KEY = '__djust_shell__';
 const BUFFER_CAP = 50;
+
+// v0.6.0 advanced caches.
+const VDOM_CACHE = 'djust-vdom-cache-v1';
+const STATE_CACHE = 'djust-state-cache-v1';
+// LRU order tracking — Map preserves insertion order; we rotate on access.
+const VDOM_LRU = new Map();
+const STATE_LRU = new Map();
+// Defaults; client can override via VDOM_CONFIG message.
+let VDOM_TTL_MS = 1800 * 1000; // 30 minutes
+let VDOM_MAX_ENTRIES = 50;
+let STATE_MAX_ENTRIES = 50;
+// Size cap for client-submitted state_json (defense in depth).
+const STATE_JSON_MAX_BYTES = 256 * 1024;
 
 // connectionId (string) -> message[] (serialized WS payloads as strings)
 const RECONNECT_BUFFER = new Map();
@@ -196,17 +217,219 @@ self.addEventListener('message', (event) => {
         caches.open(SHELL_CACHE).then((c) => c.delete(SHELL_KEY)).catch(() => {});
         return;
     }
+
+    // -----------------------------------------------------------------
+    // v0.6.0 advanced features — VDOM cache + state snapshot
+    // -----------------------------------------------------------------
+
+    if (msg.type === 'VDOM_CONFIG') {
+        // Client-side config propagation. Accepts {ttl_seconds, max_entries}.
+        if (typeof msg.ttl_seconds === 'number' && msg.ttl_seconds > 0) {
+            VDOM_TTL_MS = Math.floor(msg.ttl_seconds) * 1000;
+        }
+        if (typeof msg.max_entries === 'number' && msg.max_entries >= 1) {
+            VDOM_MAX_ENTRIES = Math.floor(msg.max_entries);
+        }
+        return;
+    }
+
+    if (msg.type === 'VDOM_CACHE') {
+        if (!msg.url || typeof msg.html !== 'string') return;
+        putWithLRU(VDOM_CACHE, VDOM_LRU, msg.url, {
+            url: msg.url,
+            html: msg.html,
+            version: typeof msg.version === 'number' ? msg.version : 0,
+            ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
+        }, VDOM_MAX_ENTRIES).catch(() => {});
+        return;
+    }
+
+    if (msg.type === 'VDOM_CACHE_LOOKUP') {
+        lookupCached(VDOM_CACHE, msg.url).then((entry) => {
+            const now = Date.now();
+            const ts = entry && typeof entry.ts === 'number' ? entry.ts : 0;
+            const stale = entry ? now - ts > VDOM_TTL_MS : false;
+            const reply = {
+                type: 'VDOM_CACHE_REPLY',
+                requestId: msg.requestId,
+                hit: !!entry && !stale,
+                stale: !!entry && stale,
+                html: entry && !stale ? entry.html : null,
+                version: entry && !stale ? entry.version : null,
+                ts: ts,
+            };
+            postReply(event, reply);
+        }).catch(() => {
+            postReply(event, {
+                type: 'VDOM_CACHE_REPLY',
+                requestId: msg.requestId,
+                hit: false,
+                stale: false,
+                html: null,
+                version: null,
+                ts: 0,
+            });
+        });
+        return;
+    }
+
+    if (msg.type === 'STATE_SNAPSHOT') {
+        if (!msg.url || typeof msg.state_json !== 'string') return;
+        // Size cap — belt-and-braces against pathological payloads.
+        if (msg.state_json.length > STATE_JSON_MAX_BYTES) {
+            return;
+        }
+        putWithLRU(STATE_CACHE, STATE_LRU, msg.url, {
+            url: msg.url,
+            view_slug: typeof msg.view_slug === 'string' ? msg.view_slug : '',
+            state_json: msg.state_json,
+            ts: typeof msg.ts === 'number' ? msg.ts : Date.now(),
+        }, STATE_MAX_ENTRIES).catch(() => {});
+        return;
+    }
+
+    if (msg.type === 'STATE_SNAPSHOT_LOOKUP') {
+        lookupCached(STATE_CACHE, msg.url).then((entry) => {
+            const reply = {
+                type: 'STATE_SNAPSHOT_REPLY',
+                requestId: msg.requestId,
+                hit: !!entry,
+                view_slug: entry ? entry.view_slug : null,
+                state_json: entry ? entry.state_json : null,
+                ts: entry ? entry.ts : 0,
+            };
+            postReply(event, reply);
+        }).catch(() => {
+            postReply(event, {
+                type: 'STATE_SNAPSHOT_REPLY',
+                requestId: msg.requestId,
+                hit: false,
+                view_slug: null,
+                state_json: null,
+                ts: 0,
+            });
+        });
+        return;
+    }
+
+    if (msg.type === 'DJUST_CLEAR_VDOM_CACHE') {
+        caches.delete(VDOM_CACHE).catch(() => {});
+        VDOM_LRU.clear();
+        return;
+    }
+
+    if (msg.type === 'DJUST_CLEAR_STATE_CACHE') {
+        caches.delete(STATE_CACHE).catch(() => {});
+        STATE_LRU.clear();
+        return;
+    }
 });
+
+// ---------------------------------------------------------------------------
+// v0.6.0 helpers
+// ---------------------------------------------------------------------------
+
+// Insert into a named Cache with LRU eviction. The LRU tracking Map mirrors
+// insertion order; when full we evict the oldest keys.
+async function putWithLRU(cacheName, lru, url, body, maxEntries) {
+    let cache;
+    try {
+        cache = await caches.open(cacheName);
+    } catch (_e) {
+        return; // Cache API unavailable
+    }
+    // Keep the Map in sync so an update moves the key to the end.
+    if (lru.has(url)) {
+        lru.delete(url);
+    }
+    lru.set(url, true);
+    // Evict oldest until under the cap.
+    while (lru.size > maxEntries) {
+        const oldest = lru.keys().next().value;
+        if (oldest === undefined) break;
+        lru.delete(oldest);
+        try {
+            await cache.delete(oldest);
+        } catch (_e) {
+            // Best-effort eviction; ignore failures.
+        }
+    }
+    const payload = JSON.stringify(body);
+    const response = new Response(payload, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+    });
+    try {
+        await cache.put(url, response);
+    } catch (_e) {
+        // Ignore cache write failures.
+    }
+}
+
+async function lookupCached(cacheName, url) {
+    if (!url) return null;
+    let cache;
+    try {
+        cache = await caches.open(cacheName);
+    } catch (_e) {
+        return null;
+    }
+    let res;
+    try {
+        res = await cache.match(url);
+    } catch (_e) {
+        return null;
+    }
+    if (!res) return null;
+    try {
+        return await res.json();
+    } catch (_e) {
+        return null;
+    }
+}
+
+function postReply(event, reply) {
+    if (event && event.source && typeof event.source.postMessage === 'function') {
+        try {
+            event.source.postMessage(reply);
+            return;
+        } catch (_e) {
+            // Fall through to broadcast.
+        }
+    }
+    if (typeof self !== 'undefined' && self.clients && typeof self.clients.matchAll === 'function') {
+        self.clients.matchAll({ includeUncontrolled: false })
+            .then((clients) => {
+                for (const client of clients) {
+                    try {
+                        client.postMessage(reply);
+                    } catch (_e) {
+                        // Best-effort per-client; continue.
+                    }
+                }
+            })
+            .catch(() => {});
+    }
+}
 
 // Exposed for tests in module environments (Node). Harmless in browser.
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         splitShellAndMain: splitShellAndMain,
+        putWithLRU: putWithLRU,
+        lookupCached: lookupCached,
         _internal: {
             SHELL_CACHE: SHELL_CACHE,
             SHELL_KEY: SHELL_KEY,
             BUFFER_CAP: BUFFER_CAP,
             RECONNECT_BUFFER: RECONNECT_BUFFER,
+            VDOM_CACHE: VDOM_CACHE,
+            STATE_CACHE: STATE_CACHE,
+            VDOM_LRU: VDOM_LRU,
+            STATE_LRU: STATE_LRU,
+            getVdomTtlMs: () => VDOM_TTL_MS,
+            getVdomMaxEntries: () => VDOM_MAX_ENTRIES,
+            getStateMaxEntries: () => STATE_MAX_ENTRIES,
         },
     };
 }

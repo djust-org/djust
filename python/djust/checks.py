@@ -796,6 +796,168 @@ def check_configuration(app_configs, **kwargs):
 
 
 # ---------------------------------------------------------------------------
+# Service Worker advanced features (C3xx) — v0.6.0
+# ---------------------------------------------------------------------------
+
+
+# Regex matching common PII / credential naming patterns on snapshot-opt-in
+# views. Keep conservative — false positives (e.g. a benign ``token_count``
+# counter) are easier for users to tolerate than silent misses on real
+# credentials leaking into the client-side state cache.
+_PII_NAME_PATTERN = re.compile(
+    r"password|token|secret|api_?key|pii|ssn|credit_?card|cc_?num"
+    r"|bearer|private_?key|auth_?header|sensitive|credential",
+    re.IGNORECASE,
+)
+
+
+@register("djust")
+def check_service_worker_advanced(app_configs, **kwargs):
+    """Validate service-worker advanced-feature configuration (v0.6.0).
+
+    Covers the VDOM-cache TTL / max-entries ranges and the per-view
+    state-snapshot PII naming heuristic. These are configuration /
+    guardrail checks — none of them block startup; security-critical
+    state-snapshot behaviors (JSON-only, safe_setattr) are enforced at
+    runtime in the websocket handler regardless of check outcome.
+    """
+    errors = []
+    from django.conf import settings
+
+    # Resolve config values. Prefer explicit top-level settings; fall
+    # back to the nested LIVEVIEW_CONFIG['service_worker'] dict; finally
+    # fall back to the defaults shipped in ``config.py``.
+    liveview_cfg = getattr(settings, "LIVEVIEW_CONFIG", {}) or {}
+    sw_cfg = liveview_cfg.get("service_worker", {}) if isinstance(liveview_cfg, dict) else {}
+
+    ttl_seconds = getattr(
+        settings,
+        "DJUST_VDOM_CACHE_TTL_SECONDS",
+        sw_cfg.get("vdom_cache_ttl_seconds", 1800),
+    )
+    max_entries = getattr(
+        settings,
+        "DJUST_VDOM_CACHE_MAX_ENTRIES",
+        sw_cfg.get("vdom_cache_max_entries", 50),
+    )
+    vdom_enabled = getattr(
+        settings,
+        "DJUST_VDOM_CACHE_ENABLED",
+        sw_cfg.get("vdom_cache_enabled", True),
+    )
+
+    # C301 — TTL must be positive.
+    try:
+        ttl_int = int(ttl_seconds)
+    except (TypeError, ValueError):
+        ttl_int = -1
+    if ttl_int <= 0:
+        errors.append(
+            DjustError(
+                "DJUST_VDOM_CACHE_TTL_SECONDS must be a positive integer.",
+                hint=(
+                    "TTL <= 0 disables expiry and would let the SW serve "
+                    "indefinitely stale HTML on back-nav."
+                ),
+                id="djust.C301",
+                fix_hint=(
+                    "Set `DJUST_VDOM_CACHE_TTL_SECONDS = 1800` (30 minutes) "
+                    "or remove the override to use the default."
+                ),
+            )
+        )
+
+    # C302 — max entries must be >= 1.
+    try:
+        max_int = int(max_entries)
+    except (TypeError, ValueError):
+        max_int = 0
+    if max_int < 1:
+        errors.append(
+            DjustError(
+                "DJUST_VDOM_CACHE_MAX_ENTRIES must be >= 1.",
+                hint=(
+                    "A max of 0 would evict every entry on insertion and "
+                    "silently disable the cache."
+                ),
+                id="djust.C302",
+                fix_hint=(
+                    "Set `DJUST_VDOM_CACHE_MAX_ENTRIES = 50` or remove the "
+                    "override to use the default."
+                ),
+            )
+        )
+
+    # C303 — informational when the operator explicitly disabled the cache.
+    if not vdom_enabled and not _is_check_suppressed("djust.C303"):
+        errors.append(
+            DjustInfo(
+                "DJUST_VDOM_CACHE_ENABLED is False; VDOM cache disabled.",
+                hint=(
+                    "Back-navigation will fall through to a fresh mount + "
+                    "render instead of an instant paint. Suppress this "
+                    "check with DJUST_CONFIG = {'suppress_checks': ['C303']}."
+                ),
+                id="djust.C303",
+                fix_hint=(
+                    "Remove the `DJUST_VDOM_CACHE_ENABLED = False` override "
+                    "to re-enable, or suppress the check."
+                ),
+            )
+        )
+
+    # C304 — scan snapshot-opt-in views for attr names matching PII patterns.
+    try:
+        from djust.live_view import LiveView
+
+        for cls in _walk_subclasses(LiveView):
+            # Skip internal djust classes (tests/examples still checked).
+            module = getattr(cls, "__module__", "") or ""
+            if module.startswith("djust.") or module.startswith("djust_"):
+                if "test" not in module and "example" not in module:
+                    continue
+            if not getattr(cls, "enable_state_snapshot", False):
+                continue
+            # Inspect both class-level attrs (defaults) and __init__ mount
+            # attrs are unreachable statically — C304 scans class vars plus
+            # any annotations the user declared.
+            suspect_names = []
+            for name in list(cls.__dict__.keys()) + list(
+                getattr(cls, "__annotations__", {}).keys()
+            ):
+                if name.startswith("_"):
+                    continue
+                if _PII_NAME_PATTERN.search(name):
+                    suspect_names.append(name)
+            if suspect_names:
+                cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+                errors.append(
+                    DjustWarning(
+                        "%s: enable_state_snapshot=True with PII-like "
+                        "attribute names: %s" % (cls_label, ", ".join(sorted(set(suspect_names)))),
+                        hint=(
+                            "State snapshots are cached client-side by the "
+                            "Service Worker. Attributes matching "
+                            "password|token|secret|api_key|pii|ssn|"
+                            "credit_card|bearer|private_key|auth_header|"
+                            "sensitive|credential would be stored in "
+                            "browser cache storage."
+                        ),
+                        id="djust.C304",
+                        fix_hint=(
+                            "Either rename the attributes, prefix them with "
+                            "'_' to exclude from snapshots, or disable "
+                            "enable_state_snapshot on this view."
+                        ),
+                    )
+                )
+    except ImportError:
+        pass  # LiveView not importable (Rust extension missing) — skip scan.
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # LiveView checks (V0xx)
 # ---------------------------------------------------------------------------
 

@@ -870,7 +870,7 @@ class OnboardingView(WizardMixin, LiveView):
 
 ~~**Runtime layout switching**~~ ✅ **Shipped (v0.6.0)** — `self.set_layout(path)` queues a layout swap; the WS consumer renders the layout with the view's current context and emits a `layout` frame; the client splices the live `[dj-root]` into the new layout and swaps `<body>`, preserving form state / scroll / focus. Fires `djust:layout-changed` CustomEvent. 18 tests (12 Python + 6 JSDOM). User guide at `docs/website/guides/layouts.md`. Known limitation: `<head>` merging is out of scope for v1 — add dynamic stylesheets to the initial layout's `<head>`.
 
-**Advanced service worker features** — VDOM patch caching (cache last rendered DOM per page; diff against fresh response on back-navigation). LiveView state snapshots (serialize on unmount, restore on back-nav). Request batching for multi-component pages.
+~~**Advanced service worker features**~~ ✅ **Shipped (v0.6.0)** — VDOM patch caching (per-URL HTML snapshots served on popstate, TTL-enforced, LRU-capped). LiveView state snapshots (opt-in per view via `enable_state_snapshot = True`; JSON-only, restored before `mount()` on back-nav). Mount batching (N lazy-hydration mounts collapsed into one `mount_batch` frame; per-view failures isolated). 4 new system checks (`djust.C301`-`C304`). 25 Python unit + 9 JSDOM + 2 integration tests. Client bundle +1 KB gzipped. Activation: `djust.registerServiceWorker({vdomCache: true, stateSnapshot: true})`.
 
 ### Milestone: v0.7.0 — Navigation, Smart Rendering & AI Patterns
 

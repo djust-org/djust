@@ -819,7 +819,7 @@ class TestHandleLiveRedirectMountCleansStickyOnFailure:
                 self._tick_task = None
                 self.view_instance = None
 
-            async def handle_mount(self, data, sticky_preserved=None):  # type: ignore[override]
+            async def handle_mount(self, data, sticky_preserved=None, state_snapshot=None):  # type: ignore[override]
                 # Simulate a render-time failure AFTER preserved
                 # children are staged — e.g. Rust renderer raised,
                 # auth on the new view denied mid-way, etc.

@@ -311,6 +311,24 @@ class LiveView(
     sticky: bool = False
     sticky_id: Optional[str] = None
 
+    # State snapshot (v0.6.0 — Service Worker advanced features).
+    #
+    # Opt-in per-view flag that enables back-navigation state restoration
+    # via the client-side Service Worker state cache. When True and the
+    # client posts a ``state_snapshot`` payload alongside a
+    # ``live_redirect_mount`` (typically from a popstate event on the
+    # back button), the server restores public view attributes from the
+    # snapshot in lieu of calling ``mount()``. Use
+    # :meth:`_should_restore_snapshot` to reject stale snapshots based on
+    # auth context, request headers, or freshness.
+    #
+    # Security: snapshots are JSON only (no pickle). Restore happens
+    # AFTER auth checks and uses ``safe_setattr`` to block dunder keys.
+    # Never opt in for views whose public attributes contain credentials
+    # or PII — system check ``djust.C304`` warns on common PII naming
+    # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
+    enable_state_snapshot: bool = False
+
     # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================
@@ -532,6 +550,72 @@ class LiveView(
                 user_keys = getattr(self, "_user_private_keys", None)
                 if user_keys is not None:
                     user_keys.add(key)
+
+    # ============================================================================
+    # STATE SNAPSHOT — v0.6.0 back-navigation restoration (opt-in)
+    # ============================================================================
+
+    def _capture_snapshot_state(self) -> Dict[str, Any]:
+        """Return a JSON-serializable snapshot of public view state.
+
+        Filters out private (``_``-prefixed) attributes, framework-internal
+        attrs enumerated in ``_FRAMEWORK_INTERNAL_ATTRS``, callables, and any
+        value that fails a ``DjangoJSONEncoder`` round-trip. Used by the
+        client to post a ``STATE_SNAPSHOT`` message to the service worker
+        when opt-in via :attr:`enable_state_snapshot` is True.
+
+        The server never calls this directly — it's primarily exposed for
+        testing and observability. Restoration uses
+        :meth:`_restore_snapshot`.
+        """
+        result: Dict[str, Any] = {}
+        for key, value in self.__dict__.items():
+            if key.startswith("_"):
+                continue
+            if key in _FRAMEWORK_INTERNAL_ATTRS:
+                continue
+            if callable(value):
+                continue
+            try:
+                json.dumps(value, cls=DjangoJSONEncoder)
+                result[key] = value
+            except (TypeError, ValueError, OverflowError):
+                # Skip non-serializable — matches _get_private_state pattern.
+                continue
+        return result
+
+    def _restore_snapshot(self, state: Dict[str, Any]) -> None:
+        """Apply a previously captured snapshot to this view.
+
+        Default implementation iterates the dict and calls ``safe_setattr``
+        for every key, refusing to set dunder attributes or anything that
+        fails the ``SAFE_ATTRIBUTE_PATTERN`` regex. Subclasses can override
+        to implement custom restoration logic (e.g. re-hydrating ORM
+        instances from pk, re-fetching cached data).
+
+        The state is the JSON-decoded payload from the client — treat it
+        as untrusted and never pass it to ``exec``/``eval`` or raw
+        ``setattr``.
+        """
+        from .security import safe_setattr
+
+        for key, value in state.items():
+            safe_setattr(self, key, value, allow_private=False)
+
+    def _should_restore_snapshot(self, request) -> bool:
+        """Return True to allow snapshot restoration for this request.
+
+        Default implementation returns True — the class-level
+        :attr:`enable_state_snapshot` flag already gates opt-in. Override
+        to reject stale snapshots on permission changes, feature-flag
+        toggles, or time-based TTLs (e.g. refuse snapshots older than one
+        hour by inspecting a ``_snapshot_ts`` attr).
+
+        Runs AFTER Django auth / ``check_view_auth`` — a returning user
+        whose permissions were revoked will already have been redirected
+        away before this hook fires.
+        """
+        return True
 
     def handle_tick(self):
         """Override for periodic server-side updates. Called every tick_interval ms."""
