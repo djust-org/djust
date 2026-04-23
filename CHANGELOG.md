@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests
+
+- **dj-transition-group follow-ups — closes #905, #906** —
+  **#905** The VDOM `RemoveChild` integration test in
+  `tests/js/dj_transition_group.test.js` waited 700 ms per run for the
+  default dj-remove fallback timer. Pinned `dj-remove-duration="50"` on
+  the child and reduced the wait to ~80 ms, dropping this file's
+  wallclock from ~1.2 s to ~600 ms.
+  **#906** Added a nested-group regression test — outer + inner
+  `[dj-transition-group]` parents each install their own per-parent
+  observer (`subtree:false`), so a new child appended to `inner` gets
+  the inner group's enter/leave specs and is not clobbered by the
+  outer's. Pins the subtree-scoping invariant relied on by the phase-2c
+  implementation.
+
 ### Fixed
 
 - **Mechanical cleanup — closes #914, #915** —
