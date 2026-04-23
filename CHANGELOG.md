@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **dj-remove follow-ups — closes #900, #901** — Extracted shared `_teardownState(el, state)` helper in `42-dj-remove.js` so `_finalizeRemoval` and `_cancelRemoval` no longer duplicate the clearTimeout + removeEventListener + observer.disconnect + _pendingRemovals.delete block (Stage 11 nit from PR #898). Added a debug warning (gated on `globalThis.djustDebug`) when `_parseRemoveSpec` encounters a 2-token value like `dj-remove="fade-out 300"` — previously silent fall-through. 2 new JSDOM regression cases in `tests/js/dj_remove.test.js` (12/12 passing).
+
 ## [0.5.6rc1] - 2026-04-23
 
 ### BREAKING CHANGES

@@ -11086,6 +11086,12 @@ function _parseRemoveSpec(raw) {
     if (parts.length === 1) return { single: parts[0] };
     if (parts.length >= 3) return { start: parts[0], active: parts[1], end: parts[2] };
     // Two tokens — ambiguous, treat as invalid (matches dj-transition).
+    if (parts.length === 2) {
+        if (globalThis.djustDebug) {
+            console.warn('dj-remove: 2-token spec is invalid, use 1 or 3 tokens:', raw);
+        }
+        return null;
+    }
     return null;
 }
 
@@ -11101,16 +11107,25 @@ function _durationFor(el) {
     return n;
 }
 
+function _teardownState(el, state) {
+    // Shared cleanup for both _finalizeRemoval and _cancelRemoval: clear
+    // the fallback timer, remove the transitionend listener, disconnect
+    // the MutationObserver, and drop the WeakMap entry. Safe to call
+    // with a state object whose fields are partially populated (e.g.
+    // before the raf callback has run).
+    if (state.fallback) clearTimeout(state.fallback);
+    if (state.onEnd) el.removeEventListener('transitionend', state.onEnd);
+    if (state.observer) state.observer.disconnect();
+    _pendingRemovals.delete(el);
+}
+
 function _finalizeRemoval(el) {
     // Called when the animation completes or the fallback fires. Clean up
     // all pending state and physically detach the element. Guard against
     // the element having been moved or already detached by another patch.
     const state = _pendingRemovals.get(el);
     if (!state) return;
-    if (state.fallback) clearTimeout(state.fallback);
-    if (state.onEnd) el.removeEventListener('transitionend', state.onEnd);
-    if (state.observer) state.observer.disconnect();
-    _pendingRemovals.delete(el);
+    _teardownState(el, state);
     if (el.parentNode) {
         el.parentNode.removeChild(el);
     }
@@ -11122,9 +11137,7 @@ function _cancelRemoval(el) {
     // element where it was.
     const state = _pendingRemovals.get(el);
     if (!state) return;
-    if (state.fallback) clearTimeout(state.fallback);
-    if (state.onEnd) el.removeEventListener('transitionend', state.onEnd);
-    if (state.observer) state.observer.disconnect();
+    _teardownState(el, state);
     const spec = state.spec;
     if (spec) {
         if (spec.single) {
@@ -11135,7 +11148,6 @@ function _cancelRemoval(el) {
             el.classList.remove(spec.start);
         }
     }
-    _pendingRemovals.delete(el);
 }
 
 function _runRemove(el, spec) {
@@ -11217,6 +11229,7 @@ globalThis.djust.djRemove = {
     _runRemove,
     _finalizeRemoval,
     _cancelRemoval,
+    _teardownState,
     _pendingRemovals,
     _REMOVE_FALLBACK_MS,
     maybeDeferRemoval,
