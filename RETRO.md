@@ -75,7 +75,7 @@ issue or be explicitly closed with a reason.
 | 63 | Middleware content-type widening (xhtml, charset/boundary tolerance) | PR #826 | #830 | Closed | Shipped in PR #860 |
 | 64 | Slot-in-for-loop end-to-end test coverage | PR #788 | #789 | Closed | Shipped in PR #862 |
 | 65 | `{% render_slot slots.col.0 %}` dotted-path end-to-end test | PR #788 | #790 | Closed | Shipped in PR #862 at handler level; surfaced new Rust bug #861 |
-| 66 | `{% render_slot %}` Rust engine returns empty for all input | (drain) | #861 | Open | Surfaced while writing coverage for #790 |
+| 66 | `{% render_slot %}` Rust engine returns empty for all input | (drain) | #861 | Closed | Issue manually closed 2026-04-22 |
 | 67 | Morph-path should honor `dj-ignore-attrs` | PR #814 | #815 | Closed | Shipped in PR #863 |
 | 68 | `dj-ignore-attrs` CSV edge cases (empty/whitespace/trailing comma) | PR #814 | #816 | Closed | Shipped in PR #863 |
 | 69 | Namespacing `AttributeError` fallback regression test | PR #814 | #817 | Closed | Shipped in PR #863 |
@@ -89,6 +89,129 @@ issue or be explicitly closed with a reason.
 | 77 | `PostgresNotifyListener.reset_for_tests` awaits cancellation | PR #807 | #811 | Closed | Shipped in PR #867 as `areset_for_tests` |
 | 78 | Regression test: consumer handles views without `NotificationMixin` | PR #807 | #812 | Closed | Shipped in PR #867 |
 | 79 | Document 100ms `db_notify` render-lock timeout semantics | PR #807 | #813 | Closed | Shipped in PR #867 |
+| 80 | FormArrayNode drops inner template content (block body parsed but never rendered) | PR #929 | #930 | Open | Latent bug surfaced during note-severity cleanup |
+| 81 | `tag_input` widget missing `name` attribute — form submissions drop value | PR #929 | #932 | Open | Latent bug surfaced during note-severity cleanup |
+| 82 | `gallery/registry.py get_gallery_data` never consumes `discover_*` results | PR #929 | #933 | Open | Dead code / missing call — needs investigation |
+| 83 | `_registry.py` F401 unused-import alerts may need explicit `# noqa` post-rescan | PR #929 | — | Open | No issue filed; revisit after CodeQL rescan |
+| 84 | Add CodeQL MaD model for `sanitize_for_log` to close log-injection FP class | PRs #913/#923 | #934 | Open | Also consider for `url_has_allowed_host_and_scheme` and set-membership allowlists |
+| 85 | Pre-existing main test failures (`test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view`) | Arc #898–#931 | #935 | Open | Reproduced on `origin/main`; traced to prior commits (#856, #756, #755) |
+| 86 | Verify post-#928 CodeQL rescan closed the 872 cyclic-import alerts | PR #928 | — | Closed | Confirmed 2026-04-23: open alerts dropped from ~1130 to 37 |
+| 87 | `dispatch.py:295` vs `observability:399` JSON-parse error message consistency | PR #919 | — | Open | Style-only follow-up |
+| 88 | Replace `inspect.getsource + substring` test with behavior-level test | PR #919 | — | Open | Test quality |
+| 89 | `javascript:` scheme + HTTPS downgrade + null-byte storybook rejection tests | PR #920 | — | Open | Test coverage gap |
+| 90 | Audit ALL `HttpResponseRedirect`/`redirect()` sites for `url_has_allowed_host_and_scheme` guards | PR #920 | — | Open | Stage 11 flagged `mixins/request.py:75` + `auth/mixins.py:21` as unflagged surfaces |
+| 91 | Shared `conftest.py` staff-user fixture for auth-gated view tests | PR #918 | — | Open | Tooling |
+| 92 | `docs/internal/codeql-patterns.md` taint-flow cheat sheet | PR #918 | — | Open | Docs |
+| 93 | Automate CHANGELOG test-count validation (3rd recurrence across #898/#904/#885) | PRs #898/#904 | — | Open | Pre-commit hook or `make` target |
+
+---
+
+## Security & Code-Scanning Cleanup arc (PRs #898–#931, 2026-04-22/23)
+
+**Date**: 2026-04-22 / 2026-04-23
+**Scope**: 16 PRs closing the Dependabot and CodeQL dashboards. Started the arc with ~1130 open CodeQL + 23 Dependabot alerts; ended with 0 Dependabot + ~37 note-level CodeQL (mostly cyclic-import notes pending final rescan). Arc also shipped 2 v0.6.0 animation features as bookends (#898 `dj-remove`, #904 `dj-transition-group`).
+**Tests at close**: 3,428 Python + 1,279 JS (~75 regression cases added across the arc; base count unchanged by hygiene work)
+
+### What We Learned
+
+**1. Static analysis catches real bugs tests don't.** The arc surfaced ~12 pre-existing latent bugs during cleanup audits — none of which were caught by the existing test suite because they either lived on cold paths, in dead branches, or in behavior tests never exercised:
+- `BuildTimeGenerator.generate_manifest` — bool attribute shadowed a method; first deployment call would `TypeError` (#923)
+- `str.format()` with embedded CSS braces — `KeyError` on `{ font-family }` placeholder collision (#923)
+- Markdown preview reflective XSS — raw `<script>` / `javascript:` URLs rendered unescaped (#925)
+- `SignupView` / admin_ext open-redirect via unvalidated `next=` (#920)
+- Storybook path-traversal via user-controlled filename (#920)
+- Gallery render stack-trace leak — `f'{exc}'` into HttpResponseNotFound body (#918)
+- Dead `if False` conditional referencing `InvalidTemplateLibrary` (#926)
+- Duplicate `InteractionStyle` class definition shadowing the original (#928)
+- Duplicate `INTERACT_MINIMAL` / `INTERACT_PLAYFUL` instance definitions with different field values (#928)
+- `FormArrayNode` drops inner template content — block body parsed but never rendered (#929 → #930)
+- `tag_input` widget missing `name=` attribute — form submissions drop the value (#929 → #932)
+- `gallery/registry.py get_gallery_data` never consumes `discover_*` results (#929 → #933)
+
+**Action taken**: Each fixed in the PR that surfaced it, where in scope; where scope-creep risks surfaced a latent bug in a dead branch, filed as a dedicated follow-up (#930, #932, #933).
+
+**2. CodeQL's taint model doesn't recognize custom sanitizers.** Our `sanitize_for_log` helper, `url_has_allowed_host_and_scheme` used with explicit early returns, and `frozenset` membership allowlists all ARE correct — but CodeQL treats custom helpers as taint pass-throughs. ~33 alerts were dismissed across the arc with specific per-site justifications. Canonical CodeQL-recognizable patterns:
+- Literal `s.replace('\n', '').replace('\r', '')` (log-injection)
+- Django's `url_has_allowed_host_and_scheme` with `if not ...: return default_url` early return (url-redirection)
+- `frozenset({...})` membership checks (path-injection)
+- `if TYPE_CHECKING:` blocks for `__getattr__` lazy imports (undefined-export)
+
+**Action taken**: Pattern documented in each retro. Filed #934 to add a CodeQL MaD model extension for `sanitize_for_log` — structural fix for the FP class rather than per-alert dismissal.
+
+**3. Stage 11 grep-adjacent-files discipline prevents scope misses — 5+ consecutive confirmations.** Initial implementation fixes the flagged sites; Stage 11 greps the same file (or the codebase) for the SAME pattern and finds more. Examples across this arc:
+- #898: IME composition regression outside the flagged `dj-remove` sites
+- #918: `Http404(f"Unknown category: {category_slug}")` at line 690 not in the CodeQL report
+- #920: `HttpResponseRedirect(hook_redirect)` in `mixins/request.py:75` and `auth/mixins.py:21`
+- #923: `FormArrayNode` dead variable hinting at the #930 latent bug
+- #929: `tag_input` and `gallery/registry` latent bugs surfaced by investigating "why is this variable dead?"
+
+**Action taken**: Pattern entrenched. Worth making an explicit bullet in the Stage 11 checklist: "After fixing flagged sites, grep the codebase for the same pattern and verify each hit is safe or filed as follow-up."
+
+**4. Breaking changes are justified when ecosystem has moved on.** PR #927 dropped Python 3.9 (EOL 2025-10-05, 6 months past). Four Dependabot alerts had been blocked by the py3.9 floor for months because orjson/pytest/python-dotenv/requests had all dropped 3.9 in CVE-fix releases. One principled breaking change closed the whole class. PR #909 took the softer hand: narrowed Django ceiling to `<6` in pyproject.toml without dropping 5.x from the lockfile — both patterns worked.
+
+**5. The theming cyclic-import refactor (PR #928) had massive ROI.** Single PR, ~8 files edited, closed **872 `py/unsafe-cyclic-import` alerts** via one structural move: extract types to `_types.py`, extract shared instances to `_constants.py`, break the `_base.py` → `presets.py` → `themes.X` → `_base.py` cycle. Also surfaced 2 pre-existing latent bugs (duplicate `InteractionStyle`, duplicate `INTERACT_MINIMAL`/`PLAYFUL`). ~110 alerts closed per file touched — the highest-ROI PR of the arc by a wide margin. Confirmed next-day on rescan (2026-04-23): open alert count dropped from ~1130 to 37.
+
+**6. Tests verify behavior; CodeQL's note-severity verifies hygiene.** Recurring question from the user: "is this not covered by our tests?" The answer: unused imports, unused vars, duplicate imports, overly-broad exception catches — ZERO runtime impact, so tests pass whether present or absent. This is the niche static analysis fills. PRs #929 and #931 delivered the mechanical cleanup pass (~90 note-level alerts across 49 files) without introducing any test failures.
+
+### Insights
+
+- **First-pass coverage + Stage 11 adjacent-grep = ~12 latent bugs caught** that tests missed. The two-stage review is load-bearing.
+- **Dismissals are fine when the justification is SPECIFIC.** Generic "won't fix" ages badly. Per-site reasons ("set-membership allowlist at X:Y clears taint; CodeQL MaD model would recognize") survive review.
+- **CodeQL error-severity rescan lag is ~24h**. PR #928's expected 873 closures confirmed on next-day rescan.
+- **`--admin` merges with `REVIEW_REQUIRED` block** were used consistently when CI passed and self-review + Stage 11 completed. This session's pipeline policy; worth documenting as the default for hygiene PRs.
+- **Pre-existing main test failures** (`test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view`) surfaced ~3 times during this arc. Filed as #935 (not caused by this arc).
+- **Test-count-drift across CHANGELOG/ROADMAP artifacts** — 3rd recurrence across this session + retro-885. Needs automation (tracker row #93).
+
+### Review Stats (aggregated across the arc)
+
+| Metric | Total |
+|---|---|
+| PRs shipped | 16 (2 v0.6.0 features + 14 security/quality) |
+| Dependabot alerts closed | 27 (23 via #909 + 1 via #917 + 4 via #927) → **0 open** |
+| CodeQL alerts fixed | ~980 (872 cyclic-import via #928 + ~110 across the other 15 PRs) |
+| CodeQL alerts dismissed with justification | ~33 |
+| Latent pre-existing bugs surfaced | 12 |
+| Tests added | ~75 (regression cases across retros) |
+| Pre-existing bugs fixed in-arc | 6 (surfaced via hygiene refactors) |
+| Re-commit cycles per PR | ~1.3 average (most clean-landed) |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Pending — add security-pattern snippets:
+- `sanitize_for_log` for user-controlled log args
+- `url_has_allowed_host_and_scheme` with early returns for redirect targets
+- `frozenset` set-membership allowlists for path inputs
+- `if TYPE_CHECKING:` for `__getattr__` lazy imports
+- "When removing a dev tool/dep, grep 5 surfaces: config, automation, source imports, user-facing docs, internal docs" (PR #917 lesson)
+- Dependency-refresh playbook — check classifier compat, set ceilings, re-lock, verify (PR #909 lesson)
+
+**Pipeline template**: No structural changes; the existing 14-stage template held up across 16 PRs. Stage 11's grep-adjacent-files discipline proved load-bearing again.
+
+**Skills**: Pipeline-run evolved implicitly:
+- `--admin` merge fallback for `REVIEW_REQUIRED` block on hygiene PRs
+- `gh api --jq` pattern for bulk-dismissals (avoids Python JSON pipe stderr pollution — PR #926 lesson)
+- `git stash && grep && git stash pop` pre-existing-failure verification pattern
+- `gh api /code-scanning/alerts --paginate` for triage-table generation (PR #913 lesson) — consider scripting as `scripts/codeql-triage.sh`
+
+**CodeQL config**: No changes to `.github/codeql/codeql-config.yml`. The 33 dismissals were per-alert rather than rule-wide. #934 filed to add a MaD model extension for `sanitize_for_log` to close the FP class structurally.
+
+### Open Items (deferred to follow-up — see Action Tracker rows 80–93)
+
+- [ ] #930 — FormArrayNode drops inner template content (filed, pending fix)
+- [ ] #932 — `tag_input` missing `name=` attribute (filed)
+- [ ] #933 — `gallery/registry` dead `discover_*` path (filed)
+- [ ] #934 — CodeQL MaD model for `sanitize_for_log` (filed)
+- [ ] #935 — 3 pre-existing main test failures (filed)
+- [ ] `_registry.py` F401 alerts — explicit `# noqa` if rescan still flags (row #83)
+- [ ] 3 `py/mixed-returns` — per-function judgment (noted in retro-931)
+- [ ] 3 `js/unused-local-variable` from PR #925/#931 — scanner rescan pending
+- [ ] `dispatch.py:295` vs `observability:399` message consistency (row #87)
+- [ ] `inspect.getsource` test quality follow-up (row #88)
+- [ ] `javascript:` scheme + HTTPS downgrade + null-byte storybook tests (row #89)
+- [ ] Full audit of `HttpResponseRedirect`/`redirect()` call sites (row #90)
+- [ ] Shared `conftest.py` staff-user fixture (row #91)
+- [ ] `docs/internal/codeql-patterns.md` cheat sheet (row #92)
+- [ ] Automate CHANGELOG test-count validation (row #93 — 3rd recurrence)
 
 ---
 
