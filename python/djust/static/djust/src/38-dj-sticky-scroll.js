@@ -34,6 +34,11 @@ function _installDjStickyScrollFor(el) {
 
     // Seed: assume we start at bottom so the first append scrolls.
     el._djStickyAtBottom = true;
+    // #881: Deliberately scroll-to-bottom on install regardless of current
+    // position. Matches Phoenix's phx-auto-scroll / Ember's scroll-into-view
+    // behavior — sticky-scroll is an "opt into bottom-pinning" attribute,
+    // and authors typically want the initial view to show the most recent
+    // content (chat, log output).
     _scrollToBottom(el);
 
     function onScroll() {
@@ -65,6 +70,16 @@ function _installDjStickyScrollObserver() {
 
     const rootObserver = new MutationObserver(function (mutations) {
         mutations.forEach(function (m) {
+            // #879: if the dj-sticky-scroll attribute itself is removed from
+            // an already-observed element, tear down the observer so we
+            // don't leave a stale MutationObserver + scroll listener attached.
+            if (m.type === 'attributes' && m.attributeName === 'dj-sticky-scroll') {
+                const target = m.target;
+                if (target && target.nodeType === 1 && !target.hasAttribute('dj-sticky-scroll')) {
+                    if (_djStickyObservers.has(target)) _tearDownDjStickyScroll(target);
+                }
+                return;
+            }
             m.addedNodes.forEach(function (node) {
                 if (node.nodeType !== 1) return;
                 if (node.hasAttribute && node.hasAttribute('dj-sticky-scroll')) {
@@ -83,7 +98,12 @@ function _installDjStickyScrollObserver() {
             });
         });
     });
-    rootObserver.observe(document.documentElement, { subtree: true, childList: true });
+    rootObserver.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['dj-sticky-scroll'],
+    });
 }
 
 if (typeof document !== 'undefined') {

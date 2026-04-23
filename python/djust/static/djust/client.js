@@ -10585,6 +10585,16 @@ function _installDjMutationObserver() {
 
     const rootObserver = new MutationObserver(function (mutations) {
         mutations.forEach(function (m) {
+            // #879: if the dj-mutation attribute itself is removed from an
+            // already-observed element, tear down the observer so we don't
+            // leave a stale MutationObserver attached.
+            if (m.type === 'attributes' && m.attributeName === 'dj-mutation') {
+                const target = m.target;
+                if (target && target.nodeType === 1 && !target.hasAttribute('dj-mutation')) {
+                    if (_djMutationObservers.has(target)) _tearDownDjMutation(target);
+                }
+                return;
+            }
             m.addedNodes.forEach(function (node) {
                 if (node.nodeType !== 1) return;
                 if (node.hasAttribute && node.hasAttribute('dj-mutation')) {
@@ -10603,7 +10613,12 @@ function _installDjMutationObserver() {
             });
         });
     });
-    rootObserver.observe(document.documentElement, { subtree: true, childList: true });
+    rootObserver.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['dj-mutation'],
+    });
 }
 
 if (typeof document !== 'undefined') {
@@ -10655,6 +10670,11 @@ function _installDjStickyScrollFor(el) {
 
     // Seed: assume we start at bottom so the first append scrolls.
     el._djStickyAtBottom = true;
+    // #881: Deliberately scroll-to-bottom on install regardless of current
+    // position. Matches Phoenix's phx-auto-scroll / Ember's scroll-into-view
+    // behavior — sticky-scroll is an "opt into bottom-pinning" attribute,
+    // and authors typically want the initial view to show the most recent
+    // content (chat, log output).
     _scrollToBottom(el);
 
     function onScroll() {
@@ -10686,6 +10706,16 @@ function _installDjStickyScrollObserver() {
 
     const rootObserver = new MutationObserver(function (mutations) {
         mutations.forEach(function (m) {
+            // #879: if the dj-sticky-scroll attribute itself is removed from
+            // an already-observed element, tear down the observer so we
+            // don't leave a stale MutationObserver + scroll listener attached.
+            if (m.type === 'attributes' && m.attributeName === 'dj-sticky-scroll') {
+                const target = m.target;
+                if (target && target.nodeType === 1 && !target.hasAttribute('dj-sticky-scroll')) {
+                    if (_djStickyObservers.has(target)) _tearDownDjStickyScroll(target);
+                }
+                return;
+            }
             m.addedNodes.forEach(function (node) {
                 if (node.nodeType !== 1) return;
                 if (node.hasAttribute && node.hasAttribute('dj-sticky-scroll')) {
@@ -10704,7 +10734,12 @@ function _installDjStickyScrollObserver() {
             });
         });
     });
-    rootObserver.observe(document.documentElement, { subtree: true, childList: true });
+    rootObserver.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['dj-sticky-scroll'],
+    });
 }
 
 if (typeof document !== 'undefined') {
@@ -10743,6 +10778,12 @@ globalThis.djust.djStickyScroll = {
 //   changed elements carried dj-track-static="reload", call
 //   window.location.reload() instead.
 
+// #880: Using `Map` (not `WeakMap`) deliberately: the reconnect-diff step
+// iterates ALL tracked elements to compare snapshot URLs with current URLs.
+// WeakMap does not support iteration, so we accept the weak-reference
+// tradeoff. If an element is removed from the DOM, the `isConnected` check
+// in `_checkStale` skips it — we don't leak observers, just map entries
+// that are cleared on the next `_snapshotAssets()` seed.
 let _djTrackStaticSnapshot = null;
 
 function _urlOf(el) {
@@ -10750,6 +10791,7 @@ function _urlOf(el) {
 }
 
 function _snapshotAssets() {
+    // See #880 comment above: Map chosen for iteration support.
     const snap = new Map();
     document.querySelectorAll('[dj-track-static]').forEach(function (el) {
         snap.set(el, _urlOf(el));

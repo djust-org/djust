@@ -135,6 +135,24 @@ describe('dj-mutation', () => {
         expect(calls[0].params.attrs).toContain('class');
     });
 
+    it('does not fire the CustomEvent if the element is removed before the debounce timer expires', async () => {
+        dom = createDom(`<div id="el" dj-mutation="handle_change" dj-mutation-debounce="100"></div>`);
+        await new Promise((r) => setTimeout(r, 20));
+        const el = dom.window.document.getElementById('el');
+        let fired = false;
+        el.addEventListener('dj-mutation-fire', () => { fired = true; });
+
+        // Trigger a mutation (which arms the debounce timer)
+        el.setAttribute('data-trigger', 'yes');
+        // Remove the element BEFORE the debounce timer (100ms) fires
+        await new Promise((r) => setTimeout(r, 20));
+        el.remove();
+        // Wait past the debounce window
+        await new Promise((r) => setTimeout(r, 120));
+
+        expect(fired).toBe(false);
+    });
+
     it('preventDefault on dj-mutation-fire cancels the server call', async () => {
         dom = createDom('<div id="w" dj-mutation="server_handler" dj-mutation-attr="class" dj-mutation-debounce="0"></div>');
         const el = dom.window.document.getElementById('w');
