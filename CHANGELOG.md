@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **3 latent bugs caught by prior CodeQL-cleanup audits — closes #930, #932, #933** —
+  **#930 FormArrayNode inner content**: `{% form_array %}...{% endform_array %}` parsed the block
+  body into a nodelist via `parser.parse(("endform_array",))` but `FormArrayNode.render` never
+  rendered that nodelist — users' inner template markup silently disappeared. Fixed by rendering
+  the nodelist once per row with `row`, `row_index`, and `forloop` (dict shape:
+  `{counter, counter0, first, last}`) pushed onto the template context; empty or whitespace-only
+  blocks keep the original single-input-per-row default output, so existing users see no change.
+  **#932 tag_input missing `name=` attribute**: `TagInput._render_custom` rendered a visible
+  "type to add" `<input class="tag-input-field" placeholder="...">` with no `name=`, so form
+  submissions silently dropped the tag list from POST data. Fixed by emitting a
+  `<input type="hidden" name="<self.name>" value="<csv of tags>">` alongside the visible input
+  whenever `self.name` is non-empty; hidden value is `html.escape`'d.
+  **#933 gallery/registry.py dead discover_\*  path**: `discover_template_tags()` and
+  `discover_component_classes()` were public helpers exported from
+  `djust.components.gallery.__init__` but `get_gallery_data()` never called them — a developer
+  adding a new `@register.tag` or `Component` subclass without updating the curated
+  `EXAMPLES` / `CLASS_EXAMPLES` dicts had that new thing silently missing from the rendered
+  gallery. Fixed by wiring both helpers into `get_gallery_data()` as a cross-check: any
+  registered tag / component class missing an example entry emits a `logger.debug` warning
+  naming the missing entries, and discovery failures are caught so the gallery never breaks
+  at runtime. 12 regression tests across `python/djust/tests/test_form_array_930.py`,
+  `python/djust/tests/test_tag_input_932.py`, `python/djust/tests/test_gallery_registry_933.py`
+  (7 of which fail on main pre-fix). No behavior change for non-broken inputs.
+  (`python/djust/components/templatetags/djust_components.py`,
+  `python/djust/components/components/tag_input.py`,
+  `python/djust/components/gallery/registry.py`)
+
 - **dj-remove follow-ups — closes #900, #901** — Extracted shared `_teardownState(el, state)` helper in `42-dj-remove.js` so `_finalizeRemoval` and `_cancelRemoval` no longer duplicate the clearTimeout + removeEventListener + observer.disconnect + _pendingRemovals.delete block (Stage 11 nit from PR #898). Added a debug warning (gated on `globalThis.djustDebug`) when `_parseRemoveSpec` encounters a 2-token value like `dj-remove="fade-out 300"` — previously silent fall-through. 2 new JSDOM regression cases in `tests/js/dj_remove.test.js` (12/12 passing).
 
 ## [0.5.6rc1] - 2026-04-23
