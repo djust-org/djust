@@ -108,7 +108,91 @@ issue or be explicitly closed with a reason.
 | 96 | pipeline-run outer loop should verify retro comment before `completed_at` | PR #946 retro | #950 | Open | Retro dropout caught in drain — add artifact gate |
 | 97 | dj-virtual variable-height: data-key-based cache survives reorders | PR #947 retro | #951 | Open | Currently index-keyed; reorders bind heights to wrong items |
 | 98 | dj-virtual variable-height guide page | PR #947 retro | #952 | Open | Tuning estimated-height, scrollbar-jump tradeoffs, data-key story |
-| 99 | Consolidate JSDOM test helpers (DOMContentLoaded wait + repo-root cwd) | Retros #885/#918/#925/#943 | #953 | Open | 4 PRs have reinvented variants; extract to tests/js/_helpers.js |
+| 99 | Consolidate JSDOM test helpers (DOMContentLoaded wait + repo-root cwd) | Retros #885/#918/#925/#943 | #953 | Closed | Shipped in PR #956 |
+| 100 | `make ci-mirror` target — run exact CI pytest invocation locally | Retro v0.5.7 / PR #959 | #960 | Open | Prevents coverage-threshold surprises |
+| 101 | Replace hand-rolled Redis mock with `fakeredis` in test_security_upload_resumable.py | Retro v0.5.7 / PR #959 | #961 | Open | ~20 LOC simplification |
+| 102 | v0.6.0 or v0.7.0 decision: breaking rename of framework-internal attrs to `_*` prefix | Retro v0.5.7 / PR #957 | #962 | Open | #762 shipped non-breaking filter; rename still on table |
+| 103 | Weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers | Retro v0.5.7 / PR #958 | #963 | Open | All SDK tests are mocked; no real-cloud end-to-end |
+| 104 | Document `key_template` UUID-prefix convention for `s3_events.parse_s3_event` | Retro v0.5.7 / PR #958 | #964 | Open | Silent fallback to full key otherwise |
+
+---
+
+## v0.5.7 — Deployment Ergonomics & Upload Feature Family (PRs #957–#959, 2026-04-23)
+
+**Date**: 2026-04-23
+**Scope**: Deployment-friction framework fixes (A010 proxy-trusted deployments, `get_state()` internal-attr filter) + the three upload-transport features that branched from PR #819's `UploadWriter` (pre-signed S3, GCS + Azure backends, resumable across WS disconnects).
+**Tests at close**: 3445 Python + 1292 JS (baseline) → +110 regression cases across the 3 PRs (14 framework + 50 upload-writer + 46 resumable); security-tests coverage 64.72% → 89.55%.
+
+### What We Learned
+
+**1. v0.5.7 was a narrow-scope milestone and it worked — 5 issues, 3 PRs, clean first-push on 2 of 3.**
+Only PR #959 (resumable uploads) failed first CI — and the failures were substantive (under-coverage on new security-relevant modules + 7 CodeQL alerts) not spurious. The tight scope (5 issues rather than a sprawling 30-issue batch) meant each PR was big enough to matter but small enough to review in one sitting. Compare with the v0.5.6 "Security & Code-Scanning Cleanup arc" — 16 PRs, hugely productive but hard to trace individual decisions through.
+
+**Action taken**: pattern for future narrow-scope milestones: bundle related issues by theme (framework hygiene, upload-transport family) rather than by effort size. Closing as a process observation — no tracker row.
+
+**2. ADR-first development scaled the largest PR honestly.**
+PR #959 (resumable uploads, ~3148 LOC) started with ADR-010 drafted on paper: wire protocol, state-store contract, failure modes, security considerations. Writing the ADR first forced clarity that showed up directly in the implementation — clean protocol messages (`upload_resume` / `upload_resumed`), narrow state-store interface (`get/set/update/delete`), explicit TTL semantics, deliberate choice of "409 on concurrent resume" over takeover. Estimated 500-700 LOC from the issue body; actual was 3148 LOC once ADR + JS client + IndexedDB persistence + 2 state backends + 55 tests are counted. **The ADR page count is a better LOC predictor than the issue body.**
+
+**Action taken**: documented in retro-959; no code change. Pattern for v0.6.0 headline features (AI-generated UIs, ADR-006 Phase A-D) where each phase is already scoped this way.
+
+**3. Injection-seam testing without SDK installs is now the pattern.**
+PR #958 added `client=` / `service_client=` kwargs on `GCSMultipartWriter`, `AzureBlockBlobWriter`, and `PresignedS3Upload`. Tests pass a mock client; the optional `djust[s3]` / `djust[gcs]` / `djust[azure]` extras don't need to be installed for CI to run. 50 tests, ~0.15s wall time. **This is the right pattern for any future cloud-SDK contrib modules.**
+
+**Action taken**: documented in retro-958. Future upload backends (e.g. Cloudflare R2, Backblaze B2, MinIO) should copy the pattern. No new tracker row — just a convention.
+
+**4. Shared error taxonomy upfront saved downstream churn.**
+`UploadError` / `UploadNetworkError` / `UploadCredentialError` / `UploadQuotaError` in `djust.uploads.errors` + re-exported from `djust.uploads` means apps `except UploadError` without knowing which backend won. The 3 writers (S3, GCS, Azure) translate their SDK-specific exceptions into the shared taxonomy at raise-time. Stage 11 verified the translation table is consistent across all three.
+
+**Action taken**: documented. Future backends MUST use the same taxonomy — not introduce new exception types for the same semantic error class.
+
+**5. CI coverage threshold caught a real under-coverage.**
+PR #959's first push: 64.72% security-tests coverage, below the 75% gate. The gap was dominated by new PR files (`uploads/storage.py` 26%, `uploads/resumable.py` 17%, `uploads/views.py` 0%), NOT `error_handling.py` alone as the failure text suggested. The fix pass wrote 82 new tests reaching 89.55%. **The 75% coverage threshold is doing its job**, and the failure revealed that local testing before push missed the CI-mirror invocation — worth a `make ci-mirror` target.
+
+**Action taken**: new Action Tracker row → `make ci-mirror` target to run the exact CI pytest invocation locally (Action #100).
+
+**6. Retro-artifact gate (shipped in #950) worked zero dropout.**
+All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run skill's MANDATORY gate caught what the drain-phase subagents kept missing. The prior 3 dropouts (PRs #946, #955, #956) were the last occurrences.
+
+**Action taken**: pattern locked in. No new work.
+
+### Insights
+
+- **Narrow-scope milestones beat sprawling ones** for both review quality and retro coherence. v0.5.6 shipped 16 PRs in one arc — hard to retrospect. v0.5.7 shipped 3 PRs in one arc — every decision is traceable.
+- **Upload-transport family as a v0.5.7 grouping was perfect.** #819 laid the foundation; v0.5.7 added 4 backends + 1 protocol. Same mental model per PR, same error taxonomy, consistent testing pattern. Future cloud-SDK additions (R2, B2, MinIO) are drop-in by following the established pattern.
+- **Coverage failures are a gift, not a nuisance.** The 64.72% → 89.55% jump in PR #959 isn't cosmetic — the new tests covered real error paths (WatchError retry, TooLarge rejection, TTL expiration, full writer lifecycle). A future bug in any of those paths will be caught by tests that wouldn't have existed without the CI gate.
+- **CodeQL's error-level alerts on new PRs catch what self-review misses.** PR #959's 7 alerts (log-injection, 4 ineffectual statements in Protocol bodies, 1 empty-except, 1 unvalidated dynamic method call) were all real findings — not noise. The unvalidated dynamic-call alert in particular was a structural JS issue in `handleUploadResumed` that could have been a security bug.
+- **Breaking rename is still deferred.** #762 shipped as a non-breaking filter via `_FRAMEWORK_INTERNAL_ATTRS`. v0.7.0 can revisit the `_*` rename — carries the same "one deliberate breaking change per milestone" discipline that #927 (drop py3.9) used.
+
+### Review Stats
+
+| Metric | PR #957 | PR #958 | PR #959 | Total |
+|--------|---------|---------|---------|-------|
+| Tests added | 14 | 50 | 55 (46 Python + 9 JSDOM) | 119 |
+| LOC | ~180 | +2486/-13 | +3148/-13 | +5814/-26 |
+| 🔴 Findings (Stage 11) | 0 | 0 | 0 | 0 |
+| 🟡 Findings (Stage 11) | 0 | 0 | 0 | 0 |
+| 🟢 nits (Stage 11) | 0 | 3 | 0 | 3 |
+| CI failures (first push) | 0 | 0 | 1 (coverage + 7 CodeQL) | 1 |
+| Re-commit cycles | 1 | 1 | 2 | 4 |
+| ADRs written | 0 | 0 | 1 (ADR-010) | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No additions needed — patterns from v0.5.6 arc (sanitize_for_log, url_has_allowed_host_and_scheme, set-membership allowlists) re-applied cleanly.
+
+**Pipeline template**: No structural changes. The 14-stage pipeline held up across 3 PRs with CI re-run logic working as designed.
+
+**Skills**: The `pipeline-run` retro-artifact gate (from #950) was put to the test and worked zero-dropout across 3 PRs. That's the first milestone with gate-verified retros.
+
+**ADR series**: ADR-010 (resumable uploads) adds to the series after ADR-007 (package taxonomy), ADR-008 (HTTP API), ADR-009 (mixin side-effect replay). ADR-010's structure — wire protocol + state contract + failure modes + security considerations + trade-offs vs alternatives (tus.io) — is a template for future protocol-adding ADRs.
+
+### Open Items
+
+- [ ] Action Tracker #100 — `make ci-mirror` target to run the exact CI pytest invocation locally (prevents v0.5.7 #959's coverage-failure class)
+- [ ] Action Tracker #101 — `fakeredis` dev dependency to replace hand-rolled Redis mocks in `test_security_upload_resumable.py`
+- [ ] Action Tracker #102 — v0.6.0 or v0.7.0 decision point: breaking rename of framework-internal attrs to `_*` prefix (filter shipped non-breaking in v0.5.7; rename is still on the table)
+- [ ] Action Tracker #103 — real-cloud CI matrix job (weekly cadence) for S3 / GCS / Azure upload writers — all v0.5.7 tests mock the SDKs
+- [ ] Action Tracker #104 — document `key_template` convention (`uploads/{uuid}/{filename}`) more prominently so `s3_events.parse_s3_event`'s UUID-prefix extraction works as expected
 
 ---
 
