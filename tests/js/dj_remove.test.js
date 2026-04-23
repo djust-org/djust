@@ -5,7 +5,7 @@
  * dispatch it manually or rely on the fallback timeout.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -159,5 +159,57 @@ describe('dj-remove', () => {
         // …and the element stays mounted past the fallback window.
         await new Promise((r) => setTimeout(r, 700));
         expect(el.parentNode).toBe(parent);
+    });
+
+    it('parseSpec warns via console.warn on 2-token form when djustDebug is truthy (#901)', () => {
+        dom = createDom('');
+        const warnSpy = vi.spyOn(dom.window.console, 'warn').mockImplementation(() => {});
+        try {
+            // Without djustDebug: silent (null, no warn).
+            dom.window.djustDebug = undefined;
+            expect(dom.window.djust.djRemove._parseRemoveSpec('fade-out 300')).toBeNull();
+            expect(warnSpy).not.toHaveBeenCalled();
+
+            // With djustDebug truthy: null AND warn fires.
+            dom.window.djustDebug = true;
+            expect(dom.window.djust.djRemove._parseRemoveSpec('fade-out 300')).toBeNull();
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            const msg = warnSpy.mock.calls[0].join(' ');
+            expect(msg).toMatch(/dj-remove/);
+            expect(msg).toMatch(/2-token/);
+        } finally {
+            warnSpy.mockRestore();
+            dom.window.djustDebug = undefined;
+        }
+    });
+
+    it('_teardownState is invoked from both _finalizeRemoval and _cancelRemoval (#900)', async () => {
+        // Path 1 — fallback finalize. Observe teardown via side effects:
+        // the WeakMap entry is deleted and the observer stops firing.
+        dom = createDom('<div id="t1" dj-remove="fade-out" dj-remove-duration="50"></div>');
+        let el = dom.window.document.getElementById('t1');
+        dom.window.djust.maybeDeferRemoval(el);
+        expect(dom.window.djust.djRemove._pendingRemovals.has(el)).toBe(true);
+        // Wait past the 50 ms fallback window.
+        await new Promise((r) => setTimeout(r, 120));
+        // _finalizeRemoval ran → teardown ran → WeakMap entry gone + detached.
+        expect(dom.window.djust.djRemove._pendingRemovals.has(el)).toBe(false);
+        expect(el.parentNode).toBeNull();
+
+        // Path 2 — attribute-strip cancel. Same observable signal.
+        dom = createDom('<div id="t2" dj-remove="fade-out"></div>');
+        el = dom.window.document.getElementById('t2');
+        const parent = el.parentNode;
+        dom.window.djust.maybeDeferRemoval(el);
+        await nextFrame(dom);
+        expect(dom.window.djust.djRemove._pendingRemovals.has(el)).toBe(true);
+        el.removeAttribute('dj-remove');
+        await new Promise((r) => setTimeout(r, 20));
+        // _cancelRemoval ran → teardown ran → WeakMap entry gone, element stays.
+        expect(dom.window.djust.djRemove._pendingRemovals.has(el)).toBe(false);
+        expect(el.parentNode).toBe(parent);
+
+        // Also assert the shared helper is exposed on the namespace.
+        expect(typeof dom.window.djust.djRemove._teardownState).toBe('function');
     });
 });
