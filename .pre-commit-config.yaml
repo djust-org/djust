@@ -97,6 +97,18 @@ repos:
         args: ['--baseline', '.secrets.baseline']
         exclude: package-lock\.json
 
+  # CHANGELOG validation — catches drift between claimed test counts and
+  # actual tests in referenced files. See scripts/check-changelog-test-counts.py
+  # and tests/test_changelog_test_counts.py. Closes #908.
+  - repo: local
+    hooks:
+      - id: check-changelog-test-counts
+        name: check CHANGELOG test counts
+        entry: python scripts/check-changelog-test-counts.py
+        language: python
+        files: ^CHANGELOG\.md$
+        pass_filenames: false
+
   # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:

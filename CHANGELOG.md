@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tooling: CHANGELOG test-count validator — closes #908** — new
+  `scripts/check-changelog-test-counts.py` parses phrases like
+  `N JSDOM cases`, `N regression tests`, `N unit tests`,
+  `N test cases`, `N parameterized cases` in the `[Unreleased]` section,
+  resolves every backticked `tests/js/*.test.js` / `python/djust/tests/*.py`
+  / `tests/unit/*.py` path inside the same bullet, counts test
+  functions in each, and fails if the claim doesn't match reality.
+  Delta phrases (`2 new cases`, `3 additional tests`) are deliberately
+  skipped — they can't be verified without git history. Wired into
+  `.pre-commit-config.yaml` as a local hook scoped to `^CHANGELOG\.md$`
+  and exposed as `make check-changelog`. Self-tested by 7 cases in
+  `tests/test_changelog_test_counts.py` covering match/mismatch,
+  JSDOM-vs-py file resolution, multi-file summing, delta ignore, and
+  missing-section tolerance.
+- **Tooling: CodeQL triage script — closes #916** —
+  `scripts/codeql-triage.sh [rule-id]` paginates
+  `/repos/{owner}/{repo}/code-scanning/alerts?state=open` via `gh api`
+  and emits a markdown triage doc grouped by `rule.id`, sorted within
+  each group by file/line. Optional positional arg filters to a single
+  rule for focused triage sessions. Turns the raw alert dump (noisy JSON)
+  into something reviewable in a PR comment or a doc. Documented in
+  `scripts/README.md`.
+- **Tooling: CodeQL sanitizer MaD model — closes #934** — new
+  extension pack at `.github/codeql/models/` (qlpack.yml +
+  `djust-sanitizers.model.yml`) teaches CodeQL that
+  `djust._log_utils.sanitize_for_log()` is a log-injection sanitizer.
+  Referenced from `.github/codeql/codeql-config.yml` via a new `packs:`
+  section. Closes the class of false-positive `py/log-injection` alerts
+  we've been dismissing individually. Verification lands with the next
+  main-branch CodeQL scan. See `.github/codeql/README.md` for the tuple
+  shape, fallback plan (hand-written `LogInjectionFlowConfiguration`
+  override), and links to CodeQL's data-extensions docs.
+
 - **ADR-009: Mixin side-effect replay on WebSocket state restoration —
   closes #897** — formalizes the `_restore_<concept>()` pattern first
   shipped ad-hoc in PRs #891 (UploadMixin, #889) and #895 (PresenceMixin

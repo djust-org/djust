@@ -224,6 +224,10 @@ pre-commit-install: ## Install pre-commit hooks (run once after clone)
 .PHONY: check
 check: lint test ## Run linters and tests
 
+.PHONY: check-changelog
+check-changelog: ## Validate CHANGELOG test-count claims against actual tests (closes #908)
+	@.venv/bin/python scripts/check-changelog-test-counts.py
+
 ##@ Benchmarks
 
 .PHONY: benchmark
