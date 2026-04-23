@@ -671,6 +671,165 @@ def do_colocated_hook(parser, token):
     return ColocatedHookNode(name, nodelist, force_global)
 
 
+# Shimmer CSS emitted once per render. Small enough to inline; deduped via
+# ``context.render_context`` so a page that calls ``{% djust_skeleton %}`` in
+# a {% for %} loop still only writes one <style> block to the DOM.
+_SKELETON_STYLE_KEY = "_djust_skeleton_style_emitted"
+_SKELETON_STYLE_BLOCK = (
+    "<style>"
+    "@keyframes djust-skeleton-shimmer{"
+    "from{background-position:200% 0}"
+    "to{background-position:-200% 0}"
+    "}"
+    ".djust-skeleton{"
+    "display:inline-block;"
+    "background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);"
+    "background-size:200% 100%;"
+    "animation:djust-skeleton-shimmer 1.5s ease-in-out infinite;"
+    "border-radius:4px;"
+    "vertical-align:middle;"
+    "}"
+    ".djust-skeleton-line{display:block;margin-bottom:0.5em}"
+    ".djust-skeleton-circle{border-radius:50%}"
+    "@media (prefers-reduced-motion: reduce){"
+    ".djust-skeleton{animation:none}"
+    "}"
+    "</style>"
+)
+
+# Deterministic small width variation for stacked line skeletons: it looks
+# more like real copy than a column of identical 100 %-wide bars while
+# staying fully deterministic (no randomness, no per-render drift).
+_SKELETON_LINE_WIDTHS = ("100%", "92%", "85%")
+
+_SKELETON_VALID_SHAPES = frozenset({"line", "circle", "rect"})
+
+# Per-shape default (width, height) if the caller omits them.
+_SKELETON_SHAPE_DEFAULTS = {
+    "line": ("100%", "1em"),
+    "circle": ("40px", "40px"),
+    "rect": ("100%", "120px"),
+}
+
+# CSS length whitelist for skeleton width/height. ``build_tag`` already
+# HTML-escapes attribute values, so a value like ``100%;background:red``
+# cannot break out of the ``style="..."`` attribute — but it DOES compose
+# freely into the inline CSS, letting a caller stuff arbitrary declarations
+# into the emitted ``style=`` string. The whitelist rejects anything that
+# isn't a single CSS length literal (digits, optional decimal, optional
+# unit suffix), falling back to the shape default.
+_SKELETON_SIZE_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)?(?:px|em|rem|%|vh|vw|ch)?$")
+
+
+def _validate_skeleton_size(value: Any, default: str) -> str:
+    """Return ``value`` if it matches the CSS length whitelist, else ``default``."""
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        value = str(value)
+    return value if _SKELETON_SIZE_RE.match(value) else default
+
+
+@register.simple_tag(takes_context=True)
+def djust_skeleton(context, shape="line", width=None, height=None, count=1, class_=None):
+    """Emit a shimmering skeleton placeholder block (v0.6.0).
+
+    Phoenix / Vercel / Shadcn-ui parity for loading placeholders. Renders
+    a ``<div>`` (or several, when ``shape="line"`` and ``count > 1``) with
+    a shimmering background gradient keyed off a single inline
+    ``@keyframes`` block that is deduped via Django's ``render_context``.
+
+    All attribute values pass through :func:`._html.build_tag`, which
+    HTML-escapes every value, so caller-controlled ``width`` / ``height`` /
+    ``class_`` cannot inject script content.
+
+    Args:
+        shape: One of ``"line"``, ``"circle"``, ``"rect"``. Anything else
+            falls back to ``"line"``.
+        width: CSS width. Defaults by shape: ``100%`` (line/rect),
+            ``40px`` (circle).
+        height: CSS height. Defaults by shape: ``1em`` (line), ``40px``
+            (circle), ``120px`` (rect).
+        count: Number of line blocks to emit. Ignored for ``circle`` and
+            ``rect`` (they always render exactly one block). Clamped to
+            ``[1, 100]`` — an unbounded ``count`` from an untrusted
+            template context could inflate a page to megabytes.
+        class_: Optional extra CSS class to append after the default
+            ``djust-skeleton djust-skeleton-<shape>`` classes.
+
+    Returns:
+        Marked-safe HTML string containing the skeleton block(s) plus
+        (on the first call within a single render) the shimmer
+        ``<style>`` block.
+
+    Examples:
+        ``{% djust_skeleton %}`` — single 100 %-wide text line.
+        ``{% djust_skeleton shape="circle" width="48px" height="48px" %}``
+        ``{% djust_skeleton count=4 %}`` — four stacked lines with
+        subtly varying widths.
+    """
+    # Whitelist validation — prevents arbitrary class-name injection via
+    # the shape argument even though build_tag escapes attribute values.
+    if shape not in _SKELETON_VALID_SHAPES:
+        shape = "line"
+
+    # Coerce + clamp count. A non-integer count from a template var should
+    # degrade gracefully to 1 rather than raising TypeError.
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        count_int = 1
+    count_int = max(1, min(100, count_int))
+
+    # Resolve per-shape default dimensions. ``width`` and ``height`` are
+    # run through a CSS-length whitelist so a caller can't smuggle extra
+    # declarations (e.g. ``100%;background:red``) into the inline
+    # ``style=`` string. Unsafe / non-matching values silently fall back
+    # to the shape default.
+    default_w, default_h = _SKELETON_SHAPE_DEFAULTS[shape]
+    resolved_w = _validate_skeleton_size(width, default_w)
+    resolved_h = _validate_skeleton_size(height, default_h)
+
+    # Class string: default classes + any user-supplied class.
+    base_class = f"djust-skeleton djust-skeleton-{shape}"
+    css_class = f"{base_class} {class_}" if class_ else base_class
+
+    # Dedupe the shimmer <style> block across repeated invocations in the
+    # same render. Django's render_context is a ChainMap-based per-render
+    # scratch space and is the idiomatic home for this kind of dedupe.
+    style_prefix = ""
+    if not context.render_context.get(_SKELETON_STYLE_KEY):
+        context.render_context[_SKELETON_STYLE_KEY] = True
+        style_prefix = _SKELETON_STYLE_BLOCK
+
+    blocks = []
+    # ``count`` is line-only: circle / rect always render one block.
+    effective_count = count_int if shape == "line" else 1
+    for i in range(effective_count):
+        # For stacked lines, rotate through a small width palette so the
+        # block looks more like real copy. Deterministic (no RNG).
+        if shape == "line" and effective_count > 1 and width is None:
+            w = _SKELETON_LINE_WIDTHS[i % len(_SKELETON_LINE_WIDTHS)]
+        else:
+            w = resolved_w
+        style = f"width:{w};height:{resolved_h}"
+        if shape == "circle":
+            style += ";border-radius:50%"
+        blocks.append(
+            build_tag(
+                "div",
+                {
+                    "class": css_class,
+                    "style": style,
+                    "aria-hidden": "true",
+                },
+                content="",
+                content_is_safe=True,
+            )
+        )
+    return mark_safe(style_prefix + "".join(blocks))
+
+
 @register.simple_tag
 def djust_track_static():
     """Emit the ``dj-track-static`` attribute marker (v0.6.0).

@@ -8,6 +8,8 @@ Small declarative HTML attributes that replace custom `dj-hook` code every produ
 - [`dj-transition`](#dj-transition) — declarative CSS enter/leave transitions
 - [`dj-remove`](#dj-remove) — exit animations before element removal
 - [`dj-transition-group`](#dj-transition-group) — enter/leave animations for every child of a list container
+- [`dj-flip`](#dj-flip) — smooth transform animation when keyed children reorder
+- [`{% djust_skeleton %}`](#-djust_skeleton---template-tag) — shimmer placeholder blocks for loading states
 
 ---
 
@@ -181,7 +183,7 @@ Works with any class-based CSS framework — Tailwind (`transition-*` / `duratio
 This is phase 1 of the v0.6.0 Animations & transitions work. Separate follow-ups cover:
 - ~~`dj-remove` — run an exit animation before element removal~~ ✅ — see below
 - ~~`dj-transition-group` — animate children of a list container (React `<TransitionGroup>` / Vue `<transition-group>` equivalent)~~ ✅ — see below
-- FLIP — animate list-item reordering
+- ~~FLIP — animate list-item reordering~~ ✅ — see below
 - Skeleton / shimmer loading-state components
 
 ---
@@ -301,11 +303,143 @@ If a child already carries `dj-transition` or `dj-remove`, the group leaves thos
 ### Limitations
 
 - **Direct DOM removal doesn't animate.** `dj-transition-group` orchestrates the animation by setting `dj-remove` on children, then relies on the VDOM-patch integration to defer the removal. If app code calls `child.remove()` directly (bypassing `maybeDeferRemoval`), the removal is immediate. This matches how `dj-remove` works on its own.
-- **No FLIP yet.** Reordering a list without insert/remove is not animated — you get fade-in/fade-out on added/removed children, not smooth transforms for moves. FLIP is a separate follow-up.
+- **Reorder animations use a separate attribute.** `dj-transition-group` animates enter and leave, not moves. For smooth transforms when keyed children reorder in place, add `dj-flip` to the same container — see below.
 
 ### Scope
 
 Phase 2c of the v0.6.0 Animations & transitions work.
+
+---
+
+## `dj-flip`
+
+Animates list-item **reordering**. When keyed children swap positions, FLIP (First, Last, Invert, Play) interpolates each moved item from its old bounding box to its new one with a CSS transform — so the UI reflects the data reordering smoothly instead of items jumping to their new slots.
+
+Opt in by adding `dj-flip` to the parent container:
+
+```html
+<ul dj-flip>
+    {% for item in items %}
+        <li id="item-{{ item.pk }}">{{ item.name }}</li>
+    {% endfor %}
+</ul>
+```
+
+The technique:
+
+1. **F (First)** — before the VDOM patch, snapshot each child's `getBoundingClientRect()`.
+2. **L (Last)** — after the patch, read the new rects.
+3. **I (Invert)** — for each child that moved, apply an inverse `transform: translate(-Δx, -Δy)` that visually puts it back at its old position.
+4. **P (Play)** — on the next animation frame, clear the transform with a CSS transition — the item animates from old to new.
+
+### Prerequisites
+
+- **Children need stable IDs.** The Rust VDOM diff only emits `MoveChild` patches (which preserve DOM identity) when it can match old and new children by key. Give each `<li>` / `<tr>` / card a stable `id="…"` attribute — typically `id="item-{{ item.pk }}"`. Without a stable key, reorders fall back to delete+insert and FLIP correctly no-ops (there's no "old node" to animate from).
+
+### Tunables
+
+| Attribute | Default | Notes |
+|---|---|---|
+| `dj-flip-duration` | `300` (ms) | Non-numeric or out-of-range (<0 or >30000) values fall back. |
+| `dj-flip-easing` | `cubic-bezier(.2,.8,.2,1)` | Strings containing `;`, `"`, `'`, `<`, or `>` are rejected to prevent CSS-property-breakout attempts. |
+
+### Reduced motion
+
+When the user's OS reports `prefers-reduced-motion: reduce`, `dj-flip` short-circuits with no animation — elements jump to their new positions immediately. No opt-in required.
+
+### Nested containers
+
+Each `[dj-flip]` installs its own `MutationObserver(childList, {subtree: false})`. Nested `[dj-flip]` elements are isolated — the outer observer doesn't animate the inner container's children, and vice versa.
+
+### Combining with `dj-transition-group`
+
+Enter, leave, and reorder are three separate animation moments. Use `dj-transition-group` for enter/leave, `dj-flip` for reorder, both on the same parent:
+
+```html
+<ul dj-transition-group="fade-in | fade-out" dj-flip>
+    {% for task in tasks %}
+        <li id="task-{{ task.pk }}">{{ task.title }}</li>
+    {% endfor %}
+</ul>
+```
+
+### Limitations
+
+- **Block/flex HTML only.** `transform: translate(...)` behaves oddly on `<tbody>`, `<tr>`, and many SVG elements. The first release targets block and flex children; table-row reordering is out of scope.
+- **Author-specified `transform` preserved.** If a child already had an inline `transform: rotate(5deg)`, `dj-flip` restores it after the animation completes rather than leaving the element transformless.
+
+### Scope
+
+Phase 2d (final phase) of the v0.6.0 Animations & transitions work.
+
+---
+
+## `{% djust_skeleton %}` (template tag)
+
+Shimmer placeholder blocks for loading states — the counterpart to `dj-flip` for "the data isn't here yet".
+
+Use inside a conditional so the VDOM replaces the skeleton with real content once the server re-renders:
+
+```django
+{% load live_tags %}
+{% if loading %}
+    {% djust_skeleton shape="line" count=3 %}
+    {% djust_skeleton shape="circle" width="48px" height="48px" %}
+{% else %}
+    <ul>
+        {% for item in items %}<li>{{ item.name }}</li>{% endfor %}
+    </ul>
+    <img src="{{ user.avatar }}" class="avatar">
+{% endif %}
+```
+
+### Arguments
+
+| Argument | Default | Notes |
+|---|---|---|
+| `shape` | `"line"` | One of `line`, `circle`, `rect`. Invalid values fall back to `line`. |
+| `width` | `"100%"` (line/rect) / `"40px"` (circle) | Must match `^[\d.]+(px|em|rem|%|vh|vw|ch)?$`. Invalid values fall back to the shape default. |
+| `height` | `"1em"` (line) / `"40px"` (circle) / `"120px"` (rect) | Same regex as `width`. |
+| `count` | `1` | Repeated skeleton blocks (line shape only). Clamped to `[1, 100]`. |
+| `class_` | `None` | Extra CSS classes appended to `djust-skeleton djust-skeleton-{shape}`. |
+
+### Shimmer CSS
+
+The tag emits a minimal `<style>` block on first use per render (via `context.render_context`) — no separate CSS file to include, no npm dependency. The default shimmer is a linear-gradient animation with `animation-duration: 1.5s`. Respects `prefers-reduced-motion: reduce` — in that case, the placeholder is a static block with no shimmer.
+
+Override the default look by writing your own `.djust-skeleton` rules in your site's stylesheet — later rules win.
+
+### Integrating with `start_async` / `@background`
+
+The skeleton integrates with the existing [async work patterns](loading-states.md) — render it inside a branch conditional on `self.async_pending` or a named loading flag:
+
+```python
+class ReportView(LiveView):
+    @event_handler
+    @background
+    def generate_report(self, **kwargs):
+        self.loading = True
+        self.report = fetch_slow_report()
+        self.loading = False
+```
+
+```django
+{% if loading %}
+    {% djust_skeleton shape="rect" width="100%" height="240px" %}
+{% else %}
+    {{ report|safe }}
+{% endif %}
+```
+
+When `self.loading = False` fires, the VDOM diff replaces the skeleton with the real markup. No client-side JS involved; this is pure server-rendered state.
+
+### Global page-load skeletons
+
+For hiding the skeleton on a named WebSocket event, wrap in a `dj-loading` block — see the [loading states guide](loading-states.md).
+
+### Scope
+
+Phase 2d (final phase) of the v0.6.0 Animations & transitions work — the alternative to `<Suspense>` for simple placeholder cases where you don't need the full async-value machinery.
 
 ---
 

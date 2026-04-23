@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **FLIP list-reorder animations (v0.6.0 animations milestone finale)** —
+  Opt-in per container via `dj-flip`. Declarative attribute on a list parent animates direct-child reorders using First-Last-Invert-Play. Tunables: `dj-flip-duration` (default 300ms), `dj-flip-easing` (default `cubic-bezier(.2,.8,.2,1)`). Respects `prefers-reduced-motion`. Nested `[dj-flip]` isolated via `subtree: false`. Works with keyed lists where items carry stable `id=` (Rust VDOM emits MoveChild). Lands in `static/djust/src/44-dj-flip.js` (~250 LOC). 8 JSDOM tests in `tests/js/dj_flip.test.js`.
+
+- **`{% djust_skeleton %}` shimmer placeholder (v0.6.0 animations milestone finale)** —
+  Template tag for placeholder blocks. Props: `shape` (line|circle|rect), `width`, `height`, `count`, `class_`. All values HTML-escaped via `build_tag()`. Shimmer `@keyframes` emitted once per render via `context.render_context`. Integrates with existing `dj-loading` shorthand and with `{% if async_pending %}` server blocks. 18 Python tests in `tests/unit/test_djust_skeleton_tag.py`.
+
 ## [0.5.7rc1] - 2026-04-23
 
 ### Added
