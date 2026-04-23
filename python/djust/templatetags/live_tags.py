@@ -902,8 +902,12 @@ _LIVE_RENDER_ELEMENT_WITH_EVENT_RE = re.compile(
 # stamping so we don't accidentally inject ``data-djust-embedded`` inside
 # a script body or an HTML comment. The placeholder uses NUL sentinels
 # that cannot appear in valid HTML.
+#
+# The closing-tag pattern ``</script\s*>`` accepts optional whitespace
+# before ``>`` (HTML5 tokenizer tolerance — ``</script >`` is valid).
+# This also closes CodeQL py/bad-html-filtering-regexp.
 _SCRIPT_OR_COMMENT_RE = re.compile(
-    r"<script\b[^>]*>.*?</script>|<!--.*?-->",
+    r"<script\b[^>]*>.*?</script\s*>|<!--.*?-->",
     re.DOTALL | re.IGNORECASE,
 )
 
