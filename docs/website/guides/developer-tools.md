@@ -67,7 +67,7 @@ djust doctor
 | Check Name | Category | What It Verifies |
 |------------|----------|-----------------|
 | `djust_version` | versions | djust package is installed |
-| `python_version` | versions | Python >= 3.9 |
+| `python_version` | versions | Python >= 3.10 |
 | `django_version` | versions | Django >= 4.0 |
 | `rust_extension` | versions | Rust PyO3 extension is loadable |
 | `channels_installed` | infrastructure | Django Channels is installed |

@@ -93,9 +93,9 @@ def check_python_version():
     """Check Python version."""
     vi = sys.version_info
     ver = "%d.%d.%d" % (vi[0], vi[1], vi[2])
-    if vi < (3, 9):
-        status = _CheckResult.FAIL if vi < (3, 8) else _CheckResult.WARN
-        msg = "Python %s (>= 3.9 recommended)" % ver
+    if vi < (3, 10):
+        status = _CheckResult.FAIL
+        msg = "Python %s (>= 3.10 required)" % ver
     else:
         status = _CheckResult.OK
         msg = "Python %s" % ver

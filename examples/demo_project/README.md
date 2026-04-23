@@ -5,7 +5,7 @@ This demo project showcases three reactive LiveView examples.
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.8+
+- Python 3.10+
 - Rust 1.70+ (to build the Rust extension)
 
 ### Setup
