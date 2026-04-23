@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **CSS `@starting-style` guide section (v0.6.0)** — documents that
+  browser-native `@starting-style` works unmodified with djust's VDOM
+  insert path. No new djust attributes or JS — the feature is pure CSS.
+  Guide section in `docs/website/guides/declarative-ux-attrs.md` includes
+  a quick-start example, a side-by-side comparison vs `dj-transition`
+  (browser support, runtime cost, per-element customization), interop
+  notes with `dj-remove` for enter+exit coverage, and caveats around
+  `@supports` gating for older browsers. ROADMAP parity-tracker row
+  updated to ✅ Documented v0.6.0.
+
 ### Changed
 
 - **Package consolidation sunset — ADR-007 Phase 4 closure (v0.6.0)** — the

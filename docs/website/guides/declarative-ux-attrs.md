@@ -443,6 +443,95 @@ Phase 2d (final phase) of the v0.6.0 Animations & transitions work — the alter
 
 ---
 
+## CSS `@starting-style` — browser-native enter animations
+
+[CSS `@starting-style`](https://developer.mozilla.org/en-US/docs/Web/CSS/@starting-style) is a browser-native rule that lets authors declare the "starting" values of a transition when an element appears in the DOM. It's the modern alternative to `dj-transition` for enter animations when you're willing to require Chrome 117+, Safari 17.5+, and Firefox 129+.
+
+**djust requires no framework support** — `@starting-style` is pure CSS, and djust's VDOM insert path (`MoveChild` / `InsertChild` / `Replace`) uses ordinary `appendChild` / `insertBefore` / `replaceChild` which the browser honors normally. When the VDOM patch adds a new element, the browser sees a new DOM insertion and applies any matching `@starting-style` rule automatically. This section documents the pattern; no new djust attributes are introduced.
+
+### Quick start
+
+```css
+/* In your project CSS */
+.toast {
+    opacity: 1;
+    transform: translateY(0);
+    transition:
+        opacity 300ms ease-out,
+        transform 300ms ease-out;
+}
+
+@starting-style {
+    .toast {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+}
+```
+
+```html
+{% if show_toast %}
+    <div class="toast">Saved successfully</div>
+{% endif %}
+```
+
+When the server toggles `show_toast` to `True` and sends a patch that inserts the `<div class="toast">`, the browser:
+
+1. Matches the `.toast` selector.
+2. Notices a `@starting-style` block exists for that selector.
+3. Applies the `@starting-style` values first (the "from" state).
+4. Transitions to the normal values on the next frame.
+
+Result: the toast fades + slides into view without any JS or declarative attribute.
+
+### Comparison: `@starting-style` vs `dj-transition`
+
+| | `@starting-style` | `dj-transition` |
+|---|---|---|
+| Browser support | Chrome 117+, Safari 17.5+, Firefox 129+ | Any browser with `transition` support (IE10+) |
+| Where you write it | In your CSS stylesheet | On the HTML element as an attribute |
+| Runtime cost | Zero JS | Small JS module (`41-dj-transition.js`) |
+| Per-element customization | Requires a unique class or selector | Inline attribute token list |
+| Works with `display: none` toggle | ✅ Yes (spec treats that as a DOM insertion) | ✅ Yes |
+| Works with server-side conditional insert | ✅ Yes | ✅ Yes |
+| Good for | Static, repeatable animations across many elements | Dynamic, one-off transitions (e.g., a unique modal entry) |
+
+Pick `@starting-style` when the animation is part of the component's visual identity (every `.toast` animates the same way). Pick `dj-transition` when you need per-element transitions, or when you must support older browsers.
+
+### Interop with `dj-remove`
+
+`@starting-style` only handles the enter side. For exit animations, continue using `dj-remove` — browsers don't yet have a native counterpart for "animate an element before it's removed from the DOM."
+
+```html
+<div class="toast" dj-remove="opacity-100 transition-opacity-300 opacity-0">
+    Saved successfully
+</div>
+```
+
+The element gets browser-native `@starting-style` fade-in on insert and `dj-remove` fade-out on removal — the two features cooperate cleanly.
+
+### Caveats
+
+- **`@starting-style` values apply only on the first frame after insertion.** If you navigate the user to a page that already has the element visible (e.g., back-navigation with `[dj-sticky-slot]` reattachment), the browser doesn't re-play the starting-style — which is almost always the right call (the sticky content shouldn't re-animate every navigation).
+- **Browser support is newer than most animations.** Check [caniuse.com/mdn-css_at-rules_starting-style](https://caniuse.com/mdn-css_at-rules_starting-style) before relying on it for critical UX. For cross-browser compatibility, pair with a `dj-transition` fallback or gate behind `@supports (at-rule(@starting-style))`:
+
+  ```css
+  @supports (at-rule(@starting-style)) {
+      @starting-style {
+          .toast { opacity: 0; }
+      }
+  }
+  ```
+
+- **Not compatible with inline `style=` attributes.** `@starting-style` only works inside stylesheet rules (external CSS or `<style>` blocks). If you need per-element starting states, use a class or attribute selector to hook the rule.
+- **VDOM patcher interop tested.** djust's insert paths (`MoveChild`, `InsertChild`, `Replace`, morph-insert) use `appendChild` / `insertBefore` / `replaceChild` which trigger the browser's standard insertion handler and honor `@starting-style`. No special handling required.
+
+### Scope
+
+Documentation-only. No new djust attributes, no new JS module, no wire-protocol changes. The feature is delivered by the browser; djust's role is to not break it (confirmed).
+
+---
+
 ## See also
 
 - [Hooks](hooks.md) — the `dj-hook` primitive these attributes replace

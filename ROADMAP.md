@@ -1017,7 +1017,7 @@ Open questions that inform future direction:
 | Element resize events | — | ResizeObserver | Not started | v0.6.0 |
 | State undo/redo | — | `use-undo` | Not started | v0.6.0 |
 | Connection multiplexing | Channel multiplexer | — | Not started | v0.6.0 |
-| **CSS `@starting-style`** | — | Framer Motion | **Not started** | **v0.6.0** |
+| ~~**CSS `@starting-style`**~~ ✅ | — | Framer Motion | ~~**Not started**~~ **Documented v0.6.0 (PR #973)** — browser-native enter animations work unmodified with djust's VDOM insert path; docs/website/guides/declarative-ux-attrs.md has a comparison section vs `dj-transition`. | **v0.6.0** |
 | **Hot View Replacement** | Code reloading | Fast Refresh | **Not started** | **v0.6.0** |
 | Stale-while-revalidate | — | SWR / React Query | Not started | v0.7.0 |
 | `live_session` enhancements | `live_session/3` | — | Basic done | v0.7.0 |
