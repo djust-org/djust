@@ -21,7 +21,18 @@
 </div>
 {% endblock %}
 
-{# Prevent base.html from re-embedding; Dashboard owns the initial mount. #}
+{% comment %}
+Dashboard is the demo's canonical entry point: it INSTANTIATES both
+stickies inline via {% live_render %} in the content block above.
+The base.html default slot blocks would otherwise render empty
+[dj-sticky-slot] placeholders below the widgets — since the stickies
+are already mounted inline, we suppress those placeholders.
+
+NOTE (limitation): returning to Dashboard from Settings/Reports will
+re-mount the stickies fresh (server collision — see ADR-011's
+"Failure modes" section and README step 4). Dashboard -> Settings ->
+Reports is the preservation happy path demonstrated here.
+{% endcomment %}
 {% block sticky_embeds %}{% endblock %}
 {% block audio_slot %}{% endblock %}
 {% block notifications_slot %}{% endblock %}

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Sticky LiveViews (v0.6.0)** — Phoenix `live_render sticky: true` parity.
   Shipped across three PRs: #966 (Phase A — embedding primitive), #967 (Phase B —
-  preservation across `live_redirect`), #968 (Phase C — ADR-011, user guide, demo app).
+  preservation across `live_redirect`), #969 (Phase C — ADR-011, user guide, demo app).
   Mark a LiveView class with `sticky = True` + `sticky_id` and embed it via
   `{% live_render "myapp.views.AudioPlayerView" sticky=True %}`. Destination
   layouts declare `<div dj-sticky-slot="<id>"></div>` at the re-attachment point;

@@ -1,4 +1,5 @@
 {% load live_tags %}
+{% load static %}
 <!DOCTYPE html>
 <html>
 <head>
@@ -21,9 +22,9 @@
 <body>
     <nav class="top">
         <strong>Sticky Demo</strong>
-        <a href="/sticky_demo/dashboard/" dj-nav>Dashboard</a>
-        <a href="/sticky_demo/settings/" dj-nav>Settings</a>
-        <a href="/sticky_demo/reports/" dj-nav>Reports (no audio slot)</a>
+        <a href="/sticky_demo/dashboard/" dj-navigate>Dashboard</a>
+        <a href="/sticky_demo/settings/" dj-navigate>Settings</a>
+        <a href="/sticky_demo/reports/" dj-navigate>Reports (no audio slot)</a>
     </nav>
     <main>
         {% block content %}{% endblock %}
@@ -46,20 +47,14 @@
             {% endblock %}
         </div>
 
-        {# Initial render: both stickies are embedded from here. After
-           the first mount, subsequent pages only declare slots above
-           and the sticky subtree is re-attached. A real app would
-           include this block in a shared wrapper; we inline for
-           self-contained demo readability. #}
-        {% block sticky_embeds %}
-            {% if embed_stickies %}
-                {% live_render "sticky_demo.views.AudioPlayerView" sticky=True %}
-                {% live_render "sticky_demo.views.NotificationCenterView" sticky=True %}
-            {% endif %}
-        {% endblock %}
+        {# Initial instantiation of both stickies lives on the Dashboard
+           page (see dashboard.html) — that page is the canonical entry
+           point for the demo. Non-entry pages (Settings, Reports) only
+           declare [dj-sticky-slot] markers (via the base's slot blocks
+           above) and rely on the client/server reattach flow. #}
+        {% block sticky_embeds %}{% endblock %}
     </main>
 
     <script src="{% static 'djust/client.js' %}"></script>
 </body>
 </html>
-{% load static %}

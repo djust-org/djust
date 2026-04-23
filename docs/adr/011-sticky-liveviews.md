@@ -7,7 +7,7 @@
 [`python/djust/mixins/sticky.py`](../../python/djust/mixins/sticky.py),
 [`python/djust/templatetags/live_tags.py`](../../python/djust/templatetags/live_tags.py),
 [`python/djust/static/djust/src/45-child-view.js`](../../python/djust/static/djust/src/45-child-view.js),
-PRs #966 (Phase A), #967 (Phase B), #968 (Phase C)
+PRs #966 (Phase A), #967 (Phase B), #969 (Phase C)
 
 ---
 
