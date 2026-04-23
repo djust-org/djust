@@ -128,6 +128,15 @@ self.addEventListener('message', (event) => {
     // restricting to WindowClient rejects unexpected source types and the
     // scope check adds a belt-and-braces barrier against a compromised
     // same-origin frame outside the SW's scope.
+    //
+    // Explicit event.origin comparison satisfies CodeQL's
+    // js/missing-origin-check (alert #2170). event.origin is populated for
+    // Window/Worker clients — reject anything cross-origin on the off chance
+    // it reaches us, even though the platform already forbids cross-origin
+    // service-worker messaging.
+    if (event.origin && event.origin !== self.location.origin) {
+        return;
+    }
     if (!event.source || event.source.type !== 'window') {
         return;
     }
