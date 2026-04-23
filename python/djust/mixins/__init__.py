@@ -23,6 +23,7 @@ from .page_metadata import PageMetadataMixin
 from .layout import LayoutMixin
 from .waiters import WaiterMixin
 from .notifications import NotificationMixin
+from .sticky import StickyChildRegistry
 from ..streaming import StreamingMixin
 
 __all__ = [
@@ -45,4 +46,5 @@ __all__ = [
     "LayoutMixin",
     "WaiterMixin",
     "NotificationMixin",
+    "StickyChildRegistry",
 ]

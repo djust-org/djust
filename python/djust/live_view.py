@@ -43,6 +43,7 @@ from .mixins import (
     LayoutMixin,
     WaiterMixin,
     NotificationMixin,
+    StickyChildRegistry,
 )
 
 # Configure logger
@@ -141,6 +142,7 @@ class LiveView(
     WaiterMixin,
     AsyncWorkMixin,
     NotificationMixin,
+    StickyChildRegistry,
     View,
 ):
     """
@@ -311,6 +313,10 @@ class LiveView(
         self._stream_operations: list = []  # Pending stream operations for this render
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
+
+        # Initialize child-view registry (Phase A of Sticky LiveViews).
+        # Required before any {% live_render %} tag tries to register.
+        self._init_sticky()
 
         # Track user-defined _private attr names (populated by
         # _snapshot_user_private_attrs after mount, or _restore_private_state).

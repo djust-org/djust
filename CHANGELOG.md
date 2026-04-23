@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Embedded LiveViews via `{% live_render %}` (v0.6.0 Phase A of Sticky LiveViews)** —
+  New template tag embeds a LiveView as a child of another LiveView (Phoenix nested-LV parity).
+  `{% live_render "myapp.views.ChildView" foo=1 %}` resolves the dotted path, validates
+  it's a `LiveView` subclass, runs the child's `mount(request, **kwargs) -> get_context_data ->
+  render`, stamps the assigned view_id as `data-djust-embedded` inside every dj-event-bearing
+  tag, and registers the child on the parent so inbound events route by `view_id`. Children
+  get independent event dispatch, independent render, and their own background tasks. New
+  `StickyChildRegistry` mixin composed into `LiveView` provides `_register_child`,
+  `_unregister_child`, `_get_all_child_views`, `_assign_view_id`. New wire frame
+  `{"type":"child_update", "view_id":..., "patches":[...], "version":N}` with
+  `LiveViewConsumer._send_child_update` helper; client-side dispatch in new
+  `static/djust/src/45-child-view.js` scopes its root lookup to
+  `[dj-view][data-djust-embedded="..."]` and fires `djust:child-mounted` /
+  `djust:child-updated` CustomEvents. Phase A is WIRE-ONLY for `child_update` patches —
+  scoped VDOM patch application lands in Phase B. Security: the child's
+  `check_view_auth()` is invoked against the parent's request before mount; an optional
+  `DJUST_LIVE_RENDER_ALLOWED_MODULES` prefix-allowlist restricts which dotted paths
+  the tag may resolve (unset = permit-all, backward compatible). This is the foundation
+  for sticky LiveViews — Phase B (follow-up PR) adds `sticky=True` preservation across
+  `live_redirect` plus the scoped patch applier, and Phase C ships ADR-011 + the user
+  guide. 24 Python tests in `tests/unit/test_live_render_tag.py` (HTML-parsed, not
+  substring-matched) + 7 JSDOM tests in `tests/js/child_view.test.js`.
+
 - **FLIP list-reorder animations (v0.6.0 animations milestone finale)** —
   Opt-in per container via `dj-flip`. Declarative attribute on a list parent animates direct-child reorders using First-Last-Invert-Play. Tunables: `dj-flip-duration` (default 300ms, parsed via `Number` + `isFinite` + clamp `[0, 30000]` — trailing garbage rejects to fallback), `dj-flip-easing` (default `cubic-bezier(.2,.8,.2,1)`, strings containing `;"'<>` rejected to defeat CSS-property-breakout). Respects `prefers-reduced-motion`. Nested `[dj-flip]` isolated via `subtree: false`. Author-specified inline `transform` on children is preserved across the animation. Overlapping reorders are guarded against cache corruption via an in-flight-transition check. Works with keyed lists where items carry stable `id=` (Rust VDOM emits MoveChild). Lands in `static/djust/src/44-dj-flip.js` (~260 LOC). 12 JSDOM tests in `tests/js/dj_flip.test.js`.
 

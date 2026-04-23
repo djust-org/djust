@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 
 from django import template
 from django.conf import settings
-from django.template import Node, TemplateSyntaxError
+from django.template import Context, Node, Template, TemplateSyntaxError
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 
@@ -851,3 +851,293 @@ def djust_track_static():
     write the attribute literally: ``dj-track-static="reload"``.
     """
     return mark_safe("dj-track-static")
+
+
+# ---------------------------------------------------------------------------
+# {% live_render %} — embed a LiveView as a child (Phase A of Sticky LiveViews)
+# ---------------------------------------------------------------------------
+
+# Event attributes carrying dj-* directives. When ``{% live_render %}``
+# stamps ``view_id`` on embedded elements, it scans for these — a no-op
+# on static markup, but every event-bearing element gets a scoped id so
+# the consumer's event-dispatch path (``websocket.py``) routes per-view.
+_LIVE_RENDER_EVENT_ATTRS = (
+    "dj-click",
+    "dj-submit",
+    "dj-input",
+    "dj-change",
+    "dj-keydown",
+    "dj-keyup",
+    "dj-keypress",
+    "dj-focus",
+    "dj-blur",
+    "dj-hook",
+    "dj-mounted",
+    "dj-viewport-enter",
+    "dj-viewport-leave",
+    "dj-mouseenter",
+    "dj-mouseleave",
+)
+
+# Pre-compiled regex: matches the opening of an element tag that carries
+# one of the event attributes listed above. Captures:
+#   (1) the "<TagName" prefix (e.g. "<button")
+#   (2) the attributes string up to (and including) the event attr name
+#       — uses per-attribute alternation so that ``>`` inside a quoted
+#       attribute value is NOT treated as the end of the tag (fix #4).
+#   (3) the trailing ``=`` of the event attr.
+_LIVE_RENDER_ELEMENT_WITH_EVENT_RE = re.compile(
+    r"(<[a-zA-Z][\w:-]*)"  # (1) <TagName
+    # (2) zero-or-more attributes (quoted, apostrophed, or bare) followed
+    # by a dj-* event attribute whose ``=`` we also want to consume.
+    r"("
+    r"(?:\s+[^\s\"'<>/=]+(?:\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s<>]+))?)*?"
+    r"\s+(?:" + "|".join(re.escape(a) for a in _LIVE_RENDER_EVENT_ATTRS) + r")"
+    r")"
+    r"(\s*=)",  # (3) trailing '='
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Mask <script>...</script> blocks and <!-- ... --> comments before
+# stamping so we don't accidentally inject ``data-djust-embedded`` inside
+# a script body or an HTML comment. The placeholder uses NUL sentinels
+# that cannot appear in valid HTML.
+_SCRIPT_OR_COMMENT_RE = re.compile(
+    r"<script\b[^>]*>.*?</script>|<!--.*?-->",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Sentinel format for masked script/comment spans. NUL bytes are invalid
+# in HTML so we can round-trip without ambiguity.
+_MASK_PLACEHOLDER_RE = re.compile(r"\x00DJUST_MASK_(\d+)\x00")
+
+
+def _stamp_view_id(html: str, view_id: str) -> str:
+    """Inject ``data-djust-embedded="..."`` inside every event-attribute-bearing tag.
+
+    Scans ``html`` for elements carrying dj-* event attributes and adds a
+    ``data-djust-embedded`` attribute INSIDE the opening tag (right after
+    the tag name) so the client's ``getEmbeddedViewId`` DOM walker can
+    pick it up via ``dataset.djustEmbedded`` and surface it in outbound
+    event params as ``view_id``. Idempotent — elements that already carry
+    ``data-djust-embedded=`` in their opening-tag span are skipped so
+    successive invocations don't stack duplicate attrs. Safe against
+    ``>`` inside quoted attribute values, and skips ``<script>`` bodies
+    and HTML comments entirely.
+    """
+    if not html:
+        return html
+
+    escaped_id = escape(view_id)
+    marker = f' data-djust-embedded="{escaped_id}"'
+
+    # 1. Mask out <script>...</script> and <!-- ... --> so the regex can't
+    #    inject attrs inside them. See tests ``test_script_blocks_are_not_stamped``.
+    placeholders: list[str] = []
+
+    def _mask(match: "re.Match[str]") -> str:
+        placeholders.append(match.group(0))
+        return f"\x00DJUST_MASK_{len(placeholders) - 1}\x00"
+
+    masked = _SCRIPT_OR_COMMENT_RE.sub(_mask, html)
+
+    # 2. Inject the marker inside the opening tag.
+    def _inject(match: "re.Match[str]") -> str:
+        tag_prefix = match.group(1)  # e.g. "<button"
+        attrs_body = match.group(2)  # e.g. ' dj-click'
+        trailing_eq = match.group(3)  # e.g. '='
+        # Idempotence: if the tag's opening segment already has the marker
+        # for *any* view_id, skip. Distinct nested-view_ids inside the same
+        # tag would indicate a programming error — we honor the innermost
+        # stamp (applied first by the recursion order).
+        if "data-djust-embedded=" in match.group(0):
+            return match.group(0)
+        return tag_prefix + marker + attrs_body + trailing_eq
+
+    stamped = _LIVE_RENDER_ELEMENT_WITH_EVENT_RE.sub(_inject, masked)
+
+    # 3. Restore masked spans.
+    def _unmask(match: "re.Match[str]") -> str:
+        idx = int(match.group(1))
+        return placeholders[idx]
+
+    return _MASK_PLACEHOLDER_RE.sub(_unmask, stamped)
+
+
+@register.simple_tag(takes_context=True)
+def live_render(context, view_path: str, **kwargs) -> Any:
+    """Embed a LiveView as a child of the current view (Phoenix nested-LV parity).
+
+    Resolves the dotted path to a :class:`~djust.live_view.LiveView`
+    subclass, instantiates it with the parent's request, runs its
+    ``mount(request, **kwargs) -> get_context_data -> render``, stamps
+    the child's assigned ``view_id`` on every event-bearing element in
+    the rendered HTML (as ``data-djust-embedded``), and registers the
+    child on the parent so inbound events can route to it by ``view_id``.
+
+    Usage::
+
+        {% load live_tags %}
+        <div dj-root>
+          <h1>Page</h1>
+          {% live_render "myapp.views.AudioPlayerView" session=request.session.session_key %}
+        </div>
+
+    Phase A ships this non-sticky embedding primitive only. Phase B
+    (follow-up PR) will add ``sticky=True`` preservation across
+    ``live_redirect``.
+
+    Security notes:
+
+    * The child receives the parent's ``request`` object **by reference**.
+      Children MUST NOT mutate ``request`` — treat it as read-only. Mutating
+      attributes (e.g. stashing state on ``request.user`` or ``request.session``)
+      will leak across the parent + every other embedded sibling. This is a
+      convention, not an enforced copy; a deep copy of every request on every
+      embed would be prohibitively expensive.
+    * The child's auth is re-checked against the parent's request via
+      :func:`djust.auth.core.check_view_auth`. An unauthenticated (or under-
+      permissioned) request causes the tag to raise
+      :class:`~django.core.exceptions.PermissionDenied` (Django middleware
+      turns this into a 403) or :class:`~django.template.TemplateSyntaxError`
+      with the login-redirect URL in the message. This mirrors the guarantee
+      the consumer provides at mount time for top-level views — a child
+      cannot silently bypass the parent's auth posture.
+    * The dotted path can be constrained with the
+      ``DJUST_LIVE_RENDER_ALLOWED_MODULES`` setting (list of dotted-path
+      prefixes). If unset, all paths are permitted (backward-compatible).
+
+    Args:
+        view_path: Dotted import path to a LiveView subclass. Must be
+            allowed by ``DJUST_LIVE_RENDER_ALLOWED_MODULES`` when set.
+        **kwargs: Forwarded to the child's ``mount(request, **kwargs)``
+            and merged into its ``get_context_data`` pass. ``view_id``
+            (optional) pins a stable id for the child — otherwise an
+            auto-generated ``child_N`` stamp is used.
+
+    Raises:
+        TemplateSyntaxError: If ``view_path`` cannot be resolved, is
+            not on the allowlist, the target is not a LiveView subclass,
+            the tag is used outside a LiveView render context, or the
+            child's auth check returned a redirect URL.
+        PermissionDenied: If the child's auth check raised PermissionDenied
+            (authenticated user without required permissions).
+    """
+    from django.template.loader import get_template
+    from django.utils.module_loading import import_string
+
+    from ..auth.core import check_view_auth
+    from ..live_view import LiveView  # Lazy import to avoid cycle
+
+    # 1a. Optional allowlist check — opt-in hardening via
+    #     ``DJUST_LIVE_RENDER_ALLOWED_MODULES`` setting. When unset, any
+    #     dotted path resolvable by ``import_string`` is permitted; this
+    #     preserves backward compatibility. When set, the resolved view
+    #     path must start with one of the allowed prefixes. The check is
+    #     prefix-based (like ``INSTALLED_APPS``) so e.g. ``"myapp.views"``
+    #     matches ``"myapp.views.X"`` and ``"myapp.views.sub.Y"``.
+    allowed_prefixes = getattr(settings, "DJUST_LIVE_RENDER_ALLOWED_MODULES", None)
+    if allowed_prefixes is not None:
+        if not any(
+            view_path == prefix or view_path.startswith(prefix + ".") for prefix in allowed_prefixes
+        ):
+            raise TemplateSyntaxError(
+                "{%% live_render %%} view_path %r is not in "
+                "DJUST_LIVE_RENDER_ALLOWED_MODULES" % view_path
+            )
+
+    # 1. Resolve the dotted path.
+    try:
+        child_cls = import_string(view_path)
+    except (ImportError, AttributeError, ModuleNotFoundError) as exc:
+        raise TemplateSyntaxError(
+            "{%% live_render %%} cannot resolve %r: %s" % (view_path, exc)
+        ) from exc
+
+    # 2. Validate it's a LiveView subclass.
+    if not (isinstance(child_cls, type) and issubclass(child_cls, LiveView)):
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r must be a LiveView subclass; got %r"
+            % (view_path, child_cls)
+        )
+
+    # 3. Locate the parent view in the render context.
+    parent = context.get("view") or context.get("self")
+    if parent is None or not isinstance(parent, LiveView):
+        raise TemplateSyntaxError(
+            "{% live_render %} must be called inside a LiveView template; "
+            "no parent view in the current render context"
+        )
+
+    # 4. Instantiate + mount the child.
+    request = context.get("request")
+    preferred_view_id = kwargs.pop("view_id", None)
+    child = child_cls()
+    child.request = request
+
+    # 4a. Enforce child's auth posture against the parent's request BEFORE
+    #     running mount(). Consumers apply the same check at top-level
+    #     mount; children should not silently bypass it. check_view_auth
+    #     returns None on success, a login-redirect URL on unauth, and
+    #     raises PermissionDenied for authenticated users without perms.
+    auth_redirect = check_view_auth(child, request)
+    if auth_redirect is not None:
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r denied access: the child view "
+            "requires auth/permissions that the parent's request does not "
+            "satisfy (login redirect: %s)" % (view_path, auth_redirect)
+        )
+
+    mount = getattr(child, "mount", None)
+    if callable(mount):
+        mount(request, **kwargs)
+
+    # 5. Assign the view_id and register on the parent. _register_child
+    #    wires parent/view_id back-references on the child.
+    view_id = parent._assign_view_id(preferred_view_id)
+    parent._register_child(view_id, child)
+
+    # 6. Build the child's render context and render its template.
+    #    The child gets its own context, independent of the parent's —
+    #    each embedded view manages its own state.
+    child_context: Dict[str, Any] = {}
+    get_ctx = getattr(child, "get_context_data", None)
+    if callable(get_ctx):
+        try:
+            child_context = dict(get_ctx())
+        except Exception:  # noqa: BLE001 — fall back to empty context on error
+            logger.exception(
+                "live_render: child %s.get_context_data raised; rendering with empty context",
+                child_cls.__name__,
+            )
+            child_context = {}
+    child_context.setdefault("request", request)
+    child_context.setdefault("view", child)
+
+    # 7. Resolve + render the child's template. Prefer the inline
+    #    ``template`` attribute when set (used pervasively in tests);
+    #    otherwise fall through to Django's ``template_name`` resolver.
+    inline = getattr(child, "template", None)
+    if inline:
+        rendered_inner = Template(inline).render(Context(child_context))
+    else:
+        template_name = getattr(child, "template_name", None)
+        if not template_name:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} child %r has neither ``template`` nor "
+                "``template_name`` set" % view_path
+            )
+        rendered_inner = get_template(template_name).render(child_context, request)
+
+    # 8. Stamp view_id on every event-attribute-bearing element in the
+    #    rendered HTML so inbound events route to this child.
+    rendered_stamped = _stamp_view_id(rendered_inner, view_id)
+
+    # 9. Wrap in a [dj-view] container carrying ``data-djust-embedded`` —
+    #    the client's DOM walker (``getEmbeddedViewId`` in
+    #    01-dom-helpers-turbo.js) reads ``dataset.djustEmbedded`` to
+    #    surface the id on outbound events as ``view_id``.
+    escaped_id = escape(view_id)
+    return mark_safe(
+        '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
+    )
