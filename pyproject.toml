@@ -66,8 +66,21 @@ components = [
     "markdown>=3.0,<4",
     "nh3>=0.2,<1",
 ]
+# v0.5.7 (#820, #822) — object-storage upload backends. Optional; the
+# contrib modules import cleanly without the SDK but raise ImportError
+# with a clear hint when a signing/upload call is actually made.
+s3 = [
+    "boto3>=1.30,<2",
+]
+gcs = [
+    "google-cloud-storage>=2.10,<4",
+    "requests>=2.28,<3",
+]
+azure = [
+    "azure-storage-blob>=12.19,<13",
+]
 all = [
-    "djust[redis,compression,performance,admin,deploy,theming,components]",
+    "djust[redis,compression,performance,admin,deploy,theming,components,s3,gcs,azure]",
 ]
 dev = [
     "maturin>=1.0,<2.0",
