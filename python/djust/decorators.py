@@ -144,6 +144,18 @@ def event_handler(
                 "without exposing the handler over HTTP is almost certainly a bug."
             )
 
+        # Mutual-exclusion guard with @server_function — a single handler
+        # cannot be both a WebSocket/re-render event and an RPC/no-re-render
+        # call. Catching the misuse at decoration time beats a silent 404
+        # at runtime (dispatch_server_function would reject the function).
+        if getattr(func, "_djust_decorators", {}).get("server_function"):
+            raise TypeError(
+                f"@event_handler cannot be combined with @server_function on "
+                f"{getattr(func, '__name__', repr(func))!r}. A function cannot "
+                f"be both an @event_handler (WebSocket/re-render) and an "
+                f"@server_function (RPC/no-re-render). Pick one."
+            )
+
         # Extract comprehensive signature information
         sig_info = get_handler_signature_info(func)
 
@@ -216,6 +228,100 @@ def is_event_handler(func: Any) -> bool:
         True if the function has event_handler metadata.
     """
     return bool(getattr(func, "_djust_decorators", {}).get("event_handler"))
+
+
+def server_function(
+    description: Any = "",
+    coerce_types: bool = True,
+) -> Any:
+    """Mark a method as a same-origin browser RPC target (v0.7.0).
+
+    The method becomes callable from the client as
+    ``await djust.call('<view_slug>', '<method_name>', {params})`` and its
+    return value is JSON-serialized straight back to the caller — no VDOM
+    re-render, no assigns diff.
+
+    Session-cookie auth + CSRF are both required unconditionally. The
+    dispatch pipeline reuses the ADR-008 validators: parameter coercion via
+    the signature, ``@permission_required`` gating, and ``@rate_limit``
+    token-bucket limits.
+
+    ``@server_function`` differs from ``@event_handler(expose_api=True)`` in
+    intent: no OpenAPI export, no external-caller contract, no
+    ``api_response`` / ``serialize=`` hooks. It is designed exclusively for
+    in-browser RPC. A function cannot be both an event handler and a server
+    function — decoration fails with ``TypeError`` at import time.
+
+    Args:
+        description: Optional human-readable description (overrides docstring).
+        coerce_types: Coerce string params to the method's typed signature.
+            Default True.
+
+    Usage::
+
+        from djust.decorators import server_function
+
+        class ProductView(LiveView):
+            @server_function
+            def search(self, q: str = "", **kwargs) -> list[dict]:
+                return [{"id": p.id, "name": p.name}
+                        for p in Product.objects.filter(name__icontains=q)[:10]]
+
+    On the client::
+
+        const hits = await djust.call('myapp.productview', 'search', {q: 'chair'});
+
+    When stacking with ``@permission_required``, put ``@server_function``
+    OUTERMOST (topmost in source), otherwise the metadata is attached to the
+    inner wrapper and the dispatcher cannot see it.
+    """
+
+    def decorator(func):
+        from djust.validation import get_handler_signature_info
+
+        if getattr(func, "_djust_decorators", {}).get("event_handler"):
+            raise TypeError(
+                f"@server_function cannot be combined with @event_handler on "
+                f"{getattr(func, '__name__', repr(func))!r}. A function cannot "
+                f"be both an @event_handler (WebSocket/re-render) and an "
+                f"@server_function (RPC/no-re-render). Pick one."
+            )
+
+        sig_info = get_handler_signature_info(func)
+        _desc = description if isinstance(description, str) else ""
+        _add_decorator_metadata(
+            func,
+            "server_function",
+            {
+                "params": sig_info["params"],
+                "param_names": [p["name"] for p in sig_info["params"]],
+                "description": _desc or sig_info["description"],
+                "accepts_kwargs": sig_info["accepts_kwargs"],
+                "required": [p["name"] for p in sig_info["params"] if p["required"]],
+                "optional": [p["name"] for p in sig_info["params"] if not p["required"]],
+                "coerce_types": coerce_types,
+            },
+        )
+        return func
+
+    # Support both @server_function (no parens) and @server_function(...) syntaxes.
+    if callable(description):
+        func = description
+        return decorator(func)
+    return decorator
+
+
+def is_server_function(func: Any) -> bool:
+    """
+    Check if a function has been decorated with @server_function.
+
+    Args:
+        func: The function to check.
+
+    Returns:
+        True if the function has server_function metadata.
+    """
+    return bool(getattr(func, "_djust_decorators", {}).get("server_function"))
 
 
 def reactive(func: Callable) -> property:
@@ -712,6 +818,8 @@ __all__ = [
     "event_handler",
     "event",
     "is_event_handler",
+    "server_function",
+    "is_server_function",
     "permission_required",
     "rate_limit",
     "reactive",

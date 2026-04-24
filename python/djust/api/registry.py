@@ -42,6 +42,25 @@ def _has_exposed_handler(view_cls) -> bool:
     return False
 
 
+def _has_server_function(view_cls) -> bool:
+    """Return True if ``view_cls`` has at least one ``@server_function`` method.
+
+    Mirrors :func:`_has_exposed_handler` so the registry can include views
+    that only expose RPC endpoints (``@server_function``), not
+    ``@event_handler(expose_api=True)`` HTTP handlers.
+    """
+    for name in dir(view_cls):
+        if name.startswith("_"):
+            continue
+        attr = getattr(view_cls, name, None)
+        if not callable(attr):
+            continue
+        meta = getattr(attr, "_djust_decorators", None)
+        if meta and meta.get("server_function"):
+            return True
+    return False
+
+
 def _derive_slug(view_cls) -> str:
     explicit = getattr(view_cls, "api_name", None)
     if explicit:
@@ -66,7 +85,11 @@ def _build_registry() -> None:
     new: Dict[str, Type] = {}
     dupes: Dict[str, List[Type]] = {}
     for view_cls in _iter_live_view_subclasses(LiveView):
-        if not _has_exposed_handler(view_cls):
+        # Register the view if it has EITHER an exposed @event_handler OR a
+        # @server_function method. A single registry covers both endpoint
+        # kinds; ``dispatch_api`` / ``dispatch_server_function`` independently
+        # enforce which decorator they accept.
+        if not (_has_exposed_handler(view_cls) or _has_server_function(view_cls)):
             continue
         slug = _derive_slug(view_cls)
         existing = new.get(slug)
@@ -153,4 +176,18 @@ def iter_exposed_handlers() -> Iterator[Tuple[str, Type, str, callable]]:
                 continue
             meta = getattr(attr, "_djust_decorators", None)
             if meta and meta.get("event_handler", {}).get("expose_api"):
+                yield slug, view_cls, name, attr
+
+
+def iter_server_functions() -> Iterator[Tuple[str, Type, str, callable]]:
+    """Yield ``(slug, view_cls, function_name, function)`` for every @server_function."""
+    for slug, view_cls in get_api_view_registry().items():
+        for name in dir(view_cls):
+            if name.startswith("_"):
+                continue
+            attr = getattr(view_cls, name, None)
+            if not callable(attr):
+                continue
+            meta = getattr(attr, "_djust_decorators", None)
+            if meta and meta.get("server_function"):
                 yield slug, view_cls, name, attr

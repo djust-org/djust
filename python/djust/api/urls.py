@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from django.urls import include, path
 
-from djust.api.dispatch import DjustAPIDispatchView
+from djust.api.dispatch import DjustAPIDispatchView, DjustServerFunctionView
 from djust.api.openapi import OpenAPISchemaView
 
 
@@ -32,6 +32,14 @@ def default_api_urlpatterns():
     """Return the default djust API URL patterns (relative to their mount prefix)."""
     return [
         path("openapi.json", OpenAPISchemaView.as_view(), name="djust-api-openapi"),
+        # NOTE: the call/ route MUST precede the generic dispatch pattern so
+        # the catch-all ``<str:view_slug>/<str:handler_name>/`` doesn't shadow
+        # ``call/<slug>/<fn>/``. Django matches in declaration order.
+        path(
+            "call/<str:view_slug>/<str:function_name>/",
+            DjustServerFunctionView.as_view(),
+            name="djust-api-call",
+        ),
         path(
             "<str:view_slug>/<str:handler_name>/",
             DjustAPIDispatchView.as_view(),

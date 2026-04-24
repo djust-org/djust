@@ -10,11 +10,17 @@ See docs/adr/008-auto-generated-http-api-from-event-handlers.md for design ratio
 """
 
 from djust.api.auth import BaseAuth, SessionAuth
-from djust.api.dispatch import DjustAPIDispatchView, dispatch_api
+from djust.api.dispatch import (
+    DjustAPIDispatchView,
+    DjustServerFunctionView,
+    dispatch_api,
+    dispatch_server_function,
+)
 from djust.api.openapi import OpenAPISchemaView, build_schema
 from djust.api.registry import (
     get_api_view_registry,
     iter_exposed_handlers,
+    iter_server_functions,
     register_api_view,
     resolve_api_view,
 )
@@ -24,13 +30,16 @@ __all__ = [
     "BaseAuth",
     "SessionAuth",
     "DjustAPIDispatchView",
+    "DjustServerFunctionView",
     "dispatch_api",
+    "dispatch_server_function",
     "OpenAPISchemaView",
     "build_schema",
     "register_api_view",
     "resolve_api_view",
     "get_api_view_registry",
     "iter_exposed_handlers",
+    "iter_server_functions",
     "api_patterns",
     "default_api_urlpatterns",
 ]

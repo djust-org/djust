@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Server Function & Prefetch Demo - djust{% endblock %}
+
+{% block dependencies_css %}{{ dependencies_css|safe }}{% endblock %}
+{% block dependencies_js %}{{ dependencies_js|safe }}{% endblock %}
+
+{% block content %}
+<div dj-root>
+
+    <section class="section-modern" style="padding: 2rem 0 4rem;">
+        <div class="container mx-auto px-4" style="max-width: 900px;">
+
+            <h1 class="text-3xl font-bold mb-4">Server Functions & Prefetch (v0.7.0)</h1>
+            <p class="text-lg mb-6" style="color: var(--color-text-muted);">
+                Demonstrates <code>@server_function</code> RPC and <code>dj-prefetch</code>
+                hover/touch intent prefetch.
+            </p>
+
+            {# Prefetch demo: hovering this link prefetches the destination. #}
+            {# See src/22-prefetch.js for the intent-prefetch implementation. #}
+            <p class="mb-4">
+                <a dj-prefetch href="/demos/counter/" class="text-blue-600 underline">
+                    Hover me &mdash; I prefetch the Counter demo
+                </a>
+                (uses <code>dj-prefetch</code>)
+            </p>
+
+            <hr class="my-6">
+
+            {# Server function demo: client-side JS calls djust.call()
+               to hit @server_function methods without triggering a re-render. #}
+            <h2 class="text-xl font-bold mb-3">Product Search (via djust.call)</h2>
+            <input
+                id="sf-query"
+                type="text"
+                placeholder="Try 'chair' or 'desk'..."
+                class="form-control mb-3"
+                style="width:100%;padding:0.5rem;border:1px solid var(--color-border);border-radius:0.375rem;"
+            />
+            <div id="sf-results" class="mb-4"
+                 style="min-height:3rem;padding:0.75rem;background:var(--color-bg-elevated);
+                        border:1px solid var(--color-border);border-radius:0.375rem;">
+                <em style="color:var(--color-text-muted);">Type above to search...</em>
+            </div>
+
+            <button id="sf-time-btn"
+                    class="btn-primary-modern"
+                    style="padding:0.5rem 1rem;border-radius:0.375rem;">
+                Get Server Time
+            </button>
+            <div id="sf-time" class="mt-3" style="color: var(--color-text-muted);"></div>
+
+        </div>
+    </section>
+</div>
+
+{# CSRF token is rendered server-side; djust.call reads it from the cookie
+   (or the hidden input if present). #}
+{% csrf_token %}
+
+<script>
+// Narrow script demonstrating djust.call() in action.
+// The view_slug matches the ServerFunctionDemoView.api_name.
+(function () {
+    var SLUG = 'demos.server_function_demo';
+
+    var queryInput = document.getElementById('sf-query');
+    var resultsDiv = document.getElementById('sf-results');
+    var timeBtn = document.getElementById('sf-time-btn');
+    var timeDiv = document.getElementById('sf-time');
+
+    var debounceTimer = null;
+
+    // SAFE RENDERING: this demo is copy-paste material, so it models DOM
+    // construction via createElement + textContent rather than innerHTML
+    // string concatenation. Real apps will feed user/DB data through
+    // this path — building nodes directly makes XSS via a malicious
+    // product name (e.g. containing a <script> tag) impossible here.
+    function renderResults(items) {
+        resultsDiv.textContent = '';  // clear any previous content
+        if (!items || items.length === 0) {
+            var empty = document.createElement('em');
+            empty.style.color = 'var(--color-text-muted)';
+            empty.textContent = 'No matches.';
+            resultsDiv.appendChild(empty);
+            return;
+        }
+        var ul = document.createElement('ul');
+        ul.style.margin = '0';
+        ul.style.paddingLeft = '1.25rem';
+        items.forEach(function (p) {
+            var li = document.createElement('li');
+            li.textContent = p.name + ' — $' + p.price.toFixed(2);
+            ul.appendChild(li);
+        });
+        resultsDiv.appendChild(ul);
+    }
+
+    queryInput.addEventListener('input', function (e) {
+        clearTimeout(debounceTimer);
+        var value = e.target.value;
+        debounceTimer = setTimeout(function () {
+            // djust.call returns a Promise resolving to the function's return value.
+            djust.call(SLUG, 'search_products', { q: value })
+                .then(renderResults)
+                .catch(function (err) {
+                    // Use textContent — err.message is server-controlled but
+                    // we still avoid innerHTML to keep the safe-rendering pattern consistent.
+                    resultsDiv.textContent = 'Error: ' + err.message;
+                });
+        }, 200);
+    });
+
+    timeBtn.addEventListener('click', function () {
+        djust.call(SLUG, 'get_time', {})
+            .then(function (data) { timeDiv.textContent = 'Server time: ' + data.now; })
+            .catch(function (err) { timeDiv.textContent = 'Error: ' + err.message; });
+    });
+})();
+</script>
+{% endblock %}

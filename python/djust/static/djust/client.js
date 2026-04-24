@@ -8954,7 +8954,7 @@ window.djust.bindModelElements = bindModelElements;
 // The set is cleared on SPA navigation so links on the new view are re-eligible.
 
 (function () {
-    var _prefetched = new Set();
+    const _prefetched = new Set();
 
     function _shouldPrefetch(link) {
         // No SW controller available
@@ -8974,7 +8974,7 @@ window.djust.bindModelElements = bindModelElements;
             return false;
         }
         try {
-            var url = new URL(link.href, location.origin);
+            const url = new URL(link.href, location.origin);
             if (url.origin !== location.origin) {
                 return false;
             }
@@ -8990,7 +8990,7 @@ window.djust.bindModelElements = bindModelElements;
 
     document.addEventListener('pointerenter', function (event) {
         if (!(event.target instanceof Element)) return;
-        var link = event.target.closest('a');
+        const link = event.target.closest('a');
         if (!link || !_shouldPrefetch(link)) {
             return;
         }
@@ -9002,12 +9002,125 @@ window.djust.bindModelElements = bindModelElements;
         });
     }, true);
 
-    // Expose for testing and for navigation to clear on SPA transition
+    // Expose for testing and for navigation to clear on SPA transition.
+    // clear() also clears the intent-prefetch set if the intent IIFE has
+    // installed; otherwise the intent module sets its own clear bridge.
     window.djust = window.djust || {};
     window.djust._prefetch = {
         _prefetched: _prefetched,
         _shouldPrefetch: _shouldPrefetch,
-        clear: function () { _prefetched.clear(); }
+        clear: function () {
+            _prefetched.clear();
+            if (window.djust && window.djust._intentPrefetch
+                && typeof window.djust._intentPrefetch.clear === 'function') {
+                window.djust._intentPrefetch.clear();
+            }
+        }
+    };
+})();
+
+// ============================================================================
+// Intent-based prefetch (dj-prefetch)
+// ============================================================================
+// Layer on top of the SW-mediated hover prefetch above. This IIFE:
+//   - fires on `mouseenter` with a 65 ms debounce (cancelled by `mouseleave`),
+//   - fires on `touchstart` immediately (no debounce — mobile users commit fast),
+//   - injects <link rel="prefetch" as="document"> so the browser manages the
+//     cache lifecycle (falls back to low-priority fetch when relList doesn't
+//     advertise 'prefetch').
+// Links opt in via the `dj-prefetch` attribute. `dj-prefetch="false"` opts out.
+// Only same-origin URLs are prefetched; each URL fires at most once.
+
+(function () {
+    const HOVER_DEBOUNCE_MS = 65;
+    const _intentPrefetched = new Set();
+    const _pending = new WeakMap(); // link -> {timer, controller}
+
+    function _supportsLinkPrefetch() {
+        try {
+            return document.createElement('link').relList.supports('prefetch');
+        } catch (_) { return false; }
+    }
+    const _canUseLinkRel = _supportsLinkPrefetch();
+
+    function _shouldIntentPrefetch(link) {
+        if (!link || !link.hasAttribute || !link.hasAttribute('dj-prefetch')) return false;
+        const v = link.getAttribute('dj-prefetch');
+        if (v === 'false') return false;
+        if (navigator.connection && navigator.connection.saveData) return false;
+        if (!link.href) return false;
+        try {
+            const url = new URL(link.href, location.origin);
+            if (url.origin !== location.origin) return false;
+        } catch (_) { return false; }
+        if (_intentPrefetched.has(link.href)) return false;
+        return true;
+    }
+
+    function _doPrefetch(link) {
+        _intentPrefetched.add(link.href);
+        if (globalThis.djustDebug) console.log('[djust] Intent prefetch:', link.href);
+        if (_canUseLinkRel) {
+            const el = document.createElement('link');
+            el.rel = 'prefetch';
+            el.href = link.href;
+            el.setAttribute('as', 'document');
+            document.head.appendChild(el);
+            return { cancel: function () { /* browser handles; no-op */ } };
+        }
+        const ctrl = new AbortController();
+        try {
+            fetch(link.href, {
+                credentials: 'same-origin',
+                priority: 'low',
+                signal: ctrl.signal,
+            }).catch(function () { /* aborts + prefetch failures are non-fatal */ });
+        } catch (_) { /* fetch unsupported — silently no-op */ }
+        return { cancel: function () { ctrl.abort(); } };
+    }
+
+    function _onEnter(event) {
+        if (!(event.target instanceof Element)) return;
+        const link = event.target.closest && event.target.closest('a[dj-prefetch]');
+        if (!link || !_shouldIntentPrefetch(link)) return;
+        if (_pending.has(link)) return;
+        const timer = setTimeout(function () {
+            _pending.delete(link);
+            _doPrefetch(link);
+        }, HOVER_DEBOUNCE_MS);
+        _pending.set(link, { timer: timer, controller: null });
+    }
+
+    function _onLeave(event) {
+        if (!(event.target instanceof Element)) return;
+        const link = event.target.closest && event.target.closest('a[dj-prefetch]');
+        if (!link) return;
+        const p = _pending.get(link);
+        if (!p) return;
+        clearTimeout(p.timer);
+        _pending.delete(link);
+    }
+
+    function _onTouch(event) {
+        if (!(event.target instanceof Element)) return;
+        const link = event.target.closest && event.target.closest('a[dj-prefetch]');
+        if (!link || !_shouldIntentPrefetch(link)) return;
+        _doPrefetch(link); // no debounce on explicit touch
+    }
+
+    document.addEventListener('mouseenter', _onEnter, true);
+    document.addEventListener('mouseleave', _onLeave, true);
+    document.addEventListener('touchstart', _onTouch, { capture: true, passive: true });
+
+    window.djust = window.djust || {};
+    window.djust._intentPrefetch = {
+        _prefetched: _intentPrefetched,
+        _shouldIntentPrefetch: _shouldIntentPrefetch,
+        _onEnter: _onEnter,
+        _onLeave: _onLeave,
+        _onTouch: _onTouch,
+        HOVER_DEBOUNCE_MS: HOVER_DEBOUNCE_MS,
+        clear: function () { _intentPrefetched.clear(); },
     };
 })();
 
@@ -13556,4 +13669,59 @@ globalThis.djust.djTransitionGroup = {
     }
 
     djust.hvr = { showIndicator: showIndicator };
+})();
+// ============================================================================
+// Server Functions — djust.call(viewSlug, funcName, params)
+// ============================================================================
+// Same-origin RPC from the browser to an @server_function method on a
+// LiveView. No re-render, no assigns diff — pure request/response. Rejects
+// with an Error carrying {code, status, details} on non-2xx responses.
+//
+// CSRF: reads the hidden input (preferred) then falls back to the cookie.
+// Mirrors the resolver in src/11-event-handler.js for consistency.
+
+(function () {
+    function _csrf() {
+        try {
+            const input = document.querySelector('[name=csrfmiddlewaretoken]');
+            if (input && input.value) return input.value;
+        } catch (_) { /* SSR / detached DOM */ }
+        const m = (document.cookie || '').match(/(?:^|;\s*)csrftoken=([^;]+)/);
+        return m ? m[1] : '';
+    }
+
+    async function call(viewSlug, funcName, params) {
+        if (!viewSlug || !funcName) {
+            throw new Error('djust.call requires (viewSlug, funcName)');
+        }
+        // TODO(v0.7.1, #987): resolve '/djust/api/' via meta[name="djust-api-prefix"]
+        // for FORCE_SCRIPT_NAME / sub-path-mount compat. Matches the existing
+        // ADR-008 client pattern; fix both call sites together.
+        const url = '/djust/api/call/'
+            + encodeURIComponent(viewSlug) + '/'
+            + encodeURIComponent(funcName) + '/';
+        const resp = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': _csrf(),
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: JSON.stringify({ params: params || {} }),
+        });
+        let data = {};
+        try { data = await resp.json(); } catch (_) { /* empty / non-json */ }
+        if (!resp.ok) {
+            const err = new Error(data.message || ('djust.call failed: ' + resp.status));
+            err.code = data.error || 'http_error';
+            err.status = resp.status;
+            err.details = data.details;
+            throw err;
+        }
+        return data.result;
+    }
+
+    window.djust = window.djust || {};
+    window.djust.call = call;
 })();

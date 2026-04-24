@@ -417,3 +417,166 @@ def _enforce_csrf(request: HttpRequest):
     if response is not None:
         return api_error(403, "csrf_failed", "CSRF verification failed")
     return None
+
+
+# ---------------------------------------------------------------------------
+# @server_function dispatch (v0.7.0) — same-origin browser RPC.
+# ---------------------------------------------------------------------------
+# Responses:
+#   200: ``{"result": <return>}`` — JSON-serialized via DjangoJSONEncoder
+#   400: validation or JSON parse error
+#   401: request.user is anonymous (session cookie missing / expired)
+#   403: CSRF failed or @permission_required denied
+#   404: unknown view slug, unknown function name, or function not decorated
+#        with @server_function
+#   429: rate limit exceeded
+#   500: function raised an unexpected exception (logged; not leaked)
+
+
+def _is_server_function(fn) -> bool:
+    meta = getattr(fn, "_djust_decorators", None)
+    return bool(meta and meta.get("server_function"))
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DjustServerFunctionView(View):
+    """Single dispatch view for every ``@server_function`` method.
+
+    Routed at ``POST /djust/api/call/<view_slug>/<function_name>/``. CSRF is
+    evaluated *inside* :func:`dispatch_server_function` unconditionally —
+    server functions are session-cookie-only; there is no auth-class
+    opt-out.
+    """
+
+    http_method_names = ["post", "options"]
+
+    def post(self, request: HttpRequest, view_slug: str, function_name: str) -> HttpResponseBase:
+        return dispatch_server_function(request, view_slug, function_name)
+
+
+def dispatch_server_function(
+    request: HttpRequest, view_slug: str, function_name: str
+) -> HttpResponseBase:
+    """Functional dispatch entry point for ``@server_function`` RPC calls."""
+    # 1. Resolve view class by slug — reuses the ADR-008 registry which now
+    # also indexes views that only expose @server_function methods.
+    view_cls = resolve_api_view(view_slug)
+    if view_cls is None:
+        return api_error(404, "unknown_view", f"No djust view registered for {view_slug!r}")
+
+    # 2. Auth — session cookie only. No auth classes, no anonymous callers.
+    user = getattr(request, "user", None)
+    if user is None or not getattr(user, "is_authenticated", False):
+        return api_error(401, "unauthenticated", "Authentication required")
+
+    # 3. CSRF — always enforced. No opt-out (server functions are same-origin).
+    csrf_resp = _enforce_csrf(request)
+    if csrf_resp is not None:
+        return csrf_resp
+
+    # 4. Parse JSON body. Only the wrapped shape ``{"params": {...}}`` is
+    # accepted — the JS client helper at
+    # ``static/djust/src/48-server-functions.js`` always sends this form.
+    # Rejecting flat bodies and ``{"params": {...}, "other": ...}`` shapes
+    # removes the ambiguity where a caller's own field literally named
+    # ``params`` would be silently unwrapped (dropping every sibling key).
+    if not request.body:
+        params: Dict[str, Any] = {}
+    else:
+        try:
+            body = json.loads(request.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            return api_error(400, "invalid_json", f"Malformed JSON body: {exc}")
+        if not isinstance(body, dict):
+            return api_error(400, "invalid_json", "Request body must be a JSON object")
+        if not body:
+            params = {}
+        elif set(body.keys()) == {"params"} and isinstance(body["params"], dict):
+            params = body["params"]
+        else:
+            return api_error(
+                400,
+                "invalid_body",
+                'Request body must be a JSON object of the form {"params": {...}}. '
+                "Received body with unexpected keys.",
+            )
+
+    # 5. Instantiate the view (runs mount / api_mount).
+    try:
+        view = _instantiate_view(view_cls, request)
+    except PermissionDenied as exc:
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+    except Exception:
+        logger.exception(
+            "djust server_function: view init failed for %s", sanitize_for_log(view_slug)
+        )
+        return api_error(500, "mount_failed", "View initialization failed")
+
+    # 6. View-level auth (login_required + @permission_required on the class).
+    try:
+        redirect_url = check_view_auth(view, request)
+    except PermissionDenied as exc:
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+    if redirect_url:
+        return api_error(401, "login_required", "Authentication required")
+
+    # 7. Resolve the attribute and gate on @server_function metadata.
+    fn = getattr(view, function_name, None)
+    if fn is None or not callable(fn):
+        return api_error(404, "unknown_function", f"No function named {function_name!r}")
+    if not _is_server_function(fn):
+        return api_error(
+            404,
+            "not_a_server_function",
+            f"{function_name!r} is not decorated with @server_function",
+        )
+
+    # 8. Handler-level @permission_required + @rate_limit (shared helpers).
+    if not check_handler_permission(fn, request):
+        return api_error(403, "permission_denied", "Permission denied")
+    if not _rate_limit_check(request, function_name, fn):
+        return api_error(429, "rate_limited", "Rate limit exceeded")
+
+    # 9. Parameter validation + coercion (reuses ADR-008 validator).
+    validation = validate_handler_params(fn, params, function_name)
+    if not validation["valid"]:
+        return api_error(
+            400,
+            "invalid_params",
+            validation.get("error") or "Parameter validation failed",
+            details={
+                "expected": validation.get("expected", []),
+                "provided": validation.get("provided", []),
+                "type_errors": validation.get("type_errors") or [],
+            },
+        )
+    coerced = validation["coerced_params"]
+
+    # 10. Invoke (supports sync + async def via _call_possibly_async).
+    try:
+        result = _call_possibly_async(fn, **coerced)
+    except PermissionDenied as exc:
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+    except Exception:
+        logger.exception(
+            "djust server_function raised: slug=%s fn=%s",
+            sanitize_for_log(view_slug),
+            sanitize_for_log(function_name),
+        )
+        return api_error(500, "function_error", "Function raised an unexpected error")
+
+    # 11. Serialize the return value inside its own try/except so non-JSON-
+    # serializable returns (e.g. ``return set()``) surface as the documented
+    # 500 ``function_error`` envelope instead of escaping as an unhandled 500
+    # ``http_error`` from Django's default exception handler.
+    try:
+        body = json.dumps({"result": result}, cls=DjangoJSONEncoder)
+    except (TypeError, ValueError):
+        logger.exception(
+            "djust server_function return value not JSON-serializable: slug=%s fn=%s",
+            sanitize_for_log(view_slug),
+            sanitize_for_log(function_name),
+        )
+        return api_error(500, "function_error", "Return value is not JSON-serializable")
+
+    return HttpResponse(body, content_type="application/json")
