@@ -1351,6 +1351,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._debug_panel_active = True
             elif msg_type == "debug_panel_close":
                 self._debug_panel_active = False
+            elif msg_type == "time_travel_jump":
+                await self.handle_time_travel_jump(data)
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -2340,6 +2342,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         if self.use_actors and self.actor_handle and not is_embedded_child_target:
             # Phase 5: Use actor system for event handling
+            # Time-travel debugging (v0.6.1): capture state_before BEFORE
+            # the permission check so permission-denied events are also
+            # recorded (with no state_after change but a visible error).
+            from djust.time_travel import (
+                record_event_end as _tt_end,
+                record_event_start as _tt_start,
+            )
+
+            _tt_snapshot = _tt_start(target_view, event_name, params, event_ref)
+            _tt_error: Optional[str] = None
             try:
                 logger.info("Handling event '%s' with actor system", event_name)
 
@@ -2350,6 +2362,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     self, event_name, target_view, self._rate_limiter
                 )
                 if handler is None:
+                    _tt_error = "permission_denied"
                     return
 
                 # Validate parameters before sending to actor
@@ -2359,6 +2372,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 if not validation["valid"]:
                     logger.error("Parameter validation failed: %s", validation["error"])
+                    _tt_error = "validation_failed"
                     await self.send_error(
                         validation["error"],
                         validation_details={
@@ -2398,6 +2412,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
 
             except Exception as e:
+                _tt_error = str(e)[:200]
                 view_class_name = (
                     self.view_instance.__class__.__name__ if self.view_instance else "Unknown"
                 )
@@ -2410,6 +2425,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     log_message=f"Error in actor event handling for {view_class_name}.{sanitize_for_log(event_name)}()",
                 )
                 await self.send_json(response)
+            finally:
+                _tt_end(target_view, _tt_snapshot, error=_tt_error)
+                await self._maybe_push_tt_event(target_view, _tt_snapshot)
 
         else:
             # Non-actor mode: Use traditional flow
@@ -2436,60 +2454,85 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         await self.send_error(error_msg)
                         return
 
-                    # Security checks (shared with actor and view paths)
-                    handler = await _validate_event_security(
-                        self, event_name, component, self._rate_limiter
+                    # Time-travel debugging (v0.6.1): record against the
+                    # PARENT view because components don't have their own
+                    # buffer in Phase 1. State mutations the component
+                    # pushes into the parent (via send_parent) will show
+                    # up in state_before/state_after. See limitations in
+                    # docs/website/guides/time-travel-debugging.md —
+                    # full component-level time travel is v0.6.2.
+                    from djust.time_travel import (
+                        record_event_end as _tt_end_c,
+                        record_event_start as _tt_start_c,
                     )
-                    if handler is None:
-                        return
 
-                    # Extract component_id and remove from params
-                    event_data = params.copy()
-                    event_data.pop("component_id", None)
-
-                    # Validate parameters before calling handler
-                    # Pass positional_args so they can be mapped to named parameters
-                    coerce = get_handler_coerce_setting(handler)
-                    validation = validate_handler_params(
-                        handler,
-                        event_data,
-                        event_name,
-                        coerce=coerce,
-                        positional_args=positional_args,
-                    )
-                    if not validation["valid"]:
-                        logger.error("Parameter validation failed: %s", validation["error"])
-                        await self.send_error(
-                            validation["error"],
-                            validation_details={
-                                "expected_params": validation["expected"],
-                                "provided_params": validation["provided"],
-                                "type_errors": validation["type_errors"],
-                            },
+                    _tt_c_snapshot = _tt_start_c(self.view_instance, event_name, params, event_ref)
+                    _tt_c_error: Optional[str] = None
+                    try:
+                        # Security checks (shared with actor and view paths)
+                        handler = await _validate_event_security(
+                            self, event_name, component, self._rate_limiter
                         )
-                        return
+                        if handler is None:
+                            _tt_c_error = "permission_denied"
+                            return
 
-                    # Use coerced params (with positional args merged in)
-                    coerced_event_data = validation.get("coerced_params", event_data)
+                        # Extract component_id and remove from params
+                        event_data = params.copy()
+                        event_data.pop("component_id", None)
 
-                    # Call component's event handler (supports both sync and async)
-                    # This may call send_parent() which triggers handle_component_event()
-                    handler_start = time.perf_counter()
-                    # Observability: capture SQL queries fired by this handler.
-                    from djust.observability.sql import capture_for_event as _dj_sql_capture
-
-                    _sid = getattr(self, "session_id", None)
-                    with _dj_sql_capture(
-                        session_id=_sid,
-                        event_id=f"{_sid}:{handler_start}" if _sid else None,
-                        handler_name=event_name,
-                    ):
-                        await _call_handler(
-                            handler, coerced_event_data if coerced_event_data else None
+                        # Validate parameters before calling handler
+                        # Pass positional_args so they can be mapped to named parameters
+                        coerce = get_handler_coerce_setting(handler)
+                        validation = validate_handler_params(
+                            handler,
+                            event_data,
+                            event_name,
+                            coerce=coerce,
+                            positional_args=positional_args,
                         )
-                    timing["handler"] = (
-                        time.perf_counter() - handler_start
-                    ) * 1000  # Convert to ms
+                        if not validation["valid"]:
+                            logger.error("Parameter validation failed: %s", validation["error"])
+                            _tt_c_error = "validation_failed"
+                            await self.send_error(
+                                validation["error"],
+                                validation_details={
+                                    "expected_params": validation["expected"],
+                                    "provided_params": validation["provided"],
+                                    "type_errors": validation["type_errors"],
+                                },
+                            )
+                            return
+
+                        # Use coerced params (with positional args merged in)
+                        coerced_event_data = validation.get("coerced_params", event_data)
+
+                        # Call component's event handler (supports both sync and async)
+                        # This may call send_parent() which triggers handle_component_event()
+                        handler_start = time.perf_counter()
+                        # Observability: capture SQL queries fired by this handler.
+                        from djust.observability.sql import capture_for_event as _dj_sql_capture
+
+                        _sid = getattr(self, "session_id", None)
+                        with _dj_sql_capture(
+                            session_id=_sid,
+                            event_id=f"{_sid}:{handler_start}" if _sid else None,
+                            handler_name=event_name,
+                        ):
+                            try:
+                                await _call_handler(
+                                    handler,
+                                    coerced_event_data if coerced_event_data else None,
+                                )
+                            except Exception as _tt_c_exc:
+                                _tt_c_error = str(_tt_c_exc)[:200]
+                                raise
+                        timing["handler"] = (
+                            time.perf_counter() - handler_start
+                        ) * 1000  # Convert to ms
+                    finally:
+                        _tt_end_c(self.view_instance, _tt_c_snapshot, error=_tt_c_error)
+                        await self._maybe_push_tt_event(self.view_instance, _tt_c_snapshot)
 
                     # Observability: record the component-handler duration
                     # for percentile stats. Best-effort — never disturbs
@@ -2528,12 +2571,30 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 exc,
                             )
                 else:
+                    # Time-travel debugging (v0.6.1 — dev-only).
+                    # Capture state_before BEFORE the permission check so
+                    # permission-denied events are also recorded (with
+                    # state_after == state_before but error set). The
+                    # paired record_event_end runs in the finally at
+                    # the end of this branch. No-op when the view didn't
+                    # opt in. See djust.time_travel.
+                    from djust.time_travel import (
+                        record_event_end as _tt_end,
+                        record_event_start as _tt_start,
+                    )
+
+                    _tt_snapshot = _tt_start(target_view, event_name, params, event_ref)
+                    _tt_error: Optional[str] = None
+
                     # Use target_view for handler lookup (may be an embedded child)
                     # Security checks (shared with actor and component paths)
                     handler = await _validate_event_security(
                         self, event_name, target_view, self._rate_limiter
                     )
                     if handler is None:
+                        _tt_error = "permission_denied"
+                        _tt_end(target_view, _tt_snapshot, error=_tt_error)
+                        await self._maybe_push_tt_event(target_view, _tt_snapshot)
                         return
 
                     # Validate parameters before calling handler
@@ -2544,6 +2605,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
                     if not validation["valid"]:
                         logger.error("Parameter validation failed: %s", validation["error"])
+                        _tt_error = "validation_failed"
+                        _tt_end(target_view, _tt_snapshot, error=_tt_error)
+                        await self._maybe_push_tt_event(target_view, _tt_snapshot)
                         await self.send_error(
                             validation["error"],
                             validation_details={
@@ -2579,18 +2643,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
 
                         _sid = getattr(self, "session_id", None)
-                        with tracker.track(
-                            "Event Handler", event_name=event_name, params=coerced_params
-                        ):
-                            with profiler.profile(profiler.OP_EVENT_HANDLE):
-                                with _dj_sql_capture(
-                                    session_id=_sid,
-                                    event_id=f"{_sid}:{handler_start}" if _sid else None,
-                                    handler_name=event_name,
-                                ):
-                                    await _call_handler(
-                                        handler, coerced_params if coerced_params else None
-                                    )
+                        try:
+                            with tracker.track(
+                                "Event Handler",
+                                event_name=event_name,
+                                params=coerced_params,
+                            ):
+                                with profiler.profile(profiler.OP_EVENT_HANDLE):
+                                    with _dj_sql_capture(
+                                        session_id=_sid,
+                                        event_id=f"{_sid}:{handler_start}" if _sid else None,
+                                        handler_name=event_name,
+                                    ):
+                                        await _call_handler(
+                                            handler,
+                                            coerced_params if coerced_params else None,
+                                        )
+                        except Exception as _tt_exc:
+                            _tt_error = str(_tt_exc)[:200]
+                            raise
+                        finally:
+                            _tt_end(target_view, _tt_snapshot, error=_tt_error)
+                            await self._maybe_push_tt_event(target_view, _tt_snapshot)
                         timing["handler"] = (
                             time.perf_counter() - handler_start
                         ) * 1000  # Convert to ms
@@ -3797,6 +3871,114 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "type": "html_recovery",
                 "html": html_content,
                 "version": version,
+            }
+        )
+
+    async def _maybe_push_tt_event(self, view: Any, snapshot: Any) -> None:
+        """Push a ``time_travel_event`` frame to the client after a record.
+
+        Dev-only. Fan out freshly-captured :class:`EventSnapshot` entries
+        over the main djust WebSocket so the debug panel's Time Travel
+        tab can incrementally populate its history — without re-sending
+        the entire buffer on every event.
+
+        No-op when:
+            * ``snapshot`` is ``None`` (time-travel disabled on the view
+              or a guard returned early)
+            * ``DEBUG`` is off (production gate)
+            * The send itself fails (best-effort)
+        """
+        if snapshot is None:
+            return
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            return
+        buffer = getattr(view, "_time_travel_buffer", None)
+        if buffer is None:
+            return
+        try:
+            await self.send_json(
+                {
+                    "type": "time_travel_event",
+                    "entry": snapshot.to_dict(),
+                    "history_len": len(buffer),
+                }
+            )
+        except Exception:  # noqa: BLE001 — dev-only, degrade silently
+            logger.exception("time_travel: failed to push event frame")
+
+    async def handle_time_travel_jump(self, data: Dict[str, Any]):
+        """Jump the view to a past :class:`EventSnapshot`.
+
+        Dev-only. The debug panel's Time Travel tab emits
+        ``{"type": "time_travel_jump", "index": N, "which": "before"|"after"}``;
+        the server restores the captured state onto the view and
+        re-renders via the normal patch pipeline. A ``time_travel_state``
+        frame is sent back so the client can update its cursor.
+
+        Rejected in production (``DEBUG=False``) and when the view
+        hasn't opted in via ``time_travel_enabled``.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            await self.send_error("time_travel requires DEBUG=True")
+            return
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        if buffer is None:
+            await self.send_error("time_travel not enabled on this view")
+            return
+
+        index = data.get("index")
+        which = data.get("which", "before")
+        if not isinstance(index, int):
+            await self.send_error("time_travel_jump: index must be int")
+            return
+        if which not in ("before", "after"):
+            await self.send_error("time_travel_jump: which must be 'before' or 'after'")
+            return
+
+        snapshot = buffer.jump(index)
+        if snapshot is None:
+            await self.send_error("time_travel_jump: no snapshot at index %d" % index)
+            return
+
+        from djust.time_travel import restore_snapshot
+
+        ok = await sync_to_async(restore_snapshot)(self.view_instance, snapshot, which)
+        if not ok:
+            await self.send_error("time_travel_jump: restore failed")
+            return
+
+        # Re-render via the existing patch pipeline so the client sees
+        # the restored state without a full mount. Use render_with_diff
+        # directly (mirrors the hotreload / broadcast paths).
+        try:
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            patch_list = None
+            if patches is not None:
+                patch_list = fast_json_loads(patches) if patches else []
+            await self._send_update(
+                patches=patch_list,
+                html=html,
+                version=version,
+                event_name="__time_travel_jump__",
+            )
+        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
+            logger.exception("time_travel_jump: re-render failed")
+            await self.send_error("time_travel_jump: re-render failed: %s" % exc)
+            return
+
+        await self.send_json(
+            {
+                "type": "time_travel_state",
+                "cursor": index,
+                "which": which,
+                "history_len": len(buffer),
             }
         )
 

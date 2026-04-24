@@ -351,6 +351,21 @@ class LiveView(
     # tracked for v0.6.2 as Phase 2.
     streaming_render: bool = False
 
+    # Time-travel debugging (v0.6.1 — dev-only).
+    #
+    # Opt-in per-view flag that enables a per-instance ring buffer of
+    # :class:`djust.time_travel.EventSnapshot` entries — one for every
+    # ``@event_handler`` dispatch, capturing ``state_before`` /
+    # ``state_after``. The debug panel exposes a "Time Travel" tab that
+    # lets developers scrub through history and jump back to any past
+    # state; the server restores the snapshot + re-renders.
+    #
+    # Safe default (``False``) costs zero when disabled. Gated on
+    # ``DEBUG=True`` at the WebSocket consumer so enabling it in a
+    # release build silently no-ops. See
+    # :mod:`djust.time_travel` for the recording machinery.
+    time_travel_enabled: bool = False
+
     # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================
@@ -384,6 +399,23 @@ class LiveView(
         # Track user-defined _private attr names (populated by
         # _snapshot_user_private_attrs after mount, or _restore_private_state).
         self._user_private_keys: set = set()
+
+        # Time-travel debugging (v0.6.1) — lazy per-instance ring buffer.
+        # Allocated only when the subclass opts in via the class attr so
+        # the 99% of views that don't use it pay zero memory cost.
+        self._time_travel_buffer = None
+        if getattr(self.__class__, "time_travel_enabled", False):
+            try:
+                from djust.time_travel import TimeTravelBuffer
+                from djust.config import config as _djust_config
+
+                self._time_travel_buffer = TimeTravelBuffer(
+                    max_events=_djust_config.get("time_travel_max_events", 100)
+                )
+            except Exception:  # noqa: BLE001
+                # Never let a misconfigured buffer break __init__.
+                logger.exception("time_travel: failed to allocate buffer")
+                self._time_travel_buffer = None
 
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.

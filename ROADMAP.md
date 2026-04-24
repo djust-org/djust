@@ -880,7 +880,7 @@ class OnboardingView(WizardMixin, LiveView):
 
 ~~**Streaming initial render**~~ ✅ Shipped v0.6.1 (Phase 1, PR #TBD) — Chunked HTTP page shell + progressive content. Django's `StreamingHttpResponse` + djust's template engine emit the `<head>` + `<body>` wrapper immediately in a shell-open chunk, then stream the `<div dj-root>` main content and `</body></html>` close as separate chunks. Faster perceived load than full-page wait; competitive with Next.js `renderToPipeableStream` for first-paint. Opt-in via `streaming_render = True` on the LiveView class. See `docs/website/guides/streaming-render.md`. Phase 2 (lazy-child out-of-order streaming via `{% live_render lazy=True %}`) is tracked for v0.6.2.
 
-**Time-travel debugging** — State snapshot recording + replay in the debug panel. Every `@event_handler` dispatch records a before/after state snapshot; the debug panel lets the developer scrub backward through the event history, replaying the view at each step. Beyond Phoenix's debug tools. Integrates with the existing debug-panel infrastructure and the v0.6.0 state-snapshot work (reuse `_capture_snapshot_state`). ~300 lines Python + ~200 lines JS. *Deferred because it touches the render pipeline and needs dev/prod gating to avoid shipping the overhead in production builds.*
+~~**Time-travel debugging**~~ ✅ Shipped v0.6.1 (PR #TBD) — Per-view bounded ring buffer of `EventSnapshot` entries captured around every `@event_handler` dispatch (reusing `_capture_snapshot_state` from the v0.6.0 state-snapshot work). New `Time Travel` tab in the debug panel renders the timeline; clicking an entry dispatches a `time_travel_jump` WS frame and the server restores state via `safe_setattr` + re-renders through the VDOM patch pipeline. Dev-only — `DEBUG=True` gate at the consumer layer + per-view opt-in via `time_travel_enabled = True`. Beyond Redux DevTools (server-side, no client store) and beyond Phoenix's debug tools (telemetry-only). See `docs/website/guides/time-travel-debugging.md`.
 
 ~~**Hot View Replacement**~~ ✅ Shipped v0.6.1 (PR #TBD) — State-preserving Python code reload in dev mode. When a LiveView module changes on disk, the dev server `importlib.reload()`s it and swaps `__class__` in place on every live instance, preserving form input, counter values, and scroll position. React Fast Refresh parity for djust. See `docs/website/guides/hot-view-replacement.md`.
 
@@ -945,7 +945,7 @@ class TodoView(LiveView):
 **Form status awareness (React 19 `useFormStatus` equivalent)** — Child components inside a form should be able to read whether the parent form is currently submitting, without prop drilling. React 19's `useFormStatus` lets any nested component access `{ pending, data, method, action }` from the nearest `<form>`. djust equivalent: any element with `dj-form-pending` attribute auto-toggles visibility/class based on whether its ancestor form's `dj-submit` event is in-flight. Template: `<button type="submit"><span dj-form-pending="hide">Save</span><span dj-form-pending="show">Saving...</span></button>`. Works with the existing `dj-lock` and `dj-disable-with` but provides a more general-purpose pattern for any element — not just the submit button. ~30 lines JS. *This is how React 19 handles loading states in forms, and it's more composable than per-button solutions.*
 
 | ~~**Streaming initial render**~~ ✅ | Chunked HTTP page shell + progressive content — faster perceived load than full-page wait | ~~**v0.6.1**~~ ✅ Shipped v0.6.1 (Phase 1); lazy-child = v0.6.2 |
-| **Time-travel debugging** | State snapshot recording + replay in debug panel — beyond Phoenix's debug tools | **v0.6.1** (deferred from v0.6.0rc1) |
+| ~~**Time-travel debugging**~~ ✅ | State snapshot recording + replay in debug panel — beyond Phoenix's debug tools | ~~**v0.6.1**~~ ✅ Shipped v0.6.1 |
 
 ---
 
@@ -1020,7 +1020,7 @@ Open questions that inform future direction:
 | Transition groups (lists) | — | `<TransitionGroup>` | Not started | v0.6.0 |
 | Exit animations | `phx-remove` | `<AnimatePresence>` | Not started | v0.6.0 |
 | ~~Streaming initial render~~ ✅ | — | `renderToPipeableStream` | ✅ Shipped v0.6.1 (Phase 1); lazy-child Phase 2 v0.6.2 | **v0.6.1** |
-| Time-travel debugging | — | Redux DevTools | Not started | **v0.6.1** |
+| ~~Time-travel debugging~~ ✅ | — | Redux DevTools | ✅ Shipped v0.6.1 | **v0.6.1** |
 | ~~Sticky LiveViews~~ ✅ | `sticky: true` | — | Shipped v0.6.0 | v0.6.0 |
 | DOM mutation events | — | MutationObserver | Not started | v0.6.0 |
 | Sticky scroll | — | Chat/log UX | Not started | v0.6.0 |
