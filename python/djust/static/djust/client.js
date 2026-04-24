@@ -13694,6 +13694,9 @@ globalThis.djust.djTransitionGroup = {
         if (!viewSlug || !funcName) {
             throw new Error('djust.call requires (viewSlug, funcName)');
         }
+        // TODO(v0.7.1, #987): resolve '/djust/api/' via meta[name="djust-api-prefix"]
+        // for FORCE_SCRIPT_NAME / sub-path-mount compat. Matches the existing
+        // ADR-008 client pattern; fix both call sites together.
         const url = '/djust/api/call/'
             + encodeURIComponent(viewSlug) + '/'
             + encodeURIComponent(funcName) + '/';

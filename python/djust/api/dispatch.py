@@ -565,4 +565,18 @@ def dispatch_server_function(
         )
         return api_error(500, "function_error", "Function raised an unexpected error")
 
-    return JsonResponse({"result": result}, encoder=DjangoJSONEncoder)
+    # 11. Serialize the return value inside its own try/except so non-JSON-
+    # serializable returns (e.g. ``return set()``) surface as the documented
+    # 500 ``function_error`` envelope instead of escaping as an unhandled 500
+    # ``http_error`` from Django's default exception handler.
+    try:
+        body = json.dumps({"result": result}, cls=DjangoJSONEncoder)
+    except (TypeError, ValueError):
+        logger.exception(
+            "djust server_function return value not JSON-serializable: slug=%s fn=%s",
+            sanitize_for_log(view_slug),
+            sanitize_for_log(function_name),
+        )
+        return api_error(500, "function_error", "Return value is not JSON-serializable")
+
+    return HttpResponse(body, content_type="application/json")

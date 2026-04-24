@@ -340,6 +340,35 @@ def test_is_server_function_helper():
     assert is_server_function(y) is False
 
 
+def test_non_serializable_return_returns_function_error(authed_request):
+    """Non-JSON-serializable returns surface as the documented 500 envelope.
+
+    Regression guard: ``JsonResponse`` serialization used to run OUTSIDE the
+    try/except guarding the handler invocation, so a return value like
+    ``{"bad": {1, 2, 3}}`` (sets aren't JSON-serializable) escaped as an
+    unhandled ``TypeError`` and Django surfaced it as a generic 500
+    ``http_error`` — contradicting the contract documented in
+    ``docs/website/guides/server-functions.md``. The fix wraps serialization
+    so the envelope stays ``{"error": "function_error", ...}``.
+    """
+
+    class V(LiveView):
+        api_name = "sf.badret"
+
+        @server_function
+        def oops(self, **kwargs):
+            # ``set`` is not JSON-serializable via DjangoJSONEncoder.
+            return {"bad": {1, 2, 3}}
+
+    register_api_view("sf.badret", V)
+    request, _ = authed_request({})
+    resp = dispatch_server_function(request, "sf.badret", "oops")
+    assert resp.status_code == 500
+    body = json.loads(resp.content)
+    assert body["error"] == "function_error"
+    assert "not JSON-serializable" in body["message"]
+
+
 def test_url_call_route_resolves_before_generic_dispatch():
     """``call/<slug>/<fn>/`` must precede ``<slug>/<handler>/`` in URL matching.
 
