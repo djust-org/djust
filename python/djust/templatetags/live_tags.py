@@ -39,6 +39,117 @@ logger = logging.getLogger(__name__)
 _SCRIPT_CLOSE_RE = re.compile(r"</(script)>", re.IGNORECASE)
 
 
+# ---------------------------------------------------------------------------
+# {% djust_client_config %} — FORCE_SCRIPT_NAME / sub-path mount support (#987)
+# ---------------------------------------------------------------------------
+#
+# Emits a ``<meta name="djust-api-prefix" content="...">`` tag whose content
+# is derived via Django's ``reverse()``. Because ``reverse()`` honors
+# ``FORCE_SCRIPT_NAME`` and any ``api_patterns(prefix=...)`` mount prefix,
+# this automatically resolves sub-path / mounted-app deployments without
+# the template author having to hard-code the prefix.
+#
+# The client reads the meta tag at bootstrap time (``00-namespace.js``) and
+# sets ``window.djust.apiPrefix``. Server-function / HTTP-API URLs are then
+# built via ``window.djust.apiUrl(path)`` which joins prefix + path with
+# slash normalization.
+#
+# See ``docs/website/guides/server-functions.md`` (Sub-path deploys section)
+# and ``docs/website/guides/http-api.md`` for the developer-facing docs.
+
+
+# URL names to try, in order. With ``api_patterns()`` the namespace
+# ``djust_api`` is set; with ``include("djust.api.urls")`` there is no
+# namespace. We probe both so either mount style works without the
+# template author having to tell us which is in use.
+_DJUST_API_CALL_URL_NAMES = ("djust_api:djust-api-call", "djust-api-call")
+
+# Placeholder slugs fed into reverse(). Any valid ``<str>`` values work —
+# we only need the URL so we can strip the trailing segment and recover
+# the prefix. ``_`` is valid for Django's ``<str>`` converter.
+_REVERSE_PROBE_KWARGS = {"view_slug": "_", "function_name": "_"}
+_REVERSE_PROBE_SUFFIX = "call/_/_/"
+
+
+def _resolve_api_prefix() -> str:
+    """Return the API mount prefix via ``reverse()`` or ``""`` if unmounted.
+
+    ``reverse()`` honors both ``FORCE_SCRIPT_NAME`` and any
+    ``api_patterns(prefix=...)`` mount. We build a URL for the
+    server-function call endpoint with sentinel slugs, then strip the
+    ``call/_/_/`` suffix to recover the mount prefix.
+
+    Returns an empty string if the API is not mounted (so the template
+    tag can emit ``content=""`` and let the client fall back to its
+    compile-time default ``/djust/api/``).
+    """
+    from django.urls import NoReverseMatch, reverse
+
+    for name in _DJUST_API_CALL_URL_NAMES:
+        try:
+            url = reverse(name, kwargs=_REVERSE_PROBE_KWARGS)
+        except NoReverseMatch:
+            continue
+        # url ends with the suffix we probed for; strip it to recover
+        # the mount prefix. Using rsplit handles the case where the
+        # prefix itself contained the literal string "call/_/_/"
+        # (extraordinarily unlikely but harmless to be defensive).
+        if url.endswith(_REVERSE_PROBE_SUFFIX):
+            return url[: -len(_REVERSE_PROBE_SUFFIX)]
+        # Defensive fallback: reverse() returned something unexpected,
+        # hand it back as-is rather than silently mangling.
+        return url
+    return ""
+
+
+@register.simple_tag
+def djust_client_config() -> Any:
+    """Emit client bootstrap configuration as ``<meta>`` tags.
+
+    Currently emits a single tag::
+
+        <meta name="djust-api-prefix" content="<resolved prefix>">
+
+    The resolved prefix is computed via Django's ``reverse()`` so it
+    honors ``FORCE_SCRIPT_NAME`` and any custom ``api_patterns(prefix=...)``
+    mount. When the djust API is not mounted at all, the tag is still
+    emitted with ``content=""`` (for easier debugging — an inspector
+    looking at the rendered HTML can immediately see resolution failed),
+    and the client falls back to its compile-time default ``/djust/api/``.
+
+    Usage::
+
+        {% load live_tags %}
+        <!DOCTYPE html>
+        <html>
+        <head>
+            {% djust_client_config %}
+            <!-- ...other head content... -->
+        </head>
+
+    Place the tag inside ``<head>`` BEFORE the djust client script is
+    loaded so it is in the DOM when ``00-namespace.js`` runs. When djust
+    auto-injects ``client.js`` via the LiveView post-processing path,
+    the auto-injection also reads ``window.djust.apiPrefix`` if it's
+    already been set — so either placement works.
+
+    Security: the resolved prefix is HTML-escaped via
+    :func:`django.utils.html.escape` so a mis-configured
+    ``FORCE_SCRIPT_NAME`` value cannot break out of the ``content="..."``
+    attribute. See ``test_tag_output_is_escaped``.
+    """
+    prefix = _resolve_api_prefix()
+    # escape() handles all HTML-special chars including the double-quote
+    # (rendered as &quot;) so the value is safe to interpolate inside
+    # content="..." — even if a developer accidentally puts
+    # <script> in FORCE_SCRIPT_NAME.
+    escaped = escape(prefix)
+    # String concatenation (not f-string) to comply with the repo rule
+    # against f-string mark_safe interpolation.
+    html = '<meta name="djust-api-prefix" content="' + escaped + '">'
+    return mark_safe(html)
+
+
 @register.simple_tag
 def live_form(view, **kwargs):
     """

@@ -422,6 +422,50 @@ class MyView(LiveView):
 
 ---
 
+## Sub-path deploys (`FORCE_SCRIPT_NAME`, custom prefixes) <small>v0.7.1</small>
+
+If your Django project is mounted under a URL prefix — via
+`FORCE_SCRIPT_NAME=/mysite` or by passing a custom prefix to
+`api_patterns()` — in-browser callers need to know the new prefix at
+runtime. Add the `{% djust_client_config %}` template tag to your
+base template's `<head>`:
+
+```django
+{% load live_tags %}
+<!DOCTYPE html>
+<html>
+<head>
+    {% djust_client_config %}
+    <!-- other head content -->
+</head>
+```
+
+The tag emits `<meta name="djust-api-prefix" content="...">`. The
+content is resolved via Django's `reverse()` so it automatically
+reflects:
+
+- `FORCE_SCRIPT_NAME` (Django setting — prepends a path segment to
+  every generated URL). Asserted by
+  `test_tag_emits_meta_under_force_script_name`.
+- `api_patterns(prefix="myapi/")` (a custom mount prefix on the
+  djust API `include()`). Asserted by
+  `test_tag_emits_meta_when_api_mounted_at_custom_prefix`.
+- Fallback to `/djust/api/` when the tag is absent. Asserted by
+  `test_default_prefix_when_no_meta` on the client side.
+
+**Server-side (outbound) URLs** built with `reverse()` already honor
+`FORCE_SCRIPT_NAME` — this section is specifically about the
+**browser-side** `djust.call()` client and any other code that
+consumes the HTTP API directly. The browser needs to learn the
+prefix at runtime because JS has no access to Django's URL config.
+
+An integrator who wants to override the prefix explicitly can set
+`window.djust.apiPrefix = '/custom/'` in a script tag that runs
+BEFORE `client.js`; that wins over the meta tag
+(`test_explicit_global_override_wins`).
+
+---
+
 ## What's out of scope (today)
 
 Per [ADR-008](../../adr/008-auto-generated-http-api-from-event-handlers.md) §"Out of scope":

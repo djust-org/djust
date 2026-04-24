@@ -1,8 +1,13 @@
 <!DOCTYPE html>
+{% load live_tags %}
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# djust client bootstrap (#987) — emits <meta name="djust-api-prefix"> #}
+    {# so server-function / HTTP-API calls resolve the correct URL under  #}
+    {# FORCE_SCRIPT_NAME or custom api_patterns(prefix=...) mounts.        #}
+    {% djust_client_config %}
     <title>{% block title %}djust - Blazing Fast Reactive Django{% endblock %}</title>
 
     <!-- Bootstrap 5 CSS -->
