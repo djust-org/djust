@@ -329,6 +329,28 @@ class LiveView(
     # patterns (``password``, ``token``, ``secret``, ``api_key``, ``pii``).
     enable_state_snapshot: bool = False
 
+    # Streaming initial render (v0.6.1 — Phase 1).
+    #
+    # Opt-in per-view flag that returns a ``StreamingHttpResponse`` from the
+    # HTTP GET path instead of an ``HttpResponse``. The response body is
+    # flushed in three chunks — shell-open (everything before the
+    # ``<div dj-root>``), main content (the ``<div dj-root>...</div>`` block),
+    # and shell-close (``</body></html>`` + trailing markup). Browsers can
+    # begin parsing the ``<head>`` and loading CSS/JS while the server is
+    # still computing the main content — competitive with Next.js
+    # ``renderToPipeableStream``.
+    #
+    # Backward-compatible default (``False``) preserves the existing
+    # ``HttpResponse`` path. When ``True``, the response omits the
+    # ``Content-Length`` header (HTTP chunked transfer) and sets
+    # ``X-Djust-Streaming: 1`` for observability.
+    #
+    # Caveats: some reverse proxies buffer chunked responses by default;
+    # middleware that inspects response bodies must be streaming-aware.
+    # Lazy-child streaming (the full Next.js-style partial hydration) is
+    # tracked for v0.6.2 as Phase 2.
+    streaming_render: bool = False
+
     # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================
