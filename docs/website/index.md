@@ -38,6 +38,7 @@ How to build specific features.
 |                                                        |                                                           |
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | **[Streaming](guides/streaming.md)**                   | Real-time partial DOM updates for LLM chat and live feeds |
+| **[Streaming Markdown (`{% djust_markdown %}`)](guides/streaming-markdown.md)** | Server-side safe Markdown rendering for streaming LLM output — no client library, no flicker, XSS-safe (v0.7.0) |
 | **[Virtual Lists (`dj-virtual`)](guides/virtual-lists.md)** | Render 1000s of items with only the visible window in the DOM (fixed + variable height) |
 | **[Flash Messages](guides/flash-messages.md)**         | Transient notifications with `put_flash` (Phoenix-style)  |
 | **[Presence](guides/presence.md)**                     | Track online users, live cursors, typing indicators       |

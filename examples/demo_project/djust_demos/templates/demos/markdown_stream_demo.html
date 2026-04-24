@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% load live_tags %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.markdown_stream_demo.MarkdownStreamDemoView"
+     class="max-w-3xl mx-auto p-6">
+
+    <h1 class="text-2xl font-bold mb-2">Streaming Markdown demo</h1>
+    <p class="text-slate-600 mb-4">
+        Click <strong>Start stream</strong> and watch a fixed reply arrive one character at a
+        time. The entire Markdown body is re-rendered on every tick by the Rust parser,
+        server-side, with a <em>provisional-line</em> split so the trailing in-progress
+        line never flashes as half-parsed HTML. Any <code>&lt;script&gt;</code> payload in
+        the source is escaped — never rendered live.
+    </p>
+
+    <div class="flex gap-2 mb-4">
+        <button dj-click="start_stream"
+                class="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50"
+                {% if streaming %}disabled{% endif %}>
+            Start stream
+        </button>
+        <button dj-click="reset"
+                class="px-4 py-2 rounded border">
+            Reset
+        </button>
+        {% if streaming %}
+            <span class="px-3 py-2 text-sm text-slate-500">streaming…</span>
+        {% endif %}
+    </div>
+
+    <!-- The rendered Markdown. This is the only place {% djust_markdown %} is needed. -->
+    <article class="prose max-w-none border rounded p-4 bg-white min-h-[200px]">
+        {% djust_markdown llm_output %}
+    </article>
+
+    <!-- Provisional wrapper styling (scoped, one-shot). -->
+    <style>
+        .djust-md-provisional {
+            opacity: 0.55;
+            font-style: italic;
+        }
+    </style>
+</div>
+{% endblock %}

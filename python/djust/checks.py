@@ -1932,6 +1932,10 @@ _DJ_EVENT_DIRECTIVES_RE = re.compile(
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
+# A090 — scanner for {% djust_markdown %} (v0.7.0). Fires info-level once
+# per project when the tag is detected, confirming the Rust-side safe
+# renderer is in use (raw HTML escaped, provisional-line splitter active).
+_DJ_MARKDOWN_TAG_RE = re.compile(r"\{%\s*djust_markdown\b")
 
 
 @register("djust")
@@ -1941,6 +1945,12 @@ def check_templates(app_configs, **kwargs):
     tpl_dirs = _get_template_dirs()
     if not tpl_dirs:
         return errors
+
+    # A090 — project-wide counter for {% djust_markdown %} usage (v0.7.0).
+    # We emit a single info-level check after the per-file loop when at
+    # least one template uses the tag, so developers get explicit
+    # confirmation the Rust-side safe renderer is active.
+    djust_markdown_hits: list[tuple[str, int]] = []
 
     for filepath in _iter_template_files(tpl_dirs):
         try:
@@ -2161,6 +2171,33 @@ def check_templates(app_configs, **kwargs):
                 )
             else:
                 _seen_activity_names[name_literal] = lineno
+
+        # A090 — tally {% djust_markdown %} occurrences (v0.7.0). The
+        # actual Info-level check is emitted once per project after the
+        # per-file loop (below).
+        for match in _DJ_MARKDOWN_TAG_RE.finditer(content):
+            lineno = content[: match.start()].count("\n") + 1
+            djust_markdown_hits.append((relpath, lineno))
+
+    if djust_markdown_hits and not _is_check_suppressed("djust.A090"):
+        first_relpath, first_lineno = djust_markdown_hits[0]
+        count = len(djust_markdown_hits)
+        errors.append(
+            DjustInfo(
+                "{%% djust_markdown %%} is used in %d location(s) (first: %s:%d) — "
+                "djust is rendering Markdown server-side via the Rust pulldown-cmark "
+                "backend with safe-by-default escaping "
+                "(ENABLE_HTML never set, javascript: URLs neutralised, 10 MiB input cap)."
+                % (count, first_relpath, first_lineno),
+                hint=(
+                    "This is informational. Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['A090']} if you don't "
+                    "want this notice. See the Streaming Markdown guide for "
+                    "details: docs/website/guides/streaming-markdown.md."
+                ),
+                id="djust.A090",
+            )
+        )
 
     return errors
 

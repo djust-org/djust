@@ -17,10 +17,13 @@ use std::sync::OnceLock;
 pub mod filters;
 pub mod inheritance;
 pub mod lexer;
+pub mod markdown;
 pub mod parser;
 pub mod registry;
 pub mod renderer;
 pub mod tags;
+
+pub use markdown::render_markdown;
 
 use inheritance::{build_inheritance_chain, TemplateLoader};
 use parser::Node;

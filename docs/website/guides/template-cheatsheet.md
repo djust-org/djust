@@ -537,6 +537,7 @@ djust.hooks.chart = {
 | `{% static 'file' %}` | Static file URL |
 | `{% with var=value %}` | Local variable assignment |
 | `{% dj_activity "name" visible=expr eager=expr %}...{% enddj_activity %}` | Pre-rendered hidden panel with preserved local state (React 19.2 parity). See [Activity guide](activity.md). |
+| `{% djust_markdown expr [kwargs] %}` | Render Markdown to sanitised HTML in the Rust parser — raw HTML and `javascript:` URLs are neutralised; trailing-line provisional wrap makes streaming LLM output flicker-free. See [Streaming Markdown guide](streaming-markdown.md). |
 
 ### Filters (all 57 Django built-ins)
 

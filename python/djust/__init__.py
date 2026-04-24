@@ -40,6 +40,7 @@ from .mixins.flash import FlashMixin
 from .mixins.page_metadata import PageMetadataMixin
 from .mixins.notifications import NotificationMixin
 from .db import notify_on_save, send_pg_notify
+from .markdown import render_markdown as render_markdown
 
 # Import Rust functions
 try:
@@ -292,4 +293,6 @@ __all__ = [
     "NotificationMixin",
     "notify_on_save",
     "send_pg_notify",
+    # Safe server-side Markdown rendering
+    "render_markdown",
 ]

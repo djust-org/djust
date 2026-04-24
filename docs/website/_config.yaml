@@ -191,6 +191,11 @@ navigation:
         file: guides/activity.md
         order: 7.6
         level: intermediate
+      - title: Streaming Markdown (`{% djust_markdown %}`)
+        slug: streaming-markdown
+        file: guides/streaming-markdown.md
+        order: 7.7
+        level: intermediate
       - title: Authentication
         slug: authentication
         file: guides/authentication.md

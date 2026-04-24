@@ -3904,3 +3904,82 @@ class TestA072A073AdminWidgetChecks:
         assert len(a073_bogus) == 0, (
             f"A073 should fallback to 1 for bogus setting; got {a073_bogus!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# A090 — {% djust_markdown %} info-level confirmation check (v0.7.0)
+# ---------------------------------------------------------------------------
+
+
+class TestA090DjustMarkdownCheck:
+    """The A090 info-level check fires once per project when the
+    ``{% djust_markdown %}`` tag is used, confirming the Rust-side safe
+    renderer is active.
+    """
+
+    def test_check_a090_info_level(self, tmp_path, settings):
+        """A090 should fire as an INFO-level check when the tag is used."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "chat.html").write_text("<article>{% djust_markdown body %}</article>")
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from django.core.checks import INFO
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        a090 = [e for e in errors if e.id == "djust.A090"]
+        assert len(a090) == 1, (
+            "A090 should fire exactly once when {%% djust_markdown %%} is used; got %r"
+            % [e.id for e in errors]
+        )
+        assert a090[0].level == INFO, "A090 must be INFO-level; got level=%r" % a090[0].level
+        # Confirmation message mentions the Rust backend and safety guarantees.
+        msg = a090[0].msg
+        assert "pulldown-cmark" in msg
+        assert "javascript:" in msg
+
+    def test_a090_silent_when_tag_not_used(self, tmp_path, settings):
+        """A090 must not fire when no template uses the tag."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "plain.html").write_text("<p>Hello world</p>")
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        a090 = [e for e in errors if e.id == "djust.A090"]
+        assert len(a090) == 0
+
+    def test_a090_fires_once_even_with_multiple_uses(self, tmp_path, settings):
+        """Multiple occurrences still produce exactly one A090 Info."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "a.html").write_text("{% djust_markdown body %}")
+        (tpl_dir / "b.html").write_text("{% djust_markdown body %}\n{% djust_markdown other %}")
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        a090 = [e for e in errors if e.id == "djust.A090"]
+        assert len(a090) == 1
+        # Message includes the total count (3).
+        assert "3 location(s)" in a090[0].msg

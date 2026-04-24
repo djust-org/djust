@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Streaming Markdown `{% djust_markdown %}` (v0.7.0)** — server-side
+  Markdown renderer built on `pulldown-cmark 0.12` with three safety
+  guarantees wired in at the crate level: raw HTML in the source is
+  escaped (`Options::ENABLE_HTML` is never set; because
+  pulldown-cmark 0.12 still emits `Event::Html` / `Event::InlineHtml`
+  when that flag is off, `sanitise_event` re-routes those events to
+  `Event::Text` so the writer escapes them), `javascript:` /
+  `vbscript:` / `data:` URL schemes in link/image destinations are
+  rewritten to `#` (case-insensitive, leading-whitespace tolerant),
+  and inputs larger than 10 MiB (per-call input cap, not a concurrency
+  limiter) are returned as an escaped
+  `<pre class="djust-md-toobig">` block without invoking the parser.
+  A provisional-line splitter renders a partially-typed trailing line
+  as escaped text inside `<p class="djust-md-provisional">`,
+  eliminating mid-token flicker for streaming LLM output. Exposed
+  three ways: the `{% djust_markdown expr [kwargs] %}` tag (registered
+  via the existing Rust tag-handler registry), the Python helper
+  `djust.render_markdown(src, **opts)` returning a `SafeString`, and
+  the PyO3 function `djust._rust.render_markdown`. Kwargs:
+  `provisional`, `tables`, `strikethrough`, `task_lists`. **Note on
+  deviation from plan**: `autolinks` was dropped from the public surface
+  — pulldown-cmark 0.12 does not expose a `GFM_AUTOLINK` /
+  `ENABLE_AUTOLINK` options flag, so plain-text URLs stay as text unless
+  wrapped in explicit `[text](url)` syntax. Will be reconsidered when
+  the upstream parser is bumped. Covered by **24 Rust tests**
+  (`crates/djust_templates/src/markdown.rs`, including regression cases
+  for `vbscript:`, `data:`, mixed-case `JavaScript:`, leading-whitespace
+  URLs, `<iframe>` escaping, image-src neutralisation, and the 10 MiB
+  cap) and **14 Python tests** (`python/djust/tests/test_markdown.py` +
+  `tests/unit/test_markdown_tag.py`) — 38 total. Demo at
+  `/demos/markdown-stream/`; full write-up in
+  [docs/website/guides/streaming-markdown.md](docs/website/guides/streaming-markdown.md).
 - **Admin widgets & bulk-action progress (v0.7.0)** — two additions to
   `djust.admin_ext` close the most-requested gaps in the alternative
   reactive admin:
