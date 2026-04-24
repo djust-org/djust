@@ -911,6 +911,41 @@ class DashboardView(LiveView):
 
 **Server functions (RPC-style calls, promoted from post-v0.7.0 consideration)** — Call server-side Python functions from client JS and get structured results back, without defining an event handler or managing state. `const result = await djust.call('search_users', {query: 'john'})` invokes a decorated Python function and returns JSON. Different from event handlers (which trigger re-renders) — server functions are pure request/response, ideal for typeahead suggestions, autocomplete, validation checks, and any pattern where you need data but don't want a full re-render. React Server Actions and tRPC popularized this pattern. API: `@server_function` decorator on view methods, client-side `djust.call()` with promise return. ~100 lines Python + ~30 lines JS. **Relationship to the ADR-008 HTTP API (now shipping in v0.5.1):** the two are complementary — server functions target in-browser-to-server RPC for no-re-render use cases, the ADR-008 API targets external consumers (mobile / S2S / AI agents) of the same handler pool. A handler can be either or both (`@server_function @event_handler(expose_api=True)`). The ADR-008 dispatch-view router lands first in v0.5.1; server functions reuse that router plumbing here in v0.7.0.
 
+### Milestone: v0.7.1 — Deployment ergonomics & deferred v0.7.0 items
+
+*Goal:* Ship the smaller-but-compound follow-ups from the v0.7.0 retro
+— deployment-ergonomic fixes that unblock sub-path / mounted-app users,
+plus the Islands of interactivity scope that slipped from v0.7.0.
+
+| Priority | Item | Status |
+| --- | --- | --- |
+| **P1** | ~~`FORCE_SCRIPT_NAME` / mounted sub-path support for the in-browser HTTP API client (#987, Action Tracker #123)~~ | ~~Shipped in v0.7.1~~ ✅ |
+| **P2** | Islands of interactivity (deferred from v0.7.0) | Not started |
+
+**~~`FORCE_SCRIPT_NAME` / sub-path mount support (#987)~~** ✅ Shipped
+in v0.7.1 — new `{% djust_client_config %}` template tag emits
+`<meta name="djust-api-prefix" content="...">` whose content is
+resolved via Django's `reverse()`, so it automatically honors
+`FORCE_SCRIPT_NAME` and any custom `api_patterns(prefix=...)` mount.
+The client reads the meta tag at bootstrap and exposes
+`window.djust.apiPrefix` + `window.djust.apiUrl(path)`; `djust.call()`
+routes through the helper so the last remaining hardcoded
+`/djust/api/` reference in the client bundle is gone. Priority:
+explicit `window.djust.apiPrefix` > meta tag > compile-time default
+`/djust/api/`. 12 new tests (5 Python + 6 JS + 1 regression).
+Bundle delta: +148 B gzipped. Docs: "Sub-path deploys" section added
+to `docs/website/guides/server-functions.md` +
+`docs/website/guides/http-api.md`. Follow-up issue #992 filed for the same
+class of bug in `03b-sse.js:44` (SSE fallback transport, v0.7.2
+target). Closes Action Tracker #123.
+
+**Islands of interactivity (deferred from v0.7.0 retro)** —
+content-heavy sites with small, scattered interactive zones. Lets a
+page use `{% live_island %}` to mark a region that upgrades to a
+LiveView on hydration while the rest of the page stays fully static.
+Deferred from v0.7.0 because the markdown/admin/activity work already
+saturated that milestone's scope; reopens here.
+
 ### Milestone: v0.8.0 — Server Actions, Async Streams & Form Patterns (NEW)
 
 *Goal:* Bridge the gap between Phoenix 1.0's async primitives and React 19's server actions model. Make djust the most ergonomic framework for forms, data mutation, and async data flows.

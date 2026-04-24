@@ -22,12 +22,13 @@
         if (!viewSlug || !funcName) {
             throw new Error('djust.call requires (viewSlug, funcName)');
         }
-        // TODO(v0.7.1, #987): resolve '/djust/api/' via meta[name="djust-api-prefix"]
-        // for FORCE_SCRIPT_NAME / sub-path-mount compat. Matches the existing
-        // ADR-008 client pattern; fix both call sites together.
-        const url = '/djust/api/call/'
-            + encodeURIComponent(viewSlug) + '/'
-            + encodeURIComponent(funcName) + '/';
+        // #987: resolve the URL prefix through djust.apiUrl() so
+        // FORCE_SCRIPT_NAME / api_patterns(prefix=...) sub-path deploys
+        // work. djust.apiPrefix is set at bootstrap from the
+        // {% djust_client_config %} meta tag (see 00-namespace.js).
+        const url = window.djust.apiUrl(
+            'call/' + encodeURIComponent(viewSlug) + '/' + encodeURIComponent(funcName) + '/'
+        );
         const resp = await fetch(url, {
             method: 'POST',
             credentials: 'same-origin',

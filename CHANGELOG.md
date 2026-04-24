@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`FORCE_SCRIPT_NAME` / sub-path mount support for the in-browser HTTP
+  API client (v0.7.1, #987, closes Action Tracker #123)** — new template
+  tag `{% djust_client_config %}` in `djust.templatetags.live_tags`
+  emits `<meta name="djust-api-prefix" content="...">`. The content is
+  derived via Django's `reverse()` so it honors both `FORCE_SCRIPT_NAME`
+  and any custom `api_patterns(prefix=...)` mount. The djust client
+  reads this meta tag once at bootstrap (`00-namespace.js`) and exposes
+  two helpers: `window.djust.apiPrefix` (resolved prefix string) and
+  `window.djust.apiUrl(path)` (prefix + path joiner with slash
+  normalization). `djust.call()` (`48-server-functions.js`) now routes
+  through `djust.apiUrl()` — the last remaining hardcoded `/djust/api/`
+  reference in the client bundle is gone. Priority: explicit
+  `window.djust.apiPrefix` > meta tag > compile-time default
+  `/djust/api/`. Integrators mounting djust behind a reverse proxy
+  prefix now only need to add `{% load live_tags %}{% djust_client_config %}`
+  to their base template `<head>`; no JS patching required. Covered
+  by **12 new tests** (5 Python in `test_client_config_tag.py`, 6 JS
+  in `api_prefix.test.js`, 1 regression in `server_functions.test.js`
+  asserting `djust.call` honors the meta tag under a forced script
+  prefix). Bundle size delta: **+148 B gzipped** (50030 → 50178 B).
+  Docs: "Sub-path deploys" section added to
+  `docs/website/guides/server-functions.md` and
+  `docs/website/guides/http-api.md`. Follow-up issue #992 filed for the
+  same class of bug in `03b-sse.js:44` (SSE fallback transport, v0.7.2
+  target).
+
 ## [0.7.0rc1] - 2026-04-24
 
 ### Added

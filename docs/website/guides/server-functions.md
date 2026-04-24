@@ -291,6 +291,62 @@ def get_product(self, id: int) -> dict:
 
 ---
 
+## Sub-path deploys (`FORCE_SCRIPT_NAME`, custom prefixes) <small>v0.7.1</small>
+
+If your djust app is mounted under a URL prefix — either via Django's
+`FORCE_SCRIPT_NAME` setting or by passing a `prefix=` to
+`api_patterns()` — add `{% djust_client_config %}` to your base
+template's `<head>`:
+
+```django
+{% load live_tags %}
+<!DOCTYPE html>
+<html>
+<head>
+    {% djust_client_config %}
+    <!-- other head content -->
+</head>
+```
+
+The tag emits `<meta name="djust-api-prefix" content="...">`. The
+content is resolved via Django's `reverse()`, so it honors
+`FORCE_SCRIPT_NAME` **and** any custom `api_patterns(prefix=...)` mount.
+
+Three rules apply, each with an asserting test (Action Tracker #124):
+
+- **Default-mounted deployment** — the tag emits `content="/djust/api/"`.
+  (`test_tag_emits_meta_with_default_prefix`)
+- **`reverse()` honors `FORCE_SCRIPT_NAME`** — with
+  `FORCE_SCRIPT_NAME=/mysite`, the tag emits
+  `content="/mysite/djust/api/"`.
+  (`test_tag_emits_meta_under_force_script_name`)
+- **Custom `api_patterns(prefix=...)` honored** — mounting the API at
+  a non-default prefix (e.g. `api_patterns(prefix='myapi/')`) emits
+  `content="/myapi/"`, and the client routes accordingly.
+  (`test_tag_emits_meta_when_api_mounted_at_custom_prefix`)
+- **Client falls back to `/djust/api/` when no meta tag is present** —
+  if the tag is omitted or the API is not mounted, the client uses the
+  compile-time default. (`test_default_prefix_when_no_meta`)
+- **Explicit `window.djust.apiPrefix` takes priority over meta** — an
+  integrator who sets `window.djust.apiPrefix = '/custom/'` in a script
+  loaded BEFORE `client.js` wins over whatever the meta tag says.
+  (`test_explicit_global_override_wins`)
+
+The client reads the meta once at bootstrap and exposes two new entries
+on the global namespace:
+
+- `window.djust.apiPrefix` — the resolved prefix string.
+- `window.djust.apiUrl(path)` — joins prefix + relative path with slash
+  normalization. `djust.call` routes through this helper so sub-path
+  deploys work out of the box.
+
+When the tag is omitted, the client falls back to the compile-time
+default `/djust/api/`. That's the right choice for the default mount
+but will break any non-default deployment — add the tag to your base
+template before shipping.
+
+---
+
 ## Out of scope (future)
 
 Things explicitly **not** in v0.7.0, tracked for later:

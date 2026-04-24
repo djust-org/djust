@@ -10,8 +10,11 @@ import fs from 'fs';
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
 function createEnv(opts = {}) {
+    const head = opts.metaApiPrefix
+        ? `<meta name="djust-api-prefix" content="${opts.metaApiPrefix}">`
+        : '';
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><head></head><body>${opts.body || ''}</body></html>`,
+        `<!DOCTYPE html><html><head>${head}</head><body>${opts.body || ''}</body></html>`,
         { url: 'http://localhost:8000/', runScripts: 'dangerously', pretendToBeVisual: true }
     );
     const { window } = dom;
@@ -74,6 +77,23 @@ describe('djust.call — HTTP RPC client', () => {
         expect(caught.code).toBe('permission_denied');
         expect(caught.status).toBe(403);
         expect(caught.message).toBe('nope');
+    });
+
+    it('test_djust_call_uses_apiUrl_helper: honors meta[name="djust-api-prefix"] under FORCE_SCRIPT_NAME (#987)', async () => {
+        // Doc claim: djust.call routes through window.djust.apiUrl, which
+        // reads window.djust.apiPrefix seeded from the meta tag at bootstrap.
+        // With FORCE_SCRIPT_NAME=/mysite the server-side {% djust_client_config %}
+        // emits content="/mysite/djust/api/" — the client must then issue the
+        // fetch against that prefix, not the compile-time default.
+        const { window } = createEnv({
+            cookie: 'csrftoken=ABC',
+            metaApiPrefix: '/mysite/djust/api/',
+        });
+        await window.djust.call('v', 'f', { q: 'x' });
+        expect(window._fetchCalls.length).toBe(1);
+        const url = window._fetchCalls[0].url;
+        expect(url.startsWith('/mysite/djust/api/call/')).toBe(true);
+        expect(url).toBe('/mysite/djust/api/call/v/f/');
     });
 
     it('sets X-CSRFToken header from the csrftoken cookie', async () => {
