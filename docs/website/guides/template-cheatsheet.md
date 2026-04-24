@@ -536,6 +536,7 @@ djust.hooks.chart = {
 | `{% csrf_token %}` | CSRF token |
 | `{% static 'file' %}` | Static file URL |
 | `{% with var=value %}` | Local variable assignment |
+| `{% dj_activity "name" visible=expr eager=expr %}...{% enddj_activity %}` | Pre-rendered hidden panel with preserved local state (React 19.2 parity). See [Activity guide](activity.md). |
 
 ### Filters (all 57 Django built-ins)
 

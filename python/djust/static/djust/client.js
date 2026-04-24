@@ -4597,6 +4597,47 @@ async function handleEvent(eventName, params = {}) {
     const triggerElement = params._targetElement;
     const skipLoading = params._skipLoading;
 
+    // v0.7.0 — Activity gate. Drop the event client-side when ANY
+    // ancestor activity wrapper is hidden and not eager. The nested
+    // case matters: ``closest('[data-djust-activity]')`` alone returns
+    // the NEAREST wrapper, which for ``<outer hidden><inner visible>``
+    // would be the INNER one — and the inner being visible would
+    // incorrectly dispatch the event even though the user can't see it
+    // (the outer hides the whole subtree).
+    //
+    // Selector discipline is the same as 12-vdom-patch.js so the patch
+    // gate and the event gate stay in lock-step. We also stamp the
+    // resolved ``_activity`` name (nearest wrapper) on the outbound
+    // payload so the server can route / defer per-activity on the rare
+    // race where the client gate is stale (mid-morph hide).
+    let _activityName = null;
+    if (triggerElement && triggerElement.closest) {
+        // Drop if any hidden non-eager ancestor exists — correct under nesting.
+        const hiddenAncestor = triggerElement.closest(
+            '[data-djust-activity][hidden]:not([data-djust-eager="true"])'
+        );
+        if (hiddenAncestor) {
+            if (globalThis.djustDebug) {
+                console.log(
+                    '[LiveView:activity] drop event in hidden activity:',
+                    eventName,
+                    hiddenAncestor.getAttribute('data-djust-activity')
+                );
+            }
+            // Match the contract of an early-return in cached path:
+            // stop loading state if we started any, then bail.
+            if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
+            return;
+        }
+        // For routing: stamp _activity with the nearest activity wrapper
+        // the trigger lives inside (regardless of its own visibility — by
+        // this point we've already confirmed no hidden ancestor exists).
+        const activityAncestor = triggerElement.closest('[data-djust-activity]');
+        if (activityAncestor) {
+            _activityName = activityAncestor.getAttribute('data-djust-activity') || null;
+        }
+    }
+
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
@@ -4604,6 +4645,12 @@ async function handleEvent(eventName, params = {}) {
             continue;
         }
         serverParams[key] = params[key];
+    }
+    // Preserve the resolved activity name so the server can route / defer
+    // per-activity. Only attached when we actually found a wrapper, so
+    // the payload stays compact for non-activity events.
+    if (_activityName) {
+        serverParams._activity = _activityName;
     }
 
     // DEP-002: Apply optimistic UI rule if one exists for this event
@@ -5943,6 +5990,21 @@ function applySinglePatch(patch, rootEl = null) {
     // Phase B) so child / sticky patches don't resolve against the
     // parent view's dj-id namespace.
     const node = getNodeByPath(patch.path, patch.d, rootEl);
+    // v0.7.0 — {% dj_activity %} gate. If the target node lives inside
+    // a HIDDEN activity wrapper that is NOT eager, we intentionally
+    // skip the subtree patch so local DOM state (form values, scroll
+    // offsets, transient JS state) is preserved across show/hide
+    // cycles. The server is the canonical source of visibility, so the
+    // next render after the activity is shown will re-sync state.
+    if (node && node.nodeType === 1 && node.closest) {
+        const hiddenActivity = node.closest('[data-djust-activity][hidden]:not([data-djust-eager="true"])');
+        if (hiddenActivity) {
+            if (globalThis.djustDebug) {
+                console.log('[LiveView:activity] skipping patch inside hidden activity:', hiddenActivity.getAttribute('data-djust-activity'), patch.type);
+            }
+            return true;
+        }
+    }
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';
@@ -13724,4 +13786,167 @@ globalThis.djust.djTransitionGroup = {
 
     window.djust = window.djust || {};
     window.djust.call = call;
+})();
+// ============================================================================
+// {% dj_activity %} — activity visibility tracker (v0.7.0)
+// ============================================================================
+// React 19.2 <Activity> parity. The server is the canonical source of
+// visibility; this module observes the DOM for ``[data-djust-activity]``
+// wrappers, tracks their current ``hidden`` state, and dispatches a
+// bubbling ``djust:activity-shown`` CustomEvent when an activity flips
+// from hidden → visible. Consumers (user code, the event-dispatch gate in
+// 11-event-handler.js, and the VDOM-patch gate in 12-vdom-patch.js) read
+// this state via ``window.djust.activityVisible(name)``.
+//
+// No autocomplete-style polling loop: one MutationObserver filtered to
+// the ``hidden`` attribute on activity roots keeps overhead low. A
+// re-scan runs on ``djust:morph-complete`` so activities added by VDOM
+// patches get tracked.
+
+(function () {
+    // name → { node, visible, eager } — authoritative in-memory mirror of
+    // every activity wrapper currently in the document. Keyed by the
+    // ``data-djust-activity`` attribute; when the same name appears more
+    // than once (a case the A071 system check flags at build time), the
+    // LAST-scanned node wins so the map size matches DOM reality.
+    const _activities = new Map();
+
+    function _isHidden(node) {
+        // Treat explicit ``hidden`` attribute OR computed display:none as
+        // hidden. The attribute is the primary signal (that's what the
+        // template tag emits); the computed check is defensive for apps
+        // that override with CSS.
+        if (!node || node.nodeType !== 1) return false;
+        if (node.hasAttribute('hidden')) return true;
+        try {
+            const cs = node.ownerDocument.defaultView.getComputedStyle(node);
+            if (cs && cs.display === 'none') return true;
+        } catch (_) {
+            // getComputedStyle can throw in exotic environments — fall
+            // through to the attribute check result.
+        }
+        return false;
+    }
+
+    function _scan(root) {
+        const scope = root || document;
+        const nodes = scope.querySelectorAll
+            ? scope.querySelectorAll('[data-djust-activity]')
+            : [];
+        // Build a fresh view from what's actually in the DOM so stale
+        // entries don't linger after a VDOM patch removes a wrapper.
+        const fresh = new Map();
+        for (const node of nodes) {
+            const name = node.getAttribute('data-djust-activity') || '';
+            if (!name) continue;
+            fresh.set(name, {
+                node: node,
+                visible: !_isHidden(node),
+                eager: node.getAttribute('data-djust-eager') === 'true',
+            });
+        }
+        // Replace contents of the live map so external references still
+        // resolve the latest state.
+        _activities.clear();
+        for (const [k, v] of fresh) _activities.set(k, v);
+        return _activities;
+    }
+
+    function activityVisible(name) {
+        // Accept a falsy ``name`` as "no activity context" — behave
+        // identically to an unknown name (defaults to visible so callers
+        // don't suppress legitimate events against a typo).
+        if (!name) return true;
+        const entry = _activities.get(name);
+        if (!entry) return true;
+        return entry.visible !== false;
+    }
+
+    function _dispatchShown(name, node) {
+        try {
+            const ev = new CustomEvent('djust:activity-shown', {
+                bubbles: true,
+                detail: { name: name, node: node },
+            });
+            node.dispatchEvent(ev);
+            if (globalThis.djustDebug) {
+                console.log('[djust:activity] shown:', name);
+            }
+        } catch (_) {
+            // CustomEvent may not be available in some legacy envs; safe
+            // to swallow — the state map stays in sync regardless.
+        }
+    }
+
+    // One observer watches the whole document for ``hidden`` attribute
+    // flips on nodes carrying ``data-djust-activity``. attributeOldValue
+    // lets us distinguish a hidden→visible flip (dispatch) from a
+    // visible→hidden flip (state update only, no event).
+    let _observer = null;
+
+    function _installObserver() {
+        if (_observer || typeof MutationObserver === 'undefined') return;
+        _observer = new MutationObserver(function (mutations) {
+            for (const m of mutations) {
+                if (m.type !== 'attributes' || m.attributeName !== 'hidden') continue;
+                const node = m.target;
+                if (!node || !node.getAttribute) continue;
+                const name = node.getAttribute('data-djust-activity');
+                if (!name) continue;
+                const wasHidden = m.oldValue !== null; // oldValue === null iff attr was absent
+                const isHidden = node.hasAttribute('hidden');
+                const entry = _activities.get(name) || {
+                    node: node,
+                    visible: true,
+                    eager: node.getAttribute('data-djust-eager') === 'true',
+                };
+                entry.node = node;
+                entry.visible = !isHidden;
+                _activities.set(name, entry);
+                if (wasHidden && !isHidden) {
+                    _dispatchShown(name, node);
+                }
+            }
+        });
+        _observer.observe(document.body || document.documentElement, {
+            attributes: true,
+            attributeOldValue: true,
+            attributeFilter: ['hidden'],
+            subtree: true,
+        });
+    }
+
+    // Initial scan + observer install. On document-ready (or immediately
+    // if we're already past DOMContentLoaded).
+    function _boot() {
+        _scan(document);
+        _installObserver();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _boot, { once: true });
+    } else {
+        _boot();
+    }
+
+    // Re-scan when VDOM patches add / remove activity wrappers. The morph
+    // pipeline emits ``djust:morph-complete`` after every successful
+    // patch batch; a lightweight re-scan catches newly-introduced
+    // wrappers and drops entries for removed ones.
+    window.addEventListener('djust:morph-complete', function () {
+        _scan(document);
+    });
+
+    // Expose to the namespace. The top-level ``activityVisible`` helper
+    // is what user code, the event-handler gate, and the VDOM-patch gate
+    // all call; ``_activity`` carries the implementation-detail handles
+    // for tests.
+    window.djust = window.djust || {};
+    window.djust._activity = {
+        _activities: _activities,
+        _scan: _scan,
+        _isHidden: _isHidden,
+        activityVisible: activityVisible,
+    };
+    window.djust.activityVisible = activityVisible;
 })();

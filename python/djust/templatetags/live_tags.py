@@ -854,6 +854,145 @@ def djust_track_static():
 
 
 # ---------------------------------------------------------------------------
+# {% dj_activity %} — React 19.2 <Activity> parity (v0.7.0)
+# ---------------------------------------------------------------------------
+#
+# Pre-renders a hidden region of a LiveView and preserves its local DOM state
+# across show/hide cycles. Distinct from sticky (survives ``live_redirect``),
+# ``{% live_render %}`` (full child view), and ``dj-prefetch`` (fetches future
+# page). The tag renders a wrapper ``<div>`` with ``data-djust-activity`` and,
+# when ``visible=False``, the HTML ``hidden`` attribute + ``aria-hidden``.
+#
+# The companion ``ActivityMixin`` (``python/djust/mixins/activity.py``) stores
+# the server-side visibility state. Client-side event-dispatch gating lives in
+# ``static/djust/src/11-event-handler.js`` and VDOM subtree skipping in
+# ``static/djust/src/12-vdom-patch.js``. See ``docs/website/guides/activity.md``.
+
+
+class DjActivityNode(Node):
+    """Render a ``{% dj_activity %}`` block with show/hide + eager semantics.
+
+    Emits a wrapper ``<div>`` carrying the activity ``name``, a stable
+    ``data-djust-activity=<name>`` attribute, the ``hidden``/``aria-hidden``
+    pair when declared not visible, and an optional ``data-djust-eager="true"``
+    opt-in for activities that continue to run (dispatch events, receive
+    patches) while hidden.
+
+    The inner body is rendered unconditionally — children exist in the DOM
+    in every branch so local state (form values, scroll, transient JS) is
+    preserved across show/hide cycles. Hiding is done via the HTML ``hidden``
+    attribute, which the browser treats as ``display: none`` without
+    removing the subtree.
+    """
+
+    def __init__(self, name_expr, visible_expr, eager_expr, nodelist):
+        self.name_expr = name_expr
+        self.visible_expr = visible_expr
+        self.eager_expr = eager_expr
+        self.nodelist = nodelist
+
+    def _resolve_bool(self, expr, context, default):
+        if expr is None:
+            return default
+        try:
+            value = expr.resolve(context)
+        except Exception:  # noqa: BLE001 — defensive: unresolvable var → default
+            return default
+        if value is None:
+            return default
+        return bool(value)
+
+    def _resolve_name(self, context):
+        try:
+            raw = self.name_expr.resolve(context)
+        except Exception:  # noqa: BLE001
+            raw = None
+        if raw is None:
+            return ""
+        name = str(raw).strip()
+        return name
+
+    def render(self, context):
+        body = self.nodelist.render(context)
+        name = self._resolve_name(context)
+        visible = self._resolve_bool(self.visible_expr, context, True)
+        eager = self._resolve_bool(self.eager_expr, context, False)
+
+        # Register declared state on the current view so the server-side
+        # mixin can authoritatively gate events. ``ActivityMixin`` defines
+        # ``_register_activity``; guarded for non-LiveView contexts (e.g.
+        # unit tests that render the tag against a plain Context).
+        view = context.get("view")
+        if view is not None and hasattr(view, "_register_activity"):
+            try:
+                view._register_activity(name, visible=visible, eager=eager)
+            except Exception:  # noqa: BLE001 — never break template rendering
+                logger.exception("dj_activity: _register_activity failed for %s", name)
+
+        # Attribute set. ``build_tag`` escapes every value; ``name`` is
+        # developer-controlled but defense-in-depth matters for custom tags
+        # that might pass an unsanitized variable.
+        attrs: Dict[str, Any] = {
+            "data-djust-activity": name,
+            "data-djust-visible": "true" if visible else "false",
+        }
+        if eager:
+            attrs["data-djust-eager"] = "true"
+        if not visible:
+            # HTML boolean attribute. ``build_tag`` emits True-valued
+            # attributes as ``name="name"`` (canonical HTML serialization).
+            # The client-side observer checks for the presence of ``hidden``
+            # via ``hasAttribute``, which works with either form.
+            attrs["hidden"] = True
+            attrs["aria-hidden"] = "true"
+
+        return build_tag("div", attrs, content=body, content_is_safe=True)
+
+
+@register.tag("dj_activity")
+def do_dj_activity(parser, token):
+    """Parse ``{% dj_activity "name" visible=expr eager=expr %} ... {% enddj_activity %}``.
+
+    The ``name`` argument is required and must be non-empty; duplicates in
+    the same template are flagged by the ``A071`` system check. ``visible``
+    defaults to ``True``, ``eager`` defaults to ``False``.
+    """
+    bits = token.split_contents()
+    if len(bits) < 2:
+        raise TemplateSyntaxError(
+            '{% dj_activity %} requires a name argument: {% dj_activity "my-panel" visible=expr %}'
+        )
+    # First positional arg is the activity name (a template expression so
+    # string literals + variable names both work).
+    name_expr = parser.compile_filter(bits[1])
+
+    # Remaining args may be kwargs (visible=expr, eager=expr). We purposefully
+    # reject bare positional extras to keep the call site unambiguous.
+    visible_expr = None
+    eager_expr = None
+    for bit in bits[2:]:
+        if "=" not in bit:
+            raise TemplateSyntaxError(
+                "{%% dj_activity %%} unexpected positional argument %r; "
+                "use kwargs: visible=... eager=..." % bit
+            )
+        key, _, raw = bit.partition("=")
+        key = key.strip()
+        if key == "visible":
+            visible_expr = parser.compile_filter(raw)
+        elif key == "eager":
+            eager_expr = parser.compile_filter(raw)
+        else:
+            raise TemplateSyntaxError(
+                "{%% dj_activity %%} unknown kwarg %r; expected 'visible' or 'eager'." % key
+            )
+
+    nodelist = parser.parse(("enddj_activity",))
+    parser.delete_first_token()
+    return DjActivityNode(name_expr, visible_expr, eager_expr, nodelist)
+
+
+# ---------------------------------------------------------------------------
 # {% live_render %} — embed a LiveView as a child (Phase A of Sticky LiveViews)
 # ---------------------------------------------------------------------------
 

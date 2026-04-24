@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`{% dj_activity %}` + `ActivityMixin` (v0.7.0)** — React 19.2
+  `<Activity>` parity: pre-rendered hidden regions of a LiveView that
+  preserve their local DOM state (form inputs, scroll, transient JS)
+  across show/hide cycles. The new block tag
+  ``{% dj_activity "name" visible=expr eager=expr %}...{% enddj_activity %}``
+  emits a wrapper ``<div>`` carrying ``data-djust-activity``,
+  ``data-djust-visible``, and — when not visible — the HTML ``hidden``
+  attribute plus ``aria-hidden="true"``. The body is rendered
+  unconditionally in every pass so local state isn't lost. ``ActivityMixin``
+  (composed into ``LiveView`` AFTER ``StickyChildRegistry``, BEFORE
+  ``View``) provides the server-side API: ``set_activity_visible(name,
+  visible)``, ``is_activity_visible(name)``, declarative
+  ``eager_activities: frozenset`` class attr, and an internal FIFO
+  deferred-event queue (cap 100, overridable via
+  ``activity_event_queue_cap``) drained by the WebSocket consumer after
+  every ``handle_event`` / ``handle_info`` dispatch. Client runtime
+  (``python/djust/static/djust/src/49-activity.js``) exposes
+  ``window.djust.activityVisible(name)`` and dispatches a bubbling
+  ``djust:activity-shown`` CustomEvent when a panel flips hidden →
+  visible. The event-dispatch gate in ``11-event-handler.js`` drops
+  events whose trigger sits inside a hidden non-eager activity
+  client-side (stamping ``_activity`` on all other events for server-side
+  deferral). The VDOM patcher in ``12-vdom-patch.js`` skips subtree
+  patches targeting nodes inside a hidden non-eager activity so DOM
+  state is preserved. Two new system checks: ``A070`` (Warning —
+  missing ``name`` argument) and ``A071`` (Error — duplicate activity
+  name within one template). See ``docs/website/guides/activity.md``
+  for the full guide + ``{% if %}`` / ``{% live_render %}`` / sticky /
+  ``dj-prefetch`` comparison matrix. Demo at
+  ``examples/demo_project/djust_demos/views/activity_demo.py``.
 - **Intent-Based Prefetch (`dj-prefetch`, v0.7.0)** — hover- and
   touch-driven navigation prefetch that complements the existing
   service-worker-mediated hover prefetch. Links opting in with

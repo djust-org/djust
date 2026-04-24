@@ -1048,6 +1048,175 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_accessibility()
             await self._flush_i18n()
 
+    async def _dispatch_single_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Minimal event dispatch used by the activity-deferral flush path.
+
+        Invariants vs :meth:`handle_event`:
+
+        * The caller MUST already hold ``self._render_lock``. This method
+          does NOT acquire or release it — ``asyncio.Lock`` is non-reentrant
+          and the flush is driven from inside the main event handler
+          which already owns the lock.
+        * The activity-gate check is NOT re-run. Events reach this path
+          only because the flush already decided they should dispatch;
+          re-triggering the gate would re-queue them indefinitely.
+        * ``params`` MUST have any ``_activity`` marker stripped by the
+          caller.
+        * Exceptions from the handler are logged and swallowed so a single
+          bad event cannot break the remainder of the flush.
+
+        The method still runs the standard security validation pipeline
+        (unsafe name → reject, missing handler → reject, rate limit,
+        permission check) so deferred events have the same auth posture
+        as live events. After a successful handler call it re-renders
+        the view and emits exactly one patch/HTML frame (matching the
+        main ``handle_event`` output shape), then flushes push events /
+        flash / metadata / layout so downstream side-effects reach the
+        client in the same round-trip.
+        """
+        import time
+
+        # --- security / validation (shared with handle_event) -----------
+        handler = await _validate_event_security(self, event_name, target_view, self._rate_limiter)
+        if handler is None:
+            return
+
+        positional_args = (params or {}).pop("_args", []) if isinstance(params, dict) else []
+        coerce = get_handler_coerce_setting(handler)
+        validation = validate_handler_params(
+            handler,
+            params or {},
+            event_name,
+            coerce=coerce,
+            positional_args=positional_args,
+        )
+        if not validation["valid"]:
+            logger.warning(
+                "Deferred-activity event %r failed param validation: %s",
+                sanitize_for_log(event_name or ""),
+                validation["error"],
+            )
+            return
+        coerced_params = validation.get("coerced_params", params)
+
+        # --- handler invocation ----------------------------------------
+        pre_assigns = _snapshot_assigns(self.view_instance)
+        try:
+            await _call_handler(handler, coerced_params if coerced_params else None)
+        except Exception:  # noqa: BLE001 — never break the flush
+            logger.exception(
+                "Deferred-activity event %r on %s raised during dispatch",
+                sanitize_for_log(event_name or ""),
+                type(target_view).__name__,
+            )
+            return
+
+        # Waiter notification (ADR-002) — same posture as the main path.
+        if hasattr(target_view, "_notify_waiters"):
+            try:
+                target_view._notify_waiters(event_name, coerced_params or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Waiter notification for deferred %r failed: %s", event_name, exc)
+
+        # --- render + emit one update frame ----------------------------
+        # Auto-skip when no public assigns changed (same rule as
+        # handle_event). This keeps a deferred side-effect-only handler
+        # from triggering an unnecessary render frame on the client.
+        skip_render = getattr(self.view_instance, "_skip_render", False)
+        force_html = getattr(self.view_instance, "_force_full_html", False)
+        if not skip_render and not force_html:
+            post_assigns = _snapshot_assigns(self.view_instance)
+            if pre_assigns == post_assigns:
+                skip_render = True
+            else:
+                self.view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
+
+        if skip_render:
+            self.view_instance._skip_render = False
+            has_async = getattr(self.view_instance, "_async_pending", None) is not None
+            await self._flush_push_events()
+            await self._flush_flash()
+            await self._flush_page_metadata()
+            await self._flush_pending_layout()
+            await self._send_noop(async_pending=has_async, ref=event_ref)
+            if has_async:
+                await self._dispatch_async_work()
+            return
+
+        # Render + diff (mirrors the simpler arm of handle_event).
+        _gcd = self.view_instance.get_context_data
+        _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(
+            self.view_instance, "sync_safe", False
+        )
+        t0 = time.perf_counter()
+        try:
+            if _skip_thread:
+                if inspect.iscoroutinefunction(_gcd):
+                    await _gcd()
+                else:
+                    _gcd()
+                with profiler.profile(profiler.OP_RENDER):
+                    html, patches, version = self.view_instance.render_with_diff()
+            else:
+
+                def _sync_context_and_render():
+                    _gcd()
+                    with profiler.profile(profiler.OP_RENDER):
+                        return self.view_instance.render_with_diff()
+
+                html, patches, version = await sync_to_async(_sync_context_and_render)()
+        except Exception:  # noqa: BLE001
+            logger.exception("Deferred-activity render failed for %s", event_name)
+            return
+        _render_ms = (time.perf_counter() - t0) * 1000
+
+        patch_list = None
+        if patches is not None:
+            patch_list = fast_json_loads(patches) if patches else []
+
+        has_async = getattr(self.view_instance, "_async_pending", None) is not None
+        if patch_list is not None:
+            await self._send_update(
+                patches=patch_list,
+                version=version,
+                event_name=event_name,
+                async_pending=has_async,
+                source="event",
+                ref=event_ref,
+                timing={"render": _render_ms},
+            )
+        else:
+            # VDOM diff returned no patches — send full HTML like the
+            # main path does. Mirrors the fallback branch so clients
+            # behave identically for deferred vs live events.
+            try:
+
+                def _sync_strip_and_extract(raw_html):
+                    stripped = self.view_instance._strip_comments_and_whitespace(raw_html)
+                    content = self.view_instance._extract_liveview_content(stripped)
+                    return stripped, content
+
+                html, html_content = await sync_to_async(_sync_strip_and_extract)(html)
+            except Exception:  # noqa: BLE001
+                logger.exception("Deferred-activity HTML strip/extract failed for %s", event_name)
+                return
+            await self._send_update(
+                html=html_content,
+                version=version,
+                event_name=event_name,
+                async_pending=has_async,
+                source="event",
+                ref=event_ref,
+            )
+        if has_async:
+            await self._dispatch_async_work()
+
     def _attach_debug_payload(
         self,
         response: Dict[str, Any],
@@ -2333,6 +2502,33 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
+        # v0.7.0 — Activity gate: if the event was triggered inside a hidden
+        # (non-eager) ``{% dj_activity %}`` region, the client already
+        # dropped it — but defense-in-depth means the server also checks.
+        # The client stamps ``_activity`` on every dispatch so we can both
+        # verify the gate AND deliver per-activity deferral when a
+        # client-side race slips through.
+        _activity_name = params.pop("_activity", None)
+        if (
+            _activity_name
+            and hasattr(target_view, "is_activity_visible")
+            and not target_view.is_activity_visible(_activity_name)
+            and not target_view._is_activity_eager(_activity_name)
+        ):
+            logger.debug(
+                "[djust] Event %r on hidden activity %r — deferring",
+                sanitize_for_log(event_name or ""),
+                sanitize_for_log(_activity_name),
+            )
+            # Queued without permission/rate-limit check (by design:
+            # per-handler auth runs on dispatch via _dispatch_single_event).
+            # Per-activity cap bounds memory.
+            target_view._queue_deferred_activity_event(_activity_name, event_name, params)
+            # Send a no-op so the client's loading state clears; the event
+            # will replay when the activity is next shown.
+            await self._send_noop(ref=event_ref)
+            return
+
         # Handle the event
 
         # Determine actor eligibility — embedded children do NOT have their
@@ -2428,6 +2624,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             finally:
                 _tt_end(target_view, _tt_snapshot, error=_tt_error)
                 await self._maybe_push_tt_event(target_view, _tt_snapshot)
+                # v0.7.0 — Drain deferred activity queue in the actor path too.
+                # The flush is async and awaited inline so drained events
+                # complete in the SAME round-trip as this handler.
+                if hasattr(target_view, "_flush_deferred_activity_events"):
+                    try:
+                        await target_view._flush_deferred_activity_events(self)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("dj_activity: deferred-event flush raised (actor path)")
 
         else:
             # Non-actor mode: Use traditional flow
@@ -3072,6 +3276,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 # Check for async work scheduled by start_async()
                 await self._dispatch_async_work()
+
+                # v0.7.0 — If this handler flipped any activity to visible,
+                # drain its deferred-event queue now so in-flight events
+                # for that panel are delivered in-order in the same
+                # round-trip. The flush is async and awaited inline.
+                # Safe to call even when no activities exist.
+                if hasattr(target_view, "_flush_deferred_activity_events"):
+                    try:
+                        await target_view._flush_deferred_activity_events(self)
+                    except Exception:  # noqa: BLE001 — never fail the event for a drain bug
+                        logger.exception("dj_activity: deferred-event flush raised")
 
             except Exception as e:
                 view_class_name = (
@@ -4241,6 +4456,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+
+                # v0.7.0 — If handle_info flipped an activity to visible,
+                # drain its queue in the same round-trip. The flush is
+                # async and awaited inline. Safe no-op when no deferred
+                # events exist.
+                if hasattr(self.view_instance, "_flush_deferred_activity_events"):
+                    try:
+                        await self.view_instance._flush_deferred_activity_events(self)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "dj_activity: deferred-event flush raised (db_notify path)"
+                        )
             finally:
                 self._render_lock.release()
         except Exception as e:  # noqa: BLE001

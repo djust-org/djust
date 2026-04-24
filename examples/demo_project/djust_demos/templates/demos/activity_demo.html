@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% load live_tags %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.activity_demo.ActivityDemoView" class="max-w-3xl mx-auto p-6">
+    <h1 class="text-2xl font-bold mb-2">{% templatetag openblock %} dj_activity {% templatetag closeblock %} demo</h1>
+    <p class="text-slate-600 mb-6">
+        Switch tabs to see React 19.2 &lt;Activity&gt; parity: inactive panels stay in the DOM
+        but get the <code>hidden</code> attribute. Form values and the counter persist across
+        toggles. Open DevTools to watch: the hidden panels keep their DOM subtree intact —
+        typing in a hidden input would be preserved, and
+        <code>window.djust.activityVisible('profile')</code> reflects the current DOM state.
+    </p>
+
+    <!-- Tab switcher -->
+    <div class="flex gap-2 mb-4 border-b">
+        <button dj-click="switch_tab('profile')"
+                class="px-4 py-2 {% if active_tab == 'profile' %}border-b-2 border-blue-600 font-semibold{% endif %}">
+            Profile
+        </button>
+        <button dj-click="switch_tab('notes')"
+                class="px-4 py-2 {% if active_tab == 'notes' %}border-b-2 border-blue-600 font-semibold{% endif %}">
+            Notes
+        </button>
+        <button dj-click="switch_tab('counter')"
+                class="px-4 py-2 {% if active_tab == 'counter' %}border-b-2 border-blue-600 font-semibold{% endif %}">
+            Counter
+        </button>
+    </div>
+
+    <!-- Profile tab -->
+    {% dj_activity "profile" visible=active_tab %}
+        <div class="space-y-3">
+            <label class="block">
+                <span class="text-sm text-slate-700">Name</span>
+                <input type="text" dj-input="set_profile_name" value="{{ profile_name }}"
+                       class="mt-1 block w-full border rounded px-3 py-2" placeholder="Your name"/>
+            </label>
+            <label class="block">
+                <span class="text-sm text-slate-700">Email</span>
+                <input type="email" dj-input="set_profile_email" value="{{ profile_email }}"
+                       class="mt-1 block w-full border rounded px-3 py-2" placeholder="you@example.com"/>
+            </label>
+            <p class="text-xs text-slate-500">
+                Values persist when you switch tabs — the panel stays in the DOM.
+            </p>
+        </div>
+    {% enddj_activity %}
+
+    <!-- Notes tab -->
+    {% dj_activity "notes" visible=active_tab %}
+        <label class="block">
+            <span class="text-sm text-slate-700">Notes (auto-save on every keystroke)</span>
+            <textarea dj-input="set_notes" rows="6"
+                      class="mt-1 block w-full border rounded px-3 py-2"
+                      placeholder="Type here, switch tabs, come back — text is still here.">{{ notes_text }}</textarea>
+        </label>
+    {% enddj_activity %}
+
+    <!-- Counter tab (eager=True: would keep running even if hidden; default off for demo) -->
+    {% dj_activity "counter" visible=active_tab %}
+        <div class="flex items-center gap-4">
+            <button dj-click="decrement" class="px-4 py-2 bg-slate-200 rounded">-</button>
+            <span class="text-3xl font-mono">{{ counter }}</span>
+            <button dj-click="increment" class="px-4 py-2 bg-blue-600 text-white rounded">+</button>
+        </div>
+    {% enddj_activity %}
+
+    <!-- Status line showing current visibility state; uses the client helper. -->
+    <div class="mt-6 p-3 bg-slate-50 rounded text-xs font-mono">
+        Active tab (server): {{ active_tab }}
+        <br>
+        <span id="client-state">Client: loading...</span>
+    </div>
+
+    {% colocated_hook "ActivityStatusHook" %}
+        function update() {
+            if (!window.djust || !window.djust.activityVisible) return;
+            const el = document.getElementById('client-state');
+            if (!el) return;
+            const names = ['profile', 'notes', 'counter'];
+            const states = names.map(n => n + '=' + window.djust.activityVisible(n)).join(' ');
+            el.textContent = 'Client: ' + states;
+        }
+        update();
+        window.addEventListener('djust:activity-shown', update);
+        window.addEventListener('djust:morph-complete', update);
+    {% endcolocated_hook %}
+</div>
+{% endblock %}

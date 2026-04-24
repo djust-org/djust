@@ -1905,6 +1905,23 @@ def check_security(app_configs, **kwargs):
 _DEPRECATED_ATTR_RE = re.compile(
     r"@(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave)="
 )
+# A070 / A071 — ``{% dj_activity %}`` block tag scanner (v0.7.0).
+# Captures the raw argument list after the tag name so we can inspect it
+# for a ``name=`` / first-positional string and detect missing / duplicate
+# names without invoking the full Django template parser. Multi-line tag
+# bodies are handled via ``re.DOTALL``.
+_DJ_ACTIVITY_TAG_RE = re.compile(r"\{%\s*dj_activity\b([^%]*?)%\}", re.DOTALL)
+# Activity name extractor. We accept three forms of the first argument:
+#   group 1: double-quoted string literal -> "panel-name"
+#   group 2: single-quoted string literal -> 'panel-name'
+#   group 3: bare identifier or dotted path -> panel_name, view.panel_name
+# A bare identifier is treated as "name present" but resolves at render
+# time, so the A071 duplicate check cannot compare it to another tag's
+# identifier — we skip A071 for identifier-form names. Only emit A070
+# when NONE of the three groups match (truly missing name).
+_DJ_ACTIVITY_NAME_RE = re.compile(
+    r"""^\s*(?:name\s*=\s*)?(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w.]*))\s*(?:$|\s)"""
+)
 _DJ_ROOT_RE = re.compile(r"dj-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
@@ -2074,6 +2091,76 @@ def check_templates(app_configs, **kwargs):
 
         # T014 -- deprecated data-dj-id attribute (renamed to dj-id in v1.0)
         _check_deprecated_data_dj_id(content, relpath, filepath, errors)
+
+        # A070 / A071 -- {% dj_activity %} name validation (v0.7.0).
+        # A070 (Warning): tag with no name arg — renders a no-op wrapper
+        # that never ties back to the server-side activity registry.
+        # A071 (Error): two tags in one template share the same name — the
+        # later registration silently overwrites the earlier one at render
+        # time and all events route to the last-declared state.
+        _seen_activity_names = {}  # type: ignore[var-annotated]
+        for match in _DJ_ACTIVITY_TAG_RE.finditer(content):
+            args = match.group(1)
+            lineno = content[: match.start()].count("\n") + 1
+            name_match = _DJ_ACTIVITY_NAME_RE.match(args)
+            # A name is "present" iff ANY of the three groups (double-quoted,
+            # single-quoted, bare identifier / dotted path) matched.
+            name_literal = None  # str when a string-literal name was given
+            if name_match is not None:
+                name_literal = name_match.group(1) or name_match.group(2)
+                identifier_name = name_match.group(3)
+            else:
+                identifier_name = None
+            if name_match is None or (not name_literal and not identifier_name):
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- {%% dj_activity %%} is missing a 'name' argument."
+                        % (relpath, lineno),
+                        hint=(
+                            "Every {% dj_activity %} block must have a non-empty name: "
+                            '{% dj_activity "my-panel" visible=expr %}. Without a name, '
+                            "the server-side ActivityMixin cannot route events or track "
+                            "visibility for this region."
+                        ),
+                        id="djust.A070",
+                        fix_hint=(
+                            "Add a name argument to the {%% dj_activity %%} tag at line %d in `%s`, "
+                            'e.g. `{%% dj_activity "panel-name" %%}`.' % (lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+                continue
+            # Only string-literal names can be statically compared for
+            # duplicate detection. Variable-name tags (bare identifiers)
+            # resolve at render time — we can't know if two such tags
+            # will produce the same name, so we skip A071 for them to
+            # avoid false positives.
+            if not name_literal:
+                continue
+            if name_literal in _seen_activity_names:
+                first_line = _seen_activity_names[name_literal]
+                errors.append(
+                    DjustError(
+                        "%s:%d -- duplicate {%% dj_activity %%} name %r (first declared at line %d)."
+                        % (relpath, lineno, name_literal, first_line),
+                        hint=(
+                            "Activity names must be unique within one template. "
+                            "Rename one of the blocks, or split the template if the "
+                            "regions should be tracked independently."
+                        ),
+                        id="djust.A071",
+                        fix_hint=(
+                            "Rename one of the two `{%% dj_activity %r %%}` blocks in `%s`."
+                            % (name_literal, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+            else:
+                _seen_activity_names[name_literal] = lineno
 
     return errors
 

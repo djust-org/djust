@@ -53,4 +53,6 @@ urlpatterns = [
     path("whats-new/0.4.2/", WhatsNew042View.as_view(), name="whats-new-042"),
     # v0.7.0 — server functions + dj-prefetch demo
     path("server-function/", ServerFunctionDemoView.as_view(), name="server-function"),
+    # v0.7.0 — {% dj_activity %} (React 19.2 <Activity> parity)
+    path("activity/", ActivityDemoView.as_view(), name="activity"),
 ]
