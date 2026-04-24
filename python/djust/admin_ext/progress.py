@@ -65,6 +65,11 @@ logger = logging.getLogger(__name__)
 _MAX_JOBS = 500
 _MAX_MESSAGE_CHARS = 4096  # per-message cap for Job.message / Job.error
 _JOBS: "OrderedDict[str, Job]" = OrderedDict()
+# Guards concurrent ``_store_job`` callers so the length check + eviction
+# + insertion run atomically. Without this, N threads inserting at once
+# can each observe ``len(_JOBS) > _MAX_JOBS`` simultaneously and each
+# ``popitem`` — overshooting the FIFO invariant.
+_JOBS_LOCK = threading.Lock()
 
 # User-facing error message when the action body raises. The raw
 # exception text is intentionally NOT surfaced to the browser — it may
@@ -89,12 +94,16 @@ def _store_job(job_id: str, job: "Job") -> None:
     Called from the decorator. Uses ``move_to_end`` for defensive
     re-insertion (shouldn't happen with uuid4 keys but harmless) and
     trims the dict down to ``_MAX_JOBS`` entries.
+
+    Thread-safe: the length check + eviction + insertion run under
+    ``_JOBS_LOCK`` so concurrent inserters can't over-evict past the cap.
     """
-    if job_id in _JOBS:
-        _JOBS.move_to_end(job_id)
-    _JOBS[job_id] = job
-    while len(_JOBS) > _MAX_JOBS:
-        _JOBS.popitem(last=False)  # FIFO eviction of the oldest
+    with _JOBS_LOCK:
+        if job_id in _JOBS:
+            _JOBS.move_to_end(job_id)
+        _JOBS[job_id] = job
+        while len(_JOBS) > _MAX_JOBS:
+            _JOBS.popitem(last=False)  # FIFO eviction of the oldest
 
 
 @dataclass
@@ -333,9 +342,15 @@ def admin_action_with_progress(
                 logger.debug("Failed to reverse changelist URL", exc_info=True)
                 redirect_back = "/"
 
+            # Cap action_label at _MAX_MESSAGE_CHARS at construction time
+            # so a malicious / buggy action with a multi-MB
+            # ``short_description`` can't blow out memory via the _JOBS
+            # registry. Matches the per-message cap enforced by
+            # Job.update().
+            raw_label = getattr(wrapper, "short_description", func.__name__)
             job = Job(
                 job_id=job_id,
-                action_label=getattr(wrapper, "short_description", func.__name__),
+                action_label=_truncate(raw_label),
                 user_id=getattr(request.user, "pk", None),
                 admin_site_name=admin_site.name,
                 redirect_url=redirect_back,

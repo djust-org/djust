@@ -3857,3 +3857,50 @@ class TestA072A073AdminWidgetChecks:
             errors = check_admin_widgets(None, _admin_sites=[site])
         a073 = [e for e in errors if e.id == "djust.A073"]
         assert len(a073) == 1, f"Expected exactly one A073 in {[e.id for e in errors]!r}"
+
+    def test_A073_handles_string_setting_value(self):
+        """A073 must coerce a STRING ``DJUST_ASGI_WORKERS`` correctly.
+
+        Real deployments commonly read from env vars (12-factor) which
+        produce strings, not ints. Bare ``> 1`` comparison on a string
+        is a silent bug: ``'2' > 1`` raises under Py3. The check must
+        int-coerce defensively.
+        """
+        from django.contrib.auth import get_user_model
+
+        from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+        from djust.admin_ext.progress import admin_action_with_progress
+        from djust.checks import check_admin_widgets
+
+        class AnAdmin(DjustModelAdmin):
+            @admin_action_with_progress(description="Do")
+            def slow_job(self, request, queryset, progress):
+                progress.update(current=1, total=1)
+
+            actions = ["slow_job"]
+
+        # Case 1: string "2" — should fire A073.
+        site = DjustAdminSite(name="test_a073_str_multi")
+        site.register(get_user_model(), AnAdmin)
+        with override_settings(DJUST_ASGI_WORKERS="2"):
+            errors = check_admin_widgets(None, _admin_sites=[site])
+        a073 = [e for e in errors if e.id == "djust.A073"]
+        assert len(a073) == 1, f"A073 should fire for string '2'; got {[e.id for e in errors]!r}"
+
+        # Case 2: string "1" — should NOT fire A073.
+        site2 = DjustAdminSite(name="test_a073_str_single")
+        site2.register(get_user_model(), AnAdmin)
+        with override_settings(DJUST_ASGI_WORKERS="1"):
+            errors2 = check_admin_widgets(None, _admin_sites=[site2])
+        a073_single = [e for e in errors2 if e.id == "djust.A073"]
+        assert len(a073_single) == 0, f"A073 should stay silent for string '1'; got {a073_single!r}"
+
+        # Case 3: bogus string — should fallback to 1 (no A073).
+        site3 = DjustAdminSite(name="test_a073_str_bogus")
+        site3.register(get_user_model(), AnAdmin)
+        with override_settings(DJUST_ASGI_WORKERS="not-a-number"):
+            errors3 = check_admin_widgets(None, _admin_sites=[site3])
+        a073_bogus = [e for e in errors3 if e.id == "djust.A073"]
+        assert len(a073_bogus) == 0, (
+            f"A073 should fallback to 1 for bogus setting; got {a073_bogus!r}"
+        )

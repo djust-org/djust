@@ -415,6 +415,15 @@ class ModelListView(AdminBaseMixin, LiveView):
         (notably ``@admin_action_with_progress(permissions=[...])``).
         Actions without ``allowed_permissions`` run unchanged, so this
         is backward-compatible with actions decorated before v0.7.0.
+
+        If the action returns an ``HttpResponseRedirect`` (as stock
+        Django admin actions and ``@admin_action_with_progress``-
+        decorated actions do), the redirect is intercepted and a
+        ``redirect`` push_event is dispatched to the client. This is
+        required because LiveView event handlers are invoked over the
+        WebSocket — raw HTTP responses have nowhere to go. Mirrors the
+        ``push_event("redirect", ...)`` pattern used by
+        ``LoginView.do_login``.
         """
         if not self.selected_ids:
             return None
@@ -442,6 +451,16 @@ class ModelListView(AdminBaseMixin, LiveView):
 
         self.selected_ids = []
         self.select_all = False
+
+        # WS-side redirect shim: Django-style admin actions return
+        # ``HttpResponseRedirect`` for post-action navigation. Over
+        # WebSocket, such responses would be silently dropped by the
+        # LiveView dispatcher — the browser would never navigate. Convert
+        # to a ``redirect`` push_event so the client navigates to the
+        # progress page (or wherever the action pointed).
+        if isinstance(result, HttpResponseRedirect):
+            self.push_event("redirect", {"url": result.url})
+            return None
         return result
 
     @event_handler

@@ -460,3 +460,195 @@ class TestBulkProgressWidgetAuth(TestCase):
             assert job.cancelled is True
         finally:
             _JOBS.clear()
+
+
+class TestStoreJobConcurrency(TestCase):
+    """Concurrency guarantees for ``_store_job`` (LRU + lock)."""
+
+    def test_store_job_concurrent_inserts_stay_under_cap(self):
+        """Many concurrent inserters must never push _JOBS over _MAX_JOBS.
+
+        Without the lock, N threads could each observe
+        ``len(_JOBS) > _MAX_JOBS`` at the same time and each
+        ``popitem`` — over-evicting past the FIFO invariant. This test
+        spawns 50 threads x 20 inserts (1000 total) and asserts the
+        final size is EXACTLY _MAX_JOBS.
+        """
+        from djust.admin_ext.progress import (
+            Job,
+            _JOBS,
+            _MAX_JOBS,
+            _store_job,
+        )
+
+        _JOBS.clear()
+        try:
+            threads = []
+            errors: list = []
+
+            def _insert(thread_idx: int) -> None:
+                try:
+                    for i in range(20):
+                        jid = f"t{thread_idx}-j{i}"
+                        _store_job(
+                            jid,
+                            Job(
+                                job_id=jid,
+                                action_label="T",
+                                user_id=1,
+                                admin_site_name="djust_admin",
+                                redirect_url="/",
+                            ),
+                        )
+                except Exception as exc:  # pragma: no cover — diagnostic
+                    errors.append(exc)
+
+            for t in range(50):
+                th = threading.Thread(target=_insert, args=(t,))
+                threads.append(th)
+                th.start()
+            for th in threads:
+                th.join(timeout=5)
+
+            assert not errors, f"unexpected exceptions from worker threads: {errors!r}"
+            # Exactly at the cap — never over (that's the lock's job)
+            # and never under (we inserted 1000, far more than 500).
+            assert len(_JOBS) == _MAX_JOBS, (
+                "expected _JOBS size == _MAX_JOBS under concurrent inserts; "
+                f"got {len(_JOBS)} (likely lock missing or broken)"
+            )
+        finally:
+            _JOBS.clear()
+
+
+class TestActionLabelBounded(TestCase):
+    """Fix #4 — ``action_label`` must respect _MAX_MESSAGE_CHARS."""
+
+    def test_action_label_truncated_at_max_chars(self):
+        """A multi-MB ``short_description`` must not blow out memory.
+
+        The decorator's ``description`` (which becomes
+        ``wrapper.short_description`` and then ``job.action_label``) is
+        clamped to _MAX_MESSAGE_CHARS at Job construction, matching the
+        existing per-message cap.
+        """
+        from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+        from djust.admin_ext import progress as progress_mod
+        from djust.admin_ext.progress import (
+            _JOBS,
+            _MAX_MESSAGE_CHARS,
+            admin_action_with_progress,
+        )
+
+        User = get_user_model()
+        site = DjustAdminSite(name="djust_admin_label_trunc")
+
+        huge = "x" * 10_000
+
+        class HugeLabelAdmin(DjustModelAdmin):
+            @admin_action_with_progress(description=huge)
+            def do_thing(self, request, queryset, progress):
+                progress.update(current=1, total=1)
+
+            actions = ["do_thing"]
+
+        site.register(User, HugeLabelAdmin)
+
+        original_reverse = progress_mod.reverse
+        progress_mod.reverse = lambda *a, **kw: "/fake/"
+        try:
+            admin_instance = HugeLabelAdmin(User, site)
+            request = RequestFactory().post("/")
+            request.user = _make_user("label-trunc", pk=333)
+            admin_instance.do_thing(request, User.objects.none())
+            job = next(iter(_JOBS.values()))
+            assert len(job.action_label) == _MAX_MESSAGE_CHARS
+            assert job.action_label.endswith("...")
+        finally:
+            progress_mod.reverse = original_reverse
+            _JOBS.clear()
+
+
+class TestRunActionRedirectIntercept(TestCase):
+    """Fix #1 — ``ModelListView.run_action`` must convert an action's
+    HttpResponseRedirect return value into a client-side ``redirect``
+    push_event, since bare HTTP responses can't flow over the LiveView
+    WebSocket dispatcher."""
+
+    def test_admin_action_with_progress_triggers_client_redirect(self):
+        """End-to-end: decorating an action with @admin_action_with_progress
+        and dispatching it via ``run_action`` must queue a
+        ``push_event('redirect', {'url': <progress_url>})`` targeting the
+        progress page. Covers the blocker identified in the Stage 11
+        review: an HttpResponseRedirect returned to the WS handler is
+        otherwise silently dropped, leaving the user stuck on the
+        changelist."""
+        from django.http import HttpResponseRedirect
+
+        from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+        from djust.admin_ext import progress as progress_mod
+        from djust.admin_ext.progress import _JOBS, admin_action_with_progress
+        from djust.admin_ext.views import (
+            ModelListView,
+            register_admin_view,
+        )
+
+        User = get_user_model()
+        site = DjustAdminSite(name="djust_admin_redir")
+
+        class MyAdmin(DjustModelAdmin):
+            @admin_action_with_progress(description="Do thing")
+            def do_thing(self, request, queryset, progress):
+                progress.update(current=1, total=1)
+
+            actions = ["do_thing"]
+
+        site.register(User, MyAdmin)
+
+        original_reverse = progress_mod.reverse
+        progress_mod.reverse = lambda *a, **kw: "/djust-admin/djust-progress/abc/"
+        try:
+            admin_instance = MyAdmin(User, site)
+
+            view_id = "test-run-action-redir"
+            register_admin_view(view_id, admin_site=site, model=User, model_admin=admin_instance)
+
+            view = ModelListView()
+            view._view_registry_id = view_id
+            request = RequestFactory().post("/")
+            request.user = _make_user("runner", pk=501)
+            view.request = request
+            view.selected_ids = [1, 2, 3]
+            view.select_all = False
+            view._pending_push_events = []
+
+            # ``@event_handler`` is pure metadata (returns the function
+            # unchanged), so we call the method directly — the same
+            # code path the WebSocket dispatcher walks.
+            view.run_action(action_name="do_thing")
+
+            # A redirect push_event must have been queued...
+            assert view._pending_push_events, (
+                "run_action should have queued a 'redirect' push_event; got empty list"
+            )
+            ev_name, payload = view._pending_push_events[0]
+            assert ev_name == "redirect", f"expected 'redirect' event, got {ev_name!r}"
+            assert "url" in payload
+            # ...and the URL must target the progress page.
+            assert "djust-progress" in payload["url"], (
+                f"expected djust-progress URL, got {payload['url']!r}"
+            )
+
+            # Sanity: the raw result (before push_event conversion) was
+            # an HttpResponseRedirect — confirms we tested the right code path.
+            job = next(iter(_JOBS.values()))
+            assert job is not None
+            # And verify HttpResponseRedirect is still the return type
+            # of the decorator (for backwards compatibility with stock
+            # Django admin actions).
+            admin_instance2 = MyAdmin(User, site)
+            raw_result = admin_instance2.do_thing(request, User.objects.none())
+            assert isinstance(raw_result, HttpResponseRedirect)
+        finally:
+            progress_mod.reverse = original_reverse
+            _JOBS.clear()
