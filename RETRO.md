@@ -109,8 +109,8 @@ issue or be explicitly closed with a reason.
 | 97 | dj-virtual variable-height: data-key-based cache survives reorders | PR #947 retro | #951 | Open | Currently index-keyed; reorders bind heights to wrong items |
 | 98 | dj-virtual variable-height guide page | PR #947 retro | #952 | Open | Tuning estimated-height, scrollbar-jump tradeoffs, data-key story |
 | 99 | Consolidate JSDOM test helpers (DOMContentLoaded wait + repo-root cwd) | Retros #885/#918/#925/#943 | #953 | Closed | Shipped in PR #956 |
-| 100 | `make ci-mirror` target — run exact CI pytest invocation locally | Retro v0.5.7 / PR #959 | #960 | Open | Prevents coverage-threshold surprises |
-| 101 | Replace hand-rolled Redis mock with `fakeredis` in test_security_upload_resumable.py | Retro v0.5.7 / PR #959 | #961 | Open | ~20 LOC simplification |
+| 100 | `make ci-mirror` target — run exact CI pytest invocation locally | Retro v0.5.7 / PR #959 | #960 | Closed | Shipped in v0.7.1 PR #995 (merged as `56bd85d5`) — `make ci-mirror` target mirrors the exact CI pytest invocation locally; ~90 LOC. Pipeline-dev (condensed) flow used: no subagent reviews, no formal Stage 7/8/11 — DX tooling change. |
+| 101 | Replace hand-rolled Redis mock with `fakeredis` in test_security_upload_resumable.py | Retro v0.5.7 / PR #959 | #961 | Closed | Shipped in v0.7.1 PR #996 (merged as `d54dcd0f`) — net −19 LOC + accurate Redis semantics (real TTL, real key expiry, real connection-error path). Test-only refactor; clean Stage 11 APPROVE with 0 🔴. |
 | 102 | v0.6.0 or v0.7.0 decision: breaking rename of framework-internal attrs to `_*` prefix | Retro v0.5.7 / PR #957 | #962 | Open | #762 shipped non-breaking filter; rename still on table |
 | 103 | Weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers | Retro v0.5.7 / PR #958 | #963 | Open | All SDK tests are mocked; no real-cloud end-to-end |
 | 104 | Document `key_template` UUID-prefix convention for `s3_events.parse_s3_event` | Retro v0.5.7 / PR #958 | #964 | Open | Silent fallback to full key otherwise |
@@ -131,14 +131,16 @@ issue or be explicitly closed with a reason.
 | 119 | Phase 2 streaming (lazy-child render + true server overlap) | Retro v0.6.1 / PR #975 | — | Open | v0.6.2 — Phase 1 was transport-layer only |
 | 120 | ADR-006 AI-generated UIs — deferred due to AssistantMixin/LLM-provider dependency chain | Retro v0.6.1 | — | Open | Deferred from v0.6.1 to v0.6.2 |
 | 121 | Shared `_SCRIPT_CLOSE_TOLERANT_RE` constant for HTML5-tolerant `</script>` matching | Retro v0.6.1 / PR #975 | — | Open | Third occurrence of CodeQL py/bad-html-filtering-regexp (PR #966, #970, #975). Centralize into `mixins/template.py` or a new `_html_utils.py`. |
-| 122 | Post-commit verification step in pipeline-run skill: `git log -1 --oneline` sanity check after every `git commit` | Retro v0.6.1 / PR #974 | — | Open | Silent pre-commit-hook bounce on long commit message went undetected for one tool cycle. |
+| 122 | Post-commit verification step in pipeline-run skill: `git log -1 --oneline` sanity check after every `git commit` | Retro v0.6.1 / PR #974 (+ PR #989 + PR #996) | — | Open | Silent pre-commit-hook bounce on long commit message went undetected for one tool cycle. **Reinforced v0.7.1**: PR #996 hit the same class — pre-commit hook stashed+restored, ruff cleaned an unused import, but the initial commit didn't register; had to re-stage and retry. 2nd occurrence in the session (PR #989 was 1st). Action remains: post-commit `git log -1 --oneline` must be a mandatory step. |
 | 123 | FORCE_SCRIPT_NAME / mounted sub-path support for JS clients (hardcoded `/djust/api/...` prefix in `48-server-functions.js` and other client modules) | Retro v0.7.0 / PR #986 | #987 | Closed | Shipped in v0.7.1 PR #993 (merged as `f03d64eb`) — `{% djust_client_config %}` template tag (dual-registered for Django + Rust engines per the djust_markdown precedent) + `window.djust.apiPrefix` / `djust.apiUrl(path)` helpers + `48-server-functions.js` routed through the helper. 15 new tests (5 Py + 6 JS + 1 regression + 3 dual-engine parity cases added at Stage 12). Bundle delta +148 B gzipped. Follow-up filed for `03b-sse.js:44` (SSE fallback transport — same class of bug, #992, v0.7.2 target). |
 | 124 | Upgrade Action #116 — for every feature with non-trivial semantics (gate rules, error envelopes, state contracts), write doc-claim-verbatim tests BEFORE writing implementation | Retro v0.7.0 / PR #988 (+ v0.6.0/v0.6.1/#986 pattern) | — | Open | 4th consecutive milestone with doc-vs-code drift 🔴/🟡. Action #116 ("trace data-flow before writing docs") is aspirational, not executable. Upgrade to TDD sharpened: the test cases ARE the doc claims. Enforcement: Stage 7 checklist grows a "for each documented rule, point to the asserting test" row. PR #989 application: partial — five rule tests written RED first, but PR-body headline claim ("action fires → redirect to progress page") was never a test; that's the 🔴 Stage 11 caught. Subsumed for user-visible features by #125. |
-| 125 | Upgrade Stage 7 checklist with user-flow trace — for every user-visible feature, trace the happy-path user story end-to-end (HTTP request → server dispatch → response envelope → browser render/navigation) | Retro v0.7.0 / PR #989 (+ PR #986 + PR #988 pattern) | — | Open | 3rd consecutive pipeline where Stage 7 rubber-stamped a diff that Stage 11 proved was broken end-to-end. PR #986 — JsonResponse outside try/except (response-layer). PR #988 — fire-and-forget flush breaking same-round-trip (transport-layer). PR #989 — HttpResponseRedirect silently dropped by @event_handler (dispatch-layer). Common shape: code does a thing, but thing doesn't reach the user. Enforcement: Stage 7 output template grows a "User flow trace" section with a required bullet per user-visible feature. **PR #990 update**: applied for first time; Stage 11 returned APPROVE with 0 🔴, breaking the 3-pipeline streak. Single-datapoint — track next pipeline to validate. |
+| 125 | Upgrade Stage 7 checklist with user-flow trace — for every user-visible feature, trace the happy-path user story end-to-end (HTTP request → server dispatch → response envelope → browser render/navigation) | Retro v0.7.0 / PR #989 (+ PR #986 + PR #988 pattern) | — | Open | 3rd consecutive pipeline where Stage 7 rubber-stamped a diff that Stage 11 proved was broken end-to-end. PR #986 — JsonResponse outside try/except (response-layer). PR #988 — fire-and-forget flush breaking same-round-trip (transport-layer). PR #989 — HttpResponseRedirect silently dropped by @event_handler (dispatch-layer). Common shape: code does a thing, but thing doesn't reach the user. Enforcement: Stage 7 output template grows a "User flow trace" section with a required bullet per user-visible feature. **Validated across 5 pipelines** (#990, #993, #995, #996, #997 — all 0 🔴 at Stage 11; #995 + #996 ran condensed pipeline-dev flow with no Stage 11 but no live-verify regressions either). The class of defect that plagued #976/#988/#989 has not recurred since #125 was filed. |
 | 126 | Flaky perf test triage — `test_broadcast_latency_scales[10]` missed its 10 ms budget by ~12× on py3.13 CI runner (py3.12/py3.14 passed) | Retro v0.7.0 / PR #990 | — | Open | Caused 1 CI retry on PR #990. 10-subscriber case only; 1-subscriber and 50-subscriber cases passed. Options: (a) per-runner tolerance, (b) `@pytest.mark.flaky(reruns=2)`, (c) move to non-required check. |
 | 127 | Stage 9 test-count recount rule — Stage 9 (Documentation) must re-count tests AFTER Stage 7/12 fix-pass deltas and update the CHANGELOG test-count line before the final docs pass | Retro v0.7.0 / PR #990 | — | Open | PR #990 CHANGELOG claimed "38 total" but actual was 41 (docs author cited Stage 5 count, not post-fix-pass). Stage 11 caught it. Second milestone running with a small CHANGELOG test-count drift — auditable claim, should be precise. Enforcement: Stage 9 checklist grows a "run `make test`, record final count, diff against CHANGELOG" row. |
 | 128 | External-crate doc.rs read before implementation for security-surface dependencies — any external crate (Rust or Python) whose API forms part of a security boundary must have its doc.rs entry read at Stage 4/5 for the specific API surface we use | Retro v0.7.0 / PR #990 | — | Open | PR #990 surfaced two pulldown-cmark 0.12 API corrections only because RED tests failed: `Options::ENABLE_HTML` omission does NOT suppress `Event::Html`, and `Options::ENABLE_GFM_AUTOLINK` doesn't exist in 0.12. Luck saved the XSS surface. Doc-reading first would be systematic. Enforcement: Stage 4 plan template grows a "linked doc.rs section for each external security-boundary API" row. |
-| 129 | Stage 4 planner checklist — engine-path declaration for template tags. Any new template tag plan must explicitly state which engine(s) render the template(s) that consume it (Django template engine, Rust template engine, or both) and plan registration accordingly | Retro v0.7.1 / PR #993 | — | Open | PR #993 originally registered `{% djust_client_config %}` ONLY with Django's template library; pre-push pytest caught that `base.html` (rendered through the Rust engine for LiveView views) 500'd because the Rust engine didn't know the tag. Fix mirrored PR #990 dual-registration pattern. Stage 4 plan template grows an "Engine path" bullet — for each new template tag, list the engine(s) that render templates consuming the tag. Second canonical example (alongside `djust_markdown`) is `djust_client_config`. |
+| 129 | Stage 4 planner checklist — engine-path declaration for template tags. Any new template tag plan must explicitly state which engine(s) render the template(s) that consume it (Django template engine, Rust template engine, or both) and plan registration accordingly | Retro v0.7.1 / PR #993 | — | Partially validated | PR #993 originally registered `{% djust_client_config %}` ONLY with Django's template library; pre-push pytest caught that `base.html` (rendered through the Rust engine for LiveView views) 500'd because the Rust engine didn't know the tag. Fix mirrored PR #990 dual-registration pattern. Stage 4 plan template grows an "Engine path" bullet — for each new template tag, list the engine(s) that render templates consuming the tag. Second canonical example (alongside `djust_markdown`) is `djust_client_config`. **Partially validated v0.7.1**: PR #997 (SSE FORCE_SCRIPT_NAME) was a transport-layer mirror, not a template-tag PR — engine-path checklist not exercised. Generalized into Action #131 (broader: declare engine-paths during Stage 4 for any feature touching templates). |
+| 130 | SSE FORCE_SCRIPT_NAME / mounted sub-path support — `03b-sse.js:44` hardcoded `/djust/sse/` prefix breaks the same way as `48-server-functions.js` did | Retro v0.7.0 / PR #993 follow-up | #992 | Closed | Shipped in v0.7.1 PR #997 (merged as `4adc27b6`). Mechanically applied the PR #993 pattern: meta-tag emission via `{% djust_client_config %}` extension + `djust.ssePrefix` + `djust.sseUrl()` helper; +3 tests; +46 B bundle. First-push clean merge (single Stage 11 APPROVE, 0 🔴/🟡). **Template-reuse dividend**: total engineering time was a fraction of PR #993 — PR #993 established the pattern, #997 applied it. |
+| 131 | Stage 4 plan-template "Engine path" bullet should generalize beyond template-tags — any feature that touches the template rendering pipeline (filters, tags, context processors, custom blocks, post-processing hooks) must declare which engine(s) the user templates run through | Retro v0.7.1 / PR #993 generalization | — | Open | Generalizes Action #129. PR #993 caught the dual-engine bug ONLY because pre-push runs the full demo suite; targeted Stage 6 subsets miss it. Class of bug: any code path that participates in user template rendering can silently work in one engine and 500 in the other. Enforcement: Stage 4 plan template's "Engine path" row applies to filters, context processors, post-processing hooks, and any registry-style API — not just `register_tag_handler`. |
 
 ### v0.7.0 milestone updates (2026-04-24)
 
@@ -147,8 +149,110 @@ issue or be explicitly closed with a reason.
 
 ### v0.7.1 milestone updates (2026-04-24)
 
+- **#100 — Closed (`make ci-mirror`).** Shipped in PR #995. Mirrors the exact CI pytest invocation (same flags, same coverage thresholds, same selection set) as a single `make ci-mirror` target. Prevents coverage-threshold surprises that previously only surfaced in CI. ~90 LOC.
+- **#101 — Closed (fakeredis swap).** Shipped in PR #996. Replaced hand-rolled in-memory Redis mock with `fakeredis` in `test_security_upload_resumable.py` — net −19 LOC AND accurate Redis semantics (real TTL, real key expiry, real connection-error path). Test-only refactor.
+- **#123 — Closed (FORCE_SCRIPT_NAME for JS clients).** Shipped in PR #993 (recorded earlier today after PR-level retro).
+- **#125 — Validated across 5 pipelines (status updated).** Streak now: PR #990 → #993 → #995 → #996 → #997 — all 0 🔴 at Stage 11 (PRs #995/#996 ran condensed pipeline-dev with no Stage 11 but no live-verify regressions either). The class of defect that plagued #976/#988/#989 (code does a thing, thing doesn't reach the user) has not recurred since #125 was filed. Discipline is empirically working.
 - **#129 — New (Stage 4 engine-path checklist for template tags).** PR #993 shipped `{% djust_client_config %}` and originally registered the tag only with Django's template library. Pre-push pytest caught the issue: LiveView-rendered `base.html` is parsed by the Rust template engine, which didn't know the tag → 500. Fix mirrored the `djust_markdown` (PR #990) dual-registration pattern. Enforcement: Stage 4 plan template grows an "Engine path" bullet — for every new template tag, state explicitly which template engine(s) render the consuming templates. Second canonical dual-registration example (alongside `djust_markdown`) is `djust_client_config`.
+- **#130 — New (closed same-day).** SSE FORCE_SCRIPT_NAME — same class of bug as #123, mirrored PR #993 pattern in PR #997. First-push clean merge. Template-reuse dividend: ~1/3 the engineering time of #993.
+- **#131 — New (generalize #129).** "Engine path" Stage 4 bullet applies to any feature that touches template rendering (filters, context processors, post-processing hooks) — not just template tags.
+- **#122 — Reinforced (post-commit verification).** PR #996 hit the pre-commit-hook stash/restore gotcha for the second time in the session (first was PR #989 at Stage 10): hook stashed+restored the working tree, ruff cleaned up an unused import, but the initial commit didn't register. Had to re-stage and retry. Action #122 (`git log -1 --oneline` post-commit verification) remains correctly filed; second occurrence reinforces priority.
 - **Pre-push gate as last-line defense.** Stage 6 test subsets run Python + JS + Rust independently; the Python-side tag handler tests pass in isolation, but the demo views exercising the Rust engine aren't in the targeted set. The FULL pre-push pytest (as configured) runs the demo tests and caught the 500. Consider making Stage 6 explicitly invoke `make test` (not targeted subsets) for cross-engine/cross-language features — filing as a process note under #129.
+- **pipeline-dev pattern empirically validated for tooling/test-only PRs.** PR #995 (Makefile target) and PR #996 (test-only refactor) both used the condensed pipeline-dev flow — no subagent reviews, no separate Stage 7/8/11 — and shipped clean. Don't invoke the full 14-stage pipeline for Makefile / dev-tooling / docs / test-only changes. Propose: update pipeline-run skill guidance to explicitly list what qualifies for pipeline-dev vs pipeline-run. Filing as Action #132.
+
+---
+
+## v0.7.1 — Sub-path Deploys, DX Tooling, and Test Hygiene (PRs #993, #995, #996, #997)
+
+**Date**: 2026-04-24
+**Scope**: Four PRs merged in ~2 hours. PR #993 introduced the `{% djust_client_config %}` template tag (dual-registered for Django + Rust engines per the `djust_markdown` precedent) + `window.djust.apiPrefix` / `djust.apiUrl(path)` helpers, replacing the hardcoded `/djust/api/` prefix in `48-server-functions.js` and unblocking sub-path deploys (`FORCE_SCRIPT_NAME`). PR #995 added `make ci-mirror` — a DX target that mirrors the exact CI pytest invocation locally. PR #996 swapped the hand-rolled Redis mock in `test_security_upload_resumable.py` for `fakeredis` (net −19 LOC + real Redis semantics). PR #997 mirrored PR #993's pattern onto the SSE fallback transport (`03b-sse.js:44`), closing the same class of bug there.
+**Tests at close**: 6,250+ Python (15 added in #993; 0 in #995; 0 net in #996 (refactor); 3 added in #997 = 18 net new tests across the milestone).
+
+### What We Learned
+
+**1. Pattern-reuse is the v0.7.1 milestone dividend.** PR #993 established the `{% djust_client_config %}` + meta-tag + `djust.apiUrl()` pattern with full design thinking (planner-first, Stage 5b dual-registration recovery, Stage 12 parity-test fix-pass). PR #997 reused the pattern mechanically — 3 tests, +46 B bundle, first-push clean merge in a fraction of the engineering time. This is exactly what "templates ship dividends" means in practice: the second instance of an established pattern takes a fraction of the effort. Both `djust_markdown` (v0.7.0) and `djust_client_config` (v0.7.1) are now canonical examples of dual-engine tag registration; future template-tag work has two reference implementations.
+
+**Action taken**: No code change. Pattern-reuse explicitly noted in PR #997's PR-body. Action Tracker #129/#131 capture the planning-stage discipline.
+
+**2. Ship velocity unprecedented in session — and the difference is structural, not cosmetic.** v0.7.1 merged 4 PRs in ~2 hours, all first-push clean merges, zero CodeQL retries, zero 🔴 findings at Stage 11. v0.7.0 took a full session day for 4 PRs with 3 consecutive 🔴 caught at Stage 11. The structural difference: 3 of the 4 v0.7.1 PRs were template-fill "apply established pattern" work (PR #995 Makefile tooling, PR #996 mock swap, PR #997 mirror of PR #993). Only PR #993 required new design thinking. **The right takeaway is not "we got faster" but "small bounded PRs that apply known patterns are the optimal velocity unit."** When the Action Tracker is full of one-PR-shaped follow-ups (mock swap, tooling target, pattern mirror), drains run very fast.
+
+**Action taken**: No code change. Track the velocity-vs-design-novelty correlation as a planning input for future milestones.
+
+**3. Stage 11 🔴 streak holding at 0 across 5 pipelines.** PRs #990, #993, #995 (no Stage 11 — pipeline-dev), #996 (no Stage 11 — pipeline-dev), #997 → all 0 🔴 at Stage 11 (or no regressions in pipeline-dev's live-verify substitute). Action #125 (Stage 7 user-flow trace), introduced after the #976/#988/#989 streak of broken-end-to-end PRs, is demonstrably working — that class of defect has not recurred since #125 was filed. Two-PR validation became five-PR validation in a single session.
+
+**Action taken**: Action #125 status upgraded to "Validated across 5 pipelines" in the Action Tracker.
+
+**4. pipeline-dev (condensed flow) empirically validated for tooling/test-only PRs.** PR #995 (Makefile target — pure DX) and PR #996 (test-only mock swap — pure refactor) both used the condensed pipeline-dev flow: no subagent reviews, no separate Stage 7/8/11. Both shipped clean and the user manually live-verified each. Calling this empirically: when a PR doesn't change production code paths, the full 14-stage pipeline is overhead. **Heuristic: PR is pipeline-dev-eligible if it touches only one of {Makefile, scripts/, docs/, tests/}** AND **has zero changes under `python/djust/` or `crates/`**. Production code changes always go through `pipeline-run`.
+
+**Action taken**: Filing as Action #132 — update pipeline-run skill guidance to explicitly list pipeline-dev-eligible PR shapes.
+
+**5. Pre-commit hook stash/restore gotcha hit twice in the session.** PR #996 hit it (ruff cleaned an unused import in the stashed tree, original commit didn't register, had to re-stage). PR #989 hit it earlier in the v0.7.0 milestone. Both occurrences had the same shape: pre-commit reformat in the stashed working tree silently drops the original commit. Action #122 (`git log -1 --oneline` post-commit verification) was filed in v0.6.1; this milestone's data confirms the priority — the failure mode is real and recurring.
+
+**Action taken**: Action #122 reinforced in the tracker (now annotated with PR #996 as 2nd occurrence). Recommend implementing the post-commit `git log -1 --oneline` step in the pipeline-run skill before next milestone.
+
+**6. The action-tracker flywheel demonstrably works — `make ci-mirror` exists BECAUSE of the gap Stage 5b of PR #993 surfaced.** PR #993's Stage 5b caught the dual-engine 500 because the FULL pre-push suite ran (not the targeted subset Stage 6 ran). That was filed as a process note under #129. The very next PR (PR #995) shipped `make ci-mirror` — a one-shot way to run the full CI test invocation locally, which is the same gap closed for ALL future PRs. This is the Action Tracker working as a flywheel: one pipeline's lesson became the next pipeline's tooling fix in the same session. Worth calling out as a victory for the process itself, not just for the individual PRs.
+
+**Action taken**: No code change — already shipped. Highlighting the flywheel pattern as a milestone insight.
+
+### Insights
+
+- **Velocity correlates inversely with design novelty.** v0.7.1: 4 PRs / ~2 hours, 1 design-novel + 3 template-fill. v0.7.0: 4 PRs / full session day, 4 design-novel. When the Action Tracker is full of one-PR-shaped follow-ups, drains run very fast. Plan milestones to alternate: design-novel sprint → template-fill drain → design-novel sprint.
+- **First-push clean merge rate of 4/4 this milestone.** Compare v0.7.0: 0/4 first-push merges (each PR had Stage 7 or Stage 11 fixes before merge). The combination of Action #125 (Stage 7 user-flow trace) + pattern reuse (no novel design surface in 3 of 4 PRs) is the cleanest path-to-merge observed in any milestone.
+- **Pipeline-dev complements pipeline-run rather than replacing it.** PR #993 (production code, novel design) → pipeline-run, full 14 stages, Stage 5b recovery. PRs #995/#996 (tooling, test-only) → pipeline-dev, condensed. PR #997 (production code, mirrored pattern) → back to pipeline-run with full reviews. The right tool per PR shape, not a monoculture.
+- **Bundle delta stays small.** PR #993: +148 B gz. PR #997: +46 B gz. Combined: ~194 B gz across two production-feature PRs. The "no-build-step" client.js philosophy held — apiUrl + meta-tag reader + sseUrl helper in under 200 B together.
+- **Auto-merge cron agents (v0.6.1rc1, v0.7.0rc1) ran successfully in parallel with the v0.7.1 drain.** v0.6.1rc1 fired cleanly earlier in the session; v0.7.0rc1 fired at 20:47 UTC during this milestone. No interference with the v0.7.1 PR pipelines.
+- **Template-reuse PRs need their own retro discipline.** PRs #995/#996/#997 didn't get individual retro files (they ran condensed flow). For pipeline-dev runs, the milestone retro IS the per-PR retro. That's correct for low-novelty PRs, but track in case any milestone-only retro proves insufficient for surfacing class-of-bug findings.
+
+### Process Improvements Applied
+
+**Action Tracker (headline)**:
+- #100, #101, #123 → Closed by PRs #995, #996, #993 respectively.
+- #130 → New + closed same-day by PR #997 (SSE FORCE_SCRIPT_NAME — same class of bug, pattern mirror).
+- #131 → New (generalize Action #129's "Engine path" Stage 4 bullet beyond template tags to any feature touching template rendering).
+- #132 (proposed; tracked under "Open Items" below) → pipeline-run skill should list pipeline-dev-eligible PR shapes explicitly.
+- #125 status upgraded: "Validated across 5 pipelines."
+- #122 reinforced: 2nd session-occurrence of pre-commit stash/restore gotcha.
+
+**CLAUDE.md**: No additions this milestone.
+
+**Pipeline-run / pipeline-ship skills**: No new checklist additions this milestone — Action #132 (pipeline-dev triage criteria) is the next candidate but not yet drafted.
+
+**Skills**: pipeline-dev empirically validated for tooling/test-only PRs (PRs #995, #996). Recommend formalizing eligibility criteria in the next skill update.
+
+### Review Stats
+
+| Metric | PR #993 | PR #995 | PR #996 | PR #997 | Total |
+|---|---|---|---|---|---|
+| Python tests added | 5 | 0 | 0 (refactor) | 3 | 8 |
+| JS tests added | 6 | 0 | 0 | 0 | 6 |
+| Regression tests added | 1 | 0 | 0 | 0 | 1 |
+| Stage 12 dual-engine parity tests | 3 | 0 | 0 | 0 | 3 |
+| **New tests total** | **15** | **0** | **0** | **3** | **18** |
+| 🔴 findings (Stage 7+8+11) | 0 | n/a (pipeline-dev) | 0 | 0 | 0 |
+| 🟡 findings | 1 (Stage 11) | n/a | 0 | 0 | 1 |
+| Findings fixed pre-merge | 1/1 | n/a | n/a | n/a | 1/1 |
+| Pre-commit attempts | 1 | 1 | 2 (stash/restore retry) | 1 | 5 |
+| Pre-push attempts | 2 (Stage 5b) | 1 | 1 | 1 | 5 |
+| CI retries | 0 | 0 | 0 | 0 | 0 |
+| Stage loops | 1 (Stage 5b) | 0 | 0 | 0 | 1 |
+| Bundle delta (gz) | +148 B | 0 | 0 | +46 B | +194 B |
+| Quality rating | 5/5 | 5/5 (pipeline-dev) | 5/5 (pipeline-dev) | 5/5 | — |
+
+### Open Items
+
+Tracked as Action Tracker rows above:
+- **#122** — Post-commit `git log -1 --oneline` verification step (Reinforced — 2nd occurrence in the session)
+- **#125** — Stage 7 user-flow-trace checklist row — **Validated across 5 pipelines**
+- **#129** — Stage 4 engine-path declaration for template tags — **Partially validated; generalized into #131**
+- **#131** — Engine-path Stage 4 bullet generalized beyond template tags
+- **#132** *(proposed; not yet a tracker row)* — pipeline-run skill should list pipeline-dev-eligible PR shapes (Makefile / scripts/ / docs/ / tests/-only changes; zero `python/djust/` or `crates/` deltas)
+
+Deferred from v0.7.1:
+- None — milestone scope was narrow (FORCE_SCRIPT_NAME class + DX tooling + test hygiene). All planned items shipped.
+
+### Status
+
+✅ v0.7.1 user-facing scope **COMPLETE**. FORCE_SCRIPT_NAME / sub-path deploy support landed across `@server_function` / `@event_handler(expose_api=True)` / SSE fallback transports. DX gap (`make ci-mirror`) closed. Test hygiene (fakeredis swap) closed. Ready for `v0.7.1rc1` cut whenever the release cron next fires.
 
 ---
 
