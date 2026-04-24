@@ -882,7 +882,7 @@ class OnboardingView(WizardMixin, LiveView):
 
 **Time-travel debugging** — State snapshot recording + replay in the debug panel. Every `@event_handler` dispatch records a before/after state snapshot; the debug panel lets the developer scrub backward through the event history, replaying the view at each step. Beyond Phoenix's debug tools. Integrates with the existing debug-panel infrastructure and the v0.6.0 state-snapshot work (reuse `_capture_snapshot_state`). ~300 lines Python + ~200 lines JS. *Deferred because it touches the render pipeline and needs dev/prod gating to avoid shipping the overhead in production builds.*
 
-**Hot View Replacement** — State-preserving Python code reload in dev mode. When a LiveView module changes on disk, the dev server patches the class in place and re-renders existing view instances without losing their state. React's Fast Refresh equivalent for djust. Requires a file-watcher hook + Python module-reload machinery + a "state-compatible?" heuristic that detects whether the new class signature breaks the old state. ~200 lines Python. *Deferred because it requires careful handling of module identity, asyncio task references, and WebSocket channel groups when a view is hot-swapped.*
+~~**Hot View Replacement**~~ ✅ Shipped v0.6.1 (PR #TBD) — State-preserving Python code reload in dev mode. When a LiveView module changes on disk, the dev server `importlib.reload()`s it and swaps `__class__` in place on every live instance, preserving form input, counter values, and scroll position. React Fast Refresh parity for djust. See `docs/website/guides/hot-view-replacement.md`.
 
 **CSS `@starting-style`** — ~~✅ Documented in v0.6.0 (PR #973)~~ — browser-native feature, no framework work needed. See `docs/website/guides/declarative-ux-attrs.md`.
 
@@ -1032,7 +1032,7 @@ Open questions that inform future direction:
 | State undo/redo | — | `use-undo` | Not started | v0.6.0 |
 | Connection multiplexing | Channel multiplexer | — | Not started | v0.6.0 |
 | ~~**CSS `@starting-style`**~~ ✅ | — | Framer Motion | ~~**Not started**~~ **Documented v0.6.0 (PR #973)** — browser-native enter animations work unmodified with djust's VDOM insert path; docs/website/guides/declarative-ux-attrs.md has a comparison section vs `dj-transition`. | **v0.6.0** |
-| **Hot View Replacement** | Code reloading | Fast Refresh | **Not started** | **v0.6.1** (deferred from v0.6.0rc1) |
+| ~~**Hot View Replacement**~~ ✅ | Code reloading | Fast Refresh | ~~**Not started**~~ **✅ Shipped v0.6.1** — state-preserving `__class__` swap + VDOM re-render on .py save; see `docs/website/guides/hot-view-replacement.md`. | **v0.6.1** |
 | Stale-while-revalidate | — | SWR / React Query | Not started | v0.7.0 |
 | `live_session` enhancements | `live_session/3` | — | Basic done | v0.7.0 |
 | Push navigate (SPA nav) | `push_navigate` | — | Not started | v0.7.0 |

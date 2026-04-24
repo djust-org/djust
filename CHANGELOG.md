@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hot View Replacement (HVR, v0.6.1)** — state-preserving Python code
+  reload in development. When a LiveView module changes on disk, the dev
+  server `importlib.reload()`s the module and swaps `__class__` in place on
+  every live instance of the changed class, then re-renders via the
+  existing VDOM diff path. Users keep form input, counter values, active
+  tab, and scroll position — React Fast Refresh parity for djust. Gated on
+  `DEBUG=True` + `LIVEVIEW_CONFIG["hvr_enabled"]` (default True). Falls
+  back to full reload on a conservative state-compat heuristic (removed
+  handlers, changed handler signatures, or slot layout drift). New system
+  check `djust.C401` warns when HVR is enabled but `watchdog` is not
+  installed. New client event `djust:hvr-applied` (CustomEvent). Zero cost
+  in production.
+
 ## [0.6.0rc1] - 2026-04-23
 
 ### Documentation

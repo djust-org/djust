@@ -88,6 +88,7 @@ How to build specific features.
 | **[Error Codes](guides/error-codes.md)**                  | Complete error code reference with fixes           |
 | **[Error Overlay (Dev Mode)](guides/error-overlay.md)**   | In-browser Python traceback panel, Next.js-style   |
 | **[Type-Safe Template Validation](guides/typecheck.md)**  | `manage.py djust_typecheck` — catch template typos before prod |
+| **[Hot View Replacement (v0.6.1)](guides/hot-view-replacement.md)** | State-preserving Python reload in dev (React Fast Refresh parity) |
 
 ---
 

@@ -246,6 +246,11 @@ navigation:
         file: guides/typecheck.md
         order: 17
         level: intermediate
+      - title: Hot View Replacement (v0.6.1)
+        slug: hot-view-replacement
+        file: guides/hot-view-replacement.md
+        order: 30
+        level: intermediate
 
   - title: Testing
     slug: testing

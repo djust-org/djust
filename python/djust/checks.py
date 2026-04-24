@@ -2335,3 +2335,55 @@ def check_code_quality(app_configs, **kwargs):
     _check_navigation_state_in_handlers(errors)
 
     return errors
+
+
+@register("djust")
+def check_hot_view_replacement(app_configs, **kwargs):
+    """C401 — Hot View Replacement requires ``watchdog`` for file watching.
+
+    Only fires when the operator has explicitly opted into the dev-time
+    HVR pipeline (``DEBUG=True`` + ``hot_reload=True`` +
+    ``hvr_enabled=True``) but the underlying ``watchdog`` package isn't
+    importable. In that case HVR would silently no-op; the warning nudges
+    the developer to ``pip install watchdog`` so module reloads actually
+    reach the WebSocket consumers.
+
+    Silent in production: ``DEBUG=False`` suppresses the entire check
+    block so release builds stay quiet.
+    """
+    from django.conf import settings
+
+    warnings = []
+    debug = bool(getattr(settings, "DEBUG", False))
+    if not debug:
+        return warnings
+
+    try:
+        from djust.config import config
+    except ImportError:
+        return warnings
+
+    if not config.get("hvr_enabled", True):
+        return warnings
+    if not config.get("hot_reload", True):
+        return warnings
+
+    try:
+        from djust.dev_server import WATCHDOG_AVAILABLE
+    except ImportError:
+        WATCHDOG_AVAILABLE = False
+
+    if not WATCHDOG_AVAILABLE:
+        warnings.append(
+            DjustWarning(
+                "Hot View Replacement is enabled but watchdog is not installed.",
+                hint=(
+                    "HVR requires the watchdog package for file watching. "
+                    "Without it, code changes won't hot-swap live view "
+                    "instances in development."
+                ),
+                fix_hint="pip install watchdog",
+                id="djust.C401",
+            )
+        )
+    return warnings
