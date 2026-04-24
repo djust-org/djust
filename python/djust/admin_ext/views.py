@@ -10,6 +10,7 @@ from functools import wraps
 from urllib.parse import urlencode
 
 from django.contrib.auth import authenticate, logout
+from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
 from django.http import HttpResponseRedirect
@@ -38,6 +39,25 @@ def register_admin_view(view_id, admin_site, model=None, model_admin=None):
 def get_admin_config(view_id):
     """Get admin config for a view."""
     return _VIEW_REGISTRY.get(view_id, {})
+
+
+def _serialize_widget_slots(widget_classes, *, object_id=None):
+    """Convert a list of LiveView widget classes into the dict shape
+    that ``_change_form_widgets.html`` / ``_change_list_widgets.html``
+    expect. Each entry carries the dotted ``view_path`` so
+    ``{% live_render %}`` can resolve it.
+    """
+    out = []
+    for widget_cls in widget_classes:
+        entry = {
+            "view_path": f"{widget_cls.__module__}.{widget_cls.__name__}",
+            "label": getattr(widget_cls, "label", ""),
+            "size": getattr(widget_cls, "size", "md"),
+        }
+        if object_id is not None:
+            entry["object_id"] = object_id
+        out.append(entry)
+    return out
 
 
 def admin_login_required(view_func):
@@ -314,6 +334,11 @@ class ModelListView(AdminBaseMixin, LiveView):
             except Exception:
                 logger.debug("Failed to build filter for %s", filter_field, exc_info=True)
 
+        # Per-page widget slots (v0.7.0)
+        change_list_widgets = _serialize_widget_slots(
+            self._model_admin.get_change_list_widgets(self.request)
+        )
+
         return {
             **self.get_admin_context(),
             "title": f"Select {self._model._meta.verbose_name} to change",
@@ -332,6 +357,7 @@ class ModelListView(AdminBaseMixin, LiveView):
                 f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_add",
             ),
             "has_add_permission": self._model_admin.has_add_permission(self.request),
+            "change_list_widgets": change_list_widgets,
         }
 
     @event_handler
@@ -383,7 +409,13 @@ class ModelListView(AdminBaseMixin, LiveView):
 
     @event_handler
     def run_action(self, action_name: str):
-        """Execute a bulk action on selected items."""
+        """Execute a bulk action on selected items.
+
+        Enforces ``allowed_permissions`` metadata stamped by decorators
+        (notably ``@admin_action_with_progress(permissions=[...])``).
+        Actions without ``allowed_permissions`` run unchanged, so this
+        is backward-compatible with actions decorated before v0.7.0.
+        """
         if not self.selected_ids:
             return None
 
@@ -391,8 +423,21 @@ class ModelListView(AdminBaseMixin, LiveView):
         if action_name not in actions:
             return None
 
-        queryset = self._model.objects.filter(pk__in=self.selected_ids)
         action_func = actions[action_name]["func"]
+
+        # Defense-in-depth: if the action declares required perms
+        # (via ``@admin_action_with_progress(permissions=[...])`` or an
+        # equivalent ``allowed_permissions`` attribute), block users who
+        # lack them BEFORE firing the action. This covers the gap where
+        # the default ``has_*_permission`` methods return True for any
+        # authenticated staff user -- a view-only staff user could
+        # otherwise fire a destructive action just by having an action
+        # entry in the dropdown.
+        allowed = getattr(action_func, "allowed_permissions", None) or []
+        if allowed and not self.request.user.has_perms(allowed):
+            raise PermissionDenied("User lacks required permissions for this action: %r" % allowed)
+
+        queryset = self._model.objects.filter(pk__in=self.selected_ids)
         result = action_func(self.request, queryset)
 
         self.selected_ids = []
@@ -480,13 +525,20 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
                 }
             )
 
+        # Per-page widget slots (v0.7.0)
+        object_pk = self.object.pk if self.object else None
+        change_form_widgets = _serialize_widget_slots(
+            self._model_admin.get_change_form_widgets(self.request, self.object),
+            object_id=object_pk,
+        )
+
         return {
             **self.get_admin_context(),
             "title": f"Change {self.object}"
             if self.object
             else f"Add {self._model._meta.verbose_name}",
             "object": str(self.object) if self.object else None,
-            "object_pk": self.object.pk if self.object else None,
+            "object_pk": object_pk,
             "is_saving": self.is_saving,
             "save_success": self.save_success,
             "fieldsets": fieldsets_data,
@@ -499,6 +551,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             )
             if self.object
             else None,
+            "change_form_widgets": change_form_widgets,
         }
 
     @event_handler

@@ -2327,9 +2327,9 @@ class TestV008NonPrimitiveInMount:
             _check_non_primitive_assignments_in_mount(errors)
 
         v008 = [e for e in errors if e.id == "djust.V008"]
-        assert (
-            len(v008) == 0
-        ), "V008 should not duplicate V006 warnings for service/client/session patterns"
+        assert len(v008) == 0, (
+            "V008 should not duplicate V006 warnings for service/client/session patterns"
+        )
 
     def test_v008_fires_for_non_service_non_primitive(self, tmp_path):
         """V008 fires for custom types that are not in V006's service-pattern list."""
@@ -3341,9 +3341,9 @@ class TestV004LifecycleMethods:
             errors = check_liveviews(None)
             v004 = [e for e in errors if e.id == "djust.V004"]
             cls_name = f"V004Lifecycle_{method_name}"
-            assert not any(
-                cls_name in e.msg and method_name in e.msg for e in v004
-            ), f"V004 should not fire on lifecycle method {method_name!r}"
+            assert not any(cls_name in e.msg and method_name in e.msg for e in v004), (
+                f"V004 should not fire on lifecycle method {method_name!r}"
+            )
         finally:
             del cls
             _force_gc()
@@ -3391,9 +3391,9 @@ class TestT013TemplateVariableDjView:
 
         errors = check_templates(None)
         t013 = [e for e in errors if e.id == "djust.T013"]
-        assert (
-            len(t013) == 0
-        ), "dj-view='{{ view_path }}' is a valid pattern — T013 should not flag it"
+        assert len(t013) == 0, (
+            "dj-view='{{ view_path }}' is a valid pattern — T013 should not flag it"
+        )
 
     def test_t013_passes_template_variable_with_spaces(self, tmp_path, settings):
         """dj-view='{{ view_path }}' with whitespace padding should also pass."""
@@ -3784,3 +3784,76 @@ class TestSuppressChecks:
         errors = check_configuration(None)
         c003 = [e for e in errors if e.id == "djust.C003"]
         assert len(c003) == 0
+
+
+class TestA072A073AdminWidgetChecks:
+    """A072/A073 -- djust.admin_ext per-page widget slot audits (v0.7.0)."""
+
+    def test_A072_non_liveview_in_change_form_widgets_warns(self):
+        """A072 fires for a non-LiveView class in change_form_widgets."""
+        from django.contrib.auth import get_user_model
+
+        from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+        from djust.checks import check_admin_widgets
+
+        class NotALiveView:
+            pass
+
+        class BadAdmin(DjustModelAdmin):
+            change_form_widgets = [NotALiveView]
+
+        site = DjustAdminSite(name="test_a072_site")
+        site.register(get_user_model(), BadAdmin)
+        errors = check_admin_widgets(None, _admin_sites=[site])
+        a072 = [e for e in errors if e.id == "djust.A072"]
+        assert len(a072) >= 1
+
+    def test_A073_not_emitted_with_default_single_worker_settings(self):
+        """A073 stays silent when DJUST_ASGI_WORKERS is unset or 1.
+
+        In single-worker dev the limitation doesn't apply, so ``manage.py
+        check`` should show no A073 -- otherwise every demo project sees
+        a spurious warning on every boot.
+        """
+        from django.contrib.auth import get_user_model
+
+        from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+        from djust.admin_ext.progress import admin_action_with_progress
+        from djust.checks import check_admin_widgets
+
+        class AnAdmin(DjustModelAdmin):
+            @admin_action_with_progress(description="Do")
+            def slow_job(self, request, queryset, progress):
+                progress.update(current=1, total=1)
+
+            actions = ["slow_job"]
+
+        site = DjustAdminSite(name="test_a073_default_site")
+        site.register(get_user_model(), AnAdmin)
+        # Default settings have no DJUST_ASGI_WORKERS, so it falls through
+        # to 1 and A073 should not fire.
+        errors = check_admin_widgets(None, _admin_sites=[site])
+        a073 = [e for e in errors if e.id == "djust.A073"]
+        assert len(a073) == 0, f"Expected no A073 with default settings, got {a073!r}"
+
+    def test_A073_info_emitted_for_progress_action_site_with_multi_worker(self):
+        """A073 fires when the project declares DJUST_ASGI_WORKERS > 1."""
+        from django.contrib.auth import get_user_model
+
+        from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+        from djust.admin_ext.progress import admin_action_with_progress
+        from djust.checks import check_admin_widgets
+
+        class AnAdmin(DjustModelAdmin):
+            @admin_action_with_progress(description="Do")
+            def slow_job(self, request, queryset, progress):
+                progress.update(current=1, total=1)
+
+            actions = ["slow_job"]
+
+        site = DjustAdminSite(name="test_a073_site")
+        site.register(get_user_model(), AnAdmin)
+        with override_settings(DJUST_ASGI_WORKERS=2):
+            errors = check_admin_widgets(None, _admin_sites=[site])
+        a073 = [e for e in errors if e.id == "djust.A073"]
+        assert len(a073) == 1, f"Expected exactly one A073 in {[e.id for e in errors]!r}"

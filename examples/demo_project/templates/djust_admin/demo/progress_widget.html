@@ -1,0 +1,13 @@
+<div class="text-sm text-gray-700">
+    <p>
+        {% if object_id %}
+        Editing maintenance request <strong>#{{ object_id }}</strong>.
+        {% else %}
+        Demo list-page widget.
+        {% endif %}
+    </p>
+    <p class="mt-1 text-xs text-gray-500">
+        This widget is embedded via ``DjustModelAdmin.change_form_widgets`` /
+        ``change_list_widgets`` (v0.7.0).
+    </p>
+</div>

@@ -20,6 +20,9 @@
         <h1 class="text-2xl font-bold text-gray-900">{{ title }}</h1>
     </div>
 
+    {# Per-page widget slots (v0.7.0) #}
+    {% include "djust_admin/_change_form_widgets.html" %}
+
     <!-- Success message -->
     {% if save_success %}
     <div class="mb-4 rounded-md bg-green-50 p-4">

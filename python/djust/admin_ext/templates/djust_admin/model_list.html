@@ -21,6 +21,9 @@
         {% endif %}
     </div>
 
+    {# Per-page widget slots (v0.7.0) #}
+    {% include "djust_admin/_change_list_widgets.html" %}
+
     <div class="flex gap-6">
         <!-- Main content area -->
         <div class="{% if has_filters %}flex-1{% else %}w-full{% endif %}">

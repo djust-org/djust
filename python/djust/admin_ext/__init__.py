@@ -12,6 +12,7 @@ from . import adapters  # noqa: F401
 from .decorators import action, display, register
 from .options import DjustModelAdmin
 from .plugins import AdminPage, AdminPlugin, AdminWidget, NavItem
+from .progress import BulkActionProgressWidget, admin_action_with_progress
 from .sites import DjustAdminSite
 
 # Default admin site instance
@@ -36,9 +37,11 @@ __all__ = [
     "AdminPlugin",
     "AdminPage",
     "AdminWidget",
+    "BulkActionProgressWidget",
     "NavItem",
     "register",
     "action",
+    "admin_action_with_progress",
     "display",
     "site",
     "autodiscover",
