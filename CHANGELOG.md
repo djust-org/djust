@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0rc1] - 2026-04-24
+
 ### Added
 
 - **Streaming Markdown `{% djust_markdown %}` (v0.7.0)** — server-side
