@@ -66,6 +66,37 @@ window.djust.apiUrl = function apiUrl(path) {
 };
 
 // ============================================================================
+// SSE prefix resolution (#992) — same pattern as apiPrefix, different meta tag
+// ============================================================================
+// Resolves window.djust.ssePrefix once at bootstrap. Priority matches
+// apiPrefix: explicit global > <meta name="djust-sse-prefix"> > '/djust/'.
+// Used by 03b-sse.js for EventSource + event POST URL construction.
+(function initSsePrefix() {
+    if (typeof window.djust.ssePrefix !== 'undefined' && window.djust.ssePrefix !== null) {
+        return;
+    }
+    let prefix = '';
+    try {
+        const meta = document.querySelector('meta[name="djust-sse-prefix"]');
+        if (meta) {
+            const raw = meta.getAttribute('content');
+            if (raw) prefix = raw.trim();
+        }
+    } catch (_) { /* SSR / detached DOM — fall through to default */ }
+    window.djust.ssePrefix = prefix || '/djust/';
+})();
+
+// Mirror of apiUrl() for the SSE prefix. Same slash-normalization rules,
+// same absolute-URL caveat (callers must encode/validate user input).
+window.djust.sseUrl = function sseUrl(path) {
+    const raw = window.djust.ssePrefix || '/djust/';
+    const normalizedPrefix = raw.endsWith('/') ? raw : raw + '/';
+    const p = path == null ? '' : String(path);
+    const normalizedPath = p.startsWith('/') ? p.slice(1) : p;
+    return normalizedPrefix + normalizedPath;
+};
+
+// ============================================================================
 // djLog: debug-gated console.log (#761)
 // ============================================================================
 // Per djust/CLAUDE.md: "No console.log in JS without if (globalThis.djustDebug)

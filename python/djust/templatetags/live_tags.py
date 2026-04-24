@@ -70,6 +70,13 @@ _DJUST_API_CALL_URL_NAMES = ("djust_api:djust-api-call", "djust-api-call")
 _REVERSE_PROBE_KWARGS = {"view_slug": "_", "function_name": "_"}
 _REVERSE_PROBE_SUFFIX = "call/_/_/"
 
+# SSE URL names — mirrors the API pattern for #992 (SSE clients also
+# hardcoded /djust/sse/). Probed order is the same: namespaced mount via
+# sse_urlpatterns include first, then bare.
+_DJUST_SSE_URL_NAMES = ("djust-sse-stream",)
+_SSE_PROBE_KWARGS = {"session_id": "_"}
+_SSE_PROBE_SUFFIX = "sse/_/"
+
 
 def _resolve_api_prefix() -> str:
     """Return the API mount prefix via ``reverse()`` or ``""`` if unmounted.
@@ -102,13 +109,35 @@ def _resolve_api_prefix() -> str:
     return ""
 
 
+def _resolve_sse_prefix() -> str:
+    """Return the SSE mount prefix via ``reverse()`` or ``""`` if unmounted.
+
+    Mirrors :func:`_resolve_api_prefix`. The SSE app is mounted via
+    ``path("djust/", include(sse_urlpatterns))`` (see ``djust/sse.py``)
+    and the named route is ``djust-sse-stream``. We probe with a sentinel
+    session_id and strip ``sse/_/`` to recover the mount prefix.
+    """
+    from django.urls import NoReverseMatch, reverse
+
+    for name in _DJUST_SSE_URL_NAMES:
+        try:
+            url = reverse(name, kwargs=_SSE_PROBE_KWARGS)
+        except NoReverseMatch:
+            continue
+        if url.endswith(_SSE_PROBE_SUFFIX):
+            return url[: -len(_SSE_PROBE_SUFFIX)]
+        return url
+    return ""
+
+
 @register.simple_tag
 def djust_client_config() -> Any:
     """Emit client bootstrap configuration as ``<meta>`` tags.
 
-    Currently emits a single tag::
+    Currently emits two tags::
 
-        <meta name="djust-api-prefix" content="<resolved prefix>">
+        <meta name="djust-api-prefix" content="<resolved API prefix>">
+        <meta name="djust-sse-prefix" content="<resolved SSE prefix>">
 
     The resolved prefix is computed via Django's ``reverse()`` so it
     honors ``FORCE_SCRIPT_NAME`` and any custom ``api_patterns(prefix=...)``
@@ -138,15 +167,20 @@ def djust_client_config() -> Any:
     ``FORCE_SCRIPT_NAME`` value cannot break out of the ``content="..."``
     attribute. See ``test_tag_output_is_escaped``.
     """
-    prefix = _resolve_api_prefix()
+    api_prefix = _resolve_api_prefix()
+    sse_prefix = _resolve_sse_prefix()
     # escape() handles all HTML-special chars including the double-quote
     # (rendered as &quot;) so the value is safe to interpolate inside
     # content="..." — even if a developer accidentally puts
     # <script> in FORCE_SCRIPT_NAME.
-    escaped = escape(prefix)
+    api_escaped = escape(api_prefix)
+    sse_escaped = escape(sse_prefix)
     # String concatenation (not f-string) to comply with the repo rule
     # against f-string mark_safe interpolation.
-    html = '<meta name="djust-api-prefix" content="' + escaped + '">'
+    html = (
+        '<meta name="djust-api-prefix" content="' + api_escaped + '">'
+        '\n<meta name="djust-sse-prefix" content="' + sse_escaped + '">'
+    )
     return mark_safe(html)
 
 

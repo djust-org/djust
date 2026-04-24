@@ -41,7 +41,12 @@ class LiveViewSSE {
         // Session ID is generated client-side; the server stores it as the
         // lookup key so event POSTs can reach the right session.
         this.sessionId = this._generateSessionId();
-        this.sseBaseUrl = `/djust/sse/${this.sessionId}/`;
+        // Resolved via window.djust.sseUrl() — honors FORCE_SCRIPT_NAME and
+        // custom mount prefixes (closes #992). Default '/djust/' preserved
+        // for deployments that don't use {% djust_client_config %}.
+        this.sseBaseUrl = window.djust.sseUrl
+            ? window.djust.sseUrl(`sse/${this.sessionId}/`)
+            : `/djust/sse/${this.sessionId}/`;
 
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);

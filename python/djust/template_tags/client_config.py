@@ -58,14 +58,20 @@ class ClientConfigTagHandler(TagHandler):
         # Django settings — safe to defer to render time.
         from django.utils.html import format_html
 
-        from djust.templatetags.live_tags import _resolve_api_prefix
+        from djust.templatetags.live_tags import (
+            _resolve_api_prefix,
+            _resolve_sse_prefix,
+        )
 
-        prefix = _resolve_api_prefix()
+        api_prefix = _resolve_api_prefix()
+        sse_prefix = _resolve_sse_prefix()
         # format_html escapes the interpolated value and returns a
         # SafeString. The Rust CustomTag output path does NOT re-escape the
         # returned string (matches the djust_markdown pattern), so using
         # format_html here produces safe, non-double-escaped HTML.
         return format_html(
-            '<meta name="djust-api-prefix" content="{}">',
-            prefix,
+            '<meta name="djust-api-prefix" content="{}">'
+            '\n<meta name="djust-sse-prefix" content="{}">',
+            api_prefix,
+            sse_prefix,
         )
