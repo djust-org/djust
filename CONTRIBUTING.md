@@ -108,6 +108,25 @@ cd examples/demo_project
 python manage.py test
 ```
 
+### CI Mirror — catch coverage / xdist surprises pre-push
+
+`make test` runs Python, Rust, and JS in parallel for speed but uses a
+different invocation than CI. Before pushing a branch, run:
+
+```bash
+make ci-mirror
+```
+
+This executes the EXACT pytest commands from `.github/workflows/test.yml`:
+
+- Full Python suite with `pytest-xdist` (`-n auto`, as CI runs it)
+- Security-tests with `--cov-fail-under=75` coverage threshold
+
+Catches the two classes of bugs `make test` can miss:
+- Coverage-threshold regressions (e.g. PR #959 shipped with 64.72% security
+  coverage; only caught by CI)
+- xdist-ordering issues that pass under sequential runs
+
 ### Benchmarks
 ```bash
 cd benchmarks
