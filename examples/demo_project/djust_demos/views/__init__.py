@@ -38,6 +38,7 @@ from .tenant_demo import TenantDemoView
 from .whats_new_042 import WhatsNew042View
 from .server_function_demo import ServerFunctionDemoView
 from .activity_demo import ActivityDemoView
+from .markdown_stream_demo import MarkdownStreamDemoView
 
 __all__ = [
     "CounterView",
@@ -74,4 +75,5 @@ __all__ = [
     "WhatsNew042View",
     "ServerFunctionDemoView",
     "ActivityDemoView",
+    "MarkdownStreamDemoView",
 ]

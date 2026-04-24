@@ -859,6 +859,46 @@ impl RustLiveViewBackend {
     }
 }
 
+/// Render Markdown to sanitised HTML.
+///
+/// Wraps [`djust_templates::markdown::render_markdown`] for Python. Raw HTML
+/// is always escaped (`Options::ENABLE_HTML` is never set); `javascript:`,
+/// `vbscript:`, and `data:` URL schemes in links/images are neutralised to
+/// `#`. Inputs larger than 10 MiB are returned as an escaped `<pre>` without
+/// hitting the parser.
+///
+/// Args:
+///     src: Markdown source string.
+///     provisional: Split the trailing unfinished line off as escaped text
+///         (streaming-safe rendering). Default `True`.
+///     tables: Enable GFM tables. Default `True`.
+///     strikethrough: Enable `~~strikethrough~~`. Default `True`.
+///     task_lists: Enable `- [ ]` / `- [x]` checkboxes. Default `False`.
+///
+/// Returns:
+///     Sanitised HTML as a Python string.
+#[pyfunction]
+#[pyo3(
+    name = "render_markdown",
+    signature = (src, *, provisional=true, tables=true, strikethrough=true, task_lists=false)
+)]
+fn render_markdown_py(
+    py: Python<'_>,
+    src: String,
+    provisional: bool,
+    tables: bool,
+    strikethrough: bool,
+    task_lists: bool,
+) -> PyResult<String> {
+    let opts = djust_templates::markdown::RenderOpts {
+        provisional,
+        tables,
+        strikethrough,
+        task_lists,
+    };
+    Ok(py.allow_threads(|| djust_templates::markdown::render_markdown(&src, opts)))
+}
+
 /// Fast template rendering
 #[pyfunction]
 fn render_template(template_source: String, context: HashMap<String, Value>) -> PyResult<String> {
@@ -2585,6 +2625,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
+    m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;

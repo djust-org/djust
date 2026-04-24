@@ -33,7 +33,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Accessibility (ARIA/WCAG) | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
 | ~~**P2**~~ | ~~Type-safe template validation~~ ✅ Shipped in v0.5.1 (`manage.py djust_typecheck`) | ~~Catch template variable typos at CI — unique differentiator vs all competitors~~ | ~~v0.5.1~~ |
 | **P2** | Keep-Alive / `dj-activity` | Pre-render hidden routes, preserve state — React 19.2 parity | v0.7.0 |
-| **P2** | Streaming markdown renderer | Incremental markdown for LLM output — strongest AI vertical signal | v0.7.0 |
+| ~~**P2**~~ | ~~Streaming markdown renderer~~ ✅ Shipped in v0.7.0 (`{% djust_markdown %}` + `djust.render_markdown`, pulldown-cmark backend, provisional-line splitter) | ~~Incremental markdown for LLM output — strongest AI vertical signal~~ | ~~v0.7.0~~ |
 | ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
 | ~~**P1**~~ | ~~Virtual/windowed lists (`dj-virtual`)~~ ✅ | ~~DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps~~ | v0.5.0 |
 | ~~**P2**~~ | ~~Multi-step wizard (`WizardMixin`)~~ ✅ Shipped in PR #632 (`python/djust/wizard.py`) | ~~#2 most common UI pattern after CRUD — no framework has this natively~~ | ~~v0.5.1~~ |
@@ -1047,7 +1047,7 @@ Open questions that inform future direction:
 | **Keep-Alive / Activity** | — | **`<Activity>`** (19.2) | **Not started** | **v0.7.0** |
 | ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
 | **Type-safe template validation** | — | TypeScript | ✅ Shipped (v0.5.1) | v0.5.1 |
-| **Streaming markdown renderer** | — | — | **Not started** | **v0.7.0** |
+| ~~**Streaming markdown renderer**~~ | — | — | ✅ **Shipped (v0.7.0)** | **v0.7.0** |
 | ~~**DB change notifications**~~ ✅ | ~~**PubSub + Ecto**~~ | — | **Shipped** | **v0.5.0** |
 | ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
 | **Multi-step wizard** | — | **`react-hook-form`** | ✅ **Shipped (PR #632)** | **v0.5.1** |
@@ -1128,7 +1128,7 @@ High-impact areas for contributions:
 44. **Server Actions (`@action`)** — React 19-style mutation handlers with auto pending/error states
 45. **Keyed for-loop change tracking** — Rust-side per-item change detection in `{% for %}` loops, ~200 lines Rust
 46. ~~**Type-safe template validation**~~ ✅ **Shipped in v0.5.1** — `manage.py djust_typecheck` static analysis + `docs/website/guides/typecheck.md` guide + 14 tests.
-47. **Streaming markdown renderer** — Incremental Rust-side CommonMark parser for LLM streaming, ~500 lines Rust
+47. ~~**Streaming markdown renderer**~~ ✅ **Shipped in v0.7.0** — `{% djust_markdown %}` + `djust.render_markdown` backed by pulldown-cmark 0.12, raw-HTML escaping enforced in the event-filter layer, `javascript:` URLs neutralised, provisional-line splitter for flicker-free streaming. See `docs/website/guides/streaming-markdown.md`.
 48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
 49. ~~**Database change notifications**~~ ✅ Shipped in v0.5.0 — PostgreSQL LISTEN/NOTIFY → LiveView push (`@notify_on_save`, `self.listen`, `handle_info`). See `docs/website/guides/database-notifications.md`.
 50. ~~**Virtual/windowed lists**~~ ✅ Shipped in v0.5.0 — DOM virtualization for large lists (`29-virtual-list.js`, fixed-height v0.5.0; variable-height v0.5.1)

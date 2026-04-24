@@ -68,6 +68,45 @@ def render_template_with_dirs(
     """
     ...
 
+def render_markdown(
+    src: str,
+    *,
+    provisional: bool = True,
+    tables: bool = True,
+    strikethrough: bool = True,
+    task_lists: bool = False,
+) -> str:
+    """
+    Render Markdown source to sanitised HTML.
+
+    Safe by construction:
+
+    - Raw HTML tags in ``src`` are HTML-escaped (``Options::ENABLE_HTML`` is
+      never set on the underlying pulldown-cmark parser).
+    - ``javascript:``, ``vbscript:``, and ``data:`` URL schemes in links/images
+      are replaced with ``#``.
+    - Inputs larger than 10 MiB are returned wrapped in an escaped
+      ``<pre class="djust-md-toobig">`` block without invoking the parser.
+
+    Args:
+        src: Markdown source string.
+        provisional: If True (default), split the trailing unfinished line off
+            as escaped plain text — avoids mid-syntax flicker during streaming
+            LLM output.
+        tables: Enable GFM tables.
+        strikethrough: Enable ``~~strikethrough~~``.
+        task_lists: Enable ``- [ ]`` / ``- [x]`` checkboxes.
+
+    Returns:
+        Sanitised HTML string.
+
+    Example::
+
+        html = render_markdown("**bold** and *italic*")
+        # '<p><strong>bold</strong> and <em>italic</em></p>\\n'
+    """
+    ...
+
 def diff_html(old_html: str, new_html: str) -> str:
     """
     Compute diff between two HTML strings.
@@ -755,6 +794,7 @@ __all__ = [
     # Core rendering
     "render_template",
     "render_template_with_dirs",
+    "render_markdown",
     "diff_html",
     "resolve_template_inheritance",
     # Serialization

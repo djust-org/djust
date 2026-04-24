@@ -55,4 +55,6 @@ urlpatterns = [
     path("server-function/", ServerFunctionDemoView.as_view(), name="server-function"),
     # v0.7.0 — {% dj_activity %} (React 19.2 <Activity> parity)
     path("activity/", ActivityDemoView.as_view(), name="activity"),
+    # v0.7.0 — streaming Markdown via {% djust_markdown %}
+    path("markdown-stream/", MarkdownStreamDemoView.as_view(), name="markdown-stream"),
 ]
