@@ -141,6 +141,12 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | Pre-signed S3 PUT URLs — client-direct upload (#820) | Bypass djust for large uploads; djust only signs URL + observes completion | v0.5.7 |
 | **P2** | Resumable uploads across WS disconnects (#821) | Client-side byte tracking + Redis MPU state; Phoenix 1.0 pattern | v0.5.7 |
 | **P2** | First-class GCS + Azure Blob UploadWriter subclasses (#822) | `djust.contrib.uploads.gcs` / `azure`; optional extras | v0.5.7 |
+| **P1** | NameError on module load — `DjustFileChangeHandler` references undefined `FileSystemEventHandler` when `watchdog` is not installed (#994) | Breaks `manage.py check` in any production install without the `[dev]` extra — latent since ≥v0.5.4rc1, surfaced v0.7.0rc1 | v0.7.2 |
+| **P1** | Rust renderer ignores `__str__` key in serialized model dicts — renders literal `[Object]` (#968) | Asymmetry with Django template semantics: `{{ obj }}` should call `__str__`, the dict already carries `"__str__"` from `_serialize_model_safely`, Rust just doesn't consume it | v0.7.2 |
+| **P2** | docs: prominent `key_template` convention for `s3_events` UUID extraction (#964) | Silent `upload_id` fallback when key doesn't match UUID-prefix shape; doc + debug-warn | v0.7.2 |
+| **P2** | tooling: weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers (#963) | All v0.5.7 writer tests mock SDKs; weekly happy-path integration run | v0.7.2 |
+| **P2** | feat: inline radio buttons in forms (#991) | Segmented controls / filter pills / Yes-No — common LiveView UX; API TBD (form-level flag vs widget attr vs template variant) | v0.7.2 |
+| **P2** | policy: decide breaking rename of framework-internal attrs to `_*` prefix (#962) | Defense-in-depth vs `_FRAMEWORK_INTERNAL_ATTRS` filter added in #762; likely close-without-code decision | v0.7.2 |
 
 ---
 
@@ -945,6 +951,88 @@ page use `{% live_island %}` to mark a region that upgrades to a
 LiveView on hydration while the rest of the page stays fully static.
 Deferred from v0.7.0 because the markdown/admin/activity work already
 saturated that milestone's scope; reopens here.
+
+### Milestone: v0.7.2 — Production Fixes & DX Polish
+
+*Goal:* Drain the open issue queue after v0.7.1rc1 — two real bugs
+(one critical install-time NameError, one Rust renderer semantics
+gap), docs + infra tech-debt from the v0.5.7 upload-writer retro,
+one small UX feature, and one policy decision to close out the
+consolidation arc.
+
+| Priority | Item | Status |
+| --- | --- | --- |
+| **P1** | NameError on module load — `djust.dev_server` references undefined `FileSystemEventHandler` when `watchdog` is absent (#994) | Not started |
+| **P1** | Rust renderer ignores `__str__` key in serialized model dicts (#968) | Not started |
+| **P2** | docs: `key_template` UUID-prefix convention for `s3_events` (#964) | Not started |
+| **P2** | tooling: weekly real-cloud CI matrix for S3 / GCS / Azure (#963) | Not started |
+| **P2** | feat: inline radio buttons (#991) | Not started |
+| **P2** | policy: `_*` prefix rename decision (#962) | Not started |
+
+**#994 — NameError on module load when watchdog is not installed.**
+`djust/dev_server.py` wraps the `watchdog` import in try/except
+`ImportError`, setting `WATCHDOG_AVAILABLE = False`, but the class
+`DjustFileChangeHandler(FileSystemEventHandler)` on line 25 references
+the symbol unconditionally — crashing the module at import when
+watchdog is absent. Since `djust/checks.py::check_hot_view_replacement`
+imports from `djust.dev_server`, this breaks `python manage.py check`
+in any production install without the `[dev]` extra. Latent since
+≥v0.5.4rc1; only surfaces when the env omits watchdog. Fix: guard the
+class definition behind `WATCHDOG_AVAILABLE` or define a stub base
+class in the except branch. Reporter offered a PR.
+
+**#968 — Rust renderer ignores `__str__` key in serialized model
+dicts.** `djust/serialization.py:157` (`_serialize_model_safely`)
+sets `"__str__": str(obj)` on every serialized model dict so
+`{{ obj }}` can render the instance's string representation. The
+Rust renderer doesn't consume the key — instead it emits the literal
+`[Object]` placeholder. Asymmetry: Django's template engine calls
+`__str__` on any object by default; a plain Python object with a
+custom `__str__` renders correctly even through the Rust engine
+(`{{ x }}` where `x = Obj()` works). The mismatch breaks FK display
+in LiveView templates whenever a view returns a model or a dict with
+nested model data. Fix: in the Rust renderer's variable resolution
+path, when the value is a dict containing `"__str__"`, emit that
+value; fall through to `[Object]` for non-model dicts. Reporter
+provided a clear repro.
+
+**#964 — docs: prominent `key_template` convention for `s3_events`
+UUID extraction.** From PR #958 retro. `s3_events.parse_s3_event`
+extracts `upload_id` via regex match on the first UUID-shaped path
+segment; apps must follow the documented `key_template` convention.
+If they don't, extraction silently falls back to the full key. Fix:
+document the UUID-prefix requirement in the upload-writers guide +
+on-page docstring, emit a debug-level warning when a key doesn't
+match the expected shape.
+
+**#963 — tooling: weekly real-cloud CI matrix.** From PR #958 retro.
+All v0.5.7 upload-writer tests mock the SDKs. Missing: happy-path
+integration run against real AWS / GCP / Azure. Add a weekly GitHub
+Actions workflow that uploads a 1 MB file, verifies presence, and
+deletes it. Credentials via GitHub encrypted secrets. ~30 LOC
+workflow + ~50 LOC test.
+
+**#991 — feat: inline radio buttons.** Django's default `RadioSelect`
+renders vertically; segmented controls / filter pills / short Yes-No
+choices want a horizontal layout. API TBD (form-level `inline_radios`
+list vs widget attr vs `{% dj_field field inline=True %}` template
+variant). Must: render each choice as inline-block `<label>` with its
+`<input type=radio>` inline, preserve a11y + focus ring, be
+CSS-framework-agnostic, work with existing form-validation error
+styling + `dj-bind`. Phoenix LiveView form helpers support inline
+radios out of the box — keeps parity.
+
+**#962 — policy: decide breaking rename of framework-internal attrs
+to `_*` prefix.** From v0.5.7 milestone retro. #762 added a
+`_FRAMEWORK_INTERNAL_ATTRS` frozenset filter so framework-set attrs
+(`sync_safe`, `login_required`, `template_name`, ...) don't leak into
+`get_state()`. The filter is a non-breaking fix. A stricter approach
+— rename the ~25 attrs to `_*` prefix — was deferred because it
+breaks any user code that reads `self.login_required`,
+`self.template_name`, etc. Decision point: rename in v0.6.0 (already
+shipped), v0.7.0 (already shipped), v1.0.0, or never? Likely
+close-without-code outcome: the filter is sufficient in practice.
+Document the decision in an ADR and close the issue.
 
 ### Milestone: v0.8.0 — Server Actions, Async Streams & Form Patterns (NEW)
 
