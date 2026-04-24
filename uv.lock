@@ -588,7 +588,7 @@ wheels = [
 
 [[package]]
 name = "djust"
-version = "0.6.1rc1"
+version = "0.7.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "channels", extra = ["daphne"] },
@@ -625,6 +625,7 @@ deploy = [
 ]
 dev = [
     { name = "click" },
+    { name = "fakeredis" },
     { name = "maturin" },
     { name = "mcp", extra = ["cli"] },
     { name = "mypy" },
@@ -672,6 +673,7 @@ requires-dist = [
     { name = "click", marker = "extra == 'dev'", specifier = ">=8.0,<9" },
     { name = "django", specifier = ">=4.2.29,<6" },
     { name = "djust", extras = ["redis", "compression", "performance", "admin", "deploy", "theming", "components", "s3", "gcs", "azure"], marker = "extra == 'all'" },
+    { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.20,<3" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10,<4" },
     { name = "markdown", marker = "extra == 'components'", specifier = ">=3.0,<4" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.0,<2.0" },
@@ -722,6 +724,20 @@ source = { registry = "http://127.0.0.1:8418/pypi/simple/" }
 sdist = { url = "https://files.pythonhosted.org/packages/bf/89/780e11f9588d9e7128a3f87788354c7946a9cbb1401ad38a48c4db9a4f07/execnet-2.1.2.tar.gz", hash = "sha256:63d83bfdd9a23e35b9c6a3261412324f964c2ec8dcd8d3c6916ee9373e0befcd", size = 166622, upload-time = "2025-11-12T09:56:37.75Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl", hash = "sha256:67fba928dd5a544b783f6056f449e5e3931a5c378b128bc18501f7ea79e296ec", size = 40708, upload-time = "2025-11-12T09:56:36.333Z" },
+]
+
+[[package]]
+name = "fakeredis"
+version = "2.35.1"
+source = { registry = "http://127.0.0.1:8418/pypi/simple/" }
+dependencies = [
+    { name = "redis" },
+    { name = "sortedcontainers" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/50/b748233c02fa77e5105238190cc9bb58b852eb1c8b1d0763230d3a5b745a/fakeredis-2.35.1.tar.gz", hash = "sha256:5bae5eba7b9d93cb968944ac40936373cf2397ff71667d4b595df65c3d2e413f", size = 189118, upload-time = "2026-04-12T17:05:58.539Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/27/b8b057a23f7777177e92d3a602fd866751b6b45014964548997e92e048fd/fakeredis-2.35.1-py3-none-any.whl", hash = "sha256:67d97e11f562b7870e11e5c30cf182270bfb2dd37f6707dba47cc6d91628d1b9", size = 129678, upload-time = "2026-04-12T17:05:56.86Z" },
 ]
 
 [[package]]
@@ -2234,6 +2250,15 @@ source = { registry = "http://127.0.0.1:8418/pypi/simple/" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "sortedcontainers"
+version = "2.4.0"
+source = { registry = "http://127.0.0.1:8418/pypi/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
 ]
 
 [[package]]

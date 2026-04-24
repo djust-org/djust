@@ -9,9 +9,10 @@ CI security job measures coverage across them.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from unittest.mock import MagicMock
 
+import fakeredis
 import pytest
 from django.test import RequestFactory
 
@@ -183,76 +184,55 @@ class TestInMemoryUploadState:
 
 
 # ===========================================================================
-# RedisUploadState (with fake client)
+# RedisUploadState (with fakeredis)
 # ===========================================================================
-
-
-class FakeRedisClient:
-    """A minimal redis-py-compatible mock (no pipeline)."""
-
-    def __init__(self):
-        self.data: Dict[str, bytes] = {}
-        self.ttls: Dict[str, int] = {}
-
-    def get(self, key: str):
-        return self.data.get(key)
-
-    def set(self, key, value, ex=None):
-        self.data[key] = value if isinstance(value, bytes) else str(value).encode()
-        if ex is not None:
-            self.ttls[key] = ex
-
-    def setex(self, key, ttl, value):
-        self.data[key] = value if isinstance(value, bytes) else str(value).encode()
-        self.ttls[key] = ttl
-
-    def delete(self, key):
-        self.data.pop(key, None)
-        self.ttls.pop(key, None)
-
-    def ttl(self, key):
-        return self.ttls.get(key, -1)
+# We use ``fakeredis.FakeRedis`` (a full in-memory Redis implementation) in
+# place of a hand-rolled mock. It implements the complete redis-py surface
+# — including TTL semantics, atomic pipelines, and error modes — so tests
+# exercise the real call sequence our ``RedisUploadState`` uses in prod.
+# Closes #961.
 
 
 class TestRedisUploadStateNoPipeline:
     """Redis store exercising the non-atomic fallback path (no pipeline)."""
 
     def test_set_and_get(self):
-        client = FakeRedisClient()
+        client = fakeredis.FakeRedis()
         store = RedisUploadState(client)
         store.set("u1", {"a": 1}, ttl=60)
         assert store.get("u1") == {"a": 1}
 
     def test_get_missing_returns_none(self):
-        client = FakeRedisClient()
+        client = fakeredis.FakeRedis()
         store = RedisUploadState(client)
         assert store.get("nonexistent") is None
 
     def test_get_corrupt_json_discards_entry(self):
-        client = FakeRedisClient()
-        client.data["djust:upload:u1"] = b"not-json{"
+        client = fakeredis.FakeRedis()
+        client.set("djust:upload:u1", b"not-json{")
         store = RedisUploadState(client)
         assert store.get("u1") is None
         # Corrupt entry should be deleted after discovery.
-        assert "djust:upload:u1" not in client.data
+        assert client.exists("djust:upload:u1") == 0
 
     def test_setex_fallback_for_older_redis_py(self):
         """Older redis-py raises TypeError on ``ex=`` kwarg — store falls
         back to setex positional form."""
 
-        class OldRedis(FakeRedisClient):
-            def set(self, key, value, ex=None):
+        class OldRedis(fakeredis.FakeRedis):
+            def set(self, name, value, ex=None, *args, **kwargs):
                 if ex is not None:
                     raise TypeError("old redis doesn't support ex kwarg")
-                super().set(key, value, ex=None)
+                return super().set(name, value, *args, **kwargs)
 
         client = OldRedis()
         store = RedisUploadState(client)
         store.set("u1", {"a": 1}, ttl=30)
-        assert client.ttls["djust:upload:u1"] == 30
+        # fakeredis uses real wall-clock; allow ±1s slack between set and read.
+        assert 29 <= client.ttl("djust:upload:u1") <= 30
 
     def test_update_no_pipeline_reads_and_rewrites(self):
-        client = FakeRedisClient()
+        client = fakeredis.FakeRedis()
         store = RedisUploadState(client)
         store.set("u1", {"a": 1}, ttl=60)
         merged = store.update("u1", {"b": 2})
@@ -260,20 +240,20 @@ class TestRedisUploadStateNoPipeline:
         assert store.get("u1") == {"a": 1, "b": 2}
 
     def test_update_no_pipeline_missing_entry_returns_none(self):
-        client = FakeRedisClient()
+        client = fakeredis.FakeRedis()
         store = RedisUploadState(client)
         assert store.update("missing", {"x": 1}) is None
 
     def test_set_too_large_raises(self):
-        client = FakeRedisClient()
+        client = fakeredis.FakeRedis()
         store = RedisUploadState(client)
         huge = {"data": "x" * (MAX_STATE_SIZE_BYTES + 100)}
         with pytest.raises(UploadStateTooLarge):
             store.set("u1", huge, ttl=60)
 
     def test_delete_catches_redis_errors(self, caplog):
-        class BrokenRedis(FakeRedisClient):
-            def delete(self, key):
+        class BrokenRedis(fakeredis.FakeRedis):
+            def delete(self, *names):
                 raise RuntimeError("redis down")
 
         store = RedisUploadState(BrokenRedis())
@@ -281,10 +261,10 @@ class TestRedisUploadStateNoPipeline:
         store.delete("u1")
 
     def test_custom_key_prefix(self):
-        client = FakeRedisClient()
+        client = fakeredis.FakeRedis()
         store = RedisUploadState(client, key_prefix="myapp:ups:")
         store.set("u1", {"a": 1}, ttl=60)
-        assert "myapp:ups:u1" in client.data
+        assert client.exists("myapp:ups:u1") == 1
 
 
 class TestRedisUploadStateWithPipeline:

@@ -112,6 +112,7 @@ dev = [
     "requests>=2.28,<3",  # Deploy CLI
     "requests-mock>=1.11,<2",  # HTTP mocking for deploy CLI tests
     "mcp[cli]>=1.2.0,<2",  # djust.mcp server tests (test_mcp.py)
+    "fakeredis>=2.20,<3",  # In-memory Redis for test_security_upload_resumable.py (closes #961)
 ]
 
 [project.scripts]
