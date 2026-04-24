@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`djust.dev_server` NameError on module load when `watchdog` is
+  not installed (v0.7.2, #994)** — the `try/except ImportError` block
+  at `dev_server.py:13-19` sets `WATCHDOG_AVAILABLE = False` but the
+  class statement `class DjustFileChangeHandler(FileSystemEventHandler)`
+  on line 25 referenced the symbol unconditionally. When watchdog is
+  absent, class definition time crashes with `NameError: name
+  'FileSystemEventHandler' is not defined`, which in turn breaks
+  `python manage.py check` in any djust install without the `[dev]`
+  extra (because `djust.checks.check_hot_view_replacement` imports
+  `WATCHDOG_AVAILABLE` from `djust.dev_server`). Latent since at least
+  v0.5.4rc1 — the pattern predates the v0.5.x refactor; only surfaces
+  when an install omits watchdog. Fix: the `except ImportError` branch
+  now defines stub `FileSystemEventHandler`, `FileSystemEvent`, and
+  `Observer` classes purely to satisfy the class statements below at
+  import time. `HotReloadServer.start()` already short-circuits on
+  `WATCHDOG_AVAILABLE = False`, so the stubs are never instantiated in
+  a running process. Covered by **3 regression tests** in
+  `tests/test_dev_server_watchdog_missing.py` that block watchdog via
+  a `sys.meta_path` finder and verify (a) `djust.dev_server` imports
+  cleanly, (b) `HotReloadServer.start()` no-ops with the documented
+  warning, (c) `djust.checks.check_hot_view_replacement`'s downstream
+  import path survives.
+
 ## [0.7.1rc1] - 2026-04-24
 
 ### Added
