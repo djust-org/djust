@@ -161,6 +161,48 @@ def test_tag_output_is_escaped():
 
 
 # ---------------------------------------------------------------------------
+# 5b. SSE prefix (#992) — mirrors the API tests above
+# ---------------------------------------------------------------------------
+
+
+@override_settings(ROOT_URLCONF="tests.api_test_urls_default")
+def test_tag_emits_sse_meta_with_default_prefix():
+    """Doc claim (#992): SSE prefix resolves to ``/djust/`` on default mount."""
+    html = _render_tag()
+    assert 'name="djust-sse-prefix"' in html
+    assert 'content="/djust/"' in html
+
+
+@override_settings(
+    ROOT_URLCONF="tests.api_test_urls_default",
+    FORCE_SCRIPT_NAME="/mysite",
+)
+def test_tag_emits_sse_meta_under_force_script_name():
+    """Doc claim (#992): FORCE_SCRIPT_NAME also applies to the SSE prefix.
+
+    ``reverse('djust-sse-stream', ...)`` honors FORCE_SCRIPT_NAME the
+    same way ``djust-api-call`` does.
+    """
+    from django.urls import set_script_prefix
+
+    set_script_prefix("/mysite/")
+    try:
+        html = _render_tag()
+    finally:
+        set_script_prefix("/")
+    assert 'name="djust-sse-prefix"' in html
+    assert 'content="/mysite/djust/"' in html
+
+
+@override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
+def test_tag_sse_meta_when_not_mounted():
+    """Doc claim (#992): SSE not mounted → empty content; client falls back."""
+    html = _render_tag()
+    assert 'name="djust-sse-prefix"' in html
+    assert 'content=""' in html
+
+
+# ---------------------------------------------------------------------------
 # 6. Dual-engine parity (PR #993 Stage 11 🟡)
 # ---------------------------------------------------------------------------
 #
