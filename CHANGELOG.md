@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rust renderer honors `__str__` key on serialized model dicts
+  (v0.7.2, #968)** — `djust.serialization._serialize_model_safely`
+  sets `"__str__": str(obj)` on every dict it produces so `{{ obj }}`
+  in a Rust-engine template can match Django's default `str(obj)`
+  semantics. The Rust `Value::Object` Display impl
+  (`crates/djust_core/src/lib.rs`) previously ignored the key and
+  emitted the literal `"[Object]"` for any dict. This broke FK
+  display silently in LiveView templates — `{{ claim.claimant }}`
+  (where `claimant` serializes to a nested dict) rendered as
+  `[Object]` instead of the claimant's string representation, since
+  the page still returned 200 the only way to notice was visual
+  inspection. Reported by the NYC Comptroller Claims Processing
+  prototype team who hit six occurrences in a single project. Fix:
+  when the value is `Value::Object` and contains a
+  `"__str__": Value::String(...)` entry, render the string. Non-model
+  dicts (no `__str__`, or `__str__` not a string) keep the existing
+  `"[Object]"` fallback. Plain Python objects with custom `__str__`
+  were already correct (handled by `FromPyObject`). Covered by **5
+  Rust unit tests** in `crates/djust_core/src/lib.rs::tests` and **13
+  Python integration tests** in `tests/test_rust_renderer_str_key.py`
+  (model dict, nested FK, HTML-auto-escape, dotted-access, plain-dict
+  fallback, null/int `__str__` edge cases, empty-string `__str__`,
+  backwards-compat for plain Python objects + lists + scalars).
 - **`djust.dev_server` NameError on module load when `watchdog` is
   not installed (v0.7.2, #994)** — the `try/except ImportError` block
   at `dev_server.py:13-19` sets `WATCHDOG_AVAILABLE = False` but the
