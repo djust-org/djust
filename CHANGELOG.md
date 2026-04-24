@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Admin widgets & bulk-action progress (v0.7.0)** — two additions to
+  `djust.admin_ext` close the most-requested gaps in the alternative
+  reactive admin:
+  - `DjustModelAdmin.change_form_widgets` / `change_list_widgets` class
+    attributes accept any list of `LiveView` subclasses; each is
+    embedded via `{% live_render %}` on the matching admin page.
+    Permission filtering honours `permission_required` on the widget
+    class. See
+    [docs/website/guides/admin-widgets.md](docs/website/guides/admin-widgets.md).
+  - `@admin_action_with_progress` (in `djust.admin_ext.progress`) turns
+    any `DjustModelAdmin` action into a background daemon thread and
+    redirects the user to a `BulkActionProgressWidget` page at
+    `<admin>/djust-progress/<job_id>/`. The page polls the job every
+    500 ms, re-renders the progress bar / message / log, and wires a
+    Cancel button that atomically flips `done` and `cancelled`. Queryset
+    is eagerly pinned to PKs before the thread starts (no lazy-eval
+    foot-guns). **Cancellation is cooperative** — clicking Cancel flips
+    `progress.cancelled = True`; the action body must periodically check
+    `if progress.cancelled: return` to actually stop (Python cannot
+    safely interrupt a running thread mid-statement).
+  - **Server-side permission enforcement** — `@admin_action_with_progress(permissions=[...])`
+    stamps `allowed_permissions` on the wrapped action; `ModelListView.run_action`
+    now calls `request.user.has_perms(allowed)` before dispatching the
+    action and raises `PermissionDenied` if the user lacks any declared
+    perm. Closes the gap where `has_*_permission` returns True for any
+    staff user.
+  - **Bounded server state:** `_JOBS` is LRU-capped at `_MAX_JOBS = 500`
+    (oldest entries evicted on insert once the cap is reached), and
+    `Job.message` / `Job.error` are individually truncated to
+    `_MAX_MESSAGE_CHARS = 4096` on each `progress.update(...)` call.
+    `Job.error` is a generic user-facing string ("Action failed — see
+    server logs for details"); the raw exception text lives only on the
+    server-side `Job._error_raw` attribute and is always logged at ERROR
+    level via `logger.exception` (logger name `djust.admin_ext.progress`).
+  - **New setting:** `DJUST_ASGI_WORKERS` (default `1`) — declares the
+    number of ASGI workers in the deployment. Gates the A073 system
+    check (fires only when `DJUST_ASGI_WORKERS > 1`) so single-worker
+    development stays silent.
+  - **Defense-in-depth allowlist:** `DJUST_LIVE_RENDER_ALLOWED_MODULES`
+    (optional) restricts the dotted-path module prefixes that
+    `{% live_render %}` will resolve — any widget slot path outside the
+    allowlist raises `TemplateSyntaxError` at render time.
+  - Two new system checks: `djust.A072` (warning) fires if a non-
+    `LiveView` class is registered in a widget slot; `djust.A073`
+    (info, gated on `DJUST_ASGI_WORKERS > 1`) fires at startup if any
+    admin site hosts a `@admin_action_with_progress`-decorated action,
+    noting the v0.7.0 single-worker `_JOBS` limitation and pointing at
+    the v0.7.1 channel-layer follow-up.
+  - 25 new tests: `python/djust/tests/test_bulk_progress.py` (12) +
+    `python/djust/tests/test_admin_widgets_per_page.py` (13); +A072/A073
+    check tests in `python/tests/test_checks.py`.
 - **`{% dj_activity %}` + `ActivityMixin` (v0.7.0)** — React 19.2
   `<Activity>` parity: pre-rendered hidden regions of a LiveView that
   preserve their local DOM state (form inputs, scroll, transient JS)

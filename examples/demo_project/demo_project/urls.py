@@ -9,8 +9,16 @@ from django.urls import path, include
 from djust.pwa import service_worker_view, manifest_view
 from djust.sse import sse_urlpatterns
 
+# Import the demo djust admin site — registers DemoProgressViewWidget +
+# MaintenanceRequestDjustAdmin. Demonstrates v0.7.0 admin widget slots +
+# @admin_action_with_progress.
+from demo_project.djust_admin import djust_admin_site
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+    # djust admin demo — exercises change_form_widgets / change_list_widgets
+    # / BulkActionProgressWidget end-to-end.
+    path("djust-admin-demo/", djust_admin_site.urls),
     # SSE fallback transport (server-sent events for corporate proxy environments)
     path("djust/", include(sse_urlpatterns)),
     # djust HTTP API — mounts ADR-008 dispatch + v0.7.0 @server_function

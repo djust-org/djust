@@ -236,6 +236,11 @@ navigation:
         file: guides/server-functions.md
         order: 12.7
         level: advanced
+      - title: Admin Widgets (`change_form_widgets`, Bulk-Action Progress)
+        slug: admin-widgets
+        file: guides/admin-widgets.md
+        order: 12.8
+        level: intermediate
       - title: Deployment
         slug: deployment
         file: guides/deployment.md

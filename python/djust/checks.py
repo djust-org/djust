@@ -2536,3 +2536,131 @@ def check_time_travel_debugging(app_configs, **kwargs):
         )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Admin widget checks (A072 / A073) -- djust.admin_ext per-page widget slots
+# ---------------------------------------------------------------------------
+
+
+@register("djust")
+def check_admin_widgets(app_configs, _admin_sites=None, **kwargs):
+    """Audit widget-slot registrations on DjustModelAdmin subclasses.
+
+    - **A072** (Warning): non-LiveView class registered in
+      ``change_form_widgets`` / ``change_list_widgets``. Such widgets
+      cannot be embedded via ``{% live_render %}`` and will raise at
+      render time.
+    - **A073** (Info): runtime-detectable notice that the in-process
+      ``_JOBS`` registry backing ``BulkActionProgressWidget`` is
+      single-worker-only. Only emitted when (a) a ``DjustAdminSite``
+      has a registered admin action decorated with
+      ``@admin_action_with_progress`` AND (b) the ``DJUST_ASGI_WORKERS``
+      setting is greater than 1 (defaults to 1). In single-worker
+      development this check stays silent so ``manage.py check`` has
+      no noise. Multi-worker deploys must use sticky sessions or a
+      single ASGI worker until v0.7.1 ships the channel-layer backend.
+
+    The ``_admin_sites`` kwarg is for tests; production runs walk the
+    default admin site registry.
+    """
+    results = []
+
+    try:
+        from djust.admin_ext import site as default_site
+    except Exception:
+        logger.debug("admin_ext not importable; skipping A072/A073", exc_info=True)
+        return results
+
+    # Lazy import — avoids a circular import when checks.py is loaded
+    # during Django setup.
+    try:
+        from djust.live_view import LiveView
+    except Exception:
+        logger.debug("LiveView import failed; skipping admin widget audit", exc_info=True)
+        return results
+
+    sites = list(_admin_sites) if _admin_sites is not None else [default_site]
+
+    # A073 is gated on DJUST_ASGI_WORKERS > 1. In single-worker dev (the
+    # common case) the check stays silent; it only fires when the
+    # developer has deliberately declared a multi-worker deploy.
+    from django.conf import settings as _settings  # lazy import
+
+    asgi_workers = getattr(_settings, "DJUST_ASGI_WORKERS", 1)
+    try:
+        asgi_workers = int(asgi_workers)
+    except (TypeError, ValueError):
+        asgi_workers = 1
+    emit_a073 = asgi_workers > 1
+
+    for site in sites:
+        registry = getattr(site, "_registry", {}) or {}
+        site_name = getattr(site, "name", "djust_admin")
+        has_progress_action = False
+
+        for model, model_admin in registry.items():
+            model_label = "%s.%s" % (
+                getattr(model._meta, "app_label", "?"),
+                getattr(model._meta, "model_name", "?"),
+            )
+
+            for slot in ("change_form_widgets", "change_list_widgets"):
+                widgets = getattr(model_admin, slot, []) or []
+                for widget_cls in widgets:
+                    if not (isinstance(widget_cls, type) and issubclass(widget_cls, LiveView)):
+                        widget_name = getattr(widget_cls, "__name__", repr(widget_cls))
+                        results.append(
+                            DjustWarning(
+                                (
+                                    "Admin %s -- %s on %s contains non-LiveView class %r. "
+                                    "Widget slots can only embed djust LiveView subclasses."
+                                )
+                                % (site_name, slot, model_label, widget_name),
+                                hint=(
+                                    "Make %s a subclass of djust.LiveView, or remove it from %s."
+                                    % (widget_name, slot)
+                                ),
+                                id="djust.A072",
+                                fix_hint=(
+                                    "Change `class %s` to `class %s(LiveView):` or drop it from "
+                                    "`%s` on the ModelAdmin for `%s`."
+                                    % (widget_name, widget_name, slot, model_label)
+                                ),
+                            )
+                        )
+
+            # Scan actions for @admin_action_with_progress to drive A073.
+            actions = getattr(model_admin, "actions", []) or []
+            for action_name in actions:
+                func = (
+                    action_name
+                    if callable(action_name)
+                    else getattr(model_admin, str(action_name), None)
+                )
+                if func is not None and getattr(func, "_djust_admin_action_with_progress", False):
+                    has_progress_action = True
+                    break
+
+        if has_progress_action and emit_a073:
+            results.append(
+                DjustInfo(
+                    (
+                        "Admin %s -- uses @admin_action_with_progress with "
+                        "DJUST_ASGI_WORKERS=%d. The v0.7.0 BulkActionProgressWidget keeps "
+                        "job state in a process-local dict (_JOBS); multi-worker deploys "
+                        "must pin the progress URL to the worker that started the job "
+                        "(sticky sessions) or run a single ASGI worker. v0.7.1 will back "
+                        "this with a channel layer."
+                    )
+                    % (site_name, asgi_workers),
+                    hint=(
+                        "For v0.7.0, deploy with --workers 1 OR enable sticky sessions on "
+                        "your load balancer. Unset DJUST_ASGI_WORKERS (or set it to 1) to "
+                        "silence this check. See docs/website/guides/admin-widgets.md."
+                    ),
+                    id="djust.A073",
+                )
+            )
+
+    return results

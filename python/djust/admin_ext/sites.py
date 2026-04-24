@@ -126,6 +126,7 @@ class DjustAdminSite:
 
     def get_urls(self):
         """Return URL patterns for the admin site (models + plugins)."""
+        from .progress import BulkActionProgressView
         from .views import (
             AdminIndexView,
             LoginView,
@@ -146,10 +147,19 @@ class DjustAdminSite:
         # Register index view
         index_id = f"{self.name}_index"
         register_admin_view(index_id, admin_site=self)
+
+        # Bulk-action progress view
+        progress_id = f"{self.name}_progress"
+        register_admin_view(progress_id, admin_site=self)
         urlpatterns = [
             path("login/", LoginView.as_view(_view_registry_id=login_id), name="login"),
             path("logout/", LogoutView.as_view(_view_registry_id=logout_id), name="logout"),
             path("", AdminIndexView.as_view(_view_registry_id=index_id), name="index"),
+            path(
+                "djust-progress/<str:job_id>/",
+                BulkActionProgressView.as_view(_view_registry_id=progress_id),
+                name="djust_progress",
+            ),
         ]
 
         # Add URLs for each registered model

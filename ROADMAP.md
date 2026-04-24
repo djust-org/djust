@@ -905,7 +905,7 @@ class DashboardView(LiveView):
         # Charts panel pre-renders data in background
 ```
 
-**Django admin LiveView widgets** — Drop-in LiveView-powered widgets for Django's admin interface. `DjustAdminMixin` on any `ModelAdmin` enables real-time dashboards, live search/filter, inline editing, and bulk action progress within the admin. Use cases: real-time order status dashboards, live log viewers, monitoring panels, AI-powered admin actions with streaming output. This is a unique djust differentiator — no other LiveView-style framework integrates with an existing admin like Django's. Implementation: admin template overrides + a `DjustAdminWidget` base class that renders a mini LiveView inside admin change forms/list views. ~300 lines Python. *Django's admin is used by 90%+ of Django projects. Making it reactive with zero config is the single most effective demo of djust's value proposition — "add one mixin and your admin goes live."*
+~~**Django admin LiveView widgets**~~ ✅ **Shipped in v0.7.0** — Per-page widget slots (`change_form_widgets`, `change_list_widgets`) on `DjustModelAdmin` + `@admin_action_with_progress` decorator + `BulkActionProgressWidget` LiveView with cancel / log / progress bar + system checks A072 (non-LiveView slot) and A073 (multi-worker note). Shipped as extensions to the existing `DjustAdminSite` (ADR-007 Phase 4 adoption path) rather than a `DjustAdminMixin` on stock `admin.ModelAdmin` — avoids duplicating 60% of admin_ext infrastructure. See [docs/website/guides/admin-widgets.md](docs/website/guides/admin-widgets.md). Channel-layer backend for multi-worker `_JOBS` deferred to v0.7.1.
 
 **Prefetch on hover/intent** — Pre-load the next page's data when the user hovers over a link or shows navigation intent (mouse movement toward link, touch start). `<a dj-prefetch href="/dashboard">Dashboard</a>` triggers a lightweight prefetch request on hover, so the page loads instantly on click. Different from existing `22-prefetch.js` (which pre-fetches all visible links) — this is intent-based and targeted. Remix, Next.js, and Astro all use hover-prefetch as their primary strategy for fast navigation. Implementation: `mouseenter` listener with 65ms delay (avoids prefetch on fly-over), prefetch via `<link rel="prefetch">` or fetch API with abort on `mouseleave`. ~50 lines JS. *Combined with View Transitions API, this makes navigation feel literally instant — the page is already loaded before the user clicks.*
 
@@ -1042,7 +1042,7 @@ Open questions that inform future direction:
 | Islands of interactivity | — | Astro islands | Not started | v0.7.0 |
 | AI streaming primitives | — | — | Not started | v0.7.0 |
 | Server functions (RPC) | — | Server Actions | Not started | v0.7.0 |
-| Django admin LiveView widgets | — | — | Not started | v0.7.0 |
+| ~~Django admin LiveView widgets~~ | — | — | ✅ Shipped (v0.7.0) | v0.7.0 |
 | Prefetch on hover/intent | — | Remix prefetch | Not started | v0.7.0 |
 | **Keep-Alive / Activity** | — | **`<Activity>`** (19.2) | **Not started** | **v0.7.0** |
 | ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
@@ -1123,7 +1123,7 @@ High-impact areas for contributions:
 39. ~~**Rust template engine parity**~~ ✅ — Closed in v0.5.0: getattr fallback, attr-context escape, assign-tag handler
 40. **AI streaming primitives** — Purpose-built LLM streaming components
 41. **Streaming initial render** — Chunked HTTP response with progressive content loading
-42. **Django admin LiveView widgets** — Real-time admin dashboards and inline editing
+42. ~~**Django admin LiveView widgets**~~ ✅ **Shipped in v0.7.0** — `change_form_widgets`/`change_list_widgets` slots + `@admin_action_with_progress` + `BulkActionProgressWidget` + A072/A073 checks. See `docs/website/guides/admin-widgets.md`.
 43. **Hot View Replacement** — State-preserving Python code reload in dev mode, ~200 lines Python
 44. **Server Actions (`@action`)** — React 19-style mutation handlers with auto pending/error states
 45. **Keyed for-loop change tracking** — Rust-side per-item change detection in `{% for %}` loops, ~200 lines Rust

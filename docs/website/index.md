@@ -78,6 +78,7 @@ How to build specific features.
 | **[MCP Server](guides/mcp-server.md)**         | AI assistant integration via Model Context Protocol       |
 | **[HTTP API](guides/http-api.md)**             | Auto-generated HTTP endpoints + OpenAPI from `@event_handler` (ADR-008) |
 | **[Server Functions](guides/server-functions.md)** | `@server_function` + `djust.call()` — same-origin browser RPC without re-render (v0.7.0) |
+| **[Admin Widgets (v0.7.0)](guides/admin-widgets.md)** | Per-page LiveView slots on `DjustModelAdmin` + `@admin_action_with_progress` for bulk-action progress pages |
 
 ### Operations
 

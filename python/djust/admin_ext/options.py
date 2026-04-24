@@ -49,6 +49,42 @@ class DjustModelAdmin:
     # Actions
     actions = ["delete_selected"]
 
+    # Per-page widget slots (v0.7.0). Each entry is a LiveView subclass
+    # that will be embedded via ``{% live_render %}`` on the given admin
+    # page. Honour ``permission_required`` on the widget class to filter
+    # per-user. See docs/website/guides/admin-widgets.md.
+    change_form_widgets: list = []
+    change_list_widgets: list = []
+
+    def get_change_form_widgets(self, request, obj=None):
+        """Return widget classes eligible for the change form page.
+
+        Filters ``change_form_widgets`` by each widget's
+        ``permission_required`` attribute (if present).
+        """
+        return [w for w in self.change_form_widgets if self._widget_has_permission(w, request)]
+
+    def get_change_list_widgets(self, request):
+        """Return widget classes eligible for the change list page."""
+        return [w for w in self.change_list_widgets if self._widget_has_permission(w, request)]
+
+    @staticmethod
+    def _widget_has_permission(widget_cls, request):
+        """Check whether the request.user has permission to see the widget.
+
+        A widget with no ``permission_required`` attribute is always
+        visible. A string value is treated as a single perm; an
+        iterable is treated as a set of perms that are ALL required.
+        """
+        perm = getattr(widget_cls, "permission_required", None)
+        if perm is None:
+            return True
+        perms = (perm,) if isinstance(perm, str) else tuple(perm)
+        user = getattr(request, "user", None)
+        if user is None:
+            return False
+        return user.has_perms(perms)
+
     # Permissions
     def has_add_permission(self, request):
         return True

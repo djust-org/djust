@@ -1,0 +1,17 @@
+{% load live_tags %}
+{% if change_form_widgets %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+    {% for w in change_form_widgets %}
+    <div class="bg-white rounded-lg shadow p-4 {% if w.size == 'lg' %}lg:col-span-2{% endif %}">
+        {% if w.label %}
+        <h3 class="text-sm font-medium text-gray-900 mb-3">{{ w.label }}</h3>
+        {% endif %}
+        {% if w.object_id %}
+            {% live_render w.view_path object_id=w.object_id %}
+        {% else %}
+            {% live_render w.view_path %}
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
