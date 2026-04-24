@@ -251,6 +251,11 @@ navigation:
         file: guides/hot-view-replacement.md
         order: 30
         level: intermediate
+      - title: Streaming Initial Render (v0.6.1)
+        slug: streaming-render
+        file: guides/streaming-render.md
+        order: 31
+        level: intermediate
 
   - title: Testing
     slug: testing

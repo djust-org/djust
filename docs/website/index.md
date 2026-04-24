@@ -89,6 +89,7 @@ How to build specific features.
 | **[Error Overlay (Dev Mode)](guides/error-overlay.md)**   | In-browser Python traceback panel, Next.js-style   |
 | **[Type-Safe Template Validation](guides/typecheck.md)**  | `manage.py djust_typecheck` — catch template typos before prod |
 | **[Hot View Replacement (v0.6.1)](guides/hot-view-replacement.md)** | State-preserving Python reload in dev (React Fast Refresh parity) |
+| **[Streaming Initial Render (v0.6.1)](guides/streaming-render.md)** | Flush the page shell before main content — first-paint win vs. Next.js `renderToPipeableStream` |
 
 ---
 

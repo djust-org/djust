@@ -7,7 +7,7 @@ import logging
 import time
 from contextlib import contextmanager
 
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -243,7 +243,48 @@ class RequestMixin:
         # Inject LiveView client script
         html = self._inject_client_script(html)
 
+        if getattr(self, "streaming_render", False):
+            return self._make_streaming_response(html)
         return HttpResponse(html)
+
+    def _make_streaming_response(self, full_html: str) -> StreamingHttpResponse:
+        """Return a chunked ``StreamingHttpResponse`` for the initial GET.
+
+        The iterator yields the page in three chunks so the browser can
+        begin parsing ``<head>`` and loading CSS/JS while the remainder of
+        the response is still on the wire:
+
+        1. ``shell_open`` — everything before ``<div dj-root>``.
+        2. ``main_content`` — the ``<div dj-root>...</div>`` block.
+        3. ``shell_close`` — ``</body></html>`` + any trailing markup.
+
+        Templates without a ``<div dj-root>`` (edge case — e.g. a raw
+        body fragment) yield a single chunk, equivalent to the
+        non-streaming ``HttpResponse`` path.
+
+        The response omits the ``Content-Length`` header (HTTP chunked
+        transfer is implicit). Middleware that reads or modifies the
+        response body must be streaming-aware; ``X-Djust-Streaming: 1``
+        is set as an observability marker.
+
+        :param full_html: Fully-rendered HTML string from :meth:`get`.
+        :returns: ``StreamingHttpResponse`` with ``text/html`` content type.
+        """
+        shell_open, main, shell_close = self._split_for_streaming(full_html)
+
+        def _iter():
+            if shell_open:
+                yield shell_open
+            if main:
+                yield main
+            if shell_close:
+                yield shell_close
+
+        response = StreamingHttpResponse(_iter(), content_type="text/html; charset=utf-8")
+        # Explicitly DO NOT set Content-Length — chunked transfer. Middleware
+        # that reads/modifies the response body must be streaming-aware.
+        response["X-Djust-Streaming"] = "1"
+        return response
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""

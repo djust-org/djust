@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Streaming Initial Render (v0.6.1, Phase 1)** — opt-in chunked HTTP
+  response for LiveView GET requests. Setting `streaming_render = True`
+  on a LiveView class returns a `StreamingHttpResponse` that flushes the
+  page in three chunks: shell-open (everything before `<div dj-root>`),
+  main content (the `<div dj-root>...</div>` body), and shell-close
+  (`</body></html>` + trailing markup). Browsers begin parsing `<head>`
+  and loading CSS/JS while the server is still computing the main
+  content — competitive with Next.js `renderToPipeableStream` for
+  first-paint latency. No client-side code changes; opt-in per view,
+  backward-compatible default. Response emits `X-Djust-Streaming: 1`
+  for observability and omits `Content-Length` (HTTP chunked transfer).
+  Lazy-child out-of-order streaming is planned as Phase 2 (v0.6.2).
+  See `docs/website/guides/streaming-render.md`.
 - **Hot View Replacement (HVR, v0.6.1)** — state-preserving Python code
   reload in development. When a LiveView module changes on disk, the dev
   server `importlib.reload()`s the module and swaps `__class__` in place on

@@ -13,6 +13,33 @@ from ..utils import get_template_dirs
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Module-level regexes for streaming render split (hoisted for perf — see
+# PR review: avoid re.compile() on every request).
+# ---------------------------------------------------------------------------
+
+# Match ``<div ... dj-root ...>`` as a standalone attribute name.
+# The (?=[\s=>/]) lookahead ensures the character immediately AFTER ``dj-root``
+# is whitespace, ``=``, ``>``, or ``/`` — so ``dj-root-other``, ``dj-rooted``,
+# ``data-dj-root``, etc. do NOT match. \b alone is unreliable because ``-``
+# is a non-word character and ``dj-root-foo`` has a \b between ``t`` and ``-``.
+_DJ_ROOT_RE = re.compile(
+    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-root(?=[\s=>/])[^>]*>",
+    re.IGNORECASE,
+)
+
+# Match ``</body>`` tolerating trailing whitespace inside the tag (``</body >``).
+_BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
+
+# Match a full ``<script>...</script>`` block. Used to mask script contents
+# before searching for ``</body>`` so a literal ``</body>`` in a JS string
+# doesn't become a false split boundary.
+_SCRIPT_BLOCK_RE = re.compile(
+    r"<script\b[^>]*>.*?</script\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
 class TemplateMixin:
     """Template-related methods: get_template, render, render_full_template, render_with_diff,
     and various HTML extraction/stripping helpers."""
@@ -271,6 +298,68 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             html = html.replace(f"__PRESERVED_BLOCK_{i}__", block)
 
         return html
+
+    def _split_for_streaming(self, full_html: str) -> tuple:
+        """Split rendered HTML into ``(shell_open, main_content, shell_close)``.
+
+        Used by :meth:`_make_streaming_response` to flush the page shell to
+        the browser before the main LiveView body is written. The browser
+        begins parsing ``<head>`` and loading CSS/JS as soon as the first
+        chunk arrives, competitive with Next.js ``renderToPipeableStream``.
+
+        Split boundaries:
+
+        - ``shell_open`` — everything before the outermost ``<div dj-root>``.
+        - ``main_content`` — the ``<div dj-root>...</div>`` block plus any
+          markup between that closing div and the closing ``</body>``.
+        - ``shell_close`` — ``</body></html>`` + any trailing markup.
+
+        Edge cases:
+
+        - HTML without a ``<div dj-root>`` (e.g. a minimal template without
+          a document wrapper) returns ``(full_html, "", "")`` so streaming
+          falls back to a single-chunk response equivalent to the
+          non-streaming path.
+        - HTML with a ``<div dj-root>`` but no ``</body>`` returns
+          ``(shell_open, main_content, "")`` — the main chunk runs to the
+          end of the document.
+
+        The ``dj-root`` match is case-insensitive, precise (hyphenated
+        suffixes like ``dj-root-other`` do NOT match), and the
+        ``</body>`` match tolerates trailing whitespace (``</body >``).
+        ``</body>`` tokens appearing as literal string content inside a
+        ``<script>...</script>`` block are skipped so they don't create
+        a false split boundary.
+
+        :param full_html: Fully-rendered HTML as returned by
+            :meth:`render` / the GET handler.
+        :returns: Three-tuple of string chunks that, when concatenated,
+            equal ``full_html``.
+        """
+        m = _DJ_ROOT_RE.search(full_html)
+        if not m:
+            return full_html, "", ""
+
+        dj_root_start = m.start()
+
+        # Mask out <script>...</script> blocks (preserving string length via
+        # NUL fill) so a literal "</body>" inside a JS string doesn't get
+        # picked up as the real body close. Search the masked tail, then
+        # translate the hit position back into the original string.
+        tail = full_html[dj_root_start:]
+        masked_tail = _SCRIPT_BLOCK_RE.sub(
+            lambda s: "\x00" * len(s.group(0)),
+            tail,
+        )
+        body_close = _BODY_CLOSE_RE.search(masked_tail)
+        if not body_close:
+            return full_html[:dj_root_start], full_html[dj_root_start:], ""
+
+        abs_close = dj_root_start + body_close.start()
+        shell_open = full_html[:dj_root_start]
+        main_content = full_html[dj_root_start:abs_close]
+        shell_close = full_html[abs_close:]
+        return shell_open, main_content, shell_close
 
     def _extract_liveview_content(self, html: str) -> str:
         """
