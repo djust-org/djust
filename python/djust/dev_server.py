@@ -18,6 +18,28 @@ try:
 except ImportError:
     WATCHDOG_AVAILABLE = False
 
+    # Stubs so the module is importable without watchdog. Hot reload is a
+    # dev-only feature (`djust[dev]` extra); production installs that only
+    # need `manage.py check` must be able to import this module — and
+    # `djust.checks.check_hot_view_replacement` imports
+    # `WATCHDOG_AVAILABLE` from here. Without these stubs, the class
+    # definitions below reference undefined names and the whole module
+    # fails to load. HotReloadServer.start() already short-circuits on
+    # `WATCHDOG_AVAILABLE = False`, so these stubs are never instantiated
+    # in a running process; they exist purely to satisfy the class
+    # statements at import time.
+    class FileSystemEventHandler:  # type: ignore[no-redef]
+        pass
+
+    class FileSystemEvent:  # type: ignore[no-redef]
+        src_path: str = ""
+        is_directory: bool = False
+
+    class Observer:  # type: ignore[no-redef]
+        """Stub — real Observer never instantiated without watchdog."""
+
+        pass
+
 
 logger = logging.getLogger(__name__)
 
