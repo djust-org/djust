@@ -2387,3 +2387,65 @@ def check_hot_view_replacement(app_configs, **kwargs):
             )
         )
     return warnings
+
+
+@register("djust")
+def check_time_travel_debugging(app_configs, **kwargs):
+    """C501/C502 — Time-travel debugging config validation.
+
+    C501 (info) — surfaced when ``DEBUG=True`` AND the global
+    ``time_travel_enabled`` config flag is on, as a breadcrumb that
+    the feature is wired. Per-view opt-in is still required via
+    ``LiveView.time_travel_enabled = True``.
+
+    C502 (error) — fires when ``time_travel_max_events`` is <= 0,
+    which would make the ring buffer raise on allocation.
+
+    Silent in production: ``DEBUG=False`` suppresses both.
+    """
+    from django.conf import settings
+
+    results = []
+    debug = bool(getattr(settings, "DEBUG", False))
+    if not debug:
+        return results
+
+    try:
+        from djust.config import config
+    except ImportError:
+        return results
+
+    max_events = config.get("time_travel_max_events", 100)
+    if not isinstance(max_events, int) or max_events <= 0:
+        results.append(
+            DjustError(
+                "time_travel_max_events must be a positive integer (got %r)." % (max_events,),
+                hint=(
+                    "The time-travel ring buffer raises ValueError when "
+                    "the cap is non-positive, which breaks LiveView "
+                    "__init__ for any view with time_travel_enabled=True."
+                ),
+                fix_hint=(
+                    "Set LIVEVIEW_CONFIG['time_travel_max_events'] to a "
+                    "positive int (default: 100)."
+                ),
+                id="djust.C502",
+            )
+        )
+
+    if config.get("time_travel_enabled", False):
+        results.append(
+            DjustInfo(
+                "Time-travel debugging is enabled globally "
+                "(LIVEVIEW_CONFIG['time_travel_enabled']=True).",
+                hint=(
+                    "Individual views still require "
+                    "``time_travel_enabled = True`` on the class to "
+                    "allocate a buffer. This notice confirms the "
+                    "global switch is on for discoverability."
+                ),
+                id="djust.C501",
+            )
+        )
+
+    return results

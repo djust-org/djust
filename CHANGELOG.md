@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Time-Travel Debugging (v0.6.1)** — dev-only debug-panel tab that
+  records a state snapshot around every `@event_handler` dispatch
+  (`state_before` / `state_after`), then lets developers scrub back
+  through the timeline and jump to any past state. The server
+  restores the snapshot via `safe_setattr` and re-renders through the
+  normal VDOM patch pipeline. Opt-in per view
+  (`time_travel_enabled = True` on the `LiveView` subclass); zero
+  cost when disabled. Gated on `DEBUG=True` at the WebSocket consumer
+  so production clients can't coerce a jump even if the class attr
+  is left on. Per-view bounded ring buffer (default 100 events,
+  configurable via `LIVEVIEW_CONFIG["time_travel_max_events"]`).
+  New module `djust.time_travel` (`EventSnapshot`, `TimeTravelBuffer`,
+  `record_event_start`, `record_event_end`, `restore_snapshot`). New
+  inbound WS frame `time_travel_jump` + outbound `time_travel_state`
+  ack, plus `time_travel_event` frames pushed after every recorded
+  snapshot so the debug panel timeline populates incrementally
+  (client CustomEvent `djust:time-travel-event`). Instrumentation wraps
+  all three dispatch branches (actor, component, view handler) and
+  records permission-denied / validation-failed events with an
+  `error` marker. Component events record against the parent view
+  in Phase 1 (full component-level time travel is a v0.6.2 follow-up).
+  Ghost-attr cleanup in `restore_snapshot` removes public attributes
+  not present in the target snapshot, so restoring `{a:1}` over
+  `{a:5, b:10}` leaves `{a:1}` rather than `{a:1, b:10}`. New client
+  events `djust:time-travel-state` and `djust:time-travel-event`
+  (CustomEvents). New system checks `djust.C501` (info — global switch
+  on) and `djust.C502` (error — non-positive `time_travel_max_events`).
+  Beyond Redux DevTools: server-side so no client state store; beyond
+  Phoenix LiveView's debug tools which are telemetry-only. See
+  `docs/website/guides/time-travel-debugging.md`.
 - **Streaming Initial Render (v0.6.1, Phase 1)** — opt-in chunked HTTP
   response for LiveView GET requests. Setting `streaming_render = True`
   on a LiveView class returns a `StreamingHttpResponse` that flushes the

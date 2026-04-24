@@ -1268,6 +1268,41 @@ class LiveViewWebSocket {
                     globalThis.djust.hvr.showIndicator(data);
                 }
                 break;
+            case 'time_travel_state':
+                // Time-travel debugging (v0.6.1) — server acknowledges
+                // a completed jump with the new cursor/history_len.
+                // The debug panel listens for this event to update its
+                // timeline UI; the main client just fans out so non-
+                // debug-panel consumers can observe.
+                try {
+                    document.dispatchEvent(new CustomEvent('djust:time-travel-state', {
+                        detail: data,
+                        bubbles: true,
+                    }));
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] time-travel-state dispatch failed', e);
+                    }
+                }
+                break;
+            case 'time_travel_event':
+                // Time-travel debugging (v0.6.1 Fix #3) — server pushes
+                // each recorded snapshot so the debug panel's timeline
+                // populates incrementally. Payload shape:
+                //   { type: 'time_travel_event', entry: {...}, history_len: N }
+                // Fanned out as a CustomEvent so the debug-panel (and
+                // any other listener) can append the entry.
+                try {
+                    document.dispatchEvent(new CustomEvent('djust:time-travel-event', {
+                        detail: data,
+                        bubbles: true,
+                    }));
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] time-travel-event dispatch failed', e);
+                    }
+                }
+                break;
         }
     }
 

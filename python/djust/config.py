@@ -83,6 +83,12 @@ class LiveViewConfig:
         # Hot View Replacement (v0.6.1) — state-preserving Python code
         # reload in dev. Gated on DEBUG=True AND hot_reload=True.
         "hvr_enabled": True,
+        # Time-travel debugging (v0.6.1) — dev-only. Master switch for
+        # the global default (views still opt in via
+        # ``LiveView.time_travel_enabled = True``). ``time_travel_max_events``
+        # caps per-view ring buffer size (memory-bound).
+        "time_travel_enabled": False,
+        "time_travel_max_events": 100,
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # Enable/disable JIT auto-serialization
         "jit_debug": False,  # Debug logging for JIT serialization

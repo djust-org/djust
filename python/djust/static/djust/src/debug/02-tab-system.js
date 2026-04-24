@@ -43,8 +43,44 @@
                 render: () => this.renderVariablesTab()
             });
 
+            // Time Travel (v0.6.1) — scrub back through captured
+            // event snapshots. Requires server-side opt-in via
+            // ``LiveView.time_travel_enabled = True``.
+            this.registerTab('timeTravel', {
+                name: 'Time Travel',
+                icon: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 4V8L10 10"/><path d="M2 5L4 3M14 5L12 3"/></svg>',
+                render: () => this.renderTimeTravelTab()
+            });
+
             // Render tab buttons
             this.renderTabButtons();
+
+            // v0.6.1 Time Travel: hook up delegated click handler on the
+            // panel root (survives tab content re-renders) and listen for
+            // server-pushed `djust:time-travel-event` CustomEvents so the
+            // timeline populates incrementally without a full history
+            // fetch on every event.
+            if (typeof this.registerTimeTravelClickHandlers === 'function') {
+                try {
+                    this.registerTimeTravelClickHandlers();
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] time-travel click handler registration failed', e);
+                    }
+                }
+            }
+            if (typeof this.onTimeTravelEvent === 'function' && !this._ttEventListenerBound) {
+                this._ttEventListenerBound = true;
+                document.addEventListener('djust:time-travel-event', (ev) => {
+                    try {
+                        this.onTimeTravelEvent(ev && ev.detail);
+                    } catch (e) {
+                        if (globalThis.djustDebug) {
+                            console.warn('[djust] djust:time-travel-event handler failed', e);
+                        }
+                    }
+                });
+            }
         }
 
         registerTab(id, config) {
