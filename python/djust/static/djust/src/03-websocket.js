@@ -803,6 +803,26 @@ class LiveViewWebSocket {
                 // Hot reload: file changed, refresh the page
                 window.location.reload();
                 break;
+
+            case 'hvr-applied':
+                // Hot View Replacement (v0.6.1) — server swapped __class__
+                // on the live view instance without losing state. Surface
+                // the event so tests/app code can observe it, then show
+                // the dev indicator toast.
+                try {
+                    document.dispatchEvent(new CustomEvent('djust:hvr-applied', {
+                        detail: data,
+                        bubbles: true,
+                    }));
+                } catch (e) {
+                    if (globalThis.djustDebug) {
+                        console.warn('[djust] hvr-applied dispatch failed', e);
+                    }
+                }
+                if (globalThis.djust && globalThis.djust.hvr) {
+                    globalThis.djust.hvr.showIndicator(data);
+                }
+                break;
         }
     }
 

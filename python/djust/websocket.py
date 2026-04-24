@@ -361,6 +361,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
         self._tick_task = None
+        # Hot View Replacement (v0.6.1): per-consumer dedup + version
+        # counter. ``_hvr_last_reload_id`` drops duplicate broadcasts
+        # within a rapid-save burst; ``_hvr_version`` increments on each
+        # applied class swap and is echoed to the client for telemetry.
+        self._hvr_version: int = 0
+        self._hvr_last_reload_id: Optional[str] = None
         # Sticky LiveViews (Phase B): per-connection stash of preserved
         # sticky children staged in handle_live_redirect_mount BEFORE the
         # old view is torn down. Re-registered on the new parent after
@@ -3322,6 +3328,65 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.template import TemplateDoesNotExist
 
         file_path = event.get("file", "unknown")
+
+        # ------------------------------------------------------------------
+        # Hot View Replacement (v0.6.1) — optional pre-step
+        # ------------------------------------------------------------------
+        # When the watcher reloaded a LiveView module, it attaches
+        # ``hvr_meta`` to the broadcast event. Try to swap the view
+        # instance's ``__class__`` to the new class so subsequent event
+        # handlers dispatch to the new code without losing state.
+        #
+        # Failure modes:
+        #   - dedup hit (same reload_id already applied) → silent no-op.
+        #   - module not resolvable / classes gone → fall through to the
+        #     legacy template-refresh path below.
+        #   - compat check rejects the swap → emit full-reload frame and
+        #     return (no point re-rendering old state against new slots).
+        hvr_meta = event.get("hvr_meta")
+        if hvr_meta and self.view_instance:
+            reload_id = hvr_meta.get("reload_id")
+            if reload_id and reload_id == self._hvr_last_reload_id:
+                # Same reload burst — already handled on this consumer.
+                return
+            if reload_id:
+                self._hvr_last_reload_id = reload_id
+
+            from djust.hot_view_replacement import (
+                _resolve_class_pairs,
+                apply_class_swap,
+            )
+
+            class_pairs = _resolve_class_pairs(
+                hvr_meta.get("module", ""),
+                hvr_meta.get("class_names", []) or [],
+            )
+            if class_pairs is not None:
+                ok, reason = apply_class_swap(self.view_instance, class_pairs)
+                if not ok:
+                    hotreload_logger.info(
+                        "HVR incompat: %s; falling back to full reload",
+                        reason,
+                    )
+                    await self.send_json(
+                        {
+                            "type": "reload",
+                            "file": file_path,
+                        }
+                    )
+                    return
+                self._hvr_version += 1
+                await self.send_json(
+                    {
+                        "type": "hvr-applied",
+                        "view": getattr(self, "_view_path", ""),
+                        "version": self._hvr_version,
+                        "file": file_path,
+                    }
+                )
+                # Continue into template-refresh path below so the
+                # re-render picks up any template or computed attr
+                # changes that also shipped in this burst.
 
         # If we have an active view, re-render and send patch
         if self.view_instance:

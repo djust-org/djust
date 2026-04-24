@@ -80,6 +80,9 @@ class LiveViewConfig:
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
         "hot_reload_exclude_dirs": None,  # Directories to exclude (None = use defaults)
+        # Hot View Replacement (v0.6.1) — state-preserving Python code
+        # reload in dev. Gated on DEBUG=True AND hot_reload=True.
+        "hvr_enabled": True,
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # Enable/disable JIT auto-serialization
         "jit_debug": False,  # Debug logging for JIT serialization

@@ -156,9 +156,39 @@ def enable_hot_reload():
     from djust.websocket import LiveViewConsumer
     import asyncio
 
-    # Callback to broadcast reload via WebSocket
+    # HVR is opt-out via LIVEVIEW_CONFIG["hvr_enabled"] (default True).
+    # When disabled we fall back to the pre-v0.6.1 behavior (template +
+    # full page reload for every file change).
+    hvr_enabled = bool(config.get("hvr_enabled", True))
+
+    # Callback to broadcast reload via WebSocket.
+    #
+    # v0.6.1: .py changes go through the HVR path — reload the module in
+    # this process, then broadcast the resulting class-swap metadata so
+    # every connected consumer can apply the swap in-place. Non-.py
+    # changes (templates, CSS, JS, etc.) take the legacy template-refresh
+    # path unchanged.
     def on_file_change(file_path: str):
         """Called when a file changes - broadcasts reload to all clients."""
+
+        async def _dispatch():
+            is_py = hvr_enabled and file_path.lower().endswith(".py")
+            if is_py:
+                try:
+                    from djust.hot_view_replacement import (
+                        broadcast_hvr_event,
+                        reload_module_if_liveview,
+                    )
+
+                    result = reload_module_if_liveview(file_path)
+                except Exception:  # noqa: BLE001 — dev-only safety net
+                    logger.exception("[HotReload] HVR module reload failed")
+                    result = None
+                if result is not None:
+                    await broadcast_hvr_event(result, file_path)
+                    return
+            await LiveViewConsumer.broadcast_reload(file_path)
+
         try:
             # Get or create event loop
             try:
@@ -169,9 +199,9 @@ def enable_hot_reload():
 
             # Schedule the broadcast
             if loop.is_running():
-                asyncio.create_task(LiveViewConsumer.broadcast_reload(file_path))
+                asyncio.create_task(_dispatch())
             else:
-                loop.run_until_complete(LiveViewConsumer.broadcast_reload(file_path))
+                loop.run_until_complete(_dispatch())
         except Exception as e:
             logger.error("[HotReload] Error broadcasting reload: %s", e)
 
