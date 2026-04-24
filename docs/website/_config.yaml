@@ -186,6 +186,11 @@ navigation:
         file: guides/prefetch.md
         order: 7.5
         level: intermediate
+      - title: Activity (`{% dj_activity %}`) — React 19.2 parity
+        slug: activity
+        file: guides/activity.md
+        order: 7.6
+        level: intermediate
       - title: Authentication
         slug: authentication
         file: guides/authentication.md

@@ -12,6 +12,47 @@ async function handleEvent(eventName, params = {}) {
     const triggerElement = params._targetElement;
     const skipLoading = params._skipLoading;
 
+    // v0.7.0 — Activity gate. Drop the event client-side when ANY
+    // ancestor activity wrapper is hidden and not eager. The nested
+    // case matters: ``closest('[data-djust-activity]')`` alone returns
+    // the NEAREST wrapper, which for ``<outer hidden><inner visible>``
+    // would be the INNER one — and the inner being visible would
+    // incorrectly dispatch the event even though the user can't see it
+    // (the outer hides the whole subtree).
+    //
+    // Selector discipline is the same as 12-vdom-patch.js so the patch
+    // gate and the event gate stay in lock-step. We also stamp the
+    // resolved ``_activity`` name (nearest wrapper) on the outbound
+    // payload so the server can route / defer per-activity on the rare
+    // race where the client gate is stale (mid-morph hide).
+    let _activityName = null;
+    if (triggerElement && triggerElement.closest) {
+        // Drop if any hidden non-eager ancestor exists — correct under nesting.
+        const hiddenAncestor = triggerElement.closest(
+            '[data-djust-activity][hidden]:not([data-djust-eager="true"])'
+        );
+        if (hiddenAncestor) {
+            if (globalThis.djustDebug) {
+                console.log(
+                    '[LiveView:activity] drop event in hidden activity:',
+                    eventName,
+                    hiddenAncestor.getAttribute('data-djust-activity')
+                );
+            }
+            // Match the contract of an early-return in cached path:
+            // stop loading state if we started any, then bail.
+            if (!skipLoading) globalLoadingManager.stopLoading(eventName, triggerElement);
+            return;
+        }
+        // For routing: stamp _activity with the nearest activity wrapper
+        // the trigger lives inside (regardless of its own visibility — by
+        // this point we've already confirmed no hidden ancestor exists).
+        const activityAncestor = triggerElement.closest('[data-djust-activity]');
+        if (activityAncestor) {
+            _activityName = activityAncestor.getAttribute('data-djust-activity') || null;
+        }
+    }
+
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
@@ -19,6 +60,12 @@ async function handleEvent(eventName, params = {}) {
             continue;
         }
         serverParams[key] = params[key];
+    }
+    // Preserve the resolved activity name so the server can route / defer
+    // per-activity. Only attached when we actually found a wrapper, so
+    // the payload stays compact for non-activity events.
+    if (_activityName) {
+        serverParams._activity = _activityName;
     }
 
     // DEP-002: Apply optimistic UI rule if one exists for this event

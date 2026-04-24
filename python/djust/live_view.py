@@ -44,6 +44,7 @@ from .mixins import (
     WaiterMixin,
     NotificationMixin,
     StickyChildRegistry,
+    ActivityMixin,
 )
 
 # Configure logger
@@ -145,6 +146,7 @@ class LiveView(
     AsyncWorkMixin,
     NotificationMixin,
     StickyChildRegistry,
+    ActivityMixin,
     View,
 ):
     """
@@ -387,6 +389,10 @@ class LiveView(
         # Initialize child-view registry (Phase A of Sticky LiveViews).
         # Required before any {% live_render %} tag tries to register.
         self._init_sticky()
+
+        # Initialize activity registry (v0.7.0 — React 19.2 <Activity> parity).
+        # Required before any {% dj_activity %} tag tries to register.
+        self._init_activity()
 
         # Phase B: per-instance stash of sticky children preserved across
         # a live_redirect. Populated by the consumer's

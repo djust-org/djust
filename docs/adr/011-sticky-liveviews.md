@@ -381,7 +381,7 @@ survivors onto ``self._sticky_preserved`` but BEFORE
 dict in ``LiveViewConsumer.disconnect`` — each staged sticky
 receives ``_on_sticky_unmount()`` so background tasks don't leak.
 
-## Relationship to v0.7.0 `dj-activity`
+## Relationship to v0.7.0 `{% dj_activity %}`
 
 React 19.2's ``<Activity>`` is **within-page show/hide** with
 preserved state and background pre-rendering. Sticky LiveViews are
@@ -391,10 +391,12 @@ features are complementary:
 * Sticky = same LiveView instance survives navigation. Use for
   app-shell widgets: audio player, sidebar, notification center.
 * Activity = same LiveView instance stays mounted but toggles
-  visibility. Use for tab panels, wizard steps, dashboards with
-  pre-rendered neighbors.
+  visibility (via ``{% dj_activity "name" visible=... %}``). Use
+  for tab panels, wizard steps, dashboards with pre-rendered
+  neighbors.
 
-`dj-activity` ships in v0.7.0; design is tracked separately.
+``{% dj_activity %}`` ships in v0.7.0; see
+``docs/website/guides/activity.md``.
 
 ### Future work tracked as out-of-scope for v0.6.0
 

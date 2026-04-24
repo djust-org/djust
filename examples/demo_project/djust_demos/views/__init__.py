@@ -37,6 +37,7 @@ from .pwa_demo import PWADemoView
 from .tenant_demo import TenantDemoView
 from .whats_new_042 import WhatsNew042View
 from .server_function_demo import ServerFunctionDemoView
+from .activity_demo import ActivityDemoView
 
 __all__ = [
     "CounterView",
@@ -72,4 +73,5 @@ __all__ = [
     "TenantDemoView",
     "WhatsNew042View",
     "ServerFunctionDemoView",
+    "ActivityDemoView",
 ]

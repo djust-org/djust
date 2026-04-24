@@ -1205,6 +1205,21 @@ function applySinglePatch(patch, rootEl = null) {
     // Phase B) so child / sticky patches don't resolve against the
     // parent view's dj-id namespace.
     const node = getNodeByPath(patch.path, patch.d, rootEl);
+    // v0.7.0 — {% dj_activity %} gate. If the target node lives inside
+    // a HIDDEN activity wrapper that is NOT eager, we intentionally
+    // skip the subtree patch so local DOM state (form values, scroll
+    // offsets, transient JS state) is preserved across show/hide
+    // cycles. The server is the canonical source of visibility, so the
+    // next render after the activity is shown will re-sync state.
+    if (node && node.nodeType === 1 && node.closest) {
+        const hiddenActivity = node.closest('[data-djust-activity][hidden]:not([data-djust-eager="true"])');
+        if (hiddenActivity) {
+            if (globalThis.djustDebug) {
+                console.log('[LiveView:activity] skipping patch inside hidden activity:', hiddenActivity.getAttribute('data-djust-activity'), patch.type);
+            }
+            return true;
+        }
+    }
     if (!node) {
         // Sanitize for logging (patches come from trusted server, but log defensively)
         const safePath = Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid';

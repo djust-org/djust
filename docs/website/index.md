@@ -65,6 +65,7 @@ How to build specific features.
 | **[on_mount Hooks](guides/on-mount-hooks.md)**     | Cross-cutting server-side mount hooks (auth, telemetry, etc.) |
 | **[Model Binding](guides/model-binding.md)**       | Two-way `dj-model` data binding                               |
 | **[Intent-Based Prefetch (`dj-prefetch`)](guides/prefetch.md)** | Hover / touch prefetch for fast in-app navigation (v0.7.0) |
+| **[Activity (`{% dj_activity %}`)](guides/activity.md)** | Pre-rendered hidden panels with preserved state (React 19.2 parity, v0.7.0) |
 
 ### Integration
 
