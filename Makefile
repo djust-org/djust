@@ -228,6 +228,30 @@ check: lint test ## Run linters and tests
 check-changelog: ## Validate CHANGELOG test-count claims against actual tests (closes #908)
 	@.venv/bin/python scripts/check-changelog-test-counts.py
 
+.PHONY: ci-mirror
+ci-mirror: ## Mirror exact CI pytest invocations locally — catches coverage/xdist surprises pre-push (closes #960)
+	@echo "$(GREEN)ci-mirror: running the exact CI pytest commands from .github/workflows/test.yml$(NC)"
+	@echo "$(YELLOW)Ensuring xdist + pytest-cov (CI installs these just-in-time in step 1/2 and step 2/2)$(NC)"
+	@.venv/bin/python -c "import xdist, pytest_cov" 2>/dev/null || uv pip install pytest-xdist pytest-cov
+	@echo ""
+	@echo "$(YELLOW)Step 1/2: full parallel Python suite (pytest-xdist)$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto
+	@echo ""
+	@echo "$(YELLOW)Step 2/2: security-tests with coverage (--cov-fail-under=75)$(NC)"
+	@PYTHONPATH=. .venv/bin/python -m pytest \
+		tests/unit/test_security_*.py \
+		tests/unit/test_upload_writer.py \
+		python/tests/test_security*.py \
+		-v \
+		--cov=djust.security \
+		--cov=djust.uploads \
+		--cov=djust.validation \
+		--cov-report=term-missing \
+		--cov-report=json:coverage-security.json \
+		--cov-fail-under=75
+	@echo ""
+	@echo "$(GREEN)ci-mirror: all CI pytest invocations passed locally$(NC)"
+
 ##@ Benchmarks
 
 .PHONY: benchmark
