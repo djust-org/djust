@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for `vbscript:`, `data:`, mixed-case `JavaScript:`, leading-whitespace
   URLs, `<iframe>` escaping, image-src neutralisation, and the 10 MiB
   cap) and **14 Python tests** (`python/djust/tests/test_markdown.py` +
-  `tests/unit/test_markdown_tag.py`) — 38 total. Demo at
+  `tests/unit/test_markdown_tag.py`), plus **3 A090 system-check tests** —
+  41 total (24 Rust + 14 Python/tag + 3 A090). Demo at
   `/demos/markdown-stream/`; full write-up in
   [docs/website/guides/streaming-markdown.md](docs/website/guides/streaming-markdown.md).
 - **Admin widgets & bulk-action progress (v0.7.0)** — two additions to

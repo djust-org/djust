@@ -574,4 +574,27 @@ mod tests {
         // Empty.
         assert_eq!(split_provisional(""), ("", ""));
     }
+
+    #[test]
+    fn test_plain_text_url_is_not_autolinked() {
+        // pulldown-cmark 0.12 does not expose a GFM_AUTOLINK /
+        // ENABLE_AUTOLINK options flag, so bare URLs in plain text must
+        // remain plain text (not wrapped in an <a> tag). This regression
+        // test locks that current behavior — if a future pulldown-cmark
+        // upgrade flips the autolink default on, this test will fail and
+        // force us to re-evaluate the public surface of djust_markdown
+        // (since the guide documents "no autolinks in plain text").
+        let out = render_markdown(
+            "Visit https://example.com for info\n",
+            RenderOpts::default(),
+        );
+        assert!(
+            !out.contains("<a href=\"https://example.com\">"),
+            "plain-text URL should not be autolinked (got: {out})",
+        );
+        assert!(
+            out.contains("https://example.com"),
+            "plain-text URL should survive as literal text (got: {out})",
+        );
+    }
 }
