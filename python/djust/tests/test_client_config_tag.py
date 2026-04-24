@@ -16,6 +16,9 @@ Claims under test:
   :func:`test_tag_when_api_app_not_mounted`.
 * "Output is HTML-escaped" →
   :func:`test_tag_output_is_escaped`.
+* "Django and Rust template engines emit byte-identical output" →
+  :func:`test_django_and_rust_engines_emit_identical_output` (PR #993
+  Stage 11 🟡 — locks the dual-registration invariant from Stage 5b).
 """
 
 from __future__ import annotations
@@ -155,3 +158,84 @@ def test_tag_output_is_escaped():
     # Double-quote in the value must be escaped so it can't close the
     # content="..." attribute.
     assert 'content="/my"site' not in html
+
+
+# ---------------------------------------------------------------------------
+# 6. Dual-engine parity (PR #993 Stage 11 🟡)
+# ---------------------------------------------------------------------------
+#
+# The ``{% djust_client_config %}`` tag is registered with BOTH the Django
+# template engine (``djust.templatetags.live_tags``) and the Rust template
+# engine (``djust.template_tags.client_config.ClientConfigTagHandler``).
+# Both call the shared ``_resolve_api_prefix()`` helper, so their outputs
+# must be byte-identical. This test locks that invariant so a future edit
+# to one path that isn't mirrored to the other is caught immediately.
+
+
+_PARITY_CASES = [
+    pytest.param(
+        {"ROOT_URLCONF": "tests.api_test_urls_default"},
+        None,
+        id="default-prefix",
+    ),
+    pytest.param(
+        {
+            "ROOT_URLCONF": "tests.api_test_urls_default",
+            "FORCE_SCRIPT_NAME": "/mysite",
+        },
+        "/mysite/",
+        id="force-script-name",
+    ),
+    pytest.param(
+        {"ROOT_URLCONF": "tests.api_test_urls_custom"},
+        None,
+        id="custom-api-prefix",
+    ),
+]
+
+
+@pytest.mark.parametrize("settings_overrides,script_prefix", _PARITY_CASES)
+def test_django_and_rust_engines_emit_identical_output(settings_overrides, script_prefix):
+    """Dual-engine parity: Django-engine render == Rust-engine render.
+
+    Both engines register the same tag name and delegate to the shared
+    ``_resolve_api_prefix()`` helper. This test renders through each
+    engine's code path and asserts byte-equality so drift between the
+    two registrations is caught by CI.
+
+    Parameterized over three URL-config scenarios to cover the
+    resolution branches: default mount, ``FORCE_SCRIPT_NAME``, and
+    custom ``api_patterns(prefix=...)``.
+    """
+    from djust.template_tags.client_config import ClientConfigTagHandler
+
+    with override_settings(**settings_overrides):
+        # Production Django's BaseHandler sets the script prefix from
+        # FORCE_SCRIPT_NAME at the start of every request; mirror that
+        # for the FORCE_SCRIPT_NAME case since RequestFactory does not
+        # invoke the middleware chain.
+        if script_prefix is not None:
+            set_script_prefix(script_prefix)
+        clear_url_caches()
+
+        # Django-engine render: goes through live_tags.djust_client_config.
+        django_output = _render_tag()
+
+        # Rust-engine render: goes through ClientConfigTagHandler.render(),
+        # which is what the Rust template engine invokes via the
+        # CustomTag callback. TagHandler.render(args, context) is the
+        # documented interface (see template_tags/__init__.py).
+        rust_handler = ClientConfigTagHandler()
+        rust_output = rust_handler.render([], {})
+
+        # Byte-equality: neither trailing whitespace nor ordering of
+        # attributes should differ. Both paths use format_html / escape
+        # on the same resolved prefix and hard-code the same attribute
+        # order, so a failure here means someone edited one path
+        # without mirroring to the other.
+        assert django_output == rust_output, (
+            "Django and Rust template engines emitted different output for "
+            "{% djust_client_config %} — the dual-registration invariant "
+            "from PR #993 Stage 5b is broken. "
+            f"Django: {django_output!r} | Rust: {rust_output!r}"
+        )

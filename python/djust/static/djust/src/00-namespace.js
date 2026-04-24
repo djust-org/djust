@@ -23,6 +23,11 @@ window.djust = window.djust || {};
     // 1. Explicit override wins — developer set it manually before the
     //    bundle loaded (rare, but it's how integrators inject custom
     //    behaviour without patching client.js).
+    //
+    //    Backward-compat note: an explicit empty string ('') is treated
+    //    as "use default" because the meta-tag fallback below also uses
+    //    `prefix || '/djust/api/'`. Integrators who want to genuinely
+    //    disable the prefix should set a non-empty sentinel like '/'.
     if (typeof window.djust.apiPrefix !== 'undefined' && window.djust.apiPrefix !== null) {
         return;
     }
@@ -44,6 +49,14 @@ window.djust = window.djust || {};
 // slashes so '/prefix/' + '/path' doesn't produce '/prefix//path'. Callers
 // pass the portion AFTER the prefix; this helper guarantees exactly one
 // slash at the junction regardless of whether either side carries one.
+//
+// Absolute-URL note: this helper does NOT special-case absolute URLs. A
+// call like apiUrl('https://evil.com/') would return
+// '/djust/api/https://evil.com/' — the concatenation is naive by design.
+// All current callers pass relative paths built from encodeURIComponent()
+// segments (see 48-server-functions.js), so an attacker-controlled
+// absolute URL cannot reach this helper. If a future caller derives
+// `path` from user input, it MUST validate or encode it first.
 window.djust.apiUrl = function apiUrl(path) {
     const raw = window.djust.apiPrefix || '/djust/api/';
     const normalizedPrefix = raw.endsWith('/') ? raw : raw + '/';

@@ -46,6 +46,13 @@ class ClientConfigTagHandler(TagHandler):
     """
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:  # noqa: ARG002
+        # ``args`` and ``context`` are unused by this tag (it takes no
+        # arguments and its output depends only on Django settings +
+        # URLconf state), but they are kept in the signature to match
+        # the ``TagHandler.render()`` interface contract — see
+        # ``template_tags/__init__.py``. The noqa silences the
+        # unused-argument lint for the same reason.
+        #
         # Import here to avoid a circular import with live_tags at module
         # load time. live_tags imports from djust.config which pulls in
         # Django settings — safe to defer to render time.
