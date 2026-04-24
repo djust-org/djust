@@ -41,7 +41,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | WebSocket compression | `permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available | v0.6.0 |
 | **P2** | Static asset tracking (`dj-track-static`) | Detect stale JS/CSS on reconnect, prompt reload — Phoenix `phx-track-static` parity | v0.6.0 |
 | **P3** | View Transitions API | Cheapest way to make navigation feel native | v0.5.0 |
-| **P3** | Islands of interactivity | Content-heavy sites with small interactive zones | v0.7.0 |
+| **P3** | Islands of interactivity | Content-heavy sites with small interactive zones | v0.7.1 |
 | **P3** | Offline mutation queue | Mobile/spotty-connection differentiator | v0.6.0 |
 | ~~**P3**~~ | ~~Native `<dialog>` integration~~ ✅ Shipped in v0.5.1 (`dj-dialog="open|close"`, 8 tests) | ~~Browser-native modals with better a11y than custom implementations~~ | ~~v0.5.0~~ |
 | ~~**P0**~~ | ~~`push_commands` + `djust:exec` auto-executor~~ ✅ ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 1a) | ~~Foundation primitive for every backend-driven UI feature in ADRs 002-006~~ | v0.4.2 |
@@ -1039,7 +1039,7 @@ Open questions that inform future direction:
 | Portal rendering | **`<.portal>`** (1.1) | `createPortal` | Not started | v0.7.0 |
 | Back/forward restoration | `push_patch` state | Loader cache | Not started | v0.7.0 |
 | Server-only components | — | Server Components | Not started | v0.7.0 |
-| Islands of interactivity | — | Astro islands | Not started | v0.7.0 |
+| Islands of interactivity | — | Astro islands | Not started (deferred from v0.7.0 retro) | v0.7.1 |
 | AI streaming primitives | — | — | Not started | v0.7.0 |
 | Server functions (RPC) | — | Server Actions | Not started | v0.7.0 |
 | ~~Django admin LiveView widgets~~ | — | — | ✅ Shipped (v0.7.0) | v0.7.0 |
