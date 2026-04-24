@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Intent-Based Prefetch (`dj-prefetch`, v0.7.0)** — hover- and
+  touch-driven navigation prefetch that complements the existing
+  service-worker-mediated hover prefetch. Links opting in with
+  ``<a dj-prefetch href="...">`` are prefetched after a 65 ms hover
+  debounce (cancelled on ``mouseleave`` before the debounce fires) and
+  immediately on ``touchstart`` — mobile users commit to a tap fast, so
+  no debounce is applied there. Prefetch uses ``<link rel="prefetch"
+  as="document">`` injection so the browser manages the cache lifecycle
+  (falls back to low-priority ``fetch`` + ``AbortController`` when
+  ``relList`` doesn't advertise ``'prefetch'``). Same-origin only;
+  ``javascript:`` / ``data:`` URLs blocked; dedup'd per URL via a Set
+  that ``window.djust._prefetch.clear()`` wipes on SPA navigation. Opt
+  out per-link with ``dj-prefetch="false"``. Respects
+  ``navigator.connection.saveData``. New client surface:
+  ``window.djust._intentPrefetch`` for test/diagnostic access. Scope:
+  client-side only — no new server endpoint. Contract: ``dj-prefetch``
+  is intended for author-controlled navigation links only; don't put it
+  on links that perform state-changing GETs (see the module header in
+  ``python/djust/static/djust/src/22-prefetch.js`` for the full safety
+  contract). See ``docs/website/guides/prefetch.md`` for the guide and
+  the SW-hover-vs-intent comparison table.
+- **Server Functions (`@server_function` / `djust.call()`, v0.7.0)** —
+  same-origin browser RPC without VDOM re-render. Decorate a LiveView
+  method with ``@server_function`` and invoke it from JavaScript as
+  ``await djust.call('<view_slug>', '<fn>', {params})``; the return value
+  is JSON-serialized straight back to the caller. The three primitives
+  now split cleanly by intent:
+    - ``@event_handler`` — WebSocket, triggers a VDOM re-render (UI
+      interactions: click, submit, input).
+    - ``@event_handler(expose_api=True)`` — HTTP (ADR-008), triggers a
+      re-render AND exposes the handler to mobile / S2S / AI-agent
+      callers via OpenAPI.
+    - ``@server_function`` — HTTP, **no re-render**, no OpenAPI, no
+      ``api_response`` / ``serialize=`` hooks. Designed exclusively for
+      in-browser RPC; response envelope is the minimal
+      ``{"result": <value>}``.
+  Session-cookie auth + CSRF are both required unconditionally — no
+  auth-class opt-out. Request body shape is strict: only an empty body,
+  ``{}``, or ``{"params": {...}}`` are accepted; any other shape
+  (flat objects, wrapped objects with sibling keys) returns
+  ``400 invalid_body``. This deliberately removes the ambiguity where a
+  caller's own field named ``params`` would be silently unwrapped and
+  every sibling key dropped. The dispatcher reuses the ADR-008 pipeline
+  unchanged: parameter coercion via ``validate_handler_params``,
+  ``@permission_required`` gating via ``check_handler_permission``, and
+  ``@rate_limit`` via the same LRU-capped ``_rate_buckets`` OrderedDict.
+  Both sync and ``async def`` functions are supported via
+  ``_call_possibly_async``. Stacking ``@event_handler`` and
+  ``@server_function`` on the same method raises ``TypeError`` at
+  decoration time — a function either re-renders the view or returns an
+  RPC result, never both. New URL: ``POST /djust/api/call/<view_slug>/
+  <function_name>/``, declared BEFORE the catch-all dispatch pattern so
+  it can't be shadowed. New public surface:
+  ``djust.decorators.server_function``, ``is_server_function``,
+  ``djust.api.DjustServerFunctionView``, ``dispatch_server_function``
+  (in ``python/djust/api/dispatch.py``), ``iter_server_functions``. New
+  client module ``python/djust/static/djust/src/48-server-functions.js``
+  (~40 LOC, ~430 B gzipped delta). Demo:
+  ``examples/demo_project/djust_demos/`` adds a product-search view
+  demonstrating both features end-to-end. See
+  ``docs/website/guides/server-functions.md`` for the full API reference,
+  error-code table, and comparison vs. ``@event_handler`` and
+  ``@event_handler(expose_api=True)``.
+
 ## [0.6.1rc1] - 2026-04-24
 
 ### Added

@@ -181,6 +181,11 @@ navigation:
         file: guides/model-binding.md
         order: 7
         level: intermediate
+      - title: Intent-Based Prefetch (`dj-prefetch`)
+        slug: prefetch
+        file: guides/prefetch.md
+        order: 7.5
+        level: intermediate
       - title: Authentication
         slug: authentication
         file: guides/authentication.md
@@ -220,6 +225,11 @@ navigation:
         slug: http-api
         file: guides/http-api.md
         order: 12.6
+        level: advanced
+      - title: Server Functions (@server_function / djust.call)
+        slug: server-functions
+        file: guides/server-functions.md
+        order: 12.7
         level: advanced
       - title: Deployment
         slug: deployment

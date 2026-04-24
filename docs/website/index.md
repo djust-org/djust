@@ -64,6 +64,7 @@ How to build specific features.
 | **[Hooks](guides/hooks.md)**                       | Client-side JavaScript lifecycle hooks                        |
 | **[on_mount Hooks](guides/on-mount-hooks.md)**     | Cross-cutting server-side mount hooks (auth, telemetry, etc.) |
 | **[Model Binding](guides/model-binding.md)**       | Two-way `dj-model` data binding                               |
+| **[Intent-Based Prefetch (`dj-prefetch`)](guides/prefetch.md)** | Hover / touch prefetch for fast in-app navigation (v0.7.0) |
 
 ### Integration
 
@@ -75,6 +76,7 @@ How to build specific features.
 | **[External Services](guides/services.md)**    | AWS, REST APIs, Redis integration patterns                |
 | **[MCP Server](guides/mcp-server.md)**         | AI assistant integration via Model Context Protocol       |
 | **[HTTP API](guides/http-api.md)**             | Auto-generated HTTP endpoints + OpenAPI from `@event_handler` (ADR-008) |
+| **[Server Functions](guides/server-functions.md)** | `@server_function` + `djust.call()` — same-origin browser RPC without re-render (v0.7.0) |
 
 ### Operations
 

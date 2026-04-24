@@ -202,6 +202,7 @@ Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). Th
 |---|---|
 | `dj-patch="url"` | Replace `dj-root` content via AJAX (no full reload) |
 | `dj-navigate="url"` | Client-side navigation (history push) |
+| `dj-prefetch` | Prefetch link target on hover / touch — warms HTTP cache before click (v0.7.0) |
 
 ```html
 <!-- Patch: replace reactive region only -->
@@ -209,7 +210,16 @@ Syntax: `[modifier+...]key:handler[:prevent]` (comma-separated for multiple). Th
 
 <!-- Navigate: full client-side navigation with history -->
 <a dj-navigate="{% url 'dashboard' %}">Dashboard</a>
+
+<!-- Prefetch on hover (65ms debounce) / touchstart (immediate) -->
+<a dj-prefetch href="{% url 'dashboard' %}">Dashboard</a>
+
+<!-- Opt out of prefetch on a specific link -->
+<a dj-prefetch="false" href="/logout/">Log out</a>
 ```
+
+See the [prefetch guide](prefetch.md) for same-origin / data-saver /
+dedupe semantics.
 
 ### Polling
 
