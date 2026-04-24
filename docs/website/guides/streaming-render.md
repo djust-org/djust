@@ -1,18 +1,32 @@
 # Streaming Initial Render (v0.6.1)
 
-> **Phase 1 — shipped in v0.6.1.** Lazy-child streaming (Phase 2) is tracked
-> for v0.6.2.
+> **Phase 1 — shipped in v0.6.1.** Transport-layer chunked transfer.
+> Lazy-child streaming and true server-side render overlap (Phase 2) are
+> tracked for v0.6.2.
 
-djust can flush the HTML shell of a LiveView page to the browser
-**before** the main body is finished rendering. The browser starts
-parsing `<head>`, downloading CSS, and parsing the body-open tag while
-the server is still computing the page content — cutting first-paint
-latency on pages with heavy `get_context_data` work.
+djust can return a LiveView page as an **HTTP/1.1 chunked-transfer
+response** instead of a single buffered response. Phase 1's payoff is
+transport-level: the browser receives the shell chunk
+(`<!DOCTYPE>` + `<head>` + `<body>` open) as soon as the view has
+finished rendering, without waiting for the whole response to be
+assembled in a gzip or reverse-proxy buffer. Intermediate proxies that
+honor chunked encoding can relay each chunk as it arrives.
 
-This is the djust equivalent of Next.js
+**What Phase 1 does NOT do (yet):** true server-side overlap — rendering
+the main content *while* the browser is parsing the shell. Today `get()`
+fully assembles the rendered HTML string before handing it to the
+streaming iterator, so the server-render time and the first chunk's wire
+time are sequential. **Phase 2** (v0.6.2, lazy children) moves each
+`{% live_render lazy=True %}` child's render into a separate post-shell
+chunk, delivering the real concurrency win. Phase 1 lays the response-
+type plumbing that Phase 2 builds on.
+
+This is the djust analog of Next.js
 [`renderToPipeableStream`](https://nextjs.org/docs/app/building-your-application/routing/loading-ui-and-streaming):
-an opt-in flag on the view class flips the HTTP response type from
-`HttpResponse` to `StreamingHttpResponse` with no other API changes.
+opting in flips the HTTP response type from `HttpResponse` to
+`StreamingHttpResponse` with no other API changes. The full Next.js
+experience (shell-first paint during component render) arrives with
+Phase 2.
 
 ---
 

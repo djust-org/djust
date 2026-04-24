@@ -14,13 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a LiveView class returns a `StreamingHttpResponse` that flushes the
   page in three chunks: shell-open (everything before `<div dj-root>`),
   main content (the `<div dj-root>...</div>` body), and shell-close
-  (`</body></html>` + trailing markup). Browsers begin parsing `<head>`
-  and loading CSS/JS while the server is still computing the main
-  content — competitive with Next.js `renderToPipeableStream` for
-  first-paint latency. No client-side code changes; opt-in per view,
-  backward-compatible default. Response emits `X-Djust-Streaming: 1`
-  for observability and omits `Content-Length` (HTTP chunked transfer).
-  Lazy-child out-of-order streaming is planned as Phase 2 (v0.6.2).
+  (`</body></html>` + trailing markup). **Phase 1 is transport-layer only**
+  — the server fully assembles the rendered HTML before streaming it; the
+  benefit is HTTP/1.1 chunked transfer (no `Content-Length`, earlier TCP
+  flush, compatibility with chunk-relaying proxies, avoiding gzip-buffer
+  stalls). True server-side render overlap (browser parses shell while
+  server computes main content) arrives with **Phase 2** (v0.6.2) alongside
+  lazy-child streaming via `{% live_render lazy=True %}`. No client-side
+  code changes; opt-in per view, backward-compatible default. Response
+  emits `X-Djust-Streaming: 1` for observability and omits `Content-Length`.
   See `docs/website/guides/streaming-render.md`.
 - **Hot View Replacement (HVR, v0.6.1)** — state-preserving Python code
   reload in development. When a LiveView module changes on disk, the dev

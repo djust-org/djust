@@ -34,8 +34,14 @@ _BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
 # Match a full ``<script>...</script>`` block. Used to mask script contents
 # before searching for ``</body>`` so a literal ``</body>`` in a JS string
 # doesn't become a false split boundary.
+#
+# The closing-tag pattern ``</script[^>]*>`` accepts any tokens between
+# ``</script`` and ``>`` per HTML5 tokenizer tolerance — e.g. ``</script >``,
+# ``</script\t\n foo>`` are all valid script-close forms that browsers honor.
+# Using the narrower ``</script\s*>`` fails CodeQL py/bad-html-filtering-regexp
+# (the same rule that flagged PR #966's ``_stamp_view_id`` regex).
 _SCRIPT_BLOCK_RE = re.compile(
-    r"<script\b[^>]*>.*?</script\s*>",
+    r"<script\b[^>]*>.*?</script[^>]*>",
     re.DOTALL | re.IGNORECASE,
 )
 
