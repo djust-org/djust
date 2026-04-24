@@ -150,6 +150,26 @@ LIVEVIEW_CONFIG = {
   `SAFE_ATTRIBUTE_PATTERN` regex are rejected.
 - Snapshots are held in process memory only. There is no persistence;
   a dev-server restart clears the buffer.
+- **Jump-during-async race**: if you jump to a past snapshot while an
+  async task (from `@background` or `start_async()`) is still running,
+  the async task's eventual completion will overwrite the restored
+  state. This is expected behavior — djust does not cancel in-flight
+  tasks on jump. Best practice: wait for any loading indicators to
+  clear before using time-travel.
+- **Container mutations safely captured**: starting v0.6.1,
+  `_capture_snapshot_state` deep-copies state via a JSON round-trip, so
+  `self.items.append(...)` or `self.metrics["k"] = v` inside a handler
+  does not retroactively corrupt prior snapshots. Earlier v0.6.0
+  `enable_state_snapshot` users benefit from this fix too — the same
+  method backs both features.
+- **Per-frame size cap**: `time_travel_event` frames are capped at
+  16 KiB (one quarter of the conventional 64 KiB WebSocket frame
+  limit). Oversized snapshots (e.g. from a view with a 1000-row list)
+  have their `state_before` / `state_after` replaced with
+  `{"_truncated": True, "_size": N}` before the frame is sent, and the
+  entry carries `"_truncated": true` at the top level. The full state
+  is still available server-side and is restored correctly on
+  `time_travel_jump`.
 
 > **Do NOT enable `time_travel_enabled` on views holding PII or
 > secrets.** The buffer stores up to 100 full snapshots of public view

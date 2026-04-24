@@ -482,3 +482,96 @@ def test_checks_silent_when_debug_false():
     finally:
         config.set("time_travel_enabled", saved_e)
         config.set("time_travel_max_events", saved_m)
+
+
+# ---------------------------------------------------------------------------
+# Fix B regression — LiveView._capture_snapshot_state must deep-copy mutable
+# values so in-place mutations after the snapshot (e.g. self.items.append(...))
+# do not retroactively rewrite state_before / state_after on prior snapshots.
+# The same fix protects v0.6.0 state-snapshot users.
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_breaks_reference_aliasing_on_lists():
+    """state_before/state_after must not alias mutable view attrs."""
+    from djust.live_view import LiveView
+
+    class V(LiveView):
+        time_travel_enabled = True
+        template = "<div dj-root>items</div>"
+
+        def mount(self, request, **kwargs):
+            self.items = ["a", "b"]
+
+        def get_context_data(self, **kwargs):
+            return {"items": self.items}
+
+    view = V()
+    view.mount(None)
+    # Install a buffer so record_event_end actually appends.
+    view._time_travel_buffer = TimeTravelBuffer(max_events=10)
+    snap = record_event_start(view, "test", {}, None)
+    assert snap is not None
+    # Mutate AFTER start, before end — old (aliased) impl would mutate
+    # state_before["items"] in place.
+    view.items.append("c")
+    record_event_end(view, snap)
+
+    stored = view._time_travel_buffer.history()[0]
+    assert stored["state_before"]["items"] == [
+        "a",
+        "b",
+    ], f"state_before was aliased: {stored['state_before']['items']!r}"
+    assert stored["state_after"]["items"] == ["a", "b", "c"]
+
+
+def test_snapshot_breaks_reference_aliasing_on_dicts():
+    from djust.live_view import LiveView
+
+    class V(LiveView):
+        time_travel_enabled = True
+        template = "<div dj-root>metrics</div>"
+
+        def mount(self, request, **kwargs):
+            self.metrics = {"count": 0}
+
+        def get_context_data(self, **kwargs):
+            return {"metrics": self.metrics}
+
+    view = V()
+    view.mount(None)
+    view._time_travel_buffer = TimeTravelBuffer(max_events=10)
+    snap = record_event_start(view, "t", {}, None)
+    assert snap is not None
+    view.metrics["count"] = 999
+    record_event_end(view, snap)
+
+    stored = view._time_travel_buffer.history()[0]
+    assert stored["state_before"]["metrics"] == {"count": 0}
+    assert stored["state_after"]["metrics"] == {"count": 999}
+
+
+def test_capture_snapshot_state_deep_copies_nested_list():
+    """Direct test of LiveView._capture_snapshot_state deep-copy semantics.
+
+    Exercises the v0.6.0 state-snapshot path too: the same method backs
+    both time-travel and the state-snapshot roundtrip.
+    """
+    from djust.live_view import LiveView
+
+    class V(LiveView):
+        template = "<div dj-root>x</div>"
+
+        def mount(self, request, **kwargs):
+            self.nested = [{"x": 1}, {"x": 2}]
+
+        def get_context_data(self, **kwargs):
+            return {"nested": self.nested}
+
+    view = V()
+    view.mount(None)
+    captured = view._capture_snapshot_state()
+    # Mutate the live attr in place — captured copy must not change.
+    view.nested.append({"x": 3})
+    view.nested[0]["x"] = 99
+    assert captured["nested"] == [{"x": 1}, {"x": 2}]

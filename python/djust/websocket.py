@@ -3874,6 +3874,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             }
         )
 
+    # Per-frame size cap for time_travel_event frames. Set to 16 KiB —
+    # a quarter of the conventional 64 KiB WebSocket frame limit — so a
+    # view with large state (e.g. a 1000-row list) cannot flood the
+    # channel on every event. When exceeded, state_before / state_after
+    # are replaced with a truncation placeholder and the frame carries
+    # ``_truncated: True``. See Stage 11 Fix C.
+    _TT_EVENT_SIZE_CAP = 16 * 1024
+
     async def _maybe_push_tt_event(self, view: Any, snapshot: Any) -> None:
         """Push a ``time_travel_event`` frame to the client after a record.
 
@@ -3887,6 +3895,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
               or a guard returned early)
             * ``DEBUG`` is off (production gate)
             * The send itself fails (best-effort)
+
+        When the serialized entry exceeds :attr:`_TT_EVENT_SIZE_CAP`,
+        ``state_before`` / ``state_after`` are replaced with a truncation
+        placeholder so spammy handlers on large-state views can't bloat
+        the WS channel. The full state is still available server-side
+        via the ring buffer for ``time_travel_jump``.
         """
         if snapshot is None:
             return
@@ -3898,10 +3912,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if buffer is None:
             return
         try:
+            entry = snapshot.to_dict()
+            # Serialized size check — default=str tolerates non-JSON-
+            # native types (datetimes, Decimals) the same way the rest
+            # of the debug-frame plumbing does.
+            serialized = json.dumps(entry, default=str)
+            if len(serialized) > self._TT_EVENT_SIZE_CAP:
+                state_before = entry.get("state_before") or {}
+                state_after = entry.get("state_after") or {}
+                entry["state_before"] = {
+                    "_truncated": True,
+                    "_size": len(json.dumps(state_before, default=str)),
+                }
+                entry["state_after"] = {
+                    "_truncated": True,
+                    "_size": len(json.dumps(state_after, default=str)),
+                }
+                entry["_truncated"] = True
             await self.send_json(
                 {
                     "type": "time_travel_event",
-                    "entry": snapshot.to_dict(),
+                    "entry": entry,
                     "history_len": len(buffer),
                 }
             )

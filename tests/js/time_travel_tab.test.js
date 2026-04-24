@@ -7,9 +7,9 @@
  *   2. renderTimeTravelTab produces a row per captured event
  *   3. onTimeTravelState updates cursor and marks row active
  *
- * Click-to-jump wiring goes through the main djust WS (globalThis.djust.websocket)
- * which isn't present in the harness; we test onTimeTravelJumpClick with
- * a stub WS instead.
+ * Click-to-jump wiring goes through the main djust LiveView WebSocket
+ * exposed at globalThis.djust.liveViewInstance (same path used by the
+ * event-replay button in 03-tab-events.js). We stub it in the harness.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -76,7 +76,8 @@ describe('Time Travel tab (v0.6.1)', () => {
 
     it('onTimeTravelJumpClick sends the correct WS frame', () => {
         const sendMessage = vi.fn();
-        globalThis.djust = { websocket: { sendMessage } };
+        // Canonical shape: window.djust.liveViewInstance.sendMessage(...)
+        globalThis.djust = { liveViewInstance: { sendMessage } };
 
         panel.onTimeTravelJumpClick(2, 'after');
 
@@ -87,13 +88,22 @@ describe('Time Travel tab (v0.6.1)', () => {
         });
     });
 
+    it('onTimeTravelJumpClick is a no-op when liveViewInstance is missing', () => {
+        // No globalThis.djust — should NOT throw, should NOT send.
+        expect(() => panel.onTimeTravelJumpClick(0, 'before')).not.toThrow();
+
+        // Also tolerates an instance without sendMessage.
+        globalThis.djust = { liveViewInstance: {} };
+        expect(() => panel.onTimeTravelJumpClick(0, 'before')).not.toThrow();
+    });
+
     // v0.6.1 Fix #2 regression: clicking a .tt-jump button in the
     // rendered tab must dispatch onTimeTravelJumpClick with the correct
     // index/which. Previously there was no delegated click handler and
     // clicks were no-ops in the browser.
     it('clicking a .tt-jump button fires the jump via delegation', () => {
         const sendMessage = vi.fn();
-        globalThis.djust = { websocket: { sendMessage } };
+        globalThis.djust = { liveViewInstance: { sendMessage } };
 
         panel.timeTravelHistory = [
             { event_name: 'increment', params: {}, ref: 1, ts: 1_700_000_000, state_before: {}, state_after: { count: 1 }, error: null },

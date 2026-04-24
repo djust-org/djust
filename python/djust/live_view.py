@@ -631,8 +631,18 @@ class LiveView(
             if callable(value):
                 continue
             try:
-                json.dumps(value, cls=DjangoJSONEncoder)
-                result[key] = value
+                # json.dumps serves as the serializability check; the
+                # accompanying json.loads round-trips to a *disconnected*
+                # value so later in-place mutations to the source object
+                # (e.g. ``self.items.append(...)``) do not retroactively
+                # rewrite this snapshot. Without the round-trip the
+                # time-travel state_before / state_after fields aliased
+                # the live view attrs — see Stage 11 Fix B. The v0.6.0
+                # back-navigation state snapshot benefits from this same
+                # fix: previously a mutable public attr captured here
+                # could be mutated before the snapshot was serialized
+                # and sent to the client.
+                result[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
             except (TypeError, ValueError, OverflowError):
                 # Skip non-serializable — matches _get_private_state pattern.
                 continue

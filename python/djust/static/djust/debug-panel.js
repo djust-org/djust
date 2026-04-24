@@ -2686,14 +2686,19 @@
 
         onTimeTravelJumpClick(index, which) {
             if (typeof index !== 'number') return;
-            const ws = globalThis.djust && globalThis.djust.websocket;
-            const send = ws && typeof ws.sendMessage === 'function' ? ws.sendMessage.bind(ws) : null;
+            // Canonical send path: window.djust.liveViewInstance (same path
+            // used by replay in 03-tab-events.js and _hookExistingWebSocket
+            // in 11-integration.js). globalThis.djust.websocket is NOT
+            // assigned anywhere in the codebase — using it was a silent bug.
+            const lv = globalThis.djust && globalThis.djust.liveViewInstance;
             const payload = { type: 'time_travel_jump', index: index, which: which || 'before' };
-            if (send) {
-                send(payload);
-            } else if (globalThis.djustDebug) {
-                console.warn('[djust] time-travel: WS unavailable, payload would be', payload);
+            if (!lv || typeof lv.sendMessage !== 'function') {
+                if (globalThis.djustDebug) {
+                    console.warn('[time-travel] LiveView WS not ready — cannot jump', payload);
+                }
+                return;
             }
+            lv.sendMessage(payload);
         }
 
         // Delegated click handler for .tt-jump buttons. Called once from
