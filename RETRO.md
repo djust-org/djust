@@ -132,6 +132,7 @@ issue or be explicitly closed with a reason.
 | 120 | ADR-006 AI-generated UIs — deferred due to AssistantMixin/LLM-provider dependency chain | Retro v0.6.1 | — | Open | Deferred from v0.6.1 to v0.6.2 |
 | 121 | Shared `_SCRIPT_CLOSE_TOLERANT_RE` constant for HTML5-tolerant `</script>` matching | Retro v0.6.1 / PR #975 | — | Open | Third occurrence of CodeQL py/bad-html-filtering-regexp (PR #966, #970, #975). Centralize into `mixins/template.py` or a new `_html_utils.py`. |
 | 122 | Post-commit verification step in pipeline-run skill: `git log -1 --oneline` sanity check after every `git commit` | Retro v0.6.1 / PR #974 | — | Open | Silent pre-commit-hook bounce on long commit message went undetected for one tool cycle. |
+| 123 | FORCE_SCRIPT_NAME / mounted sub-path support for JS clients (hardcoded `/djust/api/...` prefix in `48-server-functions.js` and other client modules) | Retro v0.7.0 / PR #986 | #987 | Open | v0.7.1 target. Add `window.djust.apiBase` integrator hook or document constraint. Pattern inherited from ADR-008 (v0.5.1); compounds with every new API-consuming JS module. |
 
 ---
 
