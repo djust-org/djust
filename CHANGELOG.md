@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1rc1] - 2026-04-24
+
 ### Added
 
 - **`FORCE_SCRIPT_NAME` / sub-path mount support for the in-browser HTTP
