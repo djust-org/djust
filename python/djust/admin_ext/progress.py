@@ -453,7 +453,14 @@ def __getattr__(name):
 
 __all__ = [
     "BulkActionProgressWidget",
-    "BulkActionProgressView",  # noqa: F822 — lazy-constructed via __getattr__
     "Job",
     "admin_action_with_progress",
 ]
+# NOTE: ``BulkActionProgressView`` is intentionally NOT in ``__all__``. It is
+# lazy-constructed via module ``__getattr__`` (see above) to avoid a circular
+# import (progress.py → views.py → sites.py → progress.py). Internal callers
+# use the explicit ``from djust.admin_ext.progress import
+# BulkActionProgressView`` form, which still triggers ``__getattr__``.
+# Exposing it in ``__all__`` trips CodeQL py/undefined-export; declaring it
+# under ``TYPE_CHECKING`` also doesn't help because the real class is built
+# at runtime from ``BulkActionProgressWidget``, not imported.
