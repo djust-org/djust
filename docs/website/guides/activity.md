@@ -186,9 +186,24 @@ Activity gating is a **UX-correctness feature, not an auth boundary.**
 Treat it as "don't waste round-trips on events the user can't see" —
 never as "prevent hidden handlers from running."
 
-- **Real auth still runs on every event.** `_validate_event_security`,
-  `@permission_required`, handler allowlists, and rate limits apply to
-  deferred/replayed events exactly as they apply to live ones. A user
+Auth runs in **two phases** and it's important to keep them distinct:
+
+- **Queued events do NOT re-run handler-level auth at insertion time.**
+  When an event arrives for a hidden activity, the consumer pushes
+  `(event_name, params)` onto a per-activity FIFO queue (cap: 100 per
+  activity) and immediately returns a no-op. The WebSocket frame that
+  caused the queue insertion has already passed CSRF + session /
+  connection authentication — but `_validate_event_security`,
+  `@permission_required`, and rate limits are **not** consulted at this
+  step. The cap is what bounds the queue.
+- **Real auth gates always run at dispatch time, regardless of
+  activity state.** When the activity becomes visible, each queued
+  event is dispatched through `_dispatch_single_event`, which runs the
+  FULL auth stack: `_validate_event_security`, `@permission_required`
+  decorators, the rate limiter, and CSRF. A queued event **cannot**
+  reach its handler without passing all of those — even if the user's
+  permissions have changed in the meantime. There is no path that
+  dispatches a handler without going through these checks, so a user
   who cannot call `admin_only()` cannot call it by tricking the client
   into marking the trigger as an activity event.
 - **The `_activity` param is client-supplied.** A client can omit it,

@@ -2520,6 +2520,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 sanitize_for_log(event_name or ""),
                 sanitize_for_log(_activity_name),
             )
+            # Queued without permission/rate-limit check (by design:
+            # per-handler auth runs on dispatch via _dispatch_single_event).
+            # Per-activity cap bounds memory.
             target_view._queue_deferred_activity_event(_activity_name, event_name, params)
             # Send a no-op so the client's loading state clears; the event
             # will replay when the activity is next shown.

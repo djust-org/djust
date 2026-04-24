@@ -175,6 +175,16 @@ class ActivityMixin:
         :attr:`activity_event_queue_cap`. The cap guards against a
         misbehaving client flooding a hidden panel with synthetic events
         and ballooning consumer memory.
+
+        Security contract: events are queued WITHOUT permission/rate-limit
+        validation — validation runs when the event is dispatched
+        (``_dispatch_single_event``), so a denied event in the queue never
+        reaches its handler. The ``activity_event_queue_cap`` FIFO bound
+        (default 100) limits queue memory; each dispatched event is still
+        subject to the full auth stack (``_validate_event_security``,
+        ``@permission_required``, rate limiter, CSRF). Queue insertion
+        itself requires that the triggering WebSocket frame already passed
+        CSRF + connection-level authentication in the consumer.
         """
         if not activity_name or not event_name:
             return
