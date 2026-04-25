@@ -59,12 +59,19 @@ def main() -> int:
         import subprocess
 
         try:
+            # Use ``docs/`` pathspec + post-filter on .md suffix so depth-1
+            # files like ``docs/README.md`` are caught — git's
+            # ``docs/**/*.md`` glob silently skips them. (Stage 11 review
+            # finding on PR #1083.)
             result = subprocess.run(
                 ["git", "diff", "--name-only", "--diff-filter=ACMR",
-                 "origin/main..HEAD", "--", "docs/**/*.md"],
+                 "origin/main..HEAD", "--", "docs/"],
                 capture_output=True, text=True, check=False,
             )
-            files = [Path(p) for p in result.stdout.splitlines() if p.strip()]
+            files = [
+                Path(p) for p in result.stdout.splitlines()
+                if p.strip() and p.endswith(".md")
+            ]
         except FileNotFoundError:
             files = []
     else:
