@@ -67,6 +67,28 @@ And dismiss it with:
 window.djustErrorOverlay.dismiss();
 ```
 
+## DEBUG-mode enriched WebSocket errors
+
+When `settings.DEBUG=True`, server-side errors that flow back to the
+client over the WebSocket carry three extra fields beyond the
+generic message:
+
+| Field | Content |
+|---|---|
+| `debug_detail` | Unsanitized exception message (e.g. `KeyError: 'foo'`). |
+| `traceback` | Last 3 frames of the Python traceback. |
+| `hint` | Actionable suggestion when djust recognizes the failure pattern (e.g. "Initialize `self.data` in `mount()`"). |
+
+The overlay reads those fields and renders them. Mount-time class
+lookup failures additionally include the list of available LiveView
+classes in the response so a typo like `dj-view="MyVeiw"` surfaces
+the closest match instead of an opaque 500.
+
+In production (`DEBUG=False`) the framework drops `debug_detail` /
+`traceback` / `hint` before serializing the error frame, so even if
+the client somehow rendered them, there'd be nothing sensitive to
+leak.
+
 ## Security
 
 The overlay escapes every field before insertion — `error`, `traceback`, `hint`, and JSON-stringified `validation_details` all pass through HTML entity escaping, so a hostile traceback cannot inject script tags. Production builds (`DEBUG=False`) never render the overlay at all; Django also strips `traceback` / `debug_detail` / `hint` from the error frame in that mode.

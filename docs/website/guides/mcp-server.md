@@ -21,7 +21,32 @@ pip install 'mcp[cli]'
 
 ## Configuration
 
-### Claude Code
+### One-shot install: `djust mcp install`
+
+From a djust project, the `djust` CLI knows about Claude Code,
+Cursor, and Windsurf and can wire up the MCP server in one
+command:
+
+```bash
+djust mcp install                # auto-detect available editors
+djust mcp install --client claude   # Claude Code only
+djust mcp install --client cursor   # Cursor only
+djust mcp install --client windsurf # Windsurf only
+```
+
+Behavior:
+
+- Tries `claude mcp add` first (canonical for Claude Code).
+- Falls back to writing `.mcp.json` directly when the CLI is
+  unavailable or you're configuring Cursor / Windsurf.
+- Merges with any existing `.mcp.json` instead of overwriting —
+  malformed files are backed up to `.mcp.json.bak.<ts>` before the
+  rewrite. Idempotent: running it twice is a no-op.
+
+If you want to inspect or hand-edit the config, the manual options
+below produce the same `.mcp.json` content.
+
+### Claude Code (manual)
 
 From your project directory, run:
 

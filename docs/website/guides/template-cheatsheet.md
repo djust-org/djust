@@ -539,6 +539,91 @@ djust.hooks.chart = {
 | `{% dj_activity "name" visible=expr eager=expr %}...{% enddj_activity %}` | Pre-rendered hidden panel with preserved local state (React 19.2 parity). See [Activity guide](activity.md). |
 | `{% djust_markdown expr [kwargs] %}` | Render Markdown to sanitised HTML in the Rust parser — raw HTML and `javascript:` URLs are neutralised; trailing-line provisional wrap makes streaming LLM output flicker-free. See [Streaming Markdown guide](streaming-markdown.md). |
 
+### Comparison operators inside `{% if %}`
+
+The Rust template engine accepts the full set of Python comparison
+operators inside `{% if %}` and `{% elif %}` conditions — not just
+`==` / `!=`:
+
+```django
+{% if cart.total > 100 %}
+  <span class="badge">free shipping</span>
+{% endif %}
+
+{% if user.age >= 18 and user.age < 65 %}…{% endif %}
+{% if rating <= 2 %}{% elif rating < 5 %}{% else %}{% endif %}
+```
+
+`>`, `<`, `>=`, `<=`, `==`, `!=`, `in`, `not in` — all work as you'd
+expect. Combine with `and` / `or` / `not`. (Available since v0.1.6.)
+
+### `{{ model.pk }}` for Django model context
+
+Pass a Django model instance into the template context and you can
+read its primary key directly:
+
+```python
+class ArticleView(LiveView):
+    article = state(default=None)
+
+    def mount(self, request, slug):
+        self.article = Article.objects.get(slug=slug)
+```
+
+```django
+<a href="{% url 'article-edit' pk=article.pk %}">Edit</a>
+```
+
+The Rust serializer auto-includes a `pk` key on every model instance
+regardless of the field name (`id`, `uuid`, custom). You can still
+read the underlying field by its real name (`article.id`,
+`article.uuid`) — `pk` is just the cross-model alias.
+
+### Custom Tag Handlers (`register_tag_handler` / `register_block_tag_handler` / `register_assign_tag_handler`)
+
+Three registration entrypoints let you wire Python callbacks into the
+Rust template engine without forking the parser:
+
+| Variety | Returns | Use when |
+|---|---|---|
+| `register_tag_handler(name, handler)` | HTML string | The tag emits content (`{% url %}`, `{% static %}`) |
+| `register_block_tag_handler(name, handler)` | HTML wrapping the inner block | The tag wraps content (`{% upper %}…{% endupper %}`) |
+| `register_assign_tag_handler(name, handler)` | `dict[str, Any]` merged into the context | The tag mutates the context for sibling nodes (`{% assign x=expr %}`) |
+
+```python
+from djust._rust import register_tag_handler
+
+def hello_tag(args, context):
+    name = args.get("name", "world")
+    return f"<p>Hello, {name}!</p>"
+
+register_tag_handler("hello", hello_tag)
+```
+
+```django
+{% hello name="Alice" %}
+```
+
+Overhead is ~100–500 ns per call (PyO3 boundary). Built-in tags
+(`if`, `for`, `block`, …) stay in pure Rust with zero overhead. See
+ADR-005 in the djust repo for the architecture rationale.
+
+### Auto-serialization for Django types
+
+Django types pass through the Rust template engine without manual
+`.isoformat()` / `.hex` conversion:
+
+| Django type | Renders as |
+|---|---|
+| `datetime.datetime` | ISO 8601 — works with `\|date:"Y-m-d H:i"` |
+| `datetime.date` | ISO 8601 |
+| `datetime.time` | `HH:MM:SS` |
+| `decimal.Decimal` | string (preserves precision; pair with `\|floatformat`) |
+| `uuid.UUID` | string |
+| `FieldFile` (FileField / ImageField) | object — call `.url`, `.name`, `.size` directly |
+
+Pass them via `context` / `self.*`; the serializer handles the rest.
+
 ### Filters (all 57 Django built-ins)
 
 **String**

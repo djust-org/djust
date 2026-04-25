@@ -359,6 +359,22 @@ css-prod:
 
 ---
 
+## Demo utility classes
+
+The djust demo project ships a tiny `utilities.css` you can crib
+from. The most-reached-for class:
+
+| Class | Equivalent |
+|---|---|
+| `.flex-between` | `display: flex; align-items: center; justify-content: space-between;` |
+
+Use it on card headers or any flex container that needs a title on
+the left and an action widget on the right — saves repeating the
+same three flex declarations across templates. It's not a djust
+runtime requirement, just a convention worth borrowing.
+
+---
+
 ## Troubleshooting
 
 **`STATICFILES_DIRS not configured` error**
