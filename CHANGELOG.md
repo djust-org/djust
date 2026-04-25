@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Test infrastructure cleanup (v0.8.1 reconcile drain — Group A, closes #1027, #1028, #1034, #1036)** —
+  four small test-quality refactors bundled in one PR:
+  - **#1036**: `_assert_benchmark_under` and the per-segment budget constants
+    (`TARGET_PER_EVENT_S`, `TARGET_LIST_UPDATE_S`, `TARGET_WS_MOUNT_S`) moved
+    from `tests/benchmarks/test_request_path.py` into
+    `tests/benchmarks/conftest.py` for shared scope across benchmark files.
+  - **#1034**: replaced the `TARGET_LIST_UPDATE_S * 20` magic-number budget
+    for the WS-mount benchmark with a named `TARGET_WS_MOUNT_S = 0.1`
+    constant — rationale lives in the constant name, not the multiplier.
+  - **#1028**: extracted the duplicated `_make_user` factory into
+    `python/djust/tests/conftest.py` as `make_staff_user(...)`. Two test
+    files (`test_admin_widgets_per_page.py`, `test_bulk_progress.py`) now
+    import the shared factory.
+  - **#1027**: replaced the `inspect.getsource`-based regression test in
+    `test_stack_trace_exposure.py` with a behavior-level test that triggers
+    a serialize-error via a sentinel-laden `RuntimeError` and asserts
+    neither the sentinel nor the exception class name reach the response
+    body. Defends against regressions even if the leak vector moves.
+
 ### Added
 
 - **`make roadmap-lint` — mechanical ROADMAP-vs-codebase drift check (Action #142, closes #1057)** —

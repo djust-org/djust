@@ -12,18 +12,9 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
+from .conftest import make_staff_user as _make_user  # #1028: shared factory
+
 pytestmark = pytest.mark.admin
-
-
-def _make_user(username="tester", *, is_staff=True, perms=()):
-    User = get_user_model()
-    user = User(username=username, is_staff=is_staff)
-    user.pk = 1
-    # Override has_perm / has_perms without hitting the DB.
-    perm_set = set(perms)
-    user.has_perm = lambda p: p in perm_set  # type: ignore[assignment]
-    user.has_perms = lambda ps: all(p in perm_set for p in ps)  # type: ignore[assignment]
-    return user
 
 
 class TestDefaultWidgetSlots(TestCase):

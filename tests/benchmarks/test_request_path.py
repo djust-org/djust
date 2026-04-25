@@ -25,34 +25,14 @@ from typing import Any, Dict, List
 
 import pytest
 
-# Targets per ROADMAP v0.6.0 perf-profile task
-TARGET_PER_EVENT_S = 0.002  # 2 ms
-TARGET_LIST_UPDATE_S = 0.005  # 5 ms
-
-
-def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
-    """Assert benchmark mean < target, but gracefully degrade under xdist.
-
-    pytest-benchmark's stats collection is disabled when running under
-    pytest-xdist (the `-n auto` CI invocation), so `benchmark.stats["mean"]`
-    raises because `stats` is empty. In that case the function is still
-    executed for correctness, but the threshold assertion is skipped —
-    the benchmark-gated CI job (`--benchmark-only` serial) enforces it.
-    """
-    # `benchmark.disabled` is True under `--benchmark-disable` (set by xdist
-    # plugin). In that mode pytest-benchmark runs the callable once for
-    # correctness but does not collect stats.
-    if getattr(benchmark, "disabled", False):
-        return
-    try:
-        mean = benchmark.stats["mean"]
-    except (KeyError, TypeError, AttributeError):
-        # No stats collected (unexpected non-xdist disabled mode) — skip
-        # the assertion rather than raising an ambiguous KeyError.
-        return
-    assert mean < target_s, (
-        f"{label} mean {mean * 1000:.2f}ms exceeds {target_s * 1000:.0f}ms target"
-    )
+# Shared targets and helpers live in tests/benchmarks/conftest.py
+# (see #1034, #1036). Future benchmark files should import from there.
+from .conftest import (
+    TARGET_LIST_UPDATE_S,
+    TARGET_PER_EVENT_S,
+    TARGET_WS_MOUNT_S,
+    _assert_benchmark_under,
+)
 
 
 COUNTER_TEMPLATE = """
@@ -270,7 +250,7 @@ class TestWebsocketMountPath:
         assert isinstance(result, dict)
         # Per-segment budget: WebSocket mount includes connect+disconnect and a
         # full handshake, so we target the relaxed 5ms (list-update) bound.
-        _assert_benchmark_under(benchmark, TARGET_LIST_UPDATE_S * 20, "WebSocket mount")
+        _assert_benchmark_under(benchmark, TARGET_WS_MOUNT_S, "WebSocket mount")
 
 
 # ---------------------------------------------------------------------------

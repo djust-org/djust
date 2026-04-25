@@ -1,8 +1,44 @@
 """
 Benchmark fixtures and configuration for pytest-benchmark.
+
+Shared budgets and helpers live here so additional benchmark files in this
+directory can use them without duplication. See `_assert_benchmark_under`
+for the xdist-safe assertion contract.
 """
 
 import pytest
+
+
+# Per-segment budgets (ROADMAP v0.6.0 perf-profile targets — see
+# docs/performance/v0.6.0-profile.md). New benchmark files should import these
+# rather than redefining them.
+TARGET_PER_EVENT_S = 0.002  # 2 ms
+TARGET_LIST_UPDATE_S = 0.005  # 5 ms
+# WebSocket mount runs the full HTTP-render pipeline plus channels-layer +
+# Redis serialization round-trip + initial state diff, so it gets a 100 ms
+# budget (20× the list-update budget). Named explicitly so the rationale
+# lives in the constant name, not the multiplier — see #1034.
+TARGET_WS_MOUNT_S = 0.100  # 100 ms (20× list-update)
+
+
+def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
+    """Assert benchmark mean < target, but gracefully degrade under xdist.
+
+    pytest-benchmark's stats collection is disabled when running under
+    pytest-xdist (the `-n auto` CI invocation), so `benchmark.stats["mean"]`
+    raises because `stats` is empty. In that case the function is still
+    executed for correctness, but the threshold assertion is skipped —
+    the benchmark-gated CI job (`--benchmark-only` serial) enforces it.
+    """
+    if getattr(benchmark, "disabled", False):
+        return
+    try:
+        mean = benchmark.stats["mean"]
+    except (KeyError, TypeError, AttributeError):
+        return
+    assert mean < target_s, (
+        f"{label} mean {mean * 1000:.2f}ms exceeds {target_s * 1000:.0f}ms target"
+    )
 
 
 # Configure benchmark settings
