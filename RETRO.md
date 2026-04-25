@@ -192,9 +192,9 @@ issue or be explicitly closed with a reason.
 
 **Action taken**: ROADMAP updated to mark iter 1 + iter 2 ✅ shipped; Async Streams entry remains under v0.8.0 milestone with a "deferred to v0.8.1" annotation pointing at the precedent.
 
-**5. Pre-commit stash/restore — 8th occurrence.** PR #1024 hit it during the Server Actions commit (lock-file drift caused stash, commit registered correctly on retry). Same pattern continues. **Action #122 status: 8 reinforcements in single 24-hour session.** The skill-level update (`~/.claude/skills/pipeline-run/SKILL.md`) is now the single largest accumulated technical-debt item from this session.
+**5. Pre-commit stash/restore — 8th occurrence, then resolved.** PR #1024 hit it during the Server Actions commit (lock-file drift caused stash, commit registered correctly on retry). At post-rc1 housekeeping, the cumulative case (8 reinforcements in single session — PRs #989, #996, #1007, #1008, #1014, #1015, #1021, #1024) was overwhelming, and **Action #122 was implemented at the skill level**: a new "MANDATORY Post-Commit Verification (Action #122)" section landed in `~/.claude/skills/pipeline-run/SKILL.md` documenting the failure mode, the canonical fix (`git commit -m "..." && git log -1 --oneline`), and the "never skip" rationale. The pattern self-validated on its own commit (the skill-update commit chained the verify and immediately confirmed the new commit hash).
 
-**Action taken**: Reinforcement count updated.
+**Action taken**: Action #122 closed (skill-level). Pattern documented in commit `5d2c44b8` to djust-repo RETRO.md.
 
 ### Insights
 
@@ -222,7 +222,7 @@ issue or be explicitly closed with a reason.
 ### Process Improvements Applied
 
 **Action Tracker (headline)**:
-- #122 → **8th reinforcement** in single session.
+- #122 → **8th reinforcement, then CLOSED post-rc1** via skill update at `~/.claude/skills/pipeline-run/SKILL.md`. Highest-ROI session-arc technical-debt item resolved.
 - #125 → **Validated across 18 consecutive pipelines** (no Stage 11 🔴 since v0.7.0 PR #989).
 - No new rows filed this milestone — issue queue clean, design-novel work without retro-actionable findings.
 
@@ -242,7 +242,7 @@ Deferred from v0.8.0 to v0.8.1:
 
 ### Status
 
-✅ v0.8.0 user-facing scope **PARTIAL (2 of 3 P2 shipped)**. Form Status Awareness + Server Actions both landed clean; Async Streams deferred to v0.8.1. Ready for `v0.8.0rc1` cut with 2-of-3 shape (matches v0.7.0rc1 / v0.6.0rc1 precedent).
+✅ v0.8.0rc1 **RELEASED** (tag pushed 2026-04-25 as commit `12e89fa8`). Form Status Awareness + Server Actions both landed clean; Async Streams deferred to v0.8.1. 2-of-3 shape matches v0.7.0rc1 / v0.6.0rc1 precedent. djust.org pin bumped to `djust>=0.8.0rc1`. Verification cron `trig_01W9pUmAai9DMMzt8owFtNQe` fires at 06:05 UTC to confirm PyPI + GitHub release artifacts. Action #122 (post-commit verification) landed at the skill level immediately post-rc1 — the highest-ROI session-arc technical-debt item is resolved.
 
 ---
 
