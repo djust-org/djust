@@ -157,6 +157,21 @@ impl Value {
 }
 
 // Implement Display trait instead of inherent to_string method
+//
+// For serialized Django-model dicts the Python-side serializer sets
+// `"__str__": str(obj)` on every dict it produces (see
+// `python/djust/serialization.py::_serialize_model_safely`). This
+// matches Django's default template semantics: `{{ obj }}` in a
+// Django template calls `str(obj)`, so a rendered FK like
+// `{{ claim.claimant }}` produces the claimant's `__str__`, not a
+// placeholder.
+//
+// Before the #968 fix the Rust renderer ignored the `__str__` key
+// and emitted the literal `"[Object]"` for any dict, breaking the
+// Django semantic for LiveView templates. The current
+// implementation checks for a `"__str__"` entry first and renders
+// its string value when present, falling back to `"[Object]"` only
+// for dicts that weren't produced by the model serializer.
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -166,7 +181,10 @@ impl fmt::Display for Value {
             Value::Float(fl) => write!(f, "{fl}"),
             Value::String(s) => write!(f, "{s}"),
             Value::List(_) => write!(f, "[List]"),
-            Value::Object(_) => write!(f, "[Object]"),
+            Value::Object(o) => match o.get("__str__") {
+                Some(Value::String(s)) => write!(f, "{s}"),
+                _ => write!(f, "[Object]"),
+            },
         }
     }
 }
@@ -269,5 +287,64 @@ mod tests {
         assert!(!Value::Integer(0).is_truthy());
         assert!(Value::String("hello".to_string()).is_truthy());
         assert!(!Value::String("".to_string()).is_truthy());
+    }
+
+    /// #968 — `Value::Object` with a `"__str__"` key renders that
+    /// string, matching Django's default `{{ obj }}` semantics.
+    /// Serialized Django-model dicts carry `"__str__": str(obj)` from
+    /// `python/djust/serialization.py::_serialize_model_safely`; the
+    /// Rust Display impl previously dropped it and emitted `[Object]`.
+    #[test]
+    fn test_display_object_with_str_key() {
+        let mut map = HashMap::new();
+        map.insert("id".to_string(), Value::Integer(1));
+        map.insert(
+            "__str__".to_string(),
+            Value::String("<Claim: 2026PD000075>".to_string()),
+        );
+        let obj = Value::Object(map);
+        assert_eq!(obj.to_string(), "<Claim: 2026PD000075>");
+    }
+
+    /// Fallback: plain dicts without a `"__str__"` key keep rendering
+    /// as `"[Object]"` — non-model data (e.g. a context dict passed
+    /// directly from user code) was never meant to hit `__str__`
+    /// semantics.
+    #[test]
+    fn test_display_object_without_str_key() {
+        let mut map = HashMap::new();
+        map.insert("a".to_string(), Value::Integer(1));
+        map.insert("b".to_string(), Value::Integer(2));
+        let obj = Value::Object(map);
+        assert_eq!(obj.to_string(), "[Object]");
+    }
+
+    /// Edge: `"__str__"` key present but not a `String` (e.g. an
+    /// upstream bug produces `"__str__": null`). Fall back to
+    /// `"[Object]"` rather than emit `null` or crash.
+    #[test]
+    fn test_display_object_str_key_non_string_falls_back() {
+        let mut map = HashMap::new();
+        map.insert("__str__".to_string(), Value::Null);
+        let obj = Value::Object(map);
+        assert_eq!(obj.to_string(), "[Object]");
+    }
+
+    /// Empty string `"__str__"` is still a valid override — Django
+    /// template would render an empty string if `str(obj) == ""`,
+    /// and the Rust engine must match.
+    #[test]
+    fn test_display_object_empty_str_key() {
+        let mut map = HashMap::new();
+        map.insert("__str__".to_string(), Value::String("".to_string()));
+        let obj = Value::Object(map);
+        assert_eq!(obj.to_string(), "");
+    }
+
+    /// Regression-lock: bare `[List]` fallback for lists unchanged.
+    #[test]
+    fn test_display_list_unchanged() {
+        let list = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
+        assert_eq!(list.to_string(), "[List]");
     }
 }
