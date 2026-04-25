@@ -186,6 +186,75 @@ issue or be explicitly closed with a reason.
 | 153 | Stage 11 mark_safe XSS-trace audit bullet | Retro v0.8.2 / PR #1074 | #1078 | Open | New (theme_css_link example) |
 | 154 | Stage 4 broader-sweep → follow-up issue scope-discipline (validated 2x) | Retro v0.8.2 / PRs #1067, #1076 | #1079 | Open | New (validated across 2 milestones) |
 | 155 | djust-release skill Step 6 stages 3/4 files (+ Cargo.lock); causes fix-pass on every release | Retro v0.8.2rc1 release | #1080 | Open | New (caught during 0.8.2rc1 release) |
+| 156 | Edit-tool failure-mode + smoke-test discipline gap | Retro v0.8.3 / PR #1083 | #1084 | Open | New (Edit-failure produces silent unmodified file; same shape as Action #122) |
+| 157 | 3rd-strike RETRO_GATE_VIOLATION — small bookkeeping PRs bypass retro-artifact gate | Retro v0.8.3 / PRs #1069, #1073, #1082 | #1085 | Open | New (3 milestones in a row; document explicit ROADMAP-PR exemption or fix the gate) |
+
+---
+
+## v0.8.3 — Docs Sweep + Pre-push Lint (PRs #1082, #1083)
+
+**Date**: 2026-04-25
+**Scope**: Solo-issue milestone for #1075 (the broader stale-MD sweep filed during v0.8.2 PR #1076 follow-up). Two-part PR shipped: 53 stale .md ref fixes across 16 docs files + new `make docs-lint` Makefile target + `scripts/docs-lint.py` + pre-push hook in `.pre-commit-config.yaml`. #1081 (`|date` filter JSON-quoting bug) explicitly deferred — real Rust template-engine bug needing focused attention. Smallest milestone since v0.7.4.
+**Tests at close**: ~6,427 (no net change; `scripts/docs-lint.py` is self-validating, no new test file needed).
+
+### What We Learned
+
+**1. Edit-tool failure-mode + smoke-test discipline gap.**
+PR #1083's `--changed-only` pathspec fix at `scripts/docs-lint.py` was first attempted via the Edit tool which returned a "File has not been read yet" error. The subsequent smoke-test ran against the unmodified file and reported "12 files scanned" — a plausible-looking number that gave false confidence the Edit had applied. Caught only on a second diagnostic pass that explicitly compared `docs/**/*.md` vs `docs/` pathspecs (12 vs 16). **Lesson: when Edit returns an error, the next smoke-test may falsely succeed against the unmodified file.** A successful smoke-test alone is NOT proof the Edit landed. Verify by either (a) reading the file post-Edit to confirm the change, or (b) constructing a smoke-test whose output explicitly differentiates fixed vs unfixed (here: "expect 16 files, not 12"). Same shape as Action #122 (post-commit verification) but at the Edit-tool level.
+
+**Action taken**: Open — tracked in Action Tracker #156 (GitHub #1084).
+
+**2. Three consecutive RETRO_GATE_VIOLATIONs for small bookkeeping PRs.**
+PR #1082 (this milestone's ROADMAP-only setup PR) shipped without a retro at merge time — same shape as PR #1069 in v0.8.1 and PR #1073 in v0.8.2. Three milestones, three small bookkeeping PRs (single-file ROADMAP edits, ~15-20 LOC), all bypassing the retro-artifact gate. Backfilled in Stage 4 each time, but the pattern is established enough now to file as a fixable gate gap, not just an observation. The pipeline-run skill's retro-artifact gate fires for substantive PRs but not for hand-rolled ROADMAP setup PRs that bypass the pipeline-run skill entirely.
+
+**Action taken**: Open — tracked in Action Tracker #157 (GitHub #1085).
+
+**3. Marketing-cluster unlinking pattern preserves readability.**
+For 12 of the 53 stale-MD refs, the target file (MARKETING.md, FRAMEWORK_COMPARISON.md, TECHNICAL_PITCH.md, WHY_NOT_ALTERNATIVES.md, MARKETING_NEXT_STEPS.md, README_MARKETING_SECTION.md) doesn't exist anywhere in the repo and there's no canonical replacement. Instead of removing the bullet entirely or linking to a placeholder, **drop the markdown link syntax** — `[Marketing Overview](MARKETING.md)` → plain text `Marketing Overview`. Bullets still read naturally. Pattern: when a referenced file no longer exists and there's no canonical replacement, unlink rather than delete or stub.
+
+**Action taken**: Closed — pattern documented in PR #1083's commit message + this milestone retro; no separate tracker row needed. The fixer script (`/tmp/scratch/fix_stale_md_refs.py`) already encodes the pattern; future fix passes can lift from it.
+
+### Insights
+
+- **Mirror-existing-tooling-shape pattern compounded.** `scripts/docs-lint.py` was lifted from `scripts/roadmap-lint.py`'s structure byte-for-byte. The Action #152 "lift-from-downstream FIRST" pattern from v0.8.2 generalizes cleanly to "lift-from-codebase-precedent FIRST" — works the same way at intra-project scope.
+- **Stage 11 review's pathspec finding was empirically verifiable.** The reviewer's claim "git's `docs/**/*.md` glob silently skips depth-1 files" was non-obvious enough to warrant verification — `git diff --name-only` returned 12 files for the glob vs 16 for `docs/`. Empirical verification at fix-pass time + a unit-style smoke-test that explicitly differentiates the two outputs would have caught the Edit failure earlier (see finding #1).
+- **#1081 deferral was the right call.** Spending the drain cycle on the docs sweep + lint tooling, while leaving the `|date` filter JSON-quoting bug for explicit attention, kept the milestone tight (1 PR + 1 ROADMAP-setup PR) and avoided coupling unrelated investigation to a mechanical drain.
+- **Net djust open-issue queue**: 25 → 24 (closed #1075 by PR #1083). 23 of 24 remaining are skill-level (`out-of-scope-for-djust-drain`); the 1 in-scope is #1081.
+- **The retro-artifact gate has now produced 3 violations** in 3 consecutive milestones — all from the same class (small ROADMAP-only PR). Sample size is now sufficient to file the gap formally (finding #2).
+
+### Review Stats
+
+| Metric | #1082 | #1083 | Total |
+|--------|-------|-------|-------|
+| Tests added | 0 | 0 (script is self-validating) | 0 |
+| Production LOC | +14 (ROADMAP) | +203 / -53 (16 docs + 4 infra) | +217 / -53 |
+| 🔴 / 🟡 findings | 0 / 0 | 0 / 1 (Important non-blocking, addressed) | 0 / 1 |
+| Pre-commit attempts | 1 | 2 (1 fix-pass for `--changed-only` pathspec) | 3 |
+| CI retries | 0 | 0 | 0 |
+| Quality rating | n/a | 4.5/5 | — |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No additions.
+
+**Pipeline template**: No changes.
+
+**Checklist**: No additions to `docs/PULL_REQUEST_CHECKLIST.md`.
+
+**Skills**: 2 new tracker rows (#156, #157) — both skill-level, labeled `out-of-scope-for-djust-drain`. Each will need a follow-up PR to the pipeline-skill repo.
+
+### Open Items
+
+Tracked in Action Tracker:
+- **#156** — Edit-tool failure-mode + smoke-test discipline gap (PR #1083 caught at fix-pass time).
+- **#157** — Three consecutive RETRO_GATE_VIOLATIONs on small bookkeeping PRs (#1069, #1073, #1082) — extend retro-artifact gate or document explicit ROADMAP-PR exemption.
+
+Closed-as-shipped this milestone:
+- **#1075** — by PR #1083.
+
+### Status
+
+✅ v0.8.3 drain **COMPLETE**. 2 PRs merged, 1 issue closed-as-shipped. #1081 deferred for focused Rust-engine investigation.
 
 ---
 
