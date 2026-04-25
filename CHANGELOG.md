@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3rc1] - 2026-04-25
+
 ### Changed
 
 - **`djust_theming.W001` contrast-checks the active preset only by
