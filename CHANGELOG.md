@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`@action` decorator — React 19 Server Actions equivalent (v0.8.0)** —
+  mark a method as a Server Action and `_action_state[<method_name>]`
+  is auto-populated with `{pending, error, result}` at handler
+  entry/exit. Templates access the state via context injection: each
+  action's name becomes a context variable. Pairs with the v0.8.0
+  `dj-form-pending` attribute (PR #1023): `dj-form-pending` covers
+  the in-flight client UX (during the network round-trip), `@action`
+  covers the post-completion server state (after the handler
+  returns). Together: React 19-level form ergonomics with zero
+  per-handler wiring.
+
+  ```python
+  from djust import action
+
+  class TodoView(LiveView):
+      @action
+      def create_todo(self, title: str = "", **kwargs):
+          if not title:
+              raise ValueError("Title is required")
+          todo = Todo.objects.create(title=title, user=self.request.user)
+          return {"created": todo.id}
+  ```
+
+  ```html
+  {% if create_todo.error %}
+      <div class="error">{{ create_todo.error }}</div>
+  {% elif create_todo.result %}
+      <div class="success">Todo {{ create_todo.result.created }} created!</div>
+  {% endif %}
+  ```
+
+  Implementation:
+  - New `@action` decorator in `djust.decorators`. Wraps the
+    underlying `@event_handler` (every action is also an event
+    handler — same dispatch path, parameter coercion, permissions,
+    rate limits) and adds the action-state tracking layer.
+  - On entry: `self._action_state[name] = {pending: True, error: None, result: None}`.
+  - On success return: `{pending: False, error: None, result: <return_value>}`.
+  - On exception: `{pending: False, error: str(exc) or exc.__class__.__name__, result: None}` and re-raises.
+  - `LiveView.__init__` initializes `_action_state: Dict[str, Dict] = {}`.
+  - `ContextMixin.get_context_data()` injects each action's state
+    under its name (after the public-attribute walk + JIT
+    serialization, so action names that collide with user-defined
+    attrs win — actions are always the canonical reading of that
+    name).
+  - Re-running an action resets state (clears previous result on a
+    failure retry, clears previous error on a success retry — the
+    template never sees stale state alongside fresh state).
+  - Both bare-form `@action` and called-form `@action(description=...)` supported.
+  - New `is_action(func)` helper for runtime detection.
+  - Exposed as top-level imports: `from djust import action, is_action`.
+
+  Covered by **18 regression tests** in `tests/test_action_decorator.py`
+  (decorator metadata + event-handler/action distinction, sync
+  success / exception / re-raise / class-name fallback, multiple
+  actions independent state, retry success-after-failure +
+  failure-after-success, both decorator forms, end-to-end context
+  injection via `ContextMixin.get_context_data()`).
 - **`dj-form-pending` attribute — React 19 `useFormStatus` equivalent
   (v0.8.0)** — any element nested inside a `<form dj-submit>` can
   declare `dj-form-pending="hide|show|disabled"` and react

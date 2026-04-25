@@ -230,6 +230,174 @@ def is_event_handler(func: Any) -> bool:
     return bool(getattr(func, "_djust_decorators", {}).get("event_handler"))
 
 
+def action(
+    func: Optional[F] = None,
+    *,
+    description: str = "",
+    coerce_types: bool = True,
+) -> Any:
+    """
+    Mark a method as a Server Action with auto-tracked pending/error/result state.
+
+    React 19's ``useActionState`` and form actions provide a pattern where form
+    submissions automatically handle pending states, error states, and results
+    without per-handler boilerplate. ``@action`` is the djust equivalent: any
+    method decorated with ``@action`` automatically populates
+    ``self._action_state[<method_name>]`` with::
+
+        {
+            "pending": True,    # set BEFORE the handler body runs
+            "error":   None,
+            "result":  None,
+        }
+
+    On successful return::
+
+        {
+            "pending": False,
+            "error":   None,
+            "result":  <return_value>,
+        }
+
+    On exception (re-raised after recording)::
+
+        {
+            "pending": False,
+            "error":   "<str(exc)>",
+            "result":  None,
+        }
+
+    Templates access this via context injection — each action's name becomes a
+    context variable: ``{{ create_todo.pending }}``, ``{{ create_todo.result }}``,
+    ``{{ create_todo.error }}``. Works in both the Django template engine and
+    the Rust template engine (dict attribute access resolves identically).
+
+    ``@action`` builds on ``@event_handler`` — every action is also an event
+    handler, with the same parameter coercion, permissions, and rate-limit
+    machinery. The difference is the action-state tracking layer; you don't
+    write try/except + manual state-setting in every mutation handler.
+
+    Pairs with the v0.8.0 client-side ``dj-form-pending`` attribute (from PR
+    #1023): ``dj-form-pending`` covers the in-flight client UX (during the
+    network round-trip), ``@action`` covers the post-completion server state
+    (after the handler returns). Together they give React 19-level form
+    ergonomics with zero per-handler wiring.
+
+    Args:
+        func: When ``@action`` is used bare (without parentheses), the
+            decorated function is passed directly.
+        description: Human-readable description (passes through to the
+            underlying ``@event_handler``; overrides docstring).
+        coerce_types: Whether to coerce string params to expected types
+            (passes through to ``@event_handler``).
+
+    Usage::
+
+        from djust.decorators import action
+
+        class TodoView(LiveView):
+            @action
+            def create_todo(self, title: str = "", **kwargs):
+                # While this body runs, self._action_state["create_todo"] is
+                # {"pending": True, "error": None, "result": None}.
+                # In the template (re-rendered after this returns), it will
+                # be {"pending": False, "error": None, "result": <return_val>}.
+                if not title:
+                    raise ValueError("Title is required")
+                todo = Todo.objects.create(title=title, user=self.request.user)
+                self.todos.append(todo)
+                return {"created": todo.id}
+
+    Template usage::
+
+        {% if create_todo.error %}
+            <div class="error">{{ create_todo.error }}</div>
+        {% elif create_todo.result %}
+            <div class="success">
+                Todo {{ create_todo.result.created }} created!
+            </div>
+        {% endif %}
+
+    Metadata Structure:
+        Stores ``_djust_decorators["action"] = {"name": <method_name>}`` AND
+        ``_djust_decorators["event_handler"]`` (since every action is also an
+        event handler). The ``"action"`` metadata key is the marker the
+        dispatch pipeline reads to populate ``_action_state``.
+    """
+
+    def _build(func_inner: F) -> F:
+        action_name = func_inner.__name__
+
+        # Bare-call: @action decorator (no parens) → use the underlying
+        # @event_handler with default args + tag with action metadata. We
+        # call event_handler() to get the wrapper, then add the "action"
+        # key to its metadata.
+        eh_decorator = event_handler(
+            description=description,
+            coerce_types=coerce_types,
+        )
+
+        @functools.wraps(func_inner)
+        def action_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            # Initialize/reset the action state at entry. Visible to the
+            # template if any re-render fires DURING the handler body —
+            # which only happens for handlers that yield to the event loop
+            # (async handlers, handlers using `self.start_async()`, etc).
+            # Synchronous handlers that don't yield never expose pending=True
+            # to a renderer, but the field is still useful for the
+            # post-completion state shape.
+            if not hasattr(self, "_action_state") or self._action_state is None:
+                # Defensive: LiveView.__init__ initializes this, but a
+                # subclass __init__ that forgets super().__init__() would
+                # break us; create on demand.
+                self._action_state = {}
+
+            self._action_state[action_name] = {
+                "pending": True,
+                "error": None,
+                "result": None,
+            }
+
+            try:
+                result = func_inner(self, *args, **kwargs)
+                self._action_state[action_name] = {
+                    "pending": False,
+                    "error": None,
+                    "result": result,
+                }
+                return result
+            except Exception as exc:
+                # Record the error in the action state, then re-raise. The
+                # caller (event-handler dispatch path) handles the actual
+                # exception logging + envelope; we just record the human-
+                # readable message for the template.
+                self._action_state[action_name] = {
+                    "pending": False,
+                    "error": str(exc) or exc.__class__.__name__,
+                    "result": None,
+                }
+                raise
+
+        # Apply @event_handler to our wrapper, then tag with the "action"
+        # metadata key. event_handler stores its own metadata under
+        # _djust_decorators["event_handler"]; we add ours alongside.
+        wrapped = eh_decorator(action_wrapper)
+        _add_decorator_metadata(wrapped, "action", {"name": action_name})
+        return cast(F, wrapped)
+
+    # Support both `@action` (bare) and `@action(description="…")` (called).
+    if func is None:
+        # Called form: @action(...)
+        return _build
+    # Bare form: @action
+    return _build(func)
+
+
+def is_action(func: Any) -> bool:
+    """Check if a function has been decorated with ``@action``."""
+    return bool(getattr(func, "_djust_decorators", {}).get("action"))
+
+
 def server_function(
     description: Any = "",
     coerce_types: bool = True,
