@@ -16,16 +16,9 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory, TestCase
 
+from .conftest import make_staff_user as _make_user  # #1028: shared factory
+
 pytestmark = pytest.mark.admin
-
-
-def _make_user(username, *, is_staff=True, pk=1):
-    """Build a lightweight user stand-in (no DB required)."""
-    User = get_user_model()
-    user = User(username=username, is_staff=is_staff)
-    user.pk = pk
-    user.id = pk
-    return user
 
 
 class TestJobModel(TestCase):
