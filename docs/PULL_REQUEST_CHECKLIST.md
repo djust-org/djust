@@ -30,6 +30,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Test-implementation alignment** - Tests actually import and exercise the code in the PR. No references to phantom modules, renamed tags, or APIs that don't exist in the diff
 - [ ] **Import names match shipped code** - Template tag library names, module paths, and class names used in tests match the actual files in the PR diff
 - [ ] **Performance tests** for features affecting rendering/VDOM (if applicable)
+- [ ] **Misleading existing tests are part of the bug.** When fixing a check or invariant, audit the existing tests for fixtures that exemplify the broken behavior the issue describes. If you find one, *update* it — don't just add a new test. A test that passes for the wrong reason is worse than no test, because future readers assume the contract is locked when it isn't. *Source: PR #1008 (issue #1003) — `test_c011_passes_when_output_exists` had been writing an 18-byte placeholder and asserting no C011 fired, which was exactly the bug. See `docs/development/check-authoring.md` for the canonical example.*
 
 ## 💻 Code Quality
 
@@ -45,6 +46,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Dual-path wiring** - Features touching mount, lifecycle, events, or state must be wired into BOTH `LiveViewConsumer` (WebSocket in `websocket.py`) AND `RequestMixin.get/post` (HTTP in `mixins/request.py`). Missing one creates silent failures — e.g., auth hooks that only enforce on WebSocket *(PRs #568, #569)*
 - [ ] **Mixin wiring checklist** - New mixins must verify: (a) added to LiveView MRO, (b) exported from `__init__.py`, (c) consumer calls flush/process methods, (d) client JS routes the new command type, (e) HTTP request path calls mixin methods *(PRs #568, #569)*
 - [ ] **Test file location** - Test files must be in a directory listed in pytest `testpaths` (`pyproject.toml`). Tests in unlisted directories are never executed *(PR #570)*
+- [ ] **Framework-internal attrs filter sync** — If you added a new framework-set attribute on `LiveView` / `LiveComponent` (anything assigned by mount/dispatch/lifecycle code rather than user code), did you also add it to `_FRAMEWORK_INTERNAL_ATTRS` in `python/djust/live_view.py`? The frozenset is the single source of truth for `get_state()` filtering — missing entries silently leak into reactive-state debug payloads + the client-side state mirror. *Source: ADR-012 / issue #962 / PR #1002.*
 
 ### Python Code Standards
 

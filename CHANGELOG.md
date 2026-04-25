@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Check-authoring guide + PR review checklist additions (v0.7.4,
+  closes #1017, #1018, #1019, #1020)** — four retro follow-ups from
+  v0.7.2 + v0.7.3 milestones bundled into a single docs PR. New file
+  `docs/development/check-authoring.md` documents two reusable
+  patterns surfaced during the v0.7.x check-refinement work:
+  - **Whitespace-preserving redaction for line-number-aware regex
+    scanners** (canonical: `_strip_verbatim_blocks` from PR #1014).
+    Reusable for any future check that scans template source as raw
+    text and needs to ignore a region (`{% verbatim %}`,
+    `{% comment %}`, `<script>`, fenced markdown blocks). Replace
+    body with whitespace, preserve newlines for line-number accuracy.
+  - **Config-driven check scope helper extraction** (canonical:
+    `_contrast_check_scope` / `_presets_to_check` from PR #1015).
+    When a check's behavior depends on a user-configurable scope,
+    extract the decision into a named helper so the four-branch
+    test seam (default / opt-in-all / missing-scope-target /
+    unknown-value) is testable without dragging in the full Django
+    settings stack. Documents the safe-default contract: unknown
+    config values fall back to the signal-preserving option.
+
+  PR review checklist (`docs/PULL_REQUEST_CHECKLIST.md`) gains two
+  new bullets:
+  - **Misleading existing tests are part of the bug** — when fixing
+    a check, audit existing tests for fixtures that exemplify the
+    broken behavior; update them, don't just add new tests
+    alongside. *Source: PR #1008 (issue #1003).*
+  - **Framework-internal attrs filter sync** — new framework-set
+    attrs on `LiveView` / `LiveComponent` must be added to
+    `_FRAMEWORK_INTERNAL_ATTRS` to prevent leakage into
+    `get_state()`. *Source: ADR-012 / issue #962 / PR #1002.*
+
 ### Fixed
 
 - **py3.14 timing-sensitive CI flake class (v0.7.4, #1016)** —
