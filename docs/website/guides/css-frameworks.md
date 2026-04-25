@@ -39,6 +39,7 @@ LIVEVIEW_CONFIG = {
 | Value | Description |
 |---|---|
 | `'bootstrap5'` | Bootstrap 5 classes on forms and components (default) |
+| `'bootstrap4'` | Bootstrap 4 classes — for legacy projects, NYC Core Framework, government sites |
 | `'tailwind'` | Tailwind utility classes on forms and components |
 | `None` / `'plain'` | Unstyled plain HTML |
 
@@ -169,6 +170,87 @@ Compile:
 ```bash
 npx sass static/scss/main.scss static/css/main.css
 ```
+
+---
+
+## Bootstrap 4
+
+Bootstrap 4 still ships across many legacy projects, government sites,
+and frameworks like NYC Core. djust's `Bootstrap4Adapter` (added in
+v0.5.0) renders form widgets with the BS4 class set instead of BS5.
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    'css_framework': 'bootstrap4',
+}
+```
+
+The adapter handles the four BS4-specific class differences from BS5:
+
+| Element type | BS4 class | BS5 class |
+|---|---|---|
+| `<select>` | `custom-select` | `form-select` |
+| Checkbox/radio wrapper | `custom-control custom-checkbox` | `form-check` |
+| Form group wrapper | `form-group` | `mb-3` |
+| Help text | `form-text text-muted` | `form-text` |
+
+Install Bootstrap 4 the same way you would for any Bootstrap project —
+bring your own Bootstrap 4 CSS via npm/CDN. djust does not bundle it.
+
+### Radio buttons (separate config keys)
+
+Radio inputs use their own config keys rather than reusing the
+checkbox classes (BS4 and BS5 style them differently). Override in the
+adapter or via `LIVEVIEW_CONFIG`:
+
+| Key | Bootstrap 4 default | Bootstrap 5 default |
+|---|---|---|
+| `radio_class` | `custom-control-input` | `form-check-input` |
+| `radio_label_class` | `custom-control-label` | `form-check-label` |
+| `radio_wrapper_class` | `custom-control custom-radio` | `form-check` |
+
+If a radio key is not set, djust falls back to the corresponding
+checkbox key — so existing Bootstrap 5 projects don't need to define
+radio classes explicitly.
+
+### Select widgets
+
+`ChoiceField` rendered with `widget=Select` reads its class from
+`select_class` (default `form-select` for BS5, `custom-select` for
+BS4) instead of the generic `field_class` used for `<input>` fields.
+This keeps native dropdowns from picking up the wrong borders/padding.
+
+---
+
+## Theme tokens → framework classes
+
+djust's theming system exposes design tokens as CSS variables
+(`--primary`, `--border`, `--background`, …). The
+`{% theme_framework_overrides %}` template tag emits a `<style>` block
+that maps those tokens onto the active framework's class selectors so
+a theme switch automatically restyles Bootstrap components without
+editing Bootstrap source:
+
+```django
+{% load djust %}
+<head>
+  …
+  {% theme_framework_overrides %}
+</head>
+```
+
+Example output (Bootstrap 5, abridged):
+
+```css
+.btn-primary { background-color: var(--primary); border-color: var(--primary); }
+.form-control { border-color: var(--border); background: var(--background); }
+.alert-info { background: color-mix(in oklch, var(--primary), white 80%); }
+```
+
+The tag is a no-op when `css_framework='tailwind'` or `None` — Tailwind
+projects manage their palette via `@theme` in `input.css`, so the
+bridge would just duplicate work.
 
 ---
 

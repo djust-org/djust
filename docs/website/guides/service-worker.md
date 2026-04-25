@@ -56,6 +56,8 @@ All options are individually toggleable:
 | --------------------- | ------------------------------------------- | ----------------------------------------------- |
 | `instantShell`        | `false`                                     | Enable the cached-shell navigation fast path.   |
 | `reconnectionBridge`  | `false`                                     | Enable outgoing-message buffering during WS disconnect. |
+| `vdomCache`           | `false`                                     | (v0.6.0) Cache VDOM HTML per URL; serve instantly on popstate before reconciling against the live mount reply. |
+| `stateSnapshot`       | `false`                                     | (v0.6.0) Persist a view's public state on `djust:before-navigate`; restore via `_restore_snapshot()` instead of running `mount()` on back-nav. |
 | `swUrl`               | `/static/djust/service-worker.js`           | Override if you serve the SW from a custom path. |
 | `scope`               | `/`                                         | Override if the SW should only manage a subtree. |
 
@@ -159,6 +161,105 @@ WS re-OPEN: client dispatches "djust:ws-open"
 ```
 
 Buffered messages are **capped at 50 per connection** (oldest dropped). Buffers are **in-memory** in the SW process — an SW restart (browser shutdown, SW replaced by a newer version) loses them.
+
+---
+
+## Advanced features (v0.6.0)
+
+Three opt-in optimizations layered on top of the v0.5.0 core. All are
+off by default — enable per-feature on `registerServiceWorker(...)`
+and (for state snapshots) per-view via a class attribute. Each one
+gracefully no-ops when its preconditions aren't met, so partial
+adoption is always safe.
+
+### VDOM patch cache
+
+When the user clicks `<a dj-link>` or hits the back button, the SW
+serves a cached HTML snapshot of the destination URL **immediately**,
+then the live WebSocket mount reply reconciles any drift via the
+normal VDOM patch path. The user sees content the instant the route
+changes; the network round-trip is hidden behind the perceived paint.
+
+Enable in two places — the registration call AND your settings:
+
+```js
+djust.registerServiceWorker({ vdomCache: true });
+```
+
+```python
+# settings.py
+DJUST_VDOM_CACHE_ENABLED = True
+DJUST_VDOM_CACHE_TTL_SECONDS = 300         # default — entries expire after 5 min
+DJUST_VDOM_CACHE_MAX_ENTRIES = 100         # default — LRU evict beyond this cap
+```
+
+Three system checks guard the configuration ranges so a typo (e.g.
+negative TTL) fails fast at `manage.py check`:
+
+| Check ID  | Severity | Fires when |
+|---|---|---|
+| `djust.C301` | error | `DJUST_VDOM_CACHE_TTL_SECONDS` is non-positive or > 1 day |
+| `djust.C302` | error | `DJUST_VDOM_CACHE_MAX_ENTRIES` is non-positive or > 10 000 |
+| `djust.C303` | warning | `DJUST_VDOM_CACHE_ENABLED = True` without the SW registered with `vdomCache: true` |
+
+Cache scope is **per origin + per URL** with the `Vary: Cookie` and
+`Vary: Accept-Language` headers honored — different users / locales
+don't see each other's snapshots.
+
+### LiveView state snapshots
+
+A view that opts in stamps a JSON-serializable copy of its public
+state on the SW each time the user navigates **away**. On a back
+navigation, the SW returns that snapshot and the server calls
+`_restore_snapshot(state)` instead of `mount()`. Form values, scroll
+position, expanded/collapsed sections — all preserved without
+embedding state in the URL or refetching it.
+
+```python
+class CartView(LiveView):
+    enable_state_snapshot = True
+
+    def mount(self, request):
+        self.items = list(request.user.cart_items.values('id', 'qty'))
+
+    def _restore_snapshot(self, state: dict) -> None:
+        # state is the dict the client captured on `djust:before-navigate`.
+        # Trust nothing — re-validate any IDs against the database.
+        self.items = state.get('items', [])
+
+    def _should_restore_snapshot(self, request) -> bool:
+        # Override to reject stale snapshots. Default returns True for any
+        # snapshot < 5 minutes old. Return False to fall back to mount().
+        return super()._should_restore_snapshot(request)
+```
+
+Snapshots are JSON only (no `pickle`), capped at 256 KB by the SW and
+64 KB by the client clamp, and `safe_setattr` blocks dunder /
+private attributes during restoration.
+
+System check `djust.C304` warns if a snapshot-opt-in view declares
+attributes whose names match PII patterns (`password`, `token`,
+`secret`, `api_key`, `pii`) — a guardrail against accidentally
+shipping sensitive state through the SW.
+
+### Mount batching
+
+Pages that render multiple `dj-lazy` LiveViews used to fire one
+`mount` WebSocket frame per view. As of v0.6.0 the client coalesces
+those into a single `mount_batch` frame; the server replies with one
+`mount_batch` carrying every rendered view, and per-view failures are
+isolated in a `failed[]` array — one bad view no longer kills the
+batch.
+
+No code changes are required to opt in — the batching is automatic
+when the client and server are both ≥ v0.6.0. To opt out (e.g. for
+debugging), set:
+
+```js
+window.DJUST_USE_MOUNT_BATCH = false;
+```
+
+before `client.js` runs.
 
 ---
 
