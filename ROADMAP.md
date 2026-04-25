@@ -1218,6 +1218,20 @@ class TodoView(LiveView):
 
 ---
 
+### Milestone: v0.8.3 — Docs Sweep + Pre-push Lint (1 issue)
+
+*Goal:* Process #1075, the broader stale-MD ref sweep filed during v0.8.2's #1010 investigation. Solo issue, no `--group` mode needed.
+
+**Solo (P2 tech-debt)**:
+
+- **#1075** — broader stale .md ref sweep across 17 files (~50 broken refs) + new `make docs-lint` Makefile target wrapping a python sweep script (mirrors `make roadmap-lint` from Action #142). Pre-push hook prevents regression. Filed during v0.8.2 PR #1076 follow-up.
+
+**Out of scope for v0.8.3** (deferred for explicit attention):
+
+- ~~**#1081**~~ — `|date` filter on model DateField produces JSON-quoted output in Rust-rendered templates. Real production bug (NYC Claims). Requires deep Rust template-engine investigation; root cause hypothesis (JIT serializer wraps in `json.dumps`) needs verification before fix. Not a 1-PR drain item — will get a focused session.
+
+---
+
 ### Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)
 
 Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:
