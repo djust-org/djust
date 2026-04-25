@@ -588,4 +588,4 @@ Inspect WebSocket messages in real time:
 
 - **[Event Handler Best Practices](EVENT_HANDLERS.md)** - Writing effective handlers
 - **[JIT Serialization Pattern](JIT_SERIALIZATION_PATTERN.md)** - Performance optimization
-- **[State Management API](STATE_MANAGEMENT_API.md)** - Decorators reference
+- **[State Management API](state-management/STATE_MANAGEMENT_API.md)** - Decorators reference

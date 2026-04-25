@@ -793,10 +793,10 @@ function search() {
 - [State Management Architecture](STATE_MANAGEMENT_ARCHITECTURE.md) - Implementation architecture
 
 ### Marketing & Competitive Analysis
-- [Marketing Overview](MARKETING.md) - Feature highlights and positioning
-- [Framework Comparison](FRAMEWORK_COMPARISON.md) - djust vs 13+ frameworks (Django, React, Vue, etc.)
-- [Technical Pitch](TECHNICAL_PITCH.md) - Technical selling points
-- [Why Not Alternatives](WHY_NOT_ALTERNATIVES.md) - When to choose djust over alternatives
+- Marketing Overview - Feature highlights and positioning
+- Framework Comparison - djust vs 13+ frameworks (Django, React, Vue, etc.)
+- Technical Pitch - Technical selling points
+- Why Not Alternatives - When to choose djust over alternatives
 
 ---
 

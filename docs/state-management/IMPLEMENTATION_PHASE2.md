@@ -709,8 +709,8 @@ After Phase 2 completes:
 
 - [Phase 1 Implementation](IMPLEMENTATION_PHASE1.md) - Decorator metadata
 - [State Management Architecture](STATE_MANAGEMENT_ARCHITECTURE.md) - Full spec
-- [Definition of Done](DEFINITION_OF_DONE.md) - Quality checklist
-- [AI Workflow Process](AI_WORKFLOW_PROCESS.md) - Development process
+- [Definition of Done](../development/DEFINITION_OF_DONE.md) - Quality checklist
+- [AI Workflow Process](../development/AI_WORKFLOW_PROCESS.md) - Development process
 
 ---
 

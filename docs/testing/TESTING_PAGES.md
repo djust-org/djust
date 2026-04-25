@@ -482,9 +482,9 @@ Potential enhancements to the test page system:
 
 ## Related Documentation
 
-- [CONTRIBUTING.md](../CONTRIBUTING.md) - Development workflow
-- [STATE_MANAGEMENT_API.md](STATE_MANAGEMENT_API.md) - Decorator documentation
-- [Component testing](../COMPONENT_BEST_PRACTICES.md) - Component-specific testing
+- [CONTRIBUTING.md](../../CONTRIBUTING.md) - Development workflow
+- [STATE_MANAGEMENT_API.md](../state-management/STATE_MANAGEMENT_API.md) - Decorator documentation
+- [Component testing](../components/COMPONENT_BEST_PRACTICES.md) - Component-specific testing
 
 ## Questions?
 

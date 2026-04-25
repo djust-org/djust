@@ -252,10 +252,10 @@ python benchmark.py
 
 ## Next Steps
 
-- [Full Documentation](README.md)
+- [Full Documentation](../README.md)
 - [API Reference](https://djust.org/docs)
 - [Example Projects](examples/)
-- [Contributing Guide](CONTRIBUTING.md)
+- [Contributing Guide](../../CONTRIBUTING.md)
 
 ## Need Help?
 

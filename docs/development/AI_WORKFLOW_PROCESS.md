@@ -587,8 +587,8 @@ Each PR should consider whether workflow improvements should be documented here.
 ## Related Documents
 
 - [DEFINITION_OF_DONE.md](DEFINITION_OF_DONE.md) - Checklist for PR completion
-- [IMPLEMENTATION_PHASE1.md](IMPLEMENTATION_PHASE1.md) - Example tracking document
-- [CLAUDE.md](../CLAUDE.md) - Project-specific guidance for AI
+- [IMPLEMENTATION_PHASE1.md](../state-management/IMPLEMENTATION_PHASE1.md) - Example tracking document
+- [CLAUDE.md](../../CLAUDE.md) - Project-specific guidance for AI
 
 ---
 
