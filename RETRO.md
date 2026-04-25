@@ -194,7 +194,20 @@ issue or be explicitly closed with a reason.
 
 **5. Pre-commit stash/restore — 8th occurrence, then resolved.** PR #1024 hit it during the Server Actions commit (lock-file drift caused stash, commit registered correctly on retry). At post-rc1 housekeeping, the cumulative case (8 reinforcements in single session — PRs #989, #996, #1007, #1008, #1014, #1015, #1021, #1024) was overwhelming, and **Action #122 was implemented at the skill level**: a new "MANDATORY Post-Commit Verification (Action #122)" section landed in `~/.claude/skills/pipeline-run/SKILL.md` documenting the failure mode, the canonical fix (`git commit -m "..." && git log -1 --oneline`), and the "never skip" rationale. The pattern self-validated on its own commit (the skill-update commit chained the verify and immediately confirmed the new commit hash).
 
+> **Count discrepancy noted in reconcile pass**: PR #1024's per-PR retro logged `Pre-commit attempts: 1`, but this milestone finding lists #1024 among the 8 reinforcements. One of those is off by one. Likely the per-PR retro was written after the successful retry and didn't count the stash/restore cycle as a "pre-commit attempt." Not worth re-litigating — the cumulative pattern is what motivated the skill-level fix, and that fix has now landed.
+
 **Action taken**: Action #122 closed (skill-level). Pattern documented in commit `5d2c44b8` to djust-repo RETRO.md.
+
+**6. Six generalizable framework patterns surfaced in per-PR retros but were not in the milestone-level synthesis.** Caught during a post-rc1 reconcile pass that read PRs #1023 + #1024 retros from GitHub (the comment-form retros, since `pr/feedback/retro-{N}.md` files have not been generated for any PR since #993). Six concrete patterns worth promoting framework-wide:
+
+- **Try/finally for error-path cleanup in async UI state** (PR #1023 — `_handleDjSubmit`). A submit handler that throws (network down, server 500, race with reconnect) must still clear pending state in `finally`, otherwise the form stays disabled forever. The "always clear in finally" rule is the canonical shape for any feature that toggles UI state around an async operation.
+- **Sibling-form scope isolation** (PR #1023). `form.querySelectorAll('[dj-form-pending]')` scoped to the submitting form, not `document.querySelectorAll(...)`. Without this, a sibling form's loading state leaks. Generalizes to any DOM-modifying handler: scope to the originating element, not the document.
+- **Forward-compat for unknown attribute values** (PR #1023). `dj-form-pending="future-mode"` silently does nothing instead of throwing. Future-extensible without breaking existing usage. Pattern: validate the modes you know about, no-op for the rest.
+- **Re-run state semantics for stateful decorators** (PR #1024 — `@action`). On entry: clear stale `error` AND stale `result` simultaneously. Templates never see "old success result + new pending state" or "old error + new success result." Pattern locked with two regression tests (error→success and success→error).
+- **Self-init defense for stateful decorator attrs** (PR #1024). If a subclass overrides `__init__` and forgets `super().__init__()`, the decorator initializes `_action_state` on demand instead of `AttributeError`-ing in production. Locked with `test_action_self_initializes_action_state`.
+- **Bare-form + called-form decorator** (PR #1024). `@action` and `@action(description="…")` both work via the standard `if func is None` test pattern. Worth canonicalizing in the framework's decorator-authoring docs.
+
+**Action taken**: Captured here as a milestone finding rather than scattering them per-PR. The deeper process lesson: **`pipeline-retro` Step 2 (read per-PR retros) is non-skippable** — without it, the milestone retro misses the technical-design lessons the per-PR retro author already extracted. Reinforced in this session.
 
 ### Insights
 
