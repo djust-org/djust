@@ -125,6 +125,82 @@ These tools inspect your live Django project. They only work when launched via `
 
 **`add_event_handler(handler_name, params="", decorators="")`** — Generates a single event handler method to paste into an existing view. Supports typed parameters and decorator stacking.
 
+### Live Observability (DEBUG-only, runtime introspection)
+
+These tools (added in v0.4.5) expose the running app's state to an AI
+agent the same way django-debug-toolbar exposes it to a human. They
+require:
+
+- `DEBUG = True`
+- `path("_djust/observability/", include("djust.observability.urls"))`
+  in the project's `urls.py`
+- `LocalhostOnlyObservabilityMiddleware` in `MIDDLEWARE` (rejects any
+  non-loopback caller)
+
+Each tool corresponds 1:1 to an HTTP endpoint under
+`/_djust/observability/` — the MCP wrapper just calls it.
+
+**`get_view_assigns(session_id)`** — Real server-side `self.*` state of
+the mounted LiveView for a given session. Complements
+djust-browser-mcp's client-only `djust_state_diff` with the source of
+truth. Per-attr fallback tags non-serializable values as
+`{"_repr": "...", "_type": "..."}` rather than blanking the whole
+response.
+
+**`get_last_traceback(n=1)`** — Ring-buffered (50) exception log
+populated from `handle_exception()`. Replaces "can you paste the
+terminal?" for ~80% of blind-debugging cases.
+
+**`tail_server_log(since_ms=0, level="INFO")`** — Ring-buffered (500)
+Django + djust log records with `since_ms` and `level` filters.
+`djust.*` is captured at DEBUG and above; `django.*` at WARNING and
+above.
+
+**`get_handler_timings(handler_name="")`** — Per-handler rolling
+100-sample distribution: `min`, `max`, `avg`, `p50`, `p90`, `p99`.
+Reuses the existing `timing["handler"]` measurement; no extra perf
+counters in the request path.
+
+**`get_sql_queries_since(since_ms)`** — Per-event SQL capture via
+`connection.execute_wrappers`. Each query is tagged with
+`(session_id, event_id, handler_name)` plus a `stack_top` that skips
+framework frames so you see your application's call site directly.
+
+**`reset_view_state(session_id)`** — Replay `view.mount()` on the
+registered instance. Clears public attrs and re-invokes
+`mount(stashed_request, **stashed_kwargs)`. Useful between fixture
+replays.
+
+**`eval_handler(session_id, handler_name, params={}, dry_run=True)`** —
+Dry-run a handler against the live view's current state. Returns
+`{before_assigns, after_assigns, delta, result}`. With `dry_run=True`
+(default) a `DryRunContext` blocks side effects:
+
+- `Model.save` / `delete`
+- `QuerySet.update` / `delete` / `bulk_create` / `bulk_update`
+- `send_mail` / `send_mass_mail`
+- `requests.*` and `urllib.request.urlopen`
+
+The first attempt raises `DryRunViolation`; the response surfaces
+`{"blocked_side_effect": "..."}` so the caller knows what was
+attempted. Pass `dry_run_block=False` to record violations without
+blocking. A process-wide lock serializes dry-runs.
+
+**`find_handlers_for_template(template_path)`** — Cross-references a
+template file against every view that uses it. Returns the `dj-*`
+handlers wired in the template AND the diff against the view's
+handler methods, so you can catch dead bindings (template uses
+`dj-click="missing"`) at author time.
+
+**`seed_fixtures(fixture_paths)`** — Subprocess wrapper around
+`manage.py loaddata` for regression-fixture DB setup before a
+`reset_view_state` + `eval_handler` cycle.
+
+> **Security model.** Mirrors django-debug-toolbar: only fires when
+> `DEBUG=True` AND the request originates from `127.0.0.1` / `::1`.
+> Production deployments should leave the `urls.py` include
+> commented-out as a defense-in-depth check beyond `DEBUG=False`.
+
 ## Example
 
 Scaffolding a view with search and pagination:
