@@ -291,8 +291,12 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
     else:
         try:
             body = json.loads(request.body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            return api_error(400, "invalid_json", f"Malformed JSON body: {exc}")
+        except (ValueError, UnicodeDecodeError):
+            # Match observability/views.py:401 — generic message, exception
+            # body logged server-side only. Avoids leaking parser internals
+            # (offsets, snippets of malformed input) to the client. (#1026)
+            logger.exception("djust API: malformed JSON body for %s", sanitize_for_log(view_slug))
+            return api_error(400, "invalid_json", "Malformed JSON body — see server logs")
     if not isinstance(body, dict):
         return api_error(400, "invalid_json", "Request body must be a JSON object")
 
@@ -485,8 +489,11 @@ def dispatch_server_function(
     else:
         try:
             body = json.loads(request.body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as exc:
-            return api_error(400, "invalid_json", f"Malformed JSON body: {exc}")
+        except (ValueError, UnicodeDecodeError):
+            # Match observability/views.py:401 — generic message, exception
+            # body logged server-side only. (#1026)
+            logger.exception("djust API: malformed JSON body for %s", sanitize_for_log(view_slug))
+            return api_error(400, "invalid_json", "Malformed JSON body — see server logs")
         if not isinstance(body, dict):
             return api_error(400, "invalid_json", "Request body must be a JSON object")
         if not body:
