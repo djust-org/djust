@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **py3.14 timing-sensitive CI flake class (v0.7.4, #1016)** —
+  two tests intermittently failed on the py3.14 CI runner only:
+  `python/tests/test_hotreload.py::TestHotReloadMessage::test_hotreload_slow_patch_warning`
+  (PR #1001 caught it once; passed on rerun) and
+  `python/tests/test_realtime_multiuser.py::TestPerformanceBaseline::test_broadcast_latency_scales[10]`
+  (PR #990 caught it once; passed on rerun). py3.12/3.13 passed both
+  attempts in both cases. Two distinct fixes, one PR:
+
+  - **`test_hotreload_slow_patch_warning`**: the original mock used a
+    fixed 6-element `times` array indexed by `time.time()` call
+    count. py3.14 introduced extra `time.time()` calls inside the
+    asyncio scheduler path (some `loop.time()` chains delegate
+    down), so the call count drifted past the array on py3.14 only,
+    leaving every subsequent call returning the last array value
+    (0.15) — which kept the elapsed delta at 0 and prevented the
+    slow-patch warning from firing. Replaced with a phase-based
+    scheme: first two calls return 0.0 (start + render-start), every
+    subsequent call returns 0.15 (render-end / total-end). The
+    slow-patch threshold (>100 ms) is crossed deterministically
+    regardless of how many extra `time.time()` calls the scheduler
+    injects.
+  - **`test_broadcast_latency_scales`**: the dispatch-overhead-only
+    budget was 10 ms. Bumped to 30 ms to absorb py3.14 runner
+    contention variance while still catching genuine regressions
+    (the linear-scaling check in
+    `test_presence_list_scales_linearly` still catches algorithmic
+    O(n) regressions; this test only covers constant-time dispatch
+    overhead). Observed 12× over-budget on py3.14 in PR #990 CI;
+    cleanly under 30 ms on every other recorded run.
+
+  No new dependencies; both fixes are pure test-code changes.
+
 ## [0.7.3rc1] - 2026-04-25
 
 ### Changed
