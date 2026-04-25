@@ -781,6 +781,61 @@ All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run s
 
 ---
 
+## v0.5.2 / v0.5.5 RC churn — drain session second wave (PRs #868–#883, 2026-04-22)
+
+> **RETROACTIVE BACKFILL — written 2026-04-25.** This entry was filled in
+> during the v0.7.3 retro pass after auditing tag-vs-retro coverage. The
+> work below shipped through `v0.5.2rc1` → `v0.5.5rc1` (all cut on
+> 2026-04-22) but never got its own milestone entry — the
+> "Tech-debt drain session" entry above covers PRs #859–#867; the
+> Security arc covers #898+; this entry fills the #868–#883 gap. The
+> "What We Learned" section is intentionally lean: synthesizing
+> in-the-moment learning from `git log` ~3 days later produces
+> historical-record value but not the action-tracker-feeding signal
+> fresh retros capture.
+
+**Date**: 2026-04-22 (single-day RC iteration)
+**Scope**: 11 follow-up PRs continuing the tech-debt drain that started in #859–#867. Shipped through 4 RC cuts (v0.5.2rc1, v0.5.3rc1, v0.5.4rc1, v0.5.5rc1) within ~24 hours as additional fixes landed. Mix of tech-debt close-outs (#869, #870, #873, #875, #876), small-API additions (#871 render_slot via Rust engine, #874 `djust.db.untrack()`), v0.6.0 P1 foundations (#872 pre-minified client.js, #878 declarative UX attrs `dj-mutation` / `dj-sticky-scroll` / `dj-track-static`, #883 WebSocket per-message compression toggle), and one docs PR (#877 block-handler nesting + loader-access).
+**Tests at close**: ~3,200 Python + ~1,200 JS at the time of v0.5.5rc1 (estimate from CHANGELOG; precise number not preserved).
+
+### Issue → PR map (continuation of the drain)
+
+| Cluster | PR | Issues closed / Feature shipped |
+|---|---|---|
+| dep-extractor harness | #869 | #786 (broaden partial-render correctness) |
+| Rust assign-tag handler | #870 | #805 (warn on non-dict return) |
+| render_slot Rust path | #871 | #861 (end-to-end via Rust engine) |
+| **pre-minified client.js** | #872 | v0.6.0 P1 distribution — ~37 KB gzipped target |
+| template dep-tracking | #873 | #787 (filter-arg deps), #806 (for-iterable getattr) |
+| `djust.db.untrack()` | #874 | #809 (signal-receiver cleanup helper) |
+| PostgresNotifyListener | #875 | #808 (cross-loop-use guard) |
+| `assign_async` cancellation | #876 | #793 (concurrent same-name) |
+| docs: block-handler nesting | #877 | #803, #804 (loader-access surface) |
+| **declarative UX attrs** | #878 | v0.6.0 — `dj-mutation`, `dj-sticky-scroll`, `dj-track-static` |
+| **WebSocket compression** | #883 | v0.6.0 — per-message-deflate toggle |
+
+### What We Learned (retroactive)
+
+**1. The original drain session's pattern continued landing follow-ups for ~24 hours.** PRs #859–#867 were the "first wave" (issue clusters with explicit tracker rows); #868–#878 were the "second wave" (smaller standalones + Rust-path fixes that needed the first wave landed first). #883 was a v0.6.0 feature that piggybacked on the same RC train. The v0.5.2 / v0.5.3 / v0.5.4 / v0.5.5 RC tags are essentially "mid-drain checkpoints" — useful for downstream pinning but not separate milestones.
+
+**Action taken** (retroactive): None. Pattern observation only — drains naturally produce multiple RC cuts during the same active period. Future drain reporting should bundle them rather than treat each RC tag as a separate milestone-shaped event.
+
+**2. v0.6.0 features shipped under v0.5.x RC tags.** PRs #872 (pre-minified client.js), #878 (declarative UX attrs), and #883 (WS compression) were all explicitly tagged "v0.6.0" in their commit subjects but rode the v0.5.x RC train because the larger v0.6.0 milestone wasn't yet cut. This is a normal pattern for "early v0.6.0 work landing on the v0.5.x branch" but worth noting: the v0.6.0 retro at PR #885+ correctly synthesizes those features as v0.6.0 work, so the RC tag they happened to ship under is essentially incidental.
+
+**Action taken** (retroactive): None. The v0.6.0 retro's "PRs #885–#973" range is canonical for v0.6.0 features regardless of which RC tag they shipped under. This entry exists for tag-traceability; the feature-narrative belongs in the v0.6.0 retro.
+
+### Insights
+
+- **RC churn during a single drain is normal.** Five v0.5.x RC tags in 24 hours (v0.5.2rc1 → v0.5.6rc1) reflects the rapid iteration shape of the late-v0.5.x sprint, not five separate milestones.
+- **Forward-shipping pattern**: features tagged "v0.6.0" landed in v0.5.x RCs because the milestone wasn't cut. Future practice should either (a) cut a tag at the v0.5.x boundary BEFORE landing v0.6.0 features, or (b) accept the forward-shipping and document it in the v0.6.0 retro (which is what happened — PRs #872, #878, #883 are correctly counted under v0.6.0).
+- **Backfilled retros have lower signal.** This entry is intentionally lean. Compare to the fresh retros above (each with 3–6 "What We Learned" findings, action tracker rows, review stats) — the in-the-moment retro practice captures things that a `git log` mining session can't reproduce. Honest acknowledgment of the cost of deferring retros.
+
+### Status
+
+✅ Tag-coverage gap closed. v0.5.2rc1, v0.5.3rc1, v0.5.4rc1, v0.5.5rc1 RC tags now have a retro entry that explains what shipped under them. The v0.5.6rc1 → v0.5.7 / v0.6.0 work (PRs #885+) is covered in the existing v0.6.0 retro and Security & Code-Scanning Cleanup arc entry below.
+
+---
+
 ## Security & Code-Scanning Cleanup arc (PRs #898–#931, 2026-04-22/23)
 
 **Date**: 2026-04-22 / 2026-04-23
