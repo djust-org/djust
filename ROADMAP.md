@@ -150,6 +150,11 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P1** | `djust.C011` doesn't catch stale/placeholder `output.css` (#1003) | `_check_missing_compiled_css` only tests `os.path.exists` — a committed placeholder passes; site serves without Tailwind utilities silently | v0.7.3 |
 | **P1** | `djust.A070` false positive on `{% verbatim %}`-wrapped `dj_activity` examples (#1004) | A070 scans template source as raw text and fires on docs/marketing examples wrapped in `{% verbatim %}` | v0.7.3 |
 | **P2** | `djust_theming.W001` should only contrast-check the active pack (#1005) | 65+ built-in packs produce hundreds of warnings on every `manage.py check` — bad S/N ratio means real warnings get ignored | v0.7.3 |
+| **P2** | py3.14 timing-sensitive CI flake class (#1016) | `test_hotreload_slow_patch_warning` + `test_broadcast_latency_scales[10]` flake on py3.14 only — pick per-runner tolerance / `@flaky(reruns=2)` / non-required matrix slot | v0.7.4 |
+| **P2** | docs: `_FRAMEWORK_INTERNAL_ATTRS` PR-checklist reminder (#1017) | ADR-012 mitigation — one bullet in `PULL_REQUEST_CHECKLIST.md` | v0.7.4 |
+| **P2** | docs: "misleading existing tests" pattern note (#1018) | One paragraph in `PULL_REQUEST_CHECKLIST.md` — when fixing a check, audit existing tests whose fixtures exemplify the broken behavior | v0.7.4 |
+| **P2** | docs: whitespace-preserving redaction pattern in check-authoring guide (#1019) | New section documenting the `_strip_verbatim_blocks` pattern as canonical reference for line-number-aware regex scanners | v0.7.4 |
+| **P2** | docs: scope-decision helper extraction pattern in check-authoring guide (#1020) | New section documenting `_contrast_check_scope` / `_presets_to_check` as canonical reference for config-driven check scope | v0.7.4 |
 
 ---
 
@@ -1082,6 +1087,58 @@ installing project — they're discovered purely because they ship
 with djust. Fix: scope contrast checks to the active pack (per
 `DJUST_THEMING_ACTIVE_PACK` setting) instead of iterating all
 discovered packs.
+
+### Milestone: v0.7.4 — Retro Follow-ups (process & docs)
+
+*Goal:* Land the five tech-debt items filed by the v0.7.2 + v0.7.3
+milestone retros. All five are small (one is test-infra; four are
+docs-only). Likely shippable as 2 PRs: one test-infra (#1016) +
+one bundled docs PR covering the four checklist/guide additions
+(#1017 + #1018 + #1019 + #1020 — all touch
+`docs/PULL_REQUEST_CHECKLIST.md` or `docs/dev/check-authoring.md`).
+
+| Priority | Item | Status |
+| --- | --- | --- |
+| **P2** | py3.14 timing-sensitive CI flake class (#1016) | Not started |
+| **P2** | docs: `_FRAMEWORK_INTERNAL_ATTRS` PR-checklist reminder (#1017) | Not started |
+| **P2** | docs: "misleading existing tests" pattern note (#1018) | Not started |
+| **P2** | docs: whitespace-preserving redaction pattern in check-authoring guide (#1019) | Not started |
+| **P2** | docs: scope-decision helper extraction pattern in check-authoring guide (#1020) | Not started |
+
+**#1016 — py3.14 timing-sensitive CI flake class.** From Action
+Tracker #133. `test_hotreload_slow_patch_warning` (PR #1001) and
+`test_broadcast_latency_scales[10]` (PR #990) both flake on py3.14
+only — wall-clock threshold assertions and warning-debounce
+timeouts hit the threshold occasionally on the py3.14 CI runner.
+Pick one: per-runner tolerance / `@pytest.mark.flaky(reruns=2)` /
+move py3.14 to non-required check.
+
+**#1017 — `_FRAMEWORK_INTERNAL_ATTRS` PR-checklist reminder.** From
+ADR-012 / Action Tracker #134. One bullet in
+`docs/PULL_REQUEST_CHECKLIST.md` reminding reviewers to verify any
+new framework-set attribute on `LiveView` / `LiveComponent` was also
+added to `_FRAMEWORK_INTERNAL_ATTRS`. Mitigation for ADR-012's
+accepted maintenance burden.
+
+**#1018 — "misleading existing tests" pattern note.** From PR #1008
+/ Action Tracker #135. One paragraph in
+`docs/PULL_REQUEST_CHECKLIST.md` documenting that when fixing a
+check or invariant, existing tests whose fixtures exemplify the
+broken behavior must be UPDATED, not just augmented with new tests.
+A test that passes for the wrong reason is worse than no test.
+
+**#1019 — whitespace-preserving redaction pattern in check-authoring
+guide.** From PR #1014 / Action Tracker #136. One section in
+`docs/dev/check-authoring.md` (or `docs/CONTRIBUTING.md`) titled
+"Ignoring template regions in regex scanners" documenting the
+pattern (replace body with whitespace, keep newlines) with
+`_strip_verbatim_blocks` as canonical example.
+
+**#1020 — scope-decision helper extraction pattern in check-authoring
+guide.** From PR #1015 / Action Tracker #137. One section titled
+"Config-driven check scope" documenting the pattern (extract scope
+decision into a named helper, safe-default contract) with
+`_contrast_check_scope` / `_presets_to_check` as canonical examples.
 
 ### Milestone: v0.8.0 — Server Actions, Async Streams & Form Patterns (NEW)
 
