@@ -123,6 +123,10 @@ dev-build: ## Build Rust extensions in development mode
 
 ##@ Testing & Quality
 
+.PHONY: roadmap-lint
+roadmap-lint: ## Mechanical ROADMAP-vs-codebase drift check (use pipeline-roadmap-audit skill for semantic audit)
+	@.venv/bin/python scripts/roadmap-lint.py $(if $(VERBOSE),--verbose,)
+
 .PHONY: test
 test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
