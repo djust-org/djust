@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Inline radio buttons via `data-dj-inline` attribute (v0.7.2,
+  #991)** — opt-in horizontal layout for `forms.RadioSelect` fields
+  without writing any new Python. Users add
+  `widget=forms.RadioSelect(attrs={"data-dj-inline": "true"})` to a
+  `ChoiceField` and load `{% static 'djust/djust-forms.css' %}` once
+  in their base template; the bundled stylesheet uses the CSS
+  `:has()` parent selector (Selectors Level 4 — Chromium 105+,
+  Safari 15.4+, Firefox 121+, all stable since 2023) to walk up from
+  each marked `<input type="radio">` and lay out its containing
+  wrapper as `inline-flex` with sensible spacing, full keyboard
+  navigation, and the browser's native focus ring preserved.
+  Composes with anything that renders a Django `RadioSelect`
+  (plain `forms.Form`, `LiveViewForm`, ModelForms, Django admin,
+  djust-theming form templates) — the same `[data-dj-inline]`
+  selector targets both the stock `<ul><li>` markup and
+  djust-theming's `<div>`-wrapped variant. Skip-able: don't link the
+  CSS file → the attribute is inert. Override-able: write your own
+  CSS rule keyed on `[data-dj-inline]` for any visual treatment
+  (segmented controls, CSS Grid columns, etc.). New file:
+  `python/djust/static/djust/djust-forms.css`. Documented in a new
+  "Inline Radio Buttons" section of `docs/website/guides/forms.md`
+  with the API, the why-data-attribute reasoning, and examples for
+  customizing the visual treatment + multi-field forms. Covered by
+  **12 regression tests** in `tests/test_inline_radios_991.py` (3
+  Django-render contract tests + 5 CSS-ships-and-targets-correctly
+  tests + 2 backwards-compat tests + 2 edge cases).
+
 ### Decisions
 
 - **ADR-012: `_FRAMEWORK_INTERNAL_ATTRS` filter is the right tool;
