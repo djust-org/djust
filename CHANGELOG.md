@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dj-form-pending` attribute — React 19 `useFormStatus` equivalent
+  (v0.8.0)** — any element nested inside a `<form dj-submit>` can
+  declare `dj-form-pending="hide|show|disabled"` and react
+  automatically when the ancestor form's submit handler is in-flight.
+  No prop drilling, no per-button wiring, no client-side state. The
+  form itself gets a `data-djust-form-pending="true"` attribute while
+  pending so CSS selectors (`form[data-djust-form-pending] .spinner`)
+  can hook in without JS. Modes:
+
+  - **`hide`** — element is hidden via the `hidden` attribute while
+    pending (idle label that disappears during submit)
+  - **`show`** — element is hidden by default and visible while
+    pending (loading spinner / "Saving…" text)
+  - **`disabled`** — `disabled = true` while pending; original
+    disabled state restored on resolve. User-disabled elements stay
+    disabled (the helper tracks pre-pending state in
+    `data-djust-form-pending-was-disabled`).
+
+  State is set BEFORE the network round-trip and cleared in a
+  `finally` block so it always resolves regardless of error. Scope
+  isolation: only `[dj-form-pending]` descendants of the actually-
+  submitting form react; sibling `<form dj-submit>` forms on the
+  same page are unaffected. Unknown modes are silently ignored
+  (forward-compatible). Implemented in `09-event-binding.js` —
+  `_setFormPending(form, pending)` helper + 1-line wiring into
+  `_handleDjSubmit`. Bundle delta: ~80 B gzipped. Covered by **8 JS
+  regression tests** in `tests/js/dj-form-pending.test.js`
+  (data-djust-form-pending toggle, hide/show/disabled modes,
+  user-disabled preservation, plain-form no-op, scope isolation,
+  error-path cleanup, unknown-mode forward-compat).
+
 ## [0.7.4rc1] - 2026-04-25
 
 ### Documentation

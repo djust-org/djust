@@ -328,6 +328,76 @@ function _applyDisableWith(element) {
     element.disabled = true;
 }
 
+/**
+ * Toggle pending state on a `<form dj-submit>` and all `[dj-form-pending]`
+ * descendants. v0.8.0 — React 19 `useFormStatus` equivalent (#991 follow-up):
+ * any element nested inside a form-with-dj-submit can declare
+ * `dj-form-pending="hide|show|disabled"` and react automatically when its
+ * ancestor form's submit handler is in-flight.
+ *
+ * Modes:
+ *   - `hide`     — hidden while pending, visible otherwise
+ *   - `show`     — visible while pending, hidden otherwise
+ *   - `disabled` — `disabled=true` while pending, original state otherwise
+ *
+ * The form itself gets a `data-djust-form-pending="true"` attribute so CSS
+ * selectors (`form[data-djust-form-pending] .submit-spinner`) can hook in
+ * without JS. Removed when the submission resolves (success or error).
+ *
+ * @param {HTMLFormElement} form - Form being submitted
+ * @param {boolean} pending - true at submit start, false on resolve
+ */
+function _setFormPending(form, pending) {
+    if (!form) return;
+    if (pending) {
+        form.setAttribute('data-djust-form-pending', 'true');
+    } else {
+        form.removeAttribute('data-djust-form-pending');
+    }
+    const targets = form.querySelectorAll('[dj-form-pending]');
+    for (const el of targets) {
+        const mode = el.getAttribute('dj-form-pending');
+        if (mode === 'hide') {
+            // Hidden while pending. Use the `hidden` attribute (not display:none)
+            // so user CSS overrides keep working.
+            if (pending) {
+                el.setAttribute('hidden', '');
+            } else {
+                el.removeAttribute('hidden');
+            }
+        } else if (mode === 'show') {
+            // Visible while pending — opposite of `hide`.
+            if (pending) {
+                el.removeAttribute('hidden');
+            } else {
+                el.setAttribute('hidden', '');
+            }
+        } else if (mode === 'disabled') {
+            // `disabled` is property-only on form controls; setAttribute also
+            // works for non-form elements (e.g. <a> with aria-disabled wiring).
+            if (pending) {
+                if (!el.hasAttribute('data-djust-form-pending-was-disabled')) {
+                    el.setAttribute(
+                        'data-djust-form-pending-was-disabled',
+                        el.disabled ? 'true' : 'false',
+                    );
+                }
+                el.disabled = true;
+            } else {
+                const wasDisabled = el.getAttribute('data-djust-form-pending-was-disabled');
+                if (wasDisabled !== null) {
+                    el.disabled = wasDisabled === 'true';
+                    el.removeAttribute('data-djust-form-pending-was-disabled');
+                } else {
+                    el.disabled = false;
+                }
+            }
+        }
+        // Unknown modes are silently ignored — future-extensible without
+        // breaking forward compat.
+    }
+}
+
 // ============================================================================
 // Delegated Event Handlers
 // ============================================================================
@@ -534,6 +604,13 @@ async function _handleDjSubmit(element, e) {
         _applyDisableWith(e.submitter);
     }
 
+    // v0.8.0 — `dj-form-pending` (React 19 useFormStatus equivalent):
+    // toggle visibility/disabled-state on every nested element that declared
+    // a `dj-form-pending="hide|show|disabled"` mode. Set BEFORE the network
+    // round-trip so the loading UI flips immediately; cleared in `finally`
+    // so it always resolves regardless of error.
+    _setFormPending(element, true);
+
     const formData = new FormData(element);
     const params = Object.fromEntries(formData.entries());
 
@@ -548,7 +625,11 @@ async function _handleDjSubmit(element, e) {
     // Pass target element for optimistic updates (Phase 3)
     params._targetElement = element;
 
-    await handleEvent(submitHandler, params);
+    try {
+        await handleEvent(submitHandler, params);
+    } finally {
+        _setFormPending(element, false);
+    }
 }
 
 /**
