@@ -1198,8 +1198,18 @@ class TodoView(LiveView):
 
 **Medium (P2)** — larger but still v0.8.1-eligible:
 
-- **#1031** — Version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully. Back-compat protocol work.
-- **#1032** — Dashboard→Dashboard re-mount limitation in sticky LiveView demo. `{% live_render %}` should auto-detect preserved stickies.
+- ~~**#1031**~~ ✅ — Version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully. **Shipped in PR #1068.**
+- ~~**#1032**~~ — Dashboard→Dashboard re-mount limitation in sticky LiveView demo. **Closed as deferred to v0.9.0+ feature item** — requires server-side template-tag intelligence + client preserved-sticky tracking; non-trivial. See v0.9.0 backlog below.
+
+### Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)
+
+Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:
+
+- **Component-level time-travel** (was #1041) — Phase 1 records against parent; full component capture. v0.6.2+ candidate.
+- **Forward-replay through branched timeline** (was #1042) — Redux DevTools parity. v0.6.2+ candidate.
+- **Phase 2 streaming** (was #1043) — lazy-child render + true server overlap. v0.6.1 shipped Phase 1 (transport-layer); Phase 2 is the deferred remainder.
+- **ADR-006 AI-generated UIs** (was #1044) — deferred due to AssistantMixin/LLM-provider dependency chain.
+- **`{% live_render %}` auto-detect preserved stickies** (was #1032) — server-side template-tag intelligence to emit slot markers (`dj-sticky-slot`) when the client already holds the sticky. Removes the Dashboard→Dashboard re-mount limitation in the sticky LiveView demo. Requires: (a) server detection mechanism (cookie/header/WS handshake carrying preserved-sticky IDs); (b) tag conditional output; (c) test matrix covering return-trip vs fresh-tab.
 
 ---
 
