@@ -436,6 +436,11 @@ class LiveViewWebSocket {
                 // [dj-view] element, track per-target VDOM versions, and run
                 // reinitAfterDOMUpdate() ONCE after the batch is applied.
                 this.viewMounted = true;
+                // #1031: clear the lazy-hydration in-flight batch so a late
+                // arriving error frame doesn't trigger a phantom fallback.
+                if (window.djust && window.djust.lazyHydration) {
+                    window.djust.lazyHydration.inFlightBatch = null;
+                }
                 const views = Array.isArray(data.views) ? data.views : [];
                 const failed = Array.isArray(data.failed) ? data.failed : [];
                 if (!window.djust._clientVdomVersions) {
@@ -584,6 +589,19 @@ class LiveViewWebSocket {
                 if (data.traceback) {
                     // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
+                }
+
+                // #1031: if the error is about mount_batch (older server
+                // doesn't recognize the frame type), fall back to per-view
+                // mounts so the lazy-hydrated views still come up.
+                if (
+                    typeof data.error === 'string'
+                    && /mount_batch|unknown\s+message\s+type/i.test(data.error)
+                    && window.djust && window.djust.lazyHydration
+                    && typeof window.djust.lazyHydration.handleMountBatchFallback === 'function'
+                ) {
+                    window.djust.lazyHydration.handleMountBatchFallback();
+                    break;
                 }
 
                 // Non-recoverable errors (e.g. server restart lost state) — auto-reload
