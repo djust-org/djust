@@ -1,0 +1,145 @@
+name: Weekly Real-Cloud Upload-Writer Integration
+
+# Closes #963. All v0.5.7 upload-writer tests mock the SDKs; happy-path
+# end-to-end verification against real AWS / GCP / Azure is missing and
+# silent regressions have slipped through before (PR #958 retro).
+#
+# This job runs a tiny happy-path suite weekly: upload a 1 MB blob,
+# verify it's present, delete it. Matrix over the three supported
+# writers (`S3PresignedWriter`, `GCSWriter`, `AzureBlobWriter`);
+# credentials come from GitHub encrypted secrets so contributors' PRs
+# never get them. The job is NOT required for PR merge — it runs
+# on-schedule only and opens an issue on failure so the failure is
+# visible without blocking day-to-day merges.
+#
+# Scope: smoke test, not performance benchmark. Each matrix slot
+# uploads one 1 MB file, reads it back, deletes it. Total cloud cost
+# is a few cents per week per provider.
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC — before the US west-coast workday,
+    # so failures are visible when maintainers start the week.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'Run only this provider (aws/gcp/azure), or "all"'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - aws
+          - gcp
+          - azure
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: weekly-cloud-uploads
+  cancel-in-progress: false
+
+jobs:
+  cloud-integration:
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't abort the other providers if one fails — each provider's
+      # outage is independent and we want to know which ones are green.
+      fail-fast: false
+      matrix:
+        provider: [aws, gcp, azure]
+    steps:
+      - name: Check dispatched-provider filter
+        id: filter
+        run: |
+          requested='${{ github.event.inputs.provider }}'
+          if [ -z "$requested" ] || [ "$requested" = "all" ] || [ "$requested" = "${{ matrix.provider }}" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.filter.outputs.run == 'true'
+
+      - name: Set up Python
+        if: steps.filter.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        if: steps.filter.outputs.run == 'true'
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e '.[dev,uploads-aws,uploads-gcp,uploads-azure]' 2>/dev/null \
+            || uv pip install --system -e '.[dev]' boto3 google-cloud-storage azure-storage-blob
+          # The `[uploads-*]` extras are reserved for v0.7.x — fall back
+          # to direct-install of the SDKs if the extras don't exist yet.
+
+      - name: Run AWS integration smoke
+        if: steps.filter.outputs.run == 'true' && matrix.provider == 'aws'
+        env:
+          DJUST_CLOUD_INTEGRATION: aws
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUD_INT_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUD_INT_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.CLOUD_INT_AWS_REGION }}
+          DJUST_CLOUD_INT_AWS_BUCKET: ${{ secrets.CLOUD_INT_AWS_BUCKET }}
+        run: |
+          pytest tests/cloud_integration/test_s3_real.py -v --no-header -p no:cacheprovider
+
+      - name: Run GCP integration smoke
+        if: steps.filter.outputs.run == 'true' && matrix.provider == 'gcp'
+        env:
+          DJUST_CLOUD_INTEGRATION: gcp
+          DJUST_CLOUD_INT_GCP_BUCKET: ${{ secrets.CLOUD_INT_GCP_BUCKET }}
+          # GCP creds via workload-identity or JSON key — prefer JSON
+          # key for simplicity; rotate quarterly.
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.CLOUD_INT_GCP_SA_JSON }}
+        run: |
+          if [ -n "$GOOGLE_APPLICATION_CREDENTIALS_JSON" ]; then
+            echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > /tmp/gcp-sa.json
+            export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa.json
+          fi
+          pytest tests/cloud_integration/test_gcs_real.py -v --no-header -p no:cacheprovider
+
+      - name: Run Azure integration smoke
+        if: steps.filter.outputs.run == 'true' && matrix.provider == 'azure'
+        env:
+          DJUST_CLOUD_INTEGRATION: azure
+          AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.CLOUD_INT_AZURE_CONNECTION_STRING }}
+          DJUST_CLOUD_INT_AZURE_CONTAINER: ${{ secrets.CLOUD_INT_AZURE_CONTAINER }}
+        run: |
+          pytest tests/cloud_integration/test_azure_real.py -v --no-header -p no:cacheprovider
+
+      - name: Open issue on failure
+        if: failure() && steps.filter.outputs.run == 'true' && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const provider = '${{ matrix.provider }}';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `weekly-cloud-uploads: ${provider} matrix slot failed`;
+            const body = [
+              `The weekly real-cloud upload-writer smoke test for **${provider}** failed.`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `This is a scheduled job (see .github/workflows/weekly-cloud-uploads.yml)`,
+              `that exercises the v0.5.7 upload-writer happy path against a real`,
+              `cloud backend. Failure means **either** the writer is broken **or** the`,
+              `credentials have expired / the bucket was deleted.`,
+              ``,
+              `First triage step: re-run via workflow_dispatch and confirm it's a real`,
+              `writer regression, not a credential issue.`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['tech-debt', 'cloud-integration'],
+            });
