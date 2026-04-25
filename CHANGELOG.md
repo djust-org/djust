@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Regression tests locking literal filter-arg quote stripping (#1081)** — issue
+  reported `{{ d|date:"M d, Y" }}` rendering as `&quot;Apr 25, 2026&quot;` (literal
+  double-quotes wrapping the result) and `{{ x|default:"fallback" }}` rendering
+  as `&quot;fallback&quot;`. Investigation across all renderer code paths
+  confirmed the existing `strip_filter_arg_quotes` helper (landed v0.5.2rc1 via
+  #787) is invoked at every filter-application site:
+  `render_node_with_loader` (Variable + InlineIf nodes, both call sites at
+  `crates/djust_templates/src/renderer.rs:271,328`) and `get_value` for inline
+  filter chains (renderer.rs:1556 — inline `arg_str = arg_str[1..len-1]` strip).
+  No reproducible code path produces the reported output on `main` (= v0.8.3rc1).
+  New `tests/unit/test_filter_literal_args_1081.py` adds 17 cases covering every
+  literal-arg shape from the issue body and follow-up comments: `|date` with
+  `"M d, Y"` / `"F j, Y"` / single-quoted format / dotted-path field access;
+  `|default` with simple word / multi-word / slash / em-dash / dash / "No" /
+  single-quoted / truthy passthrough / None fallback; chains
+  (`|date:"…"|default:"…"`, `|default:"…"|upper`); HTML attribute context
+  (where any leftover literal quote would surface as `&quot;`). Locks the
+  invariant against future renderer refactors so the JSON-quoting class of bug
+  cannot silently re-emerge.
+
 ## [0.8.3rc1] - 2026-04-25
 
 ### Added
