@@ -46,7 +46,7 @@ SKIP_SECTIONS = {
 STOPWORDS = {
     "the", "and", "or", "of", "for", "to", "in", "on", "with", "from",
     "via", "by", "at", "an", "a", "is", "are", "be", "as", "if", "not",
-    "via", "into", "out", "up", "down", "over", "across",
+    "into", "out", "up", "down", "over", "across",
 }
 
 # Code paths that count as "shipped". Skip docs, ROADMAP itself, retros, CHANGELOG.

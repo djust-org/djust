@@ -27,6 +27,11 @@ else
     if [ -z "$changed_files" ]; then
         exit 0
     fi
+    # Note: xargs -I {} runs one grep per file. Single-file grep is intentional —
+    # it preserves the file path in the output and keeps line numbers accurate
+    # per file. djust PR sizes are small enough (typically <50 changed .py files)
+    # that the per-file overhead is negligible. Don't "optimize" this to a single
+    # grep call without preserving filename:line:match formatting.
     matches=$(echo "$changed_files" | xargs -I {} grep -HnE "$PATTERN" {} 2>/dev/null || true)
 fi
 
