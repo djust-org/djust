@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2rc1] - 2026-04-25
+
 ### Added
 
 - **`{% theme_css_link %}` cache-busting helper tag (v0.8.2 drain — Group T, closes #1012)** —
