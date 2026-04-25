@@ -287,6 +287,68 @@ class TestS3EventWebhook:
         resp = s3_event_webhook(req)
         assert resp.status_code == 200
 
+    # ------------------------------------------------------------------
+    # #964 — key_template UUID-prefix convention
+    # ------------------------------------------------------------------
+    #
+    # parse_s3_event extracts upload_id by finding the first
+    # UUID-shaped path segment in the key. When the app's
+    # key_template does NOT produce such a segment (e.g. legacy
+    # `my-uploads/2024/foo.bin`), upload_id silently falls back to
+    # the full key and the hook registered by the app's upload-id
+    # won't match. A DEBUG log entry makes this diagnosable.
+
+    def test_parse_s3_event_no_uuid_segment_emits_debug_log(self, caplog):
+        """#964: key without UUID segment → upload_id falls back to full key
+        AND a DEBUG log is emitted so the developer can diagnose a
+        silent `hook not firing` report."""
+        import logging as _logging
+
+        key = "uploads/2024/legacy/foo.bin"  # no UUID segment
+        payload = {"Records": [{"s3": {"object": {"key": key, "size": 1, "eTag": "t"}}}]}
+
+        with caplog.at_level(_logging.DEBUG, logger="djust.contrib.uploads.s3_events"):
+            got = parse_s3_event(payload)
+
+        assert got[0]["upload_id"] == key, "fallback should be the full key"
+        assert "no UUID-shaped segment" in caplog.text
+        assert key in caplog.text, "DEBUG log must name the offending key"
+
+    def test_parse_s3_event_uuid_segment_no_debug_log(self, caplog):
+        """Happy path: key follows the convention → no DEBUG log fires.
+
+        Locks the inverse of the previous test — we don't want the
+        warning on every delivery, only when the convention is
+        broken."""
+        import logging as _logging
+
+        uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        key = f"uploads/{uid}/my_file.bin"
+        payload = {"Records": [{"s3": {"object": {"key": key, "size": 1, "eTag": "t"}}}]}
+
+        with caplog.at_level(_logging.DEBUG, logger="djust.contrib.uploads.s3_events"):
+            got = parse_s3_event(payload)
+
+        assert got[0]["upload_id"] == uid
+        assert "no UUID-shaped segment" not in caplog.text
+
+    def test_parse_s3_event_uuid_segment_not_first(self, caplog):
+        """The scan is tolerant of leading non-UUID segments — the
+        first UUID-shaped segment anywhere in the path wins. Locks
+        the behavior documented in the module docstring ('both
+        ``uploads/<uuid>/...`` and ``<tenant>/<uuid>/...`` work')."""
+        import logging as _logging
+
+        uid = "11112222-3333-4444-5555-666677778888"
+        key = f"tenant-foo/{uid}/file.bin"
+        payload = {"Records": [{"s3": {"object": {"key": key, "size": 1, "eTag": "t"}}}]}
+
+        with caplog.at_level(_logging.DEBUG, logger="djust.contrib.uploads.s3_events"):
+            got = parse_s3_event(payload)
+
+        assert got[0]["upload_id"] == uid
+        assert "no UUID-shaped segment" not in caplog.text
+
 
 # ----------------------------------------------------------------------
 # Error taxonomy smoke test — keeps the root import path live

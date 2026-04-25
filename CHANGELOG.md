@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **`key_template` UUID-prefix convention for `s3_events` (v0.7.2,
+  #964)** — `djust.contrib.uploads.s3_events.parse_s3_event` extracts
+  `upload_id` by finding the first UUID-shaped path segment in the
+  S3 object key; apps whose `key_template` doesn't produce such a
+  segment silently fall back to the full key as `upload_id`, and
+  hooks registered against the UUID then don't fire. This was the
+  #1 source of "my hook isn't being called" reports from v0.5.7+
+  users. Fix: (a) the module docstring now documents the convention
+  prominently with two recommended `key_template` shapes
+  (`uploads/<uuid>/<filename>` and `<tenant>/<uuid>/<filename>`);
+  (b) a `DEBUG` log entry fires on the
+  `djust.contrib.uploads.s3_events` logger whenever fallback
+  happens, naming the offending key — so enabling `DEBUG` logging
+  once is enough to diagnose a silent hook; (c) a "Key-template
+  convention for `s3_events`" section has been added to
+  `docs/website/guides/uploads.md` with a debugging recipe and a
+  pointer to the "custom upload-id routing" escape hatch (via
+  `x-amz-meta-upload-id` / JWT / DB lookup). Covered by **3 new
+  regression tests** in `tests/test_presigned_s3_820.py` (no-UUID
+  fallback + DEBUG log, happy path emits no log, UUID segment
+  position doesn't matter).
+
 ### Fixed
 
 - **Rust renderer honors `__str__` key on serialized model dicts

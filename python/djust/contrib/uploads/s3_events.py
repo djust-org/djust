@@ -149,10 +149,40 @@ def parse_s3_event(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             ...
         ]
 
-    ``upload_id`` is extracted from the S3 object key's first path
-    segment if it looks UUID-shaped; otherwise it's the full key. Apps
-    that embed upload_id elsewhere (e.g. x-amz-meta-upload-id) can
-    parse ``payload`` themselves and bypass this helper.
+    Key-template convention (#964)
+    ------------------------------
+
+    ``upload_id`` is extracted from the S3 object key by finding the
+    **first path segment that looks UUID-shaped** (32-36 hex/dash
+    characters). Apps that follow the convention — i.e. include a
+    UUID as a leading path component — get automatic upload-id
+    routing with no custom parsing.
+
+    Recommended key template::
+
+        uploads/<upload_id_uuid>/<original_filename>
+
+    or, when bucketing by tenant::
+
+        <tenant_id>/<upload_id_uuid>/<original_filename>
+
+    Both work because ``parse_s3_event`` scans **every** segment, not
+    just the first. The first UUID-shaped segment wins.
+
+    If no path segment looks UUID-shaped, ``upload_id`` **silently
+    falls back to the full key** and a DEBUG log entry is emitted
+    (``djust.contrib.uploads.s3_events`` logger). The fallback is
+    strictly a best-effort — your hook registered via
+    :func:`register_upload_hook` will receive the full key as the
+    ``upload_id`` and will likely not match. If you're debugging a
+    "hook not firing" report, enable DEBUG logging on this module
+    and re-run the webhook delivery; the missing UUID segment will
+    show up in the log.
+
+    Apps that embed upload_id elsewhere (e.g. ``x-amz-meta-upload-id``
+    header, a registry table, a signed JWT in the key prefix) should
+    call their own parser and bypass this helper entirely — see the
+    "Custom upload-id routing" section of the uploads guide.
     """
     import re as _re
 
@@ -175,13 +205,30 @@ def parse_s3_event(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         key = obj.get("key", "")
         size = int(obj.get("size", 0))
         etag = obj.get("eTag", "").strip('"')
-        # Derive upload_id from first path segment if UUID-shaped.
+        # Derive upload_id from first UUID-shaped path segment. If
+        # none matches, fall back to the full key and emit a DEBUG
+        # log entry — the app is violating the documented
+        # key_template convention and its hook will likely not match.
+        # See module docstring + docs/website/guides/uploads.md
+        # "Key-template convention for s3_events" for the template to
+        # follow.
         segments = key.split("/")
         upload_id = key
+        matched_uuid = False
         for seg in segments:
             if uuid_re.match(seg):
                 upload_id = seg
+                matched_uuid = True
                 break
+        if not matched_uuid:
+            logger.debug(
+                "S3 webhook: no UUID-shaped segment in key %s — "
+                "falling back to full key as upload_id. App must "
+                "either follow the documented key_template convention "
+                "('uploads/<upload_id_uuid>/<filename>') or register "
+                "hooks against the full key.",
+                key,
+            )
         out.append(
             {
                 "upload_id": upload_id,
