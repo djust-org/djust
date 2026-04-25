@@ -1201,6 +1201,23 @@ class TodoView(LiveView):
 - ~~**#1031**~~ ✅ — Version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully. **Shipped in PR #1068.**
 - ~~**#1032**~~ — Dashboard→Dashboard re-mount limitation in sticky LiveView demo. **Closed as deferred to v0.9.0+ feature item** — requires server-side template-tag intelligence + client preserved-sticky tracking; non-trivial. See v0.9.0 backlog below.
 
+### Milestone: v0.8.2 — Theming Polish & Docs Cleanup (5 issues from docs.djust.org)
+
+*Goal:* Process 5 in-scope GitHub issues surfaced by docs.djust.org's link crawl + theming testing. 4 of 5 are theming-cluster (`djust_theming/` package); 1 is pure docs cleanup. All originally filed as `bug` or `enhancement` (not `tech-debt`) and outside the v0.8.1 reconcile drain scope.
+
+**Group T — Theming polish (P1 bug + P1 bug + P2 enh + P2 enh)** — bundle, single PR:
+
+- **#1011** (bug, P1) — `.card` / `.alert` in `djust_theming/static/djust_theming/css/components.css` should set `overflow: hidden` to keep child borders inside the rounded corners. ~2 LOC.
+- **#1012** (bug, P1) — `theme_css_view` `Cache-Control` insufficient: Chrome ignores `Vary: Cookie` and serves stale per-pack CSS. Add `{% theme_css_link %}` helper tag that emits cache-busting URL params (`?p=djust&m=dark`) so different pack/mode = different URL. ~30 LOC.
+- **#1009** (enhancement, P2) — Ship `djust_theming/static/djust_theming/css/prose.css` so sites using `@tailwindcss/typography` don't have to re-invent the `--tw-prose-*` ↔ pack bridge. Opt-in via `prose-djust` class. ~95 LOC.
+- **#1013** (enhancement, P2) — `ThemeManager.get_state()` cookie priority overrides `LIVEVIEW_CONFIG['theme']`, causing localhost cross-project bleed. Add `enable_client_override` setting (default `True` for back-compat) so sites without a user-facing switcher can opt out of cookie reads. ~20 LOC.
+
+**Solo — Docs link cleanup (P1 bug)**:
+
+- **#1010** (bug, P1) — `docs/components/RUST_COMPONENTS.md` references 3 nonexistent files (`LIVEVIEW.md`, `TEMPLATES.md`, `PYTHONIC_FORMS_IMPLEMENTATION.md`) and 8 dead anchors. Surfaced by docs.djust.org's `scripts/link_check.py`. Pure docs cleanup.
+
+---
+
 ### Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)
 
 Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:
