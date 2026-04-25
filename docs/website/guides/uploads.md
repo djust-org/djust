@@ -332,6 +332,37 @@ If your own `abort()` implementation raises, djust logs the traceback and swallo
 - **`entry.data` / `entry.file` are empty.** The raw bytes never sat anywhere djust could hand them to you. Use `entry.writer_result` (whatever `close()` returned) instead.
 - **No temp file cleanup required.** Because no temp file was created, `entry.cleanup()` is a no-op for writer uploads.
 
+### Key-template convention for `s3_events`
+
+When you use the S3 event webhook (`djust.contrib.uploads.s3_events.s3_event_webhook`) to receive `ObjectCreated` notifications and fire the `on_upload_complete(...)` hook, djust needs a way to map the incoming S3 key back to the `upload_id` that your app registered a hook against.
+
+`parse_s3_event` does this by finding the **first UUID-shaped path segment** (32–36 hex/dash characters) in the object key. That means your presign step must produce keys that follow the convention:
+
+```
+uploads/<upload_id_uuid>/<original_filename>
+```
+
+or, when bucketing by tenant:
+
+```
+<tenant_id>/<upload_id_uuid>/<original_filename>
+```
+
+Both work because the parser scans **every** segment, not just the first — the first UUID-shaped segment wins.
+
+**If no path segment looks UUID-shaped**, `upload_id` silently falls back to the full key, a `DEBUG` log entry is emitted on the `djust.contrib.uploads.s3_events` logger, and your hook **will not fire** (because it was registered under a UUID, not the full key). This is the #1 source of "my hook isn't being called" reports.
+
+Debugging a silent hook:
+
+```python
+import logging
+logging.getLogger("djust.contrib.uploads.s3_events").setLevel(logging.DEBUG)
+```
+
+Re-run the webhook delivery. The log will show the key that failed to match and the convention you need to follow.
+
+**Alternative: custom upload-id routing.** If you embed the upload id elsewhere — an `x-amz-meta-upload-id` header, a JWT in the key prefix, a DB lookup keyed on the S3 key — parse the SNS payload yourself and bypass `parse_s3_event` entirely. The helper is a best-effort convention for the common case; it's not mandatory.
+
 ## Best Practices
 
 - **Set `max_file_size`** based on your needs. Client-side validation rejects oversized files before upload begins; server-side validates after all chunks arrive.
