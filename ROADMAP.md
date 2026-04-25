@@ -146,7 +146,7 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | docs: prominent `key_template` convention for `s3_events` UUID extraction (#964) | Silent `upload_id` fallback when key doesn't match UUID-prefix shape; doc + debug-warn | v0.7.2 |
 | **P2** | tooling: weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers (#963) | All v0.5.7 writer tests mock SDKs; weekly happy-path integration run | v0.7.2 |
 | **P2** | feat: inline radio buttons in forms (#991) | Segmented controls / filter pills / Yes-No — common LiveView UX; API TBD (form-level flag vs widget attr vs template variant) | v0.7.2 |
-| **P2** | policy: decide breaking rename of framework-internal attrs to `_*` prefix (#962) | Defense-in-depth vs `_FRAMEWORK_INTERNAL_ATTRS` filter added in #762; likely close-without-code decision | v0.7.2 |
+| ~~**P2**~~ | ~~policy: decide breaking rename of framework-internal attrs to `_*` prefix (#962)~~ ✅ **Closed without code in v0.7.2** — [ADR-012](docs/adr/012-framework-internal-attrs-filter-vs-rename.md) documents the decision: keep the `_FRAMEWORK_INTERNAL_ATTRS` filter (shipped #762), do NOT rename. Rename would break every user view reading `self.login_required` / `self.template_name` without net defense-in-depth benefit. | ~~v0.7.2~~ |
 
 ---
 
@@ -967,7 +967,7 @@ consolidation arc.
 | **P2** | docs: `key_template` UUID-prefix convention for `s3_events` (#964) | Not started |
 | **P2** | tooling: weekly real-cloud CI matrix for S3 / GCS / Azure (#963) | Not started |
 | **P2** | feat: inline radio buttons (#991) | Not started |
-| **P2** | policy: `_*` prefix rename decision (#962) | Not started |
+| ~~**P2**~~ | ~~policy: `_*` prefix rename decision (#962)~~ | ~~Closed without code — ADR-012~~ ✅ |
 
 **#994 — NameError on module load when watchdog is not installed.**
 `djust/dev_server.py` wraps the `watchdog` import in try/except
@@ -1022,17 +1022,21 @@ CSS-framework-agnostic, work with existing form-validation error
 styling + `dj-bind`. Phoenix LiveView form helpers support inline
 radios out of the box — keeps parity.
 
-**#962 — policy: decide breaking rename of framework-internal attrs
-to `_*` prefix.** From v0.5.7 milestone retro. #762 added a
-`_FRAMEWORK_INTERNAL_ATTRS` frozenset filter so framework-set attrs
-(`sync_safe`, `login_required`, `template_name`, ...) don't leak into
-`get_state()`. The filter is a non-breaking fix. A stricter approach
-— rename the ~25 attrs to `_*` prefix — was deferred because it
-breaks any user code that reads `self.login_required`,
-`self.template_name`, etc. Decision point: rename in v0.6.0 (already
-shipped), v0.7.0 (already shipped), v1.0.0, or never? Likely
-close-without-code outcome: the filter is sufficient in practice.
-Document the decision in an ADR and close the issue.
+**~~#962 — policy: decide breaking rename of framework-internal attrs
+to `_*` prefix.~~** ✅ **Closed without code in v0.7.2** — see
+[ADR-012](docs/adr/012-framework-internal-attrs-filter-vs-rename.md).
+Decision: keep the `_FRAMEWORK_INTERNAL_ATTRS` filter shipped in
+#762; do NOT rename. Rename would break every user view that reads
+`self.login_required` / `self.template_name` / `self.sync_safe`
+(all documented first-class view attributes in our guides, and
+`template_name` is Django public API) without a meaningful
+defense-in-depth benefit. The filter is the single canonical gate on
+the exact point where leakage matters (`get_state()` + downstream
+serializers); distributing the "this attr is internal" signal
+across 25 attribute sites would not catch new classes of bugs.
+Mitigation: the PR review checklist now reminds authors to add new
+framework-set attrs to `_FRAMEWORK_INTERNAL_ATTRS` at introduction
+time.
 
 ### Milestone: v0.8.0 — Server Actions, Async Streams & Form Patterns (NEW)
 

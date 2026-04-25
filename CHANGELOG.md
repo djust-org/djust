@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Decisions
+
+- **ADR-012: `_FRAMEWORK_INTERNAL_ATTRS` filter is the right tool;
+  do NOT rename framework-internal attrs (v0.7.2, #962, close-without-code)** —
+  v0.5.7 #762 added a `_FRAMEWORK_INTERNAL_ATTRS` frozenset in
+  `python/djust/live_view.py` to prevent ~25 framework-set attrs
+  (`sync_safe`, `login_required`, `template_name`, ...) from leaking
+  into `get_state()` / reactive-state debug payloads. The v0.5.7
+  retro filed #962 to decide whether to additionally *rename* those
+  attrs to `_*`-prefixed form as defense-in-depth. Decision after a
+  full review: keep the filter, don't rename. Rename would break
+  every user view reading `self.login_required` /
+  `self.template_name` (both first-class documented attrs; the
+  latter is Django public API) without net defense-in-depth benefit
+  — the filter is a single centralized gate at the exact leakage
+  point. Mitigation for the filter's maintenance burden: the PR
+  review checklist will remind authors to add new framework-set
+  attrs to the frozenset at introduction time.
+  See `docs/adr/012-framework-internal-attrs-filter-vs-rename.md`.
+
 ### Infrastructure
 
 - **Weekly real-cloud CI matrix for upload writers (v0.7.2, #963)** —
