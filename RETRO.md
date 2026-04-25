@@ -175,13 +175,95 @@ issue or be explicitly closed with a reason.
 | 142 | make roadmap-lint — automate ROADMAP-vs-codebase grep | Retro v0.5.0 feature rollout | #1057 | Open | New (reconcile 2026-04-25) |
 | 143 | Ghost-branch drift mitigation in subagent prompts | Retro v0.5.0 feature rollout | #1058 | Open | New (reconcile 2026-04-25) |
 | 144 | Pre-existing test failure threshold — fix at ~10 | Retro v0.5.1 | #1059 | Open | New (reconcile 2026-04-25) |
-| 145 | Dogfood pass for new CLI tools before commit | Retro v0.5.1 | #1060 | Open | New (reconcile 2026-04-25) |
+| 145 | Dogfood pass for new CLI tools before commit | Retro v0.5.1 | #1060 | Open | New (reconcile 2026-04-25) | **Validated in v0.8.2 (PR #1074)** — Validated under fire — caught the dataclass vs dict bug at Stage 5 in PR #1074. Discipline empirically working; first real-world payoff. |
 | 146 | Pre-push hook for `noqa: F822` in `__all__` patterns | Retro v0.7.0 | #1061 | Open | New (reconcile 2026-04-25) |
 | 147 | Centralize tech-debt issue queue around Action Tracker rows | Retro 2026-04-25 reconcile | #1062 | Open | New (reconcile 2026-04-25) |
 | 148 | RETRO_GATE_VIOLATION backfill — PRs #995, #996, #997 | Retro 2026-04-25 reconcile | #1063 | Open | New (reconcile 2026-04-25) |
 | 149 | Stage 4 re-classification — re-read cited code before assuming tracker classification | Retro v0.8.1 | #1070 | Open | New (5 instances this milestone) |
 | 150 | Doc-claim TDD extends to prose docs with external references | Retro v0.8.1 / PR #1064 | #1071 | Open | New (Action #124 generalization) |
 | 151 | Stage 1 branch-from-target reminder — even between drain groups | Retro v0.8.1 / PR #1068 | #1072 | Open | New (Group F process error) |
+| 152 | Lift-from-downstream FIRST pattern (Stage 4 plan-template) | Retro v0.8.2 / PR #1074 | #1077 | Open | New (prose.css canonical example) |
+| 153 | Stage 11 mark_safe XSS-trace audit bullet | Retro v0.8.2 / PR #1074 | #1078 | Open | New (theme_css_link example) |
+| 154 | Stage 4 broader-sweep → follow-up issue scope-discipline (validated 2x) | Retro v0.8.2 / PRs #1067, #1076 | #1079 | Open | New (validated across 2 milestones) |
+
+---
+
+## v0.8.2 — Theming Polish & Docs Cleanup (PRs #1073, #1074, #1076)
+
+**Date**: 2026-04-25
+**Scope**: 5 in-scope GitHub issues from docs.djust.org's testing — 4 theming/CSS bundled into Group T (PR #1074), 1 docs link cleanup as solo (PR #1076), bracketed by ROADMAP setup (PR #1073). All 5 issues closed-as-shipped. One follow-up issue (#1075) filed for the broader 50-ref / 17-file stale-MD sweep that surfaced at Stage 4 of PR #1076. Smallest milestone since v0.7.4.
+**Tests at close**: ~6,427 (+7 new in `test_theming_v082_drain.py`; net delta from v0.8.1's ~6,420 baseline).
+
+### What We Learned
+
+**1. Lift-from-downstream FIRST became a real pattern.**
+PR #1074's `prose.css` (#1009) was lifted near-verbatim from docs.djust.org's `static/css/input.css` — a ↔ pack bridge that had already been battle-tested against three theme packs in production. Time-to-implement was a fraction of "design from scratch": ~10 minutes to copy-and-generalize vs. the ~hour a clean-room implementation would have taken. The downstream consumer's working solution was the right starting point. Generalizes: when an issue cites a downstream consumer's working implementation, lift verbatim FIRST (preserves their proven shape), generalize SECOND (wrap with opt-in API like the `prose-djust` class).
+
+**Action taken**: Open — tracked in Action Tracker #152 (GitHub #1077).
+
+**2. Stage 5 smoke-test discipline (Action #145, v0.8.1) caught a real defect — first paid off in this milestone.**
+First implementation of `theme_css_link` (#1012) used `state.get("pack")` because in-conversation memory said "ThemeState has dict-like API". `ThemeState` is actually a dataclass — calling `.get()` raises `AttributeError`. Caught at Stage 5 by running the new test (which I wrote BEFORE reading the dataclass definition). The Stage 5 smoke-test discipline filed as Action #145 in v0.8.1's retro is the canonical defense — and it just worked under fire. Two-PR sample, but this is the first time the pattern paid off on its own.
+
+**Action taken**: Closed — Action #145 (Stage 5 smoke-test for new scripts/code) validated under fire in PR #1074 (#1012 dataclass-vs-dict catch). No new tracker row needed; existing #145 (GitHub #1060) covers it.
+
+**3. Stage 11 mark_safe XSS-trace audit produced a one-paragraph review checklist addition.**
+PR #1074's `theme_css_link` returns a `mark_safe`'d URL string. The Stage 11 reviewer subagent specifically traced the cookie inputs → through `registry.has_theme/has_preset` validation in `get_state()` → to the URL output, and confirmed there's no XSS surface (cookie inputs are server-validated before reaching the URL). This is a generalizable Stage 11 review pattern that doesn't currently exist in the project's PR checklist. Action: add a "for every new `mark_safe` call, trace inputs to a server-validated source" bullet to `docs/PULL_REQUEST_CHECKLIST.md` Stage 11 review section.
+
+**Action taken**: Open — tracked in Action Tracker #153 (GitHub #1078).
+
+**4. Stage 4 broader-sweep → follow-up issue scope-discipline reinforced.**
+PR #1076's investigation of #1010's 4 cited stale .md refs found ~50 more across 17 files. Filed as follow-up #1075 instead of expanding scope to fix all 50. Same scope-discipline pattern that worked for v0.8.1's #1067/#1026 (rejected expanding into the broader observability/views.py path). Two consecutive milestones now demonstrate the pattern: when Stage 4 reveals a broader systemic issue, fix EXACTLY what the cited issue asks for, file follow-up for the systemic remainder. **Validated across 2 milestones; promote to a Stage 4 plan-template note.**
+
+**Action taken**: Open — tracked in Action Tracker #154 (GitHub #1079).
+
+**5. `make docs-lint` proposed alongside #142 `make roadmap-lint`.**
+The broader stale-MD sweep that produced #1075 explicitly proposes a `make docs-lint` Makefile target wrapping a python sweep script (mirroring the `make roadmap-lint` shape from Action #142). Two pre-push lint hooks for the doc-tree would prevent the stale-ref class from regressing.
+
+**Action taken**: Closed — `make docs-lint` proposal already documented in #1075's body. No separate tracker row needed; #1075 carries both the cleanup work and the tooling proposal as a paired action.
+
+### Insights
+
+- **5 issues → 2 substantive PRs + 1 ROADMAP PR** via `--group` mode. Group T bundled 4 theming issues (#1009, #1011, #1012, #1013) cleanly because all 4 touched `djust_theming/`; #1010 stayed solo because it was unrelated docs.
+- **Stage 11 caught 0 🔴 / 0 🟡 across both substantive PRs.** Lower-novelty work (CSS, lift-from-downstream, small refactor, 4-line docs fix) — fewer surfaces for defects. Stage 11 still validated the structure (e.g. `mark_safe` audit on #1012).
+- **Pre-existing patterns reused without prompting**: `globalThis.djustDebug` for the v0.8.0 cache-write log family stayed canonical, the `_assert_benchmark_under` xdist-safe contract was preserved verbatim by the v0.8.1 #1066 PR (no regression observed in v0.8.2 work), Stage 5 smoke-test discipline (Action #145) had its first real-world payoff.
+- **Issue queue churn**: 25 open → 21 open at close. Closed 5 (#1009, #1010, #1011, #1012, #1013); filed 1 (#1075). Net -4. The remaining 21 are 17 skill-level (`out-of-scope-for-djust-drain`) + 4 misc.
+- **Two RETRO_GATE_VIOLATIONs in two milestones** — PR #1069 in v0.8.1 (also a small ROADMAP PR), #1073 in v0.8.2 (also small ROADMAP PR). Both shipped without retros. Pattern: small bookkeeping PRs (ROADMAP-only, single-line) consistently miss the retro-gate. The pipeline-run skill's retro-gate fires for substantive PRs but not for hand-rolled ROADMAP setup PRs that bypass the pipeline-run skill entirely.
+- **First milestone where the new pipeline-retro Stage 3.5 gate ran twice (v0.8.1 + v0.8.2).** The v0.8.1 retro filed 3 new tracker rows (#149-#151); this v0.8.2 retro adds 3 more (#152-#154). Gate is empirically holding — neither retro produced a `prose_only` Action taken: line.
+
+### Review Stats
+
+| Metric | #1073 | #1074 | #1076 | Total |
+|--------|-------|-------|-------|-------|
+| Tests added | 0 | 7 | 0 | 7 |
+| Production LOC | +17 (ROADMAP) | +364 / -2 | +4 / -4 | +385 / -6 |
+| 🔴 / 🟡 findings | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Pre-commit attempts | 1 | 2 (1 ruff F401 auto-fix) | 1 | 4 |
+| CI retries | 0 | 0 | 0 | 0 |
+| Quality rating | n/a | 5/5 | 5/5 | — |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No additions this milestone.
+
+**Pipeline template**: No changes.
+
+**Checklist**: `docs/PULL_REQUEST_CHECKLIST.md` will receive the Stage 11 `mark_safe` audit bullet via Action Tracker #153 (skill-level work; lives in pipeline-skill repo for the broader Stage 11 review prompt, plus a parallel PR-checklist entry in djust if the bullet is also appropriate at the project level — Stage 4 plan will decide).
+
+**Skills**: 3 new tracker rows (#152, #153, #154) all skill-level, labeled `out-of-scope-for-djust-drain`. Each will need a follow-up PR to the pipeline-skill repo.
+
+### Open Items
+
+Tracked in Action Tracker:
+- **#152** — Lift-from-downstream FIRST pattern (PR #1074 / prose.css canonical example).
+- **#153** — Stage 11 `mark_safe` XSS-trace audit bullet (PR #1074 / `theme_css_link`).
+- **#154** — Stage 4 broader-sweep → follow-up issue scope-discipline (validated across v0.8.1 + v0.8.2).
+
+Filed as follow-up GitHub issue (not in Action Tracker as a row, but referenced from #154 above):
+- **#1075** — broader stale-MD sweep across 17 files + proposed `make docs-lint` Makefile target.
+
+### Status
+
+✅ v0.8.2 drain **COMPLETE**. 3 PRs merged, 5 issues closed-as-shipped, 1 follow-up issue filed. Smallest milestone since v0.7.4. The 4 theming/CSS issues from docs.djust.org's testing all shipped via PR #1074 (Group T bundling) — pattern of bundling related-cluster issues continues to work. v0.8.2 is shippable as a pre-release version (e.g. `0.8.2rc1`) if the user wants, or can roll into v0.9.0 alongside the deferred-features work.
 
 ---
 
