@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2rc1] - 2026-04-24
+
 ### Added
 
 - **Inline radio buttons via `data-dj-inline` attribute (v0.7.2,
