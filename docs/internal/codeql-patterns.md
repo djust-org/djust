@@ -32,7 +32,7 @@ logger.error("Auth failed for user %s: next=%s", request.user.username, request.
 
 This is also a hard project rule — see `CLAUDE.md` Security Rules section.
 
-**Representative PRs**: #898 (initial 9 alerts, 2 files), #918 (8 more), #921 (auth views).
+**Representative PR**: #913 (sanitize user-controlled values in log calls — closes 9 py/log-injection alerts).
 
 **Reviewer pattern**: grep for `logger\.(debug|info|warning|error|exception|critical)\(f["']` — every f-string log is a candidate.
 
@@ -58,7 +58,7 @@ return format_html("<a href='/back?next={}'>Back</a>", request.GET['next'])
 
 For JavaScript string contexts, use `json.dumps()` not `escape()` — the former handles all JS-string escape rules including U+2028/2029 line terminators that HTML escape misses.
 
-**Representative PRs**: #920 (gallery views, 6 alerts), #923 (admin views).
+**Representative PR**: #918 (escape user input in gallery 404 responses & theme options — 6 py/reflective-xss alerts).
 
 **Reviewer pattern**: grep for `mark_safe\(f` — anything with f-string interpolation inside `mark_safe` is suspect.
 
@@ -90,7 +90,7 @@ except ExternalAPI.Error:
 
 The same rule applies to **WebSocket error frames**, **template context** (`{"error": str(e)}` reaches the rendered page), and **AJAX/SSE bodies**.
 
-**Representative PRs**: #929 (10 alerts across 4 files).
+**Representative PRs**: #919 (drop exception details from API error responses — 10 py/stack-trace-exposure alerts) and #923 (3 real bugs caught by CodeQL — stack-trace exposure, shadowed method, str-format).
 
 **Reviewer pattern**: grep for `str\(e\)`, `repr\(e\)`, `traceback\.format` — track each occurrence to a response body or template context.
 
@@ -114,7 +114,7 @@ if not url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host
 return HttpResponseRedirect(next_url)
 ```
 
-**Representative PRs**: #927 (URL redirect FPs dismissed), #928 (path-injection FPs dismissed), #934 (real path-injection bug fixed).
+**Representative PR**: #920 (open-redirect + path-traversal fixes + dismiss clear-text CodeQL FPs — 7 alerts; mix of real fixes and FP dismissals in one PR).
 
 ---
 
@@ -126,7 +126,7 @@ Wire-protocol messages carry server-controlled strings, but if a malicious user 
 
 **Fix idiom for HTML output**: use the Rust VDOM engine's escaped path, not `innerHTML =`. For service-worker fetch handlers, validate `event.origin` against a whitelist.
 
-**Representative PRs**: #921 (JS XSS in markdown-textarea, fixed via VDOM path), #921 (service-worker `event.origin` check added).
+**Representative PR**: #925 (XSS in markdown preview + origin check in service-worker — both fixes in one security PR).
 
 ---
 
@@ -140,7 +140,7 @@ Wire-protocol messages carry server-controlled strings, but if a malicious user 
 2. **Wrap the import in `TYPE_CHECKING`**: when the symbol is only needed for type hints, use `if TYPE_CHECKING: from ... import X` and CodeQL accepts the conditional import.
 3. **`# noqa: F822`**: only as a last resort — see Action Tracker #146 for the open follow-up to add a pre-push grep that flags new `noqa: F822` so it doesn't accumulate.
 
-**Representative PR**: #930 (21 alerts closed via TYPE_CHECKING block).
+**Representative PR**: #924 (close 21 py/undefined-export via TYPE_CHECKING eager imports).
 
 ---
 
