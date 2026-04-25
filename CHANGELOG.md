@@ -672,6 +672,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed. New client event `djust:hvr-applied` (CustomEvent). Zero cost
   in production.
 
+  See `docs/website/guides/hot-view-replacement.md`.
 ## [0.6.0rc1] - 2026-04-23
 
 ### Documentation
@@ -750,6 +751,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the new behaviors alongside existing `instantShell` / `reconnectionBridge`
     options.
 
+  See `docs/website/guides/service-worker.md`.
 ### Changed
 
 - `LiveViewConsumer.handle_mount()` accepts new `state_snapshot` kwarg;
@@ -897,6 +899,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ~650 LOC + 50 regression tests (mocked SDKs) across
   `python/djust/tests/test_presigned_s3_820.py`, `python/djust/tests/test_gcs_upload_writer_822.py`,
   `python/djust/tests/test_azure_upload_writer_822.py`.
+  See `docs/website/guides/uploads.md`.
 - **Docs cleanup: 4 issues closed** — dj-remove no-CSS-transition gotcha (#902), dj-transition-group
   long-form precedence (#907), Django 5.1 + 5.2 classifiers in `pyproject.toml` (#912), new guide
   page for `dj-virtual` variable-height mode at `docs/website/guides/virtual-lists.md` (#952).
@@ -1203,6 +1206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`dj-transition` — declarative CSS enter/leave transitions (v0.6.0)** — Phoenix `JS.transition` parity. Three-phase class orchestration so template authors can drive CSS transitions without writing a `dj-hook`. Attribute value is three space-separated class tokens — phase 1 (start) applied synchronously, phases 2 (active) + 3 (end) applied on the next animation frame so the browser commits the start layout before the transition begins. `transitionend` removes the active class (phase 3 stays as the final-state). 600 ms fallback timeout covers the `display: none` / zero-duration corner cases where `transitionend` never fires. Any attribute-value change re-runs the sequence so authors can retrigger from JS. New `static/djust/src/41-dj-transition.js` (~120 LOC); document-level MutationObserver matches the `dj-dialog` / `dj-mutation` / `dj-sticky-scroll` registration pattern. 7 JSDOM cases in `tests/js/dj_transition.test.js` cover spec parsing, phase-1 synchronous application, next-frame phase-2/3 application, transitionend cleanup, fallback-timeout cleanup, global export, and re-trigger-on-attribute-change. This is phase 1 of the v0.6.0 Animations & transitions work; FLIP, `dj-remove`, `dj-transition-group`, and skeleton components will ship as separate follow-ups. (`python/djust/static/djust/src/41-dj-transition.js`)
 
+  See `docs/website/guides/declarative-ux-attrs.md`.
 ## [0.5.3rc1] - 2026-04-22
 
 ### Added
@@ -1217,8 +1221,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Declarative UX attributes — `dj-mutation`, `dj-sticky-scroll`, `dj-track-static` (v0.6.0)** — Three small client-side declarative attributes that replace boilerplate `dj-hook`s every production app tends to write. **`dj-mutation`** (new `static/djust/src/37-dj-mutation.js`, ~100 LOC) fires a `dj-mutation-fire` CustomEvent when the marked element's attributes or children change via MutationObserver, with `dj-mutation-attr="class,style"` for targeted attribute filters and `dj-mutation-debounce="N"` for burst coalescing (default 150 ms). **`dj-sticky-scroll`** (new `38-dj-sticky-scroll.js`, ~90 LOC) keeps a scrollable container pinned to the bottom when children are appended but backs off when the user scrolls up to read history and resumes when they return to the bottom — the canonical chat / log viewer UX with a 1 px sub-pixel tolerance. **`dj-track-static`** (new `39-dj-track-static.js`, ~90 LOC; Phoenix `phx-track-static` parity) snapshots tracked `<script src>` / `<link href>` values on page load and, on every subsequent `djust:ws-reconnected` event, diffs against the snapshot — dispatches `dj:stale-assets` CustomEvent on changed URLs, or calls `window.location.reload()` when the changed element carried `dj-track-static="reload"`. Without this last one, clients on long-lived WebSocket connections silently run stale JS after a deploy — zero-downtime on the server but broken behavior on connected clients. Supporting change in `03-websocket.js`: `onopen` now dispatches `document.dispatchEvent(new CustomEvent('djust:ws-reconnected'))` on every reconnect so application code (not just `dj-track-static`) can hook reconnects without touching internal WS state. Convenience Django template tag `{% djust_track_static %}` in `live_tags.py` emits the bare attribute for discoverability. All three attributes live-register via a document-level MutationObserver root (same pattern as `dj-dialog`) so VDOM morphs that inject or remove the marker re-wire observers automatically. 15 JSDOM test cases across `tests/js/dj_mutation.test.js`, `tests/js/dj_sticky_scroll.test.js`, `tests/js/dj_track_static.test.js`; 4 Python test cases in `tests/unit/test_djust_track_static_tag.py`. (`python/djust/static/djust/src/37-dj-mutation.js`, `38-dj-sticky-scroll.js`, `39-dj-track-static.js`, `03-websocket.js`, `python/djust/templatetags/live_tags.py`)
 
+  See `docs/website/guides/declarative-ux-attrs.md`.
 - **`djust.db.untrack(model)` — disconnect signal receivers wired by `@notify_on_save` (#809)** — Previously the only way to detach the `post_save` / `post_delete` receivers from a `@notify_on_save`-decorated model was to clear the entire `signals.receivers` list, which scorched unrelated test fixtures. `untrack()` now disconnects exactly the two receivers stashed on `model._djust_notify_receivers` and wipes the introspection attributes (`_djust_notify_channel`, `_djust_notify_receivers`) so a re-decoration goes through cleanly with a fresh channel. Returns `True` on success, `False` on a never-decorated model — idempotent, safe to call twice. Primarily for pytest teardowns in projects that decorate models at class-definition time. 5 tests in `tests/unit/test_db_notifications.py::TestUntrack`. Exported from `djust.db` and documented in the `djust.db` module docstring. (`python/djust/db/decorators.py`, `python/djust/db/__init__.py`)
 
+  See `docs/website/guides/database-notifications.md`.
 - **Pre-minified `client.js` distribution (v0.6.0 P1)** — Production now serves `client.min.js` (terser-minified) instead of the 35-module readable concat, with `.gz` and `.br` pre-compressed siblings built alongside it for whitenoise / nginx static serving. Measured impact: `client.js` 410 KB → `client.min.js` 146 KB raw → 39 KB gzip → 33 KB brotli (~92% reduction wire-size over the raw file). `DEBUG=True` continues to serve the readable `client.js` so stack traces point at meaningful line numbers and contributors can poke at source directly. An explicit `DJUST_CLIENT_JS_MINIFIED` setting (bool) overrides the `DEBUG` heuristic in either direction so operators can validate the minified file locally or keep the readable build in production if they want to debug in-situ. `scripts/build-client.sh` gained a `minify_and_compress` helper that runs terser (from `node_modules/.bin/terser` or PATH), then gzip `-9` and brotli `-q 11`; the step is skipped gracefully when terser isn't installed so contributors can still iterate on raw sources without `npm install`. Source-maps (`.min.js.map`) are emitted for production-side debugging. `djust.C012` system check now recognizes both `client.js` and `client.min.js` in manual-loading detection. 6 tests in `tests/unit/test_client_minified.py` cover build-artifact presence + size reduction, DEBUG-vs-production script selection, and the explicit override in both directions. (`scripts/build-client.sh`, `python/djust/mixins/post_processing.py`, `python/djust/checks.py`, `package.json`)
 
 ### Changed
@@ -1254,6 +1260,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`djust_typecheck` — `{% firstof %}` / `{% cycle %}` / `{% blocktrans with %}` tag support (#850)** — The extractor now captures positional context-variable references in `{% firstof a b c %}` and `{% cycle a b c %}` (string literals and `as <name>` suffixes are correctly ignored), and the `with x=expr` (and `count x=expr`) clauses of `{% blocktrans %}` / `{% blocktranslate %}` produce both the template-local binding (`x`) and the reference (`expr`). Eliminates a class of false positives (blocktrans locals) and false negatives (firstof/cycle args). (`python/djust/management/commands/djust_typecheck.py`)
 
+  See `docs/website/guides/typecheck.md`.
 ### Changed
 
 - **`djust_typecheck` — walk MRO for parent-class `self.foo = ...` assigns (#851)** — `_extract_context_keys_from_ast` now iterates `cls.__mro__` (skipping `djust.*`, `djust_*`, `django.*`, `rest_framework.*`, and `builtins`), so a child view that relies on attributes set in a parent `mount()` no longer produces spurious "unresolved" reports. The filter drops Django's `View` / namespace-framework attrs (`request`, `head`, `kwargs`, `args`) that would otherwise surface from the base class. (`python/djust/management/commands/djust_typecheck.py`)
@@ -1288,6 +1295,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Scaffold CSS — reusable layout/utility pack in `djust.theming`** — `djust_theming/static/djust_theming/css/scaffold.css` gains ~729 lines of framework-generic scaffold covering typography, responsive grid utilities (`.grid-2/3/4`), hero section, flash messages (Django + LiveView), accessibility utilities (`.sr-only`), extended layout helpers (`.flex-center`, `.content-narrow/-wide`), stat-display variants, auth layout, live indicator dot, card-accent variants, code blocks, noise texture overlay, shared nav links, dashboard/centered grids, and the full `data-layout` switching system (sidebar, topbar, dashboard, centered, sidebar-topbar). All new rules use CSS-variable fallbacks so the scaffold works without a loaded theme; no hardcoded hex colors; `.container` max-width now reads `var(--container-width, 1200px)`. Pure-CSS addition — no Python/JS/test behavior changes. (PR #836)
 
+  See `docs/website/guides/migration-from-standalone-packages.md`.
 ### Fixed
 
 - **All 82 pre-existing test failures resolved (PR #841)** — The `make test` baseline went from `2135 passed, 61 failed, 21 errors` (which had blocked normal merges for the entire v0.5.1 milestone and forced `--admin` on every PR) to `2219 passed, 0 failed, 0 errors`. Four fix clusters:
@@ -1317,6 +1325,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Automatic dirty tracking — `self.is_dirty` / `self.changed_fields` / `self.mark_clean()`** — Track which public view attributes have changed since a baseline captured after `mount()`. `changed_fields` returns a set of attr names that differ from the baseline; `is_dirty` is `bool(changed_fields)`; `mark_clean()` resets the baseline (call after a successful save). Use cases: "unsaved changes" warnings (`beforeunload`), conditional save buttons, optimized `handle_event` that skips work when nothing changed. Respects `static_assigns` and ignores private attrs. The WebSocket consumer and the HTTP API dispatch view both capture the baseline after mount. (`python/djust/live_view.py`, `python/djust/websocket.py`, `python/djust/api/dispatch.py`)
   - **Stable `self.unique_id(suffix="")`** — React 19 `useId` equivalent. Returns a deterministic per-view ID stable across renders of the same logical position. Useful for `aria-labelledby`, form field IDs, and any element that needs a consistent identifier across re-renders. Format: `djust-<viewslug>-<n>[-<suffix>]`. Counter resets via `reset_unique_ids()` at render boundaries. (`python/djust/live_view.py`)
   - **Component context sharing — `self.provide_context(key, value)` / `self.consume_context(key, default=None)`** — React Context API equivalent. A parent view or component exposes a value under `key`; descendants look it up with `consume_context`, walking the `_djust_context_parent` chain. Scoped per render tree; `clear_context_providers()` resets. (`python/djust/live_view.py`)
+  See `docs/website/guides/state-primitives.md`.
 - **Auto-generated HTTP API from `@event_handler` (v0.5.1 P1 HEADLINE, [ADR-008](docs/adr/008-auto-generated-http-api-from-event-handlers.md))** — Opt-in `@event_handler(expose_api=True)` exposes a handler at `POST /djust/api/<view_slug>/<handler_name>/` with an auto-generated OpenAPI 3.1 schema served at `/djust/api/openapi.json`. Unlocks non-browser callers (mobile, S2S, CLI, AI agents) without duplicating business logic — the HTTP transport is a thin adapter over the existing handler pipeline, reusing `validate_handler_params()`, `check_view_auth()`, `check_handler_permission()`, and the same `_snapshot_assigns()` / `_compute_changed_keys()` diff machinery the WebSocket path uses. One stack, one truth (manifesto #4). New package `djust.api` with `DjustAPIDispatchView` (dispatch view), `api_patterns()` (URL factory), `OpenAPISchemaView` (schema endpoint), `SessionAuth` + pluggable `BaseAuth` protocol (auth classes may opt out of CSRF via `csrf_exempt = True`), and a registry that walks `LiveView` subclasses with exposed handlers. `LiveView` gains two read-only contract attributes: `api_name` (stable URL slug) and `api_auth_classes` (auth class list). Response shape mirrors the WS assigns-diff: `{"result": <return>, "assigns": {<changed public attrs>}}`. Error shapes are structured with `error` / `message` / `details` — 400 validation, 401 unauth, 403 denied or CSRF fail, 404 unknown view/handler or handler not `expose_api=True`, 429 rate limit, 500 handler exception (exception messages logged server-side only, never leaked to the client). **Rate limiting:** HTTP uses a process-level LRU-capped token bucket keyed on `(caller, handler_name)` honoring the handler's `@rate_limit` settings; WebSocket continues to use its per-connection `ConnectionRateLimiter`. The two transports share rate/burst values but separate bucket storage — a caller using both draws from both independently (a shared-bucket refactor is tracked as a follow-up). `manage.py djust_audit` now lists every `expose_api=True` handler and flags any missing `@permission_required` — treat an exposed handler like `@csrf_exempt`. Out of scope per ADR-008: streaming responses, GraphQL batching, first-party token auth, Swagger UI hosting, per-handler URL customization. Full guide at `docs/website/guides/http-api.md`. (`python/djust/api/`, `python/djust/decorators.py`, `python/djust/live_view.py`, `python/djust/management/commands/djust_audit.py`)
 - **Service worker core improvements — instant page shell + WebSocket reconnection bridge (v0.5.0 P3, opt-in)** — Two independent SW features that close the v0.5.0 milestone. Both are OFF by default; users opt in explicitly via `djust.registerServiceWorker({ instantShell: true, reconnectionBridge: true })` from their own init code. No auto-registration.
   - **Instant page shell.** The SW caches the first navigation's response split into a "shell" (everything outside `<main>`) and "main" (inside). Subsequent navigations serve the cached shell immediately with a `<main data-djust-shell-placeholder="1">` placeholder; the client then fetches the current URL with `X-Djust-Main-Only: 1` and swaps in the fresh `<main>` contents. Shell/main split uses a single non-greedy regex — nested `<main>` inside HTML comments or `</main>` inside `CDATA` are documented limitations (full HTML parser deferred). Server side honors the header via the new `djust.middleware.DjustMainOnlyMiddleware`, which extracts the first `<main>…</main>` inner HTML, updates `Content-Length`, and stamps `X-Djust-Main-Only-Response: 1`. The middleware only touches HTML responses; JSON / binary / streaming responses pass through unchanged. Ordering-safe — it can sit anywhere in `MIDDLEWARE` that sees the rendered response.
@@ -1328,12 +1337,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Database change notifications — PostgreSQL `LISTEN/NOTIFY` → LiveView push (v0.5.0 P1)** — Subscribe LiveViews to Postgres pg_notify channels so database changes push real-time updates to every connected user with zero explicit pub/sub wiring. Three APIs: `@notify_on_save(channel="orders")` model decorator hooks Django `post_save` / `post_delete` and emits `NOTIFY <channel>, <json>`; `self.listen("orders")` in `mount()` subscribes the view (joins a Channels group named `djust_db_notify_<channel>`); `def handle_info(self, message)` receives `{"type": "db_notify", "channel": ..., "payload": {"pk": ..., "event": "save"|"delete", "model": "app.Model"}}` and re-renders via the standard VDOM diff path. A process-wide `PostgresNotifyListener` owns one dedicated `psycopg.AsyncConnection` (outside Django's pool — long-lived LISTEN connections don't play nice with pgbouncer transaction pooling) and runs `async for notify in conn.notifies():`, bridging every NOTIFY into `channel_layer.group_send(...)`. Channel names are strictly validated (`^[a-z_][a-z0-9_]{0,62}$`) at registration and listen time — load-bearing because Postgres NOTIFY doesn't accept bind parameters for the channel identifier. `send_pg_notify(channel, payload)` is a public helper for Celery tasks / management commands. Non-postgres backends no-op gracefully (debug-logged); `self.listen()` raises `DatabaseNotificationNotSupported` when psycopg or a postgres backend isn't available. Known limitation: notifications emitted while the listener's TCP connection is dropped are lost — listener auto-reconnects with 1s backoff and re-issues LISTEN for all subscribed channels, and WS `mount()` re-fetch handles the client-side recovery case. Documented in `docs/website/guides/database-notifications.md`. (`python/djust/db/decorators.py`, `python/djust/db/notifications.py`, `python/djust/mixins/notifications.py`, `python/djust/websocket.py`)
 - **PyO3 `getattr` fallback for model attribute access (v0.5.0 P1 — Rust template engine parity)** — Templates can now reference Django model instances passed through context without manual dict conversion. `{{ user.username }}` resolves via Python `getattr` when `user` is a raw Python object rather than a JSON-serialized dict. Implementation: Python's `_sync_state_to_rust()` builds a sidecar of non-JSON-friendly context values and forwards them via the new `RustLiveView.set_raw_py_values()` method; Rust's `Context::resolve()` tries the normal value-stack path first, then walks `getattr` on attached PyObjects one segment at a time. `PyAttributeError` (and any property-descriptor exceptions) are caught — missing attrs render as empty, matching Django's `TEMPLATE_STRING_IF_INVALID` default. `Value` stays `Serialize`-friendly (no `Value::PyObject` variant); sidecar lives outside the Value enum via `Arc<HashMap<String, PyObject>>` on `Context`. (`crates/djust_core/src/context.rs`, `crates/djust_live/src/lib.rs`, `python/djust/mixins/rust_bridge.py`)
 - **`register_assign_tag_handler()` for context-mutating template tags (v0.5.0 P1 — Rust template engine parity)** — New tag-handler variety complementing `register_tag_handler` (emits HTML) and `register_block_tag_handler` (wraps content). An assign tag's `render(args, context)` method returns a `dict[str, Any]` that's merged into the template context for subsequent sibling nodes — no HTML output. Enables `{% assign slot var_name %}`-style patterns. Supported inside `{% for %}` loops (per-iteration mutation). Registered via `djust._rust.register_assign_tag_handler(name, handler)`. New `Node::AssignTag` variant; partial-renderer emits `"*"` wildcard dep so downstream nodes always re-render on context changes. (`crates/djust_templates/src/registry.rs`, `crates/djust_templates/src/parser.rs`, `crates/djust_templates/src/renderer.rs`)
+  See `docs/website/guides/template-cheatsheet.md`.
 - **`dj-virtual` — Virtual / windowed lists with DOM recycling (v0.5.0 P1)** — Render only the visible slice of a large list, recycling DOM nodes as the user scrolls. `<div dj-virtual="items" dj-virtual-item-height="48" dj-virtual-overscan="5" style="height: 600px; overflow: auto;">` keeps ~visible-plus-overscan children in the DOM even if the pool has 100K entries. Implementation: fixed-height windowing via `transform: translateY(...)` on an inner shell plus a hidden spacer for scrollbar length, scroll handler batched through `requestAnimationFrame`, real element identity preserved across scrolls for hook/framework compatibility. Integrates with the VDOM morph pipeline: new containers are picked up by `reinitAfterDOMUpdate`, and `djust.refreshVirtualList(el)` is available for explicit repaints. `djust.teardownVirtualList(el)` disconnects observers for unmounted containers. (`python/djust/static/djust/src/29-virtual-list.js`)
+  See `docs/website/guides/large-lists.md`.
 - **`dj-viewport-top` / `dj-viewport-bottom` — Bidirectional infinite scroll (Phoenix 1.0 parity, v0.5.0 P1)** — Fire server events when the first or last child of a stream container enters the viewport via `IntersectionObserver`. `<div dj-stream="messages" dj-viewport-top="load_older" dj-viewport-bottom="load_newer" dj-viewport-threshold="0.1">`. Once-per-entry firing (matches Phoenix) via a `data-dj-viewport-fired` sentinel; call `djust.resetViewport(container)` or replace the sentinel child to re-arm. New server-side `stream()` `limit=N` kwarg and `stream_prune(name, limit, edge)` method emit a `stream_prune` op that trims children from the opposite edge so chat apps, activity feeds and log viewers can stream bidirectionally without unbounded DOM growth. (`python/djust/static/djust/src/30-infinite-scroll.js`, `python/djust/static/djust/src/17-streaming.js`, `python/djust/mixins/streams.py`)
 - **`assign_async` / `AsyncResult` (v0.5.0 P1)** — High-level async data loading inspired by Phoenix LiveView's `assign_async`. Call `self.assign_async("metrics", self._load_metrics)` in `mount()` (or any event handler); the attribute is set to `AsyncResult.pending()` immediately, the loader runs via the existing `start_async` infrastructure, and on completion the attribute becomes `AsyncResult.succeeded(result)` or `AsyncResult.errored(exc)`. Templates read the three mutually-exclusive states via `{% if metrics.loading %}…`, `{% if metrics.ok %}{{ metrics.result }}…`, `{% if metrics.failed %}{{ metrics.error }}…`. Sync and `async def` loaders are both supported; multiple calls in the same handler load concurrently. Cancellation piggybacks on `cancel_async("assign_async:<name>")`. (`python/djust/async_result.py`, `python/djust/mixins/async_work.py`)
 - **`{% dj_suspense %}` block tag for template-level loading boundaries (v0.5.0 P1)** — Declarative counterpart to `assign_async`: wrap a section depending on one or more `AsyncResult` assigns, and the boundary emits a fallback while any are loading, an error div if any failed, or the body once all are `ok`. Explicit `await="metrics,chart"` syntax keeps the tag debuggable — no reflection magic. Fallback templates are loaded via Django's template loader; unspecified fallbacks render a minimal spinner. Nested suspense boundaries resolve independently. Registered alongside `{% call %}` in the Rust template engine — no parser/renderer changes. (`python/djust/components/suspense.py`, `python/djust/components/rust_handlers.py`)
+  See `docs/website/guides/loading-states.md`.
 - **Function components via `@component` decorator (v0.5.0 P1 batch)** — Stateless Python render functions registerable as template-invokable components. `@component def button(assigns): ...` is callable from templates via `{% call "button" variant="primary" %}Go{% endcall %}` (with `{% component %}` as a synonymous alias). Closes the middle ground between raw HTML and full `LiveComponent` classes for the ~80% of UI pieces (buttons, cards, badges, icons) that are stateless. `clear_components()` helper exposed for tests. (`python/djust/components/function_component.py`, `python/djust/__init__.py`)
 - **Declarative component assigns and slots (Phoenix.Component parity)** — `Assign("variant", type=str, default="default", values=["primary", "danger"], required=True)` and `Slot("col", multiple=True)` DSL, declared on a `LiveComponent` class attribute (`assigns = [...]` / `slots = [...]`) or on function components via `@component(assigns=[...], slots=[...])`. Validation runs at mount/invoke: required-missing raises `AssignValidationError` in DEBUG and warns in production, type coercion (`str → int / bool / float`) is automatic, enum violations via `values=` raise. Child-class `assigns` extend (and override by name) parent declarations via MRO walk. (`python/djust/components/assigns.py`, `python/djust/components/base.py`)
+  See `docs/website/guides/components.md`.
 - **Named slots with attributes via `{% slot %}` / `{% render_slot %}` tags** — Parent templates pass named content blocks with attributes into components: `{% call "card" %}{% slot header label="Title" %}Header{% endslot %}Body{% endcall %}`. Multiple same-name slots collect into a list (essential for table columns, tab panels). Slots are exposed to the component as `assigns["slots"] = {name: [{"attrs": {...}, "content": "..."}, ...]}`. Non-slot content in the `{% call %}` body becomes `children` / `inner_block`. Implemented in pure Python via a sentinel-and-extract protocol — zero Rust parser/renderer changes. (`python/djust/components/function_component.py`)
 
 ### Fixed
@@ -1364,10 +1377,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Bootstrap 4 CSS framework adapter** — New `Bootstrap4Adapter` for projects using Bootstrap 4 (NYC Core Framework, government sites, legacy projects). Set `DJUST_CONFIG = {"css_framework": "bootstrap4"}`. Includes proper `custom-select`, `custom-control-*` classes for checkboxes/radios, and `form-group` wrappers.
+  See `docs/website/guides/css-frameworks.md`.
 - **Dedicated radio button classes** — Radio buttons now use `radio_class`, `radio_label_class`, and `radio_wrapper_class` config keys (with fallback to checkbox classes). Both Bootstrap 4 and 5 configs define radio-specific classes.
 - **Select widget class support** — `ChoiceField` with `Select` widget uses `select_class` config key (e.g., `custom-select` for BS4, `form-select` for BS5) instead of the generic `field_class`.
 - **Theme-to-framework CSS bridge** — New `{% theme_framework_overrides %}` template tag generates `<style>` overrides that map djust theme variables (`--primary`, `--border`, etc.) onto the active CSS framework's selectors (`.btn-primary`, `.form-control`, `.alert-*`, etc.). Switching themes now automatically re-styles Bootstrap 4/5 components.
 
+  See `docs/website/guides/css-frameworks.md`.
 ### Fixed
 
 - **Derived container context values now tracked by value equality ([#774](https://github.com/djust-org/djust/issues/774))** — The Rust state sync used `id()` comparison for all non-immutable context values, which is unreliable for containers (dict, list, tuple) due to CPython address reuse after GC. Derived values like `current_step = wizard_steps[step_index]` could be missed when the handler only changed `step_index`, causing Rust to render stale HTML. Fix: containers are now compared by value equality (like immutables already were), with previous values cached in `_prev_context_containers`. The optimization is preserved — unchanged containers are still skipped.
@@ -1390,13 +1405,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`get_view_assigns`** — Real server-side `self.*` state of the mounted LiveView for a given session. Complements browser-mcp's client-only `djust_state_diff` with the source of truth. Per-attr fallback tags non-serializable values with `{_repr, _type}` rather than an all-or-nothing blanket.
 - **`get_last_traceback`** — Ring-buffered (50) exception log populated from `handle_exception()`. Replaces "can you paste the terminal?" for 80% of blind-debugging cases.
 - **`tail_server_log`** — Ring-buffered (500) Django/djust log records with `since_ms` + `level` filters. `djust.*` captured at DEBUG+, `django.*` at WARNING+.
+  See `docs/website/guides/mcp-server.md`.
 - **`get_handler_timings`** — Per-handler rolling 100-sample distribution (min/max/avg/p50/p90/p99). Reuses existing `timing["handler"]` measurements; no extra perf counters.
 - **`get_sql_queries_since`** — Per-event SQL capture via `connection.execute_wrappers`. Queries are tagged with `(session_id, event_id, handler_name)` + `stack_top` filtered to skip framework frames.
 - **`reset_view_state`** — Replay `view.mount()` on a registered instance. Clears public attrs, re-invokes `mount(stashed_request, **stashed_kwargs)`. Useful between fixture replays.
 - **`eval_handler`** — Dry-run a handler against a live view's current state. Returns `{before_assigns, after_assigns, delta, result}`. v2 `dry_run=True` installs a `DryRunContext` that blocks `Model.save`/`delete`, `QuerySet.update`/`delete`/`bulk_create`/`bulk_update`, `send_mail`/`send_mass_mail`, `requests.*`, and `urllib.request.urlopen` — first attempt raises `DryRunViolation` and the response surfaces `{blocked_side_effect}`. `dry_run_block=False` records without blocking. Process-wide lock serializes dry-runs.
 - **`find_handlers_for_template(template_path)` in djust MCP** — Cross-references a template file against every view that uses it, returning dj-* handlers wired in the template and the diff against view handler methods. Catches dead bindings at author time (complements djust-browser-mcp's runtime `find_dead_bindings`).
+  See `docs/guides/djust-audit.md`.
 - **`seed_fixtures(fixture_paths)` in djust MCP** — Subprocess wrapper around `manage.py loaddata` for regression-fixture DB setup.
 
+  See `docs/website/guides/mcp-server.md`.
 ### Fixed
 
 - **`hotreload`: suppress empty-patch broadcasts on unrelated file changes ([#763](https://github.com/djust-org/djust/issues/763))** — When a Python file changes that doesn't affect the currently-mounted view, re-render produces zero patches. The old code still broadcast ~14 KB (empty patches + full `_debug` state dump) to every connected session. Early-return when `hotreload=True AND patches==[]`. Non-hot-reload empty patches still sent (loading-state clear ack needed).
@@ -1414,6 +1432,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Text-region fast path now fires for `{% extends %}` templates** — The scanner that builds the VDOM text-node position index used to process the full pre-hydration HTML, but the VDOM is rooted at `[dj-root]`. On templates extending a base (with `<title>`, meta tags, scripts outside dj-root), the scanner counted text runs in `<head>` and trailing `<footer>`/`<script>` siblings that the VDOM didn't have — the count mismatched, the index was discarded, and every event fell through to a full html5ever parse (~10ms on the djust.org /examples/ page). Now the scanner is restricted to the dj-root element's interior via a balanced-tag walker. Rust render drops from ~14ms → ~2.8ms on extends templates; browser E2E (production, DEBUG=False) drops from 30ms → ~25ms avg, 18ms min.
 
+  See `docs/website/core-concepts/templates.md`.
 - **Text-region VDOM fast path** — Extends the existing text-fast-path to handle changes that differ only in a text span, even when the surrounding fragment contains tags. Computes byte-level common prefix/suffix on pre-hydration HTML; if the divergence is a single tag-free text run, locates the owning VDOM text node via a pre-built positional index (binary search on `(html_start, html_end, path, text, djust_id)` entries, built once per full-parse render and kept in sync through fast-path events by shifting downstream entries by the byte delta). Patches in place and skips html5ever entirely. For a counter click inside a `{% for %}` loop on a 309KB page, Rust render drops from ~12ms to ~2.7ms. UTF-8 safe (snaps to char boundaries), handles `<pre>`/`<code>`/`<textarea>` whitespace preservation and `<script>`/`<style>` raw-text element bodies correctly, bails to full parse on entity-offset mismatches.
 
 - **`parse_html_fragment(html, context_tag)`** — New public entry point in `djust_vdom` that uses html5ever's `parse_fragment` with a parent-element context. Enables parsing isolated HTML fragments with correct tokenization for context-sensitive elements (`<tr>`, `<td>`, `<option>`), without resetting the dj-id counter. Scaffolding for future structural-fragment fast paths.
@@ -1498,6 +1517,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Negative tests for `|date` filter invalid input ([#725](https://github.com/djust-org/djust/issues/725))** — 4 Rust tests covering invalid dates, non-date strings, empty strings, and partial dates (filter returns original value per Django convention). Merged as PR #727.
 
+  See `docs/guides/live-input.md`.
 - **`format_date()` doc comment documenting Django compatibility ([#726](https://github.com/djust-org/djust/issues/726))** — Documents supported input formats (RFC 3339, YYYY-MM-DD) and unsupported types (epoch ints, locale strings). Merged as PR #727.
 
 ## [0.4.2] - 2026-04-13
@@ -1596,12 +1616,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`djust_audit --live <url>` — runtime security-header and CSWSH probe ([#661](https://github.com/djust-org/djust/issues/661))** — Adds a new mode to `djust_audit` that fetches a running deployment with stdlib `urllib` and validates security headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, COOP, CORP), cookies (HttpOnly, Secure, SameSite on session/CSRF cookies), information-disclosure paths (`/.git/config`, `/.env`, `/__debug__/`, `/robots.txt`, `/.well-known/security.txt`), and optionally probes the WebSocket endpoint with `Origin: https://evil.example` to verify the CSWSH defense from [#653](https://github.com/djust-org/djust/issues/653) is actually enforced end-to-end. This catches the class of production issues where the setting is correctly configured in `settings.py` but the response is stripped, rewritten, or never emitted by the time it reaches the client — the NYC Claims pentest caught a critical `Content-Security-Policy missing` case this way (`django-csp` was configured but the header was absent from production responses, stripped by an nginx ingress). 30 new stable finding codes `djust.L001`–`djust.L091` cover every check class so CI configs can suppress specific codes by number. New CLI flags: `--live <url>`, `--paths` (multi-URL), `--no-websocket-probe`, `--header 'Name: Value'` (for staging auth), `--skip-path-probes` (for WAF-protected environments). Supports `--json` and `--strict` (fail on warnings too). Zero new runtime dependencies — stdlib `urllib` for HTTP, optional `websockets` package for the WebSocket probe (skipped with an INFO finding if not installed).
 
+  See `docs/guides/djust-audit.md`.
 - **New static security checks in `djust_check` / `djust_audit` ([#659](https://github.com/djust-org/djust/issues/659))** — Seven new check IDs fire from `check_configuration` when Django runs `python manage.py check`: **A001** (ERROR) — WebSocket router not wrapped in `AllowedHostsOriginValidator` (static-analysis companion to #653 for existing apps built from older scaffolds). **A010** (ERROR) — `ALLOWED_HOSTS = ["*"]` in production. **A011** (ERROR) — `ALLOWED_HOSTS` mixes `"*"` with explicit hosts (the wildcard makes the explicit entries meaningless). **A012** (ERROR) — `USE_X_FORWARDED_HOST=True` combined with wildcard `ALLOWED_HOSTS` enables Host header injection. **A014** (ERROR) — `SECRET_KEY` starts with `django-insecure-` in production (scaffold default not overridden before deployment). **A020** (WARNING) — `LOGIN_REDIRECT_URL` is a single hardcoded path but the project has multiple auth groups/permissions (catches the "every role lands on the same dashboard" anti-pattern). **A030** (WARNING) — `django.contrib.admin` installed without a known brute-force protection package (`django-axes`, `django-defender`, etc.). Each check has essentially zero false-positive risk, has a `fix_hint` pointing at the remediation, and was motivated by the 2026-04-10 NYC Claims pentest report. **Out of scope for this PR:** manifest scanning (k8s/helm/docker-compose env blocks) — deferred to a follow-up. Python-level `settings.py` values cover the common case.
 
 - **`djust_audit --permissions permissions.yaml` — declarative permissions document for CI-level RBAC drift detection ([#657](https://github.com/djust-org/djust/issues/657))** — Adds a new flag to `djust_audit` that validates every LiveView against a committed, human-readable YAML document describing the expected auth configuration for each view. CI fails on any deviation (view declared public but has auth in code, permission list mismatch, undeclared view in strict mode, stale declaration, etc.). This closes a structural gap the existing audit couldn't catch: `djust_audit` today can tell "no auth" from "some auth", but not that `login_required=True` should have been `permission_required=['claims.view_supervisor']`. The permissions document IS the ground truth. Seven stable error codes (`djust.P001` through `djust.P007`) cover every deviation class. Also adds `--dump-permissions` to bootstrap a starter YAML from existing code, and `--strict` to fail CI on any finding. Full documentation in `docs/guides/permissions-document.md`. Motivated by NYC Claims pentest finding 10/11 where every view had `login_required=True` set and djust_audit reported them all as protected, but the lowest-privilege authenticated user could ID-walk the entire database.
 
 - **`WizardMixin` for multi-step LiveView form wizards** — General-purpose mixin managing step navigation, per-step validation, and data collection for guided form flows. Provides `next_step`, `prev_step`, `go_to_step`, `update_step_field`, `validate_field`, and `submit_wizard` event handlers. Template context includes step indicators, progress, form data/errors, and pre-rendered field HTML via `as_live_field()`. Re-validates all steps on submission to guard against tampered WebSocket replays. ([#632](https://github.com/djust-org/djust/pull/632))
 
+  See `docs/website/guides/wizards.md`.
 ### Security
 
 - **LOW: Nonce-based CSP support — drop `'unsafe-inline'` from `script-src` / `style-src`** — djust's inline `<script>` and `<style>` emissions (handler metadata bootstrap in `TemplateMixin._inject_handler_metadata`, `live_session` route map in `routing.get_route_map_script`, and the PWA template tags `djust_sw_register`, `djust_offline_indicator`, `djust_offline_styles`) now read `request.csp_nonce` when available (set by [django-csp](https://django-csp.readthedocs.io/) when `CSP_INCLUDE_NONCE_IN` covers the relevant directive) and emit a `nonce="..."` attribute on the tag. When no nonce is available (django-csp not installed, or `CSP_INCLUDE_NONCE_IN` not set), the tags emit without a nonce attribute — fully backward compatible with apps still allowing `'unsafe-inline'`. Apps that want strict CSP can now set `CSP_INCLUDE_NONCE_IN = ("script-src", "script-src-elem", "style-src", "style-src-elem")` in `settings.py`, drop `'unsafe-inline'` from `CSP_SCRIPT_SRC` / `CSP_STYLE_SRC`, and get strict CSP XSS protection across all djust-generated inline content. The PWA tags `djust_sw_register`, `djust_offline_indicator`, and `djust_offline_styles` now use `takes_context=True` to read the request from the template context — they still work with the same template syntax (`{% djust_sw_register %}` etc.) as long as a `RequestContext` is used (Django's default for template rendering). See `docs/guides/security.md` for the full setup. Reported via external penetration test 2026-04-10 (FINDING-W06). Closes the v0.4.1 security hardening batch (#653 / #654 / #655). ([#655](https://github.com/djust-org/djust/issues/655))
@@ -1642,22 +1664,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`{% dj_flash %}` template tag in Rust renderer** — Registered `DjFlashTagHandler` so the flash container renders correctly when templates are processed by the Rust engine. Previously, the tag was only registered as a Django template tag and silently dropped by the Rust renderer. ([#590](https://github.com/djust-org/djust/pull/590))
 
+  See `docs/website/guides/flash-messages.md`.
 - **Navigation lifecycle events and CSS class** — `djust:navigate-start` / `djust:navigate-end` CustomEvents and `.djust-navigating` CSS class on `[dj-root]` during `dj-navigate` transitions. Enables CSS-only page transitions without monkey-patching `pageLoading`. ([#585](https://github.com/djust-org/djust/issues/585))
 
+  See `docs/website/core-concepts/events.md`.
 - **`manage.py djust_doctor` diagnostic command** -- checks Rust extension, Python/Django versions, Channels, Redis, templates, static files, routing, and ASGI server in one command. Supports `--json`, `--quiet`, `--check NAME`, and `--verbose` flags.
 
 - **Enhanced VDOM patch error messages** -- patch failures now include patch type, `dj-id`, parent element info, and suggested causes (third-party DOM modification, `{% if %}` block changes). In `DEBUG_MODE`, a console group with full patch detail is shown. Batch failure summaries include which patch indices failed.
 
+  See `docs/website/guides/flash-messages.md`.
 - **DEBUG-mode enriched WebSocket errors** -- `send_error` includes `debug_detail` (unsanitized message), `traceback` (last 3 frames), and `hint` (actionable suggestion) when `settings.DEBUG=True`. `handle_mount` lists available LiveView classes when class lookup fails.
 
+  See `docs/website/guides/error-overlay.md`.
 - **Debug panel warning interceptor** -- intercepts `console.warn` calls matching `[LiveView]` prefix and surfaces them as a warning badge on the debug button. Configurable auto-open via `LIVEVIEW_CONFIG.debug_auto_open_on_error`.
 
+  See `docs/website/advanced/debug-panel.md`.
 - **Latency simulator in debug panel** -- test loading states and optimistic updates with simulated network delay. Presets (Off/50/100/200/500ms), custom value, jitter control, localStorage persistence, and visual badge on the debug button. Latency is injected on both WebSocket send and receive for full round-trip simulation. Only active when `DEBUG_MODE=true`.
 
+  See `docs/website/advanced/debug-panel.md`.
 - **Form recovery on reconnect** — After WebSocket reconnects, form fields with `dj-change` or `dj-input` automatically fire change events to restore server state. Compares DOM values against server-rendered defaults and only fires for fields that differ. Use `dj-no-recover` to opt out individual fields. Fields inside `dj-auto-recover` containers are skipped (custom handler takes precedence). Works over both WebSocket and SSE transports.
 
 - **Reconnection backoff with jitter** — Exponential backoff with random jitter (AWS full-jitter strategy) prevents thundering herd on server restart. Min delay 500ms, max delay 30s, increased from 5 to 10 max attempts. Attempt count shown in reconnection banner (`dj-reconnecting-banner` CSS class) and exposed via `data-dj-reconnect-attempt` attribute and `--dj-reconnect-attempt` CSS custom property on `<body>`. Banner and attributes cleared on successful reconnect or intentional disconnect.
 
+  See `docs/website/guides/reconnection.md`.
 - **`page_title` / `page_meta` dynamic document metadata** — Update `document.title` and `<meta>` tags from any LiveView handler via property setters (`self.page_title = "..."`, `self.page_meta = {"description": "..."}`). Uses side-channel WebSocket messages (no VDOM diff needed). Supports `og:` and `twitter:` meta tags with correct `property` attribute. Works over both WebSocket and SSE transports.
 
 - **`dj-copy` enhancements** — Selector-based copy (`dj-copy="#code-block"` copies the element's `textContent`), configurable feedback text (`dj-copy-feedback="Done!"`), CSS class feedback (`dj-copy-class` adds a custom class for 2s, default `dj-copied`), and optional server event (`dj-copy-event="copied"` fires after successful copy for analytics). Backward compatible with existing literal copy behavior.
@@ -1672,34 +1701,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Page loading bar for navigation transitions** — NProgress-style thin loading bar at the top of the page during TurboNav and `live_redirect` navigation. Always active by default. Exposed as `window.djust.pageLoading` with `start()`, `finish()`, and `enabled` for manual control. Disable via `window.djust.pageLoading.enabled = false` or CSS override.
 
+  See `docs/website/guides/navigation.md`.
 - **`dj-scroll-into-view` attribute for auto-scroll on render** — Elements with `dj-scroll-into-view` are automatically scrolled into view after DOM updates (mount, VDOM patch). Supports scroll behavior options: `""` (smooth/nearest, default), `"instant"`, `"center"`, `"start"`, `"end"`. One-shot per DOM node — uses WeakSet tracking so the same element isn't re-scrolled on every patch, but VDOM-replaced fresh nodes scroll correctly.
 
+  See `docs/website/core-concepts/events.md`.
 - **`dj-window-*` / `dj-document-*` event scoping** — Bind event listeners on `window` or `document` while using the declaring element for context extraction (component_id, dj-value-* params). Supports `dj-window-keydown`, `dj-window-keyup`, `dj-window-scroll`, `dj-window-click`, `dj-window-resize`, `dj-document-keydown`, `dj-document-keyup`, `dj-document-click`. Key modifier filtering (e.g., `dj-window-keydown.escape="close_modal"`) works the same as `dj-keydown`. Scroll and resize events default to 150ms throttle. Phoenix LiveView's `phx-window-*` equivalent, plus `dj-document-*` as a djust extension.
 
+  See `docs/website/core-concepts/events.md`.
 - **`dj-click-away` attribute** — Fire a server event when the user clicks outside an element: `<div dj-click-away="close_dropdown">`. Uses capture-phase document listener so `stopPropagation()` inside the element doesn't prevent detection. Supports `dj-confirm` for confirmation dialogs and `dj-value-*` params from the declaring element.
 
 - **`dj-shortcut` attribute for declarative keyboard shortcuts** — Bind keyboard shortcuts on any element with modifier key support: `<div dj-shortcut="ctrl+k:open_search:prevent, escape:close_modal">`. Supports `ctrl`, `alt`, `shift`, `meta` modifiers, comma-separated multiple bindings, and `prevent` modifier to suppress browser defaults. Shortcuts are automatically skipped when the user is typing in form inputs (override with `dj-shortcut-in-input` attribute). Event params include `key`, `code`, and `shortcut` (the matched binding string).
 
 - **`_target` param in form change/input events** — When multiple form fields share one `dj-change` or `dj-input` handler, the `_target` param now includes the triggering element's `name` (or `id`, or `null`), letting the server know which field changed. For `dj-submit`, includes the submitter button's name if available. Matches Phoenix LiveView's `_target` convention.
 
+  See `docs/website/core-concepts/events.md`.
 - **`dj-disable-with` attribute for submit buttons** — Automatically disable submit buttons during form submission and replace their text with a loading message: `<button type="submit" dj-disable-with="Saving...">Save</button>`. Prevents double-submit and gives instant visual feedback. Works with both `dj-submit` forms and `dj-click` buttons. Original text is restored after server response.
 
 - **`dj-lock` attribute for concurrent event prevention** — Disable an element until its event handler response arrives from the server: `<button dj-click="save" dj-lock>Save</button>`. Prevents rapid double-clicks from triggering duplicate server events. For non-form elements (e.g., `<div>`), applies a `djust-locked` CSS class instead of the `disabled` property. All locked elements are unlocked on server response.
 
+  See `docs/website/core-concepts/events.md`.
 - **`dj-mounted` event for element lifecycle** — Fire a server event when an element with `dj-mounted="handler_name"` enters the DOM after a VDOM patch: `<div dj-mounted="on_chart_ready" dj-value-chart-type="bar">`. Does not fire on initial page load (only after subsequent patches). Includes `dj-value-*` params from the mounted element. Uses a WeakSet to prevent duplicate fires for the same DOM node.
 
+  See `docs/website/core-concepts/events.md`.
 - **Priority-aware event queue for broadcast and async updates** — Server-initiated broadcasts (`server_push`) and async completions (`_run_async_work`) are now tagged with `source="broadcast"` and `source="async"` respectively, and the client buffers them during pending user event round-trips (same as tick buffering from #560). `server_push` now acquires the render lock and yields to in-progress user events to prevent version interleaving. Client-side pending event tracking upgraded from single ref to `Set`-based tracking, supporting multiple concurrent pending events. Buffer flushes only when all pending events resolve.
 
 - **`manage.py djust_gen_live` — Model-to-LiveView scaffolding generator** — Generate a complete CRUD LiveView scaffold from a model name and field definitions: `python manage.py djust_gen_live blog Post title:string body:text`. Creates views.py (with `@event_handler` CRUD operations), urls.py (using `live_session()` routing), HTML template (with `dj-*` directives), and tests.py. Supports `--dry-run`, `--force`, `--no-tests`, `--api` (JSON mode) options. Handles all Django field types including FK relationships. Search uses `Q` objects for OR logic across text fields.
 
+  See `docs/guides/scaffolding.md`.
 - **`on_mount` hooks for cross-cutting mount logic** — Module-level hooks that run on every LiveView mount, declared via `@on_mount` decorator and `on_mount` class attribute. Use cases: authentication checks, telemetry, tenant resolution, feature flags. Hooks run after auth checks, before `mount()`. Return a redirect URL string to halt the mount pipeline. Hooks are inherited via MRO (parent-first, deduplicated). Includes V009 system check for validation. Phoenix `on_mount` v0.17+ parity.
 
+  See `docs/website/guides/on-mount-hooks.md`.
 - **`put_flash(level, message)` and `clear_flash()` for ephemeral flash notifications** — Phoenix `put_flash` parity. Queue transient messages (info, success, warning, error) from any event handler; they are flushed to the client over WebSocket/SSE after each response. Includes `{% dj_flash %}` template tag with auto-dismiss and ARIA `role="status"` / `role="alert"` support. ([#568](https://github.com/djust-org/djust/pull/568))
 
+  See `docs/website/guides/flash-messages.md`.
 - **`handle_params` called on initial mount** — `handle_params(params, uri)` is now invoked after `mount()` on the initial WebSocket connect, not just on subsequent URL changes. This matches Phoenix LiveView's `handle_params/3` contract and eliminates the need to duplicate URL-parsing logic between `mount()` and `handle_params()`. Views that don't override `handle_params` are unaffected (default is a no-op).
 
+  See `docs/website/core-concepts/liveview.md`.
 - **`dj-value-*` — Static event parameters** — Pass static values alongside events without `data-*` attributes or hidden inputs: `<button dj-click="delete" dj-value-id:int="{{ item.id }}" dj-value-type="soft">`. Supports type-hint suffixes (`:int`, `:float`, `:bool`, `:json`, `:list`), kebab-to-snake_case conversion, and prototype pollution prevention. Works with all event types: `dj-click`, `dj-submit`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`, `dj-blur`, `dj-focus`, `dj-poll`. Phoenix LiveView's `phx-value-*` equivalent.
 
+  See `docs/website/core-concepts/events.md`.
 ### Fixed
 
 - **`True`/`False`/`None` literals resolved as empty string in custom tag args** — `get_value()` didn't recognize Python boolean/None literals, so `{% tag show_labels=False %}` produced `show_labels=` (empty string) instead of `show_labels=False`. Now handles `True`/`true`, `False`/`false`, and `None`/`none` as literal values. ([#602](https://github.com/djust-org/djust/pull/602))
@@ -1789,13 +1829,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
+  See `docs/website/guides/djust-deploy.md`.
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
+  See `docs/website/guides/typecheck.md`.
 - **`.flex-between` CSS utility class** — Added to demo project's `utilities.css` for laying out flex children horizontally with space-between. Use on card headers or any flex container that needs a title on the left and action widget on the right. ([#397](https://github.com/djust-org/djust/issues/397))
+  See `docs/website/guides/css-frameworks.md`.
 - **Debug toolbar state size visualization** — New "Size Breakdown" table in State tab shows per-variable memory and serialized byte sizes with human-readable formatting (B/KB/MB). Added `_debug_state_sizes()` method to `PostProcessingMixin` included in both mount and event debug payloads. ([#459](https://github.com/djust-org/djust/pull/459))
 - **Debug panel TurboNav persistence** — Event, patch, network, and state history now persist across TurboNav navigation via sessionStorage (30s window). Panel state restores on next page if navigated within 30 seconds. ([#459](https://github.com/djust-org/djust/pull/459))
+  See `docs/website/advanced/debug-panel.md`.
 - **TurboNav integration guide** — Comprehensive guide covering setup, navigation lifecycle, inline script handling, known caveats, and design decisions: `docs/guides/turbonav-integration.md`. ([#459](https://github.com/djust-org/djust/pull/459))
 - **Debug panel search extended to Network and State tabs** — The search bar in the debug panel now filters across all data tabs. The Network tab shows a `N / total` count label when a query narrows the message list (#530). The State tab filters history entries by trigger, event name, and serialized state content, with the same `N / total` count label (#520). Overlapping `nameFilter` and `searchQuery` on the Events tab now correctly apply AND semantics (#532). ([#541](https://github.com/djust-org/djust/pull/541))
 
+  See `docs/website/advanced/debug-panel.md`.
 ## [0.3.6rc4] - 2026-03-13
 
 ### Fixed
@@ -1846,13 +1891,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
   - `--server` flag / `DJUST_SERVER` env var to override the default server URL (`https://djustlive.com`)
+  See `docs/website/guides/djust-deploy.md`.
 - **TypeScript type stubs updated** — `DjustStreamOp` now includes `"done"` and `"start"` operation types and an optional `mode` field (`"append" | "replace" | "prepend"`). `getActiveStreams()` return type changed from `Map` to `Record`.
+  See `docs/website/guides/typecheck.md`.
 - **`.flex-between` CSS utility class** — Added to demo project's `utilities.css` for laying out flex children horizontally with space-between. Use on card headers or any flex container that needs a title on the left and action widget on the right. ([#397](https://github.com/djust-org/djust/issues/397))
+  See `docs/website/guides/css-frameworks.md`.
 - **Debug toolbar state size visualization** — New "Size Breakdown" table in State tab shows per-variable memory and serialized byte sizes with human-readable formatting (B/KB/MB). Added `_debug_state_sizes()` method to `PostProcessingMixin` included in both mount and event debug payloads. ([#459](https://github.com/djust-org/djust/pull/459))
 - **Debug panel TurboNav persistence** — Event, patch, network, and state history now persist across TurboNav navigation via sessionStorage (30s window). Panel state restores on next page if navigated within 30 seconds. ([#459](https://github.com/djust-org/djust/pull/459))
+  See `docs/website/advanced/debug-panel.md`.
 - **TurboNav integration guide** — Comprehensive guide covering setup, navigation lifecycle, inline script handling, known caveats, and design decisions: `docs/guides/turbonav-integration.md`. ([#459](https://github.com/djust-org/djust/pull/459))
 - **Debug panel search extended to Network and State tabs** — The search bar in the debug panel now filters across all data tabs. The Network tab shows a `N / total` count label when a query narrows the message list (#530). The State tab filters history entries by trigger, event name, and serialized state content, with the same `N / total` count label (#520). Overlapping `nameFilter` and `searchQuery` on the Events tab now correctly apply AND semantics (#532). ([#541](https://github.com/djust-org/djust/pull/541))
 
+  See `docs/website/advanced/debug-panel.md`.
 ## [0.3.5] - 2026-03-05
 
 
@@ -1864,6 +1914,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `djust-deploy status [project]` — fetches current deployment state; optionally filtered by project slug
   - `djust-deploy deploy <project-slug>` — validates the git working tree is clean, triggers a production deployment, and streams build logs to stdout
 
+  See `docs/website/guides/djust-deploy.md`.
 ### Fixed
 
 - **`dj-hook` elements now initialize after `dj-navigate` navigation** — `updateHooks()` is called after `live_redirect_mount` replaces DOM content via WebSocket and SSE mount handlers. Previously, hook lifecycle callbacks (`mounted()`, `destroyed()`) were skipped after client-side navigation, leaving hook-dependent elements (e.g., Chart.js canvases) uninitialized. ([#408](https://github.com/djust-org/djust/pull/408))
@@ -1881,8 +1932,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Type stubs for Rust-injected LiveView methods** — `.pyi` stubs for `live_redirect`, `live_patch`, `push_event`, `stream`, and related methods so mypy/pyright catch typos at lint time. ([#390](https://github.com/djust-org/djust/pull/390))
+  See `docs/website/guides/typecheck.md`.
 - **Navigation Patterns guide** — Documents when to use `dj-navigate` vs `live_redirect` vs `live_patch`. ([#390](https://github.com/djust-org/djust/pull/390))
 - **Testing guide** — Django testing best practices and pytest setup for djust applications. ([#390](https://github.com/djust-org/djust/pull/390))
+  See `docs/website/api-reference/testing.md`.
 - **System checks reference** — New `docs/system-checks.md` covering all 37 check IDs (C/V/S/T/Q) with severity, detection method, suppression patterns, and known false positives. ([#398](https://github.com/djust-org/djust/pull/398))
 
 ### Security
@@ -1910,6 +1963,7 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 ### Added
 
 - **6 new Django template tags in Rust renderer** — `{% widthratio %}`, `{% firstof %}`, `{% templatetag %}`, `{% spaceless %}`, `{% cycle %}`, `{% now %}`. ([#329](https://github.com/djust-org/djust/issues/329))
+  See `docs/website/guides/template-cheatsheet.md`.
 - **System checks `djust.T011` / `T012` / `T013`** — Warns at startup for unsupported Rust template tags, missing `dj-view`, and invalid `dj-view` paths. ([#293](https://github.com/djust-org/djust/issues/293), [#329](https://github.com/djust-org/djust/issues/329))
 - **Deployment guides** — Railway, Render, and Fly.io. ([#247](https://github.com/djust-org/djust/issues/247))
 - **Navigation and LiveView invariants documentation.** ([#304](https://github.com/djust-org/djust/issues/304), [#316](https://github.com/djust-org/djust/issues/316))
@@ -1944,12 +1998,16 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 ### Added
 
 - **6 new Django template tags in Rust renderer** — Implemented `{% widthratio %}`, `{% firstof %}`, `{% templatetag %}`, `{% spaceless %}`, `{% cycle %}`, and `{% now %}` in the Rust template engine. These tags were previously rendered as HTML comments with warnings. ([#329](https://github.com/djust-org/djust/issues/329))
+  See `docs/website/guides/template-cheatsheet.md`.
 - **System check `djust.T011` for unsupported template tags** — Warns at startup when templates use Django tags not yet implemented in the Rust renderer (`ifchanged`, `regroup`, `resetcycle`, `lorem`, `debug`, `filter`, `autoescape`). Suppressible with `{# noqa: T011 #}`. ([#329](https://github.com/djust-org/djust/issues/329))
 - **System check `djust.T012` for missing `dj-view`** — Detects templates that use `dj-*` event directives without a `dj-view` attribute, which would silently fail at runtime. ([#293](https://github.com/djust-org/djust/issues/293))
+  See `docs/website/getting-started/first-liveview.md`.
 - **System check `djust.T013` for invalid `dj-view` paths** — Detects empty or malformed `dj-view` attribute values. ([#293](https://github.com/djust-org/djust/issues/293))
+  See `docs/website/getting-started/first-liveview.md`.
 - **`{% now %}` supports 35+ Django date format specifiers** — Including `S` (ordinal suffix), `t` (days in month), `w`/`W` (weekday/week number), `L` (leap year), `c` (ISO 8601), `r` (RFC 2822), `U` (Unix timestamp), and Django's special `P` format (noon/midnight).
 - **Deployment guides** — Added deployment documentation for Railway, Render, and Fly.io. ([#247](https://github.com/djust-org/djust/issues/247))
 - **Navigation best practices documentation** — Documented `dj-patch` vs `dj-click` for client-side navigation, with `handle_params()` patterns. ([#304](https://github.com/djust-org/djust/issues/304))
+  See `docs/guides/BEST_PRACTICES.md`.
 - **LiveView invariants documentation** — Documented root container requirement and `**kwargs` convention for event handlers. ([#316](https://github.com/djust-org/djust/issues/316))
 
 ### Fixed
@@ -1970,9 +2028,12 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 - **Type stub files (.pyi) for LiveView and mixins** — Added PEP 561 compliant type stubs for `NavigationMixin`, `PushEventMixin`, `StreamsMixin`, `StreamingMixin`, and `LiveView` to enable IDE autocomplete and mypy type checking for runtime-injected methods like `live_redirect`, `live_patch`, `push_event`, `stream`, `stream_insert`, `stream_delete`, and `stream_to`. Includes `py.typed` marker file and comprehensive test suite.
 - **`@background` decorator for async event handlers** — New decorator that automatically runs the entire event handler in a background thread via `start_async()`. Simplifies syntax for long-running operations (AI generation, API calls, file processing) without needing explicit callback splitting. Can be combined with other decorators like `@debounce`. Task name is automatically set to the handler's function name for cancellation tracking. ([#313](https://github.com/djust-org/djust/issues/313))
 - **`start_async()` keeps loading state active during background work** — WebSocket responses include `async_pending` flag when a `start_async()` callback is running, preventing loading spinners from disappearing prematurely. Async completion responses include `event_name` so the client clears the correct loading state. Supports named tasks for tracking and cancellation via `cancel_async(name)`. Optional `handle_async_result(name, result, error)` callback for completion/error handling. ([#313](https://github.com/djust-org/djust/issues/313), [#314](https://github.com/djust-org/djust/pull/314))
+  See `docs/website/guides/loading-states.md`.
 - **`dj-loading.for` attribute** — Scope any `dj-loading.*` directive to a specific event name, regardless of DOM position. Allows spinners, disabled buttons, and other loading indicators anywhere in the page to react to a named event. ([#314](https://github.com/djust-org/djust/pull/314))
 - **`AsyncWorkMixin` included in `LiveView` base class** — `start_async()` is now available on all LiveViews without explicit mixin import. ([#314](https://github.com/djust-org/djust/pull/314))
+  See `docs/website/guides/loading-states.md`.
 - **Loading state re-scan after DOM patches** — `scanAndRegister()` is called after every `bindLiveViewEvents()` so dynamically rendered elements (e.g., inside modals) get loading state registration. Stale entries for disconnected elements are cleaned up automatically. ([#314](https://github.com/djust-org/djust/pull/314))
+  See `docs/website/guides/loading-states.md`.
 - **System check `djust.T010` for dj-click navigation antipattern** — Detects elements using `dj-click` with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, `data-section`). This pattern should use `dj-patch` instead for proper URL updates, browser history support, and bookmarkable views. Warning severity. ([#305](https://github.com/djust-org/djust/issues/305))
 - **System check `djust.Q010` for navigation state in event handlers** — Heuristic INFO-level check that detects `@event_handler` methods setting navigation state variables (`self.active_view`, `self.current_tab`, etc.) without using `patch()` or `handle_params()`. Suggests converting to `dj-patch` pattern for URL updates and back-button support. Can be suppressed with `# noqa: Q010`. ([#305](https://github.com/djust-org/djust/issues/305))
 - **Type stubs for Rust extension and LiveView** — Added `.pyi` type stub files for `_rust` module and `LiveView` class, enabling IDE autocomplete, mypy/pyright type checking, and catching typos like `live_navigate` (should be `live_patch`) at lint time. Includes `py.typed` marker for PEP 561 compliance and comprehensive documentation in `docs/TYPE_STUBS.md`.
@@ -2041,6 +2102,7 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 
 - **CSS Framework Support** — Comprehensive Tailwind CSS integration with three-part system: (1) System checks (`djust.C010`, `djust.C011`, `djust.C012`) automatically warn about Tailwind CDN in production, missing compiled CSS, and manual `client.js` loading. (2) Graceful fallback auto-injects Tailwind CDN in development mode when `output.css` is missing. (3) CLI helper command `python manage.py djust_setup_css tailwind` creates `input.css` with Tailwind v4 syntax, auto-detects template directories, finds Tailwind CLI, and builds CSS with optional `--watch` and `--minify` flags. Eliminates duplicate client.js race conditions and guides developers toward production-ready setup.
 
+  See `docs/website/guides/css-frameworks.md`.
 ### Fixed
 
 - **Server-side template processing now auto-infers dj-root from dj-view** — All template extraction methods (`_extract_liveview_content`, `_extract_liveview_root_with_wrapper`, `_extract_liveview_template_content`, `_strip_liveview_root_in_html`) now fall back to `[dj-view]` when `[dj-root]` is not present, matching the client-side `autoStampRootAttributes()` behavior introduced in PR #297. This fixes a bug where templates with only `dj-view` (no explicit `dj-root`) would fail to render correctly. ([#300](https://github.com/djust-org/djust/issues/300))
@@ -2073,31 +2135,43 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 ### Added
 
 - **All 57 Django template filters** — The Rust template engine now supports the complete set of Django built-in filters. Added 24 filters across two batches: `default_if_none`, `wordcount`, `wordwrap`, `striptags`, `addslashes`, `ljust`, `rjust`, `center`, `make_list`, `json_script`, `force_escape`, `escapejs`, `linenumbers`, `get_digit`, `iriencode`, `urlize`, `urlizetrunc`, `truncatechars_html`, `truncatewords_html`, `safeseq`, `escapeseq`, `unordered_list`, `phone2numeric`, `pprint`. ([#246](https://github.com/djust-org/djust/issues/246), [#254](https://github.com/djust-org/djust/issues/254))
+  See `docs/website/guides/template-cheatsheet.md`.
 - **Authentication & Authorization** — Opinionated, framework-enforced auth for LiveViews. View-level `login_required` and `permission_required` class attributes (plus `LoginRequiredMixin`/`PermissionRequiredMixin` for Django-familiar patterns). Custom auth logic via `check_permissions()` hook. Handler-level `@permission_required()` decorator for protecting individual event handlers. Auth checks run server-side before `mount()` and before handler dispatch — no client-side bypass possible. Integrates with `djust_audit` command (shows auth posture per view) and Django system checks (`djust.S005` warns on unprotected views with exposed state).
 - **Navigation & URL State** — `live_patch()` updates URL query params without remount, `live_redirect()` navigates to a different view over the same WebSocket. Includes `handle_params()` callback, `live_session()` URL routing helper, and client-side `dj-patch`/`dj-navigate` directives with popstate handling. ([#236](https://github.com/djust-org/djust/pull/236))
 - **Presence Tracking** — Real-time user presence with `PresenceMixin` and `PresenceManager`. Pluggable backends (in-memory and Redis). Includes `LiveCursorMixin` and `CursorTracker` for collaborative live cursor features. ([#236](https://github.com/djust-org/djust/pull/236))
+  See `docs/website/guides/presence.md`.
 - **Streaming** — `StreamingMixin` for real-time partial DOM updates (e.g., LLM token-by-token streaming). Provides `stream_to()`, `stream_insert()`, `stream_text()`, `stream_error()`, `stream_start()`/`stream_done()`, and `push_state()`. Batched at ~60fps to prevent flooding. ([#236](https://github.com/djust-org/djust/pull/236))
+  See `docs/website/guides/streaming-markdown.md`.
 - **File Uploads** — `UploadMixin` with binary WebSocket frame protocol for chunked file uploads. Includes progress tracking, magic bytes validation, file size/extension/MIME checking, and client-side `dj-upload`/`dj-upload-drop` directives. ([#236](https://github.com/djust-org/djust/pull/236))
+  See `docs/website/guides/uploads.md`.
 - **JS Hooks** — `dj-hook` attribute for client-side JavaScript lifecycle hooks (mounted, updated, destroyed, disconnected, reconnected). ([#236](https://github.com/djust-org/djust/pull/236))
 - **Model Binding** — `dj-model` two-way data binding with `.lazy` and `.debounce-N` modifiers. Server-side `ModelBindingMixin` with security field blocklist and type coercion. ([#236](https://github.com/djust-org/djust/pull/236))
+  See `docs/website/guides/model-binding.md`.
 - **Client Directives** — `dj-confirm` confirmation dialogs, `dj-target` scoped updates, embedded view routing in event handlers. ([#236](https://github.com/djust-org/djust/pull/236))
 - **Server-Push API** — Background tasks (Celery, management commands, cron jobs) can now push state updates to connected LiveView clients via `push_to_view()`. Includes per-view channel groups (auto-joined on mount), a sync/async public API (`push_to_view` / `apush_to_view`), and periodic `handle_tick()` for self-updating views. ([#230](https://github.com/djust-org/djust/issues/230))
 - **Progressive Web App (PWA) Support** — Complete offline-first PWA implementation with service worker integration, IndexedDB/LocalStorage abstraction, optimistic UI updates, and offline-aware template directives. Includes comprehensive template tags (`{% djust_pwa_head %}`, `{% djust_pwa_manifest %}`), PWA mixins (`PWAMixin`, `OfflineMixin`, `SyncMixin`), and automatic synchronization when online. ([#235](https://github.com/djust-org/djust/pull/235))
+  See `docs/website/guides/pwa.md`.
 - **Multi-Tenant SaaS Support** — Production-ready multi-tenant architecture with flexible tenant resolution strategies (subdomain, path, header, session, custom, chained), automatic data isolation, tenant-aware state backends, and comprehensive template context injection. Includes `TenantMixin` and `TenantScopedMixin` for views. ([#235](https://github.com/djust-org/djust/pull/235))
 - **`dj-poll` attribute** — Declarative polling for LiveView elements. Add `dj-poll="handler_name"` to any element to trigger the handler at regular intervals. Configurable via `dj-poll-interval` (default: 5000ms). Automatically pauses when the page is hidden and resumes on visibility change. ([#269](https://github.com/djust-org/djust/issues/269))
 - **`DjustMiddlewareStack`** — New ASGI middleware for apps that don't use `django.contrib.auth`. Wraps WebSocket routes with session middleware only (no auth required). Updated `C005` system check to recognize both `AuthMiddlewareStack` and `DjustMiddlewareStack`. ([#265](https://github.com/djust-org/djust/issues/265))
 - **System check `C006`** — Warns when `daphne` is in `INSTALLED_APPS` but `whitenoise` middleware is missing. ([#259](https://github.com/djust-org/djust/issues/259))
 - **`startproject` / `startapp` / `new` CLI commands** — `python -m djust new myapp` creates a full project with optional features (`--with-auth`, `--with-db`, `--with-presence`, `--with-streaming`, `--from-schema`). Legacy `startproject` and `startapp` commands also available. ([#266](https://github.com/djust-org/djust/issues/266))
 - **`djust mcp install` CLI command** — Automates MCP server setup for Claude Code, Cursor, and Windsurf. Tries `claude mcp add` first (canonical for Claude Code), falls back to writing `.mcp.json` directly. Merges with existing config, backs up malformed files, idempotent.
+  See `docs/website/guides/mcp-server.md`.
 - **Simplified root element** — `dj-view` is now the only required attribute on LiveView container elements. The client auto-stamps `dj-root` and `dj-liveview-root` at init time. Old three-attribute format still works. ([#258](https://github.com/djust-org/djust/issues/258))
 - **Model `.pk` in templates** — `{{ model.pk }}` now works in Rust-rendered templates. Model serialization includes a `pk` key with the native primary key value. ([#262](https://github.com/djust-org/djust/issues/262))
+  See `docs/website/guides/template-cheatsheet.md`.
 - **Better Error Messages** — Improved error messages for common LiveView event handler mistakes (missing `@event_handler`, wrong method signature). ([#248](https://github.com/djust-org/djust/issues/248))
+  See `docs/website/guides/flash-messages.md`.
 - **`LiveViewSmokeTest` mixin** — Automated smoke and fuzz testing for LiveView classes. ([#251](https://github.com/djust-org/djust/pull/251))
 - **MCP server** — `python manage.py djust_mcp` starts a Model Context Protocol server for AI assistant integration. Provides framework introspection, system checks, scaffolding, and validation tools. Used by `djust mcp install` to configure Claude Code, Cursor, and Windsurf.
+  See `docs/website/guides/mcp-server.md`.
 - **`djust_audit` management command** — Security audit showing auth posture, exposed state, and handler signatures per view.
 - **`djust_check` management command** — Django system checks for project validation. Gains `--fix` flag for safe auto-fixes and `--format json` for enhanced output with fix hints.
 - **`djust_schema` management command** — Extract and generate Django models from JSON schema files.
+  See `docs/guides/djust-audit.md`.
 - **`djust_ai_context` management command** — Generate AI-focused context files for LLM integrations.
+  See `docs/guides/djust-audit.md`.
 - **AI documentation** — `docs/ai/` with focused guides for events, forms, JIT, lifecycle, security, and templates. `docs/llms.txt` and `docs/llms-full.txt` for LLM context.
 - **Auto-build client.js from src/ modules** — Pre-commit hook runs `build-client.sh` when `src/` files change. ([#211](https://github.com/djust-org/djust/issues/211))
 - **Keyed-mutation fuzz test generator** — New proptest generator produces tree B by mutating tree A, exercising keyed diff paths more effectively. Proptest cases bumped from 500 to 1000. ([#216](https://github.com/djust-org/djust/issues/216), [#217](https://github.com/djust-org/djust/issues/217))
@@ -2180,6 +2254,7 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 ### Added
 
 - **Debug Panel: Live Debug Payload** — When `DEBUG=True`, WebSocket event responses now include a `_debug` field with updated variables, handlers, patches, and performance metrics. ([#191](https://github.com/djust-org/djust/pull/191))
+  See `docs/website/advanced/debug-panel.md`.
 - **Debug Toolbar: Event Filtering** — Events tab filter controls to search by event/handler name and filter by status. ([#180](https://github.com/djust-org/djust/pull/180))
 - **Debug Toolbar: Event Replay** — Replay button (⟳) that re-sends events through the WebSocket with original params. ([#181](https://github.com/djust-org/djust/pull/181))
 - **Debug Toolbar: Scoped State Persistence** — Panel UI state scoped per view class via localStorage. ([#182](https://github.com/djust-org/djust/pull/182))
@@ -2228,6 +2303,7 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 
 - **Template `and`/`or`/`in` Operators** - `{% if %}` conditions now support `and`, `or`, and `in` boolean/membership operators with correct precedence and chaining. ([#103](https://github.com/djust-org/djust/pull/103))
 
+  See `docs/website/getting-started/installation.md`.
 ### Fixed
 
 - **Pre-rendered DOM Whitespace Preservation** - WebSocket mount no longer replaces `innerHTML` when content was pre-rendered via HTTP GET. Instead, `data-dj-id` attributes are stamped onto existing DOM elements, preserving whitespace in code blocks and syntax-highlighted content. ([#99](https://github.com/djust-org/djust/pull/99))
@@ -2292,8 +2368,10 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 
 - **Inline Template Support** - `LiveComponent` now supports inline `template` attribute for template strings, in addition to `template_name` for file-based templates. ([#89](https://github.com/djust-org/djust/pull/89))
 
+  See `docs/website/guides/template-cheatsheet.md`.
 - **Form Components Export** - `ForeignKeySelect` and `ManyToManySelect` are now exported from `djust.components`. ([#89](https://github.com/djust-org/djust/pull/89))
 
+  See `docs/website/guides/components.md`.
 ### Fixed
 
 - **`{% elif %}` Tag Support**: Template parser now correctly handles `{% elif %}` conditionals. Previously, elif branches fell through to the unknown tag handler and rendered all branches instead of just the matching one. ([#80](https://github.com/djust-org/djust/pull/80))
@@ -2339,6 +2417,7 @@ Stable release — promotes 0.3.3rc1 through 0.3.3rc3. All changes below were pr
 - **Lazy Hydration**: LiveView elements can now defer WebSocket connections until they enter the viewport or receive user interaction. Use `dj-lazy` attribute with modes: `viewport` (default), `click`, `hover`, or `idle`. Reduces memory usage by 20-40% per page for below-fold content. ([#54](https://github.com/djust-org/djust/pull/54))
 - **TurboNav Integration**: LiveView now works seamlessly with Turbo-style client-side navigation. WebSocket connections are properly disconnected on navigation and reinitialized when returning to a page. ([#54](https://github.com/djust-org/djust/pull/54))
 
+  See `docs/guides/turbonav-integration.md`.
 ### Changed
 
 - **AST Optimization**: Template parser now merges adjacent Text nodes during AST optimization, reducing allocations and improving render time by 5-15%. Comment nodes are also removed during optimization as they produce no output. ([#54](https://github.com/djust-org/djust/pull/54))
