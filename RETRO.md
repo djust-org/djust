@@ -131,7 +131,7 @@ issue or be explicitly closed with a reason.
 | 119 | Phase 2 streaming (lazy-child render + true server overlap) | Retro v0.6.1 / PR #975 | — | Open | v0.6.2 — Phase 1 was transport-layer only |
 | 120 | ADR-006 AI-generated UIs — deferred due to AssistantMixin/LLM-provider dependency chain | Retro v0.6.1 | — | Open | Deferred from v0.6.1 to v0.6.2 |
 | 121 | Shared `_SCRIPT_CLOSE_TOLERANT_RE` constant for HTML5-tolerant `</script>` matching | Retro v0.6.1 / PR #975 | — | Open | Third occurrence of CodeQL py/bad-html-filtering-regexp (PR #966, #970, #975). Centralize into `mixins/template.py` or a new `_html_utils.py`. |
-| 122 | Post-commit verification step in pipeline-run skill: `git log -1 --oneline` sanity check after every `git commit` | Retro v0.6.1 / PR #974 (+ PRs #989, #996, #1007, #1008, #1014, #1015) | — | **Open — 6th reinforcement in single session** | Silent pre-commit-hook bounce on long commit message / ruff reformat went undetected for one tool cycle. **Six reinforcements in single 24-hour session**: #989 (1st), #996 (2nd), #1007 (3rd), #1008 (4th), #1014 (5th), #1015 (6th). The failure mode is now unmistakably load-bearing — every additional PR carries a re-stage+retry cost. Implementation is one bash check in the skill markdown; cumulative working-around cost has long exceeded that. **Top of next housekeeping pass — not optional.** |
+| 122 | Post-commit verification step in pipeline-run skill: `git log -1 --oneline` sanity check after every `git commit` | Retro v0.6.1 / PR #974 (+ PRs #989, #996, #1007, #1008, #1014, #1015, #1021) | — | **Open — 7th reinforcement in single session** | Silent pre-commit-hook bounce on long commit message / ruff reformat / lock-file stash. **Seven reinforcements in single 24-hour session**: #989 (1st), #996 (2nd), #1007 (3rd), #1008 (4th), #1014 (5th), #1015 (6th), #1021 (7th). The failure mode is now load-bearing across every drain milestone — every additional PR carries a re-stage+retry cost. Implementation is one bash check in `~/.claude/skills/pipeline-run/SKILL.md`; cumulative working-around cost has long exceeded the implementation cost by orders of magnitude. **Skill-level work overdue.** |
 | 123 | FORCE_SCRIPT_NAME / mounted sub-path support for JS clients (hardcoded `/djust/api/...` prefix in `48-server-functions.js` and other client modules) | Retro v0.7.0 / PR #986 | #987 | Closed | Shipped in v0.7.1 PR #993 (merged as `f03d64eb`) — `{% djust_client_config %}` template tag (dual-registered for Django + Rust engines per the djust_markdown precedent) + `window.djust.apiPrefix` / `djust.apiUrl(path)` helpers + `48-server-functions.js` routed through the helper. 15 new tests (5 Py + 6 JS + 1 regression + 3 dual-engine parity cases added at Stage 12). Bundle delta +148 B gzipped. Follow-up filed for `03b-sse.js:44` (SSE fallback transport — same class of bug, #992, v0.7.2 target). |
 | 124 | Upgrade Action #116 — for every feature with non-trivial semantics (gate rules, error envelopes, state contracts), write doc-claim-verbatim tests BEFORE writing implementation | Retro v0.7.0 / PR #988 (+ v0.6.0/v0.6.1/#986 pattern) | — | Open | 4th consecutive milestone with doc-vs-code drift 🔴/🟡. Action #116 ("trace data-flow before writing docs") is aspirational, not executable. Upgrade to TDD sharpened: the test cases ARE the doc claims. Enforcement: Stage 7 checklist grows a "for each documented rule, point to the asserting test" row. PR #989 application: partial — five rule tests written RED first, but PR-body headline claim ("action fires → redirect to progress page") was never a test; that's the 🔴 Stage 11 caught. Subsumed for user-visible features by #125. |
 | 125 | Upgrade Stage 7 checklist with user-flow trace — for every user-visible feature, trace the happy-path user story end-to-end (HTTP request → server dispatch → response envelope → browser render/navigation) | Retro v0.7.0 / PR #989 (+ PR #986 + PR #988 pattern) | — | Open | 3rd consecutive pipeline where Stage 7 rubber-stamped a diff that Stage 11 proved was broken end-to-end. PR #986 — JsonResponse outside try/except (response-layer). PR #988 — fire-and-forget flush breaking same-round-trip (transport-layer). PR #989 — HttpResponseRedirect silently dropped by @event_handler (dispatch-layer). Common shape: code does a thing, but thing doesn't reach the user. Enforcement: Stage 7 output template grows a "User flow trace" section with a required bullet per user-visible feature. **Validated across 5 pipelines** (#990, #993, #995, #996, #997 — all 0 🔴 at Stage 11; #995 + #996 ran condensed pipeline-dev flow with no Stage 11 but no live-verify regressions either). The class of defect that plagued #976/#988/#989 has not recurred since #125 was filed. |
@@ -142,11 +142,11 @@ issue or be explicitly closed with a reason.
 | 130 | SSE FORCE_SCRIPT_NAME / mounted sub-path support — `03b-sse.js:44` hardcoded `/djust/sse/` prefix breaks the same way as `48-server-functions.js` did | Retro v0.7.0 / PR #993 follow-up | #992 | Closed | Shipped in v0.7.1 PR #997 (merged as `4adc27b6`). Mechanically applied the PR #993 pattern: meta-tag emission via `{% djust_client_config %}` extension + `djust.ssePrefix` + `djust.sseUrl()` helper; +3 tests; +46 B bundle. First-push clean merge (single Stage 11 APPROVE, 0 🔴/🟡). **Template-reuse dividend**: total engineering time was a fraction of PR #993 — PR #993 established the pattern, #997 applied it. |
 | 131 | Stage 4 plan-template "Engine path" bullet should generalize beyond template-tags — any feature that touches the template rendering pipeline (filters, tags, context processors, custom blocks, post-processing hooks) must declare which engine(s) the user templates run through | Retro v0.7.1 / PR #993 generalization | — | Open | Generalizes Action #129. PR #993 caught the dual-engine bug ONLY because pre-push runs the full demo suite; targeted Stage 6 subsets miss it. Class of bug: any code path that participates in user template rendering can silently work in one engine and 500 in the other. Enforcement: Stage 4 plan template's "Engine path" row applies to filters, context processors, post-processing hooks, and any registry-style API — not just `register_tag_handler`. |
 | 132 | Pipeline-run skill should list pipeline-dev-eligible PR shapes explicitly | Retro v0.7.1 / PRs #995 + #996 | — | Open | Empirically validated this milestone: PR #995 (Makefile target) and PR #996 (test-only refactor) shipped cleanly under condensed pipeline-dev flow (no subagent reviews, no Stage 7/8/11). Proposed heuristic: pipeline-dev-eligible iff PR touches only {Makefile, scripts/, docs/, tests/} AND has zero changes under `python/djust/` or `crates/`. Production code always goes through pipeline-run. Action: update `~/.claude/skills/pipeline-run/SKILL.md` with a triage section before next milestone. |
-| 133 | py3.14 timing-sensitive CI flake class — `test_hotreload_slow_patch_warning` and `test_broadcast_latency_scales[10]` both fail intermittently on the py3.14 runner only | Retro v0.7.0 / PR #990 + Retro v0.7.2 / PR #1001 | #1016 | Open | Same class as #126 (filed during v0.7.0). py3.14 CI runner has different timing characteristics from py3.12/3.13 — wall-clock threshold assertions and warning-debounce timeouts hit the threshold occasionally on py3.14 only. Both tests (`test_broadcast_latency_scales[10]` from PR #990, `test_hotreload_slow_patch_warning` from PR #1001) passed on rerun. Options: (a) loosen thresholds with per-runner tolerance, (b) `@pytest.mark.flaky(reruns=2)` on timing-sensitive tests, (c) move py3.14 to non-required check until thresholds are recalibrated. Track next 3-4 py3.14 runs; if a third test joins the class, prioritize the fix. |
-| 134 | PR review checklist reminder: when adding a framework-set attribute on `LiveView`/`LiveComponent`, also add it to `_FRAMEWORK_INTERNAL_ATTRS` | Retro v0.7.2 / PR #1002 / ADR-012 | #1017 | Open | Mitigation for ADR-012's accepted maintenance burden. The `_FRAMEWORK_INTERNAL_ATTRS` filter is the single source of truth for "this attr is internal"; a future framework attr added without the filter entry would re-introduce the v0.5.7 leak class. Not a CI gate (would be over-engineering for ~25 attrs that change rarely) — just a one-line bullet in `docs/PULL_REQUEST_CHECKLIST.md`. ~2 minutes to add; lock the mitigation that ADR-012 documented. |
-| 135 | "Misleading existing tests" pattern — a check fix often requires UPDATING tests, not just adding new ones, when the pre-existing test fixture exemplifies the broken behavior the issue is about | Retro v0.7.3 / PR #1008 | #1018 | Open | PR #1008's `test_c011_passes_when_output_exists` had been writing an 18-byte placeholder and asserting no C011 — exactly the bug #1003 was about. The test was wrong in a load-bearing way: it codified the broken behavior. Add a one-paragraph note to `docs/PULL_REQUEST_CHECKLIST.md` and PR review prompts: "if a check claims to test X but its test fixture exemplifies the broken behavior, updating the test is part of the fix." Locks against future "I added a new test but the existing one passes for the wrong reason" failures. |
-| 136 | Whitespace-preserving redaction pattern for line-number-aware regex scanners | Retro v0.7.3 / PR #1014 | #1019 | Open | When a regex scanner needs to ignore a region of text (e.g. `{% verbatim %}` blocks for A070, or potentially future `{% comment %}` / `<script>` regions), replace the body with whitespace (preserve newlines) instead of stripping it. Line numbers from `match.start()` stay aligned with the original source for matches outside the region. Worth a one-paragraph note in the check-authoring guide as a reusable pattern; PR #1014 is the canonical reference implementation. |
-| 137 | Scope-decision helpers belong as named functions, not inline branches | Retro v0.7.3 / PR #1015 | #1020 | Open | When a check's behavior depends on a config-driven scope (e.g. `_contrast_check_scope()` reading `DJUST_THEMING.contrast_check_scope`), extracting the decision into a named helper creates a clean test seam. PR #1015's `_contrast_check_scope()` and `_presets_to_check()` are the canonical examples — 4 small tests cover the four branches (default-active, opt-in-all, missing-preset, unknown-value) without dragging in the full Django settings stack. Worth a one-paragraph note in the check-authoring guide. |
+| 133 | py3.14 timing-sensitive CI flake class — `test_hotreload_slow_patch_warning` and `test_broadcast_latency_scales[10]` both fail intermittently on the py3.14 runner only | Retro v0.7.0 / PR #990 + Retro v0.7.2 / PR #1001 | #1016 | Closed | Shipped in v0.7.4 PR #1021 (merged as `6a4c0a58`). Two distinct fixes: (a) phase-based `time.time()` mock in test_hotreload (resilient to extra scheduler `loop.time()` calls on py3.14), (b) bumped 10ms→30ms dispatch budget for broadcast_latency_scales. No new deps. | Same class as #126 (filed during v0.7.0). py3.14 CI runner has different timing characteristics from py3.12/3.13 — wall-clock threshold assertions and warning-debounce timeouts hit the threshold occasionally on py3.14 only. Both tests (`test_broadcast_latency_scales[10]` from PR #990, `test_hotreload_slow_patch_warning` from PR #1001) passed on rerun. Options: (a) loosen thresholds with per-runner tolerance, (b) `@pytest.mark.flaky(reruns=2)` on timing-sensitive tests, (c) move py3.14 to non-required check until thresholds are recalibrated. Track next 3-4 py3.14 runs; if a third test joins the class, prioritize the fix. |
+| 134 | PR review checklist reminder: when adding a framework-set attribute on `LiveView`/`LiveComponent`, also add it to `_FRAMEWORK_INTERNAL_ATTRS` | Retro v0.7.2 / PR #1002 / ADR-012 | #1017 | Closed | Shipped in v0.7.4 PR #1022 (bundled docs PR). One bullet under Code Quality > Architecture in `docs/PULL_REQUEST_CHECKLIST.md`. | Mitigation for ADR-012's accepted maintenance burden. The `_FRAMEWORK_INTERNAL_ATTRS` filter is the single source of truth for "this attr is internal"; a future framework attr added without the filter entry would re-introduce the v0.5.7 leak class. Not a CI gate (would be over-engineering for ~25 attrs that change rarely) — just a one-line bullet in `docs/PULL_REQUEST_CHECKLIST.md`. ~2 minutes to add; lock the mitigation that ADR-012 documented. |
+| 135 | "Misleading existing tests" pattern — a check fix often requires UPDATING tests, not just adding new ones, when the pre-existing test fixture exemplifies the broken behavior the issue is about | Retro v0.7.3 / PR #1008 | #1018 | Closed | Shipped in v0.7.4 PR #1022 (bundled docs PR). Bullet in `docs/PULL_REQUEST_CHECKLIST.md` Test Quality section + canonical example documented in `docs/development/check-authoring.md`. | PR #1008's `test_c011_passes_when_output_exists` had been writing an 18-byte placeholder and asserting no C011 — exactly the bug #1003 was about. The test was wrong in a load-bearing way: it codified the broken behavior. Add a one-paragraph note to `docs/PULL_REQUEST_CHECKLIST.md` and PR review prompts: "if a check claims to test X but its test fixture exemplifies the broken behavior, updating the test is part of the fix." Locks against future "I added a new test but the existing one passes for the wrong reason" failures. |
+| 136 | Whitespace-preserving redaction pattern for line-number-aware regex scanners | Retro v0.7.3 / PR #1014 | #1019 | Closed | Shipped in v0.7.4 PR #1022 (bundled docs PR). Documented in `docs/development/check-authoring.md` with `_strip_verbatim_blocks` (PR #1014) as canonical reference + fast-path note. | When a regex scanner needs to ignore a region of text (e.g. `{% verbatim %}` blocks for A070, or potentially future `{% comment %}` / `<script>` regions), replace the body with whitespace (preserve newlines) instead of stripping it. Line numbers from `match.start()` stay aligned with the original source for matches outside the region. Worth a one-paragraph note in the check-authoring guide as a reusable pattern; PR #1014 is the canonical reference implementation. |
+| 137 | Scope-decision helpers belong as named functions, not inline branches | Retro v0.7.3 / PR #1015 | #1020 | Closed | Shipped in v0.7.4 PR #1022 (bundled docs PR). Documented in `docs/development/check-authoring.md` with `_contrast_check_scope` / `_presets_to_check` (PR #1015) as canonical reference + safe-default contract. | When a check's behavior depends on a config-driven scope (e.g. `_contrast_check_scope()` reading `DJUST_THEMING.contrast_check_scope`), extracting the decision into a named helper creates a clean test seam. PR #1015's `_contrast_check_scope()` and `_presets_to_check()` are the canonical examples — 4 small tests cover the four branches (default-active, opt-in-all, missing-preset, unknown-value) without dragging in the full Django settings stack. Worth a one-paragraph note in the check-authoring guide. |
 
 ### v0.7.0 milestone updates (2026-04-24)
 
@@ -165,6 +165,90 @@ issue or be explicitly closed with a reason.
 - **#122 — Reinforced (post-commit verification).** PR #996 hit the pre-commit-hook stash/restore gotcha for the second time in the session (first was PR #989 at Stage 10): hook stashed+restored the working tree, ruff cleaned up an unused import, but the initial commit didn't register. Had to re-stage and retry. Action #122 (`git log -1 --oneline` post-commit verification) remains correctly filed; second occurrence reinforces priority.
 - **Pre-push gate as last-line defense.** Stage 6 test subsets run Python + JS + Rust independently; the Python-side tag handler tests pass in isolation, but the demo views exercising the Rust engine aren't in the targeted set. The FULL pre-push pytest (as configured) runs the demo tests and caught the 500. Consider making Stage 6 explicitly invoke `make test` (not targeted subsets) for cross-engine/cross-language features — filing as a process note under #129.
 - **pipeline-dev pattern empirically validated for tooling/test-only PRs.** PR #995 (Makefile target) and PR #996 (test-only refactor) both used the condensed pipeline-dev flow — no subagent reviews, no separate Stage 7/8/11 — and shipped clean. Don't invoke the full 14-stage pipeline for Makefile / dev-tooling / docs / test-only changes. Propose: update pipeline-run skill guidance to explicitly list what qualifies for pipeline-dev vs pipeline-run. Filing as Action #132.
+
+---
+
+## v0.7.4 — Retro Follow-ups: process & docs (PRs #1021, #1022)
+
+**Date**: 2026-04-25
+**Scope**: All five v0.7.2 + v0.7.3 retro Action Tracker rows that were filed as GitHub issues — now resolved. Two PRs: PR #1021 fixed the py3.14 timing-sensitive CI flake class (#1016 — phase-based time mock for `test_hotreload_slow_patch_warning` + 10ms→30ms budget for `test_broadcast_latency_scales`). PR #1022 bundled the four docs follow-ups into a single PR (closes #1017, #1018, #1019, #1020): two PR-checklist additions plus a new `docs/development/check-authoring.md` consolidating the v0.7.x check-refinement patterns.
+**Tests at close**: ~6,326 (no net new tests; PR #1021 only modified existing test files, PR #1022 was docs-only).
+
+### What We Learned
+
+**1. Bundle-by-touched-file is the right grouping for docs PRs.** PR #1022 closed 4 issues (#1017, #1018, #1019, #1020) in a single PR because all four touched either `docs/PULL_REQUEST_CHECKLIST.md` or the new `docs/development/check-authoring.md`. Single review pass, single CI cycle, single merge — vs. four separate PRs each spending ~5-10 min in CI. Bundle eligibility rule: **same target file(s) + same review type (docs vs code) + small scope**. PR #1014's "engine path" Stage 4 plan template addition (Action #129) is the contrasting case — different target files, would not have bundled cleanly.
+
+**Action taken**: No new Action Tracker row. Bundling-by-touched-file is implicit from the existing pipeline-run "group related tasks" guidance (Action #132 territory).
+
+**2. `closes #X, #Y, #Z` only auto-closes the first issue.** PR #1022's title and body contained `closes #1017, #1018, #1019, #1020` but only #1017 auto-closed on merge. GitHub respects only the first "closes #N" pattern when comma-separated; subsequent IDs are treated as plain references. The fix is one-`closes`-keyword-per-issue (each on its own line). This gotcha is **already documented** in `docs/PULL_REQUEST_CHECKLIST.md` (Pre-Review Quick Checks: "Multiple issues must be listed one per line — do not combine them on a single line"). Despite that, a docs-PR for retro follow-ups violated the checklist that PR was UPDATING. Pure operator error; cost was three manual `gh issue close` calls.
+
+**Action taken**: No code change. The checklist already covers this — the meta-lesson is that even a checklist update PR needs to follow its own checklist. Future bundled PRs should use `Closes #N\nCloses #M\n...` format.
+
+**3. py3.14 fix worked first-push clean.** PR #1021 hardened `test_hotreload_slow_patch_warning` against extra `time.time()` calls from py3.14's asyncio scheduler (replacing the indexed-array mock with a phase-based mock) AND bumped `test_broadcast_latency_scales` budget from 10ms to 30ms. Both fixes landed clean on first push — Action #133's "pick one" suggestion (per-runner tolerance / `@pytest.mark.flaky` / non-required matrix) was answered with "two tailored fixes in one PR." Avoided introducing `pytest-rerunfailures` as a new dep.
+
+**Action taken**: Action #133 closed (resolved by PR #1021).
+
+**4. Pre-commit stash/restore — 7th occurrence.** Same pattern continues. PR #1021 hit it during commit (lock file drift caused stash, then commit rolled back). The cumulative reinforcement count is now 7 (PRs #989, #996, #1007, #1008, #1014, #1015, #1021). **Action #122 implementation is overdue** — but it's a skill-level update (`~/.claude/skills/pipeline-run/SKILL.md`), not a djust-repo task. Filing one more reinforcement note doesn't help; the skill-level work has to actually land.
+
+**Action taken**: Action #122 reinforcement count updated to 7 in tracker.
+
+### Insights
+
+- **2 PRs / ~30 min throughput** for v0.7.4. Smallest milestone in session. Sustainable only when the issues are pre-triaged retro follow-ups with explicit acceptance criteria.
+- **First-push clean merge rate: 2/2** this milestone. Combined with v0.7.3 (3/3) and v0.7.2 (6/6), 11 consecutive first-push merges across three milestones.
+- **Action #125 streak now 16 consecutive pipelines** (#990 → #1022). The Stage 7 user-flow trace discipline filed in PR #989's retro is empirically working.
+- **Issue queue genuinely clean again.** No new issues filed during the v0.7.4 drain. Same as end of v0.7.3 — but v0.7.3 had 3 retro-followup issues queued for v0.7.4. v0.7.4 retro filed zero new code-actionable issues; only #122 reinforcement (skill-level, not djust repo).
+- **Five Action Tracker rows closed in single milestone** (#133, #134, #135, #136, #137). All were filed during v0.7.2 + v0.7.3 retros and resolved cleanly via the v0.7.4 drain shape. Validates the "retro Action Tracker → GitHub issue → drain milestone" flywheel from end to end.
+
+### Review Stats
+
+| Metric | PR #1021 | PR #1022 | Total |
+|---|---|---|---|
+| Tests modified | 2 | 0 | 2 |
+| Production LOC | 0 | 0 | 0 |
+| Test LOC delta | +13 / -8 | 0 | +13 / -8 |
+| Doc LOC | +25 (CHANGELOG) | +216 (PR checklist + new guide + CHANGELOG) | +241 |
+| 🔴 / 🟡 findings | 0 / 0 | 0 / 0 | 0 / 0 |
+| Pre-commit attempts | 2 (#122 7th) | 1 | 3 |
+| Pre-push attempts | 1 | 1 | 2 |
+| CI retries | 0 | 0 | 0 |
+| First-push clean merge | ✅ | ✅ | 2/2 |
+| Quality rating | 5/5 | 5/5 | — |
+
+### Process Improvements Applied
+
+**Action Tracker (headline)**:
+- #122 → **7th reinforcement** in single session. Skill-level update mandated.
+- #125 → **Validated across 16 consecutive pipelines**.
+- #133 → **Closed** (PR #1021).
+- #134 → **Closed** (PR #1022).
+- #135 → **Closed** (PR #1022).
+- #136 → **Closed** (PR #1022).
+- #137 → **Closed** (PR #1022).
+
+**CLAUDE.md**: No additions this milestone.
+
+**Pipeline-run / pipeline-ship skills**: No new checklist additions in this milestone. Action #122 / #129 / #131 / #132 all remain skill-level updates that haven't landed.
+
+**docs**: New `docs/development/check-authoring.md` shipped — first dedicated check-authoring guide in the repo. Future check-author PRs reference it.
+
+### Open Items
+
+Tracked as Action Tracker rows above:
+- **#122** — Post-commit `git log -1 --oneline` verification (7th reinforcement; skill-level update overdue)
+- **#125** — Stage 7 user-flow-trace checklist (Validated across 16 consecutive pipelines)
+- **#129/#131** — Stage 4 engine-path checklist (not exercised in v0.7.4)
+- **#132** — pipeline-dev eligibility heuristic (not implemented)
+
+Deferred from v0.7.4: None — all 5 originally-triaged issues shipped.
+
+### New issues filed during v0.7.4 (candidates for v0.7.5/v0.8.0)
+
+- **None.** Issue queue is clean for the second consecutive milestone. v0.8.0 scope must come from ROADMAP next-features (Server Actions, Async Streams, Form Patterns).
+
+### Status
+
+✅ v0.7.4 user-facing scope **COMPLETE**. All five originally-triaged retro follow-ups resolved. Ready for `v0.7.4rc1` cut.
 
 ---
 
