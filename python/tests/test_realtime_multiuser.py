@@ -604,8 +604,7 @@ class TestPerformanceBaseline:
 
         assert len(presences) == n_subscribers
         assert elapsed_ms < budget_ms, (
-            f"list_presences({n_subscribers}) took {elapsed_ms:.1f}ms, "
-            f"expected < {budget_ms:.1f}ms"
+            f"list_presences({n_subscribers}) took {elapsed_ms:.1f}ms, expected < {budget_ms:.1f}ms"
         )
 
     @pytest.mark.parametrize("n_subscribers", [1, 10, 50, 100])
@@ -627,7 +626,19 @@ class TestPerformanceBaseline:
         Cls = _make_view_class(key)
         view = Cls(user=FakeUser("sender", 9999))
 
-        budget_ms = 10.0  # broadcast dispatch overhead only
+        # #1016 — original budget was 10ms (broadcast dispatch overhead
+        # only). py3.14 GitHub Actions runners have different scheduler
+        # characteristics and contention patterns; observed a 12× over-
+        # budget hit in PR #990 CI on the n_subscribers=10 slot
+        # (118ms) which then passed cleanly on rerun. The budget is
+        # bumped to 30ms to absorb runner-contention variance while
+        # still catching genuine regressions (the linear-scaling check
+        # in `test_presence_list_scales_linearly` already catches
+        # algorithmic O(n) regressions; this test only covers
+        # constant-time dispatch overhead).
+        budget_ms = (
+            30.0  # broadcast dispatch overhead only — 30ms tolerates py3.14 CI runner variance
+        )
         start = time.perf_counter()
         view.broadcast_to_presence("ping", {"ts": time.time()})
         elapsed_ms = (time.perf_counter() - start) * 1000

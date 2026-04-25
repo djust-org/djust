@@ -353,14 +353,24 @@ class TestHotReloadMessage:
                 original_time = time.time
                 call_count = [0]
 
+                # #1016 — original implementation indexed a fixed
+                # 6-element array of timestamps. py3.14 introduced
+                # extra time.time() calls in the asyncio scheduler
+                # path (some `loop.time()` chains delegate down) so
+                # the call count drifted past the array on py3.14
+                # only, leaving every subsequent call returning the
+                # last array value (0.15) — which kept the elapsed
+                # delta at 0 and prevented the slow-patch warning
+                # from firing. Switch to a phase-based scheme:
+                # the first two calls return 0.0 (start + render
+                # start) and every subsequent call returns 0.15
+                # (render-end / total-end). The slow-patch threshold
+                # (>100 ms) is crossed deterministically regardless
+                # of how many extra time.time() calls the scheduler
+                # injects.
                 def mock_time_func():
                     call_count[0] += 1
-                    # First call: start_time = 0.0
-                    # Second call: render_start = 0.0
-                    # Third call: render_end = 0.15 (150ms)
-                    # Fourth call: total_end = 0.15
-                    times = [0.0, 0.0, 0.15, 0.15, 0.15, 0.15]
-                    return times[min(call_count[0] - 1, len(times) - 1)]
+                    return 0.0 if call_count[0] <= 2 else 0.15
 
                 time.time = mock_time_func
                 try:
