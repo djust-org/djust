@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`djust.C011` now catches stale/placeholder `output.css`, not
+  just totally-missing files (v0.7.3, #1003)** — `_check_missing_compiled_css`
+  in `python/djust/checks.py` previously tested only
+  `os.path.exists()`. A committed-but-stale `output.css` (e.g. a
+  placeholder `/* Run tailwindcss ... */`) silently passed the
+  check, the site rendered without any Tailwind utilities, and
+  `manage.py check` emitted no warning. Reported by the
+  docs.djust.org team after hitting it at launch — fresh-clone +
+  `make dev` produced a broken page with zero warnings. Fix: new
+  helper `_output_css_looks_built(path)` extends the contract to
+  "the file exists AND looks built" — checks size > 10 KB AND a
+  marker (`tailwindcss` banner OR `@layer` directive) in the first
+  512 bytes. The existing `os.path.exists()` branch is replaced
+  with the helper. Both checks must pass; a 50 KB hand-rolled
+  stylesheet without Tailwind markers is correctly flagged. Warning
+  message updated from "output.css not found" to "output.css is
+  missing or stale" with a hint that placeholder files are the
+  canonical failure mode. Covered by **5 new regression tests**
+  (placeholder `/* Run tailwindcss... */`, empty 0-byte file,
+  sub-10 KB file with banner, real built `>10 KB` Tailwind output,
+  hand-rolled `@layer` stylesheet) plus **3 existing tests**
+  updated to use realistic Tailwind output (~16 KB minified-style
+  fixture instead of the 18-byte placeholder that exposed the
+  original bug).
+
 ## [0.7.2rc1] - 2026-04-24
 
 ### Added

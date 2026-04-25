@@ -381,74 +381,159 @@ class TestC010TailwindCdnInProduction:
 class TestC011MissingCompiledCss:
     """C011 -- Tailwind configured but compiled CSS not found."""
 
-    def test_c011_detects_missing_output_css_dev(self, tmp_path, settings, monkeypatch):
-        """C011 fires as Info when Tailwind configured but output.css missing in dev."""
-        # Create tailwind.config.js
+    # Sentinel for "real built Tailwind output" — first-512-bytes
+    # banner that the v4 minifier emits, padded to >10 KB so it
+    # passes the `_output_css_looks_built` size threshold.
+    _REAL_TAILWIND_OUTPUT = (
+        "/*! tailwindcss v4.0.0 | MIT License | https://tailwindcss.com */\n"
+        + ".test{color:red}" * 1000  # ~16 KB of plausible CSS
+    )
+
+    def _setup_djust_tailwind_project(
+        self, tmp_path, settings, monkeypatch, debug, output_css_content=None
+    ):
+        """Helper: create tailwind.config.js + input.css + (optional) output.css."""
         config_file = tmp_path / "tailwind.config.js"
         config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
-
-        # Create static dir with input.css but no output.css
         static_dir = tmp_path / "static" / "css"
         static_dir.mkdir(parents=True)
         (static_dir / "input.css").write_text("@import 'tailwindcss';")
-
+        if output_css_content is not None:
+            (static_dir / "output.css").write_text(output_css_content)
         monkeypatch.chdir(tmp_path)
-        settings.DEBUG = True
+        settings.DEBUG = debug
         settings.STATICFILES_DIRS = [str(tmp_path / "static")]
         settings.ASGI_APPLICATION = "myproject.asgi.application"
         settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
         settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+    def test_c011_detects_missing_output_css_dev(self, tmp_path, settings, monkeypatch):
+        """C011 fires as Info when Tailwind configured but output.css missing in dev."""
+        self._setup_djust_tailwind_project(tmp_path, settings, monkeypatch, debug=True)
 
         from djust.checks import check_configuration
 
         errors = check_configuration(None)
         c011 = [e for e in errors if e.id == "djust.C011"]
         assert len(c011) == 1
-        assert "output.css not found" in c011[0].msg
+        assert "missing or stale" in c011[0].msg
 
     def test_c011_detects_missing_output_css_production(self, tmp_path, settings, monkeypatch):
         """C011 fires as Warning when Tailwind configured but output.css missing in production."""
-        # Create tailwind.config.js
-        config_file = tmp_path / "tailwind.config.js"
-        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
-
-        # Create static dir with input.css but no output.css
-        static_dir = tmp_path / "static" / "css"
-        static_dir.mkdir(parents=True)
-        (static_dir / "input.css").write_text("@import 'tailwindcss';")
-
-        monkeypatch.chdir(tmp_path)
-        settings.DEBUG = False
-        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
-        settings.ASGI_APPLICATION = "myproject.asgi.application"
-        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
-        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+        self._setup_djust_tailwind_project(tmp_path, settings, monkeypatch, debug=False)
 
         from djust.checks import check_configuration
 
         errors = check_configuration(None)
         c011 = [e for e in errors if e.id == "djust.C011"]
         assert len(c011) == 1
-        assert "output.css not found" in c011[0].msg
+        assert "missing or stale" in c011[0].msg
 
-    def test_c011_passes_when_output_exists(self, tmp_path, settings, monkeypatch):
-        """C011 should not fire when output.css exists."""
-        # Create tailwind.config.js
-        config_file = tmp_path / "tailwind.config.js"
-        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
+    def test_c011_passes_when_real_tailwind_output_exists(self, tmp_path, settings, monkeypatch):
+        """C011 should not fire when output.css contains real Tailwind output.
 
-        # Create static dir with both input.css and output.css
-        static_dir = tmp_path / "static" / "css"
-        static_dir.mkdir(parents=True)
-        (static_dir / "input.css").write_text("@import 'tailwindcss';")
-        (static_dir / "output.css").write_text("/* compiled css */")
+        After #1003: the test must use a realistic minified Tailwind file
+        (banner + >10 KB), not a placeholder comment — see the
+        ``test_c011_fires_on_placeholder_output_css`` test below for the
+        explicit placeholder regression."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=self._REAL_TAILWIND_OUTPUT,
+        )
 
-        monkeypatch.chdir(tmp_path)
-        settings.DEBUG = False
-        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
-        settings.ASGI_APPLICATION = "myproject.asgi.application"
-        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
-        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 0
+
+    # ------------------------------------------------------------------
+    # #1003 — stale / placeholder output.css must trigger C011
+    # ------------------------------------------------------------------
+
+    def test_c011_fires_on_placeholder_output_css(self, tmp_path, settings, monkeypatch):
+        """#1003: a committed-but-stale placeholder output.css is the
+        canonical failure mode — file "exists" so a bare os.path.exists()
+        check passes, but the page renders without any Tailwind
+        utilities. Locks the new content-sniff behavior."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content="/* Run tailwindcss to generate this file */\n",
+        )
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1, (
+            "C011 must fire on a placeholder output.css — that's the #1003 fix. "
+            f"Got: {[e.msg for e in errors]}"
+        )
+        assert "missing or stale" in c011[0].msg
+
+    def test_c011_fires_on_empty_output_css(self, tmp_path, settings, monkeypatch):
+        """#1003: a 0-byte output.css is also "not built" — same as
+        a placeholder. Edge case in the size threshold."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content="",
+        )
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1
+
+    def test_c011_fires_on_under_threshold_output_css(self, tmp_path, settings, monkeypatch):
+        """#1003: a sub-10 KB output.css fails the size threshold even
+        if it has Tailwind markers. Real Tailwind v4 builds always
+        ship the preflight reset + at least the utility skeleton, so
+        anything below 10 KB is suspicious by definition."""
+        # 5 KB content with the banner — looks built by header but
+        # fails the size threshold.
+        suspicious = "/*! tailwindcss v4.0.0 */\n" + "/* hand-trimmed file */\n" * 200
+        assert len(suspicious) < 10_000
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=suspicious,
+        )
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1
+
+    def test_c011_does_not_fire_on_layer_marker_above_threshold(
+        self, tmp_path, settings, monkeypatch
+    ):
+        """A hand-rolled Tailwind-style stylesheet with `@layer` directives
+        and >10 KB body should pass — the marker isn't strictly the
+        Tailwind banner, but it's a legitimate signal of a built CSS
+        artifact. Locks the inclusive `tailwindcss OR @layer` semantics
+        documented in `_output_css_looks_built`."""
+        layered = "@layer base { html { font-family: sans; } }\n" + ".test{color:blue}" * 1000
+        assert len(layered) > 10_000
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=layered,
+        )
 
         from djust.checks import check_configuration
 
