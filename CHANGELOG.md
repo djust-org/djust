@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mount_batch` fallback for old-server compat (v0.8.1 reconcile drain — Group F, closes #1031)** —
+  the `mount_batch` WebSocket frame was added in v0.6.0 (PR #970) for lazy-
+  hydration efficiency. A v0.6.0+ client talking to a pre-v0.6.0 server
+  previously got a generic `"Unknown message type: mount_batch"` error and
+  the lazy-hydrated views never mounted. Now the client tracks the
+  in-flight batch in `lazyHydrationManager.inFlightBatch`; if the
+  websocket error handler sees `mount_batch` or `Unknown message type`
+  in the error string, it invokes `handleMountBatchFallback()` which
+  iterates the stashed mounts and falls back to per-view mount calls.
+  Idempotent (clears `inFlightBatch` before iterating) so a late-arriving
+  successful response can't double-trigger. 7 new JSDOM tests under
+  `tests/js/mount-batch-fallback.test.js`.
+
 ### Security
 
 - **Drop exception text from JSON-parse error responses (v0.8.1 reconcile drain — Group B, closes #1026)** —
