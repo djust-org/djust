@@ -147,6 +147,9 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | tooling: weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers (#963) | All v0.5.7 writer tests mock SDKs; weekly happy-path integration run | v0.7.2 |
 | **P2** | feat: inline radio buttons in forms (#991) | Segmented controls / filter pills / Yes-No — common LiveView UX; API TBD (form-level flag vs widget attr vs template variant) | v0.7.2 |
 | ~~**P2**~~ | ~~policy: decide breaking rename of framework-internal attrs to `_*` prefix (#962)~~ ✅ **Closed without code in v0.7.2** — [ADR-012](docs/adr/012-framework-internal-attrs-filter-vs-rename.md) documents the decision: keep the `_FRAMEWORK_INTERNAL_ATTRS` filter (shipped #762), do NOT rename. Rename would break every user view reading `self.login_required` / `self.template_name` without net defense-in-depth benefit. | ~~v0.7.2~~ |
+| **P1** | `djust.C011` doesn't catch stale/placeholder `output.css` (#1003) | `_check_missing_compiled_css` only tests `os.path.exists` — a committed placeholder passes; site serves without Tailwind utilities silently | v0.7.3 |
+| **P1** | `djust.A070` false positive on `{% verbatim %}`-wrapped `dj_activity` examples (#1004) | A070 scans template source as raw text and fires on docs/marketing examples wrapped in `{% verbatim %}` | v0.7.3 |
+| **P2** | `djust_theming.W001` should only contrast-check the active pack (#1005) | 65+ built-in packs produce hundreds of warnings on every `manage.py check` — bad S/N ratio means real warnings get ignored | v0.7.3 |
 
 ---
 
@@ -1037,6 +1040,48 @@ across 25 attribute sites would not catch new classes of bugs.
 Mitigation: the PR review checklist now reminds authors to add new
 framework-set attrs to `_FRAMEWORK_INTERNAL_ATTRS` at introduction
 time.
+
+### Milestone: v0.7.3 — Check Refinements
+
+*Goal:* Triage the three checks-area issues filed during the v0.7.2
+drain. All three are check-refinement bugs / enhancements — drift
+between what a check claims to test and what it actually tests, or
+signal-to-noise issues. Small-to-medium PRs each.
+
+| Priority | Item | Status |
+| --- | --- | --- |
+| **P1** | `djust.C011` doesn't catch stale/placeholder `output.css` (#1003) | Not started |
+| **P1** | `djust.A070` false positive on `{% verbatim %}`-wrapped `dj_activity` (#1004) | Not started |
+| **P2** | `djust_theming.W001` should only contrast-check active pack (#1005) | Not started |
+
+**#1003 — `djust.C011` doesn't catch stale/placeholder `output.css`.**
+`djust._check_missing_compiled_css` at `python/djust/checks.py:185`
+tests only `os.path.exists(...)` for `static/css/output.css`. A
+committed-but-stale `output.css` (e.g. a placeholder
+`/* Run tailwindcss ... */`) passes the check — the file "exists" —
+so no C011 is emitted. The site then serves with no Tailwind
+utilities. Fix: extend the check to detect placeholder content or
+suspiciously-small files. Consider a sentinel comment at the top of
+generated `output.css` that the check can verify.
+
+**#1004 — `djust.A070` false positive on `{% verbatim %}`-wrapped
+examples.** A070 (`dj_activity` missing `name=` argument) scans
+template source as raw text. Templates that contain literal examples
+of `{% dj_activity %}` inside `{% verbatim %}...{% endverbatim %}`
+blocks — common pattern on docs / marketing pages that document the
+tag — get flagged as real uninstrumented `dj_activity` calls. Fix:
+strip `{% verbatim %}...{% endverbatim %}` regions before scanning
+for `{% dj_activity %}` literals.
+
+**#1005 — `djust_theming.W001` only contrast-checks active pack.**
+`djust_theming.W001` runs WCAG AA contrast checks on every
+registered theme pack × color-preset × mode. With 65+ built-in
+packs, this produces hundreds of warnings on every `manage.py
+check` / pod start. Most of those packs are never used by the
+installing project — they're discovered purely because they ship
+with djust. Fix: scope contrast checks to the active pack (per
+`DJUST_THEMING_ACTIVE_PACK` setting) instead of iterating all
+discovered packs.
 
 ### Milestone: v0.8.0 — Server Actions, Async Streams & Form Patterns (NEW)
 
