@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0rc1] - 2026-04-25
+
 ### Added
 
 - **`@action` decorator — React 19 Server Actions equivalent (v0.8.0)** —
