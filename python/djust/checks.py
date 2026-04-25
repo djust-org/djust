@@ -182,8 +182,44 @@ def _check_tailwind_cdn_in_production(errors):
                             pass
 
 
+def _output_css_looks_built(path: str) -> bool:
+    """Return True if ``path`` looks like a real compiled Tailwind output.
+
+    #1003 — `os.path.exists()` is insufficient: a committed placeholder
+    `output.css` (e.g. ``/* Run tailwindcss ... */``) passes that test
+    but the site renders without any Tailwind utilities. This helper
+    extends the contract to "the file exists AND looks built":
+
+    - **Size threshold**: real Tailwind v4 output is always > 10 KB
+      (even a tiny project pulls in the preflight reset + utility set).
+    - **Header marker**: the Tailwind v4 minifier emits a
+      ``/*! tailwindcss ... */`` banner; bare-bones theme CSS or
+      stand-alone hand-written stylesheets contain ``@layer`` blocks.
+      Either marker in the first 512 bytes is sufficient.
+
+    Both checks must pass — a 50 KB hand-rolled stylesheet without
+    Tailwind markers is also "not built Tailwind output". A real
+    placeholder fails both.
+
+    Returns False on any I/O error (missing file, permission denied,
+    invalid encoding) — the safest behavior is to treat the missing
+    signal as "not built" and let C011 fire.
+    """
+    try:
+        if not os.path.exists(path):
+            return False
+        size = os.path.getsize(path)
+        if size <= 10_000:
+            return False
+        with open(path, "rb") as f:
+            head = f.read(512).decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    return "tailwindcss" in head.lower() or "@layer" in head
+
+
 def _check_missing_compiled_css(errors):
-    """Warn if Tailwind is configured but compiled CSS is missing."""
+    """Warn if Tailwind is configured but compiled CSS is missing or stale."""
     from django.conf import settings
 
     # Check common Tailwind indicators
@@ -208,21 +244,27 @@ def _check_missing_compiled_css(errors):
                 pass
 
     if has_tailwind_config or has_input_css:
-        # Check if output.css exists
-        output_exists = False
+        # #1003 — a committed-but-stale placeholder `output.css` (e.g.
+        # `/* Run tailwindcss ... */`) silently passes a bare
+        # `os.path.exists()` test, leading to a broken site that
+        # serves with no Tailwind utilities and no `manage.py check`
+        # warning. Use the content-sniffing helper instead so a
+        # placeholder is treated the same as a missing file.
+        output_built = False
         for static_dir in static_dirs:
-            if os.path.exists(os.path.join(static_dir, "css", "output.css")):
-                output_exists = True
+            if _output_css_looks_built(os.path.join(static_dir, "css", "output.css")):
+                output_built = True
                 break
 
-        if not output_exists:
+        if not output_built:
             if settings.DEBUG:
                 errors.append(
                     DjustInfo(
-                        "Tailwind CSS configured but output.css not found (development mode).",
+                        "Tailwind CSS configured but output.css is missing or stale (development mode).",
                         hint=(
                             "djust will use Tailwind CDN as fallback in development. "
-                            "For better performance, compile CSS:\n"
+                            "A placeholder or empty output.css triggers this — run a "
+                            "real Tailwind build for production-grade output:\n"
                             "  python manage.py djust_setup_css tailwind --watch"
                         ),
                         id="djust.C011",
@@ -231,9 +273,11 @@ def _check_missing_compiled_css(errors):
             else:
                 errors.append(
                     DjustWarning(
-                        "Tailwind CSS configured but output.css not found.",
+                        "Tailwind CSS configured but output.css is missing or stale.",
                         hint=(
-                            "Run: tailwindcss -i static/css/input.css -o static/css/output.css --minify\n"
+                            "A committed placeholder or empty output.css produces a site "
+                            "that serves with no Tailwind utilities applied. Run:\n"
+                            "  tailwindcss -i static/css/input.css -o static/css/output.css --minify\n"
                             "Or: python manage.py djust_setup_css tailwind"
                         ),
                         id="djust.C011",
