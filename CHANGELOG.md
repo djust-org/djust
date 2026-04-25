@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`make roadmap-lint` — mechanical ROADMAP-vs-codebase drift check (Action #142, closes #1057)** —
+  `scripts/roadmap-lint.py` parses the "Not started" entries in `ROADMAP.md`,
+  extracts grep-able tokens from each feature name, and reports entries
+  whose tokens have zero hits in code paths (`python/`, `crates/`,
+  `static/`, `scripts/`, `tests/`, `Makefile`). Pure mechanical check —
+  for semantic auditing (LLM reads each entry, decides if the cited
+  feature actually ships) use the `pipeline-roadmap-audit` skill instead.
+  Exit code 0 unless drift exceeds threshold (25 suspect entries).
+  Run via `make roadmap-lint` or `make roadmap-lint VERBOSE=1`.
+
+- **Pre-push hook for `# noqa: F822` in `__all__` patterns (Action #146, closes #1061)** —
+  `scripts/check-noqa-f822.sh` flags new `noqa: F822` annotations
+  introduced in `python/**/*.py` or `tests/**/*.py` since the last push.
+  Ruff silences `py/undefined-export` with `noqa: F822`, but CodeQL flags
+  it as a security alert later — the canonical fix is a
+  `TYPE_CHECKING`-conditional import (PR #924 pattern). Hook fires only
+  on changed files (incremental); pass `--all` to scan the whole tree
+  manually.
+
 ## [0.8.0rc1] - 2026-04-25
 
 ### Added
