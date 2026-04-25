@@ -383,6 +383,12 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+        # v0.8.0 — @action server-action state. Each entry is keyed by the
+        # action's method name and holds {"pending": bool, "error": str|None,
+        # "result": Any}. Populated by the @action decorator's wrapper at
+        # handler entry/exit; exposed to templates by ContextMixin's
+        # get_context_data() for `{{ <action_name>.pending }}` access.
+        self._action_state: Dict[str, Dict[str, Any]] = {}
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
 
