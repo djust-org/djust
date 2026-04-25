@@ -1981,6 +1981,58 @@ _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 # renderer is in use (raw HTML escaped, provisional-line splitter active).
 _DJ_MARKDOWN_TAG_RE = re.compile(r"\{%\s*djust_markdown\b")
 
+# #1004 — `{% verbatim %}...{% endverbatim %}` regions hold raw template
+# source that Django renders as-is without parsing. Docs and marketing
+# templates routinely wrap literal `{% dj_activity %}` examples in
+# verbatim blocks; the A070 / A071 scanner used to treat those as real
+# uninstrumented activity calls and false-positive. The pre-processor
+# below replaces each verbatim region with whitespace (preserving line
+# breaks) so downstream regex scanners see no `{% dj_activity %}` text
+# inside the region, while line numbers from the original source remain
+# accurate for any matches OUTSIDE the region.
+#
+# Both unnamed (`{% verbatim %}`) and named (`{% verbatim foo %}`)
+# variants are matched. The endverbatim form must match the opening
+# variant, but Django allows either to close — we accept either since
+# the goal is to redact the BODY of the region, not validate Django
+# syntax (the template engine itself will reject malformed verbatim
+# blocks at render time).
+_VERBATIM_BLOCK_RE = re.compile(
+    r"\{%\s*verbatim\b[^%]*%\}.*?\{%\s*endverbatim\b[^%]*%\}",
+    re.DOTALL,
+)
+
+
+def _strip_verbatim_blocks(content: str) -> str:
+    """Replace the BODY of every ``{% verbatim %}...{% endverbatim %}`` region
+    with whitespace, preserving newlines so line numbers stay accurate for
+    matches outside the region.
+
+    Used before regex-scanning for A070 / A071 (and any future scanner
+    that walks template source as raw text) — without this, literal
+    `{% dj_activity %}` examples wrapped in verbatim blocks (a common
+    pattern on docs / marketing pages that document the tag) get
+    flagged as real uninstrumented activity calls.
+
+    The verbatim tags themselves are kept (so the scanner doesn't see
+    a totally absent region), but their content is blanked. We replace
+    every non-newline character with a space and keep newlines verbatim
+    — line numbers stay aligned with the original source.
+
+    Returns ``content`` unchanged if no verbatim region is present (the
+    common case). Cost: one regex pass plus one rewrite when at least
+    one verbatim region exists.
+    """
+    if "verbatim" not in content:
+        return content
+
+    def _redact(match: re.Match) -> str:
+        body = match.group(0)
+        # Preserve newlines, blank everything else.
+        return "".join("\n" if ch == "\n" else " " for ch in body)
+
+    return _VERBATIM_BLOCK_RE.sub(_redact, content)
+
 
 @register("djust")
 def check_templates(app_configs, **kwargs):
@@ -2152,8 +2204,15 @@ def check_templates(app_configs, **kwargs):
         # A071 (Error): two tags in one template share the same name — the
         # later registration silently overwrites the earlier one at render
         # time and all events route to the last-declared state.
+        #
+        # #1004 — strip {% verbatim %}...{% endverbatim %} regions before
+        # the regex scan so literal `{% dj_activity %}` examples on docs /
+        # marketing pages (which Django renders as-is, without parsing the
+        # tag) don't false-positive. `_strip_verbatim_blocks` preserves
+        # line numbers by replacing the body with whitespace.
+        _activity_scan_source = _strip_verbatim_blocks(content)
         _seen_activity_names = {}  # type: ignore[var-annotated]
-        for match in _DJ_ACTIVITY_TAG_RE.finditer(content):
+        for match in _DJ_ACTIVITY_TAG_RE.finditer(_activity_scan_source):
             args = match.group(1)
             lineno = content[: match.start()].count("\n") + 1
             name_match = _DJ_ACTIVITY_NAME_RE.match(args)
