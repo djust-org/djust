@@ -92,16 +92,16 @@ issue or be explicitly closed with a reason.
 | 80 | FormArrayNode drops inner template content (block body parsed but never rendered) | PR #929 | #930 | Closed | Shipped in PR #939 — renders self.nodelist per row |
 | 81 | `tag_input` widget missing `name` attribute — form submissions drop value | PR #929 | #932 | Closed | Shipped in PR #939 — hidden input with name + CSV payload |
 | 82 | `gallery/registry.py get_gallery_data` never consumes `discover_*` results | PR #929 | #933 | Closed | Shipped in PR #939 — wires discovery as drift-detector |
-| 83 | `_registry.py` F401 unused-import alerts may need explicit `# noqa` post-rescan | PR #929 | — | Open | No issue filed; revisit after CodeQL rescan |
+| 83 | `_registry.py` F401 unused-import alerts may need explicit `# noqa` post-rescan | PR #929 | #1025 | Open | No issue filed; revisit after CodeQL rescan |
 | 84 | Add CodeQL MaD model for `sanitize_for_log` to close log-injection FP class | PRs #913/#923 | #934 | Closed | Shipped in PR #945 — `.github/codeql/models/djust-sanitizers.model.yml` |
 | 85 | Pre-existing main test failures (`test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view`) | Arc #898–#931 | #935 | Closed | Shipped in PR #946 — 3 tests fixed, main now clean |
 | 86 | Verify post-#928 CodeQL rescan closed the 872 cyclic-import alerts | PR #928 | — | Closed | Confirmed 2026-04-23: open alerts dropped from ~1130 to 37 |
-| 87 | `dispatch.py:295` vs `observability:399` JSON-parse error message consistency | PR #919 | — | Open | Style-only follow-up |
-| 88 | Replace `inspect.getsource + substring` test with behavior-level test | PR #919 | — | Open | Test quality |
+| 87 | `dispatch.py:295` vs `observability:399` JSON-parse error message consistency | PR #919 | #1026 | Open | Style-only follow-up |
+| 88 | Replace `inspect.getsource + substring` test with behavior-level test | PR #919 | #1027 | Open | Test quality |
 | 89 | `javascript:` scheme + HTTPS downgrade + null-byte storybook rejection tests | PR #920 | #922 | Closed | Shipped in PR #946 — 4 edge tests added |
 | 90 | Audit ALL `HttpResponseRedirect`/`redirect()` sites for `url_has_allowed_host_and_scheme` guards | PR #920 | #921 | Closed | Shipped in PR #946 — audited + fixed mixins/request.py, auth/mixins.py |
-| 91 | Shared `conftest.py` staff-user fixture for auth-gated view tests | PR #918 | — | Open | Tooling |
-| 92 | `docs/internal/codeql-patterns.md` taint-flow cheat sheet | PR #918 | — | Open | Docs |
+| 91 | Shared `conftest.py` staff-user fixture for auth-gated view tests | PR #918 | #1028 | Open | Tooling |
+| 92 | `docs/internal/codeql-patterns.md` taint-flow cheat sheet | PR #918 | #1029 | Open | Docs |
 | 93 | Automate CHANGELOG test-count validation (3rd recurrence across #898/#904/#885) | PRs #898/#904 | #908 | Closed | Shipped in PR #945 — scripts/check-changelog-test-counts.py + pre-commit hook |
 | 94 | Bump `.pre-commit-config.yaml` ruff-pre-commit from v0.8.4 to current | PR #940 retro | #948 | Open | Local ruff disagreements with pinned hook cause spurious format churn |
 | 95 | tag_input CSV serialization ambiguous for commas-in-values | PR #939 retro | #949 | Open | Escape, multiple inputs, or JSON-encode — decide and document |
@@ -115,33 +115,33 @@ issue or be explicitly closed with a reason.
 | 103 | Weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers | Retro v0.5.7 / PR #958 | #963 | Open | All SDK tests are mocked; no real-cloud end-to-end |
 | 104 | Document `key_template` UUID-prefix convention for `s3_events.parse_s3_event` | Retro v0.5.7 / PR #958 | #964 | Open | Silent fallback to full key otherwise |
 | 105 | Substring-matching tests in other existing suites should be rewritten to parse HTML | Retro v0.6.0 / PR #966 | — | Closed | Discipline-resolved: v0.6.1 PRs #974/#975/#976 all used HTML-parsed assertions; pattern consistent across three features. Remaining legacy suites swept opportunistically. |
-| 106 | Silent cache-write failures in `03-websocket.js:386` should log under `djustDebug` | Retro v0.6.0 / PR #970 | — | Open | Tech-debt |
-| 107 | No version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully | Retro v0.6.0 / PR #970 | — | Open | Tech-debt |
-| 108 | Dashboard→Dashboard re-mount limitation in sticky LiveView demo; `{% live_render %}` doesn't auto-detect preserved stickies | Retro v0.6.0 / PR #969 | — | Open | v0.6.x/v0.7.0 enhancement — teach tag to emit slot markers automatically |
-| 109 | `djust[admin]` extra vs `djust.admin_ext` module name divergence | Retro v0.6.0 / PR #971 | — | Open | Rename one or the other in v0.7.0 |
-| 110 | Hardcoded `TARGET_LIST_UPDATE_S * 20` for WS mount target in perf tests should become named `TARGET_WS_MOUNT_S` | Retro v0.6.0 / PR #972 | — | Open | Tech-debt |
-| 111 | cProfile top-N table in `docs/performance/v0.6.0-profile.md` is a single-run snapshot; add "not canonical" disclaimer | Retro v0.6.0 / PR #972 | — | Open | Tech-debt |
-| 112 | `_assert_benchmark_under` helper should move to `tests/benchmarks/conftest.py` for shared scope | Retro v0.6.0 / PR #972 | — | Open | Tech-debt |
-| 113 | Pre-commit Self-Review should grep for stubbed JSDOM API shapes (greenwashing-catcher) | Retro v0.6.1 / PR #976 | — | Open | `globalThis.djust.websocket` was stubbed in test; no source ever assigns it — real path is `window.djust.liveViewInstance.sendMessage`. Add check: if JSDOM test stubs `djust.FOO` and nothing in source assigns it, flag. |
-| 114 | Planning-stage check: "grep for how OTHER callers do X" before implementation agents write send-path / API-consuming code | Retro v0.6.1 / PR #976 | — | Open | Implementer invented `globalThis.djust.websocket` instead of reading `03-tab-events.js` / `11-integration.js`. Planner should answer "how does existing code do X?" before implementation starts. |
-| 115 | Mutation-after-capture test discipline for any snapshot/capture function | Retro v0.6.1 / PR #976 (+ latent v0.6.0 bug) | — | Open | `_capture_snapshot_state` reference-aliasing bug existed unnoticed for two milestones (v0.6.0 `enable_state_snapshot` + v0.6.1 time-travel). Generalize: every capture function needs a test exercising mutation after capture. |
-| 116 | Doc-accuracy data-flow trace — require implementation agents to trace data-flow of each claimed benefit before writing user-facing docs | Retro v0.6.1 / PR #975 (+ v0.6.0 PRs #969/#971/#972 pattern) | — | Open | Fifth consecutive milestone with this finding class. Phase 1 streaming guide overclaimed "server overlap" when implementation is transport-layer only. |
-| 117 | Component-level time-travel (Phase 1 records against parent; full component capture) | Retro v0.6.1 / PR #976 | — | Open | v0.6.2 candidate |
-| 118 | Forward-replay through branched timeline (Redux DevTools parity) | Retro v0.6.1 / PR #976 | — | Open | v0.6.2 candidate |
-| 119 | Phase 2 streaming (lazy-child render + true server overlap) | Retro v0.6.1 / PR #975 | — | Open | v0.6.2 — Phase 1 was transport-layer only |
-| 120 | ADR-006 AI-generated UIs — deferred due to AssistantMixin/LLM-provider dependency chain | Retro v0.6.1 | — | Open | Deferred from v0.6.1 to v0.6.2 |
-| 121 | Shared `_SCRIPT_CLOSE_TOLERANT_RE` constant for HTML5-tolerant `</script>` matching | Retro v0.6.1 / PR #975 | — | Open | Third occurrence of CodeQL py/bad-html-filtering-regexp (PR #966, #970, #975). Centralize into `mixins/template.py` or a new `_html_utils.py`. |
+| 106 | Silent cache-write failures in `03-websocket.js:386` should log under `djustDebug` | Retro v0.6.0 / PR #970 | #1030 | Open | Tech-debt |
+| 107 | No version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully | Retro v0.6.0 / PR #970 | #1031 | Open | Tech-debt |
+| 108 | Dashboard→Dashboard re-mount limitation in sticky LiveView demo; `{% live_render %}` doesn't auto-detect preserved stickies | Retro v0.6.0 / PR #969 | #1032 | Open | v0.6.x/v0.7.0 enhancement — teach tag to emit slot markers automatically |
+| 109 | `djust[admin]` extra vs `djust.admin_ext` module name divergence | Retro v0.6.0 / PR #971 | #1033 | Open | Rename one or the other in v0.7.0 |
+| 110 | Hardcoded `TARGET_LIST_UPDATE_S * 20` for WS mount target in perf tests should become named `TARGET_WS_MOUNT_S` | Retro v0.6.0 / PR #972 | #1034 | Open | Tech-debt |
+| 111 | cProfile top-N table in `docs/performance/v0.6.0-profile.md` is a single-run snapshot; add "not canonical" disclaimer | Retro v0.6.0 / PR #972 | #1035 | Open | Tech-debt |
+| 112 | `_assert_benchmark_under` helper should move to `tests/benchmarks/conftest.py` for shared scope | Retro v0.6.0 / PR #972 | #1036 | Open | Tech-debt |
+| 113 | Pre-commit Self-Review should grep for stubbed JSDOM API shapes (greenwashing-catcher) | Retro v0.6.1 / PR #976 | #1037 | Open | `globalThis.djust.websocket` was stubbed in test; no source ever assigns it — real path is `window.djust.liveViewInstance.sendMessage`. Add check: if JSDOM test stubs `djust.FOO` and nothing in source assigns it, flag. |
+| 114 | Planning-stage check: "grep for how OTHER callers do X" before implementation agents write send-path / API-consuming code | Retro v0.6.1 / PR #976 | #1038 | Open | Implementer invented `globalThis.djust.websocket` instead of reading `03-tab-events.js` / `11-integration.js`. Planner should answer "how does existing code do X?" before implementation starts. |
+| 115 | Mutation-after-capture test discipline for any snapshot/capture function | Retro v0.6.1 / PR #976 (+ latent v0.6.0 bug) | #1039 | Open | `_capture_snapshot_state` reference-aliasing bug existed unnoticed for two milestones (v0.6.0 `enable_state_snapshot` + v0.6.1 time-travel). Generalize: every capture function needs a test exercising mutation after capture. |
+| 116 | Doc-accuracy data-flow trace — require implementation agents to trace data-flow of each claimed benefit before writing user-facing docs | Retro v0.6.1 / PR #975 (+ v0.6.0 PRs #969/#971/#972 pattern) | #1040 | Open | Fifth consecutive milestone with this finding class. Phase 1 streaming guide overclaimed "server overlap" when implementation is transport-layer only. |
+| 117 | Component-level time-travel (Phase 1 records against parent; full component capture) | Retro v0.6.1 / PR #976 | #1041 | Open | v0.6.2 candidate |
+| 118 | Forward-replay through branched timeline (Redux DevTools parity) | Retro v0.6.1 / PR #976 | #1042 | Open | v0.6.2 candidate |
+| 119 | Phase 2 streaming (lazy-child render + true server overlap) | Retro v0.6.1 / PR #975 | #1043 | Open | v0.6.2 — Phase 1 was transport-layer only |
+| 120 | ADR-006 AI-generated UIs — deferred due to AssistantMixin/LLM-provider dependency chain | Retro v0.6.1 | #1044 | Open | Deferred from v0.6.1 to v0.6.2 |
+| 121 | Shared `_SCRIPT_CLOSE_TOLERANT_RE` constant for HTML5-tolerant `</script>` matching | Retro v0.6.1 / PR #975 | #1045 | Open | Third occurrence of CodeQL py/bad-html-filtering-regexp (PR #966, #970, #975). Centralize into `mixins/template.py` or a new `_html_utils.py`. |
 | 122 | Post-commit verification step in pipeline-run skill: `git log -1 --oneline` sanity check after every `git commit` | Retro v0.6.1 / PR #974 (+ PRs #989, #996, #1007, #1008, #1014, #1015, #1021, #1024) | — | **Closed (skill-level)** | Eight reinforcements in single 24-hour session (PRs #989, #996, #1007, #1008, #1014, #1015, #1021, #1024). Implemented as new "MANDATORY Post-Commit Verification (Action #122)" section in `~/.claude/skills/pipeline-run/SKILL.md` (2026-04-25, post-v0.8.0rc1). Documents the failure mode (pre-commit hook stash → reformat → conflict → silent rollback), the canonical fix (`git commit -m "..." && git log -1 --oneline`), the load-bearing detail (`&&` chains the verify, so the agent immediately sees the previous-commit subject if the commit didn't register), and the "never skip" rationale. Resolves the highest-ROI technical-debt item from the v0.6.1 → v0.8.0 session arc. |
 | 123 | FORCE_SCRIPT_NAME / mounted sub-path support for JS clients (hardcoded `/djust/api/...` prefix in `48-server-functions.js` and other client modules) | Retro v0.7.0 / PR #986 | #987 | Closed | Shipped in v0.7.1 PR #993 (merged as `f03d64eb`) — `{% djust_client_config %}` template tag (dual-registered for Django + Rust engines per the djust_markdown precedent) + `window.djust.apiPrefix` / `djust.apiUrl(path)` helpers + `48-server-functions.js` routed through the helper. 15 new tests (5 Py + 6 JS + 1 regression + 3 dual-engine parity cases added at Stage 12). Bundle delta +148 B gzipped. Follow-up filed for `03b-sse.js:44` (SSE fallback transport — same class of bug, #992, v0.7.2 target). |
-| 124 | Upgrade Action #116 — for every feature with non-trivial semantics (gate rules, error envelopes, state contracts), write doc-claim-verbatim tests BEFORE writing implementation | Retro v0.7.0 / PR #988 (+ v0.6.0/v0.6.1/#986 pattern) | — | Open | 4th consecutive milestone with doc-vs-code drift 🔴/🟡. Action #116 ("trace data-flow before writing docs") is aspirational, not executable. Upgrade to TDD sharpened: the test cases ARE the doc claims. Enforcement: Stage 7 checklist grows a "for each documented rule, point to the asserting test" row. PR #989 application: partial — five rule tests written RED first, but PR-body headline claim ("action fires → redirect to progress page") was never a test; that's the 🔴 Stage 11 caught. Subsumed for user-visible features by #125. |
-| 125 | Upgrade Stage 7 checklist with user-flow trace — for every user-visible feature, trace the happy-path user story end-to-end (HTTP request → server dispatch → response envelope → browser render/navigation) | Retro v0.7.0 / PR #989 (+ PR #986 + PR #988 pattern) | — | Open | 3rd consecutive pipeline where Stage 7 rubber-stamped a diff that Stage 11 proved was broken end-to-end. PR #986 — JsonResponse outside try/except (response-layer). PR #988 — fire-and-forget flush breaking same-round-trip (transport-layer). PR #989 — HttpResponseRedirect silently dropped by @event_handler (dispatch-layer). Common shape: code does a thing, but thing doesn't reach the user. Enforcement: Stage 7 output template grows a "User flow trace" section with a required bullet per user-visible feature. **Validated across 5 pipelines** (#990, #993, #995, #996, #997 — all 0 🔴 at Stage 11; #995 + #996 ran condensed pipeline-dev flow with no Stage 11 but no live-verify regressions either). The class of defect that plagued #976/#988/#989 has not recurred since #125 was filed. |
-| 126 | Flaky perf test triage — `test_broadcast_latency_scales[10]` missed its 10 ms budget by ~12× on py3.13 CI runner (py3.12/py3.14 passed) | Retro v0.7.0 / PR #990 | — | Open | Caused 1 CI retry on PR #990. 10-subscriber case only; 1-subscriber and 50-subscriber cases passed. Options: (a) per-runner tolerance, (b) `@pytest.mark.flaky(reruns=2)`, (c) move to non-required check. |
-| 127 | Stage 9 test-count recount rule — Stage 9 (Documentation) must re-count tests AFTER Stage 7/12 fix-pass deltas and update the CHANGELOG test-count line before the final docs pass | Retro v0.7.0 / PR #990 | — | Open | PR #990 CHANGELOG claimed "38 total" but actual was 41 (docs author cited Stage 5 count, not post-fix-pass). Stage 11 caught it. Second milestone running with a small CHANGELOG test-count drift — auditable claim, should be precise. Enforcement: Stage 9 checklist grows a "run `make test`, record final count, diff against CHANGELOG" row. |
-| 128 | External-crate doc.rs read before implementation for security-surface dependencies — any external crate (Rust or Python) whose API forms part of a security boundary must have its doc.rs entry read at Stage 4/5 for the specific API surface we use | Retro v0.7.0 / PR #990 | — | Open | PR #990 surfaced two pulldown-cmark 0.12 API corrections only because RED tests failed: `Options::ENABLE_HTML` omission does NOT suppress `Event::Html`, and `Options::ENABLE_GFM_AUTOLINK` doesn't exist in 0.12. Luck saved the XSS surface. Doc-reading first would be systematic. Enforcement: Stage 4 plan template grows a "linked doc.rs section for each external security-boundary API" row. |
+| 124 | Upgrade Action #116 — for every feature with non-trivial semantics (gate rules, error envelopes, state contracts), write doc-claim-verbatim tests BEFORE writing implementation | Retro v0.7.0 / PR #988 (+ v0.6.0/v0.6.1/#986 pattern) | #1046 | Open | 4th consecutive milestone with doc-vs-code drift 🔴/🟡. Action #116 ("trace data-flow before writing docs") is aspirational, not executable. Upgrade to TDD sharpened: the test cases ARE the doc claims. Enforcement: Stage 7 checklist grows a "for each documented rule, point to the asserting test" row. PR #989 application: partial — five rule tests written RED first, but PR-body headline claim ("action fires → redirect to progress page") was never a test; that's the 🔴 Stage 11 caught. Subsumed for user-visible features by #125. |
+| 125 | Upgrade Stage 7 checklist with user-flow trace — for every user-visible feature, trace the happy-path user story end-to-end (HTTP request → server dispatch → response envelope → browser render/navigation) | Retro v0.7.0 / PR #989 (+ PR #986 + PR #988 pattern) | #1047 | Open | 3rd consecutive pipeline where Stage 7 rubber-stamped a diff that Stage 11 proved was broken end-to-end. PR #986 — JsonResponse outside try/except (response-layer). PR #988 — fire-and-forget flush breaking same-round-trip (transport-layer). PR #989 — HttpResponseRedirect silently dropped by @event_handler (dispatch-layer). Common shape: code does a thing, but thing doesn't reach the user. Enforcement: Stage 7 output template grows a "User flow trace" section with a required bullet per user-visible feature. **Validated across 5 pipelines** (#990, #993, #995, #996, #997 — all 0 🔴 at Stage 11; #995 + #996 ran condensed pipeline-dev flow with no Stage 11 but no live-verify regressions either). The class of defect that plagued #976/#988/#989 has not recurred since #125 was filed. |
+| 126 | Flaky perf test triage — `test_broadcast_latency_scales[10]` missed its 10 ms budget by ~12× on py3.13 CI runner (py3.12/py3.14 passed) | Retro v0.7.0 / PR #990 | #1048 | Open | Caused 1 CI retry on PR #990. 10-subscriber case only; 1-subscriber and 50-subscriber cases passed. Options: (a) per-runner tolerance, (b) `@pytest.mark.flaky(reruns=2)`, (c) move to non-required check. |
+| 127 | Stage 9 test-count recount rule — Stage 9 (Documentation) must re-count tests AFTER Stage 7/12 fix-pass deltas and update the CHANGELOG test-count line before the final docs pass | Retro v0.7.0 / PR #990 | #1049 | Open | PR #990 CHANGELOG claimed "38 total" but actual was 41 (docs author cited Stage 5 count, not post-fix-pass). Stage 11 caught it. Second milestone running with a small CHANGELOG test-count drift — auditable claim, should be precise. Enforcement: Stage 9 checklist grows a "run `make test`, record final count, diff against CHANGELOG" row. |
+| 128 | External-crate doc.rs read before implementation for security-surface dependencies — any external crate (Rust or Python) whose API forms part of a security boundary must have its doc.rs entry read at Stage 4/5 for the specific API surface we use | Retro v0.7.0 / PR #990 | #1050 | Open | PR #990 surfaced two pulldown-cmark 0.12 API corrections only because RED tests failed: `Options::ENABLE_HTML` omission does NOT suppress `Event::Html`, and `Options::ENABLE_GFM_AUTOLINK` doesn't exist in 0.12. Luck saved the XSS surface. Doc-reading first would be systematic. Enforcement: Stage 4 plan template grows a "linked doc.rs section for each external security-boundary API" row. |
 | 129 | Stage 4 planner checklist — engine-path declaration for template tags. Any new template tag plan must explicitly state which engine(s) render the template(s) that consume it (Django template engine, Rust template engine, or both) and plan registration accordingly | Retro v0.7.1 / PR #993 | — | Partially validated | PR #993 originally registered `{% djust_client_config %}` ONLY with Django's template library; pre-push pytest caught that `base.html` (rendered through the Rust engine for LiveView views) 500'd because the Rust engine didn't know the tag. Fix mirrored PR #990 dual-registration pattern. Stage 4 plan template grows an "Engine path" bullet — for each new template tag, list the engine(s) that render templates consuming the tag. Second canonical example (alongside `djust_markdown`) is `djust_client_config`. **Partially validated v0.7.1**: PR #997 (SSE FORCE_SCRIPT_NAME) was a transport-layer mirror, not a template-tag PR — engine-path checklist not exercised. Generalized into Action #131 (broader: declare engine-paths during Stage 4 for any feature touching templates). |
 | 130 | SSE FORCE_SCRIPT_NAME / mounted sub-path support — `03b-sse.js:44` hardcoded `/djust/sse/` prefix breaks the same way as `48-server-functions.js` did | Retro v0.7.0 / PR #993 follow-up | #992 | Closed | Shipped in v0.7.1 PR #997 (merged as `4adc27b6`). Mechanically applied the PR #993 pattern: meta-tag emission via `{% djust_client_config %}` extension + `djust.ssePrefix` + `djust.sseUrl()` helper; +3 tests; +46 B bundle. First-push clean merge (single Stage 11 APPROVE, 0 🔴/🟡). **Template-reuse dividend**: total engineering time was a fraction of PR #993 — PR #993 established the pattern, #997 applied it. |
-| 131 | Stage 4 plan-template "Engine path" bullet should generalize beyond template-tags — any feature that touches the template rendering pipeline (filters, tags, context processors, custom blocks, post-processing hooks) must declare which engine(s) the user templates run through | Retro v0.7.1 / PR #993 generalization | — | Open | Generalizes Action #129. PR #993 caught the dual-engine bug ONLY because pre-push runs the full demo suite; targeted Stage 6 subsets miss it. Class of bug: any code path that participates in user template rendering can silently work in one engine and 500 in the other. Enforcement: Stage 4 plan template's "Engine path" row applies to filters, context processors, post-processing hooks, and any registry-style API — not just `register_tag_handler`. |
-| 132 | Pipeline-run skill should list pipeline-dev-eligible PR shapes explicitly | Retro v0.7.1 / PRs #995 + #996 | — | Open | Empirically validated this milestone: PR #995 (Makefile target) and PR #996 (test-only refactor) shipped cleanly under condensed pipeline-dev flow (no subagent reviews, no Stage 7/8/11). Proposed heuristic: pipeline-dev-eligible iff PR touches only {Makefile, scripts/, docs/, tests/} AND has zero changes under `python/djust/` or `crates/`. Production code always goes through pipeline-run. Action: update `~/.claude/skills/pipeline-run/SKILL.md` with a triage section before next milestone. |
+| 131 | Stage 4 plan-template "Engine path" bullet should generalize beyond template-tags — any feature that touches the template rendering pipeline (filters, tags, context processors, custom blocks, post-processing hooks) must declare which engine(s) the user templates run through | Retro v0.7.1 / PR #993 generalization | #1051 | Open | Generalizes Action #129. PR #993 caught the dual-engine bug ONLY because pre-push runs the full demo suite; targeted Stage 6 subsets miss it. Class of bug: any code path that participates in user template rendering can silently work in one engine and 500 in the other. Enforcement: Stage 4 plan template's "Engine path" row applies to filters, context processors, post-processing hooks, and any registry-style API — not just `register_tag_handler`. |
+| 132 | Pipeline-run skill should list pipeline-dev-eligible PR shapes explicitly | Retro v0.7.1 / PRs #995 + #996 | #1052 | Open | Empirically validated this milestone: PR #995 (Makefile target) and PR #996 (test-only refactor) shipped cleanly under condensed pipeline-dev flow (no subagent reviews, no Stage 7/8/11). Proposed heuristic: pipeline-dev-eligible iff PR touches only {Makefile, scripts/, docs/, tests/} AND has zero changes under `python/djust/` or `crates/`. Production code always goes through pipeline-run. Action: update `~/.claude/skills/pipeline-run/SKILL.md` with a triage section before next milestone. |
 | 133 | py3.14 timing-sensitive CI flake class — `test_hotreload_slow_patch_warning` and `test_broadcast_latency_scales[10]` both fail intermittently on the py3.14 runner only | Retro v0.7.0 / PR #990 + Retro v0.7.2 / PR #1001 | #1016 | Closed | Shipped in v0.7.4 PR #1021 (merged as `6a4c0a58`). Two distinct fixes: (a) phase-based `time.time()` mock in test_hotreload (resilient to extra scheduler `loop.time()` calls on py3.14), (b) bumped 10ms→30ms dispatch budget for broadcast_latency_scales. No new deps. | Same class as #126 (filed during v0.7.0). py3.14 CI runner has different timing characteristics from py3.12/3.13 — wall-clock threshold assertions and warning-debounce timeouts hit the threshold occasionally on py3.14 only. Both tests (`test_broadcast_latency_scales[10]` from PR #990, `test_hotreload_slow_patch_warning` from PR #1001) passed on rerun. Options: (a) loosen thresholds with per-runner tolerance, (b) `@pytest.mark.flaky(reruns=2)` on timing-sensitive tests, (c) move py3.14 to non-required check until thresholds are recalibrated. Track next 3-4 py3.14 runs; if a third test joins the class, prioritize the fix. |
 | 134 | PR review checklist reminder: when adding a framework-set attribute on `LiveView`/`LiveComponent`, also add it to `_FRAMEWORK_INTERNAL_ATTRS` | Retro v0.7.2 / PR #1002 / ADR-012 | #1017 | Closed | Shipped in v0.7.4 PR #1022 (bundled docs PR). One bullet under Code Quality > Architecture in `docs/PULL_REQUEST_CHECKLIST.md`. | Mitigation for ADR-012's accepted maintenance burden. The `_FRAMEWORK_INTERNAL_ATTRS` filter is the single source of truth for "this attr is internal"; a future framework attr added without the filter entry would re-introduce the v0.5.7 leak class. Not a CI gate (would be over-engineering for ~25 attrs that change rarely) — just a one-line bullet in `docs/PULL_REQUEST_CHECKLIST.md`. ~2 minutes to add; lock the mitigation that ADR-012 documented. |
 | 135 | "Misleading existing tests" pattern — a check fix often requires UPDATING tests, not just adding new ones, when the pre-existing test fixture exemplifies the broken behavior the issue is about | Retro v0.7.3 / PR #1008 | #1018 | Closed | Shipped in v0.7.4 PR #1022 (bundled docs PR). Bullet in `docs/PULL_REQUEST_CHECKLIST.md` Test Quality section + canonical example documented in `docs/development/check-authoring.md`. | PR #1008's `test_c011_passes_when_output_exists` had been writing an 18-byte placeholder and asserting no C011 — exactly the bug #1003 was about. The test was wrong in a load-bearing way: it codified the broken behavior. Add a one-paragraph note to `docs/PULL_REQUEST_CHECKLIST.md` and PR review prompts: "if a check claims to test X but its test fixture exemplifies the broken behavior, updating the test is part of the fix." Locks against future "I added a new test but the existing one passes for the wrong reason" failures. |
@@ -168,6 +168,17 @@ issue or be explicitly closed with a reason.
 
 ---
 
+| 138 | Stage 11 grep-adjacent-files checklist bullet | Retros: security/CodeQL arc | #1053 | Open | New (reconcile 2026-04-25) |
+| 139 | pipeline-retro Stage 2 (read per-PR retros) reinforcement | Retro v0.8.0 | #1054 | Open | New (reconcile 2026-04-25) |
+| 140 | Stage 4 plan template — multi-PR milestone iter sequencing | Retro v0.8.0 | #1055 | Open | New (reconcile 2026-04-25) |
+| 141 | Stage 4 plan template — 'API shape options considered' row | Retro v0.7.2 (addendum to Action #124) | #1056 | Open | New (reconcile 2026-04-25) |
+| 142 | make roadmap-lint — automate ROADMAP-vs-codebase grep | Retro v0.5.0 feature rollout | #1057 | Open | New (reconcile 2026-04-25) |
+| 143 | Ghost-branch drift mitigation in subagent prompts | Retro v0.5.0 feature rollout | #1058 | Open | New (reconcile 2026-04-25) |
+| 144 | Pre-existing test failure threshold — fix at ~10 | Retro v0.5.1 | #1059 | Open | New (reconcile 2026-04-25) |
+| 145 | Dogfood pass for new CLI tools before commit | Retro v0.5.1 | #1060 | Open | New (reconcile 2026-04-25) |
+| 146 | Pre-push hook for `noqa: F822` in `__all__` patterns | Retro v0.7.0 | #1061 | Open | New (reconcile 2026-04-25) |
+| 147 | Centralize tech-debt issue queue around Action Tracker rows | Retro 2026-04-25 reconcile | #1062 | Open | New (reconcile 2026-04-25) |
+| 148 | RETRO_GATE_VIOLATION backfill — PRs #995, #996, #997 | Retro 2026-04-25 reconcile | #1063 | Open | New (reconcile 2026-04-25) |
 ## v0.8.0 — Form Status Awareness + Server Actions (PRs #1023, #1024)
 
 **Date**: 2026-04-25
@@ -178,15 +189,15 @@ issue or be explicitly closed with a reason.
 
 **1. Pairing client-side + server-side patterns into a single milestone unlocks React 19 ergonomics.** `dj-form-pending` and `@action` are independently useful but are designed to compose — `dj-form-pending` covers the in-flight UX (during the network round-trip), `@action` covers the post-completion state (after the handler returns). Form authors get the full React 19 form ergonomics by adopting both, with zero per-handler wiring on either side. This was the v0.8.0 thesis from the ROADMAP and it landed cleanly.
 
-**Action taken**: No code change. Pattern documentation in CHANGELOG entries explicitly cross-references the two features.
+**Action taken**: Closed — observational only (cross-feature pairing). No new tracker row.
 
 **2. Iter sizing rule: small-first opens the milestone shipping rhythm.** iter 1 (`dj-form-pending`) was ~80 LOC + 8 tests in 30 minutes. iter 2 (`@action`) was ~175 LOC + 18 tests in ~1 hour, building on infrastructure iter 1 had stress-tested (the form-submit dispatch path). If iter 2 had gone first, the cumulative engineering budget pressure would have been higher and iter 1's scope might have crept. Generalize: **always sequence the smallest design-novel iter first when bundling a multi-PR milestone**.
 
-**Action taken**: No code change. Pattern observation worth promoting to a Stage 4 plan note for future multi-PR milestones — close to Action #129's "engine-path declaration" but for sequencing rather than coverage.
+**Action taken**: Open — tracked in Action Tracker #140 (GitHub #1055).
 
 **3. Building on existing infrastructure is the right shape for compound features.** `@action` doesn't reimplement dispatch — it wraps `@event_handler` and adds the state-tracking layer. Result: same parameter coercion, permissions, rate limits, CSRF guards. The wrapper is small (~50 LOC) because all the heavy lifting was already done. If `@action` had reinvented dispatch, this PR would have been 3-4× larger and Stage 11 would have caught security regressions. **The decorator-wraps-decorator pattern is the canonical shape for "add cross-cutting concern X to existing Y."**
 
-**Action taken**: No code change. Pattern documented in `@action` docstring as "every action is also an event handler — same dispatch path."
+**Action taken**: Closed — observational only (decorator-wraps-decorator pattern; already in @action docstring). No new tracker row.
 
 **4. Scope-cut decision: defer Async Streams to v0.8.1 with explicit precedent reference.** Async Streams is Python + Rust VDOM work (~200 LOC Python + Rust stream container support). At session-end, that's not a clean shipping shape — it would either mean shipping under-tested code or working past the point of diminishing returns. The v0.7.0rc1 / v0.6.0rc1 precedents both cut rc1 with 4-of-5 P2 features shipped, deferring the largest deferred-eligible item. v0.8.0rc1 follows the same shape: 2-of-3 shipped, Async Streams deferred. **The right v0.8.0 isn't "all 3 features at once" — it's "the React 19 form pattern landed correctly, with Async Streams as a focused v0.8.1."**
 
@@ -207,7 +218,7 @@ issue or be explicitly closed with a reason.
 - **Self-init defense for stateful decorator attrs** (PR #1024). If a subclass overrides `__init__` and forgets `super().__init__()`, the decorator initializes `_action_state` on demand instead of `AttributeError`-ing in production. Locked with `test_action_self_initializes_action_state`.
 - **Bare-form + called-form decorator** (PR #1024). `@action` and `@action(description="…")` both work via the standard `if func is None` test pattern. Worth canonicalizing in the framework's decorator-authoring docs.
 
-**Action taken**: Captured here as a milestone finding rather than scattering them per-PR. The deeper process lesson: **`pipeline-retro` Step 2 (read per-PR retros) is non-skippable** — without it, the milestone retro misses the technical-design lessons the per-PR retro author already extracted. Reinforced in this session.
+**Action taken**: Open — tracked in Action Tracker #139 (GitHub #1054).
 
 ### Insights
 
@@ -269,11 +280,11 @@ Deferred from v0.8.0 to v0.8.1:
 
 **1. Bundle-by-touched-file is the right grouping for docs PRs.** PR #1022 closed 4 issues (#1017, #1018, #1019, #1020) in a single PR because all four touched either `docs/PULL_REQUEST_CHECKLIST.md` or the new `docs/development/check-authoring.md`. Single review pass, single CI cycle, single merge — vs. four separate PRs each spending ~5-10 min in CI. Bundle eligibility rule: **same target file(s) + same review type (docs vs code) + small scope**. PR #1014's "engine path" Stage 4 plan template addition (Action #129) is the contrasting case — different target files, would not have bundled cleanly.
 
-**Action taken**: No new Action Tracker row. Bundling-by-touched-file is implicit from the existing pipeline-run "group related tasks" guidance (Action #132 territory).
+**Action taken**: Closed — observational only (bundle-by-touched-file is implicit in Action #132 territory). No new tracker row.
 
 **2. `closes #X, #Y, #Z` only auto-closes the first issue.** PR #1022's title and body contained `closes #1017, #1018, #1019, #1020` but only #1017 auto-closed on merge. GitHub respects only the first "closes #N" pattern when comma-separated; subsequent IDs are treated as plain references. The fix is one-`closes`-keyword-per-issue (each on its own line). This gotcha is **already documented** in `docs/PULL_REQUEST_CHECKLIST.md` (Pre-Review Quick Checks: "Multiple issues must be listed one per line — do not combine them on a single line"). Despite that, a docs-PR for retro follow-ups violated the checklist that PR was UPDATING. Pure operator error; cost was three manual `gh issue close` calls.
 
-**Action taken**: No code change. The checklist already covers this — the meta-lesson is that even a checklist update PR needs to follow its own checklist. Future bundled PRs should use `Closes #N\nCloses #M\n...` format.
+**Action taken**: Closed — already documented in `docs/PULL_REQUEST_CHECKLIST.md` Pre-Review Quick Checks. Operator-discipline note.
 
 **3. py3.14 fix worked first-push clean.** PR #1021 hardened `test_hotreload_slow_patch_warning` against extra `time.time()` calls from py3.14's asyncio scheduler (replacing the indexed-array mock with a phase-based mock) AND bumped `test_broadcast_latency_scales` budget from 10ms to 30ms. Both fixes landed clean on first push — Action #133's "pick one" suggestion (per-runner tolerance / `@pytest.mark.flaky` / non-required matrix) was answered with "two tailored fixes in one PR." Avoided introducing `pytest-rerunfailures` as a new dep.
 
@@ -281,7 +292,7 @@ Deferred from v0.8.0 to v0.8.1:
 
 **4. Pre-commit stash/restore — 7th occurrence.** Same pattern continues. PR #1021 hit it during commit (lock file drift caused stash, then commit rolled back). The cumulative reinforcement count is now 7 (PRs #989, #996, #1007, #1008, #1014, #1015, #1021). **Action #122 implementation is overdue** — but it's a skill-level update (`~/.claude/skills/pipeline-run/SKILL.md`), not a djust-repo task. Filing one more reinforcement note doesn't help; the skill-level work has to actually land.
 
-**Action taken**: Action #122 reinforcement count updated to 7 in tracker.
+**Action taken**: Closed — Action #122 closed at skill level 2026-04-25 (~/.claude/skills/pipeline-run/SKILL.md MANDATORY Post-Commit Verification section).
 
 ### Insights
 
@@ -353,7 +364,7 @@ Deferred from v0.7.4: None — all 5 originally-triaged issues shipped.
 
 **1. Single-area drains run unprecedented-fast — 3 PRs in ~1 hour.** v0.7.3 was the tightest drain in the session. Three issues, all in `python/djust/checks.py` or `python/djust/theming/checks.py`, all reported by docs.djust.org users with explicit repros and suggested fix sketches. Compare to v0.7.2 (6 PRs / ~3-4h, four design-novel + two template-fill) and v0.7.1 (4 PRs / ~2h, one design-novel + three template-fill). v0.7.3 was 0 design-novel + 3 template-fill: each fix had a clear "extend this helper" or "add this guard" shape. **The takeaway is not just "single-area is fast" but "user-reported issues with repro+fix-sketch are the optimal drain-iteration unit"** — the cognitive load of "what's the right shape?" is paid by the reporter, leaving the implementer to translate the sketch into production code + tests.
 
-**Action taken**: No code change. Pattern observation locked. Future user-issue triage should weight "reporter provided repro + fix sketch" heavily — those issues belong at the front of the drain queue.
+**Action taken**: Closed — observational only (user-issue triage prioritization). No new tracker row.
 
 **2. Misleading existing tests are a load-bearing bug shape.** PR #1008's existing test `test_c011_passes_when_output_exists` had been writing an 18-byte placeholder file and asserting no C011 fired — exactly the bug #1003 was about. The test codified the broken behavior. Updating that test was part of the fix; without the update, the new content-sniff helper would have shipped with a contradictory existing-test that "passed for the wrong reason." Generalized: when a check claims to test X but its fixture exemplifies the broken behavior the issue describes, updating the test is mandatory, not optional. **Filed as Action #135** with proposed mitigation: a one-paragraph note in the PR review checklist + reviewer prompts.
 
@@ -369,11 +380,11 @@ Deferred from v0.7.4: None — all 5 originally-triaged issues shipped.
 
 **5. Pre-commit stash/restore — 6× reinforced in single session, mandate is unambiguous.** PRs #1008, #1014, #1015 each hit the gotcha (#4, #5, #6 occurrences respectively). Combined with #989, #996, #1007 from earlier, six occurrences in a single 24-hour drain session. **Action #122 status: top of next housekeeping pass, not optional.** The cumulative working-around cost (re-stage, retry, verify each commit) has long exceeded the implementation cost (one bash check in the skill markdown). Filing one more reinforcement isn't going to make the case any clearer.
 
-**Action taken**: Action #122 status updated to "Open — 6th reinforcement in single session" with the full PR list. Implementation is now the very next housekeeping action.
+**Action taken**: Closed — Action #122 closed at skill level 2026-04-25 (~/.claude/skills/pipeline-run/SKILL.md MANDATORY Post-Commit Verification section).
 
 **6. CI was clean every time.** All three v0.7.3 PRs landed first-push clean — no CI retries, no flakes (no py3.14 timing issues this drain), zero 🔴 or 🟡 findings. Action #125 (Stage 7 user-flow trace) streak now extends to **14 consecutive pipelines** without a Stage-7-miss-Stage-11-catch defect (PRs #990 through #1015). The discipline is empirically working.
 
-**Action taken**: Action #125 streak extended; no new follow-up.
+**Action taken**: Closed — observational only (Action #125 streak status update). No new tracker row.
 
 ### Insights
 
@@ -450,11 +461,11 @@ Deferred from v0.7.3:
 
 **1. Drain pace correlates inversely with design novelty — confirmed across 2 milestones now.** v0.7.2 shipped 6 PRs in ~3-4 hours with first-push clean merges on all of them (one unrelated py3.14 flake retry on PR #1001). v0.7.1 shipped 4 PRs in ~2 hours under similar conditions. v0.7.0 took a full session day for 4 design-novel PRs. The pattern: when the issue queue is dominated by one-PR-shaped follow-ups (small bugs with reporter-provided repros, docs+observability fixes, ADR-only policy closes, and pattern-mirror features), drains run very fast. v0.7.2's mix was 2 design-novel (#968 Rust Display impl, #991 `:has()` CSS contract) + 4 template-fill (#994 stub classes, #964 docs+log, #963 workflow YAML+scaffold tests, #962 ADR). All six landed clean.
 
-**Action taken**: No code change — pattern observation locked. Plan future milestones to alternate "design-novel sprint" → "template-fill drain" → "design-novel sprint" rather than mixing the two at random. Generalized into the v0.7.1 retro Insights; this milestone confirms.
+**Action taken**: Closed — observational only (drain-pace correlates with design-novelty). No new tracker row.
 
 **2. Three-option design surfaces beat single-option proposals when the API shape isn't obvious.** PR #1007 (#991 inline radios) had three plausible API shapes: form-level flag, widget-attr+CSS, or template-tag variant. Surfacing all three with explicit pros/cons in a comment unblocked the user's choice in a single round-trip. Total design time: minutes, not hours. Once the user picked B (widget-attr+CSS), implementation was a mechanical translation — 12/12 tests green on first authoring pass (after one diagnostic step on Django widget mechanics). Compare to PR #976 (v0.6.1 time-travel) where the implementer invented an API shape unilaterally and got the wrong one — three rework cycles before alignment.
 
-**Action taken**: Generalize the "surface 2-3 options before implementation" pattern for any feature where the API shape isn't dictated by an existing design. Stage 4 plan template should grow an "API shape options considered" row for greenfield UX/API features. Filed as an addendum to Action #124 (doc-claim-verbatim TDD): for *new* features, the doc claims should reflect a chosen shape, not invent one mid-implementation.
+**Action taken**: Open — tracked in Action Tracker #141 (GitHub #1056).
 
 **3. CSS `:has()` is now in the project's CSS toolkit.** PR #1007 used the `:has()` parent selector to walk up from a marked `<input>` to its containing wrapper — solving the "Django `attrs={...}` lands on the form-control element, not its container" problem with zero new Python. Browser support stable since late 2023 across Chromium 105+ / Safari 15.4+ / Firefox 121+, all current minimums in 2026. Worth adopting for any future "wrap-when-attribute-present" CSS rule. Documented one-paragraph note in the forms guide alongside the inline-radios section so future contributors see the pattern.
 
@@ -462,7 +473,7 @@ Deferred from v0.7.3:
 
 **4. Pre-commit stash/restore gotcha — third reinforcement in a single 24-hour window.** PR #1007 hit it (ruff reformatted the test file during pre-commit, original commit didn't register). PRs #989 (1st) and #996 (2nd) hit it earlier in the session. Three occurrences in one drain. Action #122 (post-commit `git log -1 --oneline` verification step in the pipeline-run skill) was filed in v0.6.1 retro and reinforced in v0.7.1; this milestone makes it an unmistakable papercut. **The cost of NOT implementing it is now per-PR**, and the implementation cost is one bash check in the skill markdown.
 
-**Action taken**: Action #122 status updated to "Open — 3rd reinforcement in single session". Implementing the post-commit verification in `~/.claude/skills/pipeline-run/SKILL.md` is now top of the next housekeeping pass. NOT done in this milestone (the skill update is out of scope for the djust-repo drain), but the case for it is now overwhelming.
+**Action taken**: Closed — Action #122 closed at skill level 2026-04-25 (~/.claude/skills/pipeline-run/SKILL.md MANDATORY Post-Commit Verification section).
 
 **5. py3.14 timing-sensitive flake class is real and worth a strategy.** PR #1001 hit `test_hotreload_slow_patch_warning` failing on py3.14 only (3.12/3.13 passed). PR #990 (v0.7.0) hit `test_broadcast_latency_scales[10]` failing on py3.14 only. Both passed on rerun. Two distinct tests, both timing-sensitive, both py3.14-specific. The py3.14 GitHub Actions runner appears to have different timing characteristics than py3.12/3.13 — slower scheduler granularity, GIL changes, or runner contention. **Generalized into Action #133** (renamed from the single-test #126).
 
@@ -470,7 +481,7 @@ Deferred from v0.7.3:
 
 **6. Close-without-code via ADR is the right shape for policy decisions.** PR #1002 / ADR-012 closed #962 (the long-deferred `_FRAMEWORK_INTERNAL_ATTRS` rename question) without writing any code. The ADR lists 4 alternatives with rejection reasons + the mitigation (PR review checklist reminder filed as Action #134). The mechanism beats letting the question rot in retro Open Items across multiple milestones. v0.6.1 retro carried "decide #962" as an open item; v0.7.0 retro deferred it again; v0.7.1 retro repeated the deferral. v0.7.2 closed it. **The shape — issue → ADR → mitigation as Action Tracker row → close — is now the canonical close-without-code pattern.**
 
-**Action taken**: Pattern documented as a milestone insight. Future close-without-code issues follow the same shape. Action #134 (PR-checklist reminder) is the canonical follow-up to ADR-012; not implemented in this milestone but filed.
+**Action taken**: Closed — observational only (close-without-code via ADR pattern; already documented). No new tracker row.
 
 ### Insights
 
@@ -551,27 +562,27 @@ These appeared during the v0.7.2 drain (not caused by the drain PRs themselves).
 
 **1. Pattern-reuse is the v0.7.1 milestone dividend.** PR #993 established the `{% djust_client_config %}` + meta-tag + `djust.apiUrl()` pattern with full design thinking (planner-first, Stage 5b dual-registration recovery, Stage 12 parity-test fix-pass). PR #997 reused the pattern mechanically — 3 tests, +46 B bundle, first-push clean merge in a fraction of the engineering time. This is exactly what "templates ship dividends" means in practice: the second instance of an established pattern takes a fraction of the effort. Both `djust_markdown` (v0.7.0) and `djust_client_config` (v0.7.1) are now canonical examples of dual-engine tag registration; future template-tag work has two reference implementations.
 
-**Action taken**: No code change. Pattern-reuse explicitly noted in PR #997's PR-body. Action Tracker #129/#131 capture the planning-stage discipline.
+**Action taken**: Closed — observational only (pattern reuse in PR body). No new tracker row.
 
 **2. Ship velocity unprecedented in session — and the difference is structural, not cosmetic.** v0.7.1 merged 4 PRs in ~2 hours, all first-push clean merges, zero CodeQL retries, zero 🔴 findings at Stage 11. v0.7.0 took a full session day for 4 PRs with 3 consecutive 🔴 caught at Stage 11. The structural difference: 3 of the 4 v0.7.1 PRs were template-fill "apply established pattern" work (PR #995 Makefile tooling, PR #996 mock swap, PR #997 mirror of PR #993). Only PR #993 required new design thinking. **The right takeaway is not "we got faster" but "small bounded PRs that apply known patterns are the optimal velocity unit."** When the Action Tracker is full of one-PR-shaped follow-ups (mock swap, tooling target, pattern mirror), drains run very fast.
 
-**Action taken**: No code change. Track the velocity-vs-design-novelty correlation as a planning input for future milestones.
+**Action taken**: Closed — observational only (velocity-vs-design-novelty planning input). No new tracker row.
 
 **3. Stage 11 🔴 streak holding at 0 across 5 pipelines.** PRs #990, #993, #995 (no Stage 11 — pipeline-dev), #996 (no Stage 11 — pipeline-dev), #997 → all 0 🔴 at Stage 11 (or no regressions in pipeline-dev's live-verify substitute). Action #125 (Stage 7 user-flow trace), introduced after the #976/#988/#989 streak of broken-end-to-end PRs, is demonstrably working — that class of defect has not recurred since #125 was filed. Two-PR validation became five-PR validation in a single session.
 
-**Action taken**: Action #125 status upgraded to "Validated across 5 pipelines" in the Action Tracker.
+**Action taken**: Open — tracked in Action Tracker #125 (GitHub #1047) — validated across 18+ pipelines.
 
 **4. pipeline-dev (condensed flow) empirically validated for tooling/test-only PRs.** PR #995 (Makefile target — pure DX) and PR #996 (test-only mock swap — pure refactor) both used the condensed pipeline-dev flow: no subagent reviews, no separate Stage 7/8/11. Both shipped clean and the user manually live-verified each. Calling this empirically: when a PR doesn't change production code paths, the full 14-stage pipeline is overhead. **Heuristic: PR is pipeline-dev-eligible if it touches only one of {Makefile, scripts/, docs/, tests/}** AND **has zero changes under `python/djust/` or `crates/`**. Production code changes always go through `pipeline-run`.
 
-**Action taken**: Filing as Action #132 — update pipeline-run skill guidance to explicitly list pipeline-dev-eligible PR shapes.
+**Action taken**: Open — tracked in Action Tracker #132 (GitHub #1052).
 
 **5. Pre-commit hook stash/restore gotcha hit twice in the session.** PR #996 hit it (ruff cleaned an unused import in the stashed tree, original commit didn't register, had to re-stage). PR #989 hit it earlier in the v0.7.0 milestone. Both occurrences had the same shape: pre-commit reformat in the stashed working tree silently drops the original commit. Action #122 (`git log -1 --oneline` post-commit verification) was filed in v0.6.1; this milestone's data confirms the priority — the failure mode is real and recurring.
 
-**Action taken**: Action #122 reinforced in the tracker (now annotated with PR #996 as 2nd occurrence). Recommend implementing the post-commit `git log -1 --oneline` step in the pipeline-run skill before next milestone.
+**Action taken**: Closed — Action #122 closed at skill level 2026-04-25 (~/.claude/skills/pipeline-run/SKILL.md MANDATORY Post-Commit Verification section).
 
 **6. The action-tracker flywheel demonstrably works — `make ci-mirror` exists BECAUSE of the gap Stage 5b of PR #993 surfaced.** PR #993's Stage 5b caught the dual-engine 500 because the FULL pre-push suite ran (not the targeted subset Stage 6 ran). That was filed as a process note under #129. The very next PR (PR #995) shipped `make ci-mirror` — a one-shot way to run the full CI test invocation locally, which is the same gap closed for ALL future PRs. This is the Action Tracker working as a flywheel: one pipeline's lesson became the next pipeline's tooling fix in the same session. Worth calling out as a victory for the process itself, not just for the individual PRs.
 
-**Action taken**: No code change — already shipped. Highlighting the flywheel pattern as a milestone insight.
+**Action taken**: Closed — observational only (action-tracker flywheel observation). No new tracker row.
 
 ### Insights
 
@@ -649,11 +660,11 @@ Deferred from v0.7.1:
 
 **2. Action #124 (doc-claim-verbatim TDD) paid off twice in two milestones.** Introduced in PR #988's retro (4th consecutive milestone with doc-vs-code drift), applied for the first time on PR #989 (5 rule tests RED-first: log level, A073 gate, LRU cap, generic-error split, cooperative cancel — each caught a real drift). Applied again on PR #990 where the pattern demonstrated its peak value: 9/9 Stage 7 fix-pass tests passed first-run against the unmodified implementation (strongest possible positive signal), AND 2 pulldown-cmark 0.12 API surprises (`ENABLE_HTML` non-suppression; `ENABLE_GFM_AUTOLINK` nonexistent) were caught by RED rule tests *before* the XSS surface could ship open. #124 evolved from aspirational process reminder to executable TDD discipline over the course of two PRs.
 
-**Action taken**: #124 marked Validated (partial — rule-level claims covered; PR-body-headline claims not yet). Subsumed for user-visible features by #125.
+**Action taken**: Open — tracked in Action Tracker #124 (GitHub #1046) — validated partial.
 
 **3. Planner-first continues to be the highest-leverage stage.** Every one of the 4 PRs had the Plan agent make structurally-significant corrections to the briefing before Stage 5. PR #986: added WIRING_CHECK + URL-route-precedence analysis. PR #988: flagged `live_tags.py` (not `djust.py`), JS slot `49-` (not `24-`), `11-event-handler.js` (not `09-event-binding.js`), `_FRAMEWORK_INTERNAL_ATTRS` was a no-op. PR #989: re-scoped from a stock-admin `DjustAdminMixin` (would have duplicated ~60% of `admin_ext/`) to `DjustModelAdmin` slot extension — saved a milestone of future consolidation. PR #990: identified PyO3 registration belongs in `djust_live` (not `djust_templates`), tag handler in `parser.rs`/`renderer.rs` (not `tags.rs`). Four pipelines, ~14 planner corrections, one structural wrong-turn avoided.
 
-**Action taken**: Pattern locked in. Planner-first is now empirically the most consistently-valuable stage across the milestone.
+**Action taken**: Closed — observational only (planner-first locked, no new work). No new tracker row.
 
 **4. Rust + PyO3 cross-language PRs introduce new security-surface risks.** PR #990 surfaced two pulldown-cmark 0.12 API surprises — both caught by RED rule tests, not by reading the crate's documentation first. `Options::ENABLE_HTML` omission does NOT suppress `Event::Html` emission; a custom event filter (`sanitise_event`) is required. `Options::ENABLE_GFM_AUTOLINK` doesn't exist in 0.12 (was renamed/restructured upstream). If the RED tests had been any less thorough, both would have shipped silently.
 
@@ -661,11 +672,11 @@ Deferred from v0.7.1:
 
 **5. Quality trajectory across the milestone trended up.** PR #986 4/5 (2 🟡 at Stage 11, clean merge). PR #988 4/5 (3 🔴 + 2 🟡 at Stage 7, single-commit fix-pass). PR #989 3/5 (1 🔴 at Stage 11 — redirect-drop — pulled the feature back from shipping cosmetically broken). PR #990 4.5/5 (0 🔴 at Stage 11; streak broken; #125 validated). Stage 11 🔴 count trended 1 → 1 → 1 → 0 across the milestone — correlating directly with the introduction of Action #124 in #988 and Action #125 in #989.
 
-**Action taken**: No code change. Tracking as a positive-direction signal for the #124+#125 discipline pair.
+**Action taken**: Closed — observational only (quality trajectory positive signal). No new tracker row.
 
 **6. CodeQL pattern — `py/undefined-export` on lazy `__all__` — continued.** PR #989 tripped `py/undefined-export` on `BulkActionProgressView` listed in `__all__` behind a `noqa: F822` suppression; ruff's local lint was silenced, CodeQL's independent analyzer flagged it. Same taxonomy as the three prior v0.6.x/v0.7.0 CodeQL-catches-what-ruff-missed occurrences (PRs #966, #970, #975). Action #121 (centralize `_SCRIPT_CLOSE_TOLERANT_RE`) is unrelated but same shape — lint suppressions drifting into CodeQL visibility.
 
-**Action taken**: Open item — evaluate a pre-push hook or at least a grep for `noqa: F822` in `__all__` patterns. Noted in PR #989 retro; not yet a tracker row.
+**Action taken**: Open — tracked in Action Tracker #146 (GitHub #1061).
 
 ### Insights
 
@@ -888,22 +899,22 @@ Tracked as Action Tracker rows #105–#112 above. Note: row #83 (stale docstring
 **1. v0.5.7 was a narrow-scope milestone and it worked — 5 issues, 3 PRs, clean first-push on 2 of 3.**
 Only PR #959 (resumable uploads) failed first CI — and the failures were substantive (under-coverage on new security-relevant modules + 7 CodeQL alerts) not spurious. The tight scope (5 issues rather than a sprawling 30-issue batch) meant each PR was big enough to matter but small enough to review in one sitting. Compare with the v0.5.6 "Security & Code-Scanning Cleanup arc" — 16 PRs, hugely productive but hard to trace individual decisions through.
 
-**Action taken**: pattern for future narrow-scope milestones: bundle related issues by theme (framework hygiene, upload-transport family) rather than by effort size. Closing as a process observation — no tracker row.
+**Action taken**: Closed — observational only (narrow-scope milestone bundling pattern). No new tracker row.
 
 **2. ADR-first development scaled the largest PR honestly.**
 PR #959 (resumable uploads, ~3148 LOC) started with ADR-010 drafted on paper: wire protocol, state-store contract, failure modes, security considerations. Writing the ADR first forced clarity that showed up directly in the implementation — clean protocol messages (`upload_resume` / `upload_resumed`), narrow state-store interface (`get/set/update/delete`), explicit TTL semantics, deliberate choice of "409 on concurrent resume" over takeover. Estimated 500-700 LOC from the issue body; actual was 3148 LOC once ADR + JS client + IndexedDB persistence + 2 state backends + 55 tests are counted. **The ADR page count is a better LOC predictor than the issue body.**
 
-**Action taken**: documented in retro-959; no code change. Pattern for v0.6.0 headline features (AI-generated UIs, ADR-006 Phase A-D) where each phase is already scoped this way.
+**Action taken**: Closed — observational only (ADR page count predicts LOC). No new tracker row.
 
 **3. Injection-seam testing without SDK installs is now the pattern.**
 PR #958 added `client=` / `service_client=` kwargs on `GCSMultipartWriter`, `AzureBlockBlobWriter`, and `PresignedS3Upload`. Tests pass a mock client; the optional `djust[s3]` / `djust[gcs]` / `djust[azure]` extras don't need to be installed for CI to run. 50 tests, ~0.15s wall time. **This is the right pattern for any future cloud-SDK contrib modules.**
 
-**Action taken**: documented in retro-958. Future upload backends (e.g. Cloudflare R2, Backblaze B2, MinIO) should copy the pattern. No new tracker row — just a convention.
+**Action taken**: Closed — observational only (injection-seam testing convention). No new tracker row.
 
 **4. Shared error taxonomy upfront saved downstream churn.**
 `UploadError` / `UploadNetworkError` / `UploadCredentialError` / `UploadQuotaError` in `djust.uploads.errors` + re-exported from `djust.uploads` means apps `except UploadError` without knowing which backend won. The 3 writers (S3, GCS, Azure) translate their SDK-specific exceptions into the shared taxonomy at raise-time. Stage 11 verified the translation table is consistent across all three.
 
-**Action taken**: documented. Future backends MUST use the same taxonomy — not introduce new exception types for the same semantic error class.
+**Action taken**: Closed — observational only (shared error taxonomy guidance). No new tracker row.
 
 **5. CI coverage threshold caught a real under-coverage.**
 PR #959's first push: 64.72% security-tests coverage, below the 75% gate. The gap was dominated by new PR files (`uploads/storage.py` 26%, `uploads/resumable.py` 17%, `uploads/views.py` 0%), NOT `error_handling.py` alone as the failure text suggested. The fix pass wrote 82 new tests reaching 89.55%. **The 75% coverage threshold is doing its job**, and the failure revealed that local testing before push missed the CI-mirror invocation — worth a `make ci-mirror` target.
@@ -913,7 +924,7 @@ PR #959's first push: 64.72% security-tests coverage, below the 75% gate. The ga
 **6. Retro-artifact gate (shipped in #950) worked zero dropout.**
 All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run skill's MANDATORY gate caught what the drain-phase subagents kept missing. The prior 3 dropouts (PRs #946, #955, #956) were the last occurrences.
 
-**Action taken**: pattern locked in. No new work.
+**Action taken**: Closed — observational only (retro-artifact gate locked, no new work). No new tracker row.
 
 ### Insights
 
@@ -1050,7 +1061,7 @@ All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run s
 - #923: `FormArrayNode` dead variable hinting at the #930 latent bug
 - #929: `tag_input` and `gallery/registry` latent bugs surfaced by investigating "why is this variable dead?"
 
-**Action taken**: Pattern entrenched. Worth making an explicit bullet in the Stage 11 checklist: "After fixing flagged sites, grep the codebase for the same pattern and verify each hit is safe or filed as follow-up."
+**Action taken**: Open — tracked in Action Tracker #138 (GitHub #1053).
 
 **4. Breaking changes are justified when ecosystem has moved on.** PR #927 dropped Python 3.9 (EOL 2025-10-05, 6 months past). Four Dependabot alerts had been blocked by the py3.9 floor for months because orjson/pytest/python-dotenv/requests had all dropped 3.9 in CVE-fix releases. One principled breaking change closed the whole class. PR #909 took the softer hand: narrowed Django ceiling to `<6` in pyproject.toml without dropping 5.x from the lockfile — both patterns worked.
 
@@ -1143,15 +1154,15 @@ All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run s
 
 **1. Stage 11 still catches real defects even on tech-debt PRs.** Every single cluster PR tonight had Stage 11 surface something non-trivial that Stage 7 (self-review) missed: `AnnAssign` dropped in the AST extractor (#859); `PermissionDenied` masked as 500 (prior PR #856); `_api_request` flag set after mount (prior PR #856); `dj-hook` not re-bound after the instant-shell swap (#860 — the doc I wrote claimed MutationObserver was the mechanism; it wasn't, and the test-client-to-main parity wasn't wired at all); `{% cycle ... as row_class %}` locals binding missing (#859); the `isIgnoredAttr` empty-token match edge case (#863). At 9 consecutive PRs, "Stage 11 is load-bearing" has proven itself beyond argument.
 
-**Action taken**: No change — rule stays mandatory. The pattern is so consistent that any future proposal to skip Stage 11 to save time should be rejected on sight.
+**Action taken**: Closed — already-locked rule (`feedback_pipeline_discipline.md` memory + RETRO.md historical record). No new tracker row.
 
 **2. `Closes #X, #Y, #Z` in PR bodies only auto-closes the FIRST issue.** Several PRs merged with their second and third referenced issues still open. Fixed manually via 11 `gh issue close` calls; fixed the remaining PR bodies (#866, #867) to use `Closes #X` on separate lines — those auto-closed correctly on merge.
 
-**Action taken**: Use one `Closes #N` per line going forward. Tracked as a process memory for future PR body generation.
+**Action taken**: Closed — already documented in `docs/PULL_REQUEST_CHECKLIST.md` Pre-Review Quick Checks. Operator-discipline note.
 
 **3. Branch-per-cluster → every CHANGELOG touches the same Unreleased section → every merge has a conflict.** Eight PRs, eight CHANGELOG conflicts. Each conflict was trivial to resolve (both sides wanted to add a bullet) but it added ~3–5 min of ceremony to every merge. Total tax: probably 30 minutes of pure git-surgery across the session.
 
-**Action taken**: For multi-PR sessions like this, consider a separate "consolidated CHANGELOG" PR at the end instead of per-branch edits. Or accept the conflict tax as the cost of isolation.
+**Action taken**: Closed — observational only (consolidated CHANGELOG PR consideration). No new tracker row.
 
 **4. The drain surfaced a real bug.** While writing end-to-end coverage for #790 (`{% render_slot slots.col.0 %}`), the test exposed that the Rust engine returns empty string for *any* `{% render_slot %}` invocation — not just the dotted-path case. Filed as #861. The handler's own Python logic works correctly in isolation. Users today have to extract slot content in Python (`assigns["slots"][name][0]["content"]`); the documented `{% render_slot %}` tag is silently broken via the Rust path. Net: #790 closed at the handler level, plus one new bug discovered that has real user impact.
 
@@ -1198,32 +1209,32 @@ All 3 v0.5.7 PRs had retros posted before `completed_at` was set. Pipeline-run s
 **1. Stage 11 is load-bearing — 6 PRs in a row had Stage 7 pass + Stage 11 find real defects.**
 PRs #814, #837, #840, #842, #846, #849 all passed Stage 7 (self-review) cleanly and then Stage 11 (subagent code review) found bugs that would have shipped. Examples: `AnnAssign` unhandled in the typecheck extractor (#849), `get_default_prefix()` always returning `"form"` regardless of custom prefix (#846), `absolute_max` miscap allowing `max_num=5` to grow to 1005 rows (#846), `follow_redirect` docstring promising a `RuntimeError` it never raised (#842). The pattern is strong enough to be mandatory — the pipeline's "never skip Stage 11" rule paid off every single time.
 
-**Action taken**: No change — rule stays load-bearing. Continues to catch what the author missed.
+**Action taken**: Closed — already-locked rule (`feedback_pipeline_discipline.md` memory + RETRO.md historical record). No new tracker row.
 
 **2. Directly-to-main pushes are a real risk — caught by permission denial.**
 During the Stage 11 fix pass on PR #846, I pushed the fix commit (335cce26) to main instead of the feature branch because I never switched back after a sync. Recovery was awkward (close the stale PR as superseded, file docs-bookkeeping PR #847). Later, the same mistake was prevented by a permission rule the user had installed. The rule is cheap to add and expensive to work without.
 
-**Action taken**: The denial pattern should be the default. Version-bump commits can still use release branches + PR — no loss of velocity.
+**Action taken**: Closed — already mitigated by user-installed permission rule preventing direct main pushes.
 
 **3. Pre-existing test failures block normal merge flow until fixed.**
 The v0.5.1 cycle started with 82 failing tests. Every PR in the cycle before #841 was forced to use `--admin` bypass on merge. This eroded the signal from CI — a green CI run meant nothing because red CI also merged. PR #841 fixed all 82 in four clusters (missing test shims, stale `@layer` expectations, real code bugs like CSS prefix drift, and one wrong test assumption). After #841, every subsequent PR merged via the normal path.
 
-**Action taken**: Don't let pre-existing failures accumulate. Fix them in a dedicated PR when they cross ~10 and block merge flow.
+**Action taken**: Open — tracked in Action Tracker #144 (GitHub #1059).
 
 **4. Dogfooding before committing prevents shipping broken UX.**
 The first `djust_typecheck` implementation correctly flagged everything the static analysis *could* resolve, but running it against the demo project surfaced 230+ lines of false positives because it only looked at `get_context_data` literals. The second pass added `self.foo = ...` AST extraction, reducing the noise to acceptable levels. Without the demo-project dry run, it would have shipped unusable.
 
-**Action taken**: Established the pattern — any CLI tool that reports on project state gets a dogfood pass against the demo project before commit.
+**Action taken**: Open — tracked in Action Tracker #145 (GitHub #1060).
 
 **5. Batching related small features into one PR is the right default.**
 The state-primitives batch (#837: `@computed`, `is_dirty`, `unique_id`, context sharing) and form-polish batch (#840: `dj-no-submit`, `dj-trigger-action`, scoped `dj-loading`) were ~100-150 LOC each and shipped as single PRs. Four separate PRs would have produced 4x the review surface for low marginal signal. The `--group` flag in pipeline-run matched this correctly.
 
-**Action taken**: Keep grouping. Cutoff is roughly: under 6 tasks per group, shared functional area, no architectural branching.
+**Action taken**: Closed — observational only (batching small features 'keep grouping' guidance). No new tracker row.
 
 **6. `window.DEBUG_MODE` gate pattern works for dev-only JS.**
 The error overlay (#848) is gated on `window.DEBUG_MODE`, which the `djust_tags` template tag sets based on Django `DEBUG`. Production ships the code but it early-returns before rendering — and since Django strips the `traceback`/`debug_detail`/`hint` fields from the error frame in non-DEBUG, there's nothing to leak even if the guard were bypassed. Defense in depth without runtime cost.
 
-**Action taken**: Continue pattern for any dev-only client-side feature.
+**Action taken**: Closed — observational only (DEBUG_MODE gate continue-pattern guidance). No new tracker row.
 
 ### Insights
 
@@ -1285,7 +1296,7 @@ PR #770 review found `tenant.obj` (should be `tenant.raw`) — would crash at ru
 **4. CSP injection via tenant settings was a real security gap.**
 PR #770 review identified that `csp_allowed_domains` from tenant settings was concatenated into the CSP header without validation. A tenant with `;script-src 'unsafe-inline'` as their setting could break the entire security policy. Added regex validation (`^[\w.*:/-]+$`) to reject directive-like values.
 
-**Action taken**: Fixed in PR #770. CSP injection test added.
+**Action taken**: Closed — Fixed in PR #770. CSP injection test added.
 
 **5. Pre-existing lint in upstream packages requires per-file-ignores, not fixes.**
 The theming and components packages had dozens of pre-existing ruff violations (E741 for `l` in HSL code, F841 unused variables, E402 conditional imports, F524 CSS-in-format-strings). Fixing them would have created divergence from upstream and risked behavioral changes. The right approach: `[tool.ruff.lint.per-file-ignores]` in pyproject.toml with comments explaining why.
@@ -1295,7 +1306,7 @@ The theming and components packages had dozens of pre-existing ruff violations (
 **6. `logout_view` accepting GET was a CSRF vulnerability.**
 The djust-auth package's `logout_view` was a plain function that called `logout(request)` on any HTTP method. An attacker could log users out via `<img src="/accounts/logout/">`. Changed to POST-only with `HttpResponseNotAllowed(["POST"])`.
 
-**Action taken**: Fixed in PR #770. Test added for GET → 405.
+**Action taken**: Closed — Fixed in PR #770. Test added for GET → 405.
 
 ### Insights
 
@@ -1344,7 +1355,7 @@ The djust-auth package's `logout_view` was a plain function that called `logout(
 **1. The strategic-enabler pattern compounds — ship the primitive, reuse it.**
 PR #788's `register_block_tag_handler` was the primitive that carried seven subsequent PRs: #792 (`{% dj_suspense %}`), #796 (`stream_prune` op), #802 (`register_assign_tag_handler` sibling), #807 (consumer group send), #814 (`{% colocated_hook %}`). Each subsequent PR got smaller because the prior PR laid a reusable primitive. IntersectionObserver in #796 played the same role across virtual lists and viewport sentinels. The `Arc<HashMap<String, PyObject>>` sidecar in #802 spared a `Value: Serialize` refactor.
 
-**Action taken**: Noted in #788's retro and reinforced in every subsequent PR's "Milestone connection" section. Primitive-first design is now the default for v0.6 work.
+**Action taken**: Closed — observational only (primitive-first design locked as default for v0.6+). No new tracker row.
 
 **2. Stage 11 (independent code review) kept catching real defects Stage 7 (self-review) missed — three times.**
 - **#796**: `window.djust.pushEvent` didn't exist — the viewport-event feature was broken end-to-end. Unit tests asserted on the dispatched CustomEvent, never on the server round-trip. Fixed via `window.djust.handleEvent` + regression test.
@@ -1361,12 +1372,12 @@ PR #779 was originally credited with closing #783 in both the ROADMAP and the is
 **4. ROADMAP drift — grep before implementing.**
 PR #792 found that `temporary_assigns` was already implemented — the ROADMAP claimed "completely absent from djust today" when in fact the machinery was wired through multiple modules. Caught during the Stage 6 codebase survey. Pivoted to regression-test-only + ROADMAP correction. Second time this session — PR #784 also found #783 attribution stale.
 
-**Action taken**: Future rule — BEFORE implementing a ROADMAP P-item, grep for its keywords in the codebase. A `make roadmap-lint` comparing P-items against grep-able tokens is the obvious automation follow-up.
+**Action taken**: Open — tracked in Action Tracker #142 (GitHub #1057).
 
 **5. Pre-commit commit-loop friction amplifies each fix attempt.**
 PR #814 took six commit attempts to land. Root causes compounded: eslint `no-new-func` at the `new Function` call site, ruff E402 import-order in tests, AND the pre-commit hook's stash-restore cycle itself re-triggering each fix. Running formatters+linters against the *exact staged files* BEFORE `git commit` — not reacting after the hook fails — would have cut this to 1 attempt.
 
-**Action taken**: Added as a process note in PR #814's retro. Belongs in the Stage 9 (commit) pipeline checklist.
+**Action taken**: Closed — Action #122 closed at skill level 2026-04-25 (~/.claude/skills/pipeline-run/SKILL.md MANDATORY Post-Commit Verification section).
 
 **6. Client.js weight drifted past manifesto budget.**
 CLAUDE.md claims ~5 KB client JS; the session added roughly +25 KB raw (355 KB → 380 KB): +15.7 KB in #796 (virtual lists + infinite scroll), +6.4 KB in #814 (colocated hooks), ~0 in #826 (service worker is a separate file). The 5 KB number is aspirational/gzipped; needs an explicit clarification in the manifesto or a bundle-split plan before v0.6.
@@ -1376,7 +1387,7 @@ CLAUDE.md claims ~5 KB client JS; the session added roughly +25 KB raw (355 KB �
 **7. Ghost-branch drift in subagent workflows.**
 PRs #788, #814, #819, and #826 each saw at least one commit land on a phantom `pr-NNN` branch instead of the feature branch, requiring cherry-pick recovery. PR #826 hit it twice. Appears to happen when subagents operate in fresh git contexts and something (likely `gh pr checkout` state) sets up a tracking branch silently. Has not lost work yet, but adds recovery overhead.
 
-**Action taken**: Note captured in multiple per-PR retros. Proposed v0.6 mitigation: pin branch explicitly in subagent prompts + verify `git symbolic-ref HEAD` in stage procedures.
+**Action taken**: Open — tracked in Action Tracker #143 (GitHub #1058).
 
 ### Insights
 
@@ -1440,12 +1451,12 @@ The POST handler's `render_with_diff()` path skipped `_apply_context_processors(
 **3. Pre-commit hooks caught real issues but wasted significant time.**
 Three commit attempts for #708 failed due to: `cargo fmt` reformatting, ruff F841 (unused variable), and pre-existing `test_debug_state_sizes` failures. The lesson: always run `cargo fmt`, `ruff check`, and the test suite locally before `git commit`.
 
-**Action taken**: Test failures fixed as part of the PRs. Process lesson noted.
+**Action taken**: Closed — superseded by Action #122 closure (predates the post-commit verification skill update).
 
 **4. Pipeline discipline matters — skipping review stages has consequences.**
 The first two PRs (#708, #710) were merged without running the Code Review and Retrospective stages. The post-merge review of #710 found a real issue (missing try/finally) that should have been caught pre-merge. PR #714 followed the pipeline correctly and the review found no issues.
 
-**Action taken**: Pipeline stages must not be skipped. The backfilled retros for #708/#710 were honest about this.
+**Action taken**: Closed — already-locked rule (`feedback_pipeline_discipline.md` memory + RETRO.md historical record). No new tracker row.
 
 **5. The Rust template engine's Django compatibility is a long tail.**
 PR #720 fixed `|date` filter on bare `DateField` values ("2026-03-15") — it only supported RFC 3339 datetimes. The fix is 6 lines (NaiveDate fallback to midnight UTC), but the pattern is clear: every new production use case surfaces another Django filter edge case. The Rust engine now handles 2 of Django's ~5 date input types. The midnight-UTC assumption is correct but means `{{ date_field|date:"H:i" }}` renders "00:00", which could surprise developers.
@@ -1455,7 +1466,7 @@ PR #720 fixed `|date` filter on bare `DateField` values ("2026-03-15") — it on
 **6. Review-to-action-item pipeline completed a full cycle.**
 All 4 items in PR #721 originated as findings from PRs #708 and #710 reviews. They were tracked in the Action Tracker, filed as GitHub issues (#715-#718), and resolved in a batch PR. This is the pipeline working as designed. However, the #721 review found that the CSRF HTML-escape fix used a manual `.replace()` chain instead of the existing `filters::html_escape()` utility — an implementation gap where the developer didn't search for existing utilities before writing new code.
 
-**Action taken**: Fixed in PR #721. New action item #9 filed for the utility duplication.
+**Action taken**: Closed — Fixed in PR #721. Action #9 filed for the utility duplication.
 
 ### Insights
 
