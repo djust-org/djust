@@ -1176,6 +1176,31 @@ class TodoView(LiveView):
 | ~~**Streaming initial render**~~ ✅ | Chunked HTTP page shell + progressive content — faster perceived load than full-page wait | ~~**v0.6.1**~~ ✅ Shipped v0.6.1 (Phase 1); lazy-child = v0.6.2 |
 | ~~**Time-travel debugging**~~ ✅ | State snapshot recording + replay in debug panel — beyond Phoenix's debug tools | ~~**v0.6.1**~~ ✅ Shipped v0.6.1 |
 
+### Milestone: v0.8.1 — Reconcile drain (15 issues from 2026-04-25 reconcile)
+
+*Goal:* Process the curated djust-repo subset of the 39 tech-debt issues filed during `/pipeline-retro --reconcile` on 2026-04-25. Skill-level work is tracked separately under the `out-of-scope-for-djust-drain` GitHub label and lives in the pipeline-skill repo, not here.
+
+**Quick wins (P2)** — small, focused PRs eligible for `/pipeline-drain --milestone v0.8.1`:
+
+- **#1026** — `dispatch.py:295` vs `observability.py:399` JSON-parse error message consistency. Pure style alignment.
+- **#1027** — Replace `inspect.getsource + substring` test with behavior-level test. Test-quality refactor.
+- **#1028** — Shared `conftest.py` staff-user fixture for auth-gated view tests. Test-infra DRY.
+- **#1029** — `docs/internal/codeql-patterns.md` taint-flow cheat sheet. Internal docs.
+- **#1030** — Silent cache-write failures in `03-websocket.js:386` should log under `djustDebug`. Small JS fix.
+- **#1033** — `djust[admin]` extra vs `djust.admin_ext` module name divergence. Rename one or the other.
+- **#1034** — `TARGET_LIST_UPDATE_S * 20` → named `TARGET_WS_MOUNT_S` constant in perf tests.
+- **#1035** — cProfile single-run "not canonical" disclaimer in `docs/performance/v0.6.0-profile.md`.
+- **#1036** — `_assert_benchmark_under` move to `tests/benchmarks/conftest.py` for shared scope.
+- **#1045** — Shared `_SCRIPT_CLOSE_TOLERANT_RE` constant for HTML5-tolerant `</script>` matching.
+- **#1048** — Flaky perf test triage — `test_broadcast_latency_scales[10]` py3.13 budget (paired-class with PR #1021's py3.14 fix).
+- **#1057** — `make roadmap-lint` Makefile target — automate ROADMAP-vs-codebase grep. ~30 LOC.
+- **#1061** — Pre-push hook for `noqa: F822` in `__all__` patterns. ~15 LOC.
+
+**Medium (P2)** — larger but still v0.8.1-eligible:
+
+- **#1031** — Version-probe fallback for `mount_batch` — older servers produce generic "unknown msg type"; client should fall back gracefully. Back-compat protocol work.
+- **#1032** — Dashboard→Dashboard re-mount limitation in sticky LiveView demo. `{% live_render %}` should auto-detect preserved stickies.
+
 ---
 
 ## Investigate & Decide
