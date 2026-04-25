@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`djust.A070` no longer false-positives on `{% verbatim %}`-wrapped
+  `dj_activity` examples (v0.7.3, #1004)** — the A070 / A071 scanner
+  walks template source as raw text. Templates that document the
+  `{% dj_activity %}` tag — common pattern on docs / marketing pages
+  that include literal example markup wrapped in `{% verbatim %}` so
+  Django renders the example as-is — got flagged as real
+  uninstrumented activity calls. Fix: new
+  `_strip_verbatim_blocks(content)` helper redacts the BODY of every
+  `{% verbatim %}...{% endverbatim %}` region (both unnamed and
+  Django's named-form `{% verbatim foo %}...{% endverbatim foo %}`)
+  before the regex scan. Newlines inside the region are preserved so
+  line numbers from `match.start()` stay accurate for matches OUTSIDE
+  the region. The scanner's existing iteration over
+  `_DJ_ACTIVITY_TAG_RE` runs against the redacted source. Real
+  uninstrumented `{% dj_activity %}` calls outside any verbatim block
+  continue to fire A070 unchanged. Covered by **12 regression tests**
+  in `python/tests/test_a070_verbatim_fp_1004.py` (7 helper-contract
+  tests + 5 scanner-integration tests including the canonical docs
+  case, mixed verbatim + real calls, named verbatim form, and line
+  number preservation).
 - **`djust.C011` now catches stale/placeholder `output.css`, not
   just totally-missing files (v0.7.3, #1003)** — `_check_missing_compiled_css`
   in `python/djust/checks.py` previously tested only
