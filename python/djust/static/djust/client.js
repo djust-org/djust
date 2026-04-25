@@ -917,7 +917,12 @@ class LiveViewWebSocket {
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }
-                    } catch (_e) { /* best-effort cache put */ }
+                    } catch (_e) {
+                        // #1030 — best-effort cache write; only log under
+                        // djustDebug so production console stays quiet but
+                        // developers can diagnose cache misses.
+                        if (globalThis.djustDebug) console.log('[LiveView] cache-write failed:', _e);
+                    }
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
                         if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');

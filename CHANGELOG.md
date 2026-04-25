@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Drop exception text from JSON-parse error responses (v0.8.1 reconcile drain — Group B, closes #1026)** —
+  `python/djust/api/dispatch.py` (two sites at the API event-dispatch and
+  server-function paths) was returning `f"Malformed JSON body: {exc}"` — a
+  small but real stack-trace-style leak that could surface parser internals
+  (offsets, snippets of the malformed input) to the client. Aligned to
+  match `observability/views.py:401`'s existing pattern: log the exception
+  server-side via `logger.exception(...)`, return a generic
+  `"Malformed JSON body — see server logs"` message. The `invalid_json`
+  error code is unchanged, so callers that branch on `error` keep working.
+
 ### Changed
+
+- **WebSocket cache-write failures now log under `djustDebug` (v0.8.1 reconcile drain — Group B, closes #1030)** —
+  `python/djust/static/djust/src/03-websocket.js:386` previously swallowed
+  cache-put exceptions with a bare `catch (_e) {}`. Now logs the failure
+  via `if (globalThis.djustDebug) console.log(...)` so developers can
+  diagnose cache-write misses without polluting production console output.
 
 - **Test infrastructure cleanup (v0.8.1 reconcile drain — Group A, closes #1027, #1028, #1034, #1036)** —
   four small test-quality refactors bundled in one PR:
