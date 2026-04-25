@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`make docs-lint` — sweep docs/**/*.md for stale cross-references (closes #1075)** —
+  new `scripts/docs-lint.py` walks every markdown link in `docs/` (excluding
+  the rendered `docs/website/` site dir), parses `[text](target.md)` patterns,
+  and reports any whose relative target doesn't resolve. Mirrors `make
+  roadmap-lint` from Action #142 — manual `make docs-lint`, with optional
+  `VERBOSE=1` to list every stale ref. Also wired into `.pre-commit-config.yaml`
+  as a pre-push hook so the stale-ref class can't regress.
+
+### Fixed
+
+- **53 stale .md cross-references across 16 files in docs/ (closes #1075)** —
+  follow-up to #1010. Sweep found 53 broken refs across 16 files: 34
+  relocatable (file moved to a different docs/ subdir; rewrote relative
+  path), 12 marketing-cluster files that no longer exist (unlinked — kept
+  link text without the `[](url)` syntax), 7 references to
+  `forms/PYTHONIC_FORMS_IMPLEMENTATION.md` redirected to the canonical
+  `docs/website/guides/forms.md`. Fixer script at
+  `/tmp/scratch/fix_stale_md_refs.py` (one-shot; not committed). After fix:
+  0 stale refs remaining.
+
 ## [0.8.2rc1] - 2026-04-25
 
 ### Added

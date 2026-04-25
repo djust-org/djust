@@ -321,8 +321,8 @@ When modifying decorator behavior:
 
 - [Vitest Documentation](https://vitest.dev/)
 - [Testing Library Best Practices](https://testing-library.com/docs/)
-- [Phase 2 Implementation Docs](../docs/IMPLEMENTATION_PHASE2.md)
-- [Phase 3 Implementation Docs](../docs/IMPLEMENTATION_PHASE3.md)
+- [Phase 2 Implementation Docs](../state-management/IMPLEMENTATION_PHASE2.md)
+- [Phase 3 Implementation Docs](../state-management/IMPLEMENTATION_PHASE3.md)
 
 ## FAQ
 

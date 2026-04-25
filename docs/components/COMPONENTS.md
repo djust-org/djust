@@ -839,7 +839,7 @@ Components should:
 
 ## Learn More
 
-- [CLAUDE.md](CLAUDE.md) - Development guide
+- [CLAUDE.md](../../CLAUDE.md) - Development guide
 - [examples/demo_project/](examples/demo_project/) - Live examples
 - [python/djust/components/](python/djust/components/) - Component source code
 

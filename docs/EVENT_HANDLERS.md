@@ -818,4 +818,4 @@ See [Security Guidelines](SECURITY_GUIDELINES.md) for full details.
 
 - **[Debug Panel User Guide](DEBUG_PANEL.md)** - Interactive debugging tools
 - **[JIT Serialization Pattern](JIT_SERIALIZATION_PATTERN.md)** - Public/private variable usage
-- **[State Management Decorators](STATE_MANAGEMENT_API.md)** - @debounce, @optimistic, @cache
+- **[State Management Decorators](state-management/STATE_MANAGEMENT_API.md)** - @debounce, @optimistic, @cache

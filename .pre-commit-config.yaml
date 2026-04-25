@@ -150,3 +150,13 @@ repos:
         types: [python]
         pass_filenames: false
         stages: [pre-push]
+
+      # Sweep docs/**/*.md for stale cross-references (#1075)
+      # Pairs with `make docs-lint` for manual / CI invocation.
+      - id: docs-lint
+        name: docs stale-MD-ref check
+        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/docs-lint.py'
+        language: system
+        files: ^docs/.*\.md$
+        pass_filenames: false
+        stages: [pre-push]

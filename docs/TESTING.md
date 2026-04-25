@@ -1146,11 +1146,11 @@ pytest -m "not slow"
 
 ## Additional Resources
 
-- [Testing JavaScript](docs/testing/TESTING_JAVASCRIPT.md) - JavaScript testing guide
-- [Testing Pages](docs/testing/TESTING_PAGES.md) - Automated test pages
-- [Smoke & Fuzz Testing](docs/testing/TESTING_SMOKE_FUZZ.md) - Smoke and fuzz testing
-- [Pull Request Checklist](docs/PULL_REQUEST_CHECKLIST.md) - PR review checklist
-- [Security Guidelines](docs/SECURITY_GUIDELINES.md) - Security testing patterns
+- [Testing JavaScript](testing/TESTING_JAVASCRIPT.md) - JavaScript testing guide
+- [Testing Pages](testing/TESTING_PAGES.md) - Automated test pages
+- [Smoke & Fuzz Testing](testing/TESTING_SMOKE_FUZZ.md) - Smoke and fuzz testing
+- [Pull Request Checklist](PULL_REQUEST_CHECKLIST.md) - PR review checklist
+- [Security Guidelines](SECURITY_GUIDELINES.md) - Security testing patterns
 
 ---
 

@@ -280,20 +280,20 @@ class TemperatureView(LiveView):
 
 djust provides Python-only state management decorators that eliminate the need for custom JavaScript:
 
-- **[@debounce](state-management/STATE_MANAGEMENT_API.md#debounce)** - Debounce event handlers
-- **[@throttle](state-management/STATE_MANAGEMENT_API.md#throttle)** - Throttle with leading/trailing edge
-- **[@loading](state-management/STATE_MANAGEMENT_API.md#loading)** - Automatic loading states
-- **[@cache](state-management/STATE_MANAGEMENT_API.md#cache)** - Client-side LRU caching
-- **[@client_state](state-management/STATE_MANAGEMENT_API.md#client-state)** - Reactive state bus
-- **[@optimistic](state-management/STATE_MANAGEMENT_API.md#optimistic)** - Optimistic UI updates
-- **[DraftModeMixin](state-management/STATE_MANAGEMENT_API.md#draftmodemixin)** - Auto-save drafts
+- **[@debounce](../state-management/STATE_MANAGEMENT_API.md#debounce)** - Debounce event handlers
+- **[@throttle](../state-management/STATE_MANAGEMENT_API.md#throttle)** - Throttle with leading/trailing edge
+- **[@loading](../state-management/STATE_MANAGEMENT_API.md#loading)** - Automatic loading states
+- **[@cache](../state-management/STATE_MANAGEMENT_API.md#cache)** - Client-side LRU caching
+- **[@client_state](../state-management/STATE_MANAGEMENT_API.md#client-state)** - Reactive state bus
+- **[@optimistic](../state-management/STATE_MANAGEMENT_API.md#optimistic)** - Optimistic UI updates
+- **[DraftModeMixin](../state-management/STATE_MANAGEMENT_API.md#draftmodemixin)** - Auto-save drafts
 
 **Resources**:
-- [5-Minute Quick Start](state-management/STATE_MANAGEMENT_QUICKSTART.md)
-- [Step-by-Step Tutorial](state-management/STATE_MANAGEMENT_TUTORIAL.md)
-- [Complete API Reference](state-management/STATE_MANAGEMENT_API.md)
-- [Copy-Paste Examples](state-management/STATE_MANAGEMENT_EXAMPLES.md)
-- [Best Practices](state-management/STATE_MANAGEMENT_PATTERNS.md)
+- [5-Minute Quick Start](../state-management/STATE_MANAGEMENT_QUICKSTART.md)
+- [Step-by-Step Tutorial](../state-management/STATE_MANAGEMENT_TUTORIAL.md)
+- [Complete API Reference](../state-management/STATE_MANAGEMENT_API.md)
+- [Copy-Paste Examples](../state-management/STATE_MANAGEMENT_EXAMPLES.md)
+- [Best Practices](../state-management/STATE_MANAGEMENT_PATTERNS.md)
 ```
 
 **Success Criteria**:

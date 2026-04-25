@@ -53,7 +53,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - [Tooltip](components/TOOLTIP_COMPONENT_REPORT.md)
 
 ### 📝 Forms
-- **[Forms Implementation](forms/PYTHONIC_FORMS_IMPLEMENTATION.md)** - Django Forms integration
+- **[Forms Implementation](website/guides/forms.md)** - Django Forms integration
 
 ### 🔄 State Management
 - **[State Management API](state-management/STATE_MANAGEMENT_API.md)** - Complete decorator reference (@debounce, @throttle, @loading, @cache, @client_state, @optimistic, DraftModeMixin)
@@ -100,12 +100,12 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[CI Optimization](development/CI_OPTIMIZATION.md)** - Parallel test execution guide
 
 ### 🎯 Marketing & Strategy
-- **[Marketing](marketing/MARKETING.md)** - Marketing strategy
-- **[Marketing Next Steps](marketing/MARKETING_NEXT_STEPS.md)** - Action items
-- **[Marketing README Section](marketing/README_MARKETING_SECTION.md)** - README marketing content
-- **[Technical Pitch](marketing/TECHNICAL_PITCH.md)** - Technical value proposition
-- **[Framework Comparison](marketing/FRAMEWORK_COMPARISON.md)** - vs alternatives
-- **[Why Not Alternatives](marketing/WHY_NOT_ALTERNATIVES.md)** - Why djust over X
+- **Marketing** - Marketing strategy
+- **Marketing Next Steps** - Action items
+- **Marketing README Section** - README marketing content
+- **Technical Pitch** - Technical value proposition
+- **Framework Comparison** - vs alternatives
+- **Why Not Alternatives** - Why djust over X
 
 ### 🌐 Example Site
 - **[Phase 5 Showcase Plan](example-site/EXAMPLE_SITE_PHASE5_PLAN.md)** - Plan to showcase Phase 5 features on example site

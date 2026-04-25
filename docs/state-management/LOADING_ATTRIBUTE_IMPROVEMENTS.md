@@ -198,7 +198,7 @@ Add CSS animation support for smoother transitions:
 
 ## Contributing
 
-Want to implement one of these? See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+Want to implement one of these? See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines.
 
 Each enhancement should:
 1. Add tests (unit + E2E)
