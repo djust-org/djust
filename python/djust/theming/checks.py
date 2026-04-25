@@ -26,13 +26,63 @@ CONTRAST_PAIRS = [
 ]
 
 
+def _contrast_check_scope() -> str:
+    """Return the configured W001 contrast-check scope.
+
+    #1005 — defaults to ``"active"`` (only the configured preset is
+    contrast-checked) since djust ships 65+ built-in presets and an
+    "all" sweep on every ``manage.py check`` produces hundreds of
+    warnings for presets the project never uses, drowning real signal.
+
+    Theme-pack authors who want to exhaustively validate every preset
+    can opt in via::
+
+        DJUST_THEMING = {"contrast_check_scope": "all"}
+
+    Returns ``"all"`` or ``"active"``. Unknown values fall back to
+    ``"active"`` (the safer signal-preserving default).
+    """
+    cfg = getattr(settings, "DJUST_THEMING", {}) or {}
+    scope = cfg.get("contrast_check_scope", "active")
+    return "all" if scope == "all" else "active"
+
+
+def _presets_to_check():
+    """Yield ``(preset_name, preset)`` pairs for W001 contrast checks.
+
+    Honors the scope returned by ``_contrast_check_scope()``: in
+    ``"active"`` mode only the configured preset is yielded (resolved
+    via the same ``LIVEVIEW_CONFIG["theme"]["preset"]`` setting that
+    ``check_preset_valid`` reads); in ``"all"`` mode every registered
+    preset is yielded.
+
+    If the configured active preset is missing from the registry, no
+    pairs are yielded — ``check_preset_valid`` will already have fired
+    a more direct E002 error pointing at the misconfiguration.
+    """
+    registry = get_registry()
+    if _contrast_check_scope() == "all":
+        yield from registry.list_presets().items()
+        return
+
+    active_name = get_theme_config().get("preset", "default")
+    if not registry.has_preset(active_name):
+        return
+    yield active_name, registry.list_presets()[active_name]
+
+
 @register(Tags.compatibility)
 def check_preset_contrast(app_configs, **kwargs):
-    """Validate all registered theme presets meet WCAG AA contrast ratios."""
+    """Validate the active theme preset meets WCAG AA contrast ratios.
+
+    #1005 — scoped by default to the active preset only. Set
+    ``DJUST_THEMING = {"contrast_check_scope": "all"}`` to validate
+    every registered preset (theme-pack-authoring mode).
+    """
     warnings = []
     validator = AccessibilityValidator()
 
-    for preset_name, preset in get_registry().list_presets().items():
+    for preset_name, preset in _presets_to_check():
         for mode_name in ("light", "dark"):
             tokens = getattr(preset, mode_name)
             for fg_attr, bg_attr, label in CONTRAST_PAIRS:
