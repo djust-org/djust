@@ -275,12 +275,20 @@ class ThemeManager:
         registry = get_registry()
         session_data = self._get_session_data()
 
-        # Check cookies for theme, preset, and pack (set by JavaScript)
+        # Check cookies for theme, preset, and pack (set by JavaScript).
+        #
+        # #1013 — sites WITHOUT a user-facing theme switcher can disable cookie
+        # reads via ``LIVEVIEW_CONFIG['theme']['enable_client_override']: False``
+        # to prevent cross-project cookie bleed on localhost (every djust site
+        # answering on localhost shares a cookie jar — `djust_theme_pack` set
+        # by project A pins the palette for project B). Default ``True`` for
+        # back-compat: sites with a user-facing switcher keep working.
         theme = None
         preset = None
         pack = None
         layout = ""
-        if self.request:
+        enable_client_override = bool(self.config.get("enable_client_override", True))
+        if self.request and enable_client_override:
             theme = self.request.COOKIES.get("djust_theme")
             preset = self.request.COOKIES.get("djust_theme_preset")
             pack = self.request.COOKIES.get("djust_theme_pack")
@@ -288,6 +296,8 @@ class ThemeManager:
             logger.debug(
                 "Cookies: theme=%s, preset=%s, pack=%s, layout=%s", theme, preset, pack, layout
             )
+        elif self.request:
+            logger.debug("Cookies skipped — LIVEVIEW_CONFIG.theme.enable_client_override=False")
 
         # Fall back to session, then config default
         if not theme:

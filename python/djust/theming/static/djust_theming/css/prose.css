@@ -1,0 +1,91 @@
+/*
+ * djust prose.css — pack-aware overrides for @tailwindcss/typography
+ * =================================================================
+ *
+ * Sites that use the @tailwindcss/typography plugin to render markdown
+ * (docs, blogs, in-app help) get baseline body / heading / link / code
+ * styling via the `.prose` class. The plugin emits its own
+ * `--tw-prose-*` variables tuned for a light background, so on dark
+ * themes the prose looks washed out unless every site re-implements
+ * the bridge to the active djust pack's `--color-brand-*` tokens.
+ *
+ * This file is the canonical bridge. Opt in by adding `prose-djust`
+ * alongside `prose` on your <article>:
+ *
+ *   <article class="prose prose-djust">
+ *       {{ rendered_markdown|safe }}
+ *   </article>
+ *
+ * Pack-aware: reads the same `--color-brand-*` tokens the active pack
+ * emits, so flipping pack at runtime updates prose without a stylesheet
+ * swap. Mode-aware: the existing pack scope (`html.dark`, etc.) carries
+ * the dark-mode overrides; this file just re-uses pack tokens.
+ *
+ * Closes #1009. Pulled from docs.djust.org's input.css reference impl.
+ *
+ * NOT in @layer on purpose: the typography plugin emits `.prose`
+ * unlayered; unlayered rules always beat layered ones.
+ */
+
+.prose.prose-djust {
+    --tw-prose-body:          var(--color-brand-text);
+    --tw-prose-headings:      var(--color-brand-text);
+    --tw-prose-lead:          var(--color-brand-text);
+    --tw-prose-links:         var(--color-brand-rust);
+    --tw-prose-bold:          var(--color-brand-text);
+    --tw-prose-counters:      var(--color-brand-text);
+    --tw-prose-bullets:       var(--color-brand-text);
+    --tw-prose-hr:            var(--color-brand-border, hsl(var(--border)));
+    --tw-prose-quotes:        var(--color-brand-text);
+    --tw-prose-quote-borders: var(--color-brand-rust);
+    --tw-prose-captions:      var(--color-brand-text);
+    --tw-prose-kbd:           var(--color-brand-text);
+    --tw-prose-kbd-shadows:   var(--color-brand-text);
+    --tw-prose-code:          var(--color-brand-text);
+    --tw-prose-pre-code:      var(--color-brand-text);
+    --tw-prose-pre-bg:        var(--color-brand-bg);
+    --tw-prose-th-borders:    var(--color-brand-border, hsl(var(--border)));
+    --tw-prose-td-borders:    var(--color-brand-border, hsl(var(--border)));
+
+    /* Dark-mode invert variables — the typography plugin reads these
+       inside `.dark .prose` ancestors. Each one falls back to its
+       light-mode counterpart so packs that don't emit a separate dark
+       palette still work. */
+    --tw-prose-invert-body:          var(--color-brand-text);
+    --tw-prose-invert-headings:      var(--color-brand-text);
+    --tw-prose-invert-lead:          var(--color-brand-text);
+    --tw-prose-invert-links:         var(--color-brand-rust);
+    --tw-prose-invert-bold:          var(--color-brand-text);
+    --tw-prose-invert-counters:      var(--color-brand-text);
+    --tw-prose-invert-bullets:       var(--color-brand-text);
+    --tw-prose-invert-hr:            var(--color-brand-border, hsl(var(--border)));
+    --tw-prose-invert-quotes:        var(--color-brand-text);
+    --tw-prose-invert-quote-borders: var(--color-brand-rust);
+    --tw-prose-invert-captions:      var(--color-brand-text);
+    --tw-prose-invert-kbd:           var(--color-brand-text);
+    --tw-prose-invert-kbd-shadows:   var(--color-brand-text);
+    --tw-prose-invert-code:          var(--color-brand-text);
+    --tw-prose-invert-pre-code:      var(--color-brand-text);
+    --tw-prose-invert-pre-bg:        var(--color-brand-bg);
+    --tw-prose-invert-th-borders:    var(--color-brand-border, hsl(var(--border)));
+    --tw-prose-invert-td-borders:    var(--color-brand-border, hsl(var(--border)));
+}
+
+/* Inline code receives a translucent token-aware background so it pops
+   without re-introducing the typography plugin's hardcoded grey. */
+.prose.prose-djust :where(code):not(:where([class~="not-prose"] *))::before,
+.prose.prose-djust :where(code):not(:where([class~="not-prose"] *))::after {
+    content: "";
+}
+.prose.prose-djust :where(code):not(:where([class~="not-prose"] *)) {
+    background-color: color-mix(in srgb, var(--color-brand-rust) 12%, transparent);
+    padding: 0.15em 0.35em;
+    border-radius: 0.25em;
+}
+
+/* Code blocks lose the inline padding (the <pre> already provides it)
+   and pick up the pack background. */
+.prose.prose-djust :where(pre code):not(:where([class~="not-prose"] *)) {
+    background-color: transparent;
+    padding: 0;
+}

@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`{% theme_css_link %}` cache-busting helper tag (v0.8.2 drain — Group T, closes #1012)** —
+  Chrome's `Vary: Cookie` handling is unreliable for per-cookie dynamic CSS;
+  after a pack switch the browser often serves the prior pack's stylesheet
+  from its own HTTP cache and the page renders with stale palette. The new
+  `{% theme_css_link %}` tag in `djust.theming.templatetags.theme_tags`
+  emits `<link href="/_theming/theme.css?p=<pack>&m=<mode>&r=<preset>">`
+  with cache-busting query params derived from the same `ThemeManager.get_state()`
+  the view itself reads. Different pack/mode = different URL = guaranteed
+  fresh fetch. Usage: `<link rel="stylesheet" href="{% theme_css_link %}">`.
+
+- **`prose.css` for `@tailwindcss/typography` ↔ pack bridge (v0.8.2 drain — Group T, closes #1009)** —
+  new `djust_theming/static/djust_theming/css/prose.css` ships pack-aware
+  overrides for the typography plugin's `--tw-prose-*` variables. Opt in
+  by adding `prose-djust` alongside `prose` on your `<article>`. Reads
+  `--color-brand-*` tokens the active pack emits, so flipping packs at
+  runtime updates prose without a stylesheet swap. Includes both light-mode
+  and dark-mode invert variables. Pulled from docs.djust.org's reference
+  implementation. ~95 lines.
+
+- **`enable_client_override` flag for `LIVEVIEW_CONFIG['theme']` (v0.8.2 drain — Group T, closes #1013)** —
+  `ThemeManager.get_state()` reads `djust_theme_pack` / `djust_theme_preset`
+  cookies with priority over config defaults. Default behavior unchanged
+  (back-compat `True`). Sites without a user-facing theme switcher can set
+  `LIVEVIEW_CONFIG['theme']['enable_client_override']: False` to ignore
+  cookie reads — prevents cross-project bleed on localhost where multiple
+  djust apps share a cookie jar.
+
+### Fixed
+
+- **`.card` / `.alert` overflow:hidden for clean rounded corners (v0.8.2 drain — Group T, closes #1011)** —
+  `djust_theming/static/djust_theming/css/components.css` `.card` and
+  `.alert` selectors now set `overflow: hidden`. Without this, child
+  borders (e.g. `.card-header { border-bottom: ... }`) cross the
+  parent's rounded arc and produce a visible 1-2 px notch at the
+  corners. Affects every theme pack.
+
 - **`mount_batch` fallback for old-server compat (v0.8.1 reconcile drain — Group F, closes #1031)** —
   the `mount_batch` WebSocket frame was added in v0.6.0 (PR #970) for lazy-
   hydration efficiency. A v0.6.0+ client talking to a pre-v0.6.0 server

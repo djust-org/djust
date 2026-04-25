@@ -21,6 +21,8 @@
     padding: 1rem;
     border-radius: var(--radius);
     border: 1px solid;
+    /* #1011 — keep child borders inside the rounded corners. */
+    overflow: hidden;
 }
 
 .alert-content {
@@ -227,6 +229,10 @@
     border: 1px solid hsl(var(--border));
     border-radius: calc(var(--radius) + 2px);
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    /* #1011 — keep child elements (e.g. .card-header border-bottom) inside
+       the rounded corners. Without this, child borders cross the rounded
+       arc and produce a visible 1-2px notch at the corners. */
+    overflow: hidden;
 }
 
 .card-header {
