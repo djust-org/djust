@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`djust_theming.W001` contrast-checks the active preset only by
+  default (v0.7.3, #1005)** — `check_preset_contrast` previously
+  iterated `get_registry().list_presets().items()` and ran WCAG AA
+  contrast checks on every registered preset × mode × token pair.
+  With djust's 65+ built-in presets, that produced hundreds of
+  warnings on every `manage.py check` / pod start (in one observed
+  project: 491 issues → ~480 W001 noise + ~11 real). The S/N ratio
+  was bad enough that the warnings got ignored, which is the
+  opposite of what you want from a check. Fix: new
+  `_contrast_check_scope()` helper reads `DJUST_THEMING.contrast_check_scope`
+  (default: `"active"`) and the active scope iterates only the
+  preset configured in `LIVEVIEW_CONFIG.theme.preset` — same setting
+  `check_preset_valid` reads. Theme-pack authors who want the full
+  exhaustive sweep opt in via:
+
+  ```python
+  DJUST_THEMING = {"contrast_check_scope": "all"}
+  ```
+
+  Unknown values fall back to `"active"` (signal-preserving). When
+  the configured preset is missing from the registry, the check
+  yields zero warnings — `check_preset_valid` already fires E002 for
+  that misconfiguration, so we don't double-warn. **Behavior change
+  for existing users**: dropping into the `"active"` default
+  silences hundreds of warnings about presets the project never
+  uses; real W001 hits on the active preset still surface as before.
+  Covered by **4 new regression tests** (active-only default, opt-in
+  all-scope, missing-active-preset edge case, unknown-scope-value
+  fallback) plus **6 existing tests** updated to opt into the
+  exhaustive scope (they exercise the loop body, not the scope
+  selector).
+
 ### Fixed
 
 - **`djust.A070` no longer false-positives on `{% verbatim %}`-wrapped

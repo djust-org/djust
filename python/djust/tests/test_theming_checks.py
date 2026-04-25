@@ -54,7 +54,20 @@ class TestHslToRgbBugFix:
 
 
 class TestCheckPresetContrast:
-    """Tests for the check_preset_contrast system check."""
+    """Tests for the check_preset_contrast system check.
+
+    #1005 — these tests exercise the loop body (CONTRAST_PAIRS × mode)
+    and need the "all" scope so a single fixture preset is checked
+    regardless of `LIVEVIEW_CONFIG["theme"]["preset"]`. Scope-default
+    behavior is locked separately in `TestCheckPresetContrastScope`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _opt_into_all_scope(self, settings):
+        """Opt into the exhaustive-sweep scope for these tests so a
+        fixture-injected preset gets contrast-checked even when its
+        name isn't the configured `LIVEVIEW_CONFIG.theme.preset`."""
+        settings.DJUST_THEMING = {"contrast_check_scope": "all"}
 
     def test_check_runs_without_error(self):
         """The system check executes against all built-in presets without crashing."""
@@ -202,6 +215,171 @@ class TestCheckPresetContrast:
             # Should mention a real preset name and light/dark
             assert "light" in w.msg or "dark" in w.msg
             assert "contrast ratio" in w.msg
+
+
+# ---------------------------------------------------------------------------
+# #1005 — W001 scope (active preset only by default, all if opted-in)
+# ---------------------------------------------------------------------------
+
+
+class TestCheckPresetContrastScope:
+    """Tests for the #1005 scope rule: W001 only fires for the active preset
+    by default, with an opt-in for theme-pack authors who want the full
+    exhaustive sweep.
+
+    These tests intentionally do NOT inherit the `_opt_into_all_scope`
+    fixture from the broader behavior class — they exercise the
+    scope-decision path itself and need the default ("active") to hold."""
+
+    def _make_bad_preset(self, name: str) -> ThemePreset:
+        """Return a preset whose every contrast pair is white-on-near-white
+        (~0 contrast). Same fixture shape as the broader behavior tests."""
+        white = ColorScale(h=0, s=0, lightness=100)
+        near_white = ColorScale(h=0, s=0, lightness=98)
+        bad_tokens = ThemeTokens(
+            background=white,
+            foreground=near_white,
+            card=white,
+            card_foreground=near_white,
+            popover=white,
+            popover_foreground=near_white,
+            primary=white,
+            primary_foreground=near_white,
+            secondary=white,
+            secondary_foreground=near_white,
+            muted=white,
+            muted_foreground=near_white,
+            accent=white,
+            accent_foreground=near_white,
+            destructive=white,
+            destructive_foreground=near_white,
+            success=white,
+            success_foreground=near_white,
+            warning=white,
+            warning_foreground=near_white,
+            info=white,
+            info_foreground=near_white,
+            link=white,
+            link_hover=white,
+            code=white,
+            code_foreground=near_white,
+            selection=white,
+            selection_foreground=near_white,
+            brand=white,
+            brand_foreground=near_white,
+            border=white,
+            input=white,
+            ring=white,
+            surface_1=white,
+            surface_2=white,
+            surface_3=white,
+        )
+        return ThemePreset(
+            name=name,
+            display_name=name,
+            light=bad_tokens,
+            dark=bad_tokens,
+            description="Intentionally bad contrast",
+        )
+
+    def test_default_scope_is_active_only(self, settings):
+        """#1005 default: W001 only fires for the configured active
+        preset. Two bad presets registered, only ONE configured as
+        active — only that one's warnings appear."""
+        bad_active = self._make_bad_preset("active-bad")
+        bad_inactive = self._make_bad_preset("inactive-bad")
+        registry_dict = {"active-bad": bad_active, "inactive-bad": bad_inactive}
+
+        # No DJUST_THEMING setting → default scope ("active")
+        if hasattr(settings, "DJUST_THEMING"):
+            del settings.DJUST_THEMING
+
+        with (
+            patch("djust.theming.checks.get_registry") as mock_reg,
+            patch("djust.theming.checks.get_theme_config") as mock_cfg,
+        ):
+            mock_reg.return_value.list_presets.return_value = registry_dict
+            mock_reg.return_value.has_preset.side_effect = lambda n: n in registry_dict
+            mock_cfg.return_value = {"preset": "active-bad"}
+            warnings = check_preset_contrast(app_configs=None)
+
+        # Only `active-bad` should produce warnings (inactive-bad is
+        # registered but not the configured active preset).
+        assert all("active-bad" in w.msg for w in warnings)
+        assert not any("inactive-bad" in w.msg for w in warnings)
+        # 13 contrast pairs × 2 modes = 26 warnings for the bad active preset
+        # (verifying we still get a full sweep on the active preset).
+        assert len(warnings) == len(CONTRAST_PAIRS) * 2
+
+    def test_opt_in_all_scope_checks_every_preset(self, settings):
+        """`DJUST_THEMING = {"contrast_check_scope": "all"}` restores
+        the v0.7.2-and-earlier behavior of checking every registered
+        preset. Opt-in for theme-pack authors who explicitly want
+        exhaustive validation."""
+        bad_a = self._make_bad_preset("pack-a")
+        bad_b = self._make_bad_preset("pack-b")
+        registry_dict = {"pack-a": bad_a, "pack-b": bad_b}
+
+        settings.DJUST_THEMING = {"contrast_check_scope": "all"}
+
+        with (
+            patch("djust.theming.checks.get_registry") as mock_reg,
+            patch("djust.theming.checks.get_theme_config") as mock_cfg,
+        ):
+            mock_reg.return_value.list_presets.return_value = registry_dict
+            mock_reg.return_value.has_preset.side_effect = lambda n: n in registry_dict
+            mock_cfg.return_value = {"preset": "pack-a"}
+            warnings = check_preset_contrast(app_configs=None)
+
+        # Both presets are checked → 2 presets × 13 pairs × 2 modes = 52
+        assert len(warnings) == 2 * len(CONTRAST_PAIRS) * 2
+        assert any("pack-a" in w.msg for w in warnings)
+        assert any("pack-b" in w.msg for w in warnings)
+
+    def test_active_scope_when_active_preset_missing_yields_no_warnings(self, settings):
+        """If `LIVEVIEW_CONFIG.theme.preset` names a preset that isn't
+        registered, the contrast check produces no warnings —
+        `check_preset_valid` already fires E002 for the misconfiguration,
+        so we don't double-warn."""
+        bad_other = self._make_bad_preset("registered-but-inactive")
+        registry_dict = {"registered-but-inactive": bad_other}
+
+        if hasattr(settings, "DJUST_THEMING"):
+            del settings.DJUST_THEMING
+
+        with (
+            patch("djust.theming.checks.get_registry") as mock_reg,
+            patch("djust.theming.checks.get_theme_config") as mock_cfg,
+        ):
+            mock_reg.return_value.list_presets.return_value = registry_dict
+            mock_reg.return_value.has_preset.side_effect = lambda n: n in registry_dict
+            mock_cfg.return_value = {"preset": "missing-preset-name"}
+            warnings = check_preset_contrast(app_configs=None)
+
+        assert warnings == []
+
+    def test_unknown_scope_value_falls_back_to_active(self, settings):
+        """Unknown values for `contrast_check_scope` fall back to the
+        signal-preserving default ("active"), not "all". Locks the
+        safe-default contract."""
+        bad_a = self._make_bad_preset("active")
+        bad_b = self._make_bad_preset("other")
+        registry_dict = {"active": bad_a, "other": bad_b}
+
+        settings.DJUST_THEMING = {"contrast_check_scope": "garbage-value"}
+
+        with (
+            patch("djust.theming.checks.get_registry") as mock_reg,
+            patch("djust.theming.checks.get_theme_config") as mock_cfg,
+        ):
+            mock_reg.return_value.list_presets.return_value = registry_dict
+            mock_reg.return_value.has_preset.side_effect = lambda n: n in registry_dict
+            mock_cfg.return_value = {"preset": "active"}
+            warnings = check_preset_contrast(app_configs=None)
+
+        # Only "active" is checked — unknown scope falls back to active.
+        assert all("active" in w.msg for w in warnings)
+        assert not any('"other"' in w.msg for w in warnings)
 
 
 class TestContrastPairsCompleteness:
