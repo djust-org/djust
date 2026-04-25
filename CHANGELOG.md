@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Infrastructure
+
+- **Weekly real-cloud CI matrix for upload writers (v0.7.2, #963)** —
+  all v0.5.7 upload-writer tests mock the SDKs. Happy-path end-to-end
+  verification against real AWS S3 / Google Cloud Storage / Azure
+  Blob was missing; silent regressions in credential handling, SDK
+  auth chain changes, or bucket permissions could reach production
+  without detection. New workflow
+  `.github/workflows/weekly-cloud-uploads.yml` runs every Monday at
+  06:00 UTC (plus manual `workflow_dispatch`) against all three
+  providers in parallel (fail-fast: false — each provider's outage
+  is independent). Each matrix slot uploads a 1 MB blob, HEADs it,
+  GETs it, and DELETEs it. Failure opens a `tech-debt` + new
+  `cloud-integration` label issue via `actions/github-script@v7`
+  with a diagnostic link to the run. Credentials come from GitHub
+  encrypted secrets (`CLOUD_INT_AWS_*`, `CLOUD_INT_GCP_*`,
+  `CLOUD_INT_AZURE_*`) so contributors' PRs never have access. The
+  three provider-specific integration tests live under
+  `tests/cloud_integration/` and **auto-skip** when
+  `DJUST_CLOUD_INTEGRATION` isn't set — running the full test suite
+  locally or in PR CI costs nothing. Cost: a few cents per provider
+  per weekly run.
+
 ### Documentation
 
 - **`key_template` UUID-prefix convention for `s3_events` (v0.7.2,
