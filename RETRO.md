@@ -185,6 +185,7 @@ issue or be explicitly closed with a reason.
 | 152 | Lift-from-downstream FIRST pattern (Stage 4 plan-template) | Retro v0.8.2 / PR #1074 | #1077 | Open | New (prose.css canonical example) |
 | 153 | Stage 11 mark_safe XSS-trace audit bullet | Retro v0.8.2 / PR #1074 | #1078 | Open | New (theme_css_link example) |
 | 154 | Stage 4 broader-sweep → follow-up issue scope-discipline (validated 2x) | Retro v0.8.2 / PRs #1067, #1076 | #1079 | Open | New (validated across 2 milestones) |
+| 155 | djust-release skill Step 6 stages 3/4 files (+ Cargo.lock); causes fix-pass on every release | Retro v0.8.2rc1 release | #1080 | Open | New (caught during 0.8.2rc1 release) |
 
 ---
 
