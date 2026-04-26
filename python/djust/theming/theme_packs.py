@@ -1079,6 +1079,7 @@ def _ensure_theme_imports() -> None:
     from .themes.supabase import PACK as _PACK_SUPABASE, DESIGN_SYSTEM as _DESIGN_SUPABASE
     from .themes.raycast import PACK as _PACK_RAYCAST, DESIGN_SYSTEM as _DESIGN_RAYCAST
     from .themes.adaptive import PACK as _PACK_ADAPTIVE, DESIGN_SYSTEM as _DESIGN_ADAPTIVE
+    from .themes.docs import PACK as _PACK_DOCS
 
     THEME_PACKS.update(
         {
@@ -1144,6 +1145,7 @@ def _ensure_theme_imports() -> None:
             "supabase": _PACK_SUPABASE,
             "raycast": _PACK_RAYCAST,
             "adaptive": _PACK_ADAPTIVE,
+            "docs": _PACK_DOCS,
         }
     )
 

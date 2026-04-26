@@ -81,6 +81,7 @@ from .themes.tailwind import PRESET as TAILWIND_THEME  # noqa: E402
 from .themes.supabase import PRESET as SUPABASE_THEME  # noqa: E402
 from .themes.raycast import PRESET as RAYCAST_THEME  # noqa: E402
 from .themes.adaptive import PRESET as ADAPTIVE_THEME  # noqa: E402
+from .themes.docs import PRESET as DOCS_THEME  # noqa: E402
 
 
 # =============================================================================
@@ -150,6 +151,7 @@ THEME_PRESETS: dict[str, ThemePreset] = {
     "supabase": SUPABASE_THEME,
     "raycast": RAYCAST_THEME,
     "adaptive": ADAPTIVE_THEME,
+    "docs": DOCS_THEME,
 }
 
 
