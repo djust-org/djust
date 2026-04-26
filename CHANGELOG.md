@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5rc1] - 2026-04-26
+
 ### Added
 
 - **`WizardMixin.wizard_rendered_fields` opt-in skips `field_html` rendering
