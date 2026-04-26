@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Process canonicalizations from the v0.8.5 → v0.8.6 retro arc folded into
+  CLAUDE.md (closes #1100, #1101, #1103, #1104, #1106, #1108, #1109)** —
+  Eight Stage 11 / retro-tracker learnings from the View Transitions PR-A →
+  PR-B arc and the nyc-claims gap-fix arc are now canonicalized as a single
+  "Process canonicalizations" section in `CLAUDE.md`. Each rule names the
+  source PR so the audit trail is preserved.
+
+  Topics covered: completeness-grep after async-migration regex passes
+  (#1100); ADR scope-estimation counts test-file callers (#1101); `is None`
+  coalesce vs `kwargs.setdefault` for mixin kwarg-forwarding (#1103);
+  mechanical-replacement PRs need N tests for N sites (#1104); CHANGELOG
+  test-count phrasing for additions to existing files (#1106);
+  `Iterable[T]` over `list[T]` for membership-check parameters (#1108);
+  dynamic subclass via `type(name, bases, dict)` over class-attr mutation
+  in test fixtures (#1109); microtask-faithful test stubs for
+  `startViewTransition` / `MutationObserver` / `IntersectionObserver`
+  (PR #1113 retro); batch-PR issue × file × test mapping table convention
+  (PR #1115 retro).
+
+  Docs-only change. No code or test surface modified.
+
 ### Added
 
 - **`djust.C013` system check — stale collectstatic copy of `client.min.js`
