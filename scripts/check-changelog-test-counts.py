@@ -54,8 +54,9 @@ PY_TEST_PATH_RE = re.compile(
 )
 JS_TEST_PATH_RE = re.compile(r"`(tests/js/[^\s`]+?\.test\.js)`")
 
-# Count test functions inside Python files. Matches top-level and class-level.
-PY_TEST_FN_RE = re.compile(r"^[ \t]*def\s+test_\w+\s*\(", re.MULTILINE)
+# Count test functions inside Python files. Matches top-level and class-level,
+# both `def test_*` and `async def test_*` (pytest-asyncio).
+PY_TEST_FN_RE = re.compile(r"^[ \t]*(?:async\s+)?def\s+test_\w+\s*\(", re.MULTILINE)
 # Python pytest.mark.parametrize adds a case per tuple; count via rough sum
 # of ``parametrize(...)`` argument list lengths is out of scope here — a
 # ``test_*`` function is counted as ONE test, which mirrors ``pytest --collect-only -q``

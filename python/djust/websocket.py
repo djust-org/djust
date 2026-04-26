@@ -509,6 +509,52 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             }
         )
 
+    async def _flush_deferred(self) -> None:
+        """Drain and execute callbacks queued via :meth:`LiveView.defer`.
+
+        Runs **after** every other post-render flush (push events, flash,
+        page metadata, layout) so deferred callbacks observe the
+        post-patch state. Phoenix-style ``send(self(), :foo)`` semantics —
+        useful for telemetry, post-render cleanup, or follow-up side
+        effects that should fire after the user sees the change.
+
+        Each callback is invoked in a try/except. Sync callbacks run
+        directly; async callbacks (``async def`` or coroutine-returning)
+        are awaited inline. A failing deferred callback logs at WARN with
+        full traceback and continues to the next — a deferred callback's
+        failure must not break the WebSocket connection or the user's
+        interactive flow.
+
+        Does NOT trigger a re-render after callbacks complete; if a
+        callback needs to re-render, the caller should use
+        :meth:`AsyncWorkMixin.start_async` instead.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_deferred"):
+            return
+        callbacks = self.view_instance._drain_deferred()
+        # Defensive: same shape as ``_flush_flash`` — guard against test
+        # mocks (a ``Mock`` ``view_instance`` returns a ``Mock``, not a
+        # list) and any legacy view that overrode ``_drain_deferred`` to
+        # return non-list.
+        if not isinstance(callbacks, list) or not callbacks:
+            return
+        for callback, args, kwargs in callbacks:
+            try:
+                result = callback(*args, **kwargs)
+                # Async callbacks: await inline. Mirrors the inspect-based
+                # detection used elsewhere (e.g. async event handlers).
+                if inspect.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.warning(
+                    "[djust] Deferred callback %s on %s raised; continuing to next",
+                    getattr(callback, "__qualname__", repr(callback)),
+                    self.view_instance.__class__.__name__,
+                    exc_info=True,
+                )
+
     async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:
         """
         Send a lightweight noop acknowledgment to the client.
@@ -857,6 +903,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_flash()
             await self._flush_page_metadata()
             await self._flush_pending_layout()
+            await self._flush_deferred()
 
         except Exception as e:
             error = e
@@ -1017,6 +1064,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._flush_flash()
                 await self._flush_page_metadata()
                 await self._flush_pending_layout()
+                await self._flush_deferred()
                 await self._flush_navigation()
                 await self._flush_accessibility()
                 await self._flush_i18n()
@@ -1044,6 +1092,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_flash()
             await self._flush_page_metadata()
             await self._flush_pending_layout()
+            await self._flush_deferred()
             await self._flush_navigation()
             await self._flush_accessibility()
             await self._flush_i18n()
@@ -1144,6 +1193,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_flash()
             await self._flush_page_metadata()
             await self._flush_pending_layout()
+            await self._flush_deferred()
             await self._send_noop(async_pending=has_async, ref=event_ref)
             if has_async:
                 await self._dispatch_async_work()
@@ -2956,6 +3006,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             await self._flush_flash()
                             await self._flush_page_metadata()
                             await self._flush_pending_layout()
+                            await self._flush_deferred()
                             await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
                                 await self._dispatch_async_work()
@@ -3082,6 +3133,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
                     await self._flush_navigation()
                     await self._flush_i18n()
                 else:
@@ -4317,6 +4369,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
                     await self._send_noop()
                     return
 
@@ -4342,6 +4395,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
             finally:
                 self._render_lock.release()
 
@@ -4434,6 +4488,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
                     await self._send_noop()
                     return
 
@@ -4456,6 +4511,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
 
                 # v0.7.0 — If handle_info flipped an activity to visible,
                 # drain its queue in the same round-trip. The flush is

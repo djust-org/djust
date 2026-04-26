@@ -118,6 +118,70 @@ class AsyncWorkMixin:
             self._async_cancelled = set()
         self._async_cancelled.add(name)
 
+    def defer(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+        """
+        Schedule a callback to run **once, after the current render+patch
+        cycle** completes. Phoenix-style ``send(self(), :foo)`` semantics —
+        useful for telemetry, post-render cleanup, or follow-up side
+        effects that should fire after the user sees the change.
+
+        Unlike :meth:`start_async`, ``defer``:
+
+        * Runs synchronously in the same WebSocket message cycle (not in a
+          background thread).
+        * Does NOT trigger a re-render after the callback returns.
+        * Is fire-once — every call appends to a queue that is drained and
+          cleared after each ``_send_update`` returns.
+
+        If the callback raises, the exception is logged at WARN with full
+        traceback and execution continues to the next deferred callback —
+        a deferred callback's failure must not break the WebSocket
+        connection or the user's interactive flow.
+
+        Async callbacks (``async def`` or coroutine-returning) are
+        awaited inline, mirroring the existing
+        :meth:`~djust.mixins.async_work.AsyncWorkMixin.start_async`
+        async-detection pattern.
+
+        Args:
+            callback: Callable (typically a method on this view).
+            *args: Positional arguments passed to the callback.
+            **kwargs: Keyword arguments passed to the callback.
+
+        Example::
+
+            @event_handler
+            def increment(self, **kwargs):
+                self.count += 1
+                self.defer(self._record_metric, action="increment")
+
+            def _record_metric(self, action: str):
+                # Fires after the patch reaches the client.
+                metrics.increment(f"liveview.{action}", count=self.count)
+        """
+        if not hasattr(self, "_deferred_callbacks"):
+            self._deferred_callbacks = []
+        self._deferred_callbacks.append((callback, args, kwargs))
+
+    def _drain_deferred(self) -> list:
+        """Pop and return the queued deferred callbacks; reset the queue.
+
+        Called by :class:`~djust.websocket.LiveViewConsumer` immediately
+        after each ``_send_update``. The drain is exception-isolated per
+        callback — see :meth:`defer` for semantics.
+
+        Returns the list of ``(callback, args, kwargs)`` tuples; consumers
+        invoke each one. Returning the list (rather than invoking inline)
+        keeps the mixin transport-agnostic — the HTTP path could call
+        :meth:`_drain_deferred` after :meth:`render` if we ever want
+        deferred-callback support there too.
+        """
+        callbacks = getattr(self, "_deferred_callbacks", None)
+        if not callbacks:
+            return []
+        self._deferred_callbacks = []
+        return callbacks
+
     def assign_async(
         self,
         name: str,
