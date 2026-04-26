@@ -1160,8 +1160,11 @@ class DataTableMixin:
         render as an empty table without errors. The first patch after
         ``mount()`` resolves to the real state.
 
-        Use a sentinel attribute (``table_rows`` is set as the LAST line
-        of ``init_table_state()``) to detect the pre-mount state cheaply.
+        Use ``table_rows`` as the sentinel attribute — it's set partway
+        through ``init_table_state()`` and serves as a cheap "init has
+        happened" signal. Any future re-ordering of ``init_table_state()``
+        should keep ``table_rows`` set on the instance before any code
+        path that calls ``get_table_context()`` runs.
         """
         if not hasattr(self, "table_rows"):
             return _PRE_MOUNT_TABLE_CONTEXT
