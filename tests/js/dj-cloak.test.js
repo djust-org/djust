@@ -60,7 +60,7 @@ describe('dj-cloak', () => {
         expect(found).toBe(true);
     });
 
-    it('removes dj-cloak attribute on WebSocket mount response', () => {
+    it('removes dj-cloak attribute on WebSocket mount response', async () => {
         const { dom } = createDom(
             '<div dj-cloak id="cloaked1">hidden</div><p dj-cloak id="cloaked2">also hidden</p>'
         );
@@ -74,15 +74,15 @@ describe('dj-cloak', () => {
         ws.connect('ws://localhost/ws/live/');
         ws.ws.onopen({ type: 'open' });
 
-        ws.handleMessage({ type: 'connect', session_id: 'test-session' });
+        await ws.handleMessage({ type: 'connect', session_id: 'test-session' });
         ws.skipMountHtml = true;
-        ws.handleMessage({ type: 'mount', view: 'test.views.TestView', html: '<div>content</div>', version: 1 });
+        await ws.handleMessage({ type: 'mount', view: 'test.views.TestView', html: '<div>content</div>', version: 1 });
 
         expect(doc.getElementById('cloaked1').hasAttribute('dj-cloak')).toBe(false);
         expect(doc.getElementById('cloaked2').hasAttribute('dj-cloak')).toBe(false);
     });
 
-    it('removes dj-cloak on SSE mount response', () => {
+    it('removes dj-cloak on SSE mount response', async () => {
         const { dom } = createDom('<div dj-cloak id="sse-cloaked">hidden</div>');
         const doc = dom.window.document;
 
@@ -103,23 +103,23 @@ describe('dj-cloak', () => {
 
         expect(doc.getElementById('sse-cloaked').hasAttribute('dj-cloak')).toBe(true);
 
-        sse.handleMessage({ type: 'mount', view: 'test.View', html: '<div>content</div>', version: 1, has_ids: true });
+        await sse.handleMessage({ type: 'mount', view: 'test.View', html: '<div>content</div>', version: 1, has_ids: true });
 
         expect(doc.getElementById('sse-cloaked').hasAttribute('dj-cloak')).toBe(false);
     });
 
-    it('works correctly when no dj-cloak elements exist', () => {
+    it('works correctly when no dj-cloak elements exist', async () => {
         const { dom } = createDom('<div>normal content</div>');
 
         const ws = new dom.window.djust.LiveViewWebSocket();
         ws.connect('ws://localhost/ws/live/');
         ws.ws.onopen({ type: 'open' });
 
-        ws.handleMessage({ type: 'connect', session_id: 'test-session' });
+        await ws.handleMessage({ type: 'connect', session_id: 'test-session' });
         ws.skipMountHtml = true;
 
-        expect(() => {
-            ws.handleMessage({ type: 'mount', view: 'test.views.TestView', html: '<div>content</div>', version: 1 });
-        }).not.toThrow();
+        await expect(
+            ws.handleMessage({ type: 'mount', view: 'test.views.TestView', html: '<div>content</div>', version: 1 })
+        ).resolves.not.toThrow();
     });
 });

@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`handleMessage` interleaving across `await` boundaries (closes #1098)** —
+  PR-A (v0.8.5rc1) made `LiveViewWebSocket.handleMessage` and
+  `LiveViewSSE.handleMessage` async without serializing the inbound
+  frame queue. Two adjacent inbound frames could fire-and-forget
+  `_handleMessageImpl` concurrently and interleave their
+  `await handleServerResponse` calls — racing on shared state like
+  `_pendingEventRefs` / `_tickBuffer` (`03-websocket.js:561-568` reads
+  `.size` AFTER an `await`, so an in-flight second message could
+  mutate the set between check and flush). Latent today; would have
+  been meaningfully worse when PR-B (View Transitions wrap) widened
+  the await window inside `applyPatches` itself.
+
+  Fix: per-transport `_inflight` Promise chain. Each `handleMessage(data)`
+  invocation chains onto the prior in-flight promise. Sequential drain
+  across rapid-fire frames; no interleaving. Errors propagate through
+  `.catch()` (logged via `console.error`) so the chain continues even
+  when one frame rejects — a single bad frame doesn't poison the queue.
+
+  Existing async `handleMessage` body renamed to `_handleMessageImpl`
+  (private). New public `handleMessage(data)` is a thin wrapper that
+  enqueues onto `this._inflight`. Both transports (WebSocket + SSE)
+  apply the same pattern.
+
+  New regression file `tests/js/handlemessage_serialization.test.js`
+  covers: rapid-fire ordered drain (later messages with shorter delays
+  must NOT finish first); throwing message doesn't poison the chain;
+  returned promise resolves only after this frame drains; both WS and
+  SSE expose `handleMessage` and `_handleMessageImpl` separately and
+  serialize.
+
+  Caller-side test migration: 4 existing test files updated to `await`
+  the now-queued `handleMessage` calls (`dj-cloak`, `hvr`,
+  `sse-transport`, `sw_advanced`) — same kind of un-awaited-call gap
+  that Stage 11 caught on PR #1099. 1402 JS tests pass; 2080 Python
+  tests pass.
+
+  PR-B (View Transitions wrap) is now unblocked.
+
 ## [0.8.5rc1] - 2026-04-26
 
 ### Added
