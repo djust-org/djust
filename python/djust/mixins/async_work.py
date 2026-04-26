@@ -143,6 +143,19 @@ class AsyncWorkMixin:
         :meth:`~djust.mixins.async_work.AsyncWorkMixin.start_async`
         async-detection pattern.
 
+        Reentry semantics (calling ``defer()`` from a deferred callback):
+
+            A callback that itself calls ``self.defer(other_cb)`` queues
+            ``other_cb`` for the **next** render+patch cycle, NOT the
+            current drain. This matches Phoenix ``send(self(), :foo)``
+            semantics — the message is processed after the current handler
+            returns. Implementation: :meth:`_drain_deferred` clears
+            ``self._deferred_callbacks`` BEFORE iterating the snapshot, so
+            re-entry into ``defer()`` writes to a fresh empty queue. This
+            avoids unbounded loops (a callback that re-defers itself does
+            NOT spin within a single drain) and gives users a predictable
+            "next tick" mental model.
+
         Args:
             callback: Callable (typically a method on this view).
             *args: Positional arguments passed to the callback.

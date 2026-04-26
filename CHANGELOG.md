@@ -33,11 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Exception isolation: a failing deferred callback is logged at WARN
   with full traceback and execution continues to the next callback in the
   queue — a deferred callback's failure must not break the WebSocket
-  connection or the user's interactive flow. 14 regression cases in
+  connection or the user's interactive flow. 19 regression cases in
   `python/djust/tests/test_defer.py` cover queue mechanics
   (append/drain/clear), arg/kwarg passing, ordering, sync+async mix,
-  exception isolation, and edge cases (no `view_instance`, view without
-  `AsyncWorkMixin`).
+  exception isolation, edge cases (no `view_instance`, view without
+  `AsyncWorkMixin`), drain-reentry contract (a callback that calls
+  `defer(other)` enqueues `other` for the **next** drain — Phoenix-style,
+  prevents unbounded loops), and SSE transport integration (mirror flush
+  via `_flush_deferred_to_sse()` in `python/djust/sse.py`).
 
   Example::
 

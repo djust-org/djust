@@ -512,6 +512,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     async def _flush_deferred(self) -> None:
         """Drain and execute callbacks queued via :meth:`LiveView.defer`.
 
+        Wire-in pattern: this method is called from two locations —
+        (a) inside :meth:`_send_update` itself (alongside the other
+        ``_flush_*`` methods), and (b) at every per-handler post-render
+        site that already calls ``_flush_pending_layout`` (10 sites).
+        The (b) sites are technically redundant when (a) preceded — the
+        drain is idempotent on an empty queue — but they preserve
+        symmetry with the existing ``_flush_*`` family which has the same
+        redundancy. Removing only ``_flush_deferred``'s (b) wiring would
+        create asymmetry that future contributors would re-introduce.
+        See post-merge follow-up Action #163 for a milestone-level
+        cleanup that drops all redundant ``_flush_*`` calls together.
+
         Runs **after** every other post-render flush (push events, flash,
         page metadata, layout) so deferred callbacks observe the
         post-patch state. Phoenix-style ``send(self(), :foo)`` semantics —
