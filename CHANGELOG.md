@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`self.defer(callback, *args, **kwargs)` — Phoenix-style post-render
+  callback scheduling** — new method on `AsyncWorkMixin` (and therefore on
+  every `LiveView`) that schedules a callback to run **once, after the
+  current render+patch cycle completes**. Phoenix `send(self(), :foo)` /
+  React `useEffect` (post-render) parity. Fires synchronously in the same
+  WebSocket message cycle (after `_send_update` returns) — so deferred
+  callbacks observe the post-patch state. Use cases: telemetry emission
+  after the user sees the change, post-render cleanup of temporary state,
+  scheduling follow-up side effects without re-rendering.
+
+  Differs from `start_async`: `defer` does NOT trigger a re-render after
+  the callback returns (the caller would use `start_async` for that), and
+  runs synchronously in the same WS frame rather than spawning a
+  background thread. Append-only queue: every `defer()` call adds to a
+  per-view list that is drained and cleared by
+  `LiveViewConsumer._flush_deferred()` after every `_send_update()` call
+  (10 sites in `python/djust/websocket.py`, mirroring the existing
+  `_flush_push_events` / `_flush_flash` / `_flush_page_metadata` /
+  `_flush_pending_layout` post-render-flush pattern).
+
+  Async callbacks (`async def` or coroutine-returning) are awaited inline.
+  Exception isolation: a failing deferred callback is logged at WARN
+  with full traceback and execution continues to the next callback in the
+  queue — a deferred callback's failure must not break the WebSocket
+  connection or the user's interactive flow. 19 regression cases in
+  `python/djust/tests/test_defer.py` cover queue mechanics
+  (append/drain/clear), arg/kwarg passing, ordering, sync+async mix,
+  exception isolation, edge cases (no `view_instance`, view without
+  `AsyncWorkMixin`), drain-reentry contract (a callback that calls
+  `defer(other)` enqueues `other` for the **next** drain — Phoenix-style,
+  prevents unbounded loops), and SSE transport integration (mirror flush
+  via `_flush_deferred_to_sse()` in `python/djust/sse.py`).
+
+  Example::
+
+      class CounterView(LiveView):
+          @event_handler
+          def increment(self, **kwargs):
+              self.count += 1
+              self.defer(self._record_metric, action="increment")
+
+          def _record_metric(self, action: str):
+              # Fires AFTER the patch reaches the client.
+              metrics.increment(f"liveview.{action}", count=self.count)
+
+  Phoenix LiveView Parity Tracker entry `self.defer()` (post-render) marked
+  shipped in `ROADMAP.md`.
+
+### Fixed
+
+- **`scripts/check-changelog-test-counts.py` regex missed `async def test_*`** —
+  the test-counter pre-push hook's `PY_TEST_FN_RE` matched only `def test_*`,
+  silently undercounting pytest-asyncio test files (any module-level
+  `async def test_*` was invisible). Updated the pattern to
+  `^[ \t]*(?:async\s+)?def\s+test_\w+\s*\(` so async tests are counted
+  alongside sync tests. Surfaced via `tests/test_defer.py` (7 sync class-method
+  tests + 7 module-level async tests = 14 total; pre-fix the hook reported 7
+  and the CHANGELOG claim of "14 regression cases" tripped a false drift
+  warning). Mechanical fix; no behavior change for files that don't use
+  `async def test_*`.
+
 ## [0.8.4rc1] - 2026-04-26
 
 ### Fixed

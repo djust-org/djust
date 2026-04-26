@@ -1297,7 +1297,7 @@ Open questions that inform future direction:
 | ~~**Colocated JS hooks + namespacing**~~ ✅ | `ColocatedHook` | — | **Shipped v0.5.0** | v0.5.0 |
 | ~~**`UploadWriter` (stream upload)**~~ | ~~**`UploadWriter`**~~ | — | ✅ **Shipped in v0.5.0** | v0.5.0 |
 | ~~**Keyed for-loop change tracking**~~ | ~~**Auto in comprehensions**~~ | — | ✅ **Shipped** — `crates/djust_vdom/src/parser.rs` per-item change detection in `{% for %}` loops (via `dj-key`) | **v0.5.0** |
-| **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** *(verified: no `def defer` / `self.defer` / `post_render` / `after_render` in `live_view.py` or mixins as of v0.8.3rc1)* | **v0.5.0** |
+| ~~**`self.defer()` (post-render)**~~ | ~~**`send(self(), ...)`**~~ | ~~`useEffect` (post-render)~~ | ✅ **Shipped (v0.8.5)** — `python/djust/mixins/async_work.py` `defer()` + `_drain_deferred()` + `LiveViewConsumer._flush_deferred()` (10 post-render-flush sites in `websocket.py`) — Phoenix-parity post-render callback scheduling | **v0.5.0** |
 | **Testing utilities** | **`LiveViewTest`** | **Testing Library** | **Basic** (`LiveViewTestClient`) | **v0.5.1** |
 | **Error overlay (dev)** | Error page | **Next.js overlay** | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Computed/derived state | — | `useMemo` | ✅ Shipped (v0.5.1) | v0.5.1 |
@@ -1385,7 +1385,7 @@ High-impact areas for contributions:
 14. ~~**`dj-scroll-into-view`**~~ ✅
 
 #### Medium Effort (1-3 days)
-14. **`self.defer(callback)`** — Post-render work scheduling, ~40 lines Python *(genuinely pending — verified no `def defer` / `self.defer` / `post_render` in `live_view.py` or mixins as of v0.8.3rc1)*
+14. ~~**`self.defer(callback)`**~~ ✅ **Shipped (v0.8.5)** — `mixins/async_work.py` `defer()` + `_drain_deferred()` (Phoenix-parity post-render scheduling)
 15. ~~**`dj-shortcut`**~~ ✅
 15. ~~**`dj-debounce`/`dj-throttle` HTML attributes**~~ ✅
 16. ~~**`on_mount` hooks**~~ ✅ Shipped — `python/djust/hooks.py` + `live_view.py` integration
