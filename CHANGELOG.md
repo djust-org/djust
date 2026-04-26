@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7rc1] - 2026-04-26
+
 ### Fixed
 
 - **`DataTableMixin.get_table_context()` post-mount missing `show_stats` key
