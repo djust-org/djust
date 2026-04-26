@@ -62,7 +62,8 @@ How to build specific features.
 |                                              |                                                     |
 | -------------------------------------------- | --------------------------------------------------- |
 | **[Navigation](guides/navigation.md)**             | `live_patch`, `live_redirect`, URL state management           |
-| **[Hooks](guides/hooks.md)**                       | Client-side JavaScript lifecycle hooks                        |
+| **[Hooks](guides/hooks.md)**                       | Client-side JavaScript lifecycle hooks (sync + async, v0.8.6) |
+| **[View Transitions](guides/view-transitions.md)** | `<body dj-view-transitions>` for browser-native cross-fades + shared-element morphs (v0.8.6) |
 | **[on_mount Hooks](guides/on-mount-hooks.md)**     | Cross-cutting server-side mount hooks (auth, telemetry, etc.) |
 | **[Model Binding](guides/model-binding.md)**       | Two-way `dj-model` data binding                               |
 | **[Intent-Based Prefetch (`dj-prefetch`)](guides/prefetch.md)** | Hover / touch prefetch for fast in-app navigation (v0.7.0) |

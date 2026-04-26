@@ -9040,6 +9040,41 @@ function _createHookInstance(hookDef, el) {
 }
 
 /**
+ * Safely invoke a hook lifecycle method. Tolerates both sync and async
+ * implementations (v0.8.6 async-hooks enhancement, leveraging PR-A's
+ * async patch path + #1098's queued handleMessage):
+ *
+ * - Sync return: errors caught and logged immediately.
+ * - Async return (Promise): errors caught via ``.catch`` and logged when
+ *   the Promise rejects. The dispatcher does NOT await — hooks fire-and-
+ *   forget on the lifecycle path so user I/O in a hook can't block the
+ *   render loop. User code that needs sequencing across hook completion
+ *   should coordinate that explicitly.
+ *
+ * No API signature change for hook authors — sync hooks behave exactly
+ * as before. Async hooks now have safe error reporting instead of
+ * Unhandled Promise Rejection logs.
+ */
+function _safeCallHook(fn, label, ...args) {
+    // Use %s placeholders for ``label`` so the format string is constant
+    // and ``label`` (which derives from a user-controlled ``dj-hook``
+    // attribute) is passed as a parameter — silences CodeQL's tainted-
+    // format-string warning. console.error doesn't reach an exploitable
+    // sink, but the parameterized form is the canonical safe pattern.
+    try {
+        const result = fn(...args);
+        if (result && typeof result.then === 'function') {
+            result.catch((e) =>
+                console.error('[dj-hook] Error in %s:', label, e),
+            );
+        }
+    } catch (e) {
+        console.error('[dj-hook] Error in %s:', label, e);
+    }
+}
+
+
+/**
  * Scan the DOM for elements with dj-hook and mount their hooks.
  * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
@@ -9067,13 +9102,9 @@ function mountHooks(root) {
         const instance = _createHookInstance(hookDef, el);
         _activeHooks.set(elId, { hookName, instance, el });
 
-        // Call mounted()
+        // Call mounted() (async-tolerant — see _safeCallHook)
         if (typeof instance.mounted === 'function') {
-            try {
-                instance.mounted();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
-            }
+            _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
         }
     });
 }
@@ -9088,11 +9119,10 @@ function beforeUpdateHooks(root) {
     for (const [, entry] of _activeHooks) {
         // Only call if element is still in the DOM
         if (root.contains(entry.el) && typeof entry.instance.beforeUpdate === 'function') {
-            try {
-                entry.instance.beforeUpdate();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.beforeUpdate():`, e);
-            }
+            _safeCallHook(
+                entry.instance.beforeUpdate.bind(entry.instance),
+                `${entry.hookName}.beforeUpdate()`,
+            );
         }
     }
 }
@@ -9119,11 +9149,10 @@ function updateHooks(root) {
             existing.el = el; // Update reference in case DOM was replaced
             existing.instance.el = el;
             if (typeof existing.instance.updated === 'function') {
-                try {
-                    existing.instance.updated();
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${hookName}.updated():`, e);
-                }
+                _safeCallHook(
+                    existing.instance.updated.bind(existing.instance),
+                    `${hookName}.updated()`,
+                );
             }
         } else {
             // New element — mount it
@@ -9135,11 +9164,7 @@ function updateHooks(root) {
             const instance = _createHookInstance(hookDef, el);
             _activeHooks.set(elId, { hookName, instance, el });
             if (typeof instance.mounted === 'function') {
-                try {
-                    instance.mounted();
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
-                }
+                _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
             }
         }
     });
@@ -9148,11 +9173,10 @@ function updateHooks(root) {
     for (const [elId, entry] of _activeHooks) {
         if (!currentElements.has(elId)) {
             if (typeof entry.instance.destroyed === 'function') {
-                try {
-                    entry.instance.destroyed();
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
-                }
+                _safeCallHook(
+                    entry.instance.destroyed.bind(entry.instance),
+                    `${entry.hookName}.destroyed()`,
+                );
             }
             _activeHooks.delete(elId);
         }
@@ -9166,11 +9190,10 @@ function notifyHooksDisconnected() {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.disconnected === 'function') {
-            try {
-                entry.instance.disconnected();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.disconnected():`, e);
-            }
+            _safeCallHook(
+                entry.instance.disconnected.bind(entry.instance),
+                `${entry.hookName}.disconnected()`,
+            );
         }
     }
 }
@@ -9182,11 +9205,10 @@ function notifyHooksReconnected() {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.reconnected === 'function') {
-            try {
-                entry.instance.reconnected();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.reconnected():`, e);
-            }
+            _safeCallHook(
+                entry.instance.reconnected.bind(entry.instance),
+                `${entry.hookName}.reconnected()`,
+            );
         }
     }
 }
@@ -9199,12 +9221,11 @@ function dispatchPushEventToHooks(eventName, payload) {
     for (const [, entry] of _activeHooks) {
         const handlers = entry.instance._eventHandlers[eventName];
         if (handlers) {
-            handlers.forEach(cb => {
-                try {
-                    cb(payload);
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${entry.hookName}.handleEvent("${eventName}"):`, e);
-                }
+            handlers.forEach((cb) => {
+                _safeCallHook(
+                    () => cb(payload),
+                    `${entry.hookName}.handleEvent("${eventName}")`,
+                );
             });
         }
     }
@@ -9217,11 +9238,10 @@ function destroyAllHooks() {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.destroyed === 'function') {
-            try {
-                entry.instance.destroyed();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
-            }
+            _safeCallHook(
+                entry.instance.destroyed.bind(entry.instance),
+                `${entry.hookName}.destroyed()`,
+            );
         }
     }
     _activeHooks.clear();

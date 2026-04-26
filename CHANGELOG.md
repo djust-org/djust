@@ -156,6 +156,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Async-tolerant `dj-hook` lifecycle dispatch (v0.8.6 enhancement
+  cashing in PR-A async refactor)** — `dj-hook` lifecycle methods
+  (`mounted`, `updated`, `beforeUpdate`, `destroyed`, `disconnected`,
+  `reconnected`, `handleEvent`) may now be `async`. The dispatcher
+  detects Promise return and chains `.catch` to log rejections via
+  `console.error` — no Unhandled Promise Rejection in the browser
+  console.
+
+  ```javascript
+  window.djust.hooks.UserAvatar = {
+      async mounted() {
+          const res = await fetch(`/api/profile/${this.el.dataset.userId}`);
+          const profile = await res.json();
+          this.el.querySelector('img').src = profile.avatar_url;
+      },
+  };
+  ```
+
+  **Fire-and-forget contract**: the dispatcher does NOT await user
+  hooks. Lifecycle callbacks fire-and-forget so user I/O can't block
+  the render loop. Sync hooks behave exactly as before — strictly
+  additive, no API change for existing hook code.
+
+  Implementation: new `_safeCallHook(fn, label, ...args)` helper in
+  `python/djust/static/djust/src/19-hooks.js` wraps the existing
+  try/catch sites for each lifecycle path. 9 sync sites refactored to
+  use the helper (mounted×2, beforeUpdate, updated, destroyed×2,
+  disconnected, reconnected, handleEvent). New file
+  `tests/js/async_hooks.test.js` with 5 cases
+  cover sync-unchanged behavior + async-Promise-rejection-logging +
+  fire-and-forget timing contract.
+
+- **`docs/website/guides/view-transitions.md` — comprehensive guide for
+  the View Transitions API integration shipped in v0.8.6 PR #1113** —
+  covers the `<body dj-view-transitions>` opt-in, browser support
+  matrix (Chrome 111+, Edge 111+, Safari 18+, Firefox graceful
+  degrade), `prefers-reduced-motion` accessibility bypass,
+  shared-element transitions via `view-transition-name`, custom
+  animation timing via `::view-transition-old(name)` /
+  `::view-transition-new(name)` pseudo-elements, `await
+  window.djust.applyPatches(...)` as public API for third-party JS,
+  and a critical "JSDOM stub microtask correctness" section
+  (mirroring the regression class that bit PR #1092). Linked from
+  `_config.yaml` and `index.md` per the docs-nav convention.
+
 - **`{% data_table %}` link column type (closes #1110)** — column dicts
   now accept a `link` key naming another row dict key that holds the
   href, and an optional `link_class` for the `<a>` element's CSS class:
