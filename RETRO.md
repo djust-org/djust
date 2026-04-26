@@ -188,6 +188,92 @@ issue or be explicitly closed with a reason.
 | 155 | djust-release skill Step 6 stages 3/4 files (+ Cargo.lock); causes fix-pass on every release | Retro v0.8.2rc1 release | #1080 | Open | New (caught during 0.8.2rc1 release) |
 | 156 | Edit-tool failure-mode + smoke-test discipline gap | Retro v0.8.3 / PR #1083 | #1084 | Open | New (Edit-failure produces silent unmodified file; same shape as Action #122) |
 | 157 | 3rd-strike RETRO_GATE_VIOLATION — small bookkeeping PRs bypass retro-artifact gate | Retro v0.8.3 / PRs #1069, #1073, #1082 | #1085 | Open | New (3 milestones in a row; document explicit ROADMAP-PR exemption or fix the gate) |
+| 158 | Inheritance round-trip identity tests must drive from parser output, not direct AST construction | Retro v0.8.4 / PR #1086 | — | Open | New — `nodes_to_template_string`'s existing test passed because it built `Node::Variable` with bare-string args, bypassing `parse_filter_specs`'s "preserve outer quotes for dep-tracking" contract. PR #1086 added the parser-driven round-trip case. Generalize: every AST round-trip (inheritance / serialization / cache-rebuild) needs a "parse the source, round-trip, re-parse, assert AST equality" test, not an AST-equality-only test. |
+| 159 | Stale-`collectstatic` Django system check (`djust.S0XX`) | Retro v0.8.4 / PR #1086 (red-herring trail) | #1088 | Open | Filed during #1081 investigation — surfacing the stale-JS class of "framework looks broken but isn't" report at startup. ~50 lines, fits existing `python/djust/checks.py` pattern. |
+| 160 | Expand release wheel matrix to cp313 + cp314 | Retro v0.8.4 / PR #1086 | #1089 | Open | PyPI ships only cp310/11/12; reporter on cp314 fell back to source build at install time. Untested binary contributed to early misdiagnosis. |
+| 161 | Debug-log when `\|date` / `\|time` filter parse fails | Retro v0.8.4 / PR #1086 | #1090 | Open | Silent passthrough on parse failure made #1081 hard to triage. One `tracing::debug!` line in the `Err` arm of `format_date` would have collapsed the saga to a 5-minute diagnosis. |
+| 162 | Demand bit-exact runnable repro before posting "root cause confirmed" on a multi-reopen issue | Retro v0.8.4 / PR #1086 (process) | — | Open | New — posted 3 "root cause" / "smoking gun" comments on #1081 based on framework-side theory testing; all three were wrong. The actual fix landed only after gaining direct project access. Process rule: on any issue with N≥2 reopens, refuse to post a root-cause claim without a runnable script that reproduces against the user's exact environment. Add to `pr/feedback/` triage checklist. |
+
+---
+
+## v0.8.4 — Inheritance Round-Trip Bug + ROADMAP Sweep (PRs #1086, #1087)
+
+**Date**: 2026-04-26
+**Scope**: Two-PR milestone driven by a single high-cost issue. PR #1086 fixed #1081 (`|date` filter producing `&quot;Apr 25, 2026&quot;` in production) with a one-line change in `crates/djust_templates/src/inheritance.rs::nodes_to_template_string` — emit filter args verbatim instead of re-wrapping in `\"…\"`, since `parse_filter_specs` (#787) preserves source-form quotes. PR #1087 swept `ROADMAP.md` for staleness — verified ~30 unchecked items as already-shipped, annotated 12 as genuinely-pending with greppable evidence. v0.8.4rc1 tagged + PyPI verifier cron scheduled.
+**Tests at close**: ~6,456 (29 cases in `tests/unit/test_filter_literal_args_1081.py` + 3 new Rust unit tests in `inheritance.rs::tests`).
+
+### What We Learned
+
+**1. Inheritance round-trip identity tests bypassed the parser contract.**
+`nodes_to_template_string`'s existing `test_nodes_to_template_string_preserves_filters` test passed because it built `Node::Variable` directly with bare-string args (no quotes). But the parser's contract per #787 is that arg STRINGS RETAIN surrounding quotes (so the dep-tracking extractor can distinguish literals from bare-identifier variable refs). The test bypassed the parser entirely, so the round-trip was broken in production despite passing tests. Surfaced through PR #1086 against the reporter's actual 26,785-char `claims/examiner_dashboard.html` — simple inline templates never hit `nodes_to_template_string` and rendered correctly all along.
+
+**Action taken**: Open — tracked in Action Tracker #158. New rule: every AST round-trip (inheritance, serialization, cache-rebuild) needs a "parse the source, round-trip, re-parse, assert AST equality" test driven from parser output, not from direct AST construction. PR #1086 added that round-trip case (`test_round_trip_through_resolve_inheritance_preserves_date_filter_arg_1081`).
+
+**2. Multi-reopen issues need bit-exact repro before claiming root cause.**
+Issue #1081 went through 4 reopens, each with a confidently-stated different root cause from the reporter (and 3 confidently-stated "found it" replies from me). All three of my framework-side theories tested clean against the published cp312 wheel SHA — and were wrong. Posted "smoking gun" comments based on theoretical-flow testing without a runnable script that reproduced against the reporter's exact environment. The actual fix landed in 5 minutes once the user provided direct project access at `/Users/tip/online_projects/Flexion/proposals/nyc_comptroller_claims/nyc-claims/`.
+
+**Action taken**: Open — tracked in Action Tracker #162. New triage process rule: on any issue with N≥2 reopens, refuse to post a root-cause claim without a runnable script that reproduces against the user's exact environment. Bit-exact diagnostic-script ask precedes any "found it" claim.
+
+**3. Released-wheel matrix is stale relative to Python's release cadence.**
+PyPI ships only cp310/11/12. Reporter was on cp314 → source build at install time → untested binary in their env. Spent significant cycles theorizing about cp314-specific PyO3 ABI / Cargo crate-version drift / toolchain delta, all of which were red herrings (the bug reproduces on cp312 too) but the matrix gap genuinely contributed to the misdiagnosis path.
+
+**Action taken**: Open — tracked in Action Tracker #160 (GitHub #1089). Concrete change in `.github/workflows/release.yml`: `python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']`. Issue spec includes design questions for the implementer (PyO3 ABI for 3.14, runner availability, abi3-stable wheel option).
+
+**4. Silent filter parse-failure passthrough hid the real failure mode.**
+The `|date` / `|time` filters' `Err(_) => Ok(value.clone())` arm in `crates/djust_templates/src/filters.rs` passes through unchanged when chrono can't parse the value. That was correct behavior for valid use cases (`|default` chained after `|date` to handle null/empty strings), but it surfaced the #1081 bug as "filter is broken" when really the format string had embedded quotes from the doubled-quote shape `""M d, Y""`. One `tracing::debug!("|date filter parse failed for value=... format=...")` line would have collapsed the multi-day investigation to a 5-minute diagnosis.
+
+**Action taken**: Open — tracked in Action Tracker #161 (GitHub #1090). Single-PR scope, ~10-line change spanning the date/time/timesince/timeuntil filter arms.
+
+**5. Stale `collectstatic` is a real "framework looks broken but isn't" trap.**
+Mid-investigation, the reporter believed they'd found root cause as stale `staticfiles/djust/client.min.js` (Apr 22 / 0.5.5rc1 era) being served instead of the wheel's fresh copy. Turned out to be a partial truth — they had two distinct issues: stale static + the inheritance round-trip bug. Anyone running djust in production behind WhiteNoise / nginx / a CDN is vulnerable to the stale-static class on every wheel upgrade if they forget the `--clear` flag.
+
+**Action taken**: Open — tracked in Action Tracker #159 (GitHub #1088). Proposed `djust.S0XX` Django system check that hashes `STATIC_ROOT/djust/client.min.js` against the wheel's `python/djust/static/djust/client.min.js` and warns on mismatch.
+
+**6. ROADMAP.md staleness compounds into wasted iteration time.**
+When picking the next "Quick Win" task, 6 of the 8 candidates I checked were already shipped — ROADMAP just hadn't been struck through. Each one cost a verification round-trip. PR #1087 swept the Priority Matrix + Quick Wins + Medium Effort + Major Features + Phoenix LiveView Parity Tracker sections (~30 items marked shipped with implementation paths inline; 12 items marked genuinely-pending with greppable evidence inline).
+
+**Action taken**: Closed — shipped in PR #1087. The annotations + `*(verified: no … references in tree)*` markers mean the next person doing this exercise starts from a known-good baseline.
+
+### Insights
+
+- **The release process improvement from Action #155 worked.** v0.8.4rc1's bump-version commit staged 6 files (pyproject + Cargo.toml + Cargo.lock + CHANGELOG + 2 init files) in a single commit with no fix-pass needed. Skill's documented "3 files" was caught and corrected at v0.8.2rc1 via Action #155; this milestone validates the lesson is being applied.
+- **User direction is load-bearing.** The "two PRs is the right ceiling before I see them" rule prevented merging #1086 prematurely with the wrong fix-shape. The eventual real fix (`nodes_to_template_string`) replaced what would have been a no-op test-only PR — exactly the kind of correction the review-gate exists for.
+- **Direct project access trumps theory-side investigation.** Once the user shared the path to the reporter's nyc-claims project, identifying the bug took two commands: read the resolved template, see the doubled `""M d, Y""`. Several hours of upstream-side variation testing produced no progress. Future similar investigations: ask earlier.
+- **Pure docs-only PRs (#1087) still warrant the retro-artifact gate.** Action #157's "3rd-strike RETRO_GATE_VIOLATION" pattern from v0.8.3 milestones — small bookkeeping PRs bypass the retro gate — repeated here for both #1086 and #1087 (no `pr/feedback/retro-N.md` file). Keeping this milestone's retro entry as the canonical source of lessons rather than backfilling per-PR retro files for a 2-PR milestone where lessons are already captured in the issue+PR conversation.
+
+### Review Stats
+
+| Metric | PR #1086 | PR #1087 | Total |
+|--------|----------|----------|-------|
+| Tests added (Python) | 29 | 0 | 29 |
+| Tests added (Rust) | 3 | 0 | 3 |
+| 🔴 Findings (Stage 11) | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 0 | 0 |
+| Findings fixed | 0 | 0 | 0 |
+| CI failures | 0 | 0 | 0 |
+| Lines changed (production) | 2 | 0 | 2 |
+| Lines changed (tests + docs) | 240 | 222 | 462 |
+
+### Process Improvements Applied
+
+- **CLAUDE.md**: no changes
+- **Pipeline template**: no changes
+- **Checklist**: no changes (Action #162 will add a triage-checklist line for multi-reopen issues; out-of-scope-for-djust label since pipeline-skill repo owns that)
+- **Skills**: no changes (Action #161 will add the parse-failure debug log; pipeline-skill repo follow-up)
+
+### Open Items
+
+- [ ] Item 1 — Inheritance round-trip identity tests must drive from parser output (Action Tracker #158)
+- [ ] Item 2 — Stale-`collectstatic` Django system check (Action Tracker #159, GitHub #1088)
+- [ ] Item 3 — Expand release wheel matrix to cp313 + cp314 (Action Tracker #160, GitHub #1089)
+- [ ] Item 4 — Debug-log when `|date` / `|time` filter parse fails (Action Tracker #161, GitHub #1090)
+- [ ] Item 5 — Demand bit-exact runnable repro before posting "root cause confirmed" on N≥2 reopen issues (Action Tracker #162)
+
+### Issues filed during this milestone
+
+- #1088 (tech-debt): Stale-`collectstatic` Django system check
+- #1089 (tech-debt): Expand release wheel matrix to cp313 + cp314
+- #1090 (tech-debt): Debug-log when `|date` / `|time` filter parse fails
 
 ---
 
