@@ -92,13 +92,18 @@ class WizardMixin:
     wizard_input_event: str = "dj-change"
 
     #: Optional opt-in to skip ``field_html`` rendering for fields not in this
-    #: list. Default ``None`` renders ALL fields in the current step's form
-    #: (pre-#1097 behavior). Set to a list of field names to render only those
-    #: — useful when a step's form has many fields but the template only
-    #: references a subset (e.g. conditional owner-info fields hidden behind
-    #: ``is_vehicle_owner == "no"``). Per-step overrides via the step dict's
-    #: ``"rendered_fields"`` key. Closes #1097.
-    wizard_rendered_fields: list | None = None
+    #: collection. Default ``None`` renders ALL fields in the current step's
+    #: form (pre-#1097 behavior). Set to any iterable of field names (list,
+    #: tuple, set, frozenset — anything that supports ``in`` membership) to
+    #: render only those — useful when a step's form has many fields but the
+    #: template only references a subset (e.g. conditional owner-info fields
+    #: hidden behind ``is_vehicle_owner == "no"``). Per-step overrides via
+    #: the step dict's ``"rendered_fields"`` key — explicit ``None`` at the
+    #: step level reverts that step to render-all. Excluded field names
+    #: produce no ``field_html[fname]`` entry; templates that reference them
+    #: via ``{{ field_html.unused|safe }}`` render empty (intentional — the
+    #: opt-out is a contract between view and template). Closes #1097.
+    wizard_rendered_fields = None
 
     @property
     def _steps(self) -> list:

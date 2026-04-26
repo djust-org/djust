@@ -42,32 +42,44 @@ class _StubLiveView:
         return dict(kwargs)
 
 
-class _W(WizardMixin, _StubLiveView):
-    wizard_steps = [
-        {"name": "details", "form_class": _BigForm, "title": "Details"},
-    ]
+_SENTINEL = object()
 
-    def __init__(self, rendered=None, per_step_rendered=None):
-        if rendered is not None:
-            self.wizard_rendered_fields = rendered
-        # Optional per-step override
-        if per_step_rendered is not None:
-            type(self).wizard_steps = [
-                {
-                    "name": "details",
-                    "form_class": _BigForm,
-                    "title": "Details",
-                    "rendered_fields": per_step_rendered,
-                },
-            ]
-        else:
-            type(self).wizard_steps = [
-                {"name": "details", "form_class": _BigForm, "title": "Details"},
-            ]
-        self.wizard_step_index = 0
-        self.wizard_step_data = {}
-        self.wizard_step_errors = {}
-        self.wizard_completed_steps = []
+
+def _make_view(rendered=None, per_step_rendered=_SENTINEL):
+    """Build a fresh WizardMixin subclass per call.
+
+    Each call dynamically creates a NEW subclass with its own class-level
+    ``wizard_steps``, avoiding cross-test mutation of a shared class
+    attribute. ``per_step_rendered=_SENTINEL`` means the step dict has no
+    ``rendered_fields`` key at all (fall through to class attr); pass
+    ``None`` explicitly to put ``"rendered_fields": None`` in the step dict.
+    """
+    if per_step_rendered is _SENTINEL:
+        steps = [{"name": "details", "form_class": _BigForm, "title": "Details"}]
+    else:
+        steps = [
+            {
+                "name": "details",
+                "form_class": _BigForm,
+                "title": "Details",
+                "rendered_fields": per_step_rendered,
+            }
+        ]
+
+    cls = type("_TestWizardView", (WizardMixin, _StubLiveView), {"wizard_steps": steps})
+    view = cls()
+    if rendered is not None:
+        view.wizard_rendered_fields = rendered
+    view.wizard_step_index = 0
+    view.wizard_step_data = {}
+    view.wizard_step_errors = {}
+    view.wizard_completed_steps = []
+    return view
+
+
+# Backwards-compat shim so the existing tests below work unchanged.
+def _W(rendered=None, per_step_rendered=_SENTINEL):
+    return _make_view(rendered=rendered, per_step_rendered=per_step_rendered)
 
 
 class DefaultRendersAllFieldsTest(TestCase):
@@ -144,3 +156,46 @@ class PerStepOverrideTest(TestCase):
         view = _W(per_step_rendered=["first_name", "last_name"])
         ctx = view.get_context_data()
         self.assertEqual(set(ctx["field_html"].keys()), {"first_name", "last_name"})
+
+    def test_per_step_empty_list_renders_no_fields(self):
+        # Per-step "rendered_fields": [] means: render NO fields for this
+        # step, even if the class attr says otherwise.
+        view = _W(rendered=["first_name", "last_name"], per_step_rendered=[])
+        ctx = view.get_context_data()
+        self.assertEqual(ctx["field_html"], {})
+
+    def test_per_step_explicit_none_renders_all(self):
+        # Step dict with `"rendered_fields": None` (explicitly None, NOT
+        # missing): dict.get returns None; the None-filter branch in
+        # get_context_data treats that as "no filter" and renders ALL
+        # fields. Documented semantic: explicit None at step level is the
+        # opt-out from any class-level filter for that specific step.
+        view = _W(rendered=["first_name"], per_step_rendered=None)
+        ctx = view.get_context_data()
+        # All fields render — class attr's filter is overridden by step's None
+        self.assertEqual(
+            set(ctx["field_html"].keys()),
+            {
+                "first_name",
+                "last_name",
+                "email",
+                "phone",
+                "is_vehicle_owner",
+                "owner_first_name",
+                "owner_last_name",
+            },
+        )
+
+
+class FilterIterableShapeTest(TestCase):
+    """The filter accepts any iterable supporting `in` membership checks."""
+
+    def test_tuple_filter(self):
+        view = _W(rendered=("first_name", "last_name"))  # tuple, not list
+        ctx = view.get_context_data()
+        self.assertEqual(set(ctx["field_html"].keys()), {"first_name", "last_name"})
+
+    def test_set_filter(self):
+        view = _W(rendered={"first_name", "email"})  # set
+        ctx = view.get_context_data()
+        self.assertEqual(set(ctx["field_html"].keys()), {"first_name", "email"})
