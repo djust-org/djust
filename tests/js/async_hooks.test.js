@@ -82,7 +82,8 @@ describe('Async-tolerant dj-hook dispatch', () => {
             dom.window.djust.mountHooks();
 
             expect(errors.length).toBe(1);
-            expect(errors[0][0]).toContain('MyHook.mounted()');
+            // Label is the second arg (parameterized format string + label arg)
+            expect(errors[0][1]).toBe('MyHook.mounted()');
         });
     });
 
@@ -119,7 +120,8 @@ describe('Async-tolerant dj-hook dispatch', () => {
             await new Promise((r) => setTimeout(r, 0));
 
             expect(errors.length).toBe(1);
-            expect(errors[0][0]).toContain('MyHook.mounted()');
+            // Label is the second arg (parameterized format string + label arg)
+            expect(errors[0][1]).toBe('MyHook.mounted()');
         });
 
         it('dispatcher does NOT await — synchronous return path', () => {

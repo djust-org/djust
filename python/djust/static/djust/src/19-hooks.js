@@ -137,15 +137,20 @@ function _createHookInstance(hookDef, el) {
  * Unhandled Promise Rejection logs.
  */
 function _safeCallHook(fn, label, ...args) {
+    // Use %s placeholders for ``label`` so the format string is constant
+    // and ``label`` (which derives from a user-controlled ``dj-hook``
+    // attribute) is passed as a parameter — silences CodeQL's tainted-
+    // format-string warning. console.error doesn't reach an exploitable
+    // sink, but the parameterized form is the canonical safe pattern.
     try {
         const result = fn(...args);
         if (result && typeof result.then === 'function') {
             result.catch((e) =>
-                console.error(`[dj-hook] Error in ${label}:`, e),
+                console.error('[dj-hook] Error in %s:', label, e),
             );
         }
     } catch (e) {
-        console.error(`[dj-hook] Error in ${label}:`, e);
+        console.error('[dj-hook] Error in %s:', label, e);
     }
 }
 
