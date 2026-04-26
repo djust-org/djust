@@ -247,7 +247,21 @@ pub fn apply_filter_with_context(
             let datetime_str = value.to_string();
             match format_date(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
-                Err(_) => Ok(value.clone()), // If parsing fails, return original value
+                Err(e) => {
+                    // #1090: surface silent parse failures so template authors
+                    // can diagnose without instrumentation. Common cause:
+                    // upstream JSON-encoding of datetime objects produces
+                    // strings with embedded literal `\"` chars that don't
+                    // round-trip through chrono's parsers.
+                    tracing::debug!(
+                        target: "djust.templates.filters",
+                        value = %datetime_str,
+                        format = %format_str,
+                        error = %e,
+                        "|date filter parse failed; returning original value unchanged",
+                    );
+                    Ok(value.clone()) // If parsing fails, return original value
+                }
             }
         }
         "time" => {
@@ -269,7 +283,18 @@ pub fn apply_filter_with_context(
             let datetime_str = value.to_string();
             match format_time(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
-                Err(_) => Ok(value.clone()),
+                Err(e) => {
+                    // #1090: see |date filter — same parse-failure surface,
+                    // same diagnostic value when log target is enabled.
+                    tracing::debug!(
+                        target: "djust.templates.filters",
+                        value = %datetime_str,
+                        format = %format_str,
+                        error = %e,
+                        "|time filter parse failed; returning original value unchanged",
+                    );
+                    Ok(value.clone())
+                }
             }
         }
         "dictsort" => {

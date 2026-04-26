@@ -383,6 +383,24 @@ async def test_sse_flush_deferred_handles_no_view_instance():
 
 
 @pytest.mark.asyncio
+async def test_sse_flush_deferred_handles_view_without_drain_method():
+    """Closes #1093: SSE-side parallel of the WS-side legacy-view guard test.
+
+    A view that doesn't subclass ``AsyncWorkMixin`` lacks ``_drain_deferred``;
+    the ``hasattr`` guard at ``python/djust/sse.py`` must short-circuit
+    cleanly without ``AttributeError``. Defensive against legacy or
+    third-party view classes that don't inherit ``LiveView``'s mixin chain.
+    """
+    from djust.sse import _flush_deferred_to_sse
+
+    class _LegacyView:
+        pass  # No _drain_deferred attribute
+
+    # Should be a no-op, not raise
+    await _flush_deferred_to_sse(_LegacyView())
+
+
+@pytest.mark.asyncio
 async def test_sse_flush_deferred_isolates_callback_exceptions(caplog):
     """SSE-side exception isolation must match WS-side: failed callback
     logs at WARN and execution continues."""

@@ -679,6 +679,97 @@ def _force_gc():
     gc.collect()
 
 
+class TestC013StaleCollectstatic:
+    """C013 — stale collectstatic copy of client.min.js (closes #1088)."""
+
+    def _baseline_settings(self, settings):
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+    def test_c013_no_static_root_skips(self, tmp_path, settings):
+        """No STATIC_ROOT configured → check is a no-op."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = None
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+    def test_c013_no_collected_file_skips(self, tmp_path, settings):
+        """STATIC_ROOT exists but no djust/client.min.js inside → no-op."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+    def test_c013_matching_content_quiet(self, tmp_path, settings):
+        """Collected copy hashes-equal to wheel-bundled → no warning."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+
+        # Mirror the wheel's client.min.js exactly into STATIC_ROOT
+        from djust import __file__ as djust_init
+        from pathlib import Path
+        import shutil
+
+        wheel_path = Path(djust_init).parent / "static" / "djust" / "client.min.js"
+        if not wheel_path.exists():
+            import pytest
+
+            pytest.skip("wheel-bundled client.min.js not present in this dev tree")
+
+        target_dir = tmp_path / "djust"
+        target_dir.mkdir()
+        shutil.copyfile(wheel_path, target_dir / "client.min.js")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+    def test_c013_diverged_content_warns(self, tmp_path, settings):
+        """Collected copy diverges from wheel-bundled → warning."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+
+        target_dir = tmp_path / "djust"
+        target_dir.mkdir()
+        # Plant intentionally-stale content
+        (target_dir / "client.min.js").write_bytes(b"// stale 0.5.5rc1-era client\n")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 1
+        assert "Stale collectstatic" in c013[0].msg
+        assert "collectstatic --clear" in c013[0].hint
+
+    def test_c013_suppressed_via_djust_config(self, tmp_path, settings):
+        """DJUST_CONFIG['suppress_checks'] = ['C013'] silences the check."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+        settings.DJUST_CONFIG = {"suppress_checks": ["C013"]}
+
+        target_dir = tmp_path / "djust"
+        target_dir.mkdir()
+        (target_dir / "client.min.js").write_bytes(b"// stale content\n")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+
 class TestV001MissingTemplateName:
     """V001 -- missing template_name on LiveView subclass."""
 
