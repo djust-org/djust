@@ -85,6 +85,12 @@ class WizardMixin:
 
     wizard_steps: list = []  # Subclasses override with a list of step dicts
 
+    #: DOM event that triggers `validate_field` on text/textarea/select inputs.
+    #: Default ``"dj-change"`` fires only on blur. Set to ``"dj-input"`` to
+    #: capture every keystroke (300ms debounced) — needed when fields can be
+    #: pre-filled and submitted without an intermediate blur. Closes #1095.
+    wizard_input_event: str = "dj-change"
+
     @property
     def _steps(self) -> list:
         """Read wizard_steps from the CLASS definition, not the instance.
@@ -116,8 +122,15 @@ class WizardMixin:
         """Render a form field as HTML with djust event bindings.
 
         Returns an HTML string containing the widget markup with
-        ``dj-change="<event_name>"`` and ``data-field="<field_name>"``
+        ``<dom_event>="<event_name>"`` and ``data-field="<field_name>"``
         attributes so the field participates in real-time validation.
+
+        ``dom_event`` defaults to the wizard's ``wizard_input_event`` class
+        attribute (``"dj-change"`` by default — fires on blur). Pass
+        ``dom_event="dj-input"`` per-call, or set ``wizard_input_event =
+        "dj-input"`` on the view, to fire on every keystroke (debounced
+        client-side) — required when fields can be pre-filled and submitted
+        without an intermediate blur (#1095).
 
         Pre-render all fields in get_context_data() and pass as field_html
         dict — the Rust renderer cannot call Python methods with arguments
@@ -159,6 +172,7 @@ class WizardMixin:
         errors = step_errors.get(field_name, [])
 
         adapter = get_adapter(kwargs.pop("framework", None))
+        kwargs.setdefault("dom_event", self.wizard_input_event)
         return adapter.render_field(
             field, field_name, value, errors, event_name=event_name, **kwargs
         )

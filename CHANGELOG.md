@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`WizardMixin.wizard_input_event` class attribute + `dom_event` kwarg on
+  `as_live_field()` — configurable DOM event for live-field validation
+  binding (closes #1095)** — `WizardMixin.as_live_field()` previously emitted
+  `dj-change="<handler>"` unconditionally on text/textarea/select/checkbox/
+  radio inputs. `dj-change` fires only on blur, so a user who edits a
+  pre-filled field and clicks Next without tabbing away has their edit
+  silently discarded. Wizards with autofill or pre-filled-from-database
+  fields hit this routinely.
+
+  New API: a class-level default and a per-call override.
+
+  Class default::
+
+      class MyWizard(WizardMixin, LiveView):
+          wizard_input_event = "dj-input"   # default: "dj-change"
+
+  Per-call override::
+
+      view.as_live_field("email", dom_event="dj-input")
+
+  ``dj-input`` fires on every keystroke (300ms client-side debounce
+  already in `09-event-binding.js`), so edits land regardless of whether
+  the user blurs first. Per-call kwarg wins over the class attribute.
+
+  Default behavior unchanged (``"dj-change"``), so this is a strictly
+  additive opt-in — existing wizards see no behavior change. Replaces
+  the regex post-process workaround that downstream consumers (e.g.
+  nyc-claims PR #185) had to maintain.
+
+  Files: `python/djust/wizard.py` (class attribute, `as_live_field`
+  forwards `dom_event` through `kwargs.setdefault`), `python/djust/
+  frameworks.py` (5 sites — `_render_input` text/textarea/select,
+  `_render_checkbox`, `_render_radio` — read `kwargs.get("dom_event",
+  "dj-change")` instead of hardcoding `"dj-change"`).
+
+  11 regression cases in `python/tests/test_wizard_input_event.py`
+  cover: default class attribute is `"dj-change"`; default rendering on
+  text/textarea/select/checkbox emits `dj-change`; per-call
+  `dom_event="dj-input"` swaps to `dj-input` and removes `dj-change`;
+  `wizard_input_event = "dj-input"` flows through `as_live_field()`;
+  per-call kwarg overrides class attribute.
+
 - **`self.defer(callback, *args, **kwargs)` — Phoenix-style post-render
   callback scheduling** — new method on `AsyncWorkMixin` (and therefore on
   every `LiveView`) that schedules a callback to run **once, after the
