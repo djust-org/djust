@@ -348,6 +348,80 @@ def test_render_with_diff_full_no_quote_wrap(db):
     assert version == 1
 
 
+def test_render_with_diff_tab_navigation_no_quote_wrap(db):
+    """Multi-step tab-navigation flow that the #1081 reopen named as the bug trigger.
+
+    Sequence (mirrors ``dj-patch`` URL-change navigation):
+      1. Initial mount, ``tab=summary`` — full render.
+      2. Navigate to ``tab=documents`` — partial render produces SetText patches.
+      3. Navigate BACK to ``tab=summary`` — partial render again.
+
+    Reporter claims dates render with literal ``"`` characters on step 3.
+    Lock the invariant that every step produces unquoted output AND that
+    every SetText patch's ``text`` field is a bare unquoted string.
+    """
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from djust import LiveView
+
+    user_model = get_user_model()
+    user = user_model(id=1, username="a", first_name="Amanda", last_name="S", email="a@b.c")
+    user.date_joined = date(2026, 5, 3)
+
+    class TabbedView(LiveView):
+        template = (
+            "<div>\n"
+            "Tab: {{ tab }}\n"
+            'Date: {{ u.date_joined|date:"M d, Y" }}\n'
+            'Email: {{ u.email|default:"N/A" }}\n'
+            "</div>\n"
+        )
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.tab = "summary"
+
+        def get_context_data(self, **kwargs):
+            return {"tab": self.tab, "u": user}
+
+    import json as _json
+
+    v = TabbedView()
+
+    # Step 1: initial mount
+    html1, _patches1, ver1 = v.render_with_diff()
+    assert "Date: May 03, 2026" in html1
+    assert "&quot;" not in html1
+    assert ver1 == 1
+
+    # Step 2: nav to ``tab=documents``
+    v.tab = "documents"
+    html2, patches2, ver2 = v.render_with_diff()
+    assert "Date: May 03, 2026" in html2
+    assert "&quot;" not in html2
+    assert ver2 == 2
+    if patches2:
+        for p in _json.loads(patches2):
+            if p.get("type") == "SetText":
+                assert '"May 03, 2026"' not in p["text"]
+                assert "&quot;" not in p["text"]
+
+    # Step 3: nav BACK to ``tab=summary`` (the path the reporter named)
+    v.tab = "summary"
+    html3, patches3, ver3 = v.render_with_diff()
+    assert "Date: May 03, 2026" in html3
+    assert "&quot;" not in html3
+    assert ver3 == 3
+    if patches3:
+        for p in _json.loads(patches3):
+            if p.get("type") == "SetText":
+                # Bare string in the patch text — no JSON-encoded quotes.
+                assert '"May 03, 2026"' not in p["text"]
+                assert "&quot;" not in p["text"]
+
+
 def test_render_with_diff_partial_no_quote_wrap(db):
     """Second-call ``render_with_diff`` after state mutation (partial path) — same invariant."""
     from datetime import date
