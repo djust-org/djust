@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **View Transitions API integration in `applyPatches` (PR-B / ADR-013)** —
+  Opt-in via `<body dj-view-transitions>`. When the browser supports
+  `document.startViewTransition()` AND the body attribute is present
+  AND the user has not requested `prefers-reduced-motion: reduce`,
+  every server-driven VDOM patch is wrapped in a View Transition: the
+  browser captures a pre-state frame, runs our patch loop, captures
+  the post-state, and animates between them.
+
+  **Default cross-fade** for free, with one body-level attribute. **Shared-
+  element morphs** via `view-transition-name` CSS — animate matching
+  named elements between two completely different DOM trees (the
+  "card flies into hero on detail page" pattern). **Custom animation
+  timing/easing** via `::view-transition-old(name)` / `::view-transition-new(name)`
+  pseudo-elements — designer-driven, no JS.
+
+  **Browser support gate**: Chrome 111+, Edge 111+, Safari 18+. Firefox
+  graceful-degrades — patches still apply, no animation. ~85% of
+  current djust users get the polish; the remaining ~15% see no
+  regression. Re-evaluated on every patch so dynamic mid-session
+  opt-in via `document.body.setAttribute('dj-view-transitions', '')`
+  works.
+
+  **Failure path**: when the wrap callback throws, the wrapper logs at
+  ERROR, calls `transition.skipTransition()` to abandon the animation,
+  and returns false so the existing full-re-render fallback at
+  `02-response-handler.js:109` fires. The async signature shipped in
+  v0.8.5rc1 (PR-A) is what makes the callback's microtask semantics
+  observable — the previous attempt (PR #1092) used a sync callback
+  and silently lost the boolean return.
+
+  **Why this matters**: View Transitions enables wizard step morphs,
+  modal open/close animations, navigation-primitive page transitions
+  (free polish for the `dj-prefetch` work shipped in v0.7.0), list
+  reorders, and tab-switch cross-fades — without per-component
+  animation code or runtime JS animation libraries.
+
+  Files: `python/djust/static/djust/src/12-vdom-patch.js` adds
+  `_shouldUseViewTransition()` gate and refactors `applyPatches` into
+  a thin wrap-or-direct dispatcher; the existing patch-loop body
+  becomes `_applyPatchesInner` (sync — no behavior change inside).
+  Cleanup: `03-websocket.js` (2 sites) and `03b-sse.js` (1 site)
+  drop the now-redundant outer `.catch()` on `handleMessage` calls
+  — the queue wrapper from #1098 already has an internal `.catch()`,
+  so the outer was dead code (Stage 11 nit from PR #1112).
+
+  New test file `tests/js/view-transitions.test.js` covers all four
+  `_shouldUseViewTransition` branches (API present, opt-in absent,
+  opt-in present, reduced-motion), success/empty/wrap-throws paths,
+  microtask-deferral correctness (DOM is unchanged before await),
+  dynamic mid-session opt-in toggle, and direct-path parity.
+  The vitest stub invokes the callback in a microtask via
+  `await Promise.resolve()` to mirror real-browser semantics — NOT
+  synchronously like the failed PR #1092 stub.
+
+  ROADMAP Phoenix LiveView Parity Tracker `View Transitions API` →
+  shipped. Quick Win #23 closed.
+
 ### Fixed
 
 - **`handleMessage` interleaving across `await` boundaries (closes #1098)** —

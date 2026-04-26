@@ -71,12 +71,11 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
-                // ``handleMessage`` is async since the View Transitions wrap
-                // was added (ADR-013). ``onmessage`` ignores returned
-                // promises, so surface unhandled rejections to console.
-                this.handleMessage(data).catch((err) =>
-                    console.error('[SSE] handleMessage threw:', err)
-                );
+                // ``handleMessage`` is the queue-wrapper (#1098); its
+                // returned promise is the chain-tail with an internal
+                // ``.catch`` that already logs and swallows. The returned
+                // promise never rejects, so we just ignore it.
+                this.handleMessage(data);
             } catch (err) {
                 console.error('[SSE] Failed to parse message:', err);
             }
