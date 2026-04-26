@@ -301,9 +301,19 @@ Five additional rules from the View Transitions arc + nyc-claims data_table arc.
   post-mount) needs a test asserting `post_mount_keys ⊆ pre_mount_keys`.
   Future post-mount additions that forget to update the default trip
   the test immediately. Pattern from PR #1117's
-  `test_pre_mount_default_has_required_template_keys` —
-  validated when PR #1119 added 3 new keys without touching the test
-  and the test caught the keyset alignment automatically.
+  `test_pre_mount_default_has_required_template_keys` — the symmetry test
+  would have failed had a future PR updated only the post-mount dict;
+  PR #1118 (the show_stats fix) is the closing case that exercises that
+  branch.
+
+  Note: this test is **one-directional** (`post ⊆ pre`). The inverted
+  bug class — pre-mount declares a key that post-mount silently drops —
+  is the failure mode #1118 actually hit. Existing pre-mount-only keys
+  (`current_group_by`, `current_density`, `visible_columns`,
+  `row_order`, `column_order`) intentionally don't appear post-mount and
+  would false-positive a strict-equality test. If/when those keys move
+  to genuinely-post-mount, tighten to `post == pre` or add a per-key
+  whitelist for the legitimately-pre-only set.
 
 - **CodeQL `js/tainted-format-string` self-review checkpoint** (#1124).
   When introducing or modifying logging where the format string's

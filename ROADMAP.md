@@ -1295,8 +1295,8 @@ Three nyc-claims issues filed during the v0.8.6 session, plus async-enabled enha
 - **#1125 (P3 docs)** — Bulk dispatch-site refactor + count-test pattern → CLAUDE.md.
 
 **Out of scope for v0.8.7**:
-- All v0.9.0 backlog candidates — deferred to v0.9.0 (which only ships #1032 sticky auto-detect per minimal-shape decision; #1041/#1042/#1043 deferred to v0.9.x or post-1.0).
-- ADR-006 AI-generated UIs — pushed down the road (post-1.0 candidate).
+- All v0.9.0 feature work — deferred to v0.9.0 (shape C: ships all 4 — #1032 + #1041 + #1042 + #1043).
+- ADR-006 AI-generated UIs (#1044) — pushed down the road (post-1.0 candidate).
 
 ---
 
@@ -1331,15 +1331,17 @@ Three nyc-claims issues filed during the v0.8.6 session, plus async-enabled enha
 
 ---
 
-### Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)
+### ~~Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)~~ — superseded
 
-Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:
+*Superseded by the shape C v0.9.0 milestone above (4 features ship; ADR-006 #1044 deferred post-1.0). Original block kept here for audit-trail only.*
 
-- **Component-level time-travel** (was #1041) — Phase 1 records against parent; full component capture. v0.6.2+ candidate.
-- **Forward-replay through branched timeline** (was #1042) — Redux DevTools parity. v0.6.2+ candidate.
-- **Phase 2 streaming** (was #1043) — lazy-child render + true server overlap. v0.6.1 shipped Phase 1 (transport-layer); Phase 2 is the deferred remainder.
-- **ADR-006 AI-generated UIs** (was #1044) — deferred due to AssistantMixin/LLM-provider dependency chain.
-- **`{% live_render %}` auto-detect preserved stickies** (was #1032) — server-side template-tag intelligence to emit slot markers (`dj-sticky-slot`) when the client already holds the sticky. Removes the Dashboard→Dashboard re-mount limitation in the sticky LiveView demo. Requires: (a) server detection mechanism (cookie/header/WS handshake carrying preserved-sticky IDs); (b) tag conditional output; (c) test matrix covering return-trip vs fresh-tab.
+~~Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:~~
+
+- ~~**Component-level time-travel** (was #1041)~~ — promoted into v0.9.0 shape C
+- ~~**Forward-replay through branched timeline** (was #1042)~~ — promoted into v0.9.0 shape C
+- ~~**Phase 2 streaming** (was #1043)~~ — promoted into v0.9.0 shape C
+- ~~**ADR-006 AI-generated UIs** (was #1044)~~ — still deferred (post-1.0)
+- ~~**`{% live_render %}` auto-detect preserved stickies** (was #1032)~~ — promoted into v0.9.0 shape C as P1
 
 ---
 
