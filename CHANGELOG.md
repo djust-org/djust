@@ -147,6 +147,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`djust.T012` false positive on `{% include %}` partial templates (closes
+  #1096)** — `T012` (template uses `dj-*` event directives but missing
+  `dj-view`) fired unconditionally for any template containing `dj-click`,
+  `dj-input`, etc., even when the file was an intentional fragment included
+  from a parent LiveView root. Wizards with 15+ step partials produced a
+  noisy 15-warning wall in `manage.py check`.
+
+  Two opt-out paths now silence T012 for legitimate fragments:
+
+  1. **Per-template marker**: add `{# djust:partial #}` (case-insensitive,
+     whitespace flexible) anywhere in the template. The marker is the right
+     choice when most fragments in a project don't need the check but a few
+     full-page templates do.
+  2. **Global suppression**: `DJUST_CONFIG = {"suppress_checks": ["T012"]}`
+     in `settings.py`. Right when the project never uses T012's intended
+     diagnostic (e.g. component-only architectures).
+
+  T012's hint now mentions both options. Component templates (`dj-component`
+  present) continue to bypass T012 as before — pre-existing behavior
+  unchanged.
+
+  Files: `python/djust/checks.py` (new `_DJ_PARTIAL_MARKER_RE`, T012 guard
+  reads partial marker AND `_is_check_suppressed("djust.T012")` —
+  previously the global suppression infrastructure existed but T012 wasn't
+  wired in). New cases added to `TestT012EventDirectivesWithoutView` in
+  `python/tests/test_checks.py` cover: partial marker silences T012;
+  case-insensitive matching; global suppression via short ID (`"T012"`)
+  and qualified ID (`"djust.T012"`); hint text mentions both opt-out
+  paths.
+
 - **`scripts/check-changelog-test-counts.py` regex missed `async def test_*`** —
   the test-counter pre-push hook's `PY_TEST_FN_RE` matched only `def test_*`,
   silently undercounting pytest-asyncio test files (any module-level
