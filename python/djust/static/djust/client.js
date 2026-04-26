@@ -6486,6 +6486,57 @@ function applyPatches(patches, rootEl = null) {
         return true;
     }
 
+    // View Transitions API integration — opt-in via `<body dj-view-transitions>`.
+    // When the browser supports `document.startViewTransition()` (Chrome 111+,
+    // Edge 111+, Safari 18+; Firefox in active development as of 2026-04) AND
+    // the body element carries the `dj-view-transitions` opt-in attribute, wrap
+    // the patch-application body in `startViewTransition()` so the browser:
+    //
+    //   1. Captures the pre-patch DOM state as a snapshot
+    //   2. Runs the callback (our patch-application logic) synchronously,
+    //      mutating the DOM in place
+    //   3. Captures the post-patch DOM state
+    //   4. Animates the cross-fade (or any per-element `view-transition-name`)
+    //      between the two states
+    //
+    // Graceful degradation: if `startViewTransition` is missing OR the body
+    // attribute isn't set, this branch is a no-op and the patch loop runs
+    // exactly as before. This is opt-in by design — every WS update would be
+    // animated otherwise (jarring on rapid updates: keystrokes, streaming
+    // markdown, cursor presence).
+    //
+    // Per-element control via the standard `view-transition-name` CSS
+    // property is fully supported and orthogonal to this opt-in: an app can
+    // tag specific elements (e.g. `view-transition-name: hero-image`) to get
+    // shared-element animations between states.
+    //
+    // The spec guarantees the callback runs synchronously before
+    // `startViewTransition()` returns — the animation phase is deferred. So
+    // the boolean return value of the inner patch loop is observable
+    // without awaiting `transition.finished`.
+    if (
+        typeof document !== 'undefined' &&
+        typeof document.startViewTransition === 'function' &&
+        document.body &&
+        document.body.hasAttribute('dj-view-transitions')
+    ) {
+        let innerResult = true;
+        document.startViewTransition(() => {
+            innerResult = _applyPatchesInner(patches, rootEl);
+        });
+        return innerResult;
+    }
+
+    return _applyPatchesInner(patches, rootEl);
+}
+
+/**
+ * Inner patch-application loop. Extracted so View Transitions API can wrap
+ * it without recursing through the public entry point. Identical semantics
+ * to the original `applyPatches` body — focus save/restore, 4-phase sort,
+ * direct vs batched application, autofocus handling.
+ */
+function _applyPatchesInner(patches, rootEl = null) {
     // Save focus state before any DOM mutations (#559 follow-up: focus preservation)
     const focusState = saveFocusState(rootEl);
     const autofocusScope = rootEl || document;

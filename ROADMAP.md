@@ -1279,7 +1279,7 @@ Open questions that inform future direction:
 | ~~`assign_async` / `AsyncResult`~~ | ~~`assign_async/3`~~ | ~~`<Suspense>`~~ | ✅ **Shipped** — `python/djust/async_result.py` + `mixins/async_work.py:121` + `components/suspense.py` | **v0.5.0** |
 | ~~**`handle_async` callback**~~ | ~~**`handle_async/3`**~~ | — | ✅ **Shipped** — `LiveView.handle_async_result(name, result, error)` (live_view.py:236) dispatched from `websocket.py:819,869` | **v0.5.0** |
 | ~~Component `update` callback~~ | ~~`update/2`~~ | ~~`getDerivedStateFromProps`~~ | ✅ **Shipped** — `Component.update(**kwargs)` (components/base.py:206) | v0.5.0 |
-| View Transitions API | — | View Transitions | **Not started** *(no `startViewTransition` / `viewTransition` references in JS modules)* | v0.5.0 |
+| ~~View Transitions API~~ | — | ~~View Transitions~~ | ✅ **Shipped (v0.8.5)** — `static/djust/src/12-vdom-patch.js` `applyPatches` wraps in `document.startViewTransition()` when `<body dj-view-transitions>` opt-in + browser support; per-element animations via standard `view-transition-name` CSS | v0.5.0 |
 | ~~Nested components~~ | ~~`LiveComponent`~~ | ~~Component tree~~ | ✅ **Shipped** — `LiveComponent` class (components/base.py) + registry | v0.5.0 |
 | ~~Targeted events (`@myself`)~~ | ~~`phx-target`~~ | — | ✅ **Shipped** — `dj-target` attribute (event-binding.js:527,668,886; schema.py:141) for scoped updates | v0.5.0 |
 | ~~Named slots~~ | ~~`slot/3` macro~~ | ~~`children` / slots~~ | ✅ **Shipped** — function components with declarative `Assign` slot attrs (`components/function_component.py` + `assigns.py`) | v0.5.0 |
@@ -1395,7 +1395,7 @@ High-impact areas for contributions:
 20. ~~**`dj-sticky-scroll`**~~ ✅ Shipped — `static/djust/src/38-dj-sticky-scroll.js` (auto-scroll chat/log containers)
 21. ~~**`dj-lazy` viewport loading**~~ ✅ **Shipped (PR #54)** — lazy LiveView hydration (viewport/click/hover/idle) in `13-lazy-hydration.js`
 22. **Multi-tab sync** — BroadcastChannel API integration, ~60 lines JS *(genuinely pending — no `BroadcastChannel` / `multi_tab` references in tree)*
-23. **View Transitions API** — Animated page transitions, ~60 lines JS *(genuinely pending — no `startViewTransition` / `viewTransition` references in JS modules)*
+23. ~~**View Transitions API**~~ ✅ **Shipped (v0.8.5)** — `static/djust/src/12-vdom-patch.js` opt-in via `<body dj-view-transitions>`, wraps `applyPatches` in `document.startViewTransition()`; per-element animations via `view-transition-name`
 24a. ~~**`dj-paste`**~~ ✅ Shipped — `static/djust/src/09-event-binding.js:760` (`pasteHandler`) + `15-uploads.js:750` (clipboard upload pipeline)
 24. ~~**`dj-viewport-top`/`dj-viewport-bottom`**~~ ✅ Shipped in v0.5.0 — Bidirectional infinite scroll (`30-infinite-scroll.js` + stream `limit` kwarg)
 25. **`used_input?` (server-side feedback)** — Server-side field touched tracking, ~40 lines Python + ~10 lines JS *(genuinely pending — no `used_input` / `_used_inputs` references in tree)*

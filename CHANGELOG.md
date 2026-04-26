@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **View Transitions API integration in `applyPatches` — opt-in via
+  `<body dj-view-transitions>`** — when the browser supports
+  `document.startViewTransition()` (Chrome 111+, Edge 111+, Safari 18+;
+  Firefox in active development as of 2026-04) AND the body element
+  carries `dj-view-transitions`, the patch-application loop in
+  `12-vdom-patch.js` is wrapped in `startViewTransition()` so the browser
+  captures pre/post DOM snapshots and animates the cross-fade. Per-element
+  control via the standard `view-transition-name` CSS property is fully
+  supported and orthogonal to this opt-in (an app can tag specific
+  elements like `view-transition-name: hero-image` for shared-element
+  animations between states). Graceful degradation: if either the API is
+  missing or the body attribute isn't set, the patch loop runs exactly as
+  before — opt-in by design because per-WS-update animation would be
+  jarring on rapid updates (keystrokes, streaming markdown, cursor
+  presence). The wrap is a 5-line check at the top of `applyPatches`; the
+  inner patch logic is extracted as `_applyPatchesInner` so the wrap and
+  fallback paths share one implementation. 5 JSDOM regression cases in
+  `tests/js/view-transitions.test.js` cover both branches (wrap fires
+  with API+attribute, fallback when either condition is absent),
+  including dynamic mid-session opt-in (`document.body.setAttribute('dj-view-transitions', '')`
+  is honored on the next patch — no startup latch). Phoenix LiveView
+  Parity Tracker entry "View Transitions API" + Quick Win #23 marked
+  shipped in `ROADMAP.md`.
+
 ## [0.8.4rc1] - 2026-04-26
 
 ### Fixed
