@@ -251,18 +251,15 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    // ``handleMessage`` is async since the View Transitions
-                    // wrap was added (ADR-013). ``onmessage`` ignores returned
-                    // promises, so surface unhandled rejections to console.
+                    // ``handleMessage`` is the queue-wrapper (#1098); its
+                    // returned promise is the chain-tail with an internal
+                    // ``.catch`` that already logs and swallows. The
+                    // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
-                        this.handleMessage(data).catch((err) =>
-                            console.error('[LiveView] handleMessage threw:', err)
-                        );
+                        this.handleMessage(data);
                     }, actual);
                 } else {
-                    this.handleMessage(data).catch((err) =>
-                        console.error('[LiveView] handleMessage threw:', err)
-                    );
+                    this.handleMessage(data);
                 }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);

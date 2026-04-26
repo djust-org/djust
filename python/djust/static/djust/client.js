@@ -785,18 +785,15 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    // ``handleMessage`` is async since the View Transitions
-                    // wrap was added (ADR-013). ``onmessage`` ignores returned
-                    // promises, so surface unhandled rejections to console.
+                    // ``handleMessage`` is the queue-wrapper (#1098); its
+                    // returned promise is the chain-tail with an internal
+                    // ``.catch`` that already logs and swallows. The
+                    // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
-                        this.handleMessage(data).catch((err) =>
-                            console.error('[LiveView] handleMessage threw:', err)
-                        );
+                        this.handleMessage(data);
                     }, actual);
                 } else {
-                    this.handleMessage(data).catch((err) =>
-                        console.error('[LiveView] handleMessage threw:', err)
-                    );
+                    this.handleMessage(data);
                 }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
@@ -1797,12 +1794,11 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
-                // ``handleMessage`` is async since the View Transitions wrap
-                // was added (ADR-013). ``onmessage`` ignores returned
-                // promises, so surface unhandled rejections to console.
-                this.handleMessage(data).catch((err) =>
-                    console.error('[SSE] handleMessage threw:', err)
-                );
+                // ``handleMessage`` is the queue-wrapper (#1098); its
+                // returned promise is the chain-tail with an internal
+                // ``.catch`` that already logs and swallows. The returned
+                // promise never rejects, so we just ignore it.
+                this.handleMessage(data);
             } catch (err) {
                 console.error('[SSE] Failed to parse message:', err);
             }
@@ -6539,23 +6535,92 @@ function applySinglePatch(patch, rootEl = null) {
  *   subtree.
  */
 /**
+ * Should the next ``applyPatches`` call wrap its DOM mutations in
+ * ``document.startViewTransition()``? All four conditions must hold:
+ *
+ *   1. ``document`` is defined (not in a worker / non-browser context)
+ *   2. ``document.startViewTransition`` is a function (Chrome 111+,
+ *      Edge 111+, Safari 18+; Firefox graceful degrade — returns false)
+ *   3. ``document.body`` is not null (yes, it can be — early bootstrap,
+ *      ``<head>``-only HTML responses, mid-navigation)
+ *   4. ``<body dj-view-transitions>`` opt-in attribute is present
+ *   5. The user has NOT requested ``prefers-reduced-motion: reduce``
+ *      (accessibility — motion-sensitive users get instant patches)
+ *
+ * Re-evaluated on every patch so dynamic mid-session opt-in via
+ * ``document.body.setAttribute('dj-view-transitions', '')`` works.
+ */
+function _shouldUseViewTransition() {
+    if (typeof document === 'undefined') return false;
+    if (typeof document.startViewTransition !== 'function') return false;
+    if (!document.body) return false;
+    if (!document.body.hasAttribute('dj-view-transitions')) return false;
+    if (
+        typeof window !== 'undefined' &&
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+        return false;
+    }
+    return true;
+}
+
+/**
  * Apply VDOM patches to the DOM. Returns ``Promise<boolean>`` — ``true``
  * on full success, ``false`` if any patch failed (caller may trigger a
  * full re-render fallback).
  *
- * **Async** as a foundational refactor for ADR-013 (View Transitions API
- * integration, landing in a follow-up PR). The View Transitions API runs
- * its update callback in a microtask after a frame capture; the wrap
- * pattern needs ``await transition.updateCallbackDone`` to observe the
- * inner-loop result. This PR makes the signature compatible without
- * adding the wrap itself; the wrap follows in a smaller, focused PR.
+ * **Two paths**:
  *
- * Direct callers see the same boolean as before; the function just
- * resolves to it instead of returning it synchronously. Every caller in
- * ``static/djust/src/*`` is migrated in this PR. Public-surface change
- * (``window.djust.applyPatches``) documented in CHANGELOG.
+ * - **Direct (default)**: just runs the inner patch loop and resolves
+ *   with its boolean result.
+ * - **Wrapped (opt-in via** ``<body dj-view-transitions>`` **)**: wraps
+ *   the inner loop in ``document.startViewTransition()``. The browser
+ *   captures a pre-state frame, runs our callback, captures the
+ *   post-state, and animates between them (cross-fade by default;
+ *   ``view-transition-name`` enables shared-element morphs). We
+ *   ``await transition.updateCallbackDone`` so the returned promise
+ *   correctly reflects whether the inner loop succeeded — the View
+ *   Transitions spec runs the callback in a microtask, NOT
+ *   synchronously, so a non-async wrap would lose the boolean
+ *   (this was PR #1092's bug).
+ *
+ * If the View Transitions callback throws, we ``transition.skipTransition()``
+ * to abandon the animation and return false so the caller can trigger
+ * a full re-render fallback. ADR-013.
  */
 async function applyPatches(patches, rootEl = null) {
+    if (!patches || patches.length === 0) {
+        return true;
+    }
+
+    if (_shouldUseViewTransition()) {
+        let innerResult = true;
+        const transition = document.startViewTransition(() => {
+            innerResult = _applyPatchesInner(patches, rootEl);
+        });
+        try {
+            await transition.updateCallbackDone;
+        } catch (err) {
+            console.error('[djust] applyPatches threw inside View Transition:', err);
+            transition.skipTransition();
+            return false;
+        }
+        return innerResult;
+    }
+
+    return _applyPatchesInner(patches, rootEl);
+}
+
+/**
+ * Synchronous inner patch loop. Extracted from the original sync
+ * ``applyPatches`` body — no behavior changes, just renamed. The View
+ * Transitions wrap above invokes this from inside the
+ * ``startViewTransition`` callback; the direct path invokes it
+ * unwrapped. Either way, this is the same DOM-mutating loop that has
+ * shipped for many releases.
+ */
+function _applyPatchesInner(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
