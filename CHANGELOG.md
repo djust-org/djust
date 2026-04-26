@@ -213,6 +213,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `table_row_click_value_key`, and `table_row_url` class attributes,
   threaded through `get_table_context()` and `_PRE_MOUNT_TABLE_CONTEXT`.
 
+  **Security note for Option A (`row_url`)**: the URL flows into JS via
+  `onclick="window.location=this.dataset.href"`. Only assign
+  developer-controlled URLs (typically computed from `reverse()`);
+  user-controlled strings could enable `javascript:` URI execution.
+  **CSP note**: Option A requires `'unsafe-inline'` in `script-src`;
+  prefer Option B (LiveView event) when CSP is strict. Option B is
+  CSP-clean — the click is dispatched via the existing djust event
+  pipeline, no inline JS executed.
+
   14 regression cases in `python/tests/test_data_table_link_row_nav.py`
   cover: link-column emits `<a>`; link_class flows through; no-link
   pre-#1110 compat; `row_click_event` adds `dj-click` to every `<tr>`;
