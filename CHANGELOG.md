@@ -44,12 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_render_checkbox`, `_render_radio` — read `kwargs.get("dom_event",
   "dj-change")` instead of hardcoding `"dj-change"`).
 
-  11 regression cases in `python/tests/test_wizard_input_event.py`
+  14 regression cases in `python/tests/test_wizard_input_event.py`
   cover: default class attribute is `"dj-change"`; default rendering on
-  text/textarea/select/checkbox emits `dj-change`; per-call
+  text/textarea/select/checkbox/radio emits `dj-change`; per-call
   `dom_event="dj-input"` swaps to `dj-input` and removes `dj-change`;
   `wizard_input_event = "dj-input"` flows through `as_live_field()`;
-  per-call kwarg overrides class attribute.
+  per-call kwarg overrides class attribute; `dom_event=None` coalesces
+  to the class attr instead of producing `attrs[None]`.
 
 - **`self.defer(callback, *args, **kwargs)` — Phoenix-style post-render
   callback scheduling** — new method on `AsyncWorkMixin` (and therefore on

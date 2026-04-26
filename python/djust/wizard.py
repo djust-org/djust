@@ -172,7 +172,10 @@ class WizardMixin:
         errors = step_errors.get(field_name, [])
 
         adapter = get_adapter(kwargs.pop("framework", None))
-        kwargs.setdefault("dom_event", self.wizard_input_event)
+        # setdefault would not overwrite a caller-passed None; coalesce explicitly
+        # so attrs[<dom_event>] never receives None and produces broken HTML.
+        if kwargs.get("dom_event") is None:
+            kwargs["dom_event"] = self.wizard_input_event
         return adapter.render_field(
             field, field_name, value, errors, event_name=event_name, **kwargs
         )

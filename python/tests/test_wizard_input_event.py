@@ -150,3 +150,44 @@ class WizardMixinClassAttributeTest(TestCase):
         html = view.as_live_field("name", dom_event="dj-input")
         self.assertIn('dj-input="validate_field"', html)
         self.assertNotIn('dj-change="validate_field"', html)
+
+    def test_dom_event_none_coalesces_to_class_attr(self):
+        # Caller passing dom_event=None must NOT produce attrs[None]; the
+        # class attribute should fill in instead.
+        view = self._W(input_event="dj-input")
+        html = view.as_live_field("name", dom_event=None)
+        self.assertIn('dj-input="validate_field"', html)
+        self.assertNotIn("None=", html)
+
+
+class RadioFieldTest(TestCase):
+    """RadioSelect widget honors the dom_event kwarg (frameworks.py:345 site)."""
+
+    def setUp(self):
+        class _RadioForm(forms.Form):
+            color = forms.ChoiceField(
+                choices=[("r", "Red"), ("g", "Green")],
+                widget=forms.RadioSelect,
+            )
+
+        self.form = _RadioForm()
+        self.adapter = PlainAdapter()
+
+    def test_radio_default_dj_change(self):
+        html = self.adapter.render_field(
+            self.form.fields["color"], "color", "", [], event_name="validate_field"
+        )
+        self.assertIn('dj-change="validate_field"', html)
+        self.assertNotIn("dj-input", html)
+
+    def test_radio_dom_event_dj_input(self):
+        html = self.adapter.render_field(
+            self.form.fields["color"],
+            "color",
+            "",
+            [],
+            event_name="validate_field",
+            dom_event="dj-input",
+        )
+        self.assertIn('dj-input="validate_field"', html)
+        self.assertNotIn('dj-change="validate_field"', html)
