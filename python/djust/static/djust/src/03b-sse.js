@@ -114,12 +114,30 @@ class LiveViewSSE {
     }
 
     /**
+     * Public entry point — serializes rapid-fire messages.
+     *
+     * Each invocation chains onto the prior in-flight promise so adjacent
+     * inbound SSE frames cannot interleave their internal awaits. Same
+     * shape as `LiveViewWebSocket.handleMessage`. Closes #1098.
+     */
+    handleMessage(data) {
+        const prev = this._inflight || Promise.resolve();
+        const next = prev
+            .then(() => this._handleMessageImpl(data))
+            .catch((err) => {
+                console.error('[SSE] handleMessage threw:', err);
+            });
+        this._inflight = next;
+        return next;
+    }
+
+    /**
      * Handle a server-pushed message.
      * The message format is identical to the WebSocket protocol so that
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    async handleMessage(data) {
+    async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
 
         switch (data.type) {

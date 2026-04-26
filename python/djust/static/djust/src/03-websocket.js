@@ -270,7 +270,32 @@ class LiveViewWebSocket {
         };
     }
 
-    async handleMessage(data) {
+    /**
+     * Public entry point — serializes rapid-fire messages.
+     *
+     * Each invocation chains onto the prior in-flight promise so that
+     * adjacent inbound frames cannot interleave their internal awaits.
+     * Without this, two frames arriving in quick succession could each
+     * start `_handleMessageImpl`, then both `await handleServerResponse`,
+     * and race on shared state like ``_pendingEventRefs`` /
+     * ``_tickBuffer``. Closes #1098.
+     *
+     * The returned promise resolves AFTER this frame's drain completes;
+     * callers may ignore it. Errors propagate through `.catch()` to
+     * preserve unhandled-rejection visibility.
+     */
+    handleMessage(data) {
+        const prev = this._inflight || Promise.resolve();
+        const next = prev
+            .then(() => this._handleMessageImpl(data))
+            .catch((err) => {
+                console.error('[LiveView] handleMessage threw:', err);
+            });
+        this._inflight = next;
+        return next;
+    }
+
+    async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {

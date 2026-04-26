@@ -332,7 +332,7 @@ describe('client: mount_batch handler', () => {
         return { window };
     }
 
-    it('applies html from mount_batch to each target by data-djust-target', () => {
+    it('applies html from mount_batch to each target by data-djust-target', async () => {
         const { window } = createEnv();
         // Call handleMessage directly on the WebSocket client.
         const ws = window.djust && (window.djust.liveViewInstance || window.djust.ws);
@@ -353,7 +353,7 @@ describe('client: mount_batch handler', () => {
         // as an immediate JSDOM regression.
         expect(handler).toBeTruthy();
         expect(typeof handler.handleMessage).toBe('function');
-        handler.handleMessage({
+        await handler.handleMessage({
             type: 'mount_batch',
             session_id: 's-1',
             views: [
@@ -451,12 +451,12 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
         return { window };
     }
 
-    it('case mount stashes public_state into djust._clientState[view]', () => {
+    it('case mount stashes public_state into djust._clientState[view]', async () => {
         const { window } = createEnv();
         const LiveViewWebSocket = window.LiveViewWebSocket;
         expect(LiveViewWebSocket).toBeTruthy();
         const handler = new LiveViewWebSocket();
-        handler.handleMessage({
+        await handler.handleMessage({
             type: 'mount',
             session_id: 's-1',
             view: 'app.views.Orders',
@@ -505,7 +505,7 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
 // ---------------------------------------------------------------------------
 
 describe('client: mount_batch navigate passthrough (Fix #4)', () => {
-    it('navigate[] entries invoke navigation.handleNavigation', () => {
+    it('navigate[] entries invoke navigation.handleNavigation', async () => {
         const dom = new JSDOM(
             `<!DOCTYPE html><html><body>
                 <div dj-view="app.views.A" data-djust-target="t1"></div>
@@ -529,7 +529,7 @@ describe('client: mount_batch navigate passthrough (Fix #4)', () => {
         window.djust.navigation = window.djust.navigation || {};
         window.djust.navigation.handleNavigation = (d) => { navCalls.push(d); };
         const handler = new window.LiveViewWebSocket();
-        handler.handleMessage({
+        await handler.handleMessage({
             type: 'mount_batch',
             session_id: 's-1',
             views: [],
