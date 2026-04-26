@@ -156,6 +156,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`DataTableMixin` LiveView compatibility — pre-mount guard +
+  `@event_handler()` decoration on all `on_table_*` methods (closes
+  #1114)** — using `DataTableMixin` in a `LiveView` (rather than a
+  `Component`) caused a blank/empty table on every page load even
+  when `refresh_table_server()` correctly populated `self.table_rows`
+  in `mount()`. Three compounding root causes:
+
+  1. **BUG-06 pre-mount lifecycle**: djust's WebSocket consumer calls
+     `get_context_data()` (which often calls `get_table_context()`)
+     BEFORE `mount()` runs, to build the initial Rust VDOM snapshot.
+     `init_table_state()` hadn't run yet, so `self.table_rows` didn't
+     exist and `get_table_context()` raised `AttributeError`. djust
+     caught it silently → empty initial VDOM → all subsequent VDOM
+     patches diff against empty content → wrong renders.
+  2. **Missing `@event_handler()` decoration**: `on_table_sort`,
+     `on_table_search`, and 19 other handlers were plain methods.
+     djust's default `event_security="strict"` rejected them — every
+     consumer had to write wrapper boilerplate.
+  3. **Documentation gap**: the API boundary between Component and
+     LiveView use cases wasn't called out anywhere in the mixin's
+     docstring.
+
+  Fix: `get_table_context()` now guards on `hasattr(self, "table_rows")`
+  and returns `_PRE_MOUNT_TABLE_CONTEXT` (a module-level minimal
+  default with every key the `{% data_table %}` template tag reads —
+  ~80 keys covering all 5 phases). All 21 `on_table_*` handlers now
+  carry `@event_handler()` decoration. Mixin docstring expanded with a
+  "LiveView vs Component lifecycle" note + recommended pattern for
+  large datasets (pass queryset directly via `get_context_data()`,
+  define `@event_handler()` methods on the view).
+
+  Downstream impact: nyc-claims PR #189 attempted migration and hit
+  this; PR #191 reverted to native handlers. With this fix,
+  `DataTableMixin` is usable from `LiveView` subclasses without
+  per-handler boilerplate.
+
+  8 regression cases in
+  `python/tests/test_data_table_mixin_liveview.py` cover: pre-mount
+  call doesn't raise; pre-mount returns the default; post-mount
+  returns real state; pre-mount key set is a superset of post-mount
+  (catches future post-mount additions that forgot to update the
+  default); all 21 expected handlers have `_djust_decorators`
+  metadata; handler count matches expected (catches future additions
+  that forgot decoration); docstring mentions LiveView lifecycle and
+  `@event_handler()` decoration (catches doc-rot).
+
 - **`handleMessage` interleaving across `await` boundaries (closes #1098)** —
   PR-A (v0.8.5rc1) made `LiveViewWebSocket.handleMessage` and
   `LiveViewSSE.handleMessage` async without serializing the inbound
