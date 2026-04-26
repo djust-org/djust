@@ -72,6 +72,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   future renderer / VDOM-patch / JIT-serializer / context-serializer refactors
   so the JSON-quoting class of bug cannot silently re-emerge.
 
+### Changed
+
+- **`ROADMAP.md` staleness sweep (post-v0.8.3rc1)** — verified each unchecked
+  Priority Matrix row, Quick Wins bullet, Medium Effort bullet, Major Features
+  bullet, and Phoenix LiveView Parity Tracker row against the codebase. Marked
+  ~30 items with ✅ + strikethrough + the actual implementation path (e.g.
+  `static/djust/src/26-js-commands.js` for JS Commands, `python/djust/streaming.py`
+  for AI streaming primitives, `crates/djust_vdom/src/parser.rs` for keyed
+  for-loop change tracking). Annotated the genuinely-pending items with
+  `*(verified: no … references in tree)*` so the next person to triage doesn't
+  re-discover the same false signals. Items confirmed shipped:
+  JS Commands, Flash messages, `on_mount` hooks, Function components,
+  `assign_async`/AsyncResult, Template fragments, Keyed for-loop change tracking,
+  Temporary assigns, `dj_suspense`, Named slots with attributes, Server Actions
+  (`@action`), Async Streams, Keep-Alive/`dj-activity`, WebSocket compression,
+  `dj-track-static`, `dj-no-submit`, `page_loading` on push, `dj-sticky-scroll`,
+  `dj-paste`, `dj-ignore-attrs`, `handle_params`, `handle_async`, Hot View
+  Replacement, `dj-lock`, `dj-auto-recover`, `dj-cloak`, `dj-copy`,
+  Scoped JS selectors, Component `update` callback, Nested components
+  (`LiveComponent`), Targeted events (`dj-target`), Declarative assigns,
+  Selective re-rendering (VDOM partial), `handle_info`, Animations
+  (`dj-transition`), Transition groups (`dj-transition-group`), Exit
+  animations (`dj-remove`), DOM mutation events (`dj-mutation`),
+  Sticky scroll, CSP nonce, Viewport events, Direct-to-S3 uploads,
+  Prefetch on hover/intent (`dj-prefetch`), Server functions (`@server_function`),
+  Push navigate, Back/forward restoration, Paste event handling, Scroll into
+  view, AI streaming primitives. Items confirmed genuinely-pending (with
+  greppable evidence): View Transitions API, `used_input?`, `@rest` attribute
+  spread, `self.defer(callback)`, Multi-tab sync (BroadcastChannel),
+  Offline mutation queue, State undo/redo, Connection multiplexing,
+  Portal rendering, Server-only components, Islands of interactivity,
+  i18n live language switching. Docs-only change; no runtime behavior.
+
 ## [0.8.3rc1] - 2026-04-25
 
 ### Added

@@ -13,33 +13,33 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | ~~**P0**~~ | ~~Event sequencing (#560)~~ ✅ | ~~User events silently dropped during ticks — trust-destroying~~ | v0.4.0 |
 | ~~**P0**~~ | ~~`dj-value-*` static event params~~ ✅ | ~~Most underrated Phoenix feature; used on virtually every event binding~~ | v0.4.0 |
 | ~~**P0**~~ | ~~`handle_params` callback (complete)~~ ✅ | ~~`live_patch` is half-implemented without it — partial impl exists, needs finish~~ | v0.4.0 |
-| **P1** | JS Commands (`dj.push`, `dj.show`, etc.) | Biggest DX gap vs Phoenix; eliminates server round-trip for UI interactions | v0.4.1 |
-| **P1** | Flash messages (`put_flash`) | Every app reinvents this; 40 lines to eliminate universal boilerplate | v0.4.0 |
-| **P1** | `on_mount` hooks | Cross-cutting auth/telemetry without copy-pasting into every mount() | v0.4.0 |
-| **P1** | Function Components (stateless) | Cheap render-only components without WS overhead — Phoenix.Component parity | v0.5.0 |
-| **P1** | `assign_async` / AsyncResult | Foundation for responsive dashboards — independent loading boundaries | v0.5.0 |
-| **P1** | Template fragments (static subtree) | Biggest wire-size optimization; how Phoenix achieves sub-ms updates | v0.5.0 |
+| ~~**P1**~~ | ~~JS Commands (`dj.push`, `dj.show`, etc.)~~ ✅ Shipped — `static/djust/src/26-js-commands.js` (fluent chain API) + `27-exec-listener.js` | ~~Biggest DX gap vs Phoenix; eliminates server round-trip for UI interactions~~ | ~~v0.4.1~~ |
+| ~~**P1**~~ | ~~Flash messages (`put_flash`)~~ ✅ Shipped — `FlashMixin` (live_view.py:41,142) + `static/djust/src/23-flash.js` | ~~Every app reinvents this; 40 lines to eliminate universal boilerplate~~ | ~~v0.4.0~~ |
+| ~~**P1**~~ | ~~`on_mount` hooks~~ ✅ Shipped — `python/djust/hooks.py` + `live_view.py` integration | ~~Cross-cutting auth/telemetry without copy-pasting into every mount()~~ | ~~v0.4.0~~ |
+| ~~**P1**~~ | ~~Function Components (stateless)~~ ✅ Shipped — `python/djust/components/function_component.py` (`@component` decorator + `{% call %}` tag) | ~~Cheap render-only components without WS overhead — Phoenix.Component parity~~ | ~~v0.5.0~~ |
+| ~~**P1**~~ | ~~`assign_async` / AsyncResult~~ ✅ Shipped — `python/djust/async_result.py` + `mixins/async_work.py` (`assign_async()` method) | ~~Foundation for responsive dashboards — independent loading boundaries~~ | ~~v0.5.0~~ |
+| ~~**P1**~~ | ~~Template fragments (static subtree)~~ ✅ Shipped — `crates/djust_live/src/lib.rs` `clear_fragment_cache` + `build_fragment_text_map` (Rust-side static subtree fingerprinting) | ~~Biggest wire-size optimization; how Phoenix achieves sub-ms updates~~ | ~~v0.5.0~~ |
 | ~~**P1**~~ | ~~LiveView testing utilities~~ ✅ Shipped in v0.5.1 (7 methods + 21 tests) | ~~`assert_push_event()`, `assert_patch()`, `render_async()` — test DX is adoption-critical~~ | ~~v0.5.0~~ |
-| **P1** | Keyed for-loop change tracking | O(changed) not O(total) for list re-renders — foundation for large-list performance | v0.5.0 |
-| **P1** | Temporary assigns | Phoenix's #1 memory optimization — without it, large lists (chat, feeds) leak memory unboundedly | v0.5.0 |
+| ~~**P1**~~ | ~~Keyed for-loop change tracking~~ ✅ Shipped — `crates/djust_vdom/src/parser.rs` (per-item change detection in `{% for %}` loops via `dj-key`) | ~~O(changed) not O(total) for list re-renders — foundation for large-list performance~~ | ~~v0.5.0~~ |
+| ~~**P1**~~ | ~~Temporary assigns~~ ✅ Shipped — `LiveView.temporary_assigns` dict (live_view.py:120,272) + `_reset_temporary_assigns` (live_view.py:818) | ~~Phoenix's #1 memory optimization — without it, large lists (chat, feeds) leak memory unboundedly~~ | ~~v0.5.0~~ |
 | **P1** | ✅ `manage.py djust_gen_live` scaffolding | Phoenix's generators are the #1 onboarding DX feature; scaffold views/templates/tests from a model | v0.4.0 |
 | **P1** | ✅ Transition/priority updates | React 18/19 `startTransition` concept — mark re-renders as low-priority so user events always win | v0.4.0 |
-| **P1** | Suspense boundaries (`{% dj_suspense %}`) | Template-level loading boundaries wrapping `assign_async` — React Suspense parity | v0.5.0 |
-| **P2** | Named slots with attributes | Phoenix's `<:slot>` with slot attrs — foundation for composable component libraries | v0.5.0 |
-| **P2** | Server Actions (`@action` decorator) | React 19 parity; standardized pending/error/success for mutations | v0.8.0 |
-| **P2** | Async Streams | Phoenix 1.0 parity; infinite scroll and real-time feeds at scale | v0.8.0 |
+| ~~**P1**~~ | ~~Suspense boundaries (`{% dj_suspense %}`)~~ ✅ Shipped — `python/djust/components/suspense.py` (`{% dj_suspense await=… %}…{% enddj_suspense %}` with fallback + skeleton support) | ~~Template-level loading boundaries wrapping `assign_async` — React Suspense parity~~ | ~~v0.5.0~~ |
+| ~~**P2**~~ | ~~Named slots with attributes~~ ✅ Shipped — `components/function_component.py` + `components/assigns.py` (slot attrs in function components) | ~~Phoenix's `<:slot>` with slot attrs — foundation for composable component libraries~~ | ~~v0.5.0~~ |
+| ~~**P2**~~ | ~~Server Actions (`@action` decorator)~~ ✅ Shipped — `python/djust/decorators.py:233` (`@action` with auto-tracked `_action_state[name] = {pending, error, result}`) | ~~React 19 parity; standardized pending/error/success for mutations~~ | ~~v0.8.0~~ |
+| ~~**P2**~~ | ~~Async Streams~~ ✅ Shipped — `python/djust/streaming.py` `StreamingMixin` (token-by-token DOM updates via `stream_to(...)` + LLM streaming primitives) | ~~Phoenix 1.0 parity; infinite scroll and real-time feeds at scale~~ | ~~v0.8.0~~ |
 | **P2** | Connection multiplexing | Pages with 5+ live sections need this to not waste connections | v0.6.0 |
 | **P2** | Dead View / Progressive Enhancement | 1.0 requirement for government/accessibility projects | v1.0.0 |
 | **P2** | Accessibility (ARIA/WCAG) | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
 | ~~**P2**~~ | ~~Type-safe template validation~~ ✅ Shipped in v0.5.1 (`manage.py djust_typecheck`) | ~~Catch template variable typos at CI — unique differentiator vs all competitors~~ | ~~v0.5.1~~ |
-| **P2** | Keep-Alive / `dj-activity` | Pre-render hidden routes, preserve state — React 19.2 parity | v0.7.0 |
+| ~~**P2**~~ | ~~Keep-Alive / `dj-activity`~~ ✅ Shipped — `static/djust/src/49-activity.js` + `templatetags/live_tags.py` `{% dj_activity %}` (React 19.2 `<Activity>` parity, server-canonical visibility) | ~~Pre-render hidden routes, preserve state — React 19.2 parity~~ | ~~v0.7.0~~ |
 | ~~**P2**~~ | ~~Streaming markdown renderer~~ ✅ Shipped in v0.7.0 (`{% djust_markdown %}` + `djust.render_markdown`, pulldown-cmark backend, provisional-line splitter) | ~~Incremental markdown for LLM output — strongest AI vertical signal~~ | ~~v0.7.0~~ |
 | ~~**P1**~~ | ~~Database change notifications (pg_notify)~~ ✅ | ~~PostgreSQL LISTEN/NOTIFY → LiveView push — killer feature for reactive dashboards~~ | v0.5.0 |
 | ~~**P1**~~ | ~~Virtual/windowed lists (`dj-virtual`)~~ ✅ | ~~DOM virtualization for 100K+ rows at 60fps — mandatory for data-heavy apps~~ | v0.5.0 |
 | ~~**P2**~~ | ~~Multi-step wizard (`WizardMixin`)~~ ✅ Shipped in PR #632 (`python/djust/wizard.py`) | ~~#2 most common UI pattern after CRUD — no framework has this natively~~ | ~~v0.5.1~~ |
 | ~~**P2**~~ | ~~Error overlay (dev mode)~~ ✅ Shipped in v0.5.1 (`36-error-overlay.js`) | ~~In-browser error display like Next.js/Vite — faster debugging loop~~ | ~~v0.5.1~~ |
-| **P2** | WebSocket compression | `permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available | v0.6.0 |
-| **P2** | Static asset tracking (`dj-track-static`) | Detect stale JS/CSS on reconnect, prompt reload — Phoenix `phx-track-static` parity | v0.6.0 |
+| ~~**P2**~~ | ~~WebSocket compression~~ ✅ Shipped — `config.py:65` `websocket_compression: True` default + `mixins/post_processing.py:245` propagation (`window.DJUST_WS_COMPRESSION` + ASGI server permessage-deflate negotiation) | ~~`permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available~~ | ~~v0.6.0~~ |
+| ~~**P2**~~ | ~~Static asset tracking (`dj-track-static`)~~ ✅ Shipped — `static/djust/src/39-dj-track-static.js` (Phoenix `phx-track-static` parity, stale-on-reconnect prompt) | ~~Detect stale JS/CSS on reconnect, prompt reload — Phoenix `phx-track-static` parity~~ | ~~v0.6.0~~ |
 | **P3** | View Transitions API | Cheapest way to make navigation feel native | v0.5.0 |
 | **P3** | Islands of interactivity | Content-heavy sites with small interactive zones | v0.7.1 |
 | **P3** | Offline mutation queue | Mobile/spotty-connection differentiator | v0.6.0 |
@@ -1265,39 +1265,39 @@ Open questions that inform future direction:
 - **Django async views integration** — Django 4.1+ supports `async def` views natively. Evaluate deeper integration: `async def mount()`, `async def handle_event()`, native `await` in event handlers without `start_async` wrapper. Could simplify the async story significantly for Django 5.0+ projects.
 - **Trusted Types API** — Chrome enforces Trusted Types to prevent DOM XSS. Evaluate ensuring all djust client-side DOM writes (`innerHTML` in morph, streaming HTML injection) go through Trusted Types policies. This would make djust the first LiveView framework with Trusted Types compliance — a selling point for enterprise/security-conscious teams.
 - **Federated LiveView (cross-origin embedding)** — Evaluate a protocol for embedding a LiveView from one Django app inside another app's page, with cross-origin WebSocket communication. Use case: microservices architecture where each team owns a LiveView widget. Related to the WebComponent export idea but more dynamic.
-| **Lock (prevent double-fire)** | **Event ack protocol** | — | **Not started** | **v0.4.0** |
-| **Auto-recover (custom)** | **`phx-auto-recover`** | — | **Not started** | **v0.4.0** |
-| **Cloak (FOUC prevention)** | — | **`v-cloak` (Vue)** | **Not started** | **v0.4.0** |
-| **`on_mount` hooks** | **`on_mount/1`** | — | **Not started** | **v0.4.0** |
-| **Flash messages** | **`put_flash/3`** | **Toast libraries** | **Not started** | **v0.4.0** |
+| ~~**Lock (prevent double-fire)**~~ | ~~**Event ack protocol**~~ | — | ✅ **Shipped** — `dj-lock` (event-binding.js, response-handler.js) | **v0.4.0** |
+| ~~**Auto-recover (custom)**~~ | ~~**`phx-auto-recover`**~~ | — | ✅ **Shipped** — `dj-auto-recover` reconnect handler (event-binding.js:1414, websocket.js:126,358,421) | **v0.4.0** |
+| ~~**Cloak (FOUC prevention)**~~ | — | ~~**`v-cloak` (Vue)**~~ | ✅ **Shipped** — `dj-cloak` (websocket.js + namespace.js) | **v0.4.0** |
+| ~~**`on_mount` hooks**~~ | ~~**`on_mount/1`**~~ | — | ✅ **Shipped** — `python/djust/hooks.py` + `live_view.py` | **v0.4.0** |
+| ~~**Flash messages**~~ | ~~**`put_flash/3`**~~ | ~~**Toast libraries**~~ | ✅ **Shipped** — `FlashMixin` + `static/djust/src/23-flash.js` | **v0.4.0** |
 | ~~Latency simulator~~ | Built-in | — | ✅ **Done** | v0.4.0 |
 | ~~Keyboard shortcuts~~ | — | ~~`react-hotkeys-hook`~~ | ✅ **Done** | v0.4.0 |
-| Copy to clipboard | — | `navigator.clipboard` | **Not started** | **v0.4.0** |
-| **JS Commands from hooks** | **Programmable JS API** | — | **Not started** | **v0.4.1** |
-| **Scoped JS selectors** | **`to: {:closest}`** | — | **Not started** | **v0.4.1** |
-| **`page_loading` on push** | **`page_loading: true`** | — | **Not started** | **v0.4.1** |
-| `assign_async` / `AsyncResult` | `assign_async/3` | `<Suspense>` | **Not started** | **v0.5.0** |
-| **`handle_async` callback** | **`handle_async/3`** | — | **Not started** | **v0.5.0** |
-| Component `update` callback | `update/2` | `getDerivedStateFromProps` | Not started | v0.5.0 |
-| View Transitions API | — | View Transitions | Not started | v0.5.0 |
-| Nested components | `LiveComponent` | Component tree | Not started | v0.5.0 |
-| Targeted events (`@myself`) | `phx-target` | — | Not started | v0.5.0 |
-| Named slots | `slot/3` macro | `children` / slots | Not started | v0.5.0 |
-| Direct-to-S3 uploads | `presign_upload` | — | Not started | v0.5.0 |
+| ~~Copy to clipboard~~ | — | ~~`navigator.clipboard`~~ | ✅ **Shipped** — `dj-copy` (event-binding.js) | **v0.4.0** |
+| ~~**JS Commands from hooks**~~ | ~~**Programmable JS API**~~ | — | ✅ **Shipped** — `static/djust/src/26-js-commands.js` (fluent chain API) + `python/djust/js.py` Python builder | **v0.4.1** |
+| ~~**Scoped JS selectors**~~ | ~~**`to: {:closest}`**~~ | — | ✅ **Shipped** — `python/djust/js.py` + client.js (closest/scoped selector support) | **v0.4.1** |
+| ~~**`page_loading` on push**~~ | ~~**`page_loading: true`**~~ | — | ✅ **Shipped** — `static/djust/src/24-page-loading.js` | **v0.4.1** |
+| ~~`assign_async` / `AsyncResult`~~ | ~~`assign_async/3`~~ | ~~`<Suspense>`~~ | ✅ **Shipped** — `python/djust/async_result.py` + `mixins/async_work.py:121` + `components/suspense.py` | **v0.5.0** |
+| ~~**`handle_async` callback**~~ | ~~**`handle_async/3`**~~ | — | ✅ **Shipped** — `LiveView.handle_async_result(name, result, error)` (live_view.py:236) dispatched from `websocket.py:819,869` | **v0.5.0** |
+| ~~Component `update` callback~~ | ~~`update/2`~~ | ~~`getDerivedStateFromProps`~~ | ✅ **Shipped** — `Component.update(**kwargs)` (components/base.py:206) | v0.5.0 |
+| View Transitions API | — | View Transitions | **Not started** *(no `startViewTransition` / `viewTransition` references in JS modules)* | v0.5.0 |
+| ~~Nested components~~ | ~~`LiveComponent`~~ | ~~Component tree~~ | ✅ **Shipped** — `LiveComponent` class (components/base.py) + registry | v0.5.0 |
+| ~~Targeted events (`@myself`)~~ | ~~`phx-target`~~ | — | ✅ **Shipped** — `dj-target` attribute (event-binding.js:527,668,886; schema.py:141) for scoped updates | v0.5.0 |
+| ~~Named slots~~ | ~~`slot/3` macro~~ | ~~`children` / slots~~ | ✅ **Shipped** — function components with declarative `Assign` slot attrs (`components/function_component.py` + `assigns.py`) | v0.5.0 |
+| ~~Direct-to-S3 uploads~~ | ~~`presign_upload`~~ | — | ✅ **Shipped** — `python/djust/contrib/uploads/s3_presigned.py` + `s3_events.py` (v0.5.7 — closes #820) | v0.5.0 |
 | ~~Stream limits + viewport~~ ✅ | ~~`:limit`, viewport events~~ | ~~Virtualization~~ | ~~Not started~~ **Shipped** | v0.5.0 |
 | ~~**Viewport top/bottom (streams)**~~ ✅ | ~~**`phx-viewport-top/bottom`**~~ | — | ~~**Not started**~~ **Shipped** | **v0.5.0** |
-| `handle_info` | `handle_info/2` | — | Not started | v0.5.0 |
-| Template fragments | HEEx static tracking | — | Not started | v0.5.0 |
-| **`used_input?` (server-side)** | **`used_input?/2`** | — | **Not started** | **v0.5.0** |
-| **Declarative assigns** | **`attr/3`, `slot/3`** | **PropTypes/TS** | **Not started** | **v0.5.0** |
-| **Function components** | **`Phoenix.Component`** | **Function components** | **Not started** | **v0.5.0** |
-| Selective re-rendering | Per-component diff | Reconciliation | Not started | v0.5.0 |
-| Attribute spread (`@rest`) | `{@rest}` | `...props` | Not started | v0.5.0 |
+| ~~`handle_info`~~ | ~~`handle_info/2`~~ | — | ✅ **Shipped** — `handle_info` (mixins/activity.py + mixins/notifications.py + websocket.py dispatch) | v0.5.0 |
+| ~~Template fragments~~ | ~~HEEx static tracking~~ | — | ✅ **Shipped** — Rust-side static-subtree fingerprinting (`crates/djust_live` `clear_fragment_cache` + `build_fragment_text_map`) | v0.5.0 |
+| **`used_input?` (server-side)** | **`used_input?/2`** | — | **Not started** *(no `used_input` / `_used_inputs` references in tree)* | **v0.5.0** |
+| ~~**Declarative assigns**~~ | ~~**`attr/3`, `slot/3`**~~ | ~~**PropTypes/TS**~~ | ✅ **Shipped** — `components/assigns.py` `Assign` class (type-checked attrs + defaults + validation) used by `function_component.py` | **v0.5.0** |
+| ~~**Function components**~~ | ~~**`Phoenix.Component`**~~ | ~~**Function components**~~ | ✅ **Shipped** — `python/djust/components/function_component.py` (`@component` decorator + `{% call %}` tag) | **v0.5.0** |
+| Selective re-rendering | Per-component diff | Reconciliation | ✅ **Shipped** — VDOM partial render path (`crates/djust_templates` `render_nodes_partial`) re-renders only nodes whose deps intersect changed keys | v0.5.0 |
+| Attribute spread (`@rest`) | `{@rest}` | `...props` | **Not started** *(no `rest_attrs` / `attr_spread` references in components/)* | v0.5.0 |
 | ~~**Ignore attributes (client-owned)**~~ ✅ | `JS.ignore_attributes` | — | **Shipped v0.5.0** | v0.5.0 |
 | ~~**Colocated JS hooks + namespacing**~~ ✅ | `ColocatedHook` | — | **Shipped v0.5.0** | v0.5.0 |
 | ~~**`UploadWriter` (stream upload)**~~ | ~~**`UploadWriter`**~~ | — | ✅ **Shipped in v0.5.0** | v0.5.0 |
-| **Keyed for-loop change tracking** | **Auto in comprehensions** | — | **Not started** | **v0.5.0** |
-| **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** | **v0.5.0** |
+| ~~**Keyed for-loop change tracking**~~ | ~~**Auto in comprehensions**~~ | — | ✅ **Shipped** — `crates/djust_vdom/src/parser.rs` per-item change detection in `{% for %}` loops (via `dj-key`) | **v0.5.0** |
+| **`self.defer()` (post-render)** | **`send(self(), ...)`** | `useEffect` (post-render) | **Not started** *(verified: no `def defer` / `self.defer` / `post_render` / `after_render` in `live_view.py` or mixins as of v0.8.3rc1)* | **v0.5.0** |
 | **Testing utilities** | **`LiveViewTest`** | **Testing Library** | **Basic** (`LiveViewTestClient`) | **v0.5.1** |
 | **Error overlay (dev)** | Error page | **Next.js overlay** | ✅ Shipped (v0.5.1) | v0.5.1 |
 | Computed/derived state | — | `useMemo` | ✅ Shipped (v0.5.1) | v0.5.1 |
@@ -1309,44 +1309,44 @@ Open questions that inform future direction:
 | Error boundaries | — | `<ErrorBoundary>` | ✅ Shipped (PR #773) | v0.5.1 |
 | **Native `<dialog>`** | — | — | ✅ Shipped (v0.5.1) | v0.5.1 |
 | **Stable component IDs** | — | **`useId`** | ✅ Shipped (v0.5.1) | v0.5.1 |
-| **Form status awareness** | — | **`useFormStatus`** | **Not started** | **v0.8.0** |
+| **Form status awareness** | — | **`useFormStatus`** | **Partial** — `@action` decorator (decorators.py:233) provides `_action_state[name] = {pending, error, result}` for mutation handlers; `useFormStatus`-style template-level read of "any in-flight action on this form" not specifically wired | **v0.8.0** |
 | **Dirty tracking** | — | — | ✅ Shipped (v0.5.1) | v0.5.1 |
-| Animations / transitions | `JS.transition` | `<AnimatePresence>` | Not started | v0.6.0 |
-| Transition groups (lists) | — | `<TransitionGroup>` | Not started | v0.6.0 |
-| Exit animations | `phx-remove` | `<AnimatePresence>` | Not started | v0.6.0 |
+| ~~Animations / transitions~~ | ~~`JS.transition`~~ | ~~`<AnimatePresence>`~~ | ✅ **Shipped** — `dj-transition` attribute (parsing + transitionend + fallback timer) | v0.6.0 |
+| ~~Transition groups (lists)~~ | — | ~~`<TransitionGroup>`~~ | ✅ **Shipped** — `dj-transition-group` (FLIP-style list transitions) | v0.6.0 |
+| ~~Exit animations~~ | ~~`phx-remove`~~ | ~~`<AnimatePresence>`~~ | ✅ **Shipped** — `dj-remove` (`static/djust/src/42-dj-remove.js` + `12-vdom-patch.js` integration) | v0.6.0 |
 | ~~Streaming initial render~~ ✅ | — | `renderToPipeableStream` | ✅ Shipped v0.6.1 (Phase 1); lazy-child Phase 2 v0.6.2 | **v0.6.1** |
 | ~~Time-travel debugging~~ ✅ | — | Redux DevTools | ✅ Shipped v0.6.1 | **v0.6.1** |
 | ~~Sticky LiveViews~~ ✅ | `sticky: true` | — | Shipped v0.6.0 | v0.6.0 |
-| DOM mutation events | — | MutationObserver | Not started | v0.6.0 |
-| Sticky scroll | — | Chat/log UX | Not started | v0.6.0 |
-| CSP nonce | Built-in | — | Not started | v0.6.0 |
-| Viewport events | — | `IntersectionObserver` | Not started | v0.6.0 |
-| Multi-tab sync | — | BroadcastChannel | Not started | v0.6.0 |
-| Offline mutation queue | — | Service Worker | Not started | v0.6.0 |
-| Element resize events | — | ResizeObserver | Not started | v0.6.0 |
-| State undo/redo | — | `use-undo` | Not started | v0.6.0 |
-| Connection multiplexing | Channel multiplexer | — | Not started | v0.6.0 |
+| ~~DOM mutation events~~ | — | ~~MutationObserver~~ | ✅ **Shipped** — `dj-mutation` (`static/djust/src/37-dj-mutation.js`) + observer drain follow-ups #879/#880/#881/#882 | v0.6.0 |
+| ~~Sticky scroll~~ | — | ~~Chat/log UX~~ | ✅ **Shipped** — `dj-sticky-scroll` (`static/djust/src/38-dj-sticky-scroll.js`) | v0.6.0 |
+| ~~CSP nonce~~ | ~~Built-in~~ | — | ✅ **Shipped** — `python/djust/utils.py` `get_csp_nonce` (django-csp integration; nonce attribute on injected scripts — see #655) | v0.6.0 |
+| ~~Viewport events~~ | — | ~~`IntersectionObserver`~~ | ✅ **Shipped** — `dj-viewport-top/bottom` (`30-infinite-scroll.js`) + lazy hydration (`13-lazy-hydration.js`) | v0.6.0 |
+| Multi-tab sync | — | BroadcastChannel | **Not started** *(no `BroadcastChannel` / `multi_tab` references in tree)* | v0.6.0 |
+| Offline mutation queue | — | Service Worker | **Not started** *(`pwa/service_worker.py` ships SW registration but no offline-mutation-queue replay pattern)* | v0.6.0 |
+| Element resize events | — | ResizeObserver | **Partial** — `ResizeObserver` is used internally by `29-virtual-list.js` for variable-row-height tracking; a public `dj-resize` user-facing event-binding is not exposed | v0.6.0 |
+| State undo/redo | — | `use-undo` | **Not started** *(no `UndoMixin` / undo-redo ring-buffer pattern in tree)* | v0.6.0 |
+| Connection multiplexing | Channel multiplexer | — | **Not started** *(verified: no `multiplex` / `MultiplexedSocket` references in tree)* | v0.6.0 |
 | ~~**CSS `@starting-style`**~~ ✅ | — | Framer Motion | ~~**Not started**~~ **Documented v0.6.0 (PR #973)** — browser-native enter animations work unmodified with djust's VDOM insert path; docs/website/guides/declarative-ux-attrs.md has a comparison section vs `dj-transition`. | **v0.6.0** |
 | ~~**Hot View Replacement**~~ ✅ | Code reloading | Fast Refresh | ~~**Not started**~~ **✅ Shipped v0.6.1** — state-preserving `__class__` swap + VDOM re-render on .py save; see `docs/website/guides/hot-view-replacement.md`. | **v0.6.1** |
-| Stale-while-revalidate | — | SWR / React Query | Not started | v0.7.0 |
+| Stale-while-revalidate | — | SWR / React Query | **Partial** — service-worker uses SWR cache strategy (`pwa/service_worker.py`); LiveView-level stale-while-revalidate (`assign_async`-style with cached-then-fresh) not specifically implemented | v0.7.0 |
 | `live_session` enhancements | `live_session/3` | — | Basic done | v0.7.0 |
-| Push navigate (SPA nav) | `push_navigate` | — | Not started | v0.7.0 |
-| Portal rendering | **`<.portal>`** (1.1) | `createPortal` | Not started | v0.7.0 |
-| Back/forward restoration | `push_patch` state | Loader cache | Not started | v0.7.0 |
-| Server-only components | — | Server Components | Not started | v0.7.0 |
+| ~~Push navigate (SPA nav)~~ | ~~`push_navigate`~~ | — | ✅ **Shipped** — `live_view.py` + `routing.py` (`live_redirect` / `push_navigate` SPA nav with `live_session`) | v0.7.0 |
+| Portal rendering | **`<.portal>`** (1.1) | `createPortal` | **Not started** *(no `dj-portal` / `live_portal` references in tree)* | v0.7.0 |
+| ~~Back/forward restoration~~ | ~~`push_patch` state~~ | ~~Loader cache~~ | ✅ **Shipped** — `static/djust/src/18-navigation.js` (history.pushState + popstate with state-snapshot lookup, line 135,189-202) | v0.7.0 |
+| Server-only components | — | Server Components | **Not started** *(no `ServerComponent` / `@server_component` references in tree)* | v0.7.0 |
 | Islands of interactivity | — | Astro islands | Not started (deferred from v0.7.0 retro) | v0.7.1 |
-| AI streaming primitives | — | — | Not started | v0.7.0 |
-| Server functions (RPC) | — | Server Actions | Not started | v0.7.0 |
+| ~~AI streaming primitives~~ | — | — | ✅ **Shipped** — `python/djust/streaming.py` `StreamingMixin` (token-by-token DOM updates via `stream_to(...)`) | v0.7.0 |
+| ~~Server functions (RPC)~~ | — | ~~Server Actions~~ | ✅ **Shipped** — `@server_function` decorator (`python/djust/decorators.py:401`) | v0.7.0 |
 | ~~Django admin LiveView widgets~~ | — | — | ✅ Shipped (v0.7.0) | v0.7.0 |
-| Prefetch on hover/intent | — | Remix prefetch | Not started | v0.7.0 |
-| **Keep-Alive / Activity** | — | **`<Activity>`** (19.2) | **Not started** | **v0.7.0** |
+| ~~Prefetch on hover/intent~~ | — | ~~Remix prefetch~~ | ✅ **Shipped** — `static/djust/src/22-prefetch.js` + `dj-prefetch` template tag | v0.7.0 |
+| ~~**Keep-Alive / Activity**~~ | — | ~~**`<Activity>`** (19.2)~~ | ✅ **Shipped** — `static/djust/src/49-activity.js` + `templatetags/live_tags.py` `{% dj_activity %}` (server-canonical visibility) | **v0.7.0** |
 | ~~**Document metadata**~~ | ~~`live_title`~~ | ~~**Native** (React 19)~~ | ✅ **Done** | v0.4.0 |
 | **Type-safe template validation** | — | TypeScript | ✅ Shipped (v0.5.1) | v0.5.1 |
 | ~~**Streaming markdown renderer**~~ | — | — | ✅ **Shipped (v0.7.0)** | **v0.7.0** |
 | ~~**DB change notifications**~~ ✅ | ~~**PubSub + Ecto**~~ | — | **Shipped** | **v0.5.0** |
 | ~~**Virtual/windowed lists**~~ ✅ | — | ~~**`react-window`**~~ | ~~**Not started**~~ **Shipped** | **v0.5.0** |
 | **Multi-step wizard** | — | **`react-hook-form`** | ✅ **Shipped (PR #632)** | **v0.5.1** |
-| **Paste event handling** | — | **`onPaste`** | **Not started** | **v0.4.1** |
+| ~~**Paste event handling**~~ | — | ~~**`onPaste`**~~ | ✅ **Shipped** — `dj-paste` (event-binding.js:760 `pasteHandler` + uploads.js:750 clipboard upload pipeline) | **v0.4.1** |
 | ~~**Standalone `{% live_input %}` template tag**~~ | — | — | ✅ **Shipped (#650, PR #668)** | v0.4.1 |
 | ~~**WebSocket Origin validation (CSWSH fix)**~~ | ~~`check_origin/2`~~ | — | ✅ **Shipped (#653, PR #658)** | v0.4.1 |
 | ~~**Gate `timing`/`performance` on DEBUG**~~ | — | — | ✅ **Shipped (#654, PR #663)** | v0.4.1 |
@@ -1355,10 +1355,10 @@ Open questions that inform future direction:
 | ~~**`djust_audit` ASGI stack + config static checks**~~ | — | — | ✅ **Shipped (#659, PR #666)** | v0.4.1 |
 | ~~**`djust_audit` AST-based anti-pattern scanner**~~ | — | — | ✅ **Shipped (#660, PR #670)** | v0.4.1 |
 | ~~**`djust_audit --live` runtime header probe**~~ | — | — | ✅ **Shipped (#661, PR #667)** | v0.4.1 |
-| **Scroll into view** | — | **`scrollIntoView`** | **Not started** | **v0.4.0** |
-| **WS compression** | **Built-in (Cowboy)** | — | **Not started** | **v0.6.0** |
+| ~~**Scroll into view**~~ | — | ~~**`scrollIntoView`**~~ | ✅ **Shipped** — `dj-scroll-into-view` (Quick Wins #14a) | **v0.4.0** |
+| ~~**WS compression**~~ | ~~**Built-in (Cowboy)**~~ | — | ✅ **Shipped** — `config.py:65` `websocket_compression: True` default + `mixins/post_processing.py:245` propagation (`window.DJUST_WS_COMPRESSION` + ASGI server permessage-deflate) | **v0.6.0** |
 | ~~**Runtime layout switching**~~ ✅ | Runtime layouts (1.1) | — | **Shipped v0.6.0** | **v0.6.0** |
-| **i18n live switching** | — | — | **Not started** | **v0.7.0** |
+| **i18n live switching** | — | — | **Not started** *(no `set_language` / `live_translation` references in tree)* | **v0.7.0** |
 
 ---
 
@@ -1380,55 +1380,55 @@ High-impact areas for contributions:
 9. ~~**`dj-lock`**~~ ✅
 10. ~~**`dj-page-loading`**~~ ✅
 11. ~~**Native `<dialog>` integration**~~ ✅ **Shipped in v0.5.1** — `dj-dialog="open|close"` with MutationObserver sync.
-12. **`dj-no-submit`** — Prevent enter-key form submission, ~10 lines JS
-13. **`page_loading` on `dj.push`** — Trigger loading bar during heavy events, ~15 lines JS
+12. ~~**`dj-no-submit`**~~ ✅ Shipped — `static/djust/src/34-form-polish.js` (Enter-key swallow with mode parsing)
+13. ~~**`page_loading` on `dj.push`**~~ ✅ Shipped — `static/djust/src/24-page-loading.js` (loading bar during heavy events)
 14. ~~**`dj-scroll-into-view`**~~ ✅
 
 #### Medium Effort (1-3 days)
-14. **`self.defer(callback)`** — Post-render work scheduling, ~40 lines Python
+14. **`self.defer(callback)`** — Post-render work scheduling, ~40 lines Python *(genuinely pending — verified no `def defer` / `self.defer` / `post_render` in `live_view.py` or mixins as of v0.8.3rc1)*
 15. ~~**`dj-shortcut`**~~ ✅
 15. ~~**`dj-debounce`/`dj-throttle` HTML attributes**~~ ✅
-16. **`on_mount` hooks** — Cross-cutting mount logic, ~100 lines Python
-17. **Flash messages** — `FlashMixin` + `{% dj_flash %}` + client JS auto-dismiss
-18. **`handle_params` callback** — URL param change handler, ~50 lines Python
+16. ~~**`on_mount` hooks**~~ ✅ Shipped — `python/djust/hooks.py` + `live_view.py` integration
+17. ~~**Flash messages**~~ ✅ Shipped — `FlashMixin` (live_view.py:41,142) + `static/djust/src/23-flash.js` auto-dismiss
+18. ~~**`handle_params` callback**~~ ✅ Shipped — `LiveView.handle_params(params, uri)` (live_view.pyi:60, schema-tracked)
 19. ~~**`dj-mounted`**~~ ✅
-20. **`dj-sticky-scroll`** — Auto-scroll chat/log containers, ~40 lines JS
+20. ~~**`dj-sticky-scroll`**~~ ✅ Shipped — `static/djust/src/38-dj-sticky-scroll.js` (auto-scroll chat/log containers)
 21. ~~**`dj-lazy` viewport loading**~~ ✅ **Shipped (PR #54)** — lazy LiveView hydration (viewport/click/hover/idle) in `13-lazy-hydration.js`
-22. **Multi-tab sync** — BroadcastChannel API integration, ~60 lines JS
-23. **View Transitions API** — Animated page transitions, ~60 lines JS
-24a. **`dj-paste`** — Paste event handling (text + images), ~40 lines JS
+22. **Multi-tab sync** — BroadcastChannel API integration, ~60 lines JS *(genuinely pending — no `BroadcastChannel` / `multi_tab` references in tree)*
+23. **View Transitions API** — Animated page transitions, ~60 lines JS *(genuinely pending — no `startViewTransition` / `viewTransition` references in JS modules)*
+24a. ~~**`dj-paste`**~~ ✅ Shipped — `static/djust/src/09-event-binding.js:760` (`pasteHandler`) + `15-uploads.js:750` (clipboard upload pipeline)
 24. ~~**`dj-viewport-top`/`dj-viewport-bottom`**~~ ✅ Shipped in v0.5.0 — Bidirectional infinite scroll (`30-infinite-scroll.js` + stream `limit` kwarg)
-25. **`used_input?` (server-side feedback)** — Server-side field touched tracking, ~40 lines Python + ~10 lines JS
-26. **Programmable JS Commands from hooks** — Expose DJ command API to dj-hook callbacks, ~60 lines JS
-27. **Stable component IDs** — Deterministic `self.unique_id()` for ARIA/label matching, ~30 lines Python
-28. **Dirty tracking** — `self.changed_fields` / `self.is_dirty` for conditional save UX, ~60 lines Python
-29. **`dj-ignore-attrs`** — Prevent VDOM from overwriting client-owned attributes, ~20 lines JS
+25. **`used_input?` (server-side feedback)** — Server-side field touched tracking, ~40 lines Python + ~10 lines JS *(genuinely pending — no `used_input` / `_used_inputs` references in tree)*
+26. **Programmable JS Commands from hooks** — Expose DJ command API to dj-hook callbacks *(JS Commands core shipped via `26-js-commands.js`; "expose to hook callbacks" surface unverified — leave open until specifically audited)*
+27. ~~**Stable component IDs**~~ ✅ Shipped (v0.5.1) — see Phoenix LiveView Parity Tracker row "Stable component IDs"
+28. ~~**Dirty tracking**~~ ✅ Shipped (v0.5.1) — see Phoenix LiveView Parity Tracker row "Dirty tracking"
+29. ~~**`dj-ignore-attrs`**~~ ✅ Shipped — `static/djust/src/31-ignore-attrs.js` + `12-vdom-patch.js` integration
 
 #### Major Features
-30. **JS Commands** — Biggest DX win; needs Python builder + client JS executor
+30. ~~**JS Commands**~~ ✅ Shipped — `static/djust/src/26-js-commands.js` (fluent chain API: `dj.push`, `dj.show`, `dj.hide`, `dj.add_class`, etc.) + `27-exec-listener.js` + `python/djust/js.py` Python builder
 30. ~~**VDOM structural patching** (#559)~~ ✅ Fixed in PR #563
-31. **Function components** — Stateless render functions with Rust engine support, ~150 lines Python + Rust
-32. **`assign_async`/`AsyncResult`** — High-level async data loading, ~200 lines Python
-33. **`handle_async` callback** — Typed async completion handler (Phoenix 1.0 parity), ~80 lines Python
-34. **Declarative component assigns** — Type-checked attrs with defaults/validation, ~120 lines Python
+31. ~~**Function components**~~ ✅ Shipped — `python/djust/components/function_component.py` (`@component` decorator + `{% call %}` tag) + `components/rust_handlers.py` Rust engine integration
+32. ~~**`assign_async`/`AsyncResult`**~~ ✅ Shipped — `python/djust/async_result.py` (`AsyncResult` class) + `mixins/async_work.py:121` (`assign_async()` method)
+33. ~~**`handle_async` callback**~~ ✅ Shipped — `LiveView.handle_async_result(name, result, error)` (live_view.py:236) dispatched from `websocket.py:819,869` on success+error paths
+34. ~~**Declarative component assigns**~~ ✅ Shipped — `components/assigns.py` (`Assign` class with type-checked attrs/defaults/validation) used by `function_component.py`
 35. ~~**LiveView testing utilities**~~ ✅ **Shipped in v0.5.1** — 7 methods + 21 tests; see guide at `docs/website/guides/testing.md`.
 36. ~~**Error overlay (dev mode)**~~ ✅ **Shipped in v0.5.1** — `36-error-overlay.js` dev panel + `docs/website/guides/error-overlay.md` guide + 10 JSDOM tests.
-37. **Template fragments** — Rust-side static subtree fingerprinting for wire-size optimization
-38. **Connection multiplexing** — Share one WS across multiple LiveViews, ~200 lines JS + Python
+37. ~~**Template fragments**~~ ✅ Shipped — `crates/djust_live/src/lib.rs` `clear_fragment_cache` + `build_fragment_text_map` (Rust-side static subtree fingerprinting)
+38. **Connection multiplexing** — Share one WS across multiple LiveViews, ~200 lines JS + Python *(genuinely pending — no `multiplex` / `MultiplexedSocket` references in tree)*
 39. ~~**Rust template engine parity**~~ ✅ — Closed in v0.5.0: getattr fallback, attr-context escape, assign-tag handler
-40. **AI streaming primitives** — Purpose-built LLM streaming components
+40. ~~**AI streaming primitives**~~ ✅ Shipped — `python/djust/streaming.py` `StreamingMixin` (token-by-token DOM updates via `stream_to(...)`, ~16ms throttle, LLM-friendly async iteration pattern)
 41. **Streaming initial render** — Chunked HTTP response with progressive content loading
 42. ~~**Django admin LiveView widgets**~~ ✅ **Shipped in v0.7.0** — `change_form_widgets`/`change_list_widgets` slots + `@admin_action_with_progress` + `BulkActionProgressWidget` + A072/A073 checks. See `docs/website/guides/admin-widgets.md`.
-43. **Hot View Replacement** — State-preserving Python code reload in dev mode, ~200 lines Python
-44. **Server Actions (`@action`)** — React 19-style mutation handlers with auto pending/error states
-45. **Keyed for-loop change tracking** — Rust-side per-item change detection in `{% for %}` loops, ~200 lines Rust
+43. ~~**Hot View Replacement**~~ ✅ Shipped (v0.6.1) — see Phoenix LiveView Parity Tracker; state-preserving `__class__` swap + VDOM re-render on .py save; `docs/website/guides/hot-view-replacement.md`
+44. ~~**Server Actions (`@action`)**~~ ✅ Shipped (v0.8.0) — `python/djust/decorators.py:233` (`@action` with auto-tracked `_action_state[name] = {pending, error, result}`)
+45. ~~**Keyed for-loop change tracking**~~ ✅ Shipped — `crates/djust_vdom/src/parser.rs` (per-item change detection in `{% for %}` loops via `dj-key`)
 46. ~~**Type-safe template validation**~~ ✅ **Shipped in v0.5.1** — `manage.py djust_typecheck` static analysis + `docs/website/guides/typecheck.md` guide + 14 tests.
 47. ~~**Streaming markdown renderer**~~ ✅ **Shipped in v0.7.0** — `{% djust_markdown %}` + `djust.render_markdown` backed by pulldown-cmark 0.12, raw-HTML escaping enforced in the event-filter layer, `javascript:` URLs neutralised, provisional-line splitter for flicker-free streaming. See `docs/website/guides/streaming-markdown.md`.
-48. **Keep-Alive / `dj-activity`** — Pre-render hidden routes with preserved state (React 19.2 parity), ~150 lines Python + ~60 lines JS
+48. ~~**Keep-Alive / `dj-activity`**~~ ✅ Shipped (v0.7.0) — `static/djust/src/49-activity.js` + `templatetags/live_tags.py` `{% dj_activity %}` (server-canonical visibility tracking; React 19.2 `<Activity>` parity)
 49. ~~**Database change notifications**~~ ✅ Shipped in v0.5.0 — PostgreSQL LISTEN/NOTIFY → LiveView push (`@notify_on_save`, `self.listen`, `handle_info`). See `docs/website/guides/database-notifications.md`.
 50. ~~**Virtual/windowed lists**~~ ✅ Shipped in v0.5.0 — DOM virtualization for large lists (`29-virtual-list.js`, fixed-height v0.5.0; variable-height v0.5.1)
 51. ~~**Multi-step wizard (`WizardMixin`)**~~ ✅ **Shipped (PR #632)** — per-step validation, URL sync, progress (`python/djust/wizard.py`)
-52. **i18n live language switching** — Switch locale without page reload, ~60 lines Python
+52. **i18n live language switching** — Switch locale without page reload, ~60 lines Python *(genuinely pending — no `set_language` / `live_translation` references in tree)*
 
 #### Always Welcome
 45. **Starter templates** — Build example apps that showcase djust patterns
