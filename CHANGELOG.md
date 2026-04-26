@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`DataTableMixin.get_table_context()` post-mount missing `show_stats` key
+  (closes #1118)** — Stage 11 review of PR #1117 surfaced that
+  `show_stats` was present in `_PRE_MOUNT_TABLE_CONTEXT` (the empty-table
+  default returned before `init_table_state()` runs) but missing from the
+  post-mount return dict. A template containing `{% if show_stats %}` would
+  silently fall back to the falsy default pre-mount and then raise
+  `VariableDoesNotExist` post-mount once `init_table_state()` had populated
+  real state. One-line fix adds `"show_stats": self.table_show_stats` to the
+  post-mount dict, alongside the existing `printable` / `column_stats` keys.
+
+  Files: `python/djust/components/mixins/data_table.py` (one-key addition
+  in `get_table_context()`); 2 new cases in
+  `PreMountGuardTest` in `python/tests/test_data_table_mixin_liveview.py`
+  cover post-mount default-False and class-override-True paths. The
+  pre-existing `test_pre_mount_default_has_required_template_keys`
+  symmetry test now passes against the fixed dict — that's the regression
+  lock-in for any future post-mount key additions.
+
+### Changed
+
+- **Process canonicalizations from the v0.8.6 retro arc folded into
+  CLAUDE.md (closes #1122, #1123, #1124, #1125)** — Five Stage 11 / retro-tracker
+  learnings from PRs #1115 / #1117 / #1119 / #1120 are now canonicalized as
+  additions to the existing "Process canonicalizations" section in
+  `CLAUDE.md`. Each rule names the source PR so the audit trail is preserved.
+
+  Topics covered: split-foundation pattern for high-blast-radius features
+  (PR-A foundation + PR-B capability — validated 3× across the View
+  Transitions arc, #1122); pre-mount/post-mount keyset invariant test
+  pattern for mixins with default-state dicts (#1123); CodeQL
+  `js/tainted-format-string` self-review checkpoint — use
+  `console.error('[label] msg %s:', val, errObj)` not template literals when
+  the label derives from user-controlled DOM data (#1124); bulk
+  dispatch-site refactor PRs need N tests for N sites + a count-test
+  guarding the EXPECTED list against drift (#1125); format-string hygiene
+  in test assertions when the assertion is itself an f-string referencing
+  caught exceptions (PR #1120 retro).
+
+  Docs-only change. No code or test surface modified.
+
 ## [0.8.6rc1] - 2026-04-26
 
 ### Changed
