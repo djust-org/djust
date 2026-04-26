@@ -544,6 +544,55 @@ def test_date_filter_on_embedded_quote_string_html_escapes_quotes():
     assert "Apr 25" not in out
 
 
+def test_resolve_inheritance_then_render_no_double_quote_filter_arg(tmp_path):
+    """End-to-end #1081: child template extends parent, resolved template
+    rendered with the date filter, must produce unquoted output.
+
+    Before the fix to ``nodes_to_template_string``: the resolved template
+    contained ``|date:""M d, Y""`` (doubled quotes) because the round-trip
+    re-wrapped the parser's already-quoted arg in another pair. The render
+    then stripped the outer pair, left ``"M d, Y"`` as the format string,
+    and chrono produced ``"Apr 25, 2026"`` which HTML-escaped to
+    ``&quot;Apr 25, 2026&quot;``.
+
+    After the fix: the resolved template contains ``|date:"M d, Y"``
+    (single pair), strip leaves ``M d, Y``, output is ``Apr 25, 2026``.
+    """
+    from djust._rust import resolve_template_inheritance
+
+    base = tmp_path / "base.html"
+    base.write_text(
+        "<!DOCTYPE html><html><head>"
+        '<style>body { font-family: "Inter", "Helvetica"; }</style>'
+        "</head><body>{% block content %}default{% endblock %}</body></html>"
+    )
+    child = tmp_path / "child.html"
+    child.write_text(
+        '{% extends "base.html" %}'
+        "{% block content %}"
+        '{% for c in claims %}<td>{{ c.filed_date|date:"M d, Y" }}</td>{% endfor %}'
+        "{% endblock %}"
+    )
+
+    resolved = resolve_template_inheritance("child.html", [str(tmp_path)])
+
+    # The resolved template MUST NOT have doubled quotes around the date format.
+    assert '|date:""M d, Y""' not in resolved
+    assert '|date:"M d, Y"' in resolved
+
+    # Render the resolved template with a date string in ctx.
+    rv = RustLiveView(resolved, [str(tmp_path)])
+    rv.update_state({"claims": [{"filed_date": "2026-04-25"}]})
+    out = rv.render()
+
+    # Date is unquoted in output. The CSS font-family quotes inside <style>
+    # are passed through (raw-text context) — that's expected and unchanged
+    # by this fix.
+    assert "<td>Apr 25, 2026</td>" in out
+    assert "&quot;Apr 25, 2026&quot;" not in out
+    assert '"Apr 25, 2026"' not in out
+
+
 def test_date_filter_on_clean_iso_string_unquoted_output():
     """Companion to the test above — the matching clean-input case.
 

@@ -307,7 +307,16 @@ fn node_to_template_string(node: &Node) -> String {
             let mut result = format!("{{{{ {var_name} ");
             for (filter_name, arg) in filters {
                 if let Some(arg) = arg {
-                    result.push_str(&format!("|{filter_name}:\"{arg}\" "));
+                    // Emit arg verbatim — `parse_filter_specs` preserves any
+                    // surrounding quotes (literal-vs-identifier disambiguation
+                    // for the dep-tracking extractor, see #787). Wrapping in
+                    // an extra `"…"` would double-quote literals like
+                    // `|date:"M d, Y"` to `|date:""M d, Y""`, and the second
+                    // strip pass would leave the inner `"…"` baked into the
+                    // format spec — surfacing as `&quot;Apr 25, 2026&quot;`
+                    // in the rendered output of inheritance-resolved
+                    // templates (#1081).
+                    result.push_str(&format!("|{filter_name}:{arg} "));
                 } else {
                     result.push_str(&format!("|{filter_name} "));
                 }
@@ -327,7 +336,9 @@ fn node_to_template_string(node: &Node) -> String {
             }
             for (filter_name, arg) in filters {
                 if let Some(arg) = arg {
-                    result.push_str(&format!("|{filter_name}:\"{arg}\""));
+                    // Same #1081 fix as Variable above — emit arg verbatim
+                    // since `parse_filter_specs` preserves surrounding quotes.
+                    result.push_str(&format!("|{filter_name}:{arg}"));
                 } else {
                     result.push_str(&format!("|{filter_name}"));
                 }
@@ -605,11 +616,14 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_preserves_filters() {
+        // `parse_filter_specs` preserves surrounding quotes on literal args
+        // (the dep-tracking extractor needs them — #787). Mirror the parser
+        // contract here so the round-trip emits the source-form template.
         let nodes = vec![Node::Variable(
             "price".to_string(),
             vec![
-                ("floatformat".to_string(), Some("2".to_string())),
-                ("default".to_string(), Some("0.00".to_string())),
+                ("floatformat".to_string(), Some("\"2\"".to_string())),
+                ("default".to_string(), Some("\"0.00\"".to_string())),
             ],
             false,
         )];
@@ -617,9 +631,87 @@ mod tests {
         let result = nodes_to_template_string(&nodes);
 
         assert!(result.contains("{{ price"));
+        // Args should round-trip verbatim — NOT double-wrapped in extra quotes.
+        // `|floatformat:"2"` (correct) vs `|floatformat:""2""` (the #1081 bug).
         assert!(result.contains("|floatformat:\"2\""));
+        assert!(!result.contains("|floatformat:\"\"2\"\""));
         assert!(result.contains("|default:\"0.00\""));
+        assert!(!result.contains("|default:\"\"0.00\"\""));
         assert!(result.contains("}}"));
+    }
+
+    #[test]
+    fn test_nodes_to_template_string_preserves_bare_identifier_filter_args() {
+        // Bare identifiers (no quotes) must also round-trip as bare identifiers.
+        // `parse_filter_specs` does not add quotes — emit verbatim. Required for
+        // the dep-tracking extractor to keep treating bare-identifier args as
+        // template dependencies (#787).
+        let nodes = vec![Node::Variable(
+            "value".to_string(),
+            vec![("default".to_string(), Some("fallback".to_string()))],
+            false,
+        )];
+
+        let result = nodes_to_template_string(&nodes);
+
+        // Should round-trip as bare identifier — NOT wrapped in quotes.
+        assert!(result.contains("|default:fallback"));
+        assert!(!result.contains("|default:\"fallback\""));
+    }
+
+    #[test]
+    fn test_round_trip_through_resolve_inheritance_preserves_date_filter_arg_1081() {
+        // Regression for #1081: with template inheritance, a `|date:"M d, Y"`
+        // filter would get re-quoted to `|date:""M d, Y""`, then the renderer's
+        // strip-quotes pass would leave the inner `"M d, Y"` baked into the
+        // format string, producing literal-quote-wrapped output
+        // (`&quot;Apr 25, 2026&quot;`) instead of `Apr 25, 2026`.
+        //
+        // This test parses a child template that extends a parent, runs the
+        // resolved template through the parser again, and asserts the date
+        // filter's format arg is exactly `"M d, Y"` after the round-trip
+        // (not `""M d, Y""`).
+
+        // Tokenise + parse the merged-template output of resolve_inheritance.
+        // We don't need to actually run resolve_inheritance — we just need to
+        // confirm that nodes_to_template_string's output, when re-parsed,
+        // preserves the date filter's arg shape.
+        let original_source = "{{ c.filed_date|date:\"M d, Y\" }}";
+        let tokens = crate::lexer::tokenize(original_source).unwrap();
+        let nodes = crate::parser::parse(&tokens).unwrap();
+
+        // Round-trip through nodes_to_template_string.
+        let round_tripped = nodes_to_template_string(&nodes);
+
+        // The output should NOT have doubled quotes around `M d, Y`.
+        assert!(
+            !round_tripped.contains("\"\"M d, Y\"\""),
+            "filter arg got double-wrapped during round-trip: {round_tripped:?}"
+        );
+        // It SHOULD have exactly one pair of quotes — matching the original source.
+        assert!(
+            round_tripped.contains("|date:\"M d, Y\""),
+            "filter arg lost its quotes during round-trip: {round_tripped:?}"
+        );
+
+        // Re-parse the round-tripped output. The date filter's arg
+        // should still be `"M d, Y"` (with single pair of quotes), so
+        // strip_filter_arg_quotes at render time produces `M d, Y` cleanly.
+        let tokens2 = crate::lexer::tokenize(&round_tripped).unwrap();
+        let nodes2 = crate::parser::parse(&tokens2).unwrap();
+        match &nodes2[0] {
+            Node::Variable(_, filters, _) => {
+                assert_eq!(filters.len(), 1);
+                let (name, arg) = &filters[0];
+                assert_eq!(name, "date");
+                assert_eq!(
+                    arg.as_deref(),
+                    Some("\"M d, Y\""),
+                    "after round-trip + re-parse, arg should be the source-form '\"M d, Y\"', not '\"\"M d, Y\"\"'"
+                );
+            }
+            other => panic!("expected Variable node, got {other:?}"),
+        }
     }
 
     #[test]

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Inheritance resolution doubled filter-arg quotes — `|date:"M d, Y"` rendered
+  as `&quot;Apr 25, 2026&quot;` (closes #1081)** — `nodes_to_template_string`
+  in `crates/djust_templates/src/inheritance.rs` was wrapping every filter arg
+  in `\"…\"` when serializing the resolved-inheritance AST back to a template
+  string. But `parse_filter_specs` deliberately preserves any surrounding quotes
+  on literal args (the dep-tracking extractor needs them to disambiguate
+  literals from bare-identifier variable references — see #787). So an arg
+  parsed from `|date:"M d, Y"` came out of the parser as the string `"M d, Y"`
+  (with the quote chars), and the round-trip wrapped it again to produce
+  `|date:""M d, Y""`. Re-parsing the resolved template then stripped the outer
+  pair, leaving the inner `"M d, Y"` as the format spec; chrono treats `"` as
+  literal output characters in strftime-style formats, so the rendered date
+  came out as `"Apr 25, 2026"`, then HTML-escape converted the `"` to
+  `&quot;` — surfacing as `&quot;Apr 25, 2026&quot;` in the rendered DOM.
+  The fix emits the arg verbatim (`|filter:{arg}`) since `parse_filter_specs`
+  already preserves the source-form quotes; round-trip is now idempotent.
+  Same fix applied to the `Node::InlineIf` branch (a `{{ x if cond else y |
+  filter:"…" }}` chain has the same shape). 29 regression cases in
+  `tests/unit/test_filter_literal_args_1081.py` + 3 in
+  `crates/djust_templates/src/inheritance.rs` lock the round-trip invariant.
+  Surfaced via PR #1086 against an actual 26,785-char inheritance-resolved
+  template (`<style>` blocks with quoted CSS font names + the date filter).
+  Failure mode was inheritance-resolution-specific: simple inline templates
+  (no `{% extends %}`) never hit `nodes_to_template_string` and rendered
+  correctly all along — which is why the simple-template regression suite
+  passed but production templates with inheritance failed.
+
 ### Added
 
 - **Regression tests locking literal filter-arg quote stripping (#1081)** — issue
