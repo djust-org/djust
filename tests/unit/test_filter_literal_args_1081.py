@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import html
 
-from djust._rust import render_template
+from djust._rust import RustLiveView, render_template
 
 
 # ---------------------------------------------------------------------------
@@ -502,3 +502,63 @@ def test_normalize_then_rust_update_state_no_quote_wrap():
     assert "&quot;" not in out
     assert '"May 03, 2026"' not in out
     assert '"—"' not in out
+
+
+# ---------------------------------------------------------------------------
+# Embedded-quote input — the actual root cause surfaced by the third reopen
+# of #1081. When upstream code (a custom ``BaseLiveView`` override, a
+# ``JSONField`` storing a JSON-encoded string, etc.) passes a value with
+# literal ``"`` characters into ``update_state``, the framework correctly:
+#  (1) attempts to parse it as a date via the ``|date`` filter,
+#  (2) fails (the embedded-quote string isn't a valid date),
+#  (3) returns the value unchanged from the filter,
+#  (4) HTML-escapes the literal ``"`` characters to ``&quot;``.
+# This is correct, defensive behavior. Lock the contract so a future "let's
+# silently strip embedded quotes from filter inputs" refactor can't sneak
+# through (that would be a real correctness regression — the ``"`` chars
+# may be load-bearing for non-date data).
+# ---------------------------------------------------------------------------
+
+
+def test_date_filter_on_embedded_quote_string_html_escapes_quotes():
+    """Date string with embedded literal quotes — ``|date`` parse fails, HTML escape preserves chars.
+
+    The string ``'"2026-04-25"'`` (10 chars + 2 surrounding ``"``) is what
+    ``json.dumps(date.isoformat())`` produces, and it's the symptom the
+    #1081 reporter actually had after their custom upstream serialization
+    JSON-encoded the date before reaching ``update_state``.
+    """
+    template = "{% for c in claims %}{{ c.filed_date|date:'M d, Y' }}|{% endfor %}"
+
+    rv = RustLiveView(template)
+    rv.update_state({"claims": [{"filed_date": '"2026-04-25"'}]})
+    out = rv.render()
+
+    # Filter parse fails on embedded-quote string; value passes through;
+    # HTML escape converts the ``"`` chars to ``&quot;``.
+    assert out == "&quot;2026-04-25&quot;|"
+    # Sanity: the framework is *not* silently swallowing the quote chars —
+    # they're correctly preserved through HTML escaping.
+    assert "&quot;" in out
+    # Sanity: the date filter did NOT format the value (because parse failed).
+    assert "Apr 25" not in out
+
+
+def test_date_filter_on_clean_iso_string_unquoted_output():
+    """Companion to the test above — the matching clean-input case.
+
+    Same template, same pipeline, but the input is a clean ISO string
+    ``'2026-04-25'``. Filter parses successfully and produces
+    ``'Apr 25, 2026'`` with NO embedded quotes. This is the contract the
+    #1081 reporter expected; the test above is the contract for what
+    happens when upstream code violates that input shape.
+    """
+    template = "{% for c in claims %}{{ c.filed_date|date:'M d, Y' }}|{% endfor %}"
+
+    rv = RustLiveView(template)
+    rv.update_state({"claims": [{"filed_date": "2026-04-25"}]})
+    out = rv.render()
+
+    assert out == "Apr 25, 2026|"
+    assert "&quot;" not in out
+    assert '"' not in out
