@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`WizardMixin.wizard_rendered_fields` opt-in skips `field_html` rendering
+  for fields not in the list (closes #1097)** — `WizardMixin.get_context_data()`
+  unconditionally pre-rendered `field_html` for **every** field on the
+  current step's form, regardless of whether the template referenced that
+  field. Wizards with conditional fields (e.g. owner-info hidden behind
+  `is_vehicle_owner == "no"`) paid the rendering cost on every event for
+  fields nobody ever sees. Reported impact on the nyc-claims VPD wizard:
+  115ms template render (threshold: 50ms), 47 VDOM patches per autofill —
+  most for invisible inputs.
+
+  New API (default behavior unchanged — `None` renders all):
+
+  - **Class-level**: `wizard_rendered_fields = ["first_name", "vin", ...]`
+    on the wizard view limits `field_html` to that subset across every step.
+  - **Per-step override**: a step dict can include
+    `{"name": "...", "form_class": ..., "rendered_fields": [...]}` to scope
+    the filter to that step. Wins over the class-level default.
+
+  `form_data`, `form_required`, and `form_choices` are NOT filtered — all
+  fields remain part of validation/state. Only the (expensive) HTML rendering
+  is opt-in skipped. Excluded field names produce no `field_html[fname]`
+  entry; templates that reference them via `{{ field_html.unused|safe }}`
+  render empty (the dict-key absence is intentional and visible).
+
+  Files: `python/djust/wizard.py` (class attribute, per-step lookup +
+  filter in `get_context_data()`); `python/tests/test_wizard_rendered_fields.py`
+  with 8 cases in `DefaultRendersAllFieldsTest`,
+  `ClassAttributeFiltersTest`, `PerStepOverrideTest`.
+
+  Future direction: a smarter automatic template-scan (similar to the JIT
+  serializer's used-field detection) could drive this without explicit
+  developer wiring. This PR ships the explicit escape hatch first.
+
 - **`WizardMixin.wizard_input_event` class attribute + `dom_event` kwarg on
   `as_live_field()` — configurable DOM event for live-field validation
   binding (closes #1095)** — `WizardMixin.as_live_field()` previously emitted
