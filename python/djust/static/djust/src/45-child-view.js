@@ -111,7 +111,7 @@
             }
             return false;
         }
-        return await applyPatches(patches, rootEl);
+        return applyPatches(patches, rootEl);
     }
 
     /**

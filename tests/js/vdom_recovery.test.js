@@ -78,7 +78,7 @@ describe('VDOM patch failure recovery', () => {
             const root = dom.window.document.querySelector('[dj-root]');
             expect(root.querySelector('#content').textContent).toBe('original');
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">recovered</p></div>',
                 version: 5,
@@ -95,7 +95,7 @@ describe('VDOM patch failure recovery', () => {
             const root = dom.window.document.querySelector('[dj-root]');
             const originalP = root.querySelector('#content');
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">updated</p></div>',
                 version: 2,
@@ -114,7 +114,7 @@ describe('VDOM patch failure recovery', () => {
             const ws = dom.window.djust.liveViewInstance;
             const root = dom.window.document.querySelector('[dj-root]');
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">kept</p><span id="new">added</span></div>',
                 version: 3,

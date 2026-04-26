@@ -83,18 +83,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (this entry) is the foundation; PR-B will add the View Transitions
   wrap on top without further signature changes.
 
-  No external API change for view authors — VDOM internals only. Test
-  surface migrated: 7 JS test files updated to `await` `applyPatches` /
-  `handleMessage` / `handleServerResponse` calls; the
-  `dom.window.eval(clientCode)` pattern that previously hoisted the
-  sync `applyPatches` to host scope now requires
-  `dom.window.djust.applyPatches` (added explicit
-  `globalThis.djust.applyPatches = applyPatches` export at the end of
-  `12-vdom-patch.js` because async function declarations don't hoist
-  to the eval host scope the way sync function declarations do under
-  JSDOM). 1396 JS tests pass; 4230 Python tests pass; behavior parity
-  with the previous sync signature confirmed by the existing patch
-  test suite (`vdom_patch_errors.test.js`, `vdom_recovery.test.js`,
+  No external API change for view authors — VDOM internals only.
+  **Newly exposed public surface**: `window.djust.applyPatches` is now
+  explicitly assigned via `globalThis.djust.applyPatches = applyPatches`
+  at the end of `12-vdom-patch.js`. (Previously the function was
+  reachable in test environments only by `eval`-host-scope hoisting,
+  which async declarations don't honor under JSDOM.) Hook code that
+  monkey-patches `applyPatches` should now address the namespace
+  explicitly and treat the return value as a `Promise<boolean>`.
+
+  Test surface migrated: 8 JS test files updated to `await`
+  `applyPatches` / `handleMessage` / `handleServerResponse` calls and
+  switch to `dom.window.djust.applyPatches`. 1396 JS tests pass; 4230
+  Python tests pass; behavior parity with the previous sync signature
+  confirmed by the existing patch test suite
+  (`vdom_patch_errors.test.js`, `vdom_recovery.test.js`,
   `tab_switch_real_repro.test.js`, `event_sequencing.test.js`,
   `batch_insert_before_remove.test.js`, `vdom-autofocus.test.js`,
   `sse.test.js`).

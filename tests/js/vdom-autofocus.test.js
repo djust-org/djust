@@ -141,6 +141,6 @@ describe('Autofocus on dynamically inserted elements (#617)', () => {
             }
         ];
 
-        expect(() => dom.window.djust.applyPatches(patches)).not.toThrow();
+        await expect(dom.window.djust.applyPatches(patches)).resolves.not.toThrow();
     });
 });
