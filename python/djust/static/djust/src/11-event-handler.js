@@ -119,7 +119,7 @@ async function handleEvent(eventName, params = {}) {
 
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
-            applyPatches(cached.patches);
+            await applyPatches(cached.patches);
             reinitAfterDOMUpdate();
         }
 
@@ -190,7 +190,7 @@ async function handleEvent(eventName, params = {}) {
         }
 
         const data = await response.json();
-        handleServerResponse(data, eventName, triggerElement);
+        await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);

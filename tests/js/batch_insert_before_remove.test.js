@@ -39,8 +39,8 @@ beforeEach(() => {
     // Append a test-only export of applyPatches so we can call it directly.
     // applyPatches is declared at module scope in client.js but not exposed
     // on window.djust; expose it here without modifying the shipped bundle.
-    dom.window.eval(clientCode + '\nwindow.djust._applyPatches = applyPatches;');
-    applyPatches = dom.window.djust._applyPatches;
+    dom.window.eval(clientCode);
+    applyPatches = dom.window.djust.applyPatches;
 });
 
 function buildParent(childIds) {
@@ -92,7 +92,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
      * so inserts run before removes, removes still find cards by ID.
      * Final DOM should be the 7 new docs.
      */
-    it('15-patch batch: 8 card removes + 7 doc inserts (non-colliding IDs)', () => {
+    it('15-patch batch: 8 card removes + 7 doc inserts (non-colliding IDs)', async () => {
         const parent = buildParent(['1','2','3','4','5','6','7','8']);
 
         const patches = [];
@@ -119,7 +119,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
             });
         }
 
-        const ok = applyPatches(patches);
+        const ok = await applyPatches(patches);
         expect(ok).toBe(true);
         expect(currentIds(parent)).toEqual(['x1','x2','x3','x4','x5','x6','x7']);
     });
@@ -137,7 +137,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
      * removes found the new docs first and deleted them, leaving
      * corrupted state.
      */
-    it('colliding IDs still apply correctly (remove-before-insert batching order)', () => {
+    it('colliding IDs still apply correctly (remove-before-insert batching order)', async () => {
         const parent = buildParent(['1','2','3','4','5','6','7','8']);
         for (let i = 0; i < 8; i++) {
             parent.children[i].textContent = 'card' + (i + 1);
@@ -166,7 +166,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
             });
         }
 
-        applyPatches(patches);
+        await applyPatches(patches);
 
         const texts = currentText(parent);
         // Post-fix: all 8 old cards are removed first, then the 7 new
@@ -184,7 +184,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
      *
      * This simulates what might happen with a mixed update.
      */
-    it('interleaved: 6 inserts + 6 removes in a single batch', () => {
+    it('interleaved: 6 inserts + 6 removes in a single batch', async () => {
         const parent = buildParent(['a','b','c','d','e','f','g','h','i','j','k']);
 
         // Using the Rust diff_indexed_children algorithm:
@@ -221,7 +221,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
             });
         }
 
-        const ok = applyPatches(patches);
+        const ok = await applyPatches(patches);
         expect(ok).toBe(true);
         expect(currentIds(parent)).toEqual([
             'a','b','c','d','e',
@@ -238,7 +238,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
      * 3 RemoveChild + 4 InsertChild = 7 patches on this parent. Pad with
      * SetAttr on surviving nodes to push past 10 and trigger batching.
      */
-    it('batching threshold (>10 patches): removes + inserts + attrs', () => {
+    it('batching threshold (>10 patches): removes + inserts + attrs', async () => {
         const parent = buildParent(['a','b','c','d','e','f']);
 
         const patches = [];
@@ -287,7 +287,7 @@ describe('Batch insert vs. remove ordering (>10 patches, same parent)', () => {
 
         expect(patches.length).toBeGreaterThan(10);
 
-        const ok = applyPatches(patches);
+        const ok = await applyPatches(patches);
         expect(ok).toBe(true);
         expect(currentIds(parent)).toEqual(['a','b','c','X','Y','Z','W']);
         expect(parent.querySelector('[dj-id="a"]').getAttribute('data-marker')).toBe('a-marked');

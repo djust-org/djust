@@ -1498,7 +1498,24 @@ function applySinglePatch(patch, rootEl = null) {
  *   ``rootEl`` so they cannot spill into or from another view's
  *   subtree.
  */
-function applyPatches(patches, rootEl = null) {
+/**
+ * Apply VDOM patches to the DOM. Returns ``Promise<boolean>`` — ``true``
+ * on full success, ``false`` if any patch failed (caller may trigger a
+ * full re-render fallback).
+ *
+ * **Async** as a foundational refactor for ADR-013 (View Transitions API
+ * integration, landing in a follow-up PR). The View Transitions API runs
+ * its update callback in a microtask after a frame capture; the wrap
+ * pattern needs ``await transition.updateCallbackDone`` to observe the
+ * inner-loop result. This PR makes the signature compatible without
+ * adding the wrap itself; the wrap follows in a smaller, focused PR.
+ *
+ * Direct callers see the same boolean as before; the function just
+ * resolves to it instead of returning it synchronously. Every caller in
+ * ``static/djust/src/*`` is migrated in this PR. Public-surface change
+ * (``window.djust.applyPatches``) documented in CHANGELOG.
+ */
+async function applyPatches(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -1674,4 +1691,14 @@ function applyPatches(patches, rootEl = null) {
 
     restoreFocusState(focusState, rootEl);
     return true;
+}
+
+// Expose applyPatches on the public namespace for test-side eval and
+// third-party hook integration. ``async function`` declarations don't
+// always hoist to the host scope under JSDOM's eval; without this
+// explicit binding, ``dom.window.eval(clientCode + '...applyPatches...')``
+// throws ReferenceError. Public-surface change documented in CHANGELOG.
+if (typeof globalThis !== 'undefined') {
+    globalThis.djust = globalThis.djust || {};
+    globalThis.djust.applyPatches = applyPatches;
 }
