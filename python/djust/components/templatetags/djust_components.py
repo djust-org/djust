@@ -595,6 +595,10 @@ def data_table(
     expression_event="table_expression",
     active_expressions=None,
     conditional_formatting=None,
+    # Phase 6 params (#1111: row-level navigation)
+    row_click_event="",
+    row_click_value_key="id",
+    row_url="",
 ):
     """Render a sortable data table with search, filters, selection, pagination, and editing.
 
@@ -791,6 +795,10 @@ def data_table(
         "expression_event": expression_event,
         "active_expressions": active_expressions or {},
         "conditional_formatting": conditional_formatting or [],
+        # Phase 6 (#1111: row-level navigation)
+        "row_click_event": row_click_event,
+        "row_click_value_key": row_click_value_key,
+        "row_url": row_url,
     }
 
 
