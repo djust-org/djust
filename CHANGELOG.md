@@ -18,16 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `render_node_with_loader` (Variable + InlineIf nodes, both call sites at
   `crates/djust_templates/src/renderer.rs:271,328`) and `get_value` for inline
   filter chains (renderer.rs:1556 — inline `arg_str = arg_str[1..len-1]` strip).
-  No reproducible code path produces the reported output on `main` (= v0.8.3rc1).
-  New `tests/unit/test_filter_literal_args_1081.py` adds 17 cases covering every
-  literal-arg shape from the issue body and follow-up comments: `|date` with
-  `"M d, Y"` / `"F j, Y"` / single-quoted format / dotted-path field access;
-  `|default` with simple word / multi-word / slash / em-dash / dash / "No" /
-  single-quoted / truthy passthrough / None fallback; chains
-  (`|date:"…"|default:"…"`, `|default:"…"|upper`); HTML attribute context
-  (where any leftover literal quote would surface as `&quot;`). Locks the
-  invariant against future renderer refactors so the JSON-quoting class of bug
-  cannot silently re-emerge.
+  When the issue was reopened with a more specific reproduction path
+  ("Django `DateField` from a model passes through the Rust context serializer
+  before being filtered, output is inserted as JSON string value into VDOM"),
+  re-tested the named path and confirmed `serialize_context`
+  (`crates/djust_live/src/lib.rs:1776-1781`) returns the bare ISO string —
+  `value.call_method0("isoformat")` is passed straight through `into_pyobject`
+  with no `serde_json::to_string` or quote-wrapping. No reproducible code path
+  produces the reported output on `main` (= v0.8.3rc1).
+  New `tests/unit/test_filter_literal_args_1081.py` ships **24 cases** covering
+  every literal-arg shape from the issue body, follow-up comments, and reopen:
+  (1) `|date` with `"M d, Y"` / `"F j, Y"` / single-quoted format / dotted-path
+  field access; (2) `|default` with simple word / multi-word / slash / em-dash /
+  dash / "No" / single-quoted / truthy passthrough / None fallback; (3) chains
+  (`|date:"…"|default:"…"`, `|default:"…"|upper`); (4) HTML attribute context
+  (where any leftover literal quote would surface as `&quot;`); (5)
+  `serialize_context` output shape — bare ISO string for `date` /
+  `datetime` / list-of-dicts (the queryset+model+date path named in the
+  reopen); (6) full `LiveView.render()` with Django Model + DateField via the
+  JIT serializer; (7) `LiveView.render()` with list of Model instances
+  (`_jit_serialize_queryset` / `_jit_serialize_model` path); (8)
+  `render_with_diff` full + partial (the WS-update path the reopen described
+  as inserting JSON-quoted values into the VDOM). Locks the invariant against
+  future renderer / VDOM-patch / JIT-serializer / context-serializer refactors
+  so the JSON-quoting class of bug cannot silently re-emerge.
 
 ## [0.8.3rc1] - 2026-04-25
 

@@ -169,3 +169,214 @@ def test_date_in_html_attribute_no_quote_wrap():
     )
     assert 'datetime="2026-04-25"' in out
     assert "&quot;" not in out
+
+
+# ---------------------------------------------------------------------------
+# `serialize_context` output shape — added after #1081 was reopened with a
+# claim that this Rust function JSON-encodes date values (i.e. produces
+# strings *containing* literal `"` characters). Source code at
+# `crates/djust_live/src/lib.rs:1776-1781` calls `value.call_method0("isoformat")`
+# and passes the resulting `String` straight through `into_pyobject` — no
+# `serde_json::to_string`, no quote-wrapping. Lock that contract here so a
+# future "let's wrap dates in JSON for the wire" refactor can't silently
+# regress to producing literal-quote-wrapped output.
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_context_date_is_bare_iso_string():
+    """``serialize_context`` returns the bare ISO string, not JSON-quoted."""
+    from datetime import date
+
+    from djust._rust import serialize_context
+
+    out = serialize_context({"d": date(2026, 4, 25)})
+    # Bare 10-character ISO string. NOT '"2026-04-25"' (12 chars with embedded quotes).
+    assert out["d"] == "2026-04-25"
+    assert len(out["d"]) == 10
+    assert '"' not in out["d"]
+
+
+def test_serialize_context_datetime_is_bare_iso_string():
+    from datetime import datetime
+
+    from djust._rust import serialize_context
+
+    out = serialize_context({"dt": datetime(2026, 4, 25, 14, 30, 0)})
+    assert out["dt"].startswith("2026-04-25T14:30:00")
+    assert '"' not in out["dt"]
+
+
+def test_serialize_context_nested_date_in_list_of_dicts():
+    """Mirrors the queryset-of-models reproduction path from the #1081 reopen."""
+    from datetime import date
+
+    from djust._rust import serialize_context
+
+    out = serialize_context(
+        {
+            "tasks": [
+                {"id": 1, "due_date": date(2026, 5, 3)},
+                {"id": 2, "due_date": date(2026, 5, 10)},
+            ]
+        }
+    )
+    assert out["tasks"][0]["due_date"] == "2026-05-03"
+    assert out["tasks"][1]["due_date"] == "2026-05-10"
+    for task in out["tasks"]:
+        assert '"' not in task["due_date"]
+
+
+# ---------------------------------------------------------------------------
+# Full ``LiveView.render()`` with Django-Model + DateField, exercising the
+# JIT-serializer path (`_jit_serialize_model` / `_jit_serialize_queryset`).
+# This is the path the issue reporter named as the source of the JSON-quoting.
+# ---------------------------------------------------------------------------
+
+
+def test_liveview_render_with_django_model_datefield_no_quote_wrap(db):
+    """Real LiveView render of a Django Model with DateField + ``|date`` filter."""
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from djust import LiveView
+
+    user_model = get_user_model()
+    user = user_model(
+        id=1, username="amanda", first_name="Amanda", last_name="Smith", email="a@b.c"
+    )
+    user.date_joined = date(2026, 5, 3)
+
+    class V(LiveView):
+        template = (
+            "<div>\n"
+            'A: {{ u.date_joined|date:"M d, Y" }}\n'
+            'B: {{ u.first_name|default:"FALLBACK" }}\n'
+            'C: {{ u.email|default:"—" }}\n'
+            "</div>\n"
+        )
+
+        def get_context_data(self, **kwargs):
+            return {"u": user}
+
+    out = V().render()
+    body = out[out.find("<div") : out.find("</div>") + 6]
+    assert "A: May 03, 2026" in body
+    assert "B: Amanda" in body
+    assert "C: a@b.c" in body
+    assert "&quot;" not in body
+    # Visible-DOM body should contain none of the JSON-encoded forms reported
+    assert '"May 03, 2026"' not in body
+    assert '"Amanda"' not in body
+
+
+def test_liveview_render_with_list_of_models_jit_path_no_quote_wrap(db):
+    """JIT-serialized list-of-Model-instances path with ``|date`` and ``|default``."""
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from djust import LiveView
+
+    user_model = get_user_model()
+    u1 = user_model(id=1, username="a", first_name="Amanda", email="a@b.c")
+    u1.date_joined = date(2026, 5, 3)
+    u2 = user_model(id=2, username="b", first_name="Brian", email="")
+    u2.date_joined = date(2026, 6, 15)
+
+    class V(LiveView):
+        template = (
+            "<ul>\n"
+            "{% for u in users %}"
+            '<li>{{ u.date_joined|date:"M d, Y" }} :: '
+            '{{ u.email|default:"NONE" }} :: '
+            '{{ u.first_name|default:"—" }}</li>'
+            "{% endfor %}\n"
+            "</ul>\n"
+        )
+
+        def get_context_data(self, **kwargs):
+            return {"users": [u1, u2]}
+
+    out = V().render()
+    body = out[out.find("<ul") : out.find("</ul>") + 5]
+    assert "May 03, 2026 :: a@b.c :: Amanda" in body
+    assert "Jun 15, 2026 :: NONE :: Brian" in body
+    assert "&quot;" not in body
+    assert '"May 03, 2026"' not in body
+    assert '"NONE"' not in body
+    assert '"Amanda"' not in body
+
+
+# ---------------------------------------------------------------------------
+# ``render_with_diff`` — the WebSocket-update path that produces VDOM patches.
+# The issue reporter described filter outputs being "inserted as JSON string
+# values into the VDOM" — this test locks down that the VDOM-patch path
+# produces unquoted output identical to the initial-render path.
+# ---------------------------------------------------------------------------
+
+
+def test_render_with_diff_full_no_quote_wrap(db):
+    """First-call ``render_with_diff`` (full render) produces unquoted HTML."""
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from djust import LiveView
+
+    user_model = get_user_model()
+    user = user_model(id=1, username="a", first_name="Amanda", last_name="S", email="a@b.c")
+    user.date_joined = date(2026, 5, 3)
+
+    class V(LiveView):
+        template = (
+            "<div>\n"
+            'A: {{ u.date_joined|date:"M d, Y" }}\n'
+            'B: {{ u.first_name|default:"FALLBACK" }}\n'
+            "</div>\n"
+        )
+
+        def get_context_data(self, **kwargs):
+            return {"u": user}
+
+    v = V()
+    html, patches, version = v.render_with_diff()
+    assert "A: May 03, 2026" in html
+    assert "B: Amanda" in html
+    assert "&quot;" not in html
+    assert '"May 03, 2026"' not in html
+    assert version == 1
+
+
+def test_render_with_diff_partial_no_quote_wrap(db):
+    """Second-call ``render_with_diff`` after state mutation (partial path) — same invariant."""
+    from datetime import date
+
+    from django.contrib.auth import get_user_model
+
+    from djust import LiveView
+
+    user_model = get_user_model()
+    user = user_model(id=1, username="a", first_name="Amanda", last_name="S", email="a@b.c")
+    user.date_joined = date(2026, 5, 3)
+
+    class V(LiveView):
+        template = (
+            '<div>\nA: {{ u.date_joined|date:"M d, Y" }}\nB: {{ counter|default:"0" }}\n</div>\n'
+        )
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.counter = 0
+
+        def get_context_data(self, **kwargs):
+            return {"u": user, "counter": self.counter}
+
+    v = V()
+    v.render_with_diff()  # version 1 — full render, populates fragment cache
+    v.counter = 7
+    html, _patches, version = v.render_with_diff()  # version 2 — partial path
+    assert "A: May 03, 2026" in html
+    assert "&quot;" not in html
+    assert '"May 03, 2026"' not in html
+    assert version == 2
