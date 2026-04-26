@@ -1261,10 +1261,24 @@ Roll all 7 retro-tracker conventions into one CLAUDE.md / PR-checklist / pipelin
 - **#1108** — `Iterable[T]` over `list[T]` for membership-check filter parameters; test at least one non-list shape (tuple OR set).
 - **#1109** — dynamic test fixture pattern: `type(name, bases, dict)` over class-level mutation in `__init__`.
 
+**v0.8.6 extension — added 2026-04-26 after the original 4 PRs merged**:
+
+Three nyc-claims issues filed during the v0.8.6 session, plus async-enabled enhancements that finally cash in PR-A's async refactor beyond View Transitions:
+
+- **#1114 (HIGH severity, P1)** — `DataTableMixin` is incompatible with LiveView JIT serialization + BUG-06 pre-mount lifecycle. Three compounding root causes: (1) `get_context_data()` runs before `mount()`, so `self.table_rows` doesn't exist and `get_table_context()` raises silently → empty VDOM; (2) `table_rows` serializes as a large list, JIT-broken dot-notation access; (3) `on_table_*` methods aren't `@event_handler()`-decorated → unusable under default `event_security=strict`. Downstream blocker: nyc-claims PR #189 reverted to native handlers. Fixes: class-level `table_rows = []` default, `@event_handler()` decoration on the 5 `on_table_*` methods, doc the LiveView vs Component API boundary explicitly.
+
+- **#1110 (P2)** — `{% data_table %}` link column type. New `link` and `link_class` keys in column dicts render the cell as `<a href="{{ row[link_key] }}">{{ row[col.key] }}</a>` instead of plain text. Currently consumers must render `<tbody>` manually (forfeit the component) or store pre-escaped HTML (fragile). Affects every admin/dashboard use case. ~30 LOC.
+
+- **#1111 (P2)** — `{% data_table %}` row-level navigation. `row_url="key"` and/or `row_click_event="handler"` make the entire `<tr>` clickable. Option B (LiveView event) preferred — integrates with djust's event system without raw JS. ~30 LOC.
+
+- **NEW: Async `dj-mounted` / `dj-updated` hook callbacks (P2, async-enabled)** — currently sync; user hooks can't `await fetch(...)`. Now that the patch path is async-aware (PR-A) and message-ordered (#1098), djust can `await` hook callbacks before continuing. Small API change (~40 LOC in `19-hooks.js` + `09-event-binding.js` + tests). Cashes in PR-A's async refactor beyond View Transitions. Bundle: `await window.djust.applyPatches(...)` documentation as public API + per-element `view-transition-name` example patterns (pure docs add, leverages PR-B).
+
 **Out of scope for v0.8.6** (parked):
 
 - The 26 issues labeled `out-of-scope-for-djust-drain` — pipeline-skill / process improvements; need their own batch session against `~/.claude/skills/`, not the djust repo.
 - The 5 v0.9.0 backlog candidates (component time-travel, Redux-DevTools parity, Phase 2 streaming, ADR-006, live_render sticky auto-detect) — feature-scale, deferred.
+- **Streaming patches with `scheduler.yield()` between chunks** — speculative; would need an ADR for the patch-loop's 4-phase ordering invariant.
+- **`await fetch()` inside a patch (new `FetchAndApply` patch type)** — speculative; needs design surface (cache, retry, error handling).
 
 ---
 
