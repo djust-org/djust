@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4rc1] - 2026-04-26
+
 ### Fixed
 
 - **Inheritance resolution doubled filter-arg quotes — `|date:"M d, Y"` rendered
