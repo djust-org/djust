@@ -1247,6 +1247,7 @@ class DataTableMixin:
             "facet_counts": self.table_facet_counts,
             "persist_key": self.table_persist_key,
             "printable": self.table_printable,
+            "show_stats": self.table_show_stats,
             "column_stats": self.table_column_stats,
             # Phase 4
             "footer_aggregations": self.table_footer_aggregations,

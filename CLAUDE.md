@@ -277,6 +277,74 @@ filter-shape PR doesn't repeat the failure mode.
   makes Stage 11 reviewers' job faster. Without it, the reviewer has
   to derive the mapping from prose.
 
+## Process canonicalizations from v0.8.6 retro arc
+
+Five additional rules from the View Transitions arc + nyc-claims data_table arc.
+
+- **Split-foundation pattern for high-blast-radius features** (#1122).
+  When a feature has blast radius (signature changes, new patterns
+  across many call sites, or correctness depends on non-obvious
+  browser/runtime semantics), split foundation from capability into
+  separate PRs. Foundation should soak through one or more releases
+  before the capability rides on top. Validated 3× across the View
+  Transitions arc: PR-A async signature (v0.8.5) → #1098 interleaving
+  fix (v0.8.6) → PR-B wrap (v0.8.6). PR #1092's earlier monolith
+  attempt shipped a sync-callback bug. Apply this when:
+  - Signature change touches public surface (`window.djust.X`)
+  - Feature correctness depends on browser semantics that JSDOM
+    can't fully model (microtasks, paint timing, layout)
+  - More than ~5 call sites need migration
+
+- **Pre-mount/post-mount keyset invariant test** (#1123). Any
+  framework-level context dict with both a default form (returned when
+  state isn't initialized) and a runtime-populated form (returned
+  post-mount) needs a test asserting `post_mount_keys ⊆ pre_mount_keys`.
+  Future post-mount additions that forget to update the default trip
+  the test immediately. Pattern from PR #1117's
+  `test_pre_mount_default_has_required_template_keys` — the symmetry test
+  would have failed had a future PR updated only the post-mount dict;
+  PR #1118 (the show_stats fix) is the closing case that exercises that
+  branch.
+
+  Note: this test is **one-directional** (`post ⊆ pre`). The inverted
+  bug class — pre-mount declares a key that post-mount silently drops —
+  is the failure mode #1118 actually hit. Existing pre-mount-only keys
+  (`current_group_by`, `current_density`, `visible_columns`,
+  `row_order`, `column_order`) intentionally don't appear post-mount and
+  would false-positive a strict-equality test. If/when those keys move
+  to genuinely-post-mount, tighten to `post == pre` or add a per-key
+  whitelist for the legitimately-pre-only set.
+
+- **CodeQL `js/tainted-format-string` self-review checkpoint** (#1124).
+  When introducing or modifying logging where the format string's
+  interpolated value comes from user-controlled data (DOM attributes,
+  server frame fields, request body), use:
+  ```javascript
+  console.error('[label] msg %s:', userControlledValue, errObj);
+  ```
+  NOT:
+  ```javascript
+  console.error(`[label] msg ${userControlledValue}:`, errObj);  // CodeQL flags
+  ```
+  The `%s` parameterized form pulls the dynamic value out of the
+  format string entirely. PR #1120 hit this post-CI; the fix was
+  one-line per call site. Add as a Stage 7 self-review grep target.
+
+- **Bulk dispatch-site refactor + count-test pattern** (#1125). When
+  introducing a helper that wraps many call sites (e.g. decorators,
+  lifecycle dispatchers), include a count-based test that enumerates
+  the EXPECTED sites and asserts the count matches what's actually in
+  the codebase. Catches future additions that forget to follow the
+  pattern. Examples: PR #1117's
+  `test_handler_count_matches_expected` (21 `on_table_*` decorators),
+  PR #1120's regex-based grep for `_safeCallHook` callsite count.
+
+- **Format-string hygiene in test assertions** (PR #1120 retro).
+  Tests that capture `console.error` calls should target the LABEL
+  arg position (e.g. `errors[0][1]`), not substring-match the format
+  string (`errors[0][0].toContain('label')`). Decouples the test from
+  later parameterization fixes for tainted-format-string warnings.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

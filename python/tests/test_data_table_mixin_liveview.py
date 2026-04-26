@@ -88,6 +88,36 @@ class PreMountGuardTest(TestCase):
             f"Pre-mount default is missing keys present post-mount: {missing}",
         )
 
+    def test_show_stats_present_post_mount(self):
+        """Closes #1118 — ``show_stats`` was in ``_PRE_MOUNT_TABLE_CONTEXT``
+        but missing from the post-mount return dict, so templates that
+        reference ``{% if show_stats %}`` would get the falsy default
+        pre-mount and ``VariableDoesNotExist`` post-mount.
+
+        Surfaced by Stage 11 review of PR #1117. Fix: add
+        ``"show_stats": self.table_show_stats`` to the post-mount return.
+        """
+        view = DataTableMixin()
+        view.init_table_state()
+        view.table_rows = []
+
+        ctx = view.get_table_context()
+
+        self.assertIn("show_stats", ctx)
+        self.assertEqual(ctx["show_stats"], False)  # default
+
+    def test_show_stats_class_override_flows_through(self):
+        """A view setting ``table_show_stats = True`` sees it post-mount."""
+
+        class _StatsTable(DataTableMixin):
+            table_show_stats = True
+
+        view = _StatsTable()
+        view.init_table_state()
+        view.table_rows = []
+
+        self.assertEqual(view.get_table_context()["show_stats"], True)
+
 
 class EventHandlerDecorationTest(TestCase):
     """All on_table_* methods must carry the @event_handler() decorator

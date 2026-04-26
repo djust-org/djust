@@ -1282,15 +1282,66 @@ Three nyc-claims issues filed during the v0.8.6 session, plus async-enabled enha
 
 ---
 
-### Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)
+### Milestone: v0.8.7 — v0.8.6 retro followup polish (5 issues)
 
-Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:
+*Goal:* Close out the 5 followup items from the v0.8.6 milestone retro before they age. Single PR, mostly docs (CLAUDE.md additions) plus one 1-line code fix. Fastest-path-to-1.0-testing logic — sweep loose ends, cut release, then v0.9.0.
 
-- **Component-level time-travel** (was #1041) — Phase 1 records against parent; full component capture. v0.6.2+ candidate.
-- **Forward-replay through branched timeline** (was #1042) — Redux DevTools parity. v0.6.2+ candidate.
-- **Phase 2 streaming** (was #1043) — lazy-child render + true server overlap. v0.6.1 shipped Phase 1 (transport-layer); Phase 2 is the deferred remainder.
-- **ADR-006 AI-generated UIs** (was #1044) — deferred due to AssistantMixin/LLM-provider dependency chain.
-- **`{% live_render %}` auto-detect preserved stickies** (was #1032) — server-side template-tag intelligence to emit slot markers (`dj-sticky-slot`) when the client already holds the sticky. Removes the Dashboard→Dashboard re-mount limitation in the sticky LiveView demo. Requires: (a) server detection mechanism (cookie/header/WS handshake carrying preserved-sticky IDs); (b) tag conditional output; (c) test matrix covering return-trip vs fresh-tab.
+**Items (single PR)**:
+
+- **#1118 (P2 bugfix)** — `DataTableMixin.get_table_context()` missing `show_stats` post-mount. Pre-existing inconsistency surfaced by PR #1117's pre-mount/post-mount keyset comparison test. One-line fix: `"show_stats": self.table_show_stats` in the post-mount return dict. New regression test asserts both default + class-override flow.
+- **#1122 (P3 docs)** — Split-foundation pattern for high-blast-radius features → CLAUDE.md. Validated 3× across the View Transitions arc.
+- **#1123 (P3 docs)** — Pre-mount/post-mount keyset invariant test pattern → CLAUDE.md (testing patterns).
+- **#1124 (P3 docs)** — CodeQL `js/tainted-format-string` self-review checkpoint → CLAUDE.md (JS-side patterns + Stage 7 grep target).
+- **#1125 (P3 docs)** — Bulk dispatch-site refactor + count-test pattern → CLAUDE.md.
+
+**Out of scope for v0.8.7**:
+- All v0.9.0 feature work — deferred to v0.9.0 (shape C: ships all 4 — #1032 + #1041 + #1042 + #1043).
+- ADR-006 AI-generated UIs (#1044) — pushed down the road (post-1.0 candidate).
+
+---
+
+### Milestone: v0.9.0 — Full feature wave before 1.0 testing (4 features, shape C)
+
+*Goal:* Ship all 4 v0.9.0 backlog candidates so 1.0 testing starts from a feature-complete base. ADR-006 #1044 (AI-generated UIs) is the only deferred candidate — pushed down the road to post-1.0 because it needs the AssistantMixin/LLM-provider design work first.
+
+**P1 — sticky-LiveView ergonomic gap (1.0-blocker)**:
+
+- **#1032 — `{% live_render %}` auto-detect preserved stickies**. Server-side template-tag intelligence to emit slot markers (`dj-sticky-slot`) when the client already holds the sticky. Removes the Dashboard→Dashboard re-mount limitation in the sticky LiveView demo. Affects every multi-tab dashboard built on `sticky=True` child LiveViews. Requires:
+  1. Server detection mechanism — cookie/header/WS handshake carrying preserved-sticky IDs from the client to the server before render
+  2. Tag conditional output — emit `<dj-sticky-slot>` placeholder when ID matches; full HTML otherwise
+  3. Test matrix covering return-trip vs fresh-tab vs partial-state cases
+
+**P2 — streaming arc completion**:
+
+- **#1043 — Phase 2 streaming: lazy-child render + true server overlap**. v0.6.1's Phase 1 shipped the transport-layer chunked HTTP response; Phase 2 completes the arc. Lazy-child render means deferred subtrees stream in after the parent shell hits the wire; server overlap means the next chunk renders while the prior one's bytes are still on the wire (vs current sequential render→send). Needs an ADR for the lazy-child semantic and the cancellation/error-propagation contract. Bigger than #1032 (~3-5 days).
+
+**P3 — DevTools polish**:
+
+- **#1041 — Component-level time-travel**. v0.6.1's time-travel ring-buffer records against the parent LiveView. Phase 2 captures component-level state too, so multi-component pages get per-component scrubbing in the debug panel. ~2-3 days.
+
+- **#1042 — Forward-replay through branched timeline (Redux DevTools parity)**. Currently the time-travel debug panel only scrubs back through linear history. Forward-replay through alternative timelines (replay from state X with new event Y) closes the React DevTools / Redux DevTools UX parity gap. Smaller than #1041 (~2 days) but builds on it.
+
+**Deferred to post-1.0**:
+
+- ~~ADR-006 AI-generated UIs (#1044)~~ — needs AssistantMixin/LLM-provider design first. Reconsider after 1.0 ships.
+
+**After v0.9.0**: enter 1.0 testing phase. v1.0.0 ships after the bake.
+
+**Sequencing strategy** (within v0.9.0): #1032 first (smallest, real 1.0-blocker), then #1043 (streaming arc completion), then #1041 + #1042 as a paired pipeline (component time-travel comes first since #1042 builds on its data model). Each item ships as its own PR; v0.9.0 release cuts after all 4 merge.
+
+---
+
+### ~~Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)~~ — superseded
+
+*Superseded by the shape C v0.9.0 milestone above (4 features ship; ADR-006 #1044 deferred post-1.0). Original block kept here for audit-trail only.*
+
+~~Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:~~
+
+- ~~**Component-level time-travel** (was #1041)~~ — promoted into v0.9.0 shape C
+- ~~**Forward-replay through branched timeline** (was #1042)~~ — promoted into v0.9.0 shape C
+- ~~**Phase 2 streaming** (was #1043)~~ — promoted into v0.9.0 shape C
+- ~~**ADR-006 AI-generated UIs** (was #1044)~~ — still deferred (post-1.0)
+- ~~**`{% live_render %}` auto-detect preserved stickies** (was #1032)~~ — promoted into v0.9.0 shape C as P1
 
 ---
 
