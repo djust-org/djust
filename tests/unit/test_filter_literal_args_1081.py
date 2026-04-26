@@ -454,3 +454,51 @@ def test_render_with_diff_partial_no_quote_wrap(db):
     assert "&quot;" not in html
     assert '"May 03, 2026"' not in html
     assert version == 2
+
+
+# ---------------------------------------------------------------------------
+# The exact ``render_full_template`` data flow named in the third reopen of
+# #1081: ``date`` Python object → ``normalize_django_value`` → ISO string →
+# ``RustLiveView.update_state(json_ctx)`` → ``temp_rust.render()``. The
+# reporter claimed this path produces literal-quote-wrapped output because
+# the Rust ``|date`` filter "doesn't know it's looking at a date" once the
+# value has been normalized to a string. Lock the contract that the Rust
+# ``|date`` filter operating on an ISO-string value produces unquoted
+# output, exactly mirroring the behavior of the same filter on a native
+# ``datetime.date`` object.
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_then_rust_update_state_no_quote_wrap():
+    """``normalize_django_value`` → ``RustLiveView.update_state`` → render.
+
+    Mirrors ``render_full_template`` (`mixins/template.py:525`) line-by-line.
+    """
+    from datetime import date
+
+    from djust._rust import RustLiveView
+
+    from djust.serialization import normalize_django_value
+
+    template = (
+        '<div>\nA: {{ claim.filed_date|date:"M d, Y" }}\nB: {{ claim.notes|default:"—" }}\n</div>\n'
+    )
+
+    ctx = {"claim": {"filed_date": date(2026, 5, 3), "notes": ""}}
+    json_ctx = normalize_django_value(ctx)
+
+    # After normalize, filed_date is a str — the exact precondition the
+    # reporter described as the bug trigger.
+    assert isinstance(json_ctx["claim"]["filed_date"], str)
+    assert json_ctx["claim"]["filed_date"] == "2026-05-03"
+
+    rv = RustLiveView(template)
+    rv.update_state(json_ctx)
+    out = rv.render()
+
+    # Rust ``|date`` filter on the ISO string produces unquoted output.
+    assert "A: May 03, 2026" in out
+    assert "B: —" in out
+    assert "&quot;" not in out
+    assert '"May 03, 2026"' not in out
+    assert '"—"' not in out
