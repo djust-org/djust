@@ -251,9 +251,18 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    setTimeout(() => this.handleMessage(data), actual);
+                    // ``handleMessage`` is async since the View Transitions
+                    // wrap was added (ADR-013). ``onmessage`` ignores returned
+                    // promises, so surface unhandled rejections to console.
+                    setTimeout(() => {
+                        this.handleMessage(data).catch((err) =>
+                            console.error('[LiveView] handleMessage threw:', err)
+                        );
+                    }, actual);
                 } else {
-                    this.handleMessage(data);
+                    this.handleMessage(data).catch((err) =>
+                        console.error('[LiveView] handleMessage threw:', err)
+                    );
                 }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
@@ -261,7 +270,7 @@ class LiveViewWebSocket {
         };
     }
 
-    handleMessage(data) {
+    async handleMessage(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
@@ -540,7 +549,7 @@ class LiveViewWebSocket {
                     evTrigger = null;
                 }
 
-                handleServerResponse(data, evName, evTrigger);
+                await handleServerResponse(data, evName, evTrigger);
 
                 if (!isServerInitiated) {
                     this.lastEventName = null;
@@ -555,7 +564,7 @@ class LiveViewWebSocket {
                     }
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -697,7 +706,7 @@ class LiveViewWebSocket {
                 if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -730,7 +739,7 @@ class LiveViewWebSocket {
                 // Sticky LiveViews Phase A: VDOM patch frame targeted at
                 // a specific child view via view_id. Routed to 45-child-view.js.
                 if (window.djust.childView && window.djust.childView.handleChildUpdate) {
-                    window.djust.childView.handleChildUpdate(data);
+                    await window.djust.childView.handleChildUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -758,7 +767,7 @@ class LiveViewWebSocket {
                 // sticky's dj-id namespace is independent of the
                 // parent's, so doc-wide lookups would be incorrect.
                 if (window.djust.stickyPreserve && window.djust.stickyPreserve.handleStickyUpdate) {
-                    window.djust.stickyPreserve.handleStickyUpdate(data);
+                    await window.djust.stickyPreserve.handleStickyUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);

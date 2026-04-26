@@ -104,14 +104,14 @@
      * this is a no-op so the receiver still dispatches its lifecycle
      * event without tripping an exception.
      */
-    function _applyScopedPatches(patches, rootEl) {
+    async function _applyScopedPatches(patches, rootEl) {
         if (typeof applyPatches !== "function") {
             if (globalThis.djustDebug) {
                 console.warn("[djust] applyPatches is not in scope; skipping");
             }
             return false;
         }
-        return applyPatches(patches, rootEl);
+        return await applyPatches(patches, rootEl);
     }
 
     /**
@@ -124,7 +124,7 @@
      * see pre-apply state; this matches the Phase A event shape with
      * ``phase: 'B'``.
      */
-    function handleChildUpdate(message) {
+    async function handleChildUpdate(message) {
         if (!message) return;
         const viewId = message.view_id;
         if (!viewId) {
@@ -153,7 +153,7 @@
         // namespace; without rootEl the doc-wide lookup in
         // getNodeByPath would cross subtree boundaries.
         if (Array.isArray(message.patches) && message.patches.length > 0) {
-            _applyScopedPatches(message.patches, root);
+            await _applyScopedPatches(message.patches, root);
         }
         clientVdomVersions.set(viewId, message.version);
     }
@@ -163,7 +163,7 @@
      * ``child_update`` but targets a sticky subtree via the
      * ``[dj-sticky-view]`` selector.
      */
-    function handleStickyUpdate(message) {
+    async function handleStickyUpdate(message) {
         if (!message) return;
         const viewId = message.view_id;
         if (!viewId) return;
@@ -180,7 +180,7 @@
             patches: message.patches || [],
         });
         if (Array.isArray(message.patches) && message.patches.length > 0) {
-            _applyScopedPatches(message.patches, root);
+            await _applyScopedPatches(message.patches, root);
         }
         clientVdomVersions.set(viewId, message.version);
     }

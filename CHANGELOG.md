@@ -57,6 +57,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Phoenix LiveView Parity Tracker entry `self.defer()` (post-render) marked
   shipped in `ROADMAP.md`.
 
+### Changed
+
+- **VDOM `applyPatches` signature is now `async` (returns `Promise<boolean>`)** —
+  foundational refactor preparing for View Transitions API integration
+  (ADR-013). Previously `applyPatches(patches, rootEl)` returned `boolean`
+  synchronously; now `async function applyPatches(patches, rootEl) ->
+  Promise<boolean>`. The patch-loop body itself is unchanged — this is a
+  signature-only migration. Direct caller migration covers six call sites
+  across the client modules: `02-response-handler.js`, `03-websocket.js`,
+  `03b-sse.js`, `11-event-handler.js`, `45-child-view.js`. Each `await`s
+  `applyPatches` and propagates async upward — `handleServerResponse` is
+  now `async`, `LiveViewWebSocket.handleMessage` and
+  `LiveViewSSE.handleMessage` are now `async`, and the `EventSource`
+  `onmessage` arrow callbacks (which cannot be `async` in their declared
+  form) wrap their `handleMessage` invocations in `.catch()` to preserve
+  unhandled-rejection visibility. `_applyScopedPatches`,
+  `handleChildUpdate`, and `handleStickyUpdate` in `45-child-view.js` are
+  also `async`.
+
+  Why this signature change matters: `document.startViewTransition()`'s
+  callback runs in a microtask after the browser captures the pre-patch
+  frame, NOT synchronously, so any wrapping that schedules patches via
+  `startViewTransition` requires the patch function to be awaitable. PR-A
+  (this entry) is the foundation; PR-B will add the View Transitions
+  wrap on top without further signature changes.
+
+  No external API change for view authors — VDOM internals only. Test
+  surface migrated: 7 JS test files updated to `await` `applyPatches` /
+  `handleMessage` / `handleServerResponse` calls; the
+  `dom.window.eval(clientCode)` pattern that previously hoisted the
+  sync `applyPatches` to host scope now requires
+  `dom.window.djust.applyPatches` (added explicit
+  `globalThis.djust.applyPatches = applyPatches` export at the end of
+  `12-vdom-patch.js` because async function declarations don't hoist
+  to the eval host scope the way sync function declarations do under
+  JSDOM). 1396 JS tests pass; 4230 Python tests pass; behavior parity
+  with the previous sync signature confirmed by the existing patch
+  test suite (`vdom_patch_errors.test.js`, `vdom_recovery.test.js`,
+  `tab_switch_real_repro.test.js`, `event_sequencing.test.js`,
+  `batch_insert_before_remove.test.js`, `vdom-autofocus.test.js`,
+  `sse.test.js`).
+
 ### Fixed
 
 - **`scripts/check-changelog-test-counts.py` regex missed `async def test_*`** —

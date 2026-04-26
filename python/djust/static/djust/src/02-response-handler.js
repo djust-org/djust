@@ -30,7 +30,7 @@ function clearOptimisticPending() {
  * @param {HTMLElement} triggerElement - Element that triggered the event
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-function handleServerResponse(data, eventName, triggerElement) {
+async function handleServerResponse(data, eventName, triggerElement) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -106,7 +106,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = applyPatches(data.patches);
+            const success = await applyPatches(data.patches);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.

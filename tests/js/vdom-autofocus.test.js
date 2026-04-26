@@ -61,7 +61,7 @@ function createDom(html) {
 }
 
 describe('Autofocus on dynamically inserted elements (#617)', () => {
-    it('calls .focus() on an inserted element with autofocus attribute', () => {
+    it('calls .focus() on an inserted element with autofocus attribute', async () => {
         const { dom, focusCalls } = createDom();
 
         // Insert an input with autofocus into the root
@@ -78,7 +78,7 @@ describe('Autofocus on dynamically inserted elements (#617)', () => {
             }
         ];
 
-        dom.window.applyPatches(patches);
+        await dom.window.djust.applyPatches(patches);
 
         // The newly inserted input should have been focused
         const newInput = dom.window.document.getElementById('new-input');
@@ -90,7 +90,7 @@ describe('Autofocus on dynamically inserted elements (#617)', () => {
         expect(autofocusEl.id).toBe('new-input');
     });
 
-    it('does not call autofocus when user already has focus on an element', () => {
+    it('does not call autofocus when user already has focus on an element', async () => {
         const { dom } = createDom(
             '<div dj-root dj-liveview-root dj-view="test.View">' +
             '<input id="existing" type="text" />' +
@@ -116,7 +116,7 @@ describe('Autofocus on dynamically inserted elements (#617)', () => {
             }
         ];
 
-        dom.window.applyPatches(patches);
+        await dom.window.djust.applyPatches(patches);
 
         // The existing element should still be focused (saveFocusState captures it)
         // The autofocus logic should not override an existing focus
@@ -124,7 +124,7 @@ describe('Autofocus on dynamically inserted elements (#617)', () => {
         expect(newInput).not.toBeNull();
     });
 
-    it('does not throw when no autofocus element exists', () => {
+    it('does not throw when no autofocus element exists', async () => {
         const { dom } = createDom();
 
         // Insert an element without autofocus - should not throw
@@ -141,6 +141,6 @@ describe('Autofocus on dynamically inserted elements (#617)', () => {
             }
         ];
 
-        expect(() => dom.window.applyPatches(patches)).not.toThrow();
+        expect(() => dom.window.djust.applyPatches(patches)).not.toThrow();
     });
 });

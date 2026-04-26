@@ -58,7 +58,7 @@ function createDom(opts = {}) {
 }
 
 describe('VDOM patch error messages', () => {
-    it('includes patch type in failure message when node not found', () => {
+    it('includes patch type in failure message when node not found', async () => {
         const { dom, warnings } = createDom();
 
         // Apply a patch to a non-existent path
@@ -66,7 +66,7 @@ describe('VDOM patch error messages', () => {
             { type: 'SetText', path: [99], text: 'new text' }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
 
         // Should have failed
         expect(result).toBe(false);
@@ -76,33 +76,33 @@ describe('VDOM patch error messages', () => {
         expect(patchWarn).toBeDefined();
     });
 
-    it('includes dj-id in failure message when provided', () => {
+    it('includes dj-id in failure message when provided', async () => {
         const { dom, warnings } = createDom();
 
         const patches = [
             { type: 'Replace', path: [99], d: 'my-component-id', node: { tag: 'div', attrs: {}, children: [] } }
         ];
 
-        dom.window.applyPatches(patches);
+        await dom.window.djust.applyPatches(patches);
 
         const patchWarn = warnings.find(w => w.includes('my-component-id'));
         expect(patchWarn).toBeDefined();
     });
 
-    it('shows debug group with suggested causes in DEBUG_MODE', () => {
+    it('shows debug group with suggested causes in DEBUG_MODE', async () => {
         const { dom, groups } = createDom({ debugMode: true });
 
         const patches = [
             { type: 'SetAttr', path: [99], key: 'class', value: 'active' }
         ];
 
-        dom.window.applyPatches(patches);
+        await dom.window.djust.applyPatches(patches);
 
         const group = groups.find(g => g.includes('Patch detail'));
         expect(group).toBeDefined();
     });
 
-    it('includes failed indices in batch error summary', () => {
+    it('includes failed indices in batch error summary', async () => {
         const { dom, errors } = createDom();
 
         // Create multiple patches where some fail
@@ -112,14 +112,14 @@ describe('VDOM patch error messages', () => {
             { type: 'SetText', path: [98], text: 'fail2' },       // fails
         ];
 
-        dom.window.applyPatches(patches);
+        await dom.window.djust.applyPatches(patches);
 
         const batchError = errors.find(e => e.includes('patches failed'));
         expect(batchError).toBeDefined();
         expect(batchError).toMatch(/indices:/);
     });
 
-    it('includes parent element info in path traversal failure', () => {
+    it('includes parent element info in path traversal failure', async () => {
         const { dom, warnings } = createDom({ debugMode: true });
 
         // Try to traverse to an index that doesn't exist
@@ -127,7 +127,7 @@ describe('VDOM patch error messages', () => {
             { type: 'SetText', path: [0, 99], text: 'fail' }
         ];
 
-        dom.window.applyPatches(patches);
+        await dom.window.djust.applyPatches(patches);
 
         const pathWarn = warnings.find(w => w.includes('Path traversal failed'));
         expect(pathWarn).toBeDefined();
@@ -135,7 +135,7 @@ describe('VDOM patch error messages', () => {
         expect(pathWarn).toMatch(/parent:/);
     });
 
-    it('does not throw when SetAttr targets a text node (#622)', () => {
+    it('does not throw when SetAttr targets a text node (#622)', async () => {
         const { dom, errors } = createDom();
 
         // path [0, 0] resolves to the text node inside <p id="child0">
@@ -143,7 +143,7 @@ describe('VDOM patch error messages', () => {
             { type: 'SetAttr', path: [0, 0], key: 'class', value: 'active' }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
 
         // Should fail gracefully (returned false), not throw
         expect(result).toBe(false);
@@ -152,59 +152,59 @@ describe('VDOM patch error messages', () => {
         expect(thrownError).toBeUndefined();
     });
 
-    it('does not throw when RemoveAttr targets a text node (#622)', () => {
+    it('does not throw when RemoveAttr targets a text node (#622)', async () => {
         const { dom, errors } = createDom();
 
         const patches = [
             { type: 'RemoveAttr', path: [0, 0], key: 'class' }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
         expect(result).toBe(false);
         const thrownError = errors.find(e => e.includes('Error applying patch'));
         expect(thrownError).toBeUndefined();
     });
 
-    it('does not throw when InsertChild targets a text node (#622)', () => {
+    it('does not throw when InsertChild targets a text node (#622)', async () => {
         const { dom, errors } = createDom();
 
         const patches = [
             { type: 'InsertChild', path: [0, 0], index: 0, node: { tag: 'span', attrs: {}, children: [] } }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
         expect(result).toBe(false);
         const thrownError = errors.find(e => e.includes('Error applying patch'));
         expect(thrownError).toBeUndefined();
     });
 
-    it('does not throw when RemoveChild targets a text node (#622)', () => {
+    it('does not throw when RemoveChild targets a text node (#622)', async () => {
         const { dom, errors } = createDom();
 
         const patches = [
             { type: 'RemoveChild', path: [0, 0], index: 0 }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
         expect(result).toBe(false);
         const thrownError = errors.find(e => e.includes('Error applying patch'));
         expect(thrownError).toBeUndefined();
     });
 
-    it('does not throw when MoveChild targets a text node (#622)', () => {
+    it('does not throw when MoveChild targets a text node (#622)', async () => {
         const { dom, errors } = createDom();
 
         const patches = [
             { type: 'MoveChild', path: [0, 0], from: 0, to: 1 }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
         expect(result).toBe(false);
         const thrownError = errors.find(e => e.includes('Error applying patch'));
         expect(thrownError).toBeUndefined();
     });
 
-    it('skips regular HTML comments in path traversal (only counts dj-if comments)', () => {
+    it('skips regular HTML comments in path traversal (only counts dj-if comments)', async () => {
         // Regression test: the Rust VDOM parser drops regular HTML comments
         // but preserves <!--dj-if--> placeholders. The JS patcher must match
         // this behavior when computing child indices, otherwise paths computed
@@ -248,14 +248,14 @@ describe('VDOM patch error messages', () => {
             { type: 'SetText', path: [1, 0, 0], text: '1' }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
         expect(result).toBe(true);
 
         const counter = dom.window.document.getElementById('counter');
         expect(counter.textContent).toBe('1');
     });
 
-    it('still counts dj-if placeholder comments in path traversal', () => {
+    it('still counts dj-if placeholder comments in path traversal', async () => {
         const dom = new JSDOM(
             '<!DOCTYPE html><html><body>' +
             '<div dj-root dj-liveview-root dj-view="test.View">' +
@@ -293,7 +293,7 @@ describe('VDOM patch error messages', () => {
             { type: 'SetText', path: [1, 0], text: 'updated' }
         ];
 
-        const result = dom.window.applyPatches(patches);
+        const result = await dom.window.djust.applyPatches(patches);
         expect(result).toBe(true);
 
         const p = dom.window.document.getElementById('visible');

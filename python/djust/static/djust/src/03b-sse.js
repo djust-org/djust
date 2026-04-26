@@ -71,7 +71,12 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
-                this.handleMessage(data);
+                // ``handleMessage`` is async since the View Transitions wrap
+                // was added (ADR-013). ``onmessage`` ignores returned
+                // promises, so surface unhandled rejections to console.
+                this.handleMessage(data).catch((err) =>
+                    console.error('[SSE] handleMessage threw:', err)
+                );
             } catch (err) {
                 console.error('[SSE] Failed to parse message:', err);
             }
@@ -114,7 +119,7 @@ class LiveViewSSE {
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    handleMessage(data) {
+    async handleMessage(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
 
         switch (data.type) {
@@ -171,13 +176,13 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;
 
             case 'html_update':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;

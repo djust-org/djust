@@ -312,7 +312,7 @@ function clearOptimisticPending() {
  * @param {HTMLElement} triggerElement - Element that triggered the event
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-function handleServerResponse(data, eventName, triggerElement) {
+async function handleServerResponse(data, eventName, triggerElement) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -388,7 +388,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = applyPatches(data.patches);
+            const success = await applyPatches(data.patches);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -785,9 +785,18 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    setTimeout(() => this.handleMessage(data), actual);
+                    // ``handleMessage`` is async since the View Transitions
+                    // wrap was added (ADR-013). ``onmessage`` ignores returned
+                    // promises, so surface unhandled rejections to console.
+                    setTimeout(() => {
+                        this.handleMessage(data).catch((err) =>
+                            console.error('[LiveView] handleMessage threw:', err)
+                        );
+                    }, actual);
                 } else {
-                    this.handleMessage(data);
+                    this.handleMessage(data).catch((err) =>
+                        console.error('[LiveView] handleMessage threw:', err)
+                    );
                 }
             } catch (error) {
                 console.error('[LiveView] Failed to parse message:', error);
@@ -795,7 +804,7 @@ class LiveViewWebSocket {
         };
     }
 
-    handleMessage(data) {
+    async handleMessage(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
@@ -1074,7 +1083,7 @@ class LiveViewWebSocket {
                     evTrigger = null;
                 }
 
-                handleServerResponse(data, evName, evTrigger);
+                await handleServerResponse(data, evName, evTrigger);
 
                 if (!isServerInitiated) {
                     this.lastEventName = null;
@@ -1089,7 +1098,7 @@ class LiveViewWebSocket {
                     }
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -1231,7 +1240,7 @@ class LiveViewWebSocket {
                 if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -1264,7 +1273,7 @@ class LiveViewWebSocket {
                 // Sticky LiveViews Phase A: VDOM patch frame targeted at
                 // a specific child view via view_id. Routed to 45-child-view.js.
                 if (window.djust.childView && window.djust.childView.handleChildUpdate) {
-                    window.djust.childView.handleChildUpdate(data);
+                    await window.djust.childView.handleChildUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -1292,7 +1301,7 @@ class LiveViewWebSocket {
                 // sticky's dj-id namespace is independent of the
                 // parent's, so doc-wide lookups would be incorrect.
                 if (window.djust.stickyPreserve && window.djust.stickyPreserve.handleStickyUpdate) {
-                    window.djust.stickyPreserve.handleStickyUpdate(data);
+                    await window.djust.stickyPreserve.handleStickyUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -1763,7 +1772,12 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
-                this.handleMessage(data);
+                // ``handleMessage`` is async since the View Transitions wrap
+                // was added (ADR-013). ``onmessage`` ignores returned
+                // promises, so surface unhandled rejections to console.
+                this.handleMessage(data).catch((err) =>
+                    console.error('[SSE] handleMessage threw:', err)
+                );
             } catch (err) {
                 console.error('[SSE] Failed to parse message:', err);
             }
@@ -1806,7 +1820,7 @@ class LiveViewSSE {
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    handleMessage(data) {
+    async handleMessage(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
 
         switch (data.type) {
@@ -1863,13 +1877,13 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;
 
             case 'html_update':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;
@@ -4902,7 +4916,7 @@ async function handleEvent(eventName, params = {}) {
 
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
-            applyPatches(cached.patches);
+            await applyPatches(cached.patches);
             reinitAfterDOMUpdate();
         }
 
@@ -4973,7 +4987,7 @@ async function handleEvent(eventName, params = {}) {
         }
 
         const data = await response.json();
-        handleServerResponse(data, eventName, triggerElement);
+        await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);
@@ -6481,7 +6495,24 @@ function applySinglePatch(patch, rootEl = null) {
  *   ``rootEl`` so they cannot spill into or from another view's
  *   subtree.
  */
-function applyPatches(patches, rootEl = null) {
+/**
+ * Apply VDOM patches to the DOM. Returns ``Promise<boolean>`` — ``true``
+ * on full success, ``false`` if any patch failed (caller may trigger a
+ * full re-render fallback).
+ *
+ * **Async** as a foundational refactor for ADR-013 (View Transitions API
+ * integration, landing in a follow-up PR). The View Transitions API runs
+ * its update callback in a microtask after a frame capture; the wrap
+ * pattern needs ``await transition.updateCallbackDone`` to observe the
+ * inner-loop result. This PR makes the signature compatible without
+ * adding the wrap itself; the wrap follows in a smaller, focused PR.
+ *
+ * Direct callers see the same boolean as before; the function just
+ * resolves to it instead of returning it synchronously. Every caller in
+ * ``static/djust/src/*`` is migrated in this PR. Public-surface change
+ * (``window.djust.applyPatches``) documented in CHANGELOG.
+ */
+async function applyPatches(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -6657,6 +6688,16 @@ function applyPatches(patches, rootEl = null) {
 
     restoreFocusState(focusState, rootEl);
     return true;
+}
+
+// Expose applyPatches on the public namespace for test-side eval and
+// third-party hook integration. ``async function`` declarations don't
+// always hoist to the host scope under JSDOM's eval; without this
+// explicit binding, ``dom.window.eval(clientCode + '...applyPatches...')``
+// throws ReferenceError. Public-surface change documented in CHANGELOG.
+if (typeof globalThis !== 'undefined') {
+    globalThis.djust = globalThis.djust || {};
+    globalThis.djust.applyPatches = applyPatches;
 }
 
 // ============================================================================
@@ -13517,14 +13558,14 @@ globalThis.djust.djTransitionGroup = {
      * this is a no-op so the receiver still dispatches its lifecycle
      * event without tripping an exception.
      */
-    function _applyScopedPatches(patches, rootEl) {
+    async function _applyScopedPatches(patches, rootEl) {
         if (typeof applyPatches !== "function") {
             if (globalThis.djustDebug) {
                 console.warn("[djust] applyPatches is not in scope; skipping");
             }
             return false;
         }
-        return applyPatches(patches, rootEl);
+        return await applyPatches(patches, rootEl);
     }
 
     /**
@@ -13537,7 +13578,7 @@ globalThis.djust.djTransitionGroup = {
      * see pre-apply state; this matches the Phase A event shape with
      * ``phase: 'B'``.
      */
-    function handleChildUpdate(message) {
+    async function handleChildUpdate(message) {
         if (!message) return;
         const viewId = message.view_id;
         if (!viewId) {
@@ -13566,7 +13607,7 @@ globalThis.djust.djTransitionGroup = {
         // namespace; without rootEl the doc-wide lookup in
         // getNodeByPath would cross subtree boundaries.
         if (Array.isArray(message.patches) && message.patches.length > 0) {
-            _applyScopedPatches(message.patches, root);
+            await _applyScopedPatches(message.patches, root);
         }
         clientVdomVersions.set(viewId, message.version);
     }
@@ -13576,7 +13617,7 @@ globalThis.djust.djTransitionGroup = {
      * ``child_update`` but targets a sticky subtree via the
      * ``[dj-sticky-view]`` selector.
      */
-    function handleStickyUpdate(message) {
+    async function handleStickyUpdate(message) {
         if (!message) return;
         const viewId = message.view_id;
         if (!viewId) return;
@@ -13593,7 +13634,7 @@ globalThis.djust.djTransitionGroup = {
             patches: message.patches || [],
         });
         if (Array.isArray(message.patches) && message.patches.length > 0) {
-            _applyScopedPatches(message.patches, root);
+            await _applyScopedPatches(message.patches, root);
         }
         clientVdomVersions.set(viewId, message.version);
     }

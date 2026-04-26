@@ -51,7 +51,8 @@ function createDom(initialHtml) {
         info: () => {},
     };
 
-    window.eval(clientCode + '\nwindow.djust._applyPatches = applyPatches;');
+    window.eval(clientCode);
+    window.djust._applyPatches = window.djust.applyPatches;
     return { dom, window, logs };
 }
 
@@ -75,7 +76,7 @@ function collectDjIdsFromHtml(window, html) {
 }
 
 describe('Real NYC Claims ClaimDetailView patch replay', () => {
-    it('replays 6-render tab-switch sequence from real view code', () => {
+    it('replays 6-render tab-switch sequence from real view code', async () => {
         const renders = fixture.renders;
         expect(renders.length).toBe(6);
 
@@ -93,7 +94,7 @@ describe('Real NYC Claims ClaimDetailView patch replay', () => {
             const r = renders[i];
             const prevTab = renders[i - 1].tab;
 
-            const ok = window.djust._applyPatches(r.patches);
+            const ok = await window.djust._applyPatches(r.patches);
 
             // Extract the [dj-root] subtree of the current DOM
             const currentRoot = document.querySelector('[dj-root]');
