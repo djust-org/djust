@@ -1232,6 +1232,42 @@ class TodoView(LiveView):
 
 ---
 
+### Milestone: v0.8.6 — View Transitions PR-B + Open-Issue Drain (13 issues)
+
+*Goal:* Convert the v0.8.5rc1 async-foundation work (PR-A) into a shipped user-facing feature, sweep up the remaining nyc-claims-arc retro tech-debt, and roll the 7 process-canonicalization tickets into one CLAUDE.md/PR-checklist update. Without v0.8.6, PR-A is a breaking signature change for nothing.
+
+**P0 — View Transitions arc (must finish what v0.8.5rc1 started)**:
+
+- **#1098** — `handleMessage` interleaving across `await` boundaries. Stage 8 security finding from PR #1099. Two adjacent inbound WS frames can interleave their `await handleServerResponse` calls; `_pendingEventRefs.size` check at `03-websocket.js:561-568` is read AFTER an `await`, so an in-flight second message could mutate the set between the check and the flush — buffered tick draining out-of-order or applied twice. **Latent today, made worse by PR-B's wrap.** Suggested fix: per-transport message queue (`await this._inflight` chain). Solo. **PR-B blocker.**
+
+- **PR-B** — View Transitions wrap (ADR-013 Option A complete). On top of PR-A's async `applyPatches` foundation, wrap the patch loop in `document.startViewTransition()` opt-in via `<body dj-view-transitions>`. Honors `prefers-reduced-motion: reduce`. Browser-support gate (Chrome/Edge 111+, Safari 18+; Firefox graceful degrade — no animation). 12 vitest cases per ADR-013 §"Test rewrite", real-browser smoke via MCP `djust-browser`. CHANGELOG `### Added: View Transitions API integration`. Solo. Blocked by #1098.
+
+**P2 — Framework gaps (drain group, ~1 PR)**:
+
+- **#1088** — Django system check for stale `collectstatic` `client.min.js`. When `client.min.js` in `STATIC_ROOT` is older than `python/djust/static/djust/client.min.js`, emit a diagnostic so deployers don't ship stale client code.
+- **#1089** — Expand release wheel matrix to cp313 + cp314 explicitly. Currently the GitHub Actions release matrix builds for cp310/311/12; cp313/14 fall through to source build. Closes the source-build trap that surfaced in #1081.
+- **#1090** — Debug-log when `|date` / `|time` filter parse fails. Today silent fallback; should debug-log at WARN with the offending value + format string so template authors can diagnose without instrumentation.
+- **#1093** — SSE-side test for legacy-view `hasattr` guard in `_flush_deferred_to_sse`. Test gap from PR #1091 Stage 13 review — landed without a test that exercises the SSE-transport drain path with a view that lacks `_pending_deferred`.
+
+**P3 — Process canonicalization (single docs PR)**:
+
+Roll all 7 retro-tracker conventions into one CLAUDE.md / PR-checklist / pipeline-run subagent-prompt update. Each is a 1-3 line addition; bundling avoids 7 trivial PRs.
+
+- **#1100** — completeness-grep for async-migration regex passes. After bulk regex pass adding `await` to migrated functions, run a follow-up grep + visual scan for hits inside `async` test bodies that don't have `await`.
+- **#1101** — ADR scope-estimation for async-style migrations. Test-file scope is typically 2-3× production scope; count via `grep -lr` upfront.
+- **#1103** — prefer `is None` coalescing over `kwargs.setdefault()` for forwarding mixins. `setdefault` doesn't overwrite caller-passed `None`.
+- **#1104** — N similar sites need N tests, not "a representative few". Mechanical-replacement PRs should test all replacement sites.
+- **#1106** — CHANGELOG conventions for additions to existing test files. Reference the test CLASS, not "N regression cases in <file>", to avoid the test-count drift hook.
+- **#1108** — `Iterable[T]` over `list[T]` for membership-check filter parameters; test at least one non-list shape (tuple OR set).
+- **#1109** — dynamic test fixture pattern: `type(name, bases, dict)` over class-level mutation in `__init__`.
+
+**Out of scope for v0.8.6** (parked):
+
+- The 26 issues labeled `out-of-scope-for-djust-drain` — pipeline-skill / process improvements; need their own batch session against `~/.claude/skills/`, not the djust repo.
+- The 5 v0.9.0 backlog candidates (component time-travel, Redux-DevTools parity, Phase 2 streaming, ADR-006, live_render sticky auto-detect) — feature-scale, deferred.
+
+---
+
 ### Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)
 
 Five tech-debt issues from the 2026-04-25 reconcile pass were closed-as-relocated because they're real feature work, not 1-PR drain items. Filing them as v0.9.0+ planning candidates so they aren't lost:
