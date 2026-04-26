@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Inheritance resolution doubled filter-arg quotes — `|date:"M d, Y"` rendered
+  as `&quot;Apr 25, 2026&quot;` (closes #1081)** — `nodes_to_template_string`
+  in `crates/djust_templates/src/inheritance.rs` was wrapping every filter arg
+  in `\"…\"` when serializing the resolved-inheritance AST back to a template
+  string. But `parse_filter_specs` deliberately preserves any surrounding quotes
+  on literal args (the dep-tracking extractor needs them to disambiguate
+  literals from bare-identifier variable references — see #787). So an arg
+  parsed from `|date:"M d, Y"` came out of the parser as the string `"M d, Y"`
+  (with the quote chars), and the round-trip wrapped it again to produce
+  `|date:""M d, Y""`. Re-parsing the resolved template then stripped the outer
+  pair, leaving the inner `"M d, Y"` as the format spec; chrono treats `"` as
+  literal output characters in strftime-style formats, so the rendered date
+  came out as `"Apr 25, 2026"`, then HTML-escape converted the `"` to
+  `&quot;` — surfacing as `&quot;Apr 25, 2026&quot;` in the rendered DOM.
+  The fix emits the arg verbatim (`|filter:{arg}`) since `parse_filter_specs`
+  already preserves the source-form quotes; round-trip is now idempotent.
+  Same fix applied to the `Node::InlineIf` branch (a `{{ x if cond else y |
+  filter:"…" }}` chain has the same shape). 29 regression cases in
+  `tests/unit/test_filter_literal_args_1081.py` + 3 in
+  `crates/djust_templates/src/inheritance.rs` lock the round-trip invariant.
+  Surfaced via PR #1086 against an actual 26,785-char inheritance-resolved
+  template (`<style>` blocks with quoted CSS font names + the date filter).
+  Failure mode was inheritance-resolution-specific: simple inline templates
+  (no `{% extends %}`) never hit `nodes_to_template_string` and rendered
+  correctly all along — which is why the simple-template regression suite
+  passed but production templates with inheritance failed.
+
+### Added
+
+- **Regression tests locking literal filter-arg quote stripping (#1081)** — issue
+  reported `{{ d|date:"M d, Y" }}` rendering as `&quot;Apr 25, 2026&quot;` (literal
+  double-quotes wrapping the result) and `{{ x|default:"fallback" }}` rendering
+  as `&quot;fallback&quot;`. Investigation across all renderer code paths
+  confirmed the existing `strip_filter_arg_quotes` helper (landed v0.5.2rc1 via
+  #787) is invoked at every filter-application site:
+  `render_node_with_loader` (Variable + InlineIf nodes, both call sites at
+  `crates/djust_templates/src/renderer.rs:271,328`) and `get_value` for inline
+  filter chains (renderer.rs:1556 — inline `arg_str = arg_str[1..len-1]` strip).
+  When the issue was reopened with a more specific reproduction path
+  ("Django `DateField` from a model passes through the Rust context serializer
+  before being filtered, output is inserted as JSON string value into VDOM"),
+  re-tested the named path and confirmed `serialize_context`
+  (`crates/djust_live/src/lib.rs:1776-1781`) returns the bare ISO string —
+  `value.call_method0("isoformat")` is passed straight through `into_pyobject`
+  with no `serde_json::to_string` or quote-wrapping. No reproducible code path
+  produces the reported output on `main` (= v0.8.3rc1).
+  New `tests/unit/test_filter_literal_args_1081.py` ships **24 cases** covering
+  every literal-arg shape from the issue body, follow-up comments, and reopen:
+  (1) `|date` with `"M d, Y"` / `"F j, Y"` / single-quoted format / dotted-path
+  field access; (2) `|default` with simple word / multi-word / slash / em-dash /
+  dash / "No" / single-quoted / truthy passthrough / None fallback; (3) chains
+  (`|date:"…"|default:"…"`, `|default:"…"|upper`); (4) HTML attribute context
+  (where any leftover literal quote would surface as `&quot;`); (5)
+  `serialize_context` output shape — bare ISO string for `date` /
+  `datetime` / list-of-dicts (the queryset+model+date path named in the
+  reopen); (6) full `LiveView.render()` with Django Model + DateField via the
+  JIT serializer; (7) `LiveView.render()` with list of Model instances
+  (`_jit_serialize_queryset` / `_jit_serialize_model` path); (8)
+  `render_with_diff` full + partial (the WS-update path the reopen described
+  as inserting JSON-quoted values into the VDOM). Locks the invariant against
+  future renderer / VDOM-patch / JIT-serializer / context-serializer refactors
+  so the JSON-quoting class of bug cannot silently re-emerge.
+
 ## [0.8.3rc1] - 2026-04-25
 
 ### Added
