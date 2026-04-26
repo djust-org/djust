@@ -285,6 +285,83 @@ def _check_missing_compiled_css(errors):
                 )
 
 
+def _check_stale_collected_client(errors):
+    """C013 — STATIC_ROOT/djust/client.min.js is older than the wheel-bundled
+    copy at python/djust/static/djust/client.min.js (closes #1088).
+
+    The trap: anyone with STATIC_ROOT configured (typical production setup
+    behind WhiteNoise / nginx / a CDN) can ship a stale client.min.js after
+    a djust wheel upgrade if they forget `collectstatic --clear`. The
+    server runs new code; the browser loads old client.js → wire-protocol
+    skew → mysterious VDOM patch failures. #1081 was reopened twice
+    before the reporter root-caused this.
+
+    Honors DJUST_CONFIG['suppress_checks'] = ['C013'] for users who
+    deliberately serve client.min.js from elsewhere (CDN, custom build).
+    """
+    import hashlib
+    from pathlib import Path
+
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C013"):
+        return
+
+    static_root = getattr(settings, "STATIC_ROOT", None)
+    if not static_root:
+        # No STATIC_ROOT means collectstatic isn't part of the deploy story
+        return
+
+    collected = Path(static_root) / "djust" / "client.min.js"
+    if not collected.exists():
+        # Either collectstatic hasn't run or the user serves client.min.js
+        # from a different path. Either way, not our problem to flag here —
+        # C011 (missing compiled CSS) and C012 (manual client.js) cover the
+        # related symptoms.
+        return
+
+    # Find the wheel-bundled copy. djust.__file__ resolves to the installed
+    # package path; static/djust/client.min.js is right alongside.
+    try:
+        from djust import __file__ as djust_init_path
+    except ImportError:
+        return
+    wheel_bundled = Path(djust_init_path).parent / "static" / "djust" / "client.min.js"
+    if not wheel_bundled.exists():
+        return
+
+    # Compare by content hash — mtime is unreliable across pip-install,
+    # tar extraction, file-system mounts.
+    def _sha256(p: Path) -> str:
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    try:
+        if _sha256(collected) == _sha256(wheel_bundled):
+            return  # Up-to-date — quiet
+    except OSError:
+        return  # Permission / IO error — don't fail the check at startup
+
+    errors.append(
+        DjustWarning(
+            f"Stale collectstatic copy of client.min.js detected at "
+            f"{collected}. The wheel-bundled copy is different — your browser "
+            f"will load outdated client code.",
+            hint=(
+                "Run `python manage.py collectstatic --clear --noinput` to refresh, "
+                "then hard-reload the browser (Cmd+Shift+R / Ctrl+Shift+R). "
+                "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['C013']} "
+                "if you serve client.min.js from a CDN or custom build."
+            ),
+            id="djust.C013",
+            fix_hint=("Run: python manage.py collectstatic --clear --noinput"),
+        )
+    )
+
+
 def _check_manual_client_js(errors):
     """Detect manual client.js loading in base templates (causes double-loading)."""
     template_dirs = _get_template_dirs()
@@ -531,6 +608,9 @@ def check_configuration(app_configs, **kwargs):
 
     # C012 -- Manual client.js in base templates
     _check_manual_client_js(errors)
+
+    # C013 -- Stale collectstatic copy of client.min.js (closes #1088)
+    _check_stale_collected_client(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

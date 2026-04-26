@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`djust.C013` system check — stale collectstatic copy of `client.min.js`
+  (closes #1088)** — anyone with `STATIC_ROOT` configured (typical
+  production deployment behind WhiteNoise / nginx / a CDN) can ship a
+  stale `client.min.js` after a djust wheel upgrade if they forget
+  `collectstatic --clear`. The server runs new code; the browser loads
+  old client.js → wire-protocol skew → mysterious VDOM patch failures.
+  #1081 was reopened twice before the reporter root-caused this
+  structurally-recurring trap.
+
+  C013 compares the SHA-256 of `STATIC_ROOT/djust/client.min.js`
+  against the wheel-bundled copy at `python/djust/static/djust/client.min.js`.
+  When they diverge, emits a Django system warning at startup with the
+  exact fix command. No-op when `STATIC_ROOT` is unset, when the
+  collected file is absent (pre-collectstatic), or when content matches.
+  Honors `DJUST_CONFIG = {"suppress_checks": ["C013"]}` for users who
+  serve `client.min.js` from a CDN or custom build.
+
+  Files: `python/djust/checks.py` (new `_check_stale_collected_client`,
+  wired into `check_configuration`); 5 cases in `TestC013StaleCollectstatic`
+  in `python/tests/test_checks.py` cover no-STATIC_ROOT skip,
+  no-collected-file skip, matching-content quiet, diverged-content
+  warning, suppress-via-DJUST_CONFIG silence.
+
+### Fixed
+
+- **`|date` and `|time` filters now debug-log on parse failure (closes
+  #1090)** — both filters previously fell through silently to the
+  original value when chrono failed to parse the input string. The
+  #1081 4-round-reopen investigation would have collapsed to a
+  5-minute diagnosis if a single line had been logged at parse-failure
+  time. Now the failure is surfaced via `tracing::debug!` against
+  target `djust.templates.filters` with the offending value, format
+  string, and chrono error message.
+
+  Enable via Python `LOGGING['loggers']['djust.templates.filters'] =
+  {'level': 'DEBUG'}` or set `RUST_LOG=djust.templates.filters=debug`
+  for the Rust-side `tracing` consumer. Behavior unchanged when the
+  log target is disabled — just no longer a silent void.
+
+  Files: `crates/djust_templates/Cargo.toml` (added `tracing`
+  workspace dep), `crates/djust_templates/src/filters.rs` (`|date`
+  arm at line ~248, `|time` arm at line ~284 — replaced
+  `Err(_) => Ok(value.clone())` with `Err(e) => { tracing::debug!(...);
+  Ok(value.clone()) }`).
+
+- **`_flush_deferred_to_sse` legacy-view guard now has a regression
+  test (closes #1093)** — Stage 13 review of PR #1091 flagged that the
+  WS-side `hasattr` guard had a parallel test
+  (`test_flush_deferred_handles_view_without_drain_method`) but the
+  SSE-side did not. New `test_sse_flush_deferred_handles_view_without_drain_method`
+  in `python/djust/tests/test_defer.py` mirrors the WS shape — a
+  legacy view class without `_drain_deferred` must short-circuit
+  cleanly without `AttributeError`.
+
+- **Release wheel matrix expanded to cp313 + cp314 (closes #1089)** —
+  `.github/workflows/release.yml` previously built only cp310/cp311/cp312
+  wheels. Users on Python 3.13 or 3.14 fell back to source-compiling
+  the sdist at `pip install` time, producing untested binaries whose
+  runtime behavior could diverge from CI-tested cp312 (this was the
+  root cause of #1081's first reopen — reporter on 3.14 hit a source-
+  compiled `_rust.cpython-314-darwin.so`). Matrix now ships tested
+  wheels for cp310–cp314 across Linux x86_64, macOS Intel + ARM, and
+  Windows x86_64 (Windows still excludes 3.10 per the existing
+  policy).
+
 - **View Transitions API integration in `applyPatches` (PR-B / ADR-013)** —
   Opt-in via `<body dj-view-transitions>`. When the browser supports
   `document.startViewTransition()` AND the body attribute is present
