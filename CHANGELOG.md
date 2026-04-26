@@ -181,8 +181,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Implementation: new `_safeCallHook(fn, label, ...args)` helper in
   `python/djust/static/djust/src/19-hooks.js` wraps the existing
-  try/catch sites for each lifecycle path. 8 sync sites refactored to
-  use the helper. New file `tests/js/async_hooks.test.js` with 5 cases
+  try/catch sites for each lifecycle path. 9 sync sites refactored to
+  use the helper (mounted×2, beforeUpdate, updated, destroyed×2,
+  disconnected, reconnected, handleEvent). New file
+  `tests/js/async_hooks.test.js` with 5 cases
   cover sync-unchanged behavior + async-Promise-rejection-logging +
   fire-and-forget timing contract.
 
