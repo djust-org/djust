@@ -85,6 +85,32 @@ window.djust.hooks = {
 | `disconnected()` | WebSocket connection drops. Show offline indicators. |
 | `reconnected()` | WebSocket restored after disconnect. Refresh state. |
 
+### Async lifecycle callbacks (v0.8.6+)
+
+Lifecycle methods may be `async` (return a Promise). The dispatcher
+detects Promise return and chains `.catch` to log rejections via
+`console.error` — no Unhandled Promise Rejection in the browser console.
+
+```javascript
+window.djust.hooks.UserAvatar = {
+    async mounted() {
+        // Fetch profile data on mount; safe — rejection logs cleanly
+        const res = await fetch(`/api/profile/${this.el.dataset.userId}`);
+        const profile = await res.json();
+        this.el.querySelector('img').src = profile.avatar_url;
+    },
+};
+```
+
+**Fire-and-forget contract**: the dispatcher does NOT await your async
+hook. Lifecycle callbacks run in parallel with subsequent patches —
+your hook's I/O can't block the render loop. If you need sequencing
+across hook completion (e.g. "patch B must wait for hook A's fetch"),
+coordinate explicitly via `pushEvent` + a server-side handler.
+
+Sync hooks (no async/await, no Promise return) behave exactly as
+before. This is purely additive: no API change for existing hook code.
+
 ## Hook Instance API
 
 ### Properties
