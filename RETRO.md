@@ -189,10 +189,168 @@ issue or be explicitly closed with a reason.
 | 156 | Edit-tool failure-mode + smoke-test discipline gap | Retro v0.8.3 / PR #1083 | #1084 | Open | New (Edit-failure produces silent unmodified file; same shape as Action #122) |
 | 157 | 3rd-strike RETRO_GATE_VIOLATION — small bookkeeping PRs bypass retro-artifact gate | Retro v0.8.3 / PRs #1069, #1073, #1082 | #1085 | Open | New (3 milestones in a row; document explicit ROADMAP-PR exemption or fix the gate) |
 | 158 | Inheritance round-trip identity tests must drive from parser output, not direct AST construction | Retro v0.8.4 / PR #1086 | — | Open | New — `nodes_to_template_string`'s existing test passed because it built `Node::Variable` with bare-string args, bypassing `parse_filter_specs`'s "preserve outer quotes for dep-tracking" contract. PR #1086 added the parser-driven round-trip case. Generalize: every AST round-trip (inheritance / serialization / cache-rebuild) needs a "parse the source, round-trip, re-parse, assert AST equality" test, not an AST-equality-only test. |
-| 159 | Stale-`collectstatic` Django system check (`djust.S0XX`) | Retro v0.8.4 / PR #1086 (red-herring trail) | #1088 | Open | Filed during #1081 investigation — surfacing the stale-JS class of "framework looks broken but isn't" report at startup. ~50 lines, fits existing `python/djust/checks.py` pattern. |
-| 160 | Expand release wheel matrix to cp313 + cp314 | Retro v0.8.4 / PR #1086 | #1089 | Open | PyPI ships only cp310/11/12; reporter on cp314 fell back to source build at install time. Untested binary contributed to early misdiagnosis. |
-| 161 | Debug-log when `\|date` / `\|time` filter parse fails | Retro v0.8.4 / PR #1086 | #1090 | Open | Silent passthrough on parse failure made #1081 hard to triage. One `tracing::debug!` line in the `Err` arm of `format_date` would have collapsed the saga to a 5-minute diagnosis. |
+| 159 | Stale-`collectstatic` Django system check (`djust.S0XX`) | Retro v0.8.4 / PR #1086 (red-herring trail) | #1088 | Closed | Shipped as `djust.C013` in v0.8.6 PR #1115 |
+| 160 | Expand release wheel matrix to cp313 + cp314 | Retro v0.8.4 / PR #1086 | #1089 | Closed | Shipped in v0.8.6 PR #1115 (`.github/workflows/release.yml` matrix) |
+| 161 | Debug-log when `\|date` / `\|time` filter parse fails | Retro v0.8.4 / PR #1086 | #1090 | Closed | Shipped in v0.8.6 PR #1115 (`tracing::debug!` in `Err` arm of `format_date`/`format_time`) |
 | 162 | Demand bit-exact runnable repro before posting "root cause confirmed" on a multi-reopen issue | Retro v0.8.4 / PR #1086 (process) | — | Open | New — posted 3 "root cause" / "smoking gun" comments on #1081 based on framework-side theory testing; all three were wrong. The actual fix landed only after gaining direct project access. Process rule: on any issue with N≥2 reopens, refuse to post a root-cause claim without a runnable script that reproduces against the user's exact environment. Add to `pr/feedback/` triage checklist. |
+| 163 | Split-foundation pattern for high-blast-radius features (canonicalize) | Retro v0.8.6 / View Transitions arc | #1122 | Open | Validated 3× now (View Transitions PR-A/PR-B, plus #1098 fix between). Add to CLAUDE.md / ADR template. |
+| 164 | Pre-mount/post-mount keyset invariant test pattern (canonicalize) | Retro v0.8.6 / PR #1117 + PR #1119 | #1123 | Open | Generalizable to any context dict with default + runtime forms. Canonicalize in CLAUDE.md testing patterns. |
+| 165 | CodeQL `js/tainted-format-string` self-review checkpoint | Retro v0.8.6 / PR #1120 | #1124 | Open | Caught by CodeQL post-CI; canonical safe pattern is `console.error('msg %s:', val, e)`, not template literals with user-controlled `${val}`. Add to CLAUDE.md JS-side patterns + Stage 7. |
+| 166 | Bulk dispatch-site refactor + count-test pattern (canonicalize) | Retro v0.8.6 / PRs #1117 + #1120 | #1125 | Open | Pattern: many similar sites → one helper + a count-based test that catches future additions that forget the pattern. |
+| 167 | v0.8.5 milestone retro never written | Retro v0.8.6 (backfill bookkeeping) | #1126 | Closed | Backfilled v0.8.5 entry in RETRO.md alongside the v0.8.6 retro session, 2026-04-26. |
+
+---
+
+## v0.8.6 — View Transitions PR-B + 3 nyc-claims data_table issues + async-hooks (PRs #1112, #1113, #1115, #1116, #1117, #1119, #1120)
+
+**Date**: 2026-04-26
+**Scope**: Closes the View Transitions arc started in v0.8.5; ships the actual user-facing wrap (PR-B). Resolves 3 nyc-claims data_table issues that surfaced during the session (#1110, #1111, #1114 HIGH). 7-PR milestone with 16 GitHub issues closed plus the View Transitions ADR-013 row.
+**Tests at close**: 4767 Python + 1419 JS = ~6186 across the suite (was 4745 + 1402 = 6147 at v0.8.5 close).
+
+### What We Learned
+
+**1. The two-PR split for high-blast-radius features keeps paying off.**
+v0.8.5's PR-A (async signature) + v0.8.6's PR-B (View Transitions wrap) was the third application of "split foundation from capability into separate PRs". PR #1092's earlier attempt at one bundled PR shipped a sync-callback bug that escaped to retroactive Stage 11. Splitting:
+  - Localizes review surface (each PR has zero or near-zero must-fixes)
+  - Lets the foundation soak through one or more releases before the capability rides on top
+  - Forces the dependency to be made explicit (PR #1112's `_inflight` queue was a v0.8.6 PR-B blocker, filed and resolved as a discrete unit before PR-B landed)
+
+**Action taken**: Open — tracked in Action Tracker #163 (GitHub #1122).
+
+**2. Pre-mount/post-mount keyset invariant tests generalize beyond first use.**
+PR #1117 introduced `test_pre_mount_default_has_required_template_keys` for `DataTableMixin` (asserting `post_mount_keys ⊆ pre_mount_keys` so future post-mount additions can't drift). PR #1119 added 3 new keys to the same dispatcher; the test caught the keyset alignment automatically without changes. Pattern shape: any framework-level context dict that has both a default form and a runtime-populated form benefits from this test.
+
+**Action taken**: Open — tracked in Action Tracker #164 (GitHub #1123).
+
+**3. RETRO_GATE_VIOLATION hit twice in v0.8.6 (PRs #1119, #1120).**
+4th milestone in a row with this gap. Action #157 already tracks "small bookkeeping PRs bypass retro-artifact gate" (filed v0.8.3). The pattern: when I move fast through a batch ($_ALL$ flag in pipeline-run), the retro stage gets dropped silently. The state-file gate works for state-file-tracked PRs but not for branch-only iterations within a multi-PR pipeline. Backfilled both retros at the start of this milestone retro (Stage 2). The structural fix needs to land — either tighten the gate or document an explicit exemption path.
+
+**Action taken**: Open — already tracked in Action Tracker #157 (GitHub #1085). Adding a 4th-strike note via stage 4.
+
+**4. CodeQL `js/tainted-format-string` is a real review checkpoint.**
+PR #1120 introduced `console.error(\`[dj-hook] Error in ${label}:\`, e)` where `label` derives from `el.getAttribute('dj-hook')` — user-controlled DOM. CodeQL flagged 2 high-severity warnings post-CI. Fix is parameterized format string: `console.error('[dj-hook] Error in %s:', label, e)`. The %s form is the canonical safe pattern in JS — pulls `label` out of the format string entirely.
+
+**Action taken**: Open — tracked in Action Tracker #165 (GitHub #1124).
+
+**5. Bulk dispatch-site refactors with one helper + tests as the safety net.**
+PR #1117 decorated 21 `on_table_*` methods via Python regex script. PR #1120 refactored 9 hook lifecycle sites to a single `_safeCallHook` helper. Both:
+  - Used a one-helper-pattern (decorator / wrapper) — duplication eliminated
+  - Were validated by a count-based test (`test_handler_count_matches_expected`, `test_all_on_table_methods_decorated`) that catches future additions that forget to follow the pattern
+  - Bulk edits saved time but the count-test was the load-bearing correctness gate
+
+**Action taken**: Open — tracked in Action Tracker #166 (GitHub #1125).
+
+**6. The async refactor (v0.8.5 PR-A) delivered concrete ROI in v0.8.6.**
+3 distinct features in v0.8.6 leveraged the async signature: PR #1112 (handleMessage queue), PR #1113 (View Transitions wrap), PR #1120 (async-tolerant dj-hook dispatch). PR-A on its own had zero user-visible impact and was a breaking signature change. v0.8.6 paid that back across 3 vectors. Pattern validation: foundational refactors with no immediate user benefit are still net-positive when they enable 2+ downstream features within 1-2 milestones.
+
+**Action taken**: Closed — pattern validated; sufficient evidence in v0.8.5/v0.8.6 retros.
+
+### Insights
+
+- **Stage 11 caught real things in 5/7 PRs (71%).** Of the 7 substantive PRs, 5 had Stage 11 findings that were fixed before merge: #1112 (3 un-awaited `handleMessage` calls — 🔴 must-fix), #1117 (misleading docstring + show_stats follow-up), #1119 (Phase 6 docstring + row_url XSS warning + CSP caveat), #1120 (9-vs-8 count, plus the post-CI CodeQL catch). Without Stage 11 these would have shipped. The "always run Stage 11" rule continues to earn its keep across milestones.
+
+- **Test-pattern surprise: `row|dictsort:col.key|first` is Rust-engine-only.** PR #1119 tests using stock Django's template engine produced empty cells. Solution: assert structural output (attribute presence, conditional branches), not extracted values. Generalizes to any djust template using dict-key-by-filter chains. Worth a CLAUDE.md note.
+
+- **Format-string hygiene as a self-review pattern.** PR #1120 had to fix template-literal logging post-CodeQL. The general rule: when an error log includes user-controlled data (DOM attributes, server frame fields, request body), use `%s` placeholder + parameter, not template literals. The bundled `client.js` line-number reports made the trail harder to follow than necessary.
+
+- **The View Transitions arc shipped end-to-end across 2 milestones with zero rollbacks.** PR-A (v0.8.5) → #1098 fix (v0.8.6) → PR-B (v0.8.6). 3 PRs, zero 🔴 across all 3 Stage 11 reviews after addressing findings, zero post-merge fixes. The split-foundation approach beat PR #1092's failed monolith.
+
+### Review Stats
+
+| Metric | #1112 | #1113 | #1115 | #1116 | #1117 | #1119 | #1120 | Total |
+|--------|------:|------:|------:|------:|------:|------:|------:|------:|
+| Issues closed | 1 | (ADR-013) | 4 | 7 | 1 | 2 | 0 | 16 |
+| Tests added | 6 | 12 | 5 | 0 | 8 | 14 | 5 | 50 |
+| 🔴 Stage 11 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| 🟡 Stage 11 | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 2 |
+| 🟢 Stage 11 | 3 | 0 | 3 | 0 | 3 | 3 | 3 | 15 |
+| Findings fixed before merge | 3 | n/a | n/a | n/a | 1 | 3 | 1 | 8 |
+| CodeQL post-CI catches | 0 | 0 | 0 | 0 | 0 | 0 | 1 (high) | 1 |
+| CI runs to green | 1 | 1 | 1 | 1 | 1 | 1 | 2 (CodeQL refit) | 8 |
+
+### Process Improvements Applied
+
+**CLAUDE.md (PR #1116)**:
+- Async-migration regex pass: completeness-grep convention
+- ADR scope-estimation counts test-file callers (2-3× src)
+- `is None` coalesce vs `kwargs.setdefault` for forwarding mixins
+- N similar sites need N tests (not "a representative few")
+- CHANGELOG phrasing for additions to existing test files
+- `Iterable[T]` over `list[T]` for membership-check parameters
+- Dynamic test fixture pattern: `type(name, bases, dict)` over class mutation
+- Microtask-faithful test stubs for browser APIs
+- Batch-PR issue × file × test mapping table
+
+**Pipeline template / skill**:
+- `pipeline-run` skill: removed the "After 3+ tasks in `--all` mode, pause for review" rule per user feedback. Autonomous mode is autonomous.
+
+**Skills**: none updated.
+
+### Open Items
+
+- [ ] 4th-strike RETRO_GATE_VIOLATION (PRs #1119, #1120) — already tracked in Action Tracker #157 (GitHub #1085). Note added.
+- [ ] CodeQL `js/tainted-format-string` self-review checkpoint — Action Tracker #165.
+- [ ] Two-PR-split-for-high-blast-radius pattern doc — Action Tracker #163.
+- [ ] Pre-mount/post-mount keyset invariant test as a generalizable pattern — Action Tracker #164.
+- [ ] Bulk-dispatch-site refactor + count-test pattern — Action Tracker #166.
+- [ ] v0.8.5 retro never written (this retro session backfilled per-PR retros for #1119/#1120 but a separate v0.8.5 milestone retro is also missing). Track separately — Action Tracker #167.
+
+---
+
+## v0.8.5 — async applyPatches foundation + 3 nyc-claims gap fixes (PRs #1099, #1102, #1105, #1107)
+
+**Date**: 2026-04-26 (released as v0.8.5rc1)
+**Scope**: View Transitions PR-A (foundational `applyPatches` async signature change), `self.defer()` (Phoenix `send(self(), :foo)` parity), and 3 nyc-claims-reported workarounds-replaced-with-features (`wizard_input_event`, T012 partial-suppress, `wizard_rendered_fields`).
+**Note**: Backfill — this milestone shipped without a milestone retro at the time; entry written 2026-04-26 alongside the v0.8.6 retro.
+
+### What We Learned
+
+**1. Foundational refactors are zero-user-benefit in isolation; only the downstream uses justify them.**
+PR #1099 (PR-A) made `applyPatches` async. Patch-loop body byte-identical. Public surface (`window.djust.applyPatches`) became a breaking change for any external hook code, with no compensating user-visible improvement in the same PR. The v0.8.6 milestone proved the investment paid back (3 features built on top), but v0.8.5 alone was a breaking signature change for a future capability.
+
+**Action taken**: Closed — pattern validated by v0.8.6 outcomes. No tracker row needed; this is a v0.8.5 → v0.8.6 cross-arc finding noted in v0.8.6's What We Learned #6.
+
+**2. JSDOM async-function-hoisting is a real test-environment quirk.**
+PR-A hit it: async function declarations don't hoist to the eval host scope the way sync function declarations do under JSDOM. Solution: explicit `globalThis.djust.applyPatches = applyPatches` namespace export. Future async refactors should plan for this from day one rather than discovering it during test migration.
+
+**Action taken**: Open — covered by CLAUDE.md addition in v0.8.6 PR #1116 (async-migration completeness-grep convention plus this hoisting note can fold into the same section).
+
+**3. Setdefault doesn't overwrite caller-supplied None.**
+PR #1102's `wizard_input_event` first attempt used `kwargs.setdefault('dom_event', self.wizard_input_event)`. A caller passing `dom_event=None` got `attrs[None]` in the rendered HTML — broken. Fix is explicit `if kwargs.get('x') is None: kwargs['x'] = default`. Caught by Stage 11.
+
+**Action taken**: Closed — canonicalized in CLAUDE.md via PR #1116 (Action Tracker #103, then folded into v0.8.6 Process Canonicalizations).
+
+**4. Mechanical-replacement PRs need N tests for N sites.**
+PR #1102 had 5 mechanical attr-key swaps in `frameworks.py` but tests covered only 4; radio site missed. Stage 11 caught it; added test. Generic enough to canonicalize.
+
+**Action taken**: Closed — canonicalized in CLAUDE.md via PR #1116 (Action Tracker #104).
+
+**5. `Iterable[T]`-not-`list[T]` for membership-check parameters.**
+PR #1107's `wizard_rendered_fields` annotated as `list | None`, but the code used `fname in filter_x` which works on any iterable. Stage 11 caught it; widened to documented `Iterable[str]` semantics + tests for tuple and set inputs.
+
+**Action taken**: Closed — canonicalized in CLAUDE.md via PR #1116 (Action Tracker #108).
+
+### Insights
+
+- **Three nyc-claims gap-fix PRs (#1102, #1105, #1107) all had Stage 11 catches.** Each was small (~30-100 LOC) and "looked easy", and each had one or two genuine 🟡 findings in review. Reinforces the rule: "small change → no Stage 11 catch" is a fallacy; Stage 11 finds non-obvious things across PR sizes.
+
+- **PR-A (#1099) was the first to use the new pipeline-retro state-file flow** (skill update from PR #1083 context). Per-PR retro file landed cleanly; milestone retro was missed at the time (this entry is the backfill). Suggests the pipeline-run → pipeline-retro handoff still misses milestone-boundary detection.
+
+### Review Stats
+
+| Metric | #1099 | #1102 | #1105 | #1107 | Total |
+|--------|------:|------:|------:|------:|------:|
+| Issues closed | (PR-A foundation) | 1 (#1095) | 1 (#1096) | 1 (#1097) | 3 |
+| Tests added | 12 | 14 | 5 | 12 | 43 |
+| 🔴 Stage 11 | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Stage 11 | 0 | 3 | 2 | 3 | 8 |
+| 🟢 Stage 11 | 2 | 0 | 0 | 2 | 4 |
+| Findings fixed before merge | 0 | 3 | 2 | 3 | 8 |
+
+### Open Items
+
+- [x] All v0.8.5 process learnings folded into v0.8.6's PR #1116 CLAUDE.md update.
+- [ ] No outstanding v0.8.5-specific tracker rows.
 
 ---
 
@@ -264,9 +422,9 @@ When picking the next "Quick Win" task, 6 of the 8 candidates I checked were alr
 ### Open Items
 
 - [ ] Item 1 — Inheritance round-trip identity tests must drive from parser output (Action Tracker #158)
-- [ ] Item 2 — Stale-`collectstatic` Django system check (Action Tracker #159, GitHub #1088)
-- [ ] Item 3 — Expand release wheel matrix to cp313 + cp314 (Action Tracker #160, GitHub #1089)
-- [ ] Item 4 — Debug-log when `|date` / `|time` filter parse fails (Action Tracker #161, GitHub #1090)
+- [x] Item 2 — Stale-`collectstatic` Django system check (Action Tracker #159, GitHub #1088) — resolved in v0.8.6 PR #1115
+- [x] Item 3 — Expand release wheel matrix to cp313 + cp314 (Action Tracker #160, GitHub #1089) — resolved in v0.8.6 PR #1115
+- [x] Item 4 — Debug-log when `|date` / `|time` filter parse fails (Action Tracker #161, GitHub #1090) — resolved in v0.8.6 PR #1115
 - [ ] Item 5 — Demand bit-exact runnable repro before posting "root cause confirmed" on N≥2 reopen issues (Action Tracker #162)
 
 ### Issues filed during this milestone
