@@ -91,6 +91,15 @@ class WizardMixin:
     #: pre-filled and submitted without an intermediate blur. Closes #1095.
     wizard_input_event: str = "dj-change"
 
+    #: Optional opt-in to skip ``field_html`` rendering for fields not in this
+    #: list. Default ``None`` renders ALL fields in the current step's form
+    #: (pre-#1097 behavior). Set to a list of field names to render only those
+    #: — useful when a step's form has many fields but the template only
+    #: references a subset (e.g. conditional owner-info fields hidden behind
+    #: ``is_vehicle_owner == "no"``). Per-step overrides via the step dict's
+    #: ``"rendered_fields"`` key. Closes #1097.
+    wizard_rendered_fields: list | None = None
+
     @property
     def _steps(self) -> list:
         """Read wizard_steps from the CLASS definition, not the instance.
@@ -225,6 +234,9 @@ class WizardMixin:
             form_instance = (
                 form_class(data=current_step_data) if current_step_data else form_class()
             )
+            # #1097: opt-in field_html filter. Per-step "rendered_fields" wins
+            # over the class-level default. None = render all (legacy behavior).
+            rendered_filter = current_step.get("rendered_fields", self.wizard_rendered_fields)
             for fname, field in form_instance.fields.items():
                 val = current_step_data.get(fname, field.initial or "")
                 form_data[fname] = val if val is not None else ""
@@ -233,7 +245,8 @@ class WizardMixin:
                     form_choices[fname] = [
                         {"value": str(k), "label": str(v)} for k, v in field.choices if str(k)
                     ]
-                field_html[fname] = self.as_live_field(fname, event_name="validate_field")
+                if rendered_filter is None or fname in rendered_filter:
+                    field_html[fname] = self.as_live_field(fname, event_name="validate_field")
 
         # Expose choices as flat top-level vars too (e.g. borough_choices)
         # so templates can use either form_choices.borough or borough_choices.
