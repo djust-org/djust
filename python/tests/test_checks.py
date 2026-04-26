@@ -3138,6 +3138,123 @@ class TestT012EventDirectivesWithoutView:
         t012 = [e for e in errors if e.id == "djust.T012"]
         assert len(t012) == 0
 
+    def test_t012_passes_with_partial_marker(self, tmp_path, settings):
+        """#1096: T012 should not fire when {# djust:partial #} marker is present.
+
+        Templates included via {% include %} from a parent LiveView root are
+        intentional fragments — the parent owns dj-view. The partial marker
+        opts the file out of T012 without introducing a global suppression.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "step_partial.html").write_text(
+            textwrap.dedent(
+                """\
+                {# djust:partial #}
+                <fieldset>
+                    <input dj-input="validate_field" name="vin" />
+                    <button dj-click="next_step">Next</button>
+                </fieldset>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_partial_marker_case_insensitive(self, tmp_path, settings):
+        """The partial marker should be matched case-insensitively."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "step.html").write_text(
+            textwrap.dedent(
+                """\
+                {# Djust: Partial #}
+                <button dj-click="next">Next</button>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_global_suppress_via_djust_config(self, tmp_path, settings):
+        """#1096: T012 honours DJUST_CONFIG['suppress_checks']=['T012']."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text('<button dj-click="next">Next</button>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.DJUST_CONFIG = {"suppress_checks": ["T012"]}
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_global_suppress_accepts_qualified_id(self, tmp_path, settings):
+        """Qualified id 'djust.T012' should also be accepted."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text('<button dj-click="next">Next</button>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.T012"]}
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_hint_mentions_partial_and_global_suppress(self, tmp_path, settings):
+        """The fired warning's hint should describe both opt-out paths."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text('<button dj-click="next">Next</button>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 1
+        hint = t012[0].hint
+        assert "djust:partial" in hint
+        assert "suppress_checks" in hint
+
 
 class TestT013InvalidViewPath:
     """T013 -- dj-view with empty or invalid value."""

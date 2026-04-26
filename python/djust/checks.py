@@ -1975,6 +1975,11 @@ _DJ_EVENT_DIRECTIVES_RE = re.compile(
     r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
+# #1096 — opt-out marker for fragment templates that are intentionally
+# {% include %}d from a parent LiveView root. Fragment authors annotate
+# the file with `{# djust:partial #}` (case-insensitive, optional surrounding
+# whitespace) to silence T012 without introducing a global suppression.
+_DJ_PARTIAL_MARKER_RE = re.compile(r"\{#\s*djust\s*:\s*partial\s*#\}", re.IGNORECASE)
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 # A090 — scanner for {% djust_markdown %} (v0.7.0). Fires info-level once
 # per project when the tag is detected, confirming the Rust-side safe
@@ -2160,21 +2165,32 @@ def check_templates(app_configs, **kwargs):
         _check_unsupported_tags(content, relpath, filepath, errors)
 
         # T012 -- template uses dj-* event directives but missing dj-view
-        if _DJ_EVENT_DIRECTIVES_RE.search(content) and not _DJ_VIEW_RE.search(content):
-            # Only fire if this isn't a component template (components don't need dj-view)
-            if not _DJ_COMPONENT_RE.search(content):
-                errors.append(
-                    DjustWarning(
-                        "%s -- template uses dj-* event directives but has no dj-view attribute."
-                        % relpath,
-                        hint=(
-                            'Add dj-view="yourapp.views.YourView" to the root element, '
-                            "or this template won't be connected to a LiveView."
-                        ),
-                        id="djust.T012",
-                        file_path=filepath,
-                    )
+        if (
+            _DJ_EVENT_DIRECTIVES_RE.search(content)
+            and not _DJ_VIEW_RE.search(content)
+            # Component templates (dj-component) don't need dj-view
+            and not _DJ_COMPONENT_RE.search(content)
+            # #1096: partial-template opt-out marker
+            and not _DJ_PARTIAL_MARKER_RE.search(content)
+            # Global suppression via DJUST_CONFIG['suppress_checks']
+            and not _is_check_suppressed("djust.T012")
+        ):
+            errors.append(
+                DjustWarning(
+                    "%s -- template uses dj-* event directives but has no dj-view attribute."
+                    % relpath,
+                    hint=(
+                        'Add dj-view="yourapp.views.YourView" to the root element, '
+                        "or this template won't be connected to a LiveView. "
+                        "If this template is an intentional fragment included from "
+                        "a parent LiveView root, add a `{# djust:partial #}` "
+                        "comment to silence this check, or suppress globally "
+                        "with DJUST_CONFIG = {'suppress_checks': ['T012']}."
+                    ),
+                    id="djust.T012",
+                    file_path=filepath,
                 )
+            )
 
         # T013 -- dj-view with empty or invalid value
         for match in re.finditer(r'dj-view="([^"]*)"', content):
