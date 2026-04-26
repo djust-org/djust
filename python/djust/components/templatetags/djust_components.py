@@ -595,6 +595,10 @@ def data_table(
     expression_event="table_expression",
     active_expressions=None,
     conditional_formatting=None,
+    # Phase 6 params (#1111: row-level navigation)
+    row_click_event="",
+    row_click_value_key="id",
+    row_url="",
 ):
     """Render a sortable data table with search, filters, selection, pagination, and editing.
 
@@ -696,6 +700,31 @@ def data_table(
         expression_event: column expression filter event name
         active_expressions: dict of active column expression filters
         conditional_formatting: list of formatting preset dicts
+
+    Phase 6 args (#1110, #1111):
+        row_click_event: dj-click event name fired when any <tr> is clicked.
+            Empty string (default) disables row-level click events.
+            LiveView-idiomatic — preferred over row_url for routing inside
+            a LiveView app. CSP-friendly (no inline JS).
+        row_click_value_key: row dict key whose value is sent as data-value
+            on the dj-click. Default "id". Override for slug-based routing
+            (e.g. "uuid", "slug").
+        row_url: row dict key holding a URL. When set, the <tr> gets
+            data-href + an inline onclick that navigates via
+            window.location. **Security**: values flow into JS via
+            ``this.dataset.href`` — only assign developer-controlled URLs
+            (typically computed from ``reverse()``). User-controlled
+            strings could enable ``javascript:`` URI execution.
+            **CSP**: requires ``'unsafe-inline'`` in script-src; prefer
+            row_click_event when CSP is strict. row_click_event takes
+            precedence when both are set.
+
+    Cell-level link column (#1110):
+        column dicts now accept ``link`` (key in row dict holding the
+        href) and ``link_class`` (optional CSS class on the <a>). When
+        ``col.link`` is set the cell renders as
+        ``<a href="{{ row[col.link] }}">{{ row[col.key] }}</a>``;
+        otherwise plain text (pre-#1110 behavior).
     """
     return {
         "rows": rows,
@@ -791,6 +820,10 @@ def data_table(
         "expression_event": expression_event,
         "active_expressions": active_expressions or {},
         "conditional_formatting": conditional_formatting or [],
+        # Phase 6 (#1111: row-level navigation)
+        "row_click_event": row_click_event,
+        "row_click_value_key": row_click_value_key,
+        "row_url": row_url,
     }
 
 

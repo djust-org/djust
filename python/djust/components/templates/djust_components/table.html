@@ -39,7 +39,10 @@
     </thead>
     <tbody>
       {% for row in rows %}
-      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}>
+      {# #1111: row-level navigation. row_click_event fires a djust event
+         (LiveView-idiomatic, preferred); row_url is a static fallback that
+         uses dataset+JS to navigate without LiveView routing. #}
+      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} dj-click="{{ row_click_event }}" data-value="{{ row|dictsort:row_click_value_key|first }}" style="cursor:pointer"{% elif row_url %} data-href="{{ row|dictsort:row_url|first }}" style="cursor:pointer" onclick="window.location=this.dataset.href"{% endif %}>
         {% if selectable %}
         <td>
           <input type="checkbox" class="data-table-checkbox"
@@ -49,7 +52,11 @@
         </td>
         {% endif %}
         {% for col in columns %}
-        <td>{{ row|dictsort:col.key|first }}</td>
+        {# #1110: link column type. col.link names a key in the same row
+           dict that holds the href; col.link_class is an optional CSS
+           class on the <a>. Falls through to plain text when col.link
+           is unset, preserving pre-#1110 behavior. #}
+        <td>{% if col.link %}<a href="{{ row|dictsort:col.link|first }}"{% if col.link_class %} class="{{ col.link_class }}"{% endif %}>{{ row|dictsort:col.key|first }}</a>{% else %}{{ row|dictsort:col.key|first }}{% endif %}</td>
         {% endfor %}
       </tr>
       {% empty %}

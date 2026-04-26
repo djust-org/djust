@@ -285,6 +285,10 @@ _PRE_MOUNT_TABLE_CONTEXT = {
     "column_order": [],
     "visible_columns": [],
     "current_density": "comfortable",
+    # Phase 6 (#1111: row-level navigation)
+    "row_click_event": "",
+    "row_click_value_key": "id",
+    "row_url": "",
 }
 
 
@@ -400,6 +404,13 @@ class DataTableMixin:
     table_column_expressions = None  # {col_key: expression_string} for advanced filtering
     table_expression_event = "table_expression"
     table_conditional_formatting = None  # list of formatting preset dicts
+
+    # Phase 6 class-level configuration (#1111: row-level navigation)
+    table_row_click_event = (
+        ""  # if set, dj-click fires per row with data-value=row[row_click_value_key]
+    )
+    table_row_click_value_key = "id"  # which row key to send as data-value
+    table_row_url = ""  # if set, row becomes a static link (Option A in #1111)
 
     def init_table_state(self):
         """Initialize instance state. Call from mount()."""
@@ -1260,6 +1271,10 @@ class DataTableMixin:
             "expression_event": self.table_expression_event,
             "active_expressions": self.table_active_expressions,
             "conditional_formatting": self.table_conditional_formatting,
+            # Phase 6 (#1111: row-level navigation)
+            "row_click_event": self.table_row_click_event,
+            "row_click_value_key": self.table_row_click_value_key,
+            "row_url": self.table_row_url,
         }
 
     # ── Queryset Pipeline ──

@@ -154,6 +154,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ROADMAP Phoenix LiveView Parity Tracker `View Transitions API` →
   shipped. Quick Win #23 closed.
 
+### Added
+
+- **`{% data_table %}` link column type (closes #1110)** — column dicts
+  now accept a `link` key naming another row dict key that holds the
+  href, and an optional `link_class` for the `<a>` element's CSS class:
+
+  ```python
+  table_columns = [
+      {"key": "claim_number", "label": "Claim #", "link": "claim_url",
+       "link_class": "claim-link"},
+  ]
+  # row dicts include both keys:
+  {"claim_number": "2026PI000001", "claim_url": "/claims/1/", ...}
+  ```
+
+  Renders as:
+
+  ```html
+  <td><a href="/claims/1/" class="claim-link">2026PI000001</a></td>
+  ```
+
+  Falls through to plain text when `col.link` is unset — strict
+  backwards-compat with pre-#1110 column dicts. Replaces the
+  `_inject_link_column` regex post-process workaround downstream
+  consumers had to maintain (e.g. nyc-claims).
+
+- **`{% data_table %}` row-level navigation: `row_click_event` + `row_url`
+  (closes #1111)** — the entire `<tr>` becomes clickable for navigation.
+  Two API shapes:
+
+  **Option B (preferred — LiveView-idiomatic)**: `row_click_event` fires
+  a djust event with `data-value=row[row_click_value_key]`. Default
+  value key is `"id"`; override per-table for slug-based routing:
+
+  ```python
+  table_row_click_event = "open_claim"
+  table_row_click_value_key = "uuid"
+  ```
+
+  ```python
+  @event_handler()
+  def open_claim(self, value: str = "", **kwargs):
+      self.redirect(reverse("claims:detail", kwargs={"claim_id": value}))
+  ```
+
+  **Option A (static URL fallback)**: `row_url` names a row dict key
+  containing the href; the `<tr>` gets `data-href` + an `onclick` that
+  reads `this.dataset.href` and navigates:
+
+  ```python
+  table_row_url = "claim_url"
+  ```
+
+  Both options also wire `style="cursor:pointer"` on each `<tr>` for
+  the affordance. `row_click_event` takes precedence when both are set.
+  Mirrored in `DataTableMixin` via `table_row_click_event`,
+  `table_row_click_value_key`, and `table_row_url` class attributes,
+  threaded through `get_table_context()` and `_PRE_MOUNT_TABLE_CONTEXT`.
+
+  **Security note for Option A (`row_url`)**: the URL flows into JS via
+  `onclick="window.location=this.dataset.href"`. Only assign
+  developer-controlled URLs (typically computed from `reverse()`);
+  user-controlled strings could enable `javascript:` URI execution.
+  **CSP note**: Option A requires `'unsafe-inline'` in `script-src`;
+  prefer Option B (LiveView event) when CSP is strict. Option B is
+  CSP-clean — the click is dispatched via the existing djust event
+  pipeline, no inline JS executed.
+
+  14 regression cases in `python/tests/test_data_table_link_row_nav.py`
+  cover: link-column emits `<a>`; link_class flows through; no-link
+  pre-#1110 compat; `row_click_event` adds `dj-click` to every `<tr>`;
+  `row_click_value_key` overrides default `id`; absent `row_click_event`
+  → no `<tr>` `dj-click` (compat); `row_url` adds `data-href` + JS;
+  `row_click_event` precedence over `row_url`; mixin class-attr
+  defaults; per-view override; pre-mount default + post-mount context
+  + template-tag function include all 3 new keys.
+
 ### Fixed
 
 - **`DataTableMixin` LiveView compatibility — pre-mount guard +
