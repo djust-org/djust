@@ -65,7 +65,7 @@ Several design decisions here work around known djust serialization constraints:
 
 import logging
 import math
-from typing import Any
+from typing import Any, ClassVar
 
 from .decorators import event_handler
 
@@ -85,10 +85,20 @@ class WizardMixin:
 
     wizard_steps: list = []  # Subclasses override with a list of step dicts
 
-    #: DOM event that triggers `validate_field` on text/textarea/select inputs.
-    #: Default ``"dj-change"`` fires only on blur. Set to ``"dj-input"`` to
-    #: capture every keystroke (300ms debounced) — needed when fields can be
-    #: pre-filled and submitted without an intermediate blur. Closes #1095.
+    #: DOM event that triggers `validate_field` on **text-stream widgets**
+    #: (``TextInput``, ``Textarea``, ``NumberInput``, ``EmailInput``,
+    #: ``URLInput``, ``PasswordInput``). Default ``"dj-change"`` fires on
+    #: blur. Set to ``"dj-input"`` to fire on every keystroke (debounced
+    #: client-side) — required when fields can be pre-filled and submitted
+    #: without an intermediate blur (#1095).
+    #:
+    #: Click-fired widgets (``RadioSelect``, ``CheckboxInput``,
+    #: ``CheckboxSelectMultiple``, ``Select``) always use ``"dj-change"``
+    #: regardless of this setting — they commit exactly one value per user
+    #: interaction, so there's no event stream to batch. This scoping keeps
+    #: ``wizard_input_event = "dj-input"`` doing what #1095 intends (capture
+    #: unblurred text edits) without accidentally also applying dj-input
+    #: semantics to widgets that don't have a text stream.
     wizard_input_event: str = "dj-change"
 
     #: Optional opt-in to skip ``field_html`` rendering for fields not in this
@@ -132,6 +142,34 @@ class WizardMixin:
     # Field rendering
     # ------------------------------------------------------------------
 
+    #: Widget classes that commit one value per user interaction and therefore
+    #: belong on ``dj-change`` regardless of ``wizard_input_event``. Subclasses
+    #: can extend this frozenset to cover custom widgets (e.g. a color-picker
+    #: component that fires a single commit event). Using string class names
+    #: avoids pulling ``django.forms`` into this module at import time.
+    _CLICK_FIRED_WIDGET_CLASSES: ClassVar[frozenset[str]] = frozenset({
+        "RadioSelect",
+        "CheckboxInput",
+        "CheckboxSelectMultiple",
+        "Select",
+    })
+
+    def _default_dom_event_for(self, field) -> str:
+        """Pick the correct default ``dom_event`` for a form field's widget.
+
+        Click-fired widgets (radio / checkbox / select) commit exactly one
+        value per user interaction and belong on ``dj-change``. Text-stream
+        widgets (TextInput / Textarea / etc.) use ``wizard_input_event`` so
+        a wizard that opts into ``"dj-input"`` for text (#1095) doesn't
+        accidentally also apply dj-input semantics to radios — which have
+        no stream to fire on.
+        """
+        widget = getattr(field, "widget", None)
+        widget_cls = type(widget).__name__ if widget is not None else ""
+        if widget_cls in self._CLICK_FIRED_WIDGET_CLASSES:
+            return "dj-change"
+        return self.wizard_input_event
+
     def as_live_field(self, field_name: str, event_name: str = "validate_field", **kwargs) -> str:
         """Render a form field as HTML with djust event bindings.
 
@@ -139,12 +177,23 @@ class WizardMixin:
         ``<dom_event>="<event_name>"`` and ``data-field="<field_name>"``
         attributes so the field participates in real-time validation.
 
-        ``dom_event`` defaults to the wizard's ``wizard_input_event`` class
-        attribute (``"dj-change"`` by default — fires on blur). Pass
-        ``dom_event="dj-input"`` per-call, or set ``wizard_input_event =
-        "dj-input"`` on the view, to fire on every keystroke (debounced
-        client-side) — required when fields can be pre-filled and submitted
-        without an intermediate blur (#1095).
+        ``dom_event`` is auto-picked from the field's widget class:
+
+        * Text-stream widgets (TextInput, Textarea, NumberInput, EmailInput,
+          URLInput, PasswordInput) default to the view's
+          ``wizard_input_event`` class attribute (``"dj-change"`` by default;
+          set to ``"dj-input"`` to fire on every keystroke, debounced
+          client-side — required when fields can be pre-filled and submitted
+          without an intermediate blur, per #1095).
+        * Click-fired widgets (RadioSelect, CheckboxInput,
+          CheckboxSelectMultiple, Select) always use ``"dj-change"``
+          regardless of ``wizard_input_event`` — they commit one value per
+          click, there's no stream to batch. Before this scoping, setting
+          ``wizard_input_event = "dj-input"`` class-wide applied dj-input
+          to radios too, which was semantically wrong and (pre-#1155)
+          incurred an unnecessary 300ms debounce stall on every click.
+        * Caller-passed ``dom_event="..."`` always wins — this is only a
+          smarter default.
 
         Pre-render all fields in get_context_data() and pass as field_html
         dict — the Rust renderer cannot call Python methods with arguments
@@ -188,8 +237,10 @@ class WizardMixin:
         adapter = get_adapter(kwargs.pop("framework", None))
         # setdefault would not overwrite a caller-passed None; coalesce explicitly
         # so attrs[<dom_event>] never receives None and produces broken HTML.
+        # Widget-aware default (#1156): dj-change for click-fired widgets,
+        # wizard_input_event for text streams.
         if kwargs.get("dom_event") is None:
-            kwargs["dom_event"] = self.wizard_input_event
+            kwargs["dom_event"] = self._default_dom_event_for(field)
         return adapter.render_field(
             field, field_name, value, errors, event_name=event_name, **kwargs
         )

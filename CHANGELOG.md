@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`WizardMixin.as_live_field` auto-picks `dom_event` by widget class
+  (closes #1156)** — previously the view-level ``wizard_input_event``
+  attribute applied uniformly to every widget the wizard rendered. An
+  author setting ``wizard_input_event = "dj-input"`` to capture
+  unblurred text edits (per #1095) unintentionally also stamped
+  ``dj-input`` on radios, selects, and checkboxes — which was
+  semantically wrong (there's no keystroke stream to fire on) and pre-
+  #1155 incurred a 300ms debounce stall on every click.
+
+  ``as_live_field`` now inspects the field's widget class and picks:
+
+  - ``dj-change`` for click-fired widgets (``RadioSelect``,
+    ``CheckboxInput``, ``CheckboxSelectMultiple``, ``Select``) — they
+    commit exactly one value per user interaction, no stream to batch.
+  - ``wizard_input_event`` for text-stream widgets (``TextInput``,
+    ``Textarea``, ``NumberInput``, ``EmailInput``, etc.) — preserves
+    the #1095 contract for authors who need unblurred-text capture.
+  - Caller-passed ``dom_event="..."`` still wins — the widget-aware
+    default is a default, not a mandate.
+
+  Apps that had implemented their own `as_live_field` override to do
+  exactly this mapping can delete the override.
+
+  New ``_CLICK_FIRED_WIDGET_CLASSES`` ClassVar (frozenset of widget
+  class names) lets apps with custom commit-style widgets extend the
+  dispatch without overriding ``as_live_field`` itself:
+
+  ```python
+  class MyWizard(WizardMixin, LiveView):
+      _CLICK_FIRED_WIDGET_CLASSES = frozenset({
+          *WizardMixin._CLICK_FIRED_WIDGET_CLASSES,
+          "MyColorPickerWidget",
+      })
+  ```
+
+  Files: ``python/djust/wizard.py`` (new ``_default_dom_event_for``
+  helper + ``_CLICK_FIRED_WIDGET_CLASSES`` ClassVar, ~15 LoC; updated
+  ``wizard_input_event`` docstring to clarify text-only scope).
+  12 new cases in ``TestAsLiveFieldWidgetAwareDomEvent`` in
+  ``tests/unit/test_wizard_mixin.py`` cover text/textarea/integer/email
+  tracking ``wizard_input_event``, radio/select/checkbox/
+  CheckboxSelectMultiple locked to ``dj-change``, caller-passed
+  ``dom_event`` overrides, and subclass extension of the click-fired
+  set.
+
 ### Fixed
 
 - **`dj-input` on click-fired widgets no longer incurs a 300ms debounce
