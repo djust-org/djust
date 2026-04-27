@@ -1435,6 +1435,12 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                     sticky_id_value,
                 )
             else:
+                # Load-bearing: ``_preserve_sticky_children`` set the
+                # survivor's request to its own staging-time request,
+                # which is a different object than the new parent's
+                # mount-time request. Middleware on the new request
+                # may have populated attributes (auth, session, etc.)
+                # the survivor's handlers will read.
                 survivor.request = request
                 auto_set = getattr(consumer, "_sticky_auto_reattached", None)
                 if auto_set is None:

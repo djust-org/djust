@@ -144,7 +144,11 @@ unchanged.**
       * Re-register the survivor under `sticky_id` on the new parent
         via `parent._register_child(sticky_id, survivor)`.
       * Update `survivor.request = parent.request` so handlers see the
-        new request.
+        new request. **Load-bearing**: the staging-time request from
+        `_preserve_sticky_children` is a different object than the
+        mount-time request on the new parent — middleware on the new
+        request may have set session/user attributes the survivor's
+        handlers will read.
       * Add `sticky_id` to `consumer._sticky_auto_reattached` so the
         consumer's post-render slot scan does NOT try to re-register
         the same survivor a second time.

@@ -37,7 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/adr/014-sticky-liveview-autodetect.md` (new ADR).
   4 new cases in `TestStickyAutoDetect` in
   `tests/unit/test_live_render_tag.py` cover no-consumer, empty-preserved,
-  preserved-for-our-id, and preserved-for-other-id paths.
+  preserved-for-our-id, and preserved-for-other-id paths. 2 new
+  integration cases in `tests/integration/test_sticky_redirect_flow.py`
+  drive the full Dashboard→Dashboard auto-reattach pipeline (tag emit
+  + consumer slot-scan skip-on-claim + survivor in `survivors_final`)
+  end-to-end through the existing `_FakeConsumer` rig.
 
 ## [0.8.7rc1] - 2026-04-26
 

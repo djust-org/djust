@@ -937,9 +937,18 @@ class TestStickyAutoDetect:
 
     def test_preserved_for_different_id_does_not_match(self, rf):
         """Survivor for a DIFFERENT id → tag falls through to fresh-mount;
-        the consumer's auto-reattached set does NOT gain our id."""
-        unrelated = _StickyChildView()
-        unrelated.sticky_id = "notification-center"  # type: ignore[misc]
+        the consumer's auto-reattached set does NOT gain our id.
+
+        Uses ``type(...)`` to build a dynamic subclass per the v0.8.6 retro
+        #1109 rule — class-attr mutation on the shared ``_StickyChildView``
+        leaks across tests.
+        """
+        OtherSticky = type(
+            "_OtherSticky",
+            (_StickyChildView,),
+            {"sticky_id": "notification-center"},
+        )
+        unrelated = OtherSticky()
         unrelated.mount_call_count = 1
 
         parent = _make_parent(rf, _StickyParentView)
