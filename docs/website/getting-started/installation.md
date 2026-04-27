@@ -7,7 +7,7 @@ Get djust running in your Django project.
 - Python 3.10+
 - Django 4.2+
 - Django Channels 4.0+
-- Rust toolchain (for building from source)
+- Rust toolchain — **only if building from source**. `pip install djust` ships pre-built wheels for Linux / macOS / Windows on Python 3.10–3.14, so most users never need Rust installed.
 
 ## Install
 
@@ -78,12 +78,9 @@ Use `uvicorn` (or `daphne`) instead of `manage.py runserver` — the standard Dj
 uvicorn myproject.asgi:application --reload
 ```
 
-Or add a Makefile target:
-
-```makefile
-start:
-    uvicorn myproject.asgi:application --reload
-```
+> Avoid `python manage.py runserver` for djust development — it accepts
+> WebSocket connections on some Django versions but does not actually
+> serve them, leading to silently broken real-time updates.
 
 ## Building from Source
 

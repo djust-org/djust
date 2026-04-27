@@ -103,10 +103,10 @@ This means complex re-renders that change one row in a 1000-row table only trans
 **Use LiveView for:**
 
 - Forms with real-time validation
-- Search/filter interfaces that update as you type
+- Search/filter interfaces that update as you type — see [search-as-you-type](../guides/tutorial-search-as-you-type.md) and [typeahead with @server_function](../guides/tutorial-typeahead-server-function.md)
 - Live dashboards, counters, feeds
-- Multi-step wizards
-- Collaborative features (presence, cursors)
+- Multi-step wizards — see [build a wizard](../guides/tutorial-multi-step-wizard.md)
+- Collaborative features (presence, cursors) — see [real-time comments](../guides/tutorial-real-time-comments.md)
 - Any UI where you'd otherwise write custom fetch/AJAX code
 
 **Use standard Django views for:**

@@ -142,3 +142,13 @@ def delete_item(self, item_id: int = 0, **kwargs):
 - [Core Concepts](./core-concepts.md) — understand the lifecycle and state model
 - [Forms](../forms/index.md) — real-time form validation
 - [State Management](../state/index.md) — debouncing, loading states, optimistic updates
+
+### Try a real-world walkthrough
+
+Once the counter is working, the four end-to-end tutorials apply the
+same primitives to common shipping patterns:
+
+- [Build a search-as-you-type feature](../guides/tutorial-search-as-you-type.md) — debounced single-input
+- [Build a real-time comment thread](../guides/tutorial-real-time-comments.md) — multi-user broadcast
+- [Build a multi-step form wizard](../guides/tutorial-multi-step-wizard.md) — stateful step cursor
+- [Build a typeahead with @server_function](../guides/tutorial-typeahead-server-function.md) — partial-page server RPC
