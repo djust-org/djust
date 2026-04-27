@@ -1453,6 +1453,231 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                     view_path,
                 )
                 return mark_safe('<div dj-sticky-slot="' + escape(sticky_id_value) + '"></div>')
+
+    # PR-B (ADR-015): ``lazy=True`` opt-in. Defer the child mount +
+    # render to a thunk that runs after the parent shell has flushed.
+    # See ``arender_chunks`` Phase 5 for thunk invocation; see
+    # ``RequestMixin.aget`` for thunk transfer from view-stash to
+    # emitter. The placeholder emitted here is replaced client-side by
+    # ``static/djust/src/40-lazy-fill.js`` once the fill chunk arrives.
+    lazy_kwarg = kwargs.pop("lazy", False)
+    if lazy_kwarg:
+        if sticky_kwarg:
+            # Hard incompatibility per ADR §"Failure modes": sticky
+            # preservation depends on the slot DOM existing at mount-
+            # frame time so the WS reattach can ``replaceWith`` the
+            # stashed subtree. Lazy renders the slot AFTER mount, so
+            # the stash-target doesn't exist when reattach runs.
+            raise TemplateSyntaxError(
+                "{%% live_render %%} sticky=True and lazy=True are mutually "
+                "exclusive on %r — sticky preservation requires the slot to "
+                "exist at mount-frame time, lazy defers slot rendering. "
+                "Pick one." % view_path
+            )
+        # Normalize the three forms of ``lazy=`` into a single config dict.
+        if lazy_kwarg is True:
+            lazy_config = {
+                "trigger": "flush",
+                "timeout_s": 15.0,
+                "on_error": "fallback",
+                "placeholder": None,
+            }
+        elif lazy_kwarg == "visible":
+            lazy_config = {
+                "trigger": "visible",
+                "timeout_s": 15.0,
+                "on_error": "fallback",
+                "placeholder": None,
+            }
+        elif isinstance(lazy_kwarg, dict):
+            lazy_config = {
+                "trigger": "flush",
+                "timeout_s": 15.0,
+                "on_error": "fallback",
+                "placeholder": None,
+            }
+            for key, value in lazy_kwarg.items():
+                if key not in lazy_config:
+                    raise TemplateSyntaxError(
+                        "{%% live_render %%} lazy= dict has unknown key "
+                        "%r; valid keys: trigger, timeout_s, on_error, "
+                        "placeholder" % key
+                    )
+                lazy_config[key] = value
+            if lazy_config["trigger"] not in ("flush", "visible"):
+                raise TemplateSyntaxError(
+                    "{%% live_render %%} lazy['trigger']=%r — valid: "
+                    "'flush' (default) or 'visible'." % lazy_config["trigger"]
+                )
+            if lazy_config["on_error"] not in ("fallback", "close"):
+                raise TemplateSyntaxError(
+                    "{%% live_render %%} lazy['on_error']=%r — valid: "
+                    "'fallback' (default) or 'close'." % lazy_config["on_error"]
+                )
+            try:
+                lazy_config["timeout_s"] = float(lazy_config["timeout_s"])
+                if lazy_config["timeout_s"] <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise TemplateSyntaxError(
+                    "{%% live_render %%} lazy['timeout_s']=%r must be a "
+                    "positive number." % lazy_config["timeout_s"]
+                )
+        else:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} lazy= accepts True, 'visible', or a "
+                "dict — got %r." % lazy_kwarg
+            )
+
+        # Capture state for the thunk closure now (before kwargs may
+        # be mutated by the eager branch path).
+        captured_kwargs = dict(kwargs)
+        view_id = parent._assign_view_id(preferred_view_id)
+        # Reserve the id by registering a placeholder NOW so a sibling
+        # eager `_register_child` collision is detectable (the actual
+        # child is created at thunk-fire time, but registry slot is
+        # locked here).
+        # We don't register a real child until the thunk fires;
+        # _assign_view_id has already mutated the parent's id-counter.
+        escaped_id = escape(view_id)
+
+        async def _lazy_thunk():
+            """Run the eager mount+render path and emit the fill chunk
+            envelope. Catches its own exceptions and wraps them in a
+            data-status="error" envelope per ADR §"Error propagation".
+            """
+            from asyncio import wait_for, TimeoutError as _AsyncioTimeout
+            from asgiref.sync import sync_to_async
+
+            def _render_eager() -> str:
+                # Eager mount + render path — same as the non-lazy
+                # branch below. Returns the stamped child HTML.
+                child = child_cls()
+                child.request = request
+                auth_redirect = check_view_auth(child, request)
+                if auth_redirect is not None:
+                    raise PermissionError("child %r denied access (auth gate)" % view_path)
+                mount_fn = getattr(child, "mount", None)
+                if callable(mount_fn):
+                    mount_fn(request, **captured_kwargs)
+                # Don't re-register the child by view_id — _assign_view_id
+                # already incremented the counter; calling _register_child
+                # here is what locks the slot. The lazy-fill DOM ends up
+                # under [data-djust-embedded="<view_id>"] so events route
+                # correctly.
+                parent._register_child(view_id, child)
+                child_context: Dict[str, Any] = {}
+                get_ctx_fn = getattr(child, "get_context_data", None)
+                if callable(get_ctx_fn):
+                    try:
+                        child_context = dict(get_ctx_fn())
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "live_render lazy: child %s.get_context_data raised; "
+                            "rendering with empty context",
+                            child_cls.__name__,
+                        )
+                        child_context = {}
+                child_context.setdefault("request", request)
+                child_context.setdefault("view", child)
+                inline_template = getattr(child, "template", None)
+                if inline_template:
+                    rendered_inner = Template(inline_template).render(Context(child_context))
+                else:
+                    template_name = getattr(child, "template_name", None)
+                    if not template_name:
+                        raise RuntimeError(
+                            "child %r has neither ``template`` nor "
+                            "``template_name`` set" % view_path
+                        )
+                    rendered_inner = get_template(template_name).render(child_context, request)
+                rendered_stamped = _stamp_view_id(rendered_inner, view_id)
+                # Wrap in a [dj-view] container so events route via
+                # data-djust-embedded just like the eager path.
+                return (
+                    '<div dj-view data-djust-embedded="'
+                    + escaped_id
+                    + '">'
+                    + rendered_stamped
+                    + "</div>"
+                )
+
+            try:
+                rendered_html = await wait_for(
+                    sync_to_async(_render_eager)(),
+                    timeout=lazy_config["timeout_s"],
+                )
+                status = "ok"
+                body = rendered_html
+            except _AsyncioTimeout:
+                status = "timeout"
+                body = (
+                    '<dj-error aria-live="polite">Lazy child '
+                    + escaped_id
+                    + " timed out after "
+                    + escape(str(lazy_config["timeout_s"]))
+                    + "s.</dj-error>"
+                )
+            except PermissionError as exc:
+                status = "error"
+                body = '<dj-error aria-live="polite">' + escape(str(exc)) + "</dj-error>"
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("live_render lazy thunk for %s raised", view_path)
+                status = "error"
+                body = (
+                    '<dj-error aria-live="polite">Lazy child '
+                    + escaped_id
+                    + " failed: "
+                    + escape(type(exc).__name__)
+                    + "</dj-error>"
+                )
+
+            # Build the fill envelope. Browsers parse <template> inertly;
+            # the inline <script> activator runs at parse time and
+            # window.djust.lazyFill('X') from 40-lazy-fill.js performs
+            # the slot replacement.
+            envelope = (
+                '<template id="djl-fill-'
+                + escaped_id
+                + '" data-target="'
+                + escaped_id
+                + '" data-status="'
+                + status
+                + '">'
+                + body
+                + "</template>"
+                + '<script>window.djust&&window.djust.lazyFill&&window.djust.lazyFill("'
+                + escaped_id
+                + '")</script>'
+            )
+            return envelope.encode("utf-8")
+
+        # Stash the thunk on the OUTERMOST parent. ``aget`` reads
+        # ``self._lazy_thunks`` after sync_to_async(get) returns and
+        # transfers them onto the chunk emitter.
+        if not hasattr(parent, "_lazy_thunks") or parent._lazy_thunks is None:
+            parent._lazy_thunks = []
+        parent._lazy_thunks.append((view_id, _lazy_thunk))
+
+        # Synchronous placeholder return. Custom <dj-lazy-slot> element
+        # — parsed as HTMLUnknownElement on browsers without a
+        # registered custom-element class; fully selectable via
+        # querySelector and replaceable via replaceWith.
+        custom_placeholder = lazy_config["placeholder"]
+        if custom_placeholder:
+            inner = str(custom_placeholder)
+        else:
+            inner = ""
+        return mark_safe(
+            '<dj-lazy-slot data-id="'
+            + escaped_id
+            + '" data-trigger="'
+            + lazy_config["trigger"]
+            + '">'
+            + inner
+            + "</dj-lazy-slot>"
+        )
+
     child = child_cls()
     child.request = request
 
