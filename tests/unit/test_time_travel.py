@@ -26,6 +26,7 @@ from typing import Any, Dict
 
 import pytest
 
+from djust.decorators import event_handler
 from djust.time_travel import (
     EventSnapshot,
     TimeTravelBuffer,
@@ -824,8 +825,15 @@ class _CounterView:
 
         return LiveView._capture_components_snapshot(self)
 
+    @event_handler
     def increment(self, n=1, **kwargs):
         self.count += n
+
+    def some_helper(self, **kwargs):
+        """Plain method — NOT a registered handler. Used to verify
+        the replay arg-validation guard rejects unregistered methods
+        even though the underscore-prefix check passes."""
+        self.count = -999
 
 
 class TestReplayEvent:
@@ -913,10 +921,15 @@ class TestReplayEvent:
         N')."""
         view = _CounterView()
 
-        def _bad(**kwargs):
+        @event_handler
+        def _bad(self, **kwargs):
             raise ValueError("intentional")
 
-        view.bad_handler = _bad
+        # Bind the decorated function as an instance attribute. The
+        # ``is_event_handler`` validator (#1148) accepts the
+        # decorated method so the replay guard passes; the body
+        # then raises and the error is recorded.
+        view.bad_handler = _bad.__get__(view, type(view))
 
         snap = EventSnapshot(
             event_name="bad_handler",
@@ -954,6 +967,7 @@ class TestReplayEvent:
 
                 return LiveView._capture_components_snapshot(self)
 
+            @event_handler
             def read_component(self, **kwargs):
                 self.observed = self._components["a"].value
 
@@ -1031,3 +1045,207 @@ class TestReplayEvent:
         assert result is None
         assert len(view._time_travel_buffer) == before_count
         assert view.count == 5  # mutated from state_before (0) + n=5
+
+
+# ===========================================================================
+# v0.9.1 #1148: replay_event handler-registration validation
+# ===========================================================================
+
+
+class TestReplayHandlerValidation:
+    """v0.9.1 #1148 — defense-in-depth: replay_event must validate that
+    the resolved attribute is an ``@event_handler``-decorated method,
+    not just any non-underscore attribute on the view.
+
+    The original v0.9.0 #1042 guard rejected only dunder/private
+    names (``startswith("_")``). That admits ANY public method
+    (helpers, inherited utilities, property getters), so a
+    hand-edited or malicious snapshot could replay e.g.
+    ``view.delete_all_records()`` even when that's never been
+    exposed to the dispatcher. The fix tightens the guard to use
+    ``is_event_handler``, matching the same acceptance criteria the
+    dispatcher uses for ``server_push`` handlers (see
+    ``websocket.py`` ~ line 4389)."""
+
+    def test_replay_registered_handler_succeeds(self):
+        """Regression: replaying an ``@event_handler``-decorated
+        method still works after the validation guard was added."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 3}, ref=1)
+        view.increment(n=3)
+        record_event_end(view, snap)
+        assert view.count == 3
+
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        assert replay_snap.state_after == {"count": 3}
+
+    def test_replay_unregistered_method_returns_none(self):
+        """A snapshot naming a non-handler method (no
+        ``@event_handler`` decorator) is rejected by the guard.
+        ``view.some_helper`` exists, is callable, and isn't
+        underscore-prefixed — but it isn't a registered handler."""
+        view = _CounterView()
+        assert callable(view.some_helper)
+
+        snap = EventSnapshot(
+            event_name="some_helper",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+        assert view.count != -999  # helper body never ran
+
+    def test_replay_dunder_still_rejected(self):
+        """Regression for the existing underscore-prefix guard: even
+        with the new ``is_event_handler`` check, dunder/private
+        names are rejected by the earlier short-circuit."""
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="__init__",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+
+
+# ===========================================================================
+# v0.9.1 #1150: descriptor-pattern component time-travel verification
+# ===========================================================================
+
+
+class TestDescriptorPatternComponentTimeTravel:
+    """v0.9.1 #1150 — Stage 11 deferred from PR #1141.
+
+    The PR #1141 ``_capture_components_snapshot`` walks
+    ``self._components`` and the defense layer
+    (``_COMPONENT_INTERNAL_ATTRS``) keeps framework config attrs
+    (``component_id``, ``template``, ``template_name``, ``assigns``,
+    ``slots``) out of the snapshot. PR #1141 retro flagged that
+    descriptor-pattern components — declared as class attributes,
+    state stored under ``obj.__dict__["_component_<name>"]`` — were
+    never directly verified end-to-end.
+
+    These tests pin down the contract for descriptor-pattern
+    components: when a descriptor-pattern component is registered
+    in ``self._components`` (so the snapshot machinery sees it), the
+    capture/restore round-trip preserves its public state and the
+    defense layer correctly excludes framework-internal fields."""
+
+    def test_descriptor_pattern_component_round_trip(self):
+        """Build a view with a descriptor-pattern LiveComponent,
+        register it in ``_components``, capture/mutate/restore.
+        The round-trip leaves the component's state intact."""
+        from djust.components.assigns import Assign
+        from djust.components.base import LiveComponent
+
+        class _DescriptorBadge(LiveComponent):
+            template = "<span>{{ label }}</span>"
+            assigns = [Assign("label", type=str, default="ten")]
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.label = kwargs.get("label", "ten")
+                self.value = kwargs.get("value", 10)
+                self.component_id = kwargs.get("component_id", "badge_descr")
+
+        class _ParentView:
+            time_travel_enabled = True
+
+            def __init__(self):
+                self.title = "Parent"
+                badge = _DescriptorBadge(label="ten", value=10)
+                self._components = {badge.component_id: badge}
+                self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+            def _capture_snapshot_state(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_snapshot_state(self)
+
+            def _capture_components_snapshot(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_components_snapshot(self)
+
+        view = _ParentView()
+        snap_before = view._capture_snapshot_state()
+        assert "__components__" in snap_before
+        assert "badge_descr" in snap_before["__components__"]
+        captured = snap_before["__components__"]["badge_descr"]
+        assert captured["label"] == "ten"
+        assert captured["value"] == 10
+        # Defense layer #1141.
+        assert "component_id" not in captured
+        assert "template" not in captured
+        assert "assigns" not in captured
+
+        view._components["badge_descr"].label = "ninety-nine"
+        view._components["badge_descr"].value = 99
+
+        snap = EventSnapshot(
+            event_name="evt",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=snap_before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        assert ok is True
+        assert view._components["badge_descr"].label == "ten"
+        assert view._components["badge_descr"].value == 10
+        assert view._components["badge_descr"].component_id == "badge_descr"
+
+    def test_descriptor_pattern_component_internal_attrs_never_restored(self):
+        """Even if a hand-edited snapshot includes an
+        ``_COMPONENT_INTERNAL_ATTRS`` field for a descriptor-pattern
+        component, the field is filtered out of the captured state
+        in the first place. Confirms the defense layer applies
+        regardless of the component's declaration style."""
+        from djust.components.base import LiveComponent
+        from djust.live_view import _COMPONENT_INTERNAL_ATTRS
+
+        class _DescriptorWidget(LiveComponent):
+            template = "<div>{{ value }}</div>"
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.value = kwargs.get("value", "x")
+                self.component_id = "widget_descr"
+                self.template_name = "widgets/descr.html"
+                self.assigns = []
+                self.slots = []
+
+        class _ParentView:
+            time_travel_enabled = True
+
+            def __init__(self):
+                widget = _DescriptorWidget(value="hello")
+                self._components = {widget.component_id: widget}
+                self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+            def _capture_snapshot_state(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_snapshot_state(self)
+
+            def _capture_components_snapshot(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_components_snapshot(self)
+
+        view = _ParentView()
+        snap = view._capture_snapshot_state()
+        captured = snap["__components__"]["widget_descr"]
+        assert captured == {"value": "hello"}
+        for key in _COMPONENT_INTERNAL_ATTRS:
+            assert key not in captured, (
+                "framework-internal attr %r leaked into descriptor component snapshot" % key
+            )

@@ -53,7 +53,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `csp_nonce` is absent / empty / missing), and HTML-escaping
   defense-in-depth for hostile-middleware substitutes.
 
+### Changed
+
+- **Dev-deps include `markdown` and `nh3` (closes #1149)** — both
+  packages are runtime deps of the `[components]` extra (see
+  `python/djust/components/components/markdown.py`) and the
+  components subpackage's `__init__.py` eagerly imports them via
+  `from .markdown import Markdown`. Tests that import
+  `djust.components.components` (directly or transitively) failed
+  collection in clean checkouts that ran only `uv sync` without
+  the `[components]` extra. The bisect agent in PR #1159 hit this
+  on a fresh clone. Added both to
+  `[project.optional-dependencies.dev]` so a single
+  `uv sync --extra dev` brings them in alongside the rest of the
+  test toolchain. No behaviour change for runtime users —
+  `[components]` already lists both as runtime deps.
+
 ### Fixed
+
+- **`replay_event` validates handler is `@event_handler`-decorated
+  (closes #1148)** — defense-in-depth strengthening of the v0.9.0
+  #1042 forward-replay path. The original guard rejected only
+  dunder/private `event_name` (`startswith("_")`), which still
+  admitted ANY public method on the view — helpers, inherited
+  utilities, property getters — even though the dispatcher only
+  ever invokes `@event_handler`-decorated methods. A hand-edited
+  or malicious snapshot could replay e.g.
+  `view.delete_all_records()` even when that method was never
+  exposed to the dispatcher. The fix calls
+  `djust.decorators.is_event_handler(handler)` after attribute
+  resolution, mirroring the dispatcher's own acceptance criteria
+  (see `websocket.py` ~ line 4389 server_push handler validation).
+  Unregistered methods log a warning and return `None` instead of
+  invoking. 3 regression cases in `TestReplayHandlerValidation`
+  cover registered-handler success, unregistered-method
+  rejection, and the existing dunder-rejection regression.
 
 - **Rust template renderer rejects project-defined custom filters
   (closes #1121)** — Django projects registering custom filters via

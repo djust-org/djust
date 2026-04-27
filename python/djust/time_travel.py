@@ -395,6 +395,28 @@ def replay_event(
         )
         return None
 
+    # Defense-in-depth (#1148): the dunder filter alone admits ANY
+    # non-underscore method on the view (e.g. helper methods,
+    # property getters, inherited utilities), not just registered
+    # ``@event_handler`` methods. A hand-edited or malicious snapshot
+    # could name e.g. ``delete_all_records`` and replay would happily
+    # invoke it. Validate that the resolved attribute is decorated
+    # with ``@event_handler`` (matching the dispatcher's own
+    # acceptance criteria — see ``websocket.py`` server_push handler
+    # validation around line 4389).
+    try:
+        from djust.decorators import is_event_handler
+    except ImportError:  # pragma: no cover — decorators is in-tree
+        is_event_handler = None  # type: ignore[assignment]
+    if is_event_handler is not None and not is_event_handler(handler):
+        logger.warning(
+            "time_travel: replay_event refused unregistered method %r on %s "
+            "(not decorated with @event_handler)",
+            snapshot.event_name,
+            type(view).__name__,
+        )
+        return None
+
     # Capture the handler reference and the live ``time_travel_enabled``
     # flag BEFORE ``restore_snapshot`` because the restore's
     # ghost-attr cleanup phase (Phase 1) deletes any public attrs
