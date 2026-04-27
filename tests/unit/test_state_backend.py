@@ -297,11 +297,17 @@ class TestRedisBackend:
         html = view2.render()
         assert html == "<div>Redis</div>"
 
-    @pytest.mark.skip(
-        reason="flaky in full-suite run, passes in isolation — test pollution, see #1134"
-    )
     def test_redis_serialization_performance(self, redis_backend):
-        """Test that Redis uses native serialization."""
+        """Test that Redis uses native serialization (set/get are fast).
+
+        The bound is 100ms (not the ideal microsecond-range a localhost
+        Redis can hit) because this assertion previously hard-coded 10ms
+        and flaked under heavy full-suite load — pytest scheduling jitter
+        + GC pauses + occasional Redis hiccups blow past 10ms even when
+        the codepath is healthy. See #1134. 100ms is still ~10× faster
+        than any "we forgot to use native serialization" regression
+        would produce, so the assertion still has signal.
+        """
         view = RustLiveView("<div>{{ data }}</div>")
         view.update_state({"data": "x" * 1000})
 
@@ -315,9 +321,10 @@ class TestRedisBackend:
         result = redis_backend.get("perf_key")
         get_time = time.time() - start
 
-        # Should be fast (sub-10ms for small data)
-        assert set_time < 0.01  # 10ms
-        assert get_time < 0.01  # 10ms
+        # Should be fast — 100ms is a generous regression bound that still
+        # catches "we accidentally serialized via JSON/pickle round-trip".
+        assert set_time < 0.1, f"set took {set_time * 1000:.1f}ms"
+        assert get_time < 0.1, f"get took {get_time * 1000:.1f}ms"
         assert result is not None
 
     def test_redis_ttl_expiration(self, redis_backend):

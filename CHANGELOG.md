@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Test pollution: 6 flaky tests in full-suite pytest run (closes #1134)** —
+  bisected two independent polluters that surfaced after v0.9.0 PR-A
+  (#1135) added the `aget`/`ChunkEmitter` async-render path and after
+  PR #998 added the `block_watchdog` test fixture:
+  - **In-memory SQLite + Channels disconnect**: 5 tests
+    (`test_websocket_origin_validation::TestConnectOriginValidation`'s
+    4 accepting-handshake cases + `test_request_path::test_websocket_mount_counter`)
+    failed during `communicator.disconnect()` because Channels'
+    consumer dispatch invokes `aclose_old_connections()`, which
+    iterates Django's connection cache and calls
+    `close_if_unusable_or_obsolete()` → `get_autocommit()` →
+    `ensure_connection()`. SQLite ignores `close()` for in-memory
+    DBs (data-loss prevention), so a prior django_db-marked test
+    leaves the connection wrapper with `.connection != None` in the
+    thread-local; pytest-django's blocker then fires inside the
+    consumer's cleanup. Marked the affected tests
+    `@pytest.mark.django_db` so they participate in pytest-django's
+    connection management.
+  - **`sys.modules["djust.checks"]` rebind**: the
+    `test_dev_server_watchdog_missing.py::test_check_hot_view_replacement_survives_without_watchdog`
+    test deleted `djust.checks` from `sys.modules` and re-imported,
+    creating a *new* module object while
+    `test_static_security_checks.py` had already done
+    `from djust.checks import check_configuration` at collection
+    time. Subsequent
+    `mock.patch("djust.checks._has_multiple_permission_groups", ...)`
+    targeted the new module while the old `check_configuration` kept
+    resolving names against the old module's `__dict__` — so the
+    patch silently no-op'd and `test_a020_fires_with_multiple_groups`
+    failed. Moved snapshot/restore of `djust.checks` and
+    `djust.dev_server` into the `block_watchdog` fixture's setup/
+    teardown so the eviction is local to the test's lifetime.
+  - **Redis-serialization-performance 10ms wall bound**: relaxed the
+    bound from 10ms to 100ms — under heavy full-suite load (GC
+    pauses, scheduling jitter) the ideal-conditions 10ms ceiling
+    was producing false positives. 100ms still catches "we
+    accidentally serialized via JSON/pickle round-trip" regressions
+    without the timing flake.
+
 ## [0.9.0rc2] - 2026-04-27
 
 ### Changed

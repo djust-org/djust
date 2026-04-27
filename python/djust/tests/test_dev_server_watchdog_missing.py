@@ -36,12 +36,28 @@ class _BlockWatchdog(importlib.abc.MetaPathFinder):
 
 @pytest.fixture
 def block_watchdog():
-    """Force `import watchdog` (and submodules) to raise ImportError."""
+    """Force `import watchdog` (and submodules) to raise ImportError.
+
+    Snapshots and restores ``sys.modules`` entries that the test body
+    is going to evict (``djust.dev_server`` and ``djust.checks``) so
+    that downstream tests in the same suite which bound names from
+    those modules at collection time keep seeing the same module
+    identity. Without this, a re-imported module replaces the original
+    in ``sys.modules`` while functions imported earlier still resolve
+    against the OLD module's ``__dict__``; ``mock.patch`` then targets
+    the NEW module and the patch silently no-ops in the OLD-module's
+    callsites. Tripped by ``test_a020_fires_with_multiple_groups`` in
+    the v0.9.0 suite — see #1134.
+    """
     # Drop any cached watchdog modules first so the re-import sees
     # our blocker, not the previously-imported real module.
     for mod in list(sys.modules):
         if mod == "watchdog" or mod.startswith("watchdog."):
             del sys.modules[mod]
+
+    # Snapshot djust.* modules that test bodies will evict, so we can
+    # restore them in teardown.
+    snapshot = {name: sys.modules.get(name) for name in ("djust.dev_server", "djust.checks")}
 
     blocker = _BlockWatchdog()
     sys.meta_path.insert(0, blocker)
@@ -49,6 +65,14 @@ def block_watchdog():
         yield
     finally:
         sys.meta_path.remove(blocker)
+        # Restore original module identities so tests that did
+        # ``from djust.checks import X`` at import time still see the
+        # same module object backing those names.
+        for name, mod in snapshot.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
 
 
 def test_dev_server_imports_without_watchdog(block_watchdog):
@@ -98,7 +122,12 @@ def test_check_hot_view_replacement_survives_without_watchdog(block_watchdog):
     """#994 downstream: `djust.checks.check_hot_view_replacement`
     imports `WATCHDOG_AVAILABLE` from `dev_server`; before the fix the
     whole module import would crash, breaking `manage.py check`. After
-    the fix, the import succeeds and the check runs normally."""
+    the fix, the import succeeds and the check runs normally.
+
+    The ``block_watchdog`` fixture snapshots and restores
+    ``djust.checks`` / ``djust.dev_server`` in ``sys.modules`` so the
+    eviction here doesn't pollute downstream tests (#1134).
+    """
     # Evict both modules so checks.py re-imports dev_server through
     # our blocker.
     for mod in ("djust.dev_server", "djust.checks"):
