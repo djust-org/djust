@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Forward-replay through branched timeline (closes #1042, v0.9.0 P3)** —
+  Redux DevTools "swap action" parity. Time-travel previously only
+  scrubbed BACK through linear history; `replay_event(view, snapshot,
+  override_params=None, record_replay=True)` now replays a recorded
+  event from its `state_before` baseline either deterministically
+  (original `params`) or with caller-supplied `override_params` to
+  fork a branched timeline.
+
+  Builds on #1041's per-component capture: replay restores via
+  `restore_snapshot(view, snap, "before")` which dispatches to
+  `view._components[id]` instances. So a handler that reads
+  `self._components[id].value` during replay sees the CAPTURED value,
+  not the live one. The test
+  `test_replay_restores_component_state_before_invoking` locks this
+  in.
+
+  Branches are scrubbable: `record_replay=True` (default) appends the
+  replay's new snapshot to the buffer so the branched timeline is
+  itself navigable. `record_replay=False` runs a "dry" replay — view
+  is mutated for preview, buffer is unchanged.
+
+  Handler-missing path: returns `None` and logs a warning (handler
+  was renamed since the snapshot was captured). Handler-raises path:
+  the new snapshot's `error` field is set and the snapshot is still
+  returned so the debug panel can show "this branch errored at step
+  N".
+
+  Files: `python/djust/time_travel.py` (~85 LoC: `replay_event`
+  function + `__all__` extension). 7 new cases in `TestReplayEvent`
+  in `tests/unit/test_time_travel.py` cover deterministic replay,
+  branched timeline (override_params), buffer recording, dry replay,
+  missing handler, handler exception, and component-state restoration
+  during replay.
+
+  v0.9.0 streaming + DevTools arc complete: PR-A foundation → PR-B
+  `lazy=True` API → PR-C parallel render → #1041 component-level
+  capture → #1042 forward-replay.
+
 - **Component-level time-travel (closes #1041, v0.9.0 P3)** — extends
   the v0.6.1 time-travel ring buffer to capture per-component public
   state alongside the parent LiveView's state. Multi-component pages
