@@ -418,28 +418,62 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             logger.debug("arender_chunks: cancelled mid-stream")
             return
 
-        # 5. Lazy thunks (PR-B, ADR-015). The body of the page has
-        # already flushed; lazy ``<template id="djl-fill-X">`` chunks
-        # are appended after </html>. Browsers tolerate post-</html>
-        # content per the HTML5 parser tree-construction spec — the
-        # template element + its inline <script> activator move into
-        # the implicit body and execute in order. Sequential in PR-B;
-        # PR-C ships parallelism via ``asyncio.as_completed``.
+        # 5. Lazy thunks (PR-B + PR-C, ADR-015). The body of the page
+        # has already flushed; lazy ``<template id="djl-fill-X">``
+        # chunks are appended after </html>. Browsers tolerate
+        # post-</html> content per the HTML5 parser tree-construction
+        # spec — the template element + its inline <script> activator
+        # move into the implicit body and execute in order.
+        #
+        # PR-C: parallel render via ``asyncio.as_completed``. All
+        # thunks start concurrently; chunks emerge in completion order
+        # rather than registration order. Total wall-clock time =
+        # max(thunk_durations) instead of sum(thunk_durations). Client-
+        # side reconciliation is keyed by slot id (``data-target``) so
+        # out-of-order arrival is correct by construction.
         if not emitter.thunks:
             return
+
+        # Schedule every thunk concurrently. ``asyncio.ensure_future``
+        # wraps coroutines into tasks so ``as_completed`` can iterate.
+        thunk_tasks = [
+            (view_id, asyncio.ensure_future(thunk_fn())) for view_id, thunk_fn in emitter.thunks
+        ]
+        # Build a reverse lookup so we can recover the view_id when a
+        # task surfaces from ``as_completed``.
+        task_to_id = {task: view_id for view_id, task in thunk_tasks}
+
         try:
-            for view_id, thunk_fn in emitter.thunks:
+            for completed in asyncio.as_completed([task for _, task in thunk_tasks]):
                 if emitter.cancelled:
+                    # Cancel any still-pending thunks so they don't
+                    # leak past the response. Already-completed tasks
+                    # whose results we haven't iterated yet are GC'd.
+                    for _vid, task in thunk_tasks:
+                        if not task.done():
+                            task.cancel()
                     return
                 try:
-                    chunk_bytes = await thunk_fn()
+                    chunk_bytes = await completed
                 except ChunkEmitterCancelled:
                     raise
+                except asyncio.CancelledError:
+                    # Cooperative cancel — emitter was cancelled while
+                    # this thunk was in-flight. The outer ``cancelled``
+                    # check on the next iteration will exit cleanly.
+                    continue
                 except Exception:  # noqa: BLE001 — thunk owns its own envelope
+                    # Recover view_id from the originating task so the
+                    # log message is actionable.
+                    failed_task = next(
+                        (t for t in task_to_id if t.done() and t.exception() is not None),
+                        None,
+                    )
+                    failed_id = task_to_id.get(failed_task, "<unknown>")
                     logger.exception(
                         "arender_chunks: lazy thunk raised for view_id=%s; "
                         "thunks should catch + emit error envelope themselves",
-                        view_id,
+                        failed_id,
                     )
                     continue
                 if chunk_bytes is None:
@@ -448,9 +482,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     chunk_bytes = chunk_bytes.encode("utf-8")
                 await emitter.emit(chunk_bytes)
                 # Yield between fills so each chunk has a chance to
-                # leave the wire before the next thunk's render starts.
+                # leave the wire before the next completed task is
+                # picked up.
                 await asyncio.sleep(0)
         except ChunkEmitterCancelled:
+            # Cancel any still-running tasks on the way out.
+            for _vid, task in thunk_tasks:
+                if not task.done():
+                    task.cancel()
             logger.debug("arender_chunks: cancelled during lazy phase")
             return
 

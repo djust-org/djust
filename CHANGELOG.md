@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Parallel lazy render via `asyncio.as_completed` (v0.9.0 PR-C, closes #1043)** —
+  closes the v0.9.0 streaming arc. PR-B shipped sequential thunk
+  invocation in `arender_chunks` Phase 5 (one thunk runs to
+  completion before the next starts; total wall-clock time =
+  sum of thunk durations). PR-C swaps the for-loop for
+  `asyncio.as_completed` over the thunk-task set. All thunks start
+  concurrently; chunks emerge in completion order rather than
+  registration order. Total wall-clock time = max(thunk_durations).
+
+  Client-side reconciliation is keyed by slot id (`data-target` on
+  `<template id="djl-fill-X">`), so out-of-order chunk arrival is
+  correct by construction — no client changes needed.
+
+  Cancellation: when the emitter is cancelled mid-stream (client
+  disconnect), all pending thunk tasks are cancelled via
+  `task.cancel()`. Already-completed tasks whose results were not yet
+  iterated are GC'd. Tasks already running through `sync_to_async` to
+  a synchronous render function will complete (asyncio cancellation
+  doesn't propagate into sync DB work) — the documented contract per
+  ADR-015 §"Cancellation contract".
+
+  Files: `python/djust/mixins/template.py` (~50 LoC swap from
+  for-loop to `asyncio.as_completed`). 3 new wall-clock-sensitive
+  tests in `tests/integration/test_chunks_overlap.py`:
+  - Three thunks (100ms, 50ms, 25ms) registered in that order →
+    chunks arrive in completion order (slot-c, slot-b, slot-a).
+  - Three 50ms-each thunks → wall clock under 100ms (sequential
+    baseline 150ms).
+  - One thunk raises → others still emit their fills (no stall).
+
+  Closes #1043. v0.9.0 streaming arc complete: PR-A (foundation) →
+  PR-B (`lazy=True` user API + `as_view` dispatch) → PR-C (parallel
+  render).
+
 - **`{% live_render lazy=True %}` capability + `as_view` dispatch wiring (v0.9.0 PR-B, ADR-015)** —
   ships the user-facing API on top of PR-A's async render foundation.
   Three forms: `lazy=True` (parent-flush trigger, default), `lazy="visible"`
