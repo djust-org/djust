@@ -152,13 +152,20 @@ class RowUrlStructureTest(TestCase):
     """#1111 Option A: row_url adds data-href + inline JS to <tr>."""
 
     def test_row_url_attaches_data_href_and_onclick(self):
+        """Pre-#1111-v0.9.1: this asserted an inline ``onclick=""``. The
+        v0.9.1 implementation moved navigation logic into the static JS
+        component module ``data-table-row-click.js`` for CSP-strict
+        compatibility, so the inline handler is gone — the marker class
+        ``data-table-row-clickable`` is the new hook the JS module
+        binds against. ``data-href`` and ``cursor:pointer`` are still
+        emitted on the <tr>."""
         rows = [{"claim_url": "/claims/1/", "name": "Claim 1"}]
         columns = [{"key": "name", "label": "Name"}]
         out = render_table(_base_ctx(rows, columns, row_url="claim_url"))
         # data-href attribute is present (value extracted by Rust engine
         # at runtime; we just assert the wiring is in place).
         self.assertIn("data-href=", out)
-        self.assertIn("window.location=this.dataset.href", out)
+        self.assertIn("data-table-row-clickable", out)
         self.assertIn("cursor:pointer", out)
 
     def test_row_click_event_takes_precedence_over_row_url(self):
