@@ -1413,6 +1413,46 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         seen.add(sticky_id_value)
         # Pin the sticky_id as the view_id for register/dispatch.
         preferred_view_id = sticky_id_value
+
+        # ADR-014: auto-detect a preserved sticky carried over from the
+        # previous view via ``LiveViewConsumer._sticky_preserved``. When
+        # found, re-register the survivor onto the new parent and emit
+        # only a ``<dj-sticky-slot>`` placeholder — the consumer's
+        # post-render slot scan + the client's ``replaceWith`` reattach
+        # then complete the round-trip without the survivor's mount()
+        # ever running again. Falls through to fresh-mount on the HTTP
+        # GET path (no consumer back-reference) and on first navigations
+        # (empty ``_sticky_preserved``).
+        consumer = getattr(parent, "_ws_consumer", None)
+        preserved_map = getattr(consumer, "_sticky_preserved", None) if consumer else None
+        survivor = preserved_map.get(sticky_id_value) if preserved_map else None
+        if survivor is not None:
+            try:
+                parent._register_child(sticky_id_value, survivor)
+            except ValueError:
+                logger.warning(
+                    "live_render: sticky %r already registered on parent — falling through",
+                    sticky_id_value,
+                )
+            else:
+                # Load-bearing: ``_preserve_sticky_children`` set the
+                # survivor's request to its own staging-time request,
+                # which is a different object than the new parent's
+                # mount-time request. Middleware on the new request
+                # may have populated attributes (auth, session, etc.)
+                # the survivor's handlers will read.
+                survivor.request = request
+                auto_set = getattr(consumer, "_sticky_auto_reattached", None)
+                if auto_set is None:
+                    consumer._sticky_auto_reattached = {sticky_id_value}
+                else:
+                    auto_set.add(sticky_id_value)
+                logger.debug(
+                    "live_render: auto-reattach sticky %r on %s",
+                    sticky_id_value,
+                    view_path,
+                )
+                return mark_safe('<div dj-sticky-slot="' + escape(sticky_id_value) + '"></div>')
     child = child_cls()
     child.request = request
 

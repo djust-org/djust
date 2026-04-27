@@ -827,3 +827,143 @@ class TestAllowlist:
             )
         assert len(parent._child_views) == 1
         assert _attr_values(out, "data-djust-embedded")
+
+
+# ---------------------------------------------------------------------------
+# ADR-014: {% live_render sticky=True %} auto-detects preserved survivors
+# ---------------------------------------------------------------------------
+
+
+class _StickyChildView(LiveView):
+    """Sticky child used for the auto-detect tests (#1032)."""
+
+    sticky = True
+    sticky_id = "audio-player"
+    template = '<div><button dj-click="play">play</button></div>'
+
+    def mount(self, request, **kwargs):
+        self.mount_call_count = getattr(self, "mount_call_count", 0) + 1
+        self.is_playing = False
+
+    def play(self, **kwargs):
+        self.is_playing = True
+
+
+class _StickyParentView(LiveView):
+    template = (
+        "{% load live_tags %}"
+        "<div dj-root>"
+        '{% live_render "tests.unit.test_live_render_tag._StickyChildView" sticky=True %}'
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        pass
+
+
+class _FakeConsumer:
+    """Minimal LiveViewConsumer-like shim — only needs the two sticky fields."""
+
+    def __init__(self, preserved=None):
+        self._sticky_preserved = dict(preserved or {})
+        self._sticky_auto_reattached: set[str] = set()
+
+
+class TestStickyAutoDetect:
+    """ADR-014: tag emits placeholder when consumer holds a survivor."""
+
+    def test_no_consumer_falls_through_to_fresh_mount(self, rf):
+        """No ``_ws_consumer`` back-reference → existing fresh-mount path
+        (HTTP GET / non-WS test contexts)."""
+        parent = _make_parent(rf, _StickyParentView)
+        # _ws_consumer not set
+        with override_settings(
+            DJUST_LIVE_RENDER_ALLOWED_MODULES=["tests.unit.test_live_render_tag"]
+        ):
+            out = _render_tag(
+                '{% live_render "tests.unit.test_live_render_tag._StickyChildView" sticky=True %}',
+                {"view": parent, "request": parent.request},
+            )
+        assert "dj-sticky-view" in out
+        assert "dj-sticky-slot" not in out
+
+    def test_consumer_with_no_preserved_falls_through(self, rf):
+        """Consumer back-reference present, ``_sticky_preserved`` empty."""
+        parent = _make_parent(rf, _StickyParentView)
+        parent._ws_consumer = _FakeConsumer(preserved={})
+        with override_settings(
+            DJUST_LIVE_RENDER_ALLOWED_MODULES=["tests.unit.test_live_render_tag"]
+        ):
+            out = _render_tag(
+                '{% live_render "tests.unit.test_live_render_tag._StickyChildView" sticky=True %}',
+                {"view": parent, "request": parent.request},
+            )
+        assert "dj-sticky-view" in out
+        assert "dj-sticky-slot" not in out
+        assert parent._ws_consumer._sticky_auto_reattached == set()
+
+    def test_preserved_for_our_id_emits_placeholder(self, rf):
+        """Survivor for the same sticky_id → tag emits the slot placeholder,
+        re-registers the survivor on the new parent, adds id to the
+        auto-reattached set, and does NOT instantiate a fresh child."""
+        # Build the survivor as if it had been preserved from a prior view.
+        survivor = _StickyChildView()
+        survivor.request = rf.get("/old")
+        survivor.mount_call_count = 1
+        survivor.is_playing = True
+
+        parent = _make_parent(rf, _StickyParentView)
+        parent._ws_consumer = _FakeConsumer(preserved={"audio-player": survivor})
+
+        with override_settings(
+            DJUST_LIVE_RENDER_ALLOWED_MODULES=["tests.unit.test_live_render_tag"]
+        ):
+            out = _render_tag(
+                '{% live_render "tests.unit.test_live_render_tag._StickyChildView" sticky=True %}',
+                {"view": parent, "request": parent.request},
+            )
+
+        # Placeholder emitted, full subtree NOT emitted.
+        assert 'dj-sticky-slot="audio-player"' in out
+        assert "dj-sticky-view=" not in out
+        # Survivor's mount() did NOT run a second time.
+        assert survivor.mount_call_count == 1
+        # Survivor is registered on the new parent.
+        assert parent._child_views.get("audio-player") is survivor
+        # Auto-reattached set has the id.
+        assert "audio-player" in parent._ws_consumer._sticky_auto_reattached
+        # Survivor's request is updated to the new parent's request.
+        assert survivor.request is parent.request
+
+    def test_preserved_for_different_id_does_not_match(self, rf):
+        """Survivor for a DIFFERENT id → tag falls through to fresh-mount;
+        the consumer's auto-reattached set does NOT gain our id.
+
+        Uses ``type(...)`` to build a dynamic subclass per the v0.8.6 retro
+        #1109 rule — class-attr mutation on the shared ``_StickyChildView``
+        leaks across tests.
+        """
+        OtherSticky = type(
+            "_OtherSticky",
+            (_StickyChildView,),
+            {"sticky_id": "notification-center"},
+        )
+        unrelated = OtherSticky()
+        unrelated.mount_call_count = 1
+
+        parent = _make_parent(rf, _StickyParentView)
+        parent._ws_consumer = _FakeConsumer(preserved={"notification-center": unrelated})
+
+        with override_settings(
+            DJUST_LIVE_RENDER_ALLOWED_MODULES=["tests.unit.test_live_render_tag"]
+        ):
+            out = _render_tag(
+                '{% live_render "tests.unit.test_live_render_tag._StickyChildView" sticky=True %}',
+                {"view": parent, "request": parent.request},
+            )
+
+        # Fresh-mount path ran (full subtree emitted).
+        assert "dj-sticky-view" in out
+        assert "dj-sticky-slot" not in out
+        # Our id is NOT in the auto-reattached set.
+        assert "audio-player" not in parent._ws_consumer._sticky_auto_reattached
