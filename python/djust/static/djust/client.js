@@ -2623,7 +2623,10 @@ function initTodoItems() {
 }
 
 // Smart default rate limiting by input type
-// Prevents VDOM version mismatches from high-frequency events
+// Prevents VDOM version mismatches from high-frequency events.
+// Click-fired widgets (radio/checkbox/select) commit one value per user
+// interaction, so there's no event stream to batch — 'passthrough' skips
+// the rate-limit wrapper entirely.
 const DEFAULT_RATE_LIMITS = {
     'range': { type: 'throttle', ms: 150 },      // Sliders
     'number': { type: 'throttle', ms: 100 },     // Number spinners
@@ -2634,7 +2637,11 @@ const DEFAULT_RATE_LIMITS = {
     'url': { type: 'debounce', ms: 300 },        // URL inputs
     'tel': { type: 'debounce', ms: 300 },        // Phone inputs
     'password': { type: 'debounce', ms: 300 },   // Password inputs
-    'textarea': { type: 'debounce', ms: 300 }    // Multi-line text
+    'textarea': { type: 'debounce', ms: 300 },   // Multi-line text
+    'radio': { type: 'passthrough' },            // Click-fired, one value per click
+    'checkbox': { type: 'passthrough' },         // Click-fired, one value per click
+    'select-one': { type: 'passthrough' },       // Click-fired, one value per click
+    'select-multiple': { type: 'passthrough' }   // Click-fired, committed per option click
 };
 
 /**
@@ -4053,7 +4060,13 @@ function installDelegatedListeners(root) {
 
                 // Apply rate limiting wrapper
                 var wrapped;
-                if (rateLimit.type === 'blur') {
+                if (rateLimit.type === 'passthrough') {
+                    // Click-fired widgets (radio/checkbox/select) — one value
+                    // per interaction, no rate-limiting needed. Fire the
+                    // handler synchronously so the WS event goes out on the
+                    // same tick as the input event.
+                    wrapped = rawHandler;
+                } else if (rateLimit.type === 'blur') {
                     // dj-debounce="blur": defer until element loses focus
                     var latestArgs = null;
                     wrapped = function() {

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`dj-input` on click-fired widgets no longer incurs a 300ms debounce
+  (closes #1154)** — `DEFAULT_RATE_LIMITS` in
+  `python/djust/static/djust/src/08-event-parsing.js` was missing entries
+  for `radio`, `checkbox`, `select-one`, and `select-multiple`. The input
+  handler's fallback (`{ type: 'debounce', ms: 300 }`) kicked in for these
+  widget types, so `WizardMixin.wizard_input_event = "dj-input"` — the
+  class-wide setting recommended by #1095 — silently inserted 300ms of
+  dead air between a radio click and the WS event being sent.
+
+  Fix adds a new `passthrough` rate-limit type for click-fired widgets
+  (they commit exactly one value per user interaction, no stream to
+  batch) plus a branch in the input handler in `09-event-binding.js` that
+  skips the rate-limit wrapper when `rateLimit.type === 'passthrough'`.
+  Text/textarea fields retain their 300ms debounce unchanged. The
+  defensive 300ms fallback for unknown widget types is intact.
+
+  Real-world measurement from a wizard with a Yes/No radio and
+  `wizard_input_event = "dj-input"`:
+
+  | | click → WS send | total click → DOM |
+  |---|---|---|
+  | Before | 1104 ms | ~1150 ms |
+  | After  | 1 ms    | ~75 ms |
+
+  `dj-debounce`/`dj-throttle` explicit overrides on a radio still work —
+  passthrough is the default, not a mandate. Files:
+  `python/djust/static/djust/src/08-event-parsing.js` (4-line
+  `DEFAULT_RATE_LIMITS` extension),
+  `python/djust/static/djust/src/09-event-binding.js` (7-line
+  `passthrough` branch). 7 new cases in
+  `tests/js/dj-input-click-widgets.test.js` lock in synchronous firing
+  for radio/checkbox/select-one, continued debounce for text/textarea,
+  and that `dj-debounce` overrides still apply.
+
 ## [0.9.0rc1] - 2026-04-27
 
 ### Added

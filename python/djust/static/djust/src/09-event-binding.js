@@ -990,7 +990,13 @@ function installDelegatedListeners(root) {
 
                 // Apply rate limiting wrapper
                 var wrapped;
-                if (rateLimit.type === 'blur') {
+                if (rateLimit.type === 'passthrough') {
+                    // Click-fired widgets (radio/checkbox/select) — one value
+                    // per interaction, no rate-limiting needed. Fire the
+                    // handler synchronously so the WS event goes out on the
+                    // same tick as the input event.
+                    wrapped = rawHandler;
+                } else if (rateLimit.type === 'blur') {
                     // dj-debounce="blur": defer until element loses focus
                     var latestArgs = null;
                     wrapped = function() {
