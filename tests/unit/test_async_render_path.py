@@ -302,7 +302,7 @@ class TestArenderChunksCancellation:
 class TestAget:
     @pytest.mark.asyncio
     @pytest.mark.django_db
-    async def test_aget_returns_streaming_response(self, rf):
+    async def test_aget_returns_streaming_response(self, rf, monkeypatch):
         """ASGI context + ``streaming_render = True`` => async streaming
         response whose iterator yields ≥ 4 chunks."""
         view = _StreamingFixtureView()
@@ -313,6 +313,9 @@ class TestAget:
 
         engine = import_module(settings.SESSION_ENGINE)
         request.session = engine.SessionStore()
+        # The rf fixture produces a WSGIRequest; force the ASGI path so
+        # we can exercise the async render code without a full ASGI stack.
+        monkeypatch.setattr(view, "_is_asgi_context", lambda *a, **kw: True)
 
         response = await view.aget(request)
         assert isinstance(response, StreamingHttpResponse)
@@ -388,7 +391,7 @@ class TestAget:
         engine = import_module(settings.SESSION_ENGINE)
         request.session = engine.SessionStore()
         # Force the WSGI fallback by stubbing _is_asgi_context.
-        monkeypatch.setattr(view, "_is_asgi_context", lambda: False)
+        monkeypatch.setattr(view, "_is_asgi_context", lambda *a, **kw: False)
 
         response = await view.aget(request)
         # Phase-1 cosmetic StreamingHttpResponse — same shape as
@@ -420,6 +423,8 @@ class TestAget:
 
         engine = import_module(settings.SESSION_ENGINE)
         request.session = engine.SessionStore()
+        # The rf fixture produces a WSGIRequest; force the ASGI path.
+        monkeypatch.setattr(view, "_is_asgi_context", lambda *a, **kw: True)
 
         # Wire up a fake is_disconnected that returns True immediately.
         # The watcher polls once, sees True, and calls emitter.cancel().

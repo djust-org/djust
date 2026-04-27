@@ -60,6 +60,10 @@ class RequestMixin:
         route through :meth:`aget` (PR-A foundation, ADR-015).
         """
         t_start = time.perf_counter()
+        # PR-B (ADR-015): defensive reset so a re-used view instance
+        # doesn't see lazy thunks from a prior request stashed by the
+        # template tag during sync render.
+        self._lazy_thunks = []
 
         # Check login_required / permission_required (matches WebSocket path).
         # Without this, views with login_required=True render their full HTML
@@ -292,22 +296,28 @@ class RequestMixin:
         response["X-Djust-Streaming"] = "1"
         return response
 
-    def _is_asgi_context(self) -> bool:
-        """Detect whether we are running inside an ASGI request loop.
+    def _is_asgi_context(self, request=None) -> bool:
+        """Detect whether we are handling a real ASGI request.
 
-        ``aget()`` returns a ``StreamingHttpResponse`` whose
-        ``streaming_content`` is an *async* iterator. Async iteration is
-        only supported by ASGI handlers (Django warns when a sync handler
-        consumes one via ``async_to_sync``). On WSGI we therefore must
-        fall back to :meth:`get`.
+        The accurate signal is ``isinstance(request, ASGIRequest)`` —
+        Django's WSGI test ``Client`` produces ``WSGIRequest`` even
+        when the view is async-callable (``async_to_sync`` wraps the
+        coroutine but the request object itself is sync). Checking
+        ``asyncio.get_running_loop()`` is fooled by that wrapping,
+        which produces false-positive ASGI detection on sync test
+        clients.
 
-        Detection is based on the presence of a running asyncio loop —
-        the ASGI handler runs the view inside a coroutine, so a loop is
-        active. Sync WSGI handlers never have a running loop.
-
-        Test environments (``django.test.AsyncClient``) also set up a
-        running loop, so :meth:`aget` works there as well.
+        Falls back to the loop-based check when ``request`` is not
+        provided (callers like ``aget`` always pass it; older callers
+        may not).
         """
+        if request is not None:
+            try:
+                from django.core.handlers.asgi import ASGIRequest
+
+                return isinstance(request, ASGIRequest)
+            except ImportError:  # pragma: no cover — Django <4.1
+                pass
         try:
             import asyncio
 
@@ -348,7 +358,7 @@ class RequestMixin:
 
         # WSGI fallback: sync get() does the right thing already
         # (returns HttpResponse or Phase-1 streaming wrapper).
-        if not self._is_asgi_context():
+        if not self._is_asgi_context(request):
             return await sync_to_async(self.get)(request, *args, **kwargs)
 
         # Run the existing sync GET pipeline to produce the fully-rendered
@@ -390,6 +400,17 @@ class RequestMixin:
         # Stash on the view so PR-B's lazy thunks can find it from the
         # template-tag render path.
         self._chunk_emitter = emitter
+
+        # PR-B (ADR-015): the live_render tag stashes lazy thunks on
+        # ``self._lazy_thunks`` during the sync ``get()`` render (the
+        # tag has no access to the emitter at render time because aget
+        # constructs the emitter AFTER ``sync_to_async(self.get)``
+        # returns). Transfer the stash to the emitter so phase-5 of
+        # ``arender_chunks`` can invoke them.
+        stashed_thunks = getattr(self, "_lazy_thunks", None) or []
+        self._lazy_thunks = []  # reset to defend against view-instance re-use
+        for view_id, thunk_fn in stashed_thunks:
+            emitter.register_thunk(view_id, thunk_fn)
 
         # Producer task: render chunks into the emitter's queue.
         # ``arender_chunks`` is a regular coroutine that pushes via

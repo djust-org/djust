@@ -9,6 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`{% live_render lazy=True %}` capability + `as_view` dispatch wiring (v0.9.0 PR-B, ADR-015)** —
+  ships the user-facing API on top of PR-A's async render foundation.
+  Three forms: `lazy=True` (parent-flush trigger, default), `lazy="visible"`
+  (IntersectionObserver-deferred), `lazy=dict` (full control —
+  `trigger`, `timeout_s`, `on_error`, `placeholder` keys).
+
+  At template-render time the tag emits a `<dj-lazy-slot data-id="X"
+  data-trigger="flush">` placeholder synchronously and registers a
+  thunk on `parent._lazy_thunks`. `RequestMixin.aget` transfers the
+  stash onto the `ChunkEmitter` after the sync render completes.
+  Phase-5 of `arender_chunks` invokes thunks AFTER the body-close
+  chunk, so `</body></html>` lands at the wire BEFORE any lazy fill —
+  the browser sees a fully-painted page (with placeholder spinners)
+  while lazy children render server-side.
+
+  Wire format (post-`</html>` per ADR §"Wire format"):
+  ```html
+  <template id="djl-fill-X" data-target="X" data-status="ok">
+    <div dj-view data-djust-embedded="X">…rendered child…</div>
+  </template>
+  <script>window.djust.lazyFill('X')</script>
+  ```
+  The new `python/djust/static/djust/src/50-lazy-fill.js` module's
+  `window.djust.lazyFill(slotId)` function scans for matching
+  `<dj-lazy-slot data-id="X">` and replaces it with the template's
+  contents. Idempotent on double-fire. `data-trigger="visible"` defers
+  the actual replacement until the slot enters the viewport via
+  IntersectionObserver. `data-status="error"`/`"timeout"` wraps the
+  fill in `<dj-error aria-live="polite">` for screen-reader
+  announcement.
+
+  **Sticky + lazy = `TemplateSyntaxError` at tag eval** — hard
+  incompatibility per ADR §"Failure modes". Sticky preservation
+  requires the slot to exist at mount-frame time so the WS reattach
+  can `replaceWith` the stashed subtree; lazy renders the slot AFTER
+  mount, so the stash-target doesn't exist when reattach runs.
+
+  **`as_view()` dispatch wiring** — `LiveView.as_view` is now
+  overridden so that classes with `streaming_render = True` return an
+  async view callable (via `markcoroutinefunction`) that routes GET to
+  `aget()` when in real ASGI context. This is the wiring that makes
+  PR-A's foundation actually active end-to-end. WSGI deployments fall
+  back to sync `dispatch` via `sync_to_async`, preserving the Phase-1
+  cosmetic chunked response behavior. The ASGI/WSGI signal is
+  `isinstance(request, ASGIRequest)` — accurate even when the sync
+  test `Client` wraps the async view via `async_to_sync` (the
+  earlier loop-presence check was fooled by that wrapping).
+
+  Files: `python/djust/templatetags/live_tags.py` (~210 LoC `lazy=`
+  branch with thunk closure), `python/djust/mixins/template.py` (~40
+  LoC Phase-5 thunk loop), `python/djust/mixins/request.py`
+  (~15 LoC thunk transfer + `_lazy_thunks` reset + ASGIRequest-aware
+  `_is_asgi_context`), `python/djust/live_view.py` (~50 LoC `as_view`
+  override). New: `python/djust/static/djust/src/50-lazy-fill.js`
+  (~140 LoC client). 14 new cases in
+  `tests/unit/test_live_render_lazy.py` cover validation, placeholder
+  emit, thunk stash, thunk closure including error + timeout
+  envelopes. 2 new integration cases in
+  `tests/integration/test_lazy_streaming_flow.py` drive the full
+  pipeline (sync render → thunk transfer → arender_chunks Phase 1-5 →
+  consumer drain) and assert the body-close-before-fills wire-format
+  ordering.
+
+  Foundation for PR-C (`asyncio.as_completed` parallel render across
+  thunks; closes #1043 umbrella).
+
 - **Async render-path foundation: `aget()` + `ChunkEmitter` + `arender_chunks()` (v0.9.0 PR-A, ADR-015)** — first PR of the v0.9.0 P2 streaming arc (#1043). Closes the v0.6.1 retro #116 doc-claim debt: Phase 1 was a regex-split-after-render with no real TTFB win; Phase 2 PR-A introduces the actual async render path so `streaming_render = True` shell-flushes to the wire BEFORE `get_context_data()` runs.
 
   New module `python/djust/http_streaming.py` (~230 LoC) provides the `ChunkEmitter` class — a per-request bounded `asyncio.Queue` with backpressure, cancellation propagation via `request_token`, and a `register_thunk()` API surface that PR-B (`{% live_render lazy=True %}`) will hook into. The emitter exposes `__aiter__` for direct consumption by `StreamingHttpResponse`.

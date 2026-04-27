@@ -9,6 +9,7 @@ import socket
 import threading
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from django.utils.decorators import classonlymethod
 from django.views import View
 
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
@@ -367,6 +368,59 @@ class LiveView(
     # release build silently no-ops. See
     # :mod:`djust.time_travel` for the recording machinery.
     time_travel_enabled: bool = False
+
+    # ============================================================================
+    # AS_VIEW DISPATCH (PR-B for v0.9.0 streaming, ADR-015)
+    # ============================================================================
+
+    @classonlymethod
+    def as_view(cls, **initkwargs):
+        """Override Django's ``View.as_view`` to route GET to :meth:`aget`
+        when ``streaming_render = True`` AND we're running on ASGI.
+
+        Django's stock dispatch routes by ``request.method.lower()`` so
+        GET → sync ``self.get()``. Adding async ``aget()`` next to sync
+        ``get()`` doesn't change the routing — Django's
+        ``view_is_async`` only checks handlers in ``http_method_names``.
+
+        For ``streaming_render = True`` views we therefore return a
+        custom async view callable that:
+
+        * Routes GET → ``await self.aget(...)`` when in ASGI context.
+        * Routes everything else (POST, PUT, etc., AND GET on WSGI)
+          through ``await sync_to_async(self.dispatch)(...)``.
+
+        For ``streaming_render = False`` (default) we delegate to
+        ``super().as_view()`` so non-streaming views run through stock
+        Django dispatch with zero overhead and no behavior change.
+        """
+        if not getattr(cls, "streaming_render", False):
+            return super().as_view(**initkwargs)
+
+        from asgiref.sync import markcoroutinefunction, sync_to_async
+
+        async def view(request, *args, **kwargs):
+            self = cls(**initkwargs)
+            self.setup(request, *args, **kwargs)
+            if not hasattr(self, "request"):
+                raise AttributeError(
+                    "%s instance has no 'request' attribute. Did you override "
+                    "setup() and forget to call super()?" % cls.__name__
+                )
+            if request.method == "GET" and self._is_asgi_context(request):
+                return await self.aget(request, *args, **kwargs)
+            return await sync_to_async(self.dispatch)(request, *args, **kwargs)
+
+        view.view_class = cls  # type: ignore[attr-defined]
+        view.view_initkwargs = initkwargs  # type: ignore[attr-defined]
+        view.__doc__ = cls.__doc__
+        view.__module__ = cls.__module__
+        view.__annotations__ = cls.dispatch.__annotations__
+        # Copy possible attributes set by decorators (e.g. ``@csrf_exempt``)
+        # from dispatch — mirrors Django's stock as_view behavior.
+        view.__dict__.update(cls.dispatch.__dict__)
+        markcoroutinefunction(view)
+        return view
 
     # ============================================================================
     # INITIALIZATION & SETUP

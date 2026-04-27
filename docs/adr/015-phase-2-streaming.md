@@ -110,3 +110,18 @@ Matches ROADMAP shape C estimate (3-5 days for #1043).
 - Per-chunk gzip framing.
 - Cross-tab `dj-lazy-slot` deduplication.
 - LiveComponent-level lazy.
+
+## Deferred from PR-B (tracked for follow-up)
+
+- **System check A075 (sticky+lazy template-scan)**. The tag itself
+  raises `TemplateSyntaxError` at eval, which is the load-bearing
+  enforcement. A075 was originally planned as defense-in-depth so the
+  collision is caught at `manage.py check` time, before first render.
+  Defer to a follow-up — the runtime check covers the user-visible
+  failure mode.
+- **CSP-nonce-aware activator script**. The wire format uses an inline
+  `<script>window.djust.lazyFill('X')</script>` activator. Strict CSP
+  without `unsafe-inline` blocks this; the auto-scan on
+  `DOMContentLoaded` (in `50-lazy-fill.js`) is the documented
+  fallback. Future work: propagate the request's CSP nonce into the
+  activator's `nonce=...` attribute. Tracked separately.

@@ -418,6 +418,42 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             logger.debug("arender_chunks: cancelled mid-stream")
             return
 
+        # 5. Lazy thunks (PR-B, ADR-015). The body of the page has
+        # already flushed; lazy ``<template id="djl-fill-X">`` chunks
+        # are appended after </html>. Browsers tolerate post-</html>
+        # content per the HTML5 parser tree-construction spec — the
+        # template element + its inline <script> activator move into
+        # the implicit body and execute in order. Sequential in PR-B;
+        # PR-C ships parallelism via ``asyncio.as_completed``.
+        if not emitter.thunks:
+            return
+        try:
+            for view_id, thunk_fn in emitter.thunks:
+                if emitter.cancelled:
+                    return
+                try:
+                    chunk_bytes = await thunk_fn()
+                except ChunkEmitterCancelled:
+                    raise
+                except Exception:  # noqa: BLE001 — thunk owns its own envelope
+                    logger.exception(
+                        "arender_chunks: lazy thunk raised for view_id=%s; "
+                        "thunks should catch + emit error envelope themselves",
+                        view_id,
+                    )
+                    continue
+                if chunk_bytes is None:
+                    continue
+                if not isinstance(chunk_bytes, (bytes, bytearray)):
+                    chunk_bytes = chunk_bytes.encode("utf-8")
+                await emitter.emit(chunk_bytes)
+                # Yield between fills so each chunk has a chance to
+                # leave the wire before the next thunk's render starts.
+                await asyncio.sleep(0)
+        except ChunkEmitterCancelled:
+            logger.debug("arender_chunks: cancelled during lazy phase")
+            return
+
     def _split_for_streaming(self, full_html: str) -> tuple:
         """Split rendered HTML into ``(shell_open, main_content, shell_close)``.
 
