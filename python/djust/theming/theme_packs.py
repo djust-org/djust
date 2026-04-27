@@ -1053,6 +1053,7 @@ def _ensure_theme_imports() -> None:
     from .themes.art_deco import PACK as _PACK_ART_DECO, DESIGN_SYSTEM as _DESIGN_ART_DECO
     from .themes.handcraft import PACK as _PACK_HANDCRAFT, DESIGN_SYSTEM as _DESIGN_HANDCRAFT
     from .themes.terminal import PACK as _PACK_TERMINAL, DESIGN_SYSTEM as _DESIGN_TERMINAL
+    from .themes.docs import PACK as _PACK_DOCS, DESIGN_SYSTEM as _DESIGN_DOCS
     from .themes.magazine import PACK as _PACK_MAGAZINE, DESIGN_SYSTEM as _DESIGN_MAGAZINE
     from .themes.swiss import PACK as _PACK_SWISS, DESIGN_SYSTEM as _DESIGN_SWISS
     from .themes.candy import PACK as _PACK_CANDY, DESIGN_SYSTEM as _DESIGN_CANDY
@@ -1124,6 +1125,7 @@ def _ensure_theme_imports() -> None:
             "art_deco": _PACK_ART_DECO,
             "handcraft": _PACK_HANDCRAFT,
             "terminal": _PACK_TERMINAL,
+            "docs": _PACK_DOCS,
             "magazine": _PACK_MAGAZINE,
             "swiss": _PACK_SWISS,
             "candy": _PACK_CANDY,
@@ -1188,6 +1190,7 @@ def _ensure_theme_imports() -> None:
     DESIGN_SYSTEMS["art_deco"] = _DESIGN_ART_DECO
     DESIGN_SYSTEMS["handcraft"] = _DESIGN_HANDCRAFT
     DESIGN_SYSTEMS["terminal"] = _DESIGN_TERMINAL
+    DESIGN_SYSTEMS["docs"] = _DESIGN_DOCS
     DESIGN_SYSTEMS["magazine"] = _DESIGN_MAGAZINE
     DESIGN_SYSTEMS["swiss"] = _DESIGN_SWISS
     DESIGN_SYSTEMS["candy"] = _DESIGN_CANDY
