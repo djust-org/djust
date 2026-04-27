@@ -155,6 +155,16 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P2** | docs: "misleading existing tests" pattern note (#1018) | One paragraph in `PULL_REQUEST_CHECKLIST.md` — when fixing a check, audit existing tests whose fixtures exemplify the broken behavior | v0.7.4 |
 | **P2** | docs: whitespace-preserving redaction pattern in check-authoring guide (#1019) | New section documenting the `_strip_verbatim_blocks` pattern as canonical reference for line-number-aware regex scanners | v0.7.4 |
 | **P2** | docs: scope-decision helper extraction pattern in check-authoring guide (#1020) | New section documenting `_contrast_check_scope` / `_presets_to_check` as canonical reference for config-driven check scope | v0.7.4 |
+| **P1** | Bisect 6 flaky tests that fail in full pytest run, pass in isolation (#1134) | Every PR pays a ~30s skip-marker tax on full-suite runs; root cause is a polluting test mutating global state (Django settings / Channels registry / Redis mock). Bisect first, fix the polluter — unblocks the pre-push hook for every future PR. | v0.9.1 |
+| **P1** | Rust template renderer rejects project-defined `register.filter` (#1121) | Real bug, surfaced post-v0.9.0 — projects that register custom filters via the Django registry don't see them in the Rust path. Asymmetry with the Python engine; same shape as the v0.7.2 `__str__` fix (#968). | v0.9.1 |
+| **P2** | A075 system check — sticky+lazy template scan (#1146) | ADR-015 §"Deferred from PR-B". Catch `{% live_render sticky=True lazy=True %}` collision at startup, not template-render time. ~80 LoC + tests. | v0.9.1 |
+| **P2** | CSP-nonce-aware activator script for `<dj-lazy-slot>` fills (#1147) | ADR-015 §"Deferred from PR-B". Sites with strict CSP need the framework to thread the request CSP nonce through `live_tags.py` + `50-lazy-fill.js` so inline activators match the document policy. | v0.9.1 |
+| **P2** | Rust template engine `{% live_render %}` lazy=True parity (#1145) | Surfaced in PR #1138 integration tests — production users on the Rust path can't use `lazy=True`. Port the Django implementation to a Rust tag handler in `crates/djust_templates/`. | v0.9.1 |
+| **P2** | Replay handler argument validation — defense-in-depth (#1148) | PR #1142 follow-up. Augment `replay_event` to validate `event_name` against `view._djust_event_handlers` registry rather than the bare underscore-prefix guard, limiting replay to actual handlers. | v0.9.1 |
+| **P2** | Theming cookie namespace to prevent cross-project bleed on localhost (#1158) | Follow-up to closed-as-workaround #1013. Cookies are domain-scoped, not port-scoped — multiple djust projects on `localhost:80xx` share `djust_theme*` cookies and overwrite each other. Add `LIVEVIEW_CONFIG['theme']['cookie_namespace']` setting; namespaced reads/writes with fallback to legacy unprefixed names. | v0.9.1 |
+| **P3** | Descriptor-pattern component time-travel verification test (#1150) | PR #1141 Stage 11 deferral. End-to-end test that constructs a view with a class-level `LiveComponent.descriptor()` and asserts capture+restore preserves the component's state. Locks in the `_COMPONENT_INTERNAL_ATTRS` defense layer. | v0.9.1 |
+| **P3** | `markdown` package missing from default test env (#1149) | Carryover from v0.8.7 retro. Add to dev-dependencies or mark dependent tests with `pytest.importorskip("markdown")`. | v0.9.1 |
+| **P3** | data_table row-level navigation — `row_click_event` / `row_url` (#1111) | Feat slot — common UX pattern for click-to-detail. Decide: handler attribute on `<tr>` vs URL builder, accessibility (Enter/Space, role=button), default-prevent for nested controls. | v0.9.1 |
 
 ---
 
@@ -1354,6 +1364,65 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 - `/pipeline-next --milestone v0.9.0 --feature "streaming-phase2-1043-pr-a"` to resume the in-flight PR-A pipeline (state file already exists; Stages 1-4 passed).
 - The Plan-stage ADR draft at `.pipeline-state/feat-streaming-phase2-1043-adr-draft.md` is the canonical design for ALL three #1043 PRs.
 - Apply Stage-4 first-principles rule: every Plan pass should grep the codebase before committing to architecture (canon from #1032 retro — what looked like "needs new transport" was actually "use the WS pipeline that already carries the data"; analogous traps may lurk in #1041/#1042).
+
+---
+
+### Milestone: v0.9.1 — v0.9.0 follow-up drain (10 issues)
+
+*Goal:* Land the user-reported real bug (#1121), unblock the pre-push hook (#1134), and clear the v0.9.0 retro deferrals (ADR-015 gates + replay defense-in-depth + Rust template parity for `lazy=True`). Bake v0.9.0rc2 → v0.9.0 stable on the back of this drain — no new headline features; the soak window closes the v0.9.0 arc cleanly.
+
+**Status:** v0.9.0rc2 released 2026-04-27. v0.9.1 candidates filed during the v0.9.0 retro + post-rc2 user reports.
+
+#### High-priority unblockers (P1)
+
+- [ ] **#1134 — Bisect 6 flaky tests that fail in full pytest run, pass in isolation** (P1, ~1 day). Pollution comes from another test mutating Django settings / Channels consumer registry / Redis mock state. Bisect first, fix the polluter. Every PR pays a flat 30s skip-marker tax until this is done — biggest ROI item in the milestone. Likely closes the 6 `@pytest.mark.skip(reason='flaky, see #1134')` markers added during v0.9.0.
+- [ ] **#1121 — Rust template renderer rejects project-defined `register.filter`** (P1, ~0.5–1 day). User-reported real bug. Custom filters registered via Django's `template.Library().filter` work in the Python engine but not the Rust engine. Same shape as v0.7.2 `__str__` fix (#968) — the Rust path needs to consult the Django filter registry (or be told about user filters at startup). Investigate scope of the registry bridge first.
+
+#### ADR-015 deferred follow-ups (P2)
+
+- [ ] **#1146 — A075 system check (sticky+lazy template scan)** (P2, ~80 LoC + tests, ~0.5 day). Walk template loader's known templates; emit warning on `{% live_render sticky=True lazy=True %}` collision at startup rather than template-render time.
+- [ ] **#1147 — CSP-nonce-aware activator for `<dj-lazy-slot>` fills** (P2, ~50 LoC + tests, ~0.5 day). Thread the request CSP nonce through `live_tags.py` + `50-lazy-fill.js` so inline activators match a strict CSP. Required for sites that disallow `unsafe-inline`.
+- [ ] **#1145 — Rust template engine `{% live_render %}` lazy=True parity** (P2, ~150 LoC Rust + ~50 LoC tests, ~1.5 days). Port the Django `lazy=True` branch (~210 LoC at `templatetags/live_tags.py:live_render`) into a Rust tag handler in `crates/djust_templates/`. Production users on the Rust path are blocked from streaming today.
+
+#### Server-side polish (P2)
+
+- [ ] **#1148 — Replay handler argument validation (defense-in-depth)** (P2, ~5 LoC + 2 tests, ~0.25 day). Augment `replay_event` (PR #1142) to validate `snapshot.event_name` against `view._djust_event_handlers` rather than the bare underscore-prefix guard. Limits forward-replay to actual handlers.
+- [ ] **#1158 — Theming cookie namespace for cross-project isolation on localhost** (P2, ~10–15 LoC + tests, ~0.5 day). Follow-up to closed-as-workaround #1013. Cookies are domain-scoped, not port-scoped, so multiple djust projects on `localhost:80xx` share `djust_theme*` cookies. Add `LIVEVIEW_CONFIG['theme']['cookie_namespace']` (string); read namespaced first, fall back to legacy unprefixed names; write only the namespaced name when set. Touches `manager.py` + `build_themes.py` + theming docs.
+
+#### Test/env hygiene (P3)
+
+- [ ] **#1150 — Descriptor-pattern component time-travel verification test** (P3, ~30 LoC, ~0.25 day). PR #1141 Stage 11 deferral. End-to-end test exercising class-level `LiveComponent.descriptor()` capture+restore. Locks in the `_COMPONENT_INTERNAL_ATTRS` defense layer.
+- [ ] **#1149 — `markdown` package missing from default test env** (P3, ~10 LoC, ~0.1 day). Carryover from v0.8.7 retro. Add to dev-deps OR mark dependent tests with `pytest.importorskip("markdown")`.
+
+#### Feat slot (P3)
+
+- [ ] **#1111 — data_table row-level navigation (`row_click_event` / `row_url`)** (P3, ~150 LoC + tests, ~1 day). Common click-to-detail UX. Design choices to lock in the Plan stage: handler attribute on `<tr>` vs URL builder, keyboard support (Enter/Space, role=button), default-prevent for nested controls (links/buttons inside the row). Slips out of v0.9.1 if the unblocker work runs long.
+
+#### Out of scope for v0.9.1
+
+- **#1151 — Debug panel UI for per-component scrubbing + forward-replay** — bigger feature (~300 LoC JS + tests). Build on PRs #1141/#1142 primitives. Park for v0.10.0 or a dedicated devtools milestone.
+- **#1152 — Vitest unhandled-rejection in `view-transitions.test.js`** — non-deterministic teardown error; investigate when it next surfaces in CI rather than chasing it speculatively.
+- **#1153 — `asyncio.as_completed._wait_for_one` warning suppression** — cosmetic warning under teardown; locally filter or fix `_cancel_pending` lifecycle when it actually blocks something.
+- **#1143/#1144 — Stage-4 first-principles canonicalization + branch-name verify check** — skill/CLAUDE.md updates, not framework code. Apply directly to `~/.claude/skills/pipeline-run/SKILL.md` and `CLAUDE.md` independent of any release cycle.
+
+#### Sequencing strategy
+
+1. **#1134 first** — every other PR is faster once the flaky-test tax is gone. Single-session bisect → polluter fix → unskip all 6 markers in one PR.
+2. **#1121** in parallel (independent codepath) — can ride a fresh session if a contributor picks it up.
+3. **#1158** + **#1148** + **#1149** + **#1150** as a small drain group (each ~0.25–0.5 day) — single autonomous `pipeline-run --milestone v0.9.1 --group --all` pass.
+4. **#1146** + **#1147** + **#1145** as the ADR-015 cleanup group — these depend on the streaming code shipped in v0.9.0 PR-B (#1138) and naturally cluster.
+5. **#1111** last — feat with a non-trivial API decision; better to ship this on its own with a Stage 4 design pass.
+
+#### After v0.9.1
+
+- v0.9.0 stable promotion (rc2 → final) once v0.9.1 has soaked for one cycle without regressions.
+- Then enter the v1.0.0 testing arc — the deferred 1.0-blockers are Dead View / Progressive Enhancement and Accessibility (ARIA/WCAG), per the Priority Matrix.
+
+#### Pipeline runner notes
+
+- `/pipeline-drain --milestone v0.9.1` to triage all 10 candidates into an `--all`-mode run.
+- `/pipeline-run --milestone v0.9.1 --priority P1 --all` to ship #1134 + #1121 first.
+- `/pipeline-run --milestone v0.9.1 --group --all` to bundle the small P2/P3 drain items per the sequencing strategy above.
 
 ---
 
