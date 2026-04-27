@@ -12,6 +12,17 @@ use std::collections::HashSet;
 /// Regex for {% spaceless %}: matches whitespace between > and <
 static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 
+/// Returns ``true`` if the (parser-preserved) filter argument string is a
+/// quoted literal — i.e. starts and ends with matching single or double
+/// quotes. Used to drive the custom-filter fallback's arg-resolution
+/// policy (#1121): quoted args are passed through as literals; bare
+/// identifiers are first resolved against the template context.
+fn is_quoted_arg(arg: &str) -> bool {
+    arg.len() >= 2
+        && ((arg.starts_with('"') && arg.ends_with('"'))
+            || (arg.starts_with('\'') && arg.ends_with('\'')))
+}
+
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
 }
@@ -267,13 +278,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
                 // extractor can tell literals from bare identifiers
-                // (issue #787).
-                let stripped = arg.as_deref().map(crate::parser::strip_filter_arg_quotes);
-                value = filters::apply_filter_with_context(
+                // (issue #787). The quoting hint is preserved so the
+                // custom-filter fallback (#1121) knows whether a bare
+                // identifier should be context-resolved.
+                let original = arg.as_deref();
+                let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
+                let stripped = original.map(crate::parser::strip_filter_arg_quotes);
+                value = filters::apply_filter_full(
                     filter_name,
                     &value,
                     stripped,
                     Some(context),
+                    arg_was_quoted,
                 )?;
             }
 
@@ -283,6 +299,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // 1. |safe is the last filter (matches Django behavior)
             // 2. The variable is marked safe in the context (like Django's SafeData)
             // 3. A filter that produces already-escaped/safe output is in the chain
+            //    (built-in safe_output_filters list OR a custom filter
+            //    registered with ``is_safe=True`` per #1121).
             let safe_output_filters = [
                 "safe",
                 "safeseq",
@@ -292,10 +310,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 "urlizetrunc",
                 "unordered_list",
             ];
-            let is_safe = filter_specs
-                .iter()
-                .any(|(name, _)| safe_output_filters.contains(&name.as_str()))
-                || context.is_safe(var_name);
+            let is_safe = filter_specs.iter().any(|(name, _)| {
+                safe_output_filters.contains(&name.as_str())
+                    || crate::filter_registry::is_custom_filter_safe(name)
+            }) || context.is_safe(var_name);
             if is_safe {
                 Ok(text)
             } else if *in_attr {
@@ -325,12 +343,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let mut value = get_value(expr, context)?;
 
             for (filter_name, arg) in filters {
-                let stripped = arg.as_deref().map(crate::parser::strip_filter_arg_quotes);
-                value = filters::apply_filter_with_context(
+                let original = arg.as_deref();
+                let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
+                let stripped = original.map(crate::parser::strip_filter_arg_quotes);
+                value = filters::apply_filter_full(
                     filter_name,
                     &value,
                     stripped,
                     Some(context),
+                    arg_was_quoted,
                 )?;
             }
 
@@ -344,10 +365,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 "urlizetrunc",
                 "unordered_list",
             ];
-            let is_safe = filters
-                .iter()
-                .any(|(name, _)| safe_output_filters.contains(&name.as_str()))
-                || context.is_safe(expr);
+            let is_safe = filters.iter().any(|(name, _)| {
+                safe_output_filters.contains(&name.as_str())
+                    || crate::filter_registry::is_custom_filter_safe(name)
+            }) || context.is_safe(expr);
             if is_safe {
                 Ok(text)
             } else {
@@ -1550,25 +1571,27 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
         // Parse and apply filters (handles chained filters too)
         for filter_part in filter_expr.split('|') {
             let filter_part = filter_part.trim();
-            let (filter_name, arg) = if let Some(colon_pos) = filter_part.find(':') {
+            let (filter_name, arg, arg_was_quoted) = if let Some(colon_pos) = filter_part.find(':')
+            {
                 let name = &filter_part[..colon_pos];
-                let mut arg_str = filter_part[colon_pos + 1..].trim().to_string();
-                // Remove surrounding quotes from argument
-                if (arg_str.starts_with('"') && arg_str.ends_with('"'))
-                    || (arg_str.starts_with('\'') && arg_str.ends_with('\''))
-                {
-                    arg_str = arg_str[1..arg_str.len() - 1].to_string();
-                }
-                (name, Some(arg_str))
+                let raw_arg = filter_part[colon_pos + 1..].trim();
+                let was_quoted = is_quoted_arg(raw_arg);
+                let arg_str = if was_quoted {
+                    raw_arg[1..raw_arg.len() - 1].to_string()
+                } else {
+                    raw_arg.to_string()
+                };
+                (name, Some(arg_str), was_quoted)
             } else {
-                (filter_part, None)
+                (filter_part, None, false)
             };
 
-            value = filters::apply_filter_with_context(
+            value = filters::apply_filter_full(
                 filter_name,
                 &value,
                 arg.as_deref(),
                 Some(context),
+                arg_was_quoted,
             )?;
         }
 
