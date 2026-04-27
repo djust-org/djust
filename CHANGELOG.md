@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust template engine `{% live_render %}` lazy=True parity (closes
+  #1145)** — the Rust template engine now ships a registered handler
+  for `{% live_render %}`, closing the v0.9.0 PR-B (#1138) gap. Before
+  this, production users on `RustLiveView` got a
+  "no handler registered for tag: live_render" template error if they
+  used `lazy=True`, forcing a fallback to the slower Django engine to
+  use streaming. The Rust handler delegates to the existing Python
+  implementation in `djust.templatetags.live_tags.live_render`, so
+  behaviour is byte-for-byte identical on both paths — same
+  `<dj-lazy-slot>` placeholder shape, same thunk-stash side effect on
+  `parent._lazy_thunks`, same CSP nonce propagation, same
+  `sticky=True + lazy=True` collision raise. The bridge required
+  threading the raw Python sidecar (`request`, `view`) through to the
+  custom-tag handler context: `crates/djust_core` exposes
+  `Context::raw_py_objects()` for read access, and
+  `crates/djust_templates::registry` adds
+  `call_handler_with_py_sidecar` (a backward-compatible variant of
+  `call_handler` — existing handlers ignore the extra Python objects
+  in their dict). 8 parity regression cases in
+  `tests/unit/test_rust_live_render_lazy_1145.py` cover lazy=True
+  placeholder byte equivalence, lazy="visible" parity, thunk stash on
+  the Rust path, CSP nonce parity, sticky+lazy collision, the
+  inline-attribute `template = "..."` mode (the original failure
+  surface from PR #1138 integration tests), and eager-mode
+  regression-guard.
 - **A075 system check: `{% live_render sticky=True lazy=True %}`
   collision (closes #1146)** — promotes the existing tag-eval-time
   `TemplateSyntaxError` to a startup-time warning so the misuse

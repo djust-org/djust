@@ -6,6 +6,12 @@
 > **Phase 2 PR-B (v0.9.0)** — `{% live_render lazy=True %}` opt-in lazy children.
 > **Phase 2 PR-C (v0.9.0)** — `asyncio.as_completed()` parallel render across
 > lazy children.
+> **v0.9.1 (#1145)** — `{% live_render lazy=True %}` is now supported on
+> the Rust template engine path. Production users on `RustLiveView` who
+> opted into the faster Rust-rendered template engine can now use lazy
+> children without falling back to the Django template engine. Behaviour
+> is byte-for-byte identical between the two paths — the Rust handler
+> delegates to the same Python implementation.
 
 ## Honest Phase-1 vs Phase-2 caveat (closes retro #116)
 
