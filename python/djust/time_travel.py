@@ -289,6 +289,12 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     # Components absent from the snapshot keep current state — they
     # are first-class instances, not parent-scoped attrs, so the
     # ghost-attr cleanup model doesn't apply.
+    #
+    # NOTE: parent-from-component derivations (e.g. ``parent.total =
+    # sum(comp.value for comp in components)``) are NOT recomputed
+    # here. Time-travel restores literal captured state at each layer;
+    # if the user wants live-recomputed invariants they should derive
+    # them at render time, not at restore time.
     if components_state:
         registry = getattr(view, "_components", None) or {}
         for component_id, component_snap in components_state.items():

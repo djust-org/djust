@@ -754,3 +754,46 @@ class TestComponentLevelTimeTravel:
         view._components["m"].items.append(99)
         # Snapshot is untouched.
         assert snap["__components__"]["m"]["items"] == [1, 2, 3]
+
+    def test_component_restore_blocks_dunder_via_safe_setattr(self):
+        """The safe_setattr defense layer applies to component restore
+        too: a hand-edited snapshot trying to set ``__class__`` on a
+        component is rejected with no class-level mutation."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Inject a malicious dunder into the alpha snapshot.
+        before["__components__"]["alpha"]["__class__"] = object
+
+        snap = EventSnapshot(
+            event_name="evil",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        # safe_setattr blocked the dunder; ok flag flipped to False.
+        assert ok is False
+        # Component class is unchanged.
+        assert isinstance(view._components["alpha"], _FakeComponent)
+
+    def test_component_id_excluded_from_snapshot(self):
+        """``component_id`` is in ``_COMPONENT_INTERNAL_ATTRS`` because
+        it's the registry key — restoring stale state would desync.
+        Verify it's not captured."""
+        view = _ParentWithComponents()
+        # Set the public attr that mirrors the registry key.
+        view._components["alpha"].component_id = "alpha"
+        snap = view._capture_snapshot_state()
+        assert "component_id" not in snap["__components__"]["alpha"]
+
+    def test_component_template_attrs_excluded_from_snapshot(self):
+        """``template`` / ``template_name`` are framework-internal —
+        not user state. Excluded from the snapshot."""
+        view = _ParentWithComponents()
+        view._components["alpha"].template = "<div>my-tpl</div>"
+        view._components["alpha"].template_name = "comp.html"
+        snap = view._capture_snapshot_state()
+        assert "template" not in snap["__components__"]["alpha"]
+        assert "template_name" not in snap["__components__"]["alpha"]

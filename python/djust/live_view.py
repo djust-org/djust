@@ -125,6 +125,26 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
 )
 
 
+# Component-level analog (#1041): framework-internal LiveComponent
+# attrs that DON'T start with ``_`` but aren't user state. Excluded
+# from the ``__components__`` snapshot to keep the time-travel state
+# focused on actual user state. Mirrors the parent's
+# :data:`_FRAMEWORK_INTERNAL_ATTRS` for component fields.
+#
+# ``component_id`` in particular is the registry key — restoring it
+# from stale snapshot state would desync the registry from the
+# instance's ``component_id`` attribute.
+_COMPONENT_INTERNAL_ATTRS: frozenset = frozenset(
+    {
+        "component_id",
+        "template",
+        "template_name",
+        "assigns",
+        "slots",
+    }
+)
+
+
 class LiveView(
     ContextProviderMixin,
     StreamsMixin,
@@ -686,12 +706,17 @@ class LiveView(
 
         Component state (#1041, v0.9.0): when this view has registered
         :class:`~djust.components.LiveComponent` instances in
-        ``self._components`` (or as descriptor-pattern attributes), each
-        component's public state is captured under the special
-        ``"__components__"`` key as a ``{component_id: {field: value}}``
-        nested dict. The reserved name keeps component snapshots out of
-        the parent's flat state namespace and gives the time-travel
-        debug panel a clean shape to render per-component scrubbers.
+        ``self._components`` (the registry populated by
+        :meth:`_assign_component_ids`), each component's public state
+        is captured under the special ``"__components__"`` key as a
+        ``{component_id: {field: value}}`` nested dict. The reserved
+        name keeps component snapshots out of the parent's flat state
+        namespace and gives the time-travel debug panel a clean shape
+        to render per-component scrubbers. Descriptor-pattern
+        components are auto-registered via the framework's existing
+        descriptor-init machinery; once they live in
+        ``self._components`` they're captured the same way as legacy-
+        instantiated ones.
 
         The server never calls this directly — it's primarily exposed for
         testing and observability. Restoration uses
@@ -745,6 +770,11 @@ class LiveView(
           parent state).
         - Skip ``_descriptor_*`` machinery and other framework-
           internal attrs that begin with ``_``.
+        - Skip framework-internal config attrs that DON'T start with
+          ``_`` but aren't user state (see
+          :data:`_COMPONENT_INTERNAL_ATTRS`). ``component_id`` in
+          particular is the registry key — restoring it from stale
+          state would desync the registry from the instance attr.
 
         Failures on individual components are logged and the bad
         component is skipped — degrade gracefully rather than break
@@ -759,6 +789,8 @@ class LiveView(
                 comp_state: Dict[str, Any] = {}
                 for key, value in component.__dict__.items():
                     if key.startswith("_"):
+                        continue
+                    if key in _COMPONENT_INTERNAL_ATTRS:
                         continue
                     if callable(value):
                         continue
