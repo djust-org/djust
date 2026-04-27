@@ -40,7 +40,10 @@ function initTodoItems() {
 }
 
 // Smart default rate limiting by input type
-// Prevents VDOM version mismatches from high-frequency events
+// Prevents VDOM version mismatches from high-frequency events.
+// Click-fired widgets (radio/checkbox/select) commit one value per user
+// interaction, so there's no event stream to batch — 'passthrough' skips
+// the rate-limit wrapper entirely.
 const DEFAULT_RATE_LIMITS = {
     'range': { type: 'throttle', ms: 150 },      // Sliders
     'number': { type: 'throttle', ms: 100 },     // Number spinners
@@ -51,7 +54,11 @@ const DEFAULT_RATE_LIMITS = {
     'url': { type: 'debounce', ms: 300 },        // URL inputs
     'tel': { type: 'debounce', ms: 300 },        // Phone inputs
     'password': { type: 'debounce', ms: 300 },   // Password inputs
-    'textarea': { type: 'debounce', ms: 300 }    // Multi-line text
+    'textarea': { type: 'debounce', ms: 300 },   // Multi-line text
+    'radio': { type: 'passthrough' },            // Click-fired, one value per click
+    'checkbox': { type: 'passthrough' },         // Click-fired, one value per click
+    'select-one': { type: 'passthrough' },       // Click-fired, one value per click
+    'select-multiple': { type: 'passthrough' }   // Click-fired, committed per option click
 };
 
 /**

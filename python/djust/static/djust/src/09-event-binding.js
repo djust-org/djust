@@ -963,9 +963,15 @@ function installDelegatedListeners(root) {
                 // Build the raw handler
                 var rawHandler = function(ev) { return _handleDjInput(inputEl, ev); };
 
-                // Determine rate limit strategy
+                // Determine rate limit strategy.
+                // Clone the default before letting dj-* overrides mutate it,
+                // otherwise the shared const entry in DEFAULT_RATE_LIMITS gets
+                // permanently flipped and pollutes every subsequently-bound
+                // element of the same type.
                 var inputType = inputEl.type || inputEl.tagName.toLowerCase();
-                var rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
+                var rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType)
+                    ? Object.assign({}, DEFAULT_RATE_LIMITS[inputType])
+                    : { type: 'debounce', ms: 300 };
 
                 // Check for explicit overrides: dj-* attributes take precedence
                 if (inputEl.hasAttribute('dj-debounce')) {
@@ -990,7 +996,13 @@ function installDelegatedListeners(root) {
 
                 // Apply rate limiting wrapper
                 var wrapped;
-                if (rateLimit.type === 'blur') {
+                if (rateLimit.type === 'passthrough') {
+                    // Click-fired widgets (radio/checkbox/select) — one value
+                    // per interaction, no rate-limiting needed. Fire the
+                    // handler synchronously so the WS event goes out on the
+                    // same tick as the input event.
+                    wrapped = rawHandler;
+                } else if (rateLimit.type === 'blur') {
                     // dj-debounce="blur": defer until element loses focus
                     var latestArgs = null;
                     wrapped = function() {
