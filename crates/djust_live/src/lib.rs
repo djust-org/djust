@@ -2727,5 +2727,28 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // Custom filter registry (project-defined ``@register.filter`` callables) — #1121.
+    // Bridges Django's per-app filter libraries into the Rust template engine.
+    m.add_function(wrap_pyfunction!(
+        djust_templates::filter_registry::register_custom_filter,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::filter_registry::unregister_custom_filter,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::filter_registry::has_custom_filter,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::filter_registry::clear_custom_filters,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::filter_registry::get_registered_custom_filters,
+        m
+    )?)?;
+
     Ok(())
 }

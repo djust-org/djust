@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rust template renderer rejects project-defined custom filters
+  (closes #1121)** — Django projects registering custom filters via
+  ``@register.filter`` in their ``templatetags/`` modules saw them work
+  in the Python render path but fail under the Rust ``RustLiveView``
+  render path with ``RuntimeError: Template error: Unknown filter:
+  <name>``. The Rust engine's filter dispatch was a hardcoded match
+  against Django's 57 built-in filter names with no fallback for
+  project-level filters. The fix is a Python→Rust bridge mirroring
+  the existing custom-tag-handler design (``crates/djust_templates/
+  src/registry.rs``):
+  - New ``crates/djust_templates/src/filter_registry.rs`` holds a
+    process-wide ``Mutex<HashMap<String, FilterEntry>>`` of project
+    filter callables + per-filter metadata (``is_safe``,
+    ``needs_autoescape``).
+  - The renderer's filter loop forwards an ``arg_was_quoted`` hint
+    from the parser so the bridge can resolve bare-identifier args
+    against the template context before calling Python — fixing the
+    ``{{ my_dict|lookup:some_key }}`` shape from the issue body.
+  - Both ``filter.is_safe`` and ``filter.needs_autoescape`` from the
+    Django filter object are honoured: ``is_safe=True`` filters skip
+    auto-escape; ``needs_autoescape=True`` filters receive
+    ``autoescape=True`` as a kwarg.
+  - ``python/djust/template_filters.py`` walks
+    ``template.engines['django'].engine.template_libraries`` at the
+    first LiveView render and bulk-registers every custom filter
+    found. Built-in Django filter names are skipped (the Rust engine
+    has native implementations of all 57). The bootstrap is
+    idempotent — late-loaded apps' filters are picked up on
+    subsequent renders.
+  - Unknown filter names still raise the original
+    ``Unknown filter: <name>`` error so typos and missing imports
+    surface immediately. 10 regression cases in
+    ``TestRustCustomFilters`` cover the lookup shape from the issue
+    body, ``is_safe``, ``needs_autoescape``, quoted vs context-
+    resolved args, plain-text auto-escape, and the full
+    ``RustLiveView`` render path.
+
 - **Test pollution: 6 flaky tests in full-suite pytest run (closes #1134)** —
   bisected two independent polluters that surfaced after v0.9.0 PR-A
   (#1135) added the `aget`/`ChunkEmitter` async-render path and after

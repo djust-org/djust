@@ -42,6 +42,39 @@ except ImportError:
     RustLiveView = None
 
 
+# Process-level guard for the custom-filter bootstrap (#1121). Set after
+# the first successful walk of Django's filter libraries. Re-bootstrapping
+# is idempotent (re-registering an existing name overwrites in the Rust
+# registry), but the guard skips the walk on every subsequent
+# ``_initialize_rust_view`` call so steady-state cost is one branch.
+_CUSTOM_FILTERS_BRIDGED = False
+
+
+def _ensure_custom_filters_bridged() -> None:
+    """One-shot bootstrap that forwards Django's ``@register.filter``
+    callables to the Rust filter registry. Idempotent and non-fatal on
+    failure — filters still work in the Python render path even if the
+    Rust bridge is unavailable.
+    """
+    global _CUSTOM_FILTERS_BRIDGED
+    if _CUSTOM_FILTERS_BRIDGED:
+        return
+    try:
+        from ..template_filters import bootstrap_django_filters
+
+        bootstrap_django_filters()
+    except Exception:  # noqa: BLE001 — defensive; never block render
+        logger.warning(
+            "Failed to bridge Django custom filters to Rust template engine; "
+            "filters will still work in the Python render path",
+            exc_info=True,
+        )
+    finally:
+        # Set the guard whether bootstrap succeeded or threw — we never
+        # want to re-attempt on every render and re-log the warning.
+        _CUSTOM_FILTERS_BRIDGED = True
+
+
 def _collect_safe_keys(
     value: Any, prefix: str = "", visited: Optional[Set[int]] = None
 ) -> List[str]:
@@ -138,6 +171,14 @@ class RustBridgeMixin:
         """Initialize the Rust LiveView backend"""
 
         logger.debug("[LiveView] _initialize_rust_view() called, _rust_view=%s", self._rust_view)
+
+        # Bootstrap project-defined ``@register.filter`` callables into the
+        # Rust filter registry the first time any LiveView is initialized
+        # (#1121). Subsequent calls are cheap — a process-level guard
+        # short-circuits, and re-bootstrapping is idempotent for late-
+        # loaded apps. Failure is non-fatal: filters still work in
+        # Python-rendered paths.
+        _ensure_custom_filters_bridged()
 
         if self._rust_view is None:
             # Try to get from cache if we have a session
