@@ -17,6 +17,8 @@ Usage:
     {% theme_preset_selector layout="dropdown" %}
 """
 
+import json
+
 from django import template
 from django.template.loader import render_to_string
 from django.urls import reverse, NoReverseMatch
@@ -129,6 +131,13 @@ def theme_head(context, include_js: bool = True, link_css: bool = False):
     # Resolve text direction
     direction = get_direction()
 
+    # #1158 — namespace prefix for theming cookies (cross-project isolation
+    # on shared domains like localhost). JSON-encoded for safe inlining in a
+    # <script> context (json.dumps gives a valid JS string literal).
+    ns = (config.get("cookie_namespace") or "").strip()
+    cookie_prefix = f"{ns}_" if ns else ""
+    cookie_prefix_js = json.dumps(cookie_prefix)
+
     # Render via shared template
     html = render_to_string(
         "djust_theming/theme_head.html",
@@ -140,6 +149,7 @@ def theme_head(context, include_js: bool = True, link_css: bool = False):
             "include_component_link": include_component_link,
             "include_js": include_js,
             "direction": direction,
+            "cookie_prefix_js": cookie_prefix_js,
         },
     )
     return mark_safe(html)

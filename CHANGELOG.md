@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Theming cookie namespace for per-project isolation on shared
+  domains (closes #1158)** — adds opt-in
+  `LIVEVIEW_CONFIG['theme']['cookie_namespace']` setting so multiple
+  djust projects on `localhost:80xx` (or any shared domain) don't
+  overwrite each other's theme preferences. Browsers scope cookies by
+  domain only — not by port — so the four `djust_theme*` cookies bleed
+  across projects without this. PR #1013 already shipped
+  `enable_client_override: False` as a workaround, but that breaks
+  sites with a user-facing theme switcher; this is the missing piece
+  for those sites. When `cookie_namespace="djust_org"` is set, the
+  cookies become `djust_org_djust_theme`, `djust_org_djust_theme_preset`,
+  `djust_org_djust_theme_pack`, `djust_org_djust_theme_layout`.
+  Read path tries namespaced first, falls back to unprefixed once on
+  upgrade so users keep their existing theme. Write path (`theme.js`)
+  reads `window.__djust_theme_cookie_prefix` injected by
+  `theme_head.html` and writes only the namespaced name when set. When
+  unset (default), the legacy unprefixed names are used — existing
+  deployments unaffected. 8 new regression cases in
+  `tests/unit/test_theming_cookie_namespace_1158.py` cover namespaced
+  precedence, unprefixed fallback, default back-compat, two-namespace
+  isolation, all four cookies honour the namespace, and the
+  `theme_head.html` + `theme.js` write-side wiring.
 - **Rust template engine `{% live_render %}` lazy=True parity (closes
   #1145)** — the Rust template engine now ships a registered handler
   for `{% live_render %}`, closing the v0.9.0 PR-B (#1138) gap. Before
