@@ -241,63 +241,66 @@ fixes.
 For other connected users to see the new comment, the LiveView
 needs to be told that a write happened. The cleanest path is a
 PostgreSQL `LISTEN` / `NOTIFY` channel — fire-and-forget on the
-write side, push-based on the read side. djust ships a
-`@dj_listen("channel_name")` decorator that wires this up:
+write side, push-based on the read side. djust ships
+`@notify_on_save` (model-side) and `self.listen(channel)` /
+`handle_info(message)` (view-side) to wire this up.
+
+**On the write side** — decorate the model. Every `save()` and
+`delete()` now fires `NOTIFY <channel>, '<json>'`:
 
 ```python
-from djust import LiveView, action, state, dj_listen
+# myapp/models.py
+from django.conf import settings
+from django.db import models
+from djust.db import notify_on_save
 
-from .models import Comment
+
+class Post(models.Model):
+    title = models.CharField(max_length=200)
 
 
+@notify_on_save  # default channel name: "<app_label>_<model_name>" → "myapp_comment"
+class Comment(models.Model):
+    post = models.ForeignKey(
+        Post, on_delete=models.CASCADE, related_name="comments"
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE
+    )
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+```
+
+**On the read side** — subscribe in `mount()` and react in
+`handle_info()`:
+
+```python
 class CommentThreadView(LiveView):
     # ... as before ...
 
-    @dj_listen("comments_changed")
-    def on_comments_changed(self, payload, **kwargs):
-        """Fired when *any* connection NOTIFY's comments_changed.
-
-        Payload comes from the NOTIFY's optional argument — we use
-        it to scope updates to the current post.
-        """
-        if payload.get("post_id") != self.post_id:
+    def mount(self, request, *, post_id: int, **kwargs):
+        if not request.user.is_authenticated:
+            self.redirect("/login/")
             return
+        self.post_id = post_id
+        self.comments = self._fetch_comments()
+        self.listen("myapp_comment")  # subscribe to the channel @notify_on_save emits
+
+    def handle_info(self, message):
+        """Fires when any process NOTIFY's the channel we listen to."""
+        if message.get("type") != "db_notify":
+            return
+        # Cheap re-fetch — covers inserts, edits, deletes for any post.
+        # For very busy threads, scope by inspecting message["payload"].
         self.comments = self._fetch_comments()
 ```
 
-And on the write side — fire the NOTIFY after a successful insert.
-The cleanest pattern is a Django signal:
-
-```python
-# myapp/signals.py
-import json
-from django.db import connection
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-
-from .models import Comment
-
-
-@receiver(post_save, sender=Comment)
-def broadcast_comment(sender, instance, created, **kwargs):
-    if not created:
-        return
-    payload = json.dumps({"post_id": instance.post_id})
-    with connection.cursor() as cur:
-        cur.execute("NOTIFY comments_changed, %s", [payload])
-```
-
-Wire it up in `apps.py`:
-
-```python
-from django.apps import AppConfig
-
-class MyappConfig(AppConfig):
-    name = "myapp"
-
-    def ready(self):
-        from . import signals  # noqa: F401
-```
+That's it — no signals.py, no `apps.py` wiring, no manual NOTIFY
+SQL. The decorator is one line on the model, the subscription is
+one line in `mount()`, the reaction is a 3-line `handle_info()`.
 
 Now reload both browser windows. Post a comment in window A — it
 appears in **both windows** within ~50–200 ms. No polling, no
@@ -338,8 +341,11 @@ Five concrete primitives carried the whole feature:
    single line of client JS.
 4. **`dj-for`** — per-row diffing so adding one comment patches one
    `<li>`, not the whole list.
-5. **`@dj_listen`** — server-push subscription to a Postgres channel,
-   so any DB write becomes a UI update for every connected viewer.
+5. **`@notify_on_save` + `self.listen()` + `handle_info()`** —
+   server-push subscription to a Postgres channel, so any DB write
+   becomes a UI update for every connected viewer. See
+   [Database Notifications](/guides/database-notifications/) for
+   the full primitive reference.
 
 ---
 
@@ -356,10 +362,10 @@ Five concrete primitives carried the whole feature:
   push the new comment client-side immediately by appending to
   `self.comments` before the DB write. The `LISTEN` echo then
   reconciles.
-- **Per-thread channels:** for very high write volume, scope the
-  `LISTEN` channel by post id (e.g. `comments_changed_{post_id}`)
+- **Per-thread channels:** for very high write volume, override
+  `@notify_on_save(channel=lambda inst: f"myapp_comment_{inst.post_id}")`
   so each LiveView only receives notifications for the post it's
-  rendering.
+  rendering. See [Database Notifications](/guides/database-notifications/).
 - **Soft-deletes & moderation:** add an `@action` for
   `delete_comment(comment_id)` with `@permission_required("moderator")`,
   same broadcast pattern.
