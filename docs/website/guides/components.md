@@ -680,6 +680,95 @@ INSTALLED_APPS = [
 | `{% pagination %}`                         | Page navigation                      |
 | `{% avatar %}`                             | User avatar with initials fallback   |
 
+### `{% data_table %}` row-level navigation (#1111)
+
+Two ways to make whole rows clickable for navigation. Both render
+`role="button"`, `tabindex="0"`, and `cursor:pointer` on every row, and
+both respect Enter / Space for keyboard activation. Clicks inside
+nested interactive descendants (`<a>`, `<button>`, `<input>`,
+`<label>`, `<select>`, `<textarea>`) are short-circuited so they
+**never** trigger row navigation.
+
+**Option B — `row_click_event` (preferred, LiveView-idiomatic)**: each
+`<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
+Your `@event_handler` receives the row's value via `**kwargs` and can
+`self.redirect(...)` (or do anything else):
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+from django.urls import reverse
+
+class ClaimsListView(LiveView):
+    template_name = "claims/list.html"
+
+    def mount(self, request, **kwargs):
+        self.rows = list(Claim.objects.values("id", "claim_number", "status"))
+        self.columns = [
+            {"key": "claim_number", "label": "Claim #"},
+            {"key": "status", "label": "Status"},
+        ]
+
+    @event_handler()
+    def open_claim(self, value: str = "", **kwargs):
+        self.redirect(reverse("claims:detail", kwargs={"claim_id": value}))
+```
+
+```django
+{% data_table rows=rows columns=columns
+              row_click_event="open_claim"
+              row_click_value_key="id" %}
+```
+
+`row_click_value_key` defaults to `"id"`; override for slug-based
+routing (e.g. `"uuid"`, `"slug"`).
+
+**Option A — `row_url` (static-URL fallback)**: each `<tr>` gets
+`data-href` from a row dict key; the component JS module navigates via
+`window.location.assign(href)` on click / Enter / Space. Use when the
+target URL is computed once in the view and doesn't need a server
+round-trip:
+
+```python
+def get_context_data(self, **kwargs):
+    ctx = super().get_context_data(**kwargs)
+    ctx["rows"] = [
+        {"claim_number": "C-001", "claim_url": reverse("claims:detail", args=[1])},
+    ]
+    ctx["columns"] = [{"key": "claim_number", "label": "Claim #"}]
+    return ctx
+```
+
+```django
+{% data_table rows=rows columns=columns row_url="claim_url" %}
+```
+
+`row_click_event` takes precedence when both are set.
+
+**Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
+announce as buttons (`role="button"`), and activate on Enter or Space.
+Screen reader users get the same affordance as mouse / touch users.
+
+**CSP-strict friendly**: no inline event handlers, no `eval`, no nonce
+plumbing required. Both options work under
+`Content-Security-Policy: script-src 'self'` once the component JS
+module is served as a static asset (no `'unsafe-inline'`).
+
+**Composition with `selectable=True`**: per-row checkbox cells are
+`<input>` elements, which are in the nested-control guard's protected
+list. Clicking the checkbox fires the existing `select_event` and does
+**not** also fire row navigation.
+
+**Composition with cell-level link columns (#1110)**: cell `<a>` tags
+also "win" — clicking a cell link follows the link without firing the
+row event.
+
+**Static-URL safety**: Option A's `data-href` value is regex-validated
+(`/^(https?:|\/|\.)/`) before navigation, so a hostile `javascript:`
+URI cannot execute even if it sneaks into the row dict. Always prefer
+URLs computed from `reverse()` in your view; never assign
+user-controlled strings to `row_url` data.
+
 ### Customization
 
 All components use CSS custom properties. Override them to match any theme:
