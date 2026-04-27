@@ -599,16 +599,88 @@ class TestAsLiveFieldWidgetAwareDomEvent:
         class _WizardWithCustom(WizardMixin, LiveView):
             wizard_input_event = "dj-input"
             # Extend rather than replace so built-in click widgets still win
-            _CLICK_FIRED_WIDGET_CLASSES = frozenset({
-                *WizardMixin._CLICK_FIRED_WIDGET_CLASSES,
-                "_MyCommitWidget",
-            })
+            _CLICK_FIRED_WIDGET_CLASSES = frozenset(
+                {
+                    *WizardMixin._CLICK_FIRED_WIDGET_CLASSES,
+                    "_MyCommitWidget",
+                }
+            )
             wizard_steps = [{"name": "x", "title": "X", "form_class": _FormWithCustom}]
             template = "<div dj-root></div>"
 
         view = _WizardWithCustom()
         view.get(get_request)
         html = view.as_live_field("committed")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    # -- MRO walk covers Django Select subclasses ---------------------------
+
+    @pytest.mark.django_db
+    def test_select_multiple_uses_dj_change_via_mro(self, get_request):
+        """SelectMultiple is a Django builtin Select subclass — its leaf
+        class name isn't in _CLICK_FIRED_WIDGET_CLASSES, but the MRO walk
+        picks up Select. SelectMultiple is the default widget for
+        forms.MultipleChoiceField, so this is a common scenario."""
+
+        class _Form(forms.Form):
+            # Default widget for MultipleChoiceField is forms.SelectMultiple
+            choices = forms.MultipleChoiceField(
+                choices=[("a", "A"), ("b", "B")],
+            )
+
+        class _Wizard(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
+            template = "<div dj-root></div>"
+
+        view = _Wizard()
+        view.get(get_request)
+        html = view.as_live_field("choices")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_null_boolean_select_uses_dj_change_via_mro(self, get_request):
+        """NullBooleanSelect is a Django builtin Select subclass for
+        nullable booleans. Same MRO scenario as SelectMultiple."""
+
+        class _Form(forms.Form):
+            agreed = forms.NullBooleanField(required=False)
+
+        class _Wizard(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
+            template = "<div dj-root></div>"
+
+        view = _Wizard()
+        view.get(get_request)
+        html = view.as_live_field("agreed")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_app_subclass_of_radio_select_inherits_commit_semantics(self, get_request):
+        """An app's RadioSelect subclass should be matched via MRO without
+        having to register the subclass in _CLICK_FIRED_WIDGET_CLASSES."""
+
+        class _MyRadio(forms.RadioSelect):
+            pass
+
+        class _Form(forms.Form):
+            pick = forms.ChoiceField(
+                choices=[("y", "Y"), ("n", "N")],
+                widget=_MyRadio,
+            )
+
+        class _Wizard(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
+            template = "<div dj-root></div>"
+
+        view = _Wizard()
+        view.get(get_request)
+        html = view.as_live_field("pick")
         assert 'dj-change="validate_field"' in html
         assert "dj-input" not in html
 

@@ -147,12 +147,14 @@ class WizardMixin:
     #: can extend this frozenset to cover custom widgets (e.g. a color-picker
     #: component that fires a single commit event). Using string class names
     #: avoids pulling ``django.forms`` into this module at import time.
-    _CLICK_FIRED_WIDGET_CLASSES: ClassVar[frozenset[str]] = frozenset({
-        "RadioSelect",
-        "CheckboxInput",
-        "CheckboxSelectMultiple",
-        "Select",
-    })
+    _CLICK_FIRED_WIDGET_CLASSES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "RadioSelect",
+            "CheckboxInput",
+            "CheckboxSelectMultiple",
+            "Select",
+        }
+    )
 
     def _default_dom_event_for(self, field) -> str:
         """Pick the correct default ``dom_event`` for a form field's widget.
@@ -163,11 +165,20 @@ class WizardMixin:
         a wizard that opts into ``"dj-input"`` for text (#1095) doesn't
         accidentally also apply dj-input semantics to radios — which have
         no stream to fire on.
+
+        Walks the widget's MRO so any subclass of an enumerated builtin
+        (e.g. ``SelectMultiple``/``NullBooleanSelect`` subclassing
+        ``Select``, or an app's ``MyRadioSelect`` subclassing
+        ``RadioSelect``) inherits the commit-style default automatically —
+        without forcing apps to register every subclass in
+        ``_CLICK_FIRED_WIDGET_CLASSES`` themselves.
         """
         widget = getattr(field, "widget", None)
-        widget_cls = type(widget).__name__ if widget is not None else ""
-        if widget_cls in self._CLICK_FIRED_WIDGET_CLASSES:
-            return "dj-change"
+        if widget is not None:
+            click_set = self._CLICK_FIRED_WIDGET_CLASSES
+            for cls in type(widget).__mro__:
+                if cls.__name__ in click_set:
+                    return "dj-change"
         return self.wizard_input_event
 
     def as_live_field(self, field_name: str, event_name: str = "validate_field", **kwargs) -> str:

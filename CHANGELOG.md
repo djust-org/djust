@@ -18,11 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semantically wrong (there's no keystroke stream to fire on) and pre-
   #1155 incurred a 300ms debounce stall on every click.
 
-  ``as_live_field`` now inspects the field's widget class and picks:
+  ``as_live_field`` now inspects the field's widget class (walking the
+  widget's MRO so any subclass of an enumerated builtin inherits the
+  default automatically) and picks:
 
-  - ``dj-change`` for click-fired widgets (``RadioSelect``,
-    ``CheckboxInput``, ``CheckboxSelectMultiple``, ``Select``) — they
-    commit exactly one value per user interaction, no stream to batch.
+  - ``dj-change`` for click-fired widgets — ``RadioSelect``,
+    ``CheckboxInput``, ``CheckboxSelectMultiple``, ``Select``, plus
+    every Django Select subclass (``SelectMultiple``,
+    ``NullBooleanSelect``) and any app's RadioSelect/Select subclass
+    matched via MRO. They commit exactly one value per user
+    interaction, no stream to batch.
   - ``wizard_input_event`` for text-stream widgets (``TextInput``,
     ``Textarea``, ``NumberInput``, ``EmailInput``, etc.) — preserves
     the #1095 contract for authors who need unblurred-text capture.
@@ -45,14 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
   Files: ``python/djust/wizard.py`` (new ``_default_dom_event_for``
-  helper + ``_CLICK_FIRED_WIDGET_CLASSES`` ClassVar, ~15 LoC; updated
+  helper + ``_CLICK_FIRED_WIDGET_CLASSES`` ClassVar, ~20 LoC; updated
   ``wizard_input_event`` docstring to clarify text-only scope).
-  12 new cases in ``TestAsLiveFieldWidgetAwareDomEvent`` in
+  15 new cases in ``TestAsLiveFieldWidgetAwareDomEvent`` in
   ``tests/unit/test_wizard_mixin.py`` cover text/textarea/integer/email
   tracking ``wizard_input_event``, radio/select/checkbox/
   CheckboxSelectMultiple locked to ``dj-change``, caller-passed
-  ``dom_event`` overrides, and subclass extension of the click-fired
-  set.
+  ``dom_event`` overrides, ClassVar extension for custom widgets, and
+  MRO walk catching ``SelectMultiple`` / ``NullBooleanSelect`` /
+  app-defined RadioSelect subclasses.
 
 ### Fixed
 
