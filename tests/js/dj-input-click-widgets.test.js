@@ -216,4 +216,63 @@ describe('dj-input on click-fired widgets: passthrough (no debounce)', () => {
         await vi.advanceTimersByTimeAsync(250);
         expect(getFetchCalls(dom).length).toBe(1);
     });
+
+    it('select-multiple fires synchronously', () => {
+        const dom = createTestEnv(`
+            <div dj-root dj-view="test.View">
+                <select name="boroughs" multiple dj-input="set_boroughs">
+                    <option value="brooklyn">Brooklyn</option>
+                    <option value="queens">Queens</option>
+                    <option value="bronx">Bronx</option>
+                </select>
+            </div>
+        `);
+        initClient(dom);
+
+        const sel = dom.window.document.querySelector('select');
+        sel.options[0].selected = true;
+        sel.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+        expect(getFetchCalls(dom).length).toBe(1);
+        expect(getFetchCalls(dom)[0].eventName).toBe('set_boroughs');
+    });
+
+    it('dj-debounce on one radio does not pollute defaults for siblings', () => {
+        // Regression: DEFAULT_RATE_LIMITS entries are shared const objects.
+        // The override branches mutate the rate-limit object directly, so
+        // without an Object.assign clone the first overriding radio
+        // permanently flips the shared default for its type, and every
+        // subsequently-bound default radio inherits the polluted setting
+        // (re-introducing the very lag this PR removes).
+        const dom = createTestEnv(`
+            <div dj-root dj-view="test.View">
+                <input type="radio" name="A" value="a"
+                       dj-input="hA" dj-debounce="200" />
+                <input type="radio" name="B" value="b"
+                       dj-input="hB" />
+            </div>
+        `);
+        initClient(dom);
+
+        const a = dom.window.document.querySelector('[name="A"]');
+        const b = dom.window.document.querySelector('[name="B"]');
+
+        // Click the override radio first — this is when its wrapper is
+        // built and (on the buggy code path) DEFAULT_RATE_LIMITS['radio']
+        // is mutated to { type: 'debounce', ms: 200 }.
+        a.checked = true;
+        a.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+        // A is debounced; nothing should have fired yet.
+        expect(getFetchCalls(dom).length).toBe(0);
+
+        // Now click the default radio — must fire SYNCHRONOUSLY (passthrough),
+        // not be debounced by the polluted shared default.
+        b.checked = true;
+        b.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+        const calls = getFetchCalls(dom);
+        expect(calls.length).toBe(1);
+        expect(calls[0].eventName).toBe('hB');
+    });
 });

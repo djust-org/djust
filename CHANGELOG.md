@@ -38,10 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `python/djust/static/djust/src/08-event-parsing.js` (4-line
   `DEFAULT_RATE_LIMITS` extension),
   `python/djust/static/djust/src/09-event-binding.js` (7-line
-  `passthrough` branch). 7 new cases in
+  `passthrough` branch + a one-line `Object.assign({}, …)` clone of the
+  default before the override branches mutate it — without the clone,
+  `dj-debounce`/`dj-throttle` on one element permanently flips the
+  shared `DEFAULT_RATE_LIMITS` entry and pollutes every subsequently-
+  bound element of the same type). 9 new cases in
   `tests/js/dj-input-click-widgets.test.js` lock in synchronous firing
-  for radio/checkbox/select-one, continued debounce for text/textarea,
-  and that `dj-debounce` overrides still apply.
+  for radio/checkbox/select-one/select-multiple, continued debounce for
+  text/textarea, that `dj-debounce` overrides still apply, and that an
+  override on one radio does not leak into a sibling radio's wrapper
+  (regression for the shared-state mutation).
 
 ## [0.9.0rc1] - 2026-04-27
 
