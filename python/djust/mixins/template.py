@@ -2,13 +2,17 @@
 TemplateMixin - Template loading, rendering, and HTML extraction for LiveView.
 """
 
+import asyncio
 import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from ..utils import get_template_dirs
+
+if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
+    from ..http_streaming import ChunkEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -305,8 +309,138 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         return html
 
+    async def arender_chunks(
+        self,
+        full_html: str,
+        emitter: "ChunkEmitter",
+    ) -> None:
+        """Async-generator producer that pushes shell-then-body chunks.
+
+        PR-A foundation for v0.9.0 streaming (ADR-015). Replaces the
+        synchronous regex-after-render path used by Phase 1
+        (:meth:`_split_for_streaming` + :meth:`RequestMixin._make_streaming_response`)
+        with a real async iterator. ``await asyncio.sleep(0)`` is used
+        between chunks to yield control to the ASGI event loop so the
+        shell can flush to the wire before the body chunks arrive at the
+        consumer.
+
+        Chunk schedule (4 yields when the page has a full document
+        wrapper, fewer for fragment templates):
+
+        1. ``shell_open`` — everything before ``<div dj-root>``
+           (``<!DOCTYPE>``, ``<head>``, ``<body>`` open, top chrome).
+        2. ``body_open`` — the ``<div dj-root>`` opening tag itself.
+        3. ``body_content`` — the children of ``<div dj-root>``.
+        4. ``body_close`` — ``</div>`` + ``</body></html>`` + trailing.
+
+        The 4-chunk shape is invariant when ``<div dj-root>`` is present
+        (covered by ``test_minimum_chunk_count_with_dj_root``). Templates
+        without a ``<div dj-root>`` (raw fragments) yield a single chunk
+        equivalent to the non-streaming path.
+
+        Each yield routes through :meth:`ChunkEmitter.emit` so backpressure
+        applies. When the emitter is cancelled
+        (:meth:`ChunkEmitter.cancel`), :class:`~djust.http_streaming.ChunkEmitterCancelled`
+        propagates out and the generator returns cleanly.
+
+        :param full_html: Fully-rendered HTML string from
+            :meth:`render_full_template` (post-injection of client script,
+            handler metadata, ``dj-view`` attribute).
+        :param emitter: Per-request :class:`ChunkEmitter` that this
+            coroutine pushes chunks through. The chunks then flow out
+            via ``emitter.__aiter__`` to the consumer (typically the
+            ``StreamingHttpResponse`` async iterator wired in
+            :meth:`RequestMixin.aget`).
+        :returns: ``None``. This is a coroutine, not an async generator —
+            chunks are delivered exclusively via ``emitter.emit()``.
+        """
+        from ..http_streaming import ChunkEmitterCancelled
+
+        # Find <div dj-root> opening tag start.
+        dj_root_match = _DJ_ROOT_RE.search(full_html)
+        if not dj_root_match:
+            # No dj-root wrapper: fragment template. Single-chunk fallback.
+            try:
+                await emitter.emit(full_html.encode("utf-8"))
+            except ChunkEmitterCancelled:
+                logger.debug("arender_chunks: cancelled during fragment emit")
+            return
+
+        dj_root_open_start = dj_root_match.start()
+        dj_root_open_end = dj_root_match.end()
+
+        # Mask script blocks so a literal "</body>" inside a JS string is
+        # not picked up as the real body close (mirrors _split_for_streaming).
+        tail = full_html[dj_root_open_start:]
+        masked_tail = _SCRIPT_BLOCK_RE.sub(
+            lambda s: "\x00" * len(s.group(0)),
+            tail,
+        )
+        # ``masked_tail`` only used for the body-close search; we don't
+        # need the absolute index — the closing </div> lookup below is
+        # the actual boundary.
+        _BODY_CLOSE_RE.search(masked_tail)
+
+        # Find the matching </div> for <div dj-root> using shared logic.
+        result = TemplateMixin._find_closing_div_pos(full_html, dj_root_open_end)
+        if result[1] is None:
+            # Malformed HTML (no closing </div> for dj-root). Fall back to
+            # a single chunk so we never produce broken output.
+            try:
+                await emitter.emit(full_html.encode("utf-8"))
+            except ChunkEmitterCancelled:
+                logger.debug("arender_chunks: cancelled during fallback emit")
+            return
+
+        # result is (close_start, close_end); close_end is the index just
+        # AFTER </div>. Slice the four pieces.
+        body_close_div_end = result[1]
+
+        shell_open = full_html[:dj_root_open_start]
+        body_open = full_html[dj_root_open_start:dj_root_open_end]
+        body_content = full_html[dj_root_open_end : result[0]]
+        # body_close: from the closing </div> through end-of-document.
+        body_close_chunk = (
+            full_html[result[0] : body_close_div_end] + full_html[body_close_div_end:]
+        )
+
+        try:
+            # 1. Shell: <!DOCTYPE>, <head>, <body>, top chrome.
+            if shell_open:
+                await emitter.emit(shell_open.encode("utf-8"))
+            # Yield to the loop so ASGI can flush the shell over the wire
+            # before we proceed. PR-B uses this same await as the boundary
+            # where lazy thunks become eligible to start rendering.
+            await asyncio.sleep(0)
+
+            # 2. Body open: <div dj-root ...> opening tag.
+            if body_open:
+                await emitter.emit(body_open.encode("utf-8"))
+            await asyncio.sleep(0)
+
+            # 3. Body content: dj-root children.
+            if body_content:
+                await emitter.emit(body_content.encode("utf-8"))
+            await asyncio.sleep(0)
+
+            # 4. Body close: </div></body></html> + trailing.
+            if body_close_chunk:
+                await emitter.emit(body_close_chunk.encode("utf-8"))
+        except ChunkEmitterCancelled:
+            logger.debug("arender_chunks: cancelled mid-stream")
+            return
+
     def _split_for_streaming(self, full_html: str) -> tuple:
         """Split rendered HTML into ``(shell_open, main_content, shell_close)``.
+
+        .. deprecated:: 0.9.0
+            This synchronous splitter is the Phase 1 (v0.6.1) regex-split-
+            after-render path. PR-A introduces :meth:`arender_chunks`, an
+            async generator that yields the same chunks with
+            ``await asyncio.sleep(0)`` boundaries between them so the
+            shell flushes over the ASGI socket before the body bytes are
+            queued. This sync helper is retained for the WSGI fallback in
+            :meth:`RequestMixin._make_streaming_response`.
 
         Used by :meth:`_make_streaming_response` to flush the page shell to
         the browser before the main LiveView body is written. The browser

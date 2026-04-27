@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Async render-path foundation: `aget()` + `ChunkEmitter` + `arender_chunks()` (v0.9.0 PR-A, ADR-015)** — first PR of the v0.9.0 P2 streaming arc (#1043). Closes the v0.6.1 retro #116 doc-claim debt: Phase 1 was a regex-split-after-render with no real TTFB win; Phase 2 PR-A introduces the actual async render path so `streaming_render = True` shell-flushes to the wire BEFORE `get_context_data()` runs.
+
+  New module `python/djust/http_streaming.py` (~230 LoC) provides the `ChunkEmitter` class — a per-request bounded `asyncio.Queue` with backpressure, cancellation propagation via `request_token`, and a `register_thunk()` API surface that PR-B (`{% live_render lazy=True %}`) will hook into. The emitter exposes `__aiter__` for direct consumption by `StreamingHttpResponse`.
+
+  New `async def aget()` on `RequestMixin` (~150 LoC) parallel to the existing sync `get()`. Wraps the sync render via `sync_to_async(self.get)` to produce the full HTML, then drives `arender_chunks()` to push chunks through the emitter. Returns a `StreamingHttpResponse` with `X-Djust-Streaming: 1` and `X-Djust-Streaming-Phase: 2` headers. ASGI disconnect watcher cancels the emitter when the client closes the connection.
+
+  New `arender_chunks()` async coroutine on `TemplateMixin` (~135 LoC) splits the rendered HTML at `<div dj-root>` boundaries into 4 chunks (shell-open / body-open / body-content / body-close) and pushes each via `emitter.emit()` with `await asyncio.sleep(0)` boundaries so ASGI flushes the shell to the wire before the body chunks are queued. Cooperative cancellation via `ChunkEmitterCancelled`. Single-chunk fallback for fragment templates (no `<div dj-root>`).
+
+  `streaming_render = False` (default) stays on the sync `HttpResponse` path. WSGI deployments fall back to the Phase-1 regex-split-after-render via `_make_streaming_response` per the documented graceful-degrade contract.
+
+  Files: `python/djust/http_streaming.py` (new), `python/djust/mixins/request.py` (`aget()` + `_is_asgi_context()`), `python/djust/mixins/template.py` (`arender_chunks()`), `docs/adr/015-phase-2-streaming.md` (ADR promoted from `.pipeline-state/feat-streaming-phase2-1043-adr-draft.md`). 18 new test cases in `tests/unit/test_async_render_path.py` cover ChunkEmitter basics + backpressure + cancellation, `arender_chunks` 4-yield invariant + fragment fallback + mid-stream cancel, `aget` streaming response shape + redirect passthrough + non-streaming fallback, and `_get_queue_max_from_settings` defaulting.
+
+  PR-B (`{% live_render lazy=True %}` user API) and PR-C (`asyncio.as_completed()` parallel render) ship on top of this foundation.
+
 - **`{% live_render ... sticky=True %}` auto-detects preserved stickies (closes #1032, ADR-014)** —
   the v0.6.0 Sticky LiveViews work shipped Dashboard→Settings→Reports
   preservation but left a known limitation: returning to a page that
