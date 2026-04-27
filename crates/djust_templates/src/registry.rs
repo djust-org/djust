@@ -344,6 +344,29 @@ pub fn call_handler(
     args: &[String],
     context: &HashMap<String, djust_core::Value>,
 ) -> Result<String, String> {
+    call_handler_with_py_sidecar(name, args, context, None)
+}
+
+/// Variant of [`call_handler`] that additionally injects raw Python
+/// objects from the [`Context::raw_py_objects`] sidecar into the
+/// handler's ``context`` dict.
+///
+/// Existing tag handlers (``url``, ``static``, ``dj_flash`` …) only
+/// look at JSON-friendly context keys, so the additional Python
+/// objects are inert noise to them. Handlers that *do* need access to
+/// Python-only context (e.g. ``live_render``, which needs the parent
+/// ``view`` and the ``request`` object to delegate to the Django
+/// template tag) read those keys from the dict directly.
+///
+/// Sidecar values overwrite same-named JSON keys so that a Python
+/// model instance wins over a normalized dict snapshot — the Python
+/// handler nearly always wants the live object, not the projection.
+pub fn call_handler_with_py_sidecar(
+    name: &str,
+    args: &[String],
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::PyObject>>,
+) -> Result<String, String> {
     // Get handler from registry
     let handler = {
         let registry = TAG_HANDLERS
@@ -376,6 +399,19 @@ pub fn call_handler(
             py_context
                 .set_item(key, py_value)
                 .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+        }
+
+        // Inject raw Python sidecar objects (e.g. ``request``, ``view``)
+        // so handlers that need full Python context (notably the
+        // ``live_render`` lazy=True path) can reach them. Overwrites
+        // same-named JSON entries — the Python object is the source of
+        // truth for downstream handlers.
+        if let Some(raw) = raw_py_objects {
+            for (key, obj) in raw {
+                py_context
+                    .set_item(key, obj.bind(py))
+                    .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+            }
         }
 
         // Call handler.render(args, context)

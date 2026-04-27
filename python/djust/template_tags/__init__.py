@@ -231,6 +231,7 @@ def _register_builtins():
         from . import flash  # noqa: F401
         from . import markdown  # noqa: F401
         from . import client_config  # noqa: F401
+        from . import live_render  # noqa: F401  # #1145
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
 
