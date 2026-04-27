@@ -434,46 +434,60 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         if not emitter.thunks:
             return
 
-        # Schedule every thunk concurrently. ``asyncio.ensure_future``
-        # wraps coroutines into tasks so ``as_completed`` can iterate.
+        # Per-thunk wrapper returns ``(view_id, result, exc)`` so the
+        # surfacing task is unambiguously identified at completion
+        # time. A naive ``next(t for t in task_to_id if t.done() and
+        # t.exception() ...)`` recovery returns the FIRST done-with-
+        # exception task — on multi-failure that attributes the wrong
+        # view_id. Wrapping packages the identity at thunk-start time.
+        async def _wrap(view_id, thunk_fn):
+            try:
+                result = await thunk_fn()
+            except asyncio.CancelledError:
+                # Re-raise so as_completed sees the cancellation
+                # propagate; otherwise the wrapped task swallows the
+                # cancel signal and the caller can't tell.
+                raise
+            except ChunkEmitterCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 — captured for logging
+                return (view_id, None, exc)
+            return (view_id, result, None)
+
         thunk_tasks = [
-            (view_id, asyncio.ensure_future(thunk_fn())) for view_id, thunk_fn in emitter.thunks
+            asyncio.ensure_future(_wrap(view_id, thunk_fn)) for view_id, thunk_fn in emitter.thunks
         ]
-        # Build a reverse lookup so we can recover the view_id when a
-        # task surfaces from ``as_completed``.
-        task_to_id = {task: view_id for view_id, task in thunk_tasks}
+
+        def _cancel_pending():
+            for task in thunk_tasks:
+                if not task.done():
+                    task.cancel()
 
         try:
-            for completed in asyncio.as_completed([task for _, task in thunk_tasks]):
+            for completed in asyncio.as_completed(thunk_tasks):
                 if emitter.cancelled:
-                    # Cancel any still-pending thunks so they don't
-                    # leak past the response. Already-completed tasks
-                    # whose results we haven't iterated yet are GC'd.
-                    for _vid, task in thunk_tasks:
-                        if not task.done():
-                            task.cancel()
+                    _cancel_pending()
                     return
                 try:
-                    chunk_bytes = await completed
+                    view_id, chunk_bytes, exc = await completed
                 except ChunkEmitterCancelled:
                     raise
                 except asyncio.CancelledError:
-                    # Cooperative cancel — emitter was cancelled while
-                    # this thunk was in-flight. The outer ``cancelled``
-                    # check on the next iteration will exit cleanly.
+                    # Suppressing CancelledError is safe HERE because
+                    # this is an INNER thunk task being cancelled by
+                    # ``_cancel_pending`` (in response to the outer
+                    # emitter cancel). The outer ``arender_chunks``
+                    # coroutine's own cancellation propagates via the
+                    # next iteration's ``emitter.cancelled`` check and
+                    # then the outer ``except ChunkEmitterCancelled``
+                    # branch. Re-raising here would short-circuit that.
                     continue
-                except Exception:  # noqa: BLE001 — thunk owns its own envelope
-                    # Recover view_id from the originating task so the
-                    # log message is actionable.
-                    failed_task = next(
-                        (t for t in task_to_id if t.done() and t.exception() is not None),
-                        None,
-                    )
-                    failed_id = task_to_id.get(failed_task, "<unknown>")
+                if exc is not None:
                     logger.exception(
                         "arender_chunks: lazy thunk raised for view_id=%s; "
                         "thunks should catch + emit error envelope themselves",
-                        failed_id,
+                        view_id,
+                        exc_info=exc,
                     )
                     continue
                 if chunk_bytes is None:
@@ -486,12 +500,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 # picked up.
                 await asyncio.sleep(0)
         except ChunkEmitterCancelled:
-            # Cancel any still-running tasks on the way out.
-            for _vid, task in thunk_tasks:
-                if not task.done():
-                    task.cancel()
+            _cancel_pending()
             logger.debug("arender_chunks: cancelled during lazy phase")
             return
+        finally:
+            # Defensive — drain any remaining pending tasks so we don't
+            # leak ``coroutine '_AsCompletedIterator._wait_for_one'
+            # was never awaited`` warnings on early-return paths.
+            _cancel_pending()
 
     def _split_for_streaming(self, full_html: str) -> tuple:
         """Split rendered HTML into ``(shell_open, main_content, shell_close)``.

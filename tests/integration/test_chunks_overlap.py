@@ -145,7 +145,16 @@ class TestParallelRender:
     @pytest.mark.asyncio
     async def test_parallel_thunk_failure_does_not_stall_others(self, rf, make_parent):
         """If one thunk raises, the others still emit their fills.
-        Failure is logged + skipped per ADR §"Error propagation"."""
+        Failure is logged + skipped per ADR §"Error propagation".
+
+        Note: ``_failing`` here is a bare ``async def`` that raises —
+        NOT how production thunks behave. The PR-B tag closure catches
+        its own exceptions and emits a ``data-status="error"``
+        envelope. This test exercises the OUTER (defensive) phase-5
+        error handler that catches anything the closure missed; the
+        log message uses the per-thunk wrapper's ``view_id`` capture
+        so multi-failure attribution is correct.
+        """
         parent = make_parent()
         parent.request = rf.get("/")
         emitter = ChunkEmitter(parent.request)
@@ -173,3 +182,45 @@ class TestParallelRender:
         # outer phase-5 handler logs and skips). Production thunks do
         # catch + emit error envelopes.
         assert b'id="djl-fill-slot-bad"' not in body
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_stream_aborts_pending_thunks(self, rf, make_parent):
+        """T-PRC-4 from ADR §"Test contract": when the emitter is
+        cancelled while thunks are still running, ``arender_chunks``
+        cancels every pending task via ``task.cancel()`` and returns
+        cleanly. Tests the cancellation propagation path that the basic
+        ``test_aget_cancels_emitter_on_disconnect`` does not exercise
+        (which has no thunks registered).
+        """
+        parent = make_parent()
+        parent.request = rf.get("/")
+        emitter = ChunkEmitter(parent.request)
+
+        # Slow thunks so the cancel fires while they're pending.
+        for vid in ("slot-slow-1", "slot-slow-2", "slot-slow-3"):
+            emitter.register_thunk(vid, _make_sleeping_thunk(vid, 1.0))
+
+        async def _drain():
+            return [c async for c in emitter]
+
+        consumer = asyncio.create_task(_drain())
+        # Run arender_chunks in the background; cancel the emitter
+        # mid-stream so the phase-5 loop hits the cancellation branch.
+        render_task = asyncio.create_task(parent.arender_chunks(parent.template, emitter))
+
+        # Yield once so render_task starts; then cancel.
+        await asyncio.sleep(0.05)
+        await emitter.cancel("test-disconnect")
+
+        # arender_chunks returns cleanly within a short window —
+        # without ``_cancel_pending`` it would block on the slow
+        # thunks for 1 second.
+        await asyncio.wait_for(render_task, timeout=0.5)
+        await emitter.close()
+        chunks = await consumer
+
+        # No fills should have completed before cancellation.
+        body = b"".join(chunks)
+        assert b'id="djl-fill-slot-slow-1"' not in body
+        assert b'id="djl-fill-slot-slow-2"' not in body
+        assert b'id="djl-fill-slot-slow-3"' not in body

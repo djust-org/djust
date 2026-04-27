@@ -67,9 +67,12 @@ Per-task timeout. Sentinel-based cancellation propagates via
 `request_token` from the emitter on ASGI scope `disconnected`.
 
 Files:
-- `python/djust/http_streaming.py` — `as_completed()` refactor. ~80 LoC.
-- `python/djust/decorators.py` — `cancel_async` reason field. ~30 LoC.
-- `tests/integration/test_chunks_overlap.py` — slow vs fast child timing assertions. ~200 LoC.
+- `python/djust/mixins/template.py` — `as_completed()` refactor in
+  `arender_chunks` Phase 5. ~80 LoC. (Originally planned for
+  `http_streaming.py` but the loop lives where it consumes thunks.)
+- `tests/integration/test_chunks_overlap.py` — slow vs fast child
+  timing assertions + mid-stream cancellation propagation
+  (T-PRC-4). ~200 LoC.
 
 ## Total estimate
 
