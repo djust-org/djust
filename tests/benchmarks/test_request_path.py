@@ -183,12 +183,19 @@ class TestWebsocketMountPath:
     connect message, mount routing, and the initial render response.
     """
 
-    @pytest.mark.skip(
-        reason="flaky in full-suite run, passes in isolation — test pollution, see #1134"
-    )
+    @pytest.mark.django_db
     @pytest.mark.benchmark(group="request_path_ws")
     def test_websocket_mount_counter(self, benchmark):
-        """Benchmark the mount round-trip for a trivial counter view."""
+        """Benchmark the mount round-trip for a trivial counter view.
+
+        Marked ``django_db`` because the WebsocketCommunicator's
+        ``disconnect()`` triggers Channels' ``aclose_old_connections``,
+        which iterates Django's connection cache. If a prior
+        django_db-marked test left an in-memory SQLite connection in the
+        cache (SQLite ignores ``close()`` for in-memory DBs, so the
+        wrapper's ``.connection`` is never reset to None), pytest-django's
+        blocker raises inside ``close_if_unusable_or_obsolete``. See #1134.
+        """
         pytest.importorskip("channels")
         from channels.testing import WebsocketCommunicator
         from django.test import override_settings
