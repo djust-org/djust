@@ -575,3 +575,225 @@ def test_capture_snapshot_state_deep_copies_nested_list():
     view.nested.append({"x": 3})
     view.nested[0]["x"] = 99
     assert captured["nested"] == [{"x": 1}, {"x": 2}]
+
+
+# ===========================================================================
+# v0.9.0 #1041: component-level time-travel
+# ===========================================================================
+
+
+class _FakeComponent:
+    """Stand-in for a LiveComponent — same surface time_travel walks."""
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class _ParentWithComponents:
+    """LiveView-like parent that registers components in ``self._components``,
+    same registry layout the production ``_assign_component_ids`` populates.
+    """
+
+    time_travel_enabled = True
+
+    def __init__(self):
+        self.title = "Parent"
+        self.count = 0
+        # Two components — Phase-2 multi-component scenario.
+        self._components = {
+            "alpha": _FakeComponent(active="q1", multiple=False),
+            "beta": _FakeComponent(value=10, label="ten"),
+        }
+        self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+    def _capture_snapshot_state(self):
+        # Borrow LiveView's real implementation. The parent helper
+        # calls ``self._capture_components_snapshot()`` so we also need
+        # to expose that on this stub.
+        from djust.live_view import LiveView
+
+        return LiveView._capture_snapshot_state(self)
+
+    def _capture_components_snapshot(self):
+        from djust.live_view import LiveView
+
+        return LiveView._capture_components_snapshot(self)
+
+
+class TestComponentLevelTimeTravel:
+    """v0.9.0 #1041 — component-level time-travel."""
+
+    def test_capture_includes_components_under_reserved_key(self):
+        """``_capture_snapshot_state`` adds a ``__components__`` key when
+        ``self._components`` is non-empty."""
+        view = _ParentWithComponents()
+        snap = view._capture_snapshot_state()
+        assert "__components__" in snap
+        assert set(snap["__components__"].keys()) == {"alpha", "beta"}
+        assert snap["__components__"]["alpha"] == {"active": "q1", "multiple": False}
+        assert snap["__components__"]["beta"] == {"value": 10, "label": "ten"}
+        # Parent state also captured.
+        assert snap["title"] == "Parent"
+        assert snap["count"] == 0
+
+    def test_capture_omits_components_key_when_registry_empty(self):
+        """A view without components produces a snapshot WITHOUT the
+        ``__components__`` key (no namespace pollution)."""
+        view = _ParentWithComponents()
+        view._components = {}
+        snap = view._capture_snapshot_state()
+        assert "__components__" not in snap
+
+    def test_capture_skips_private_and_callable_component_attrs(self):
+        """Component ``_private`` attrs and methods are not captured."""
+
+        class _ComponentWithPrivates:
+            def __init__(self):
+                self.public = "yes"
+                self._private = "no"
+                self.method = lambda: "no"
+
+        view = _ParentWithComponents()
+        view._components = {"x": _ComponentWithPrivates()}
+        snap = view._capture_snapshot_state()
+        assert snap["__components__"]["x"] == {"public": "yes"}
+
+    def test_restore_dispatches_per_component_state(self):
+        """``restore_snapshot`` applies each component's state to the
+        matching component in ``view._components``."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+
+        # Mutate parent and component state.
+        view.count = 5
+        view._components["alpha"].active = "q2"
+        view._components["beta"].value = 999
+
+        # Build a snapshot wrapping the captured "before" state.
+        snap = EventSnapshot(
+            event_name="mutate",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after=view._capture_snapshot_state(),
+        )
+
+        ok = restore_snapshot(view, snap, which="before")
+        assert ok is True
+        # Parent state restored.
+        assert view.count == 0
+        # Components restored.
+        assert view._components["alpha"].active == "q1"
+        assert view._components["alpha"].multiple is False
+        assert view._components["beta"].value == 10
+
+    def test_restore_unknown_component_id_logs_and_returns_false(self):
+        """Snapshot references a component not in current registry —
+        log a warning and return ``False``, but other components still
+        restore."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Mutate so we have something to restore.
+        view._components["alpha"].active = "q3"
+        # Inject a phantom component id into the snapshot.
+        before["__components__"]["ghost"] = {"foo": "bar"}
+
+        snap = EventSnapshot(
+            event_name="evt",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        # ghost id not in registry → False; alpha still restored.
+        assert ok is False
+        assert view._components["alpha"].active == "q1"
+
+    def test_restore_does_not_remove_components_absent_from_snapshot(self):
+        """Components in current registry but absent from the snapshot
+        keep their current state — components are first-class instances,
+        not parent-scoped attrs, so the ghost-attr cleanup model
+        (used for parent attrs) doesn't apply here."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Add a NEW component after the snapshot.
+        view._components["gamma"] = _FakeComponent(extra="present")
+
+        snap = EventSnapshot(
+            event_name="evt",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        assert ok is True
+        # gamma survives even though it's not in the snapshot.
+        assert "gamma" in view._components
+        assert view._components["gamma"].extra == "present"
+
+    def test_state_before_and_after_disconnect_from_live_components(self):
+        """Mirrors the parent-state aliasing fix: snapshots must NOT
+        share refs with live component attrs. Mutating
+        ``view._components[id].mutable`` after capture must not change
+        the snapshot."""
+
+        class _MutableComponent:
+            def __init__(self):
+                self.items = [1, 2, 3]
+
+        view = _ParentWithComponents()
+        view._components = {"m": _MutableComponent()}
+        snap = view._capture_snapshot_state()
+        # Mutate the live component state.
+        view._components["m"].items.append(99)
+        # Snapshot is untouched.
+        assert snap["__components__"]["m"]["items"] == [1, 2, 3]
+
+    def test_component_restore_blocks_dunder_via_safe_setattr(self):
+        """The safe_setattr defense layer applies to component restore
+        too: a hand-edited snapshot trying to set ``__class__`` on a
+        component is rejected with no class-level mutation."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Inject a malicious dunder into the alpha snapshot.
+        before["__components__"]["alpha"]["__class__"] = object
+
+        snap = EventSnapshot(
+            event_name="evil",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        # safe_setattr blocked the dunder; ok flag flipped to False.
+        assert ok is False
+        # Component class is unchanged.
+        assert isinstance(view._components["alpha"], _FakeComponent)
+
+    def test_component_id_excluded_from_snapshot(self):
+        """``component_id`` is in ``_COMPONENT_INTERNAL_ATTRS`` because
+        it's the registry key — restoring stale state would desync.
+        Verify it's not captured."""
+        view = _ParentWithComponents()
+        # Set the public attr that mirrors the registry key.
+        view._components["alpha"].component_id = "alpha"
+        snap = view._capture_snapshot_state()
+        assert "component_id" not in snap["__components__"]["alpha"]
+
+    def test_component_template_attrs_excluded_from_snapshot(self):
+        """``template`` / ``template_name`` are framework-internal —
+        not user state. Excluded from the snapshot."""
+        view = _ParentWithComponents()
+        view._components["alpha"].template = "<div>my-tpl</div>"
+        view._components["alpha"].template_name = "comp.html"
+        snap = view._capture_snapshot_state()
+        assert "template" not in snap["__components__"]["alpha"]
+        assert "template_name" not in snap["__components__"]["alpha"]
