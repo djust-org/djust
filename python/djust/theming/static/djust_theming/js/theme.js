@@ -18,10 +18,19 @@
     const STORAGE_KEY_PACK = 'djust-theme-pack';
     const STORAGE_KEY_LAYOUT = 'djust-theme-layout';
 
-    const COOKIE_KEY_PRESET = 'djust_theme_preset';
-    const COOKIE_KEY_THEME = 'djust_theme';
-    const COOKIE_KEY_PACK = 'djust_theme_pack';
-    const COOKIE_KEY_LAYOUT = 'djust_theme_layout';
+    // #1158 — Per-project cookie namespace. The server emits
+    // `window.__djust_theme_cookie_prefix` from `theme_head.html` based on
+    // `LIVEVIEW_CONFIG['theme']['cookie_namespace']`. Empty string means the
+    // legacy unprefixed cookie names (back-compat). When set, every theming
+    // cookie this script writes is prefixed so two djust projects on the
+    // same localhost domain don't overwrite each other's theme preferences.
+    const COOKIE_PREFIX = (typeof window !== 'undefined' && typeof window.__djust_theme_cookie_prefix === 'string')
+        ? window.__djust_theme_cookie_prefix
+        : '';
+    const COOKIE_KEY_PRESET = COOKIE_PREFIX + 'djust_theme_preset';
+    const COOKIE_KEY_THEME = COOKIE_PREFIX + 'djust_theme';
+    const COOKIE_KEY_PACK = COOKIE_PREFIX + 'djust_theme_pack';
+    const COOKIE_KEY_LAYOUT = COOKIE_PREFIX + 'djust_theme_layout';
 
     class DjustThemeManager {
         constructor() {

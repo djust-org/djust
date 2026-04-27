@@ -283,18 +283,42 @@ class ThemeManager:
         # answering on localhost shares a cookie jar — `djust_theme_pack` set
         # by project A pins the palette for project B). Default ``True`` for
         # back-compat: sites with a user-facing switcher keep working.
+        #
+        # #1158 — sites WITH a user-facing switcher (so cookies must stay on)
+        # can opt into a per-project cookie namespace via
+        # ``LIVEVIEW_CONFIG['theme']['cookie_namespace']: '<ns>'``. When set,
+        # the four theming cookies become ``<ns>_djust_theme``,
+        # ``<ns>_djust_theme_preset``, ``<ns>_djust_theme_pack``,
+        # ``<ns>_djust_theme_layout``. Read-side falls back to the unprefixed
+        # name for one-time migration; write-side (theme.js) writes only the
+        # namespaced name when the prefix is set.
         theme = None
         preset = None
         pack = None
         layout = ""
         enable_client_override = bool(self.config.get("enable_client_override", True))
         if self.request and enable_client_override:
-            theme = self.request.COOKIES.get("djust_theme")
-            preset = self.request.COOKIES.get("djust_theme_preset")
-            pack = self.request.COOKIES.get("djust_theme_pack")
-            layout = self.request.COOKIES.get("djust_theme_layout", "")
+            cookies = self.request.COOKIES
+            ns = (self.config.get("cookie_namespace") or "").strip()
+            prefix = f"{ns}_" if ns else ""
+
+            # Read namespaced first; fall back to unprefixed (migration window).
+            def _read(name: str, default: str = "") -> str:
+                if prefix:
+                    return cookies.get(f"{prefix}{name}", cookies.get(name, default))
+                return cookies.get(name, default)
+
+            theme = _read("djust_theme") or None
+            preset = _read("djust_theme_preset") or None
+            pack = _read("djust_theme_pack") or None
+            layout = _read("djust_theme_layout", "")
             logger.debug(
-                "Cookies: theme=%s, preset=%s, pack=%s, layout=%s", theme, preset, pack, layout
+                "Cookies (ns=%r): theme=%s, preset=%s, pack=%s, layout=%s",
+                ns,
+                theme,
+                preset,
+                pack,
+                layout,
             )
         elif self.request:
             logger.debug("Cookies skipped — LIVEVIEW_CONFIG.theme.enable_client_override=False")
