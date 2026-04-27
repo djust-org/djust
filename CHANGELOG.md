@@ -7,7 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A075 system check: `{% live_render sticky=True lazy=True %}`
+  collision (closes #1146)** — promotes the existing tag-eval-time
+  `TemplateSyntaxError` to a startup-time warning so the misuse
+  surfaces during `manage.py check` instead of waiting for a
+  request to render the offending template. Sticky preservation
+  requires the slot to exist at mount-frame time so the WebSocket
+  reattach can `replaceWith` the stashed subtree; `lazy=True`
+  defers slot rendering until after the parent shell flushes —
+  the stash target doesn't exist when reattach runs. The check
+  skips `{% verbatim %}...{% endverbatim %}` regions so
+  docs/marketing pages showing the anti-pattern as a literal
+  example don't false-positive (re-uses the `_strip_verbatim_blocks`
+  helper from the v0.7.3 #1004 fix). Silenceable per-project via
+  `DJUST_CONFIG = {"suppress_checks": ["A075"]}`. 8 regression
+  cases in `TestA075StickyLazyCollision` cover collision firing,
+  sticky-only / lazy-only silence, verbatim suppression, real-call
+  next to verbatim example, config disable knob, and string-truthy
+  kwarg shapes.
+
+### Security
+
+- **CSP-nonce-aware activator for `<dj-lazy-slot>` fills (closes
+  #1147)** — `{% live_render lazy=True %}` now propagates
+  `request.csp_nonce` (the Django convention set by `django-csp`
+  middleware) onto BOTH the `<template id="djl-fill-X">` element
+  AND the inline `<script>` activator that calls
+  `window.djust.lazyFill(...)`. Sites with strict CSP
+  (`script-src 'nonce-...'`, no `'unsafe-inline'`) previously had
+  the activator silently rejected at parse time, and lazy children
+  never mounted. The fix reads `getattr(request, 'csp_nonce', None)`
+  via the existing `djust.utils.get_csp_nonce` helper — no
+  additional configuration is required for any CSP middleware that
+  follows the Django convention. When `request.csp_nonce` is absent
+  or empty (the common case for sites without CSP middleware), no
+  `nonce` attribute is emitted — backward-compatible for non-CSP
+  deployments. The placeholder `<dj-lazy-slot>` also carries the
+  nonce so client-side code can read it via `getAttribute('nonce')`
+  if it ever needs to inject CSP-bound scripts under the same
+  policy. 6 Python regression cases in `tests/unit/test_lazy_render_csp.py`
+  + 3 JS cases in `tests/js/lazy_fill_csp.test.js` cover nonce
+  propagation, backward compatibility (no nonce attr when
+  `csp_nonce` is absent / empty / missing), and HTML-escaping
+  defense-in-depth for hostile-middleware substitutes.
+
+### Changed
+
+- **Dev-deps include `markdown` and `nh3` (closes #1149)** — both
+  packages are runtime deps of the `[components]` extra (see
+  `python/djust/components/components/markdown.py`) and the
+  components subpackage's `__init__.py` eagerly imports them via
+  `from .markdown import Markdown`. Tests that import
+  `djust.components.components` (directly or transitively) failed
+  collection in clean checkouts that ran only `uv sync` without
+  the `[components]` extra. The bisect agent in PR #1159 hit this
+  on a fresh clone. Added both to
+  `[project.optional-dependencies.dev]` so a single
+  `uv sync --extra dev` brings them in alongside the rest of the
+  test toolchain. No behaviour change for runtime users —
+  `[components]` already lists both as runtime deps.
+
 ### Fixed
+
+- **`replay_event` validates handler is `@event_handler`-decorated
+  (closes #1148)** — defense-in-depth strengthening of the v0.9.0
+  #1042 forward-replay path. The original guard rejected only
+  dunder/private `event_name` (`startswith("_")`), which still
+  admitted ANY public method on the view — helpers, inherited
+  utilities, property getters — even though the dispatcher only
+  ever invokes `@event_handler`-decorated methods. A hand-edited
+  or malicious snapshot could replay e.g.
+  `view.delete_all_records()` even when that method was never
+  exposed to the dispatcher. The fix calls
+  `djust.decorators.is_event_handler(handler)` after attribute
+  resolution, mirroring the dispatcher's own acceptance criteria
+  (see `websocket.py` ~ line 4389 server_push handler validation).
+  Unregistered methods log a warning and return `None` instead of
+  invoking. 3 regression cases in `TestReplayHandlerValidation`
+  cover registered-handler success, unregistered-method
+  rejection, and the existing dunder-rejection regression.
 
 - **Rust template renderer rejects project-defined custom filters
   (closes #1121)** — Django projects registering custom filters via

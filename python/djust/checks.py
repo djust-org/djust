@@ -2066,6 +2066,32 @@ _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 # renderer is in use (raw HTML escaped, provisional-line splitter active).
 _DJ_MARKDOWN_TAG_RE = re.compile(r"\{%\s*djust_markdown\b")
 
+# A075 — `{% live_render ... %}` sticky+lazy collision scanner (v0.9.1, #1146).
+# Captures the raw kwarg-list body so we can inspect it for both
+# ``sticky=`` and ``lazy=`` truthy assignments. The two are mutually
+# exclusive at tag-eval time (``TemplateSyntaxError`` in
+# ``live_tags.live_render``); A075 promotes that runtime error to a
+# startup-time warning so the misuse never reaches a request.
+_LIVE_RENDER_TAG_RE = re.compile(r"\{%\s*live_render\b([^%]*?)%\}", re.DOTALL)
+# Truthy assignments for sticky=/lazy=. Matches:
+#   sticky=True / lazy=True  (literal)
+#   sticky="..." / lazy="..." with non-empty quoted value (any non-empty string)
+#   sticky=<bare-identifier> / lazy=<bare-identifier> (variable, conservatively
+#       treated as truthy at scan time — false positives are silenceable
+#       via the suppress_checks knob)
+# False / "" / 0 are explicitly excluded.
+_LIVE_RENDER_STICKY_TRUTHY_RE = re.compile(
+    r"""\bsticky\s*=\s*(?:True|"[^"]+"|'[^']+'|[A-Za-z_]\w*)"""
+)
+_LIVE_RENDER_LAZY_TRUTHY_RE = re.compile(
+    r"""\blazy\s*=\s*(?:True|"[^"]+"|'[^']+'|[A-Za-z_]\w*|\{[^}]*\})"""
+)
+# Explicit "this kwarg is FALSY" — overrides the truthy match above. We
+# exclude these to avoid flagging ``sticky=False lazy=True`` (a legitimate
+# pattern when toggling at template-evaluation time).
+_LIVE_RENDER_STICKY_FALSY_RE = re.compile(r"""\bsticky\s*=\s*(?:False|"\s*"|'\s*'|0)\b""")
+_LIVE_RENDER_LAZY_FALSY_RE = re.compile(r"""\blazy\s*=\s*(?:False|"\s*"|'\s*'|0)\b""")
+
 # #1004 — `{% verbatim %}...{% endverbatim %}` regions hold raw template
 # source that Django renders as-is without parsing. Docs and marketing
 # templates routinely wrap literal `{% dj_activity %}` examples in
@@ -2370,6 +2396,57 @@ def check_templates(app_configs, **kwargs):
                 )
             else:
                 _seen_activity_names[name_literal] = lineno
+
+        # A075 — `{% live_render ... sticky=True lazy=True %}` collision scan
+        # (v0.9.1, #1146). The two kwargs are mutually exclusive: sticky
+        # preservation requires the slot to exist at mount-frame time so
+        # the WS reattach can ``replaceWith`` the stashed subtree, while
+        # lazy by definition defers slot rendering until after mount.
+        # ``live_tags.live_render`` already raises TemplateSyntaxError at
+        # tag-eval time; A075 promotes that runtime check to startup so
+        # ``manage.py check`` flags the misuse before any request hits.
+        #
+        # Re-uses ``_strip_verbatim_blocks`` so docs/marketing pages that
+        # show the anti-pattern as a literal example don't false-positive
+        # (mirrors the A070/A071 / #1004 fix).
+        if not _is_check_suppressed("djust.A075"):
+            _live_render_scan_source = _strip_verbatim_blocks(content)
+            for match in _LIVE_RENDER_TAG_RE.finditer(_live_render_scan_source):
+                args = match.group(1)
+                # Reject FALSY assignments first so e.g. ``sticky=False
+                # lazy=True`` is silently accepted.
+                sticky_falsy = bool(_LIVE_RENDER_STICKY_FALSY_RE.search(args))
+                lazy_falsy = bool(_LIVE_RENDER_LAZY_FALSY_RE.search(args))
+                sticky_truthy = (
+                    bool(_LIVE_RENDER_STICKY_TRUTHY_RE.search(args)) and not sticky_falsy
+                )
+                lazy_truthy = bool(_LIVE_RENDER_LAZY_TRUTHY_RE.search(args)) and not lazy_falsy
+                if sticky_truthy and lazy_truthy:
+                    lineno = content[: match.start()].count("\n") + 1
+                    errors.append(
+                        DjustWarning(
+                            "%s:%d -- {%% live_render %%} has both sticky=True and "
+                            "lazy=True — these kwargs are mutually exclusive." % (relpath, lineno),
+                            hint=(
+                                "Sticky preservation requires the slot to exist at "
+                                "mount-frame time so the WebSocket reattach can "
+                                "replaceWith the stashed subtree. Lazy defers slot "
+                                "rendering until after mount, so the stash-target "
+                                "doesn't exist when reattach runs. Pick one. "
+                                "Suppress with DJUST_CONFIG = "
+                                "{'suppress_checks': ['A075']} if you have a "
+                                "deliberate reason."
+                            ),
+                            id="djust.A075",
+                            fix_hint=(
+                                "Remove either `sticky=True` or `lazy=True` from "
+                                "the {%% live_render %%} tag at line %d in `%s`."
+                                % (lineno, relpath)
+                            ),
+                            file_path=filepath,
+                            line_number=lineno,
+                        )
+                    )
 
         # A090 — tally {% djust_markdown %} occurrences (v0.7.0). The
         # actual Info-level check is emitted once per project after the
