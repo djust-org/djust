@@ -200,16 +200,99 @@ issue or be explicitly closed with a reason.
 | 167 | v0.8.5 milestone retro never written | Retro v0.8.6 (backfill bookkeeping) | #1126 | Closed | Backfilled v0.8.5 entry in RETRO.md alongside the v0.8.6 retro session, 2026-04-26. |
 | 168 | Stage-4 first-principles canonicalization in CLAUDE.md | Retro v0.9.0 / 3 of 6 PRs | #1143 | Open | Plan stage's grep-before-architecting pass paid off in #1128, #1041, #1135. Canonicalize as a CLAUDE.md rule. |
 | 169 | Branch-name verify check in pipeline-run skill | Retro v0.9.0 / PR-A + PR-C drift | #1144 | Open | Twice in v0.9.0 a commit landed on the wrong branch. Add a pre-commit `git symbolic-ref --short HEAD` match against the active state file's `branch_name`. |
-| 170 | #1134 polluting-test bisect (HIGH-priority) | Retro v0.9.0 / 6 PRs | #1134 | Open | Flaky test count grew 5→6 in v0.9.0; every PR pays a flat 30s skip-marker tax. Bisect the polluting test before next feature batch. |
-| 171 | Rust template engine `{% live_render %}` tag handler (lazy=True parity) | Retro v0.9.0 / PR #1138 | #1145 | Open | Production users on Rust template path can't use `lazy=True`. Port Django impl to Rust handler. |
-| 172 | A075 system check — sticky+lazy template scan | Retro v0.9.0 / PR #1138 deferral / ADR-015 §"Deferred from PR-B" | #1146 | Open | Catch sticky+lazy collision at startup, not template-render time. |
-| 173 | CSP-nonce-aware activator for `<dj-lazy-slot>` fills | Retro v0.9.0 / PR #1138 deferral / ADR-015 §"Deferred from PR-B" | #1147 | Open | Sites with strict CSP need framework-emitted nonce on lazy-fill activators. |
-| 174 | Replay handler argument validation (defense-in-depth) | Retro v0.9.0 / PR #1142 Stage 11 | #1148 | Open | Augment `replay_event` to validate `event_name` against `view._djust_event_handlers` registry, not just the underscore-prefix guard. |
-| 175 | `markdown` package missing from default test env | Retro v0.9.0 (carryover from v0.8.7 retro) | #1149 | Open | Add to dev-dependencies or mark dependent tests with `pytest.importorskip`. |
-| 176 | Descriptor-pattern component time-travel verification test | Retro v0.9.0 / PR #1141 Stage 11 | #1150 | Open | Defense-layer test deferred from PR #1141; class-level descriptor components need an end-to-end capture+restore test. |
+| 170 | #1134 polluting-test bisect (HIGH-priority) | Retro v0.9.0 / 6 PRs | #1134 | Closed | **Resolved in v0.9.1 via PR #1159** — bisect identified two independent polluters (in-memory SQLite `aclose_old_connections` leak + `sys.modules` rebind in watchdog test). 6 flaky tests unskipped; 3 clean full-suite runs verified. |
+| 171 | Rust template engine `{% live_render %}` tag handler (lazy=True parity) | Retro v0.9.0 / PR #1138 | #1145 | Closed | **Resolved in v0.9.1 via PR #1166** — lazy callback delegation via shared registry sidecar; new `call_handler_with_py_sidecar` bridge generic for future Rust-path tags. 8 parity tests. |
+| 172 | A075 system check — sticky+lazy template scan | Retro v0.9.0 / PR #1138 deferral / ADR-015 §"Deferred from PR-B" | #1146 | Closed | **Resolved in v0.9.1 via PR #1163** — A075 check + verbatim-block guard (mirrors A070/A071 pattern); 8 regression tests. |
+| 173 | CSP-nonce-aware activator for `<dj-lazy-slot>` fills | Retro v0.9.0 / PR #1138 deferral / ADR-015 §"Deferred from PR-B" | #1147 | Closed | **Resolved in v0.9.1 via PR #1163** — `request.csp_nonce` propagation through `live_render` lazy=True branch onto `<template>` + activator `<script>`. 6 Python + 3 JS regression tests. |
+| 174 | Replay handler argument validation (defense-in-depth) | Retro v0.9.0 / PR #1142 Stage 11 | #1148 | Closed | **Resolved in v0.9.1 via PR #1164** — `is_event_handler(handler)` registry check after dunder guard. 3 regression tests in `TestReplayHandlerValidation`. |
+| 175 | `markdown` package missing from default test env | Retro v0.9.0 (carryover from v0.8.7 retro) | #1149 | Closed | **Resolved in v0.9.1 via PR #1164** — `markdown` + `nh3` added to `[project.optional-dependencies.dev]`. |
+| 176 | Descriptor-pattern component time-travel verification test | Retro v0.9.0 / PR #1141 Stage 11 | #1150 | Closed | **Resolved in v0.9.1 via PR #1164** — `TestDescriptorPatternComponentTimeTravel` (2 cases) added; descriptor auto-promotion gap noted as follow-up in #1165. |
 | 177 | Debug panel UI for per-component scrubbing + forward-replay | Retro v0.9.0 / PR #1141 + PR #1142 follow-up | #1151 | Open | Build the user-facing UI on top of the time-travel + replay primitives shipped in v0.9.0. |
 | 178 | Vitest unhandled-rejection in `view-transitions.test.js` | Retro v0.9.0 / PR #1135 pre-push | #1152 | Open | Non-deterministic teardown error; audit test stubs against the v0.8.5 retro #1113 microtask-yield rule. |
 | 179 | `asyncio.as_completed._wait_for_one` warning suppression | Retro v0.9.0 / PR #1138 Stage 11 | #1153 | Open | DeprecationWarning under teardown in tests/integration/test_chunks_overlap.py; either filter locally or fix `_cancel_pending` lifecycle. |
+| 180 | Serialize implementer agents per checkout (parallel-agent CHANGELOG contamination) | Retro v0.9.1 / PR #1163 + #1164 | #1172 | Open | Two implementer agents on one git checkout flip branches via pre-commit stash/restore and produce CHANGELOG cross-contamination. Canonicalize "one implementer agent per checkout" in `~/.claude/skills/pipeline-run/SKILL.md`. |
+| 181 | Two-commit shape (impl+tests / docs+CHANGELOG) as canonical pipeline stage gate | Retro v0.9.1 / PRs #1166 + #1168 + #1170 | #1173 | Open | Three PRs that adopted the split shipped clean reviews; two PRs that didn't (#1163 + #1164) cross-contaminated CHANGELOGs. Canonicalize in pipeline template Stage 9 — defer all CHANGELOG hunks to a single docs commit. |
+| 182 | "3 clean full-suite runs" verification gate for pollution-class fixes | Retro v0.9.1 / PR #1159 (#1134 bisect) | #1174 | Open | Without it, the second polluter (`sys.modules` rebind in test_dev_server_watchdog_missing.py) would have shipped silently. Single-run pass is insufficient for pollution by definition. Add to bugfix-state.json Stage 6 (Test Execution) checklist. |
+| 183 | CSP-strict defaults for new client-side framework code (no inline scripts, no inline event handlers) | Retro v0.9.1 / PRs #1163 + #1170 | #1175 | Open | Pattern emerged across 2 PRs: external static JS module + auto-bind on marker class is strictly more CSP-friendly than inline handlers + nonces. Canonicalize for v1.0 readiness — strict-CSP deployments are first-class. |
+
+---
+
+## v0.9.1 — Follow-up drain (PRs #1159, #1161, #1163, #1164, #1166, #1168, #1170)
+
+**Date**: 2026-04-27
+**Scope**: Seven-PR drain closing 10 v0.9.1 issues from the v0.9.0 retro spawn list + post-rc2 user reports. Two P1 unblockers (#1134 flaky-test bisect, #1121 Rust filter bridge), three ADR-015 deferrals (#1146 A075 / #1147 CSP nonce / #1145 Rust live_render lazy=True), three hygiene items (#1148 / #1149 / #1150), one user-reported bug (#1158 theming cookie namespace), and one feat (#1111 data_table row navigation). 6 follow-up tracker issues filed (#1160, #1162, #1165, #1167, #1169, #1171); #1134's existing tracker was bumped via comment.
+**Tests at close**: ~6679 Python + 1461 JS = ~8140 across the suite. ~82 new tests added across the milestone.
+
+### What We Learned
+
+**1. Parallel implementer agents on the same checkout produce CHANGELOG cross-contamination.**
+Two background implementer agents running concurrently (iter 3 PR #1163 and iter 4 PR #1164) flipped between branches via pre-commit stash/restore mid-edit. The result: PR #1163's CHANGELOG captured #1164's `[Unreleased]` entries (#1148 + #1149) for code that wasn't in #1163's diff. Stage 11 caught it as a 🔴 must-fix. PR #1164 also had a duplicate `### Fixed` heading from the same race. After serializing iters 5-7, no further contamination. The single-script transformation pattern adopted by iter 4 (write all edits in one Python script + commit immediately) is a fallback, not a primary defense.
+
+**Action taken**: Open — tracked in Action Tracker #180 (GitHub #1172).
+
+**2. Two-commit shape (impl+tests / docs+CHANGELOG) defended against the contamination — and held cleanly across iters 5-7.**
+After observing the #1163/#1164 contamination, every subsequent PR (#1166, #1168, #1170) used a two-commit shape: implementation + tests in commit 1, docs + CHANGELOG entry in commit 2 (Stage 9). Stage 11 reviewers explicitly verified each split was clean (per-commit `gh api .../files` checks). Three-for-three validation that deferring CHANGELOG hunks to a single Stage 9 commit eliminates the cross-edit collision class.
+
+**Action taken**: Open — tracked in Action Tracker #181 (GitHub #1173).
+
+**3. "3 clean full-suite runs" verification gate caught a hidden second polluter on PR #1159.**
+The bisect agent for #1134 didn't stop at the first hit (in-memory SQLite leak from `test_async_render_path.py`). It kept verifying until 3 clean runs, which surfaced an unrelated second polluter (`sys.modules` rebind in `test_dev_server_watchdog_missing.py`) that wasn't on the original 6-test list. Without the verify-3x gate, the second polluter would have shipped silently — and the next PR would have hit the same flake. Pollution by definition shows up under specific orderings; a single-run pass is insufficient.
+
+**Action taken**: Open — tracked in Action Tracker #182 (GitHub #1174).
+
+**4. Stage 11 reviewer agents caught 3 real 🔴 bugs across the milestone — all fixed inline.**
+PR #1163 had CHANGELOG cross-contamination. PR #1170 had two 🔴s: open-redirect via protocol-relative URL (`//evil.com/path` passed the `data-href` allowlist regex `/^(https?:|\/|\.)/`) and silent-fail-no-script-loaded UX (the JS module was sitting in static assets but no `<script>` tag emitted it). All three caught by the independent reviewer agent, none by the implementer's own tests. The "spawn an independent reviewer who hasn't seen my reasoning" pattern is consistently the highest-ROI Stage of the pipeline.
+
+**Action taken**: Closed — Stage 11 mandatory rule already canonicalized in `~/.claude/skills/pipeline-run/SKILL.md` "Stages that MUST NEVER be skipped" section. The 3-real-🔴 hit-rate this milestone reinforces it without needing a new tracker row.
+
+**5. CSP-strict defaults emerged as a cross-PR pattern — worth canonicalizing for v1.0.**
+PR #1163 added CSP-nonce-aware activator for `<dj-lazy-slot>` fills. PR #1170 went further — chose to skip inline scripts entirely in favor of an external static JS module that auto-binds on a marker class. The "external module + auto-bind on marker class" shape is strictly more CSP-friendly than "inline script + nonce attribute" and works under stricter CSP policies. Two converging pieces of evidence within one drain that strict-CSP deployments should be a v1.0 design constraint, not an opt-in.
+
+**Action taken**: Open — tracked in Action Tracker #183 (GitHub #1175).
+
+**6. Stage-4 first-principles "grep before architecting" validated for the FOURTH time.**
+Plan stage caught material reuse twice in this drain: PR #1161's eager filter registry mirrored the existing custom-tag-handler bridge (`crates/djust_templates/src/registry.rs`) — same `Py<PyAny>` storage shape, same dispatch. PR #1166's `live_render` lazy=True port reused the same eager-registry pattern + introduced the generic `call_handler_with_py_sidecar` so future Rust-path tags don't need to invent their own bridge. Without the grep-before-architecting pass, both PRs would have shipped redundant bridges. Already canonicalized in v0.9.0 retro tracker #168 (#1143); fourth validation strengthens the case.
+
+**Action taken**: Closed — already canonicalized in CLAUDE.md / Action Tracker #168 (GitHub #1143). Reinforced by this milestone; no new tracker row needed.
+
+### Insights
+
+- **7 PRs in a single autonomous session** (drain spans the v0.9.0rc2 release moment forward). Background implementer agents per iteration kept the parent-session context tight. The pattern "spawn implementer agent for stages 4-10, then spawn reviewer agent for stage 11, parent handles 1-3 + 12-14" is repeatable.
+- **Follow-up issue density**: 6 tracker issues filed (#1160, #1162, #1165, #1167, #1169, #1171) for ~24 🟡 should-fix findings across the 7 PRs. The "consolidate N 🟡s into one follow-up issue per PR" pattern keeps the merge moving while preserving the polish work for a future v0.9.x batch.
+- **Re-balance of "real bugs caught by reviewer" vs "process bugs (CHANGELOG contamination)"**: 2 real bugs (PR #1170 open-redirect + auto-load) vs 1 process bug (PR #1163 CHANGELOG). Suggests the process gates (two-commit shape, serial-agent rule) are doing their job — most 🔴s are now genuine code defects rather than mechanical drift.
+- **Bisect-as-pipeline-task** (PR #1159) was the most non-trivial drain item — the implementer agent ran for 31 minutes wall-clock to converge. Pattern works for any pollution-class fix where the investigation IS the work.
+
+### Review Stats
+
+| Metric | #1159 | #1161 | #1163 | #1164 | #1166 | #1168 | #1170 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|-------|
+| Tests added | 9 | 10 | 17 | 5 | 8 | 8 | 25 | 82 |
+| 🔴 Findings | 0 | 0 | 1 | 0 | 0 | 0 | 2 | 3 |
+| 🟡 Findings | 1 | 6 | 6 | 3 | 1 | 4 | 3 | 24 |
+| 🔴 fixed pre-merge | — | — | 1 | — | — | — | 2 | 3 |
+| 🟡 deferred to follow-up | 1 | 6 | 6 | 3 | 1 | 4 | 3 | 24 |
+| Stage 11 verdict | APPROVE | APPROVE | REQ_CHG → APPROVE | APPROVE | APPROVE | APPROVE | REQ_CHG → APPROVE | — |
+| CI matrix on final merge | 13/13 | 13/13 | 13/13 | 13/13 | 13/13 | 13/13 | 13/13 | clean |
+
+### Process Improvements Applied
+
+**ADRs landed**: None this milestone (all 7 PRs landed under existing ADR-014 / ADR-015 frames).
+**CLAUDE.md additions**: None this milestone — the 4 tracker rows (#180-#183) are queued for a follow-up CLAUDE.md update once the issues land.
+**Skill updates**: None this milestone — the pipeline-run skill canonicalizations from #180/#181/#182 are queued.
+**ROADMAP updates**: v0.9.1 milestone added at `dfee2a31` (pre-drain). All 10 originally-queued issues closed by this milestone.
+
+### Open Items
+
+- [ ] Serialize implementer agents per checkout — Action Tracker #180 (GitHub #1172).
+- [ ] Two-commit shape canonicalized in pipeline template — Action Tracker #181 (GitHub #1173).
+- [ ] "3 clean full-suite runs" verification gate for pollution-class fixes — Action Tracker #182 (GitHub #1174).
+- [ ] CSP-strict defaults for new client-side framework code — Action Tracker #183 (GitHub #1175).
+- [ ] PR #1170 follow-ups (nested-control tags / test-hook namespace / Python allowlist test) — GitHub #1171.
+- [ ] PR #1168 follow-ups (empty-namespaced cookie / namespace validation / JSDOM write test / legacy cleanup) — GitHub #1169.
+- [ ] PR #1166 follow-ups (test-isolation flake / asymmetric sidecar) — GitHub #1167.
+- [ ] PR #1164 follow-ups (caplog assertions / descriptor doc / dev-env regression) — GitHub #1165.
+- [ ] PR #1161 follow-ups (hot-path Mutex / hardcoded autoescape / weak negative test / unused fn / fixture / async filter) — GitHub #1162.
+- [ ] PR #1159 follow-up (Redis perf bound) — GitHub #1160.
 
 ---
 
