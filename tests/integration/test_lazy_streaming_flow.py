@@ -17,9 +17,11 @@ Asserts:
    format" decision.
 3. Multiple lazy children produce one fill template each, distinct
    `data-id` attributes.
-4. WSGI fallback path: when arender_chunks isn't run (sync get only),
-   placeholders survive in the body with no fills (graceful
-   degradation).
+
+The WSGI fallback path (placeholders survive, no fills emitted because
+arender_chunks doesn't run) is verified at the as_view-dispatch level
+in higher-stack integration tests; covering it here would duplicate
+that signal without adding new coverage of the chunk emitter pipeline.
 """
 
 from __future__ import annotations

@@ -1459,7 +1459,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     # See ``arender_chunks`` Phase 5 for thunk invocation; see
     # ``RequestMixin.aget`` for thunk transfer from view-stash to
     # emitter. The placeholder emitted here is replaced client-side by
-    # ``static/djust/src/40-lazy-fill.js`` once the fill chunk arrives.
+    # ``static/djust/src/50-lazy-fill.js`` once the fill chunk arrives.
     lazy_kwarg = kwargs.pop("lazy", False)
     if lazy_kwarg:
         if sticky_kwarg:
@@ -1634,7 +1634,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
 
             # Build the fill envelope. Browsers parse <template> inertly;
             # the inline <script> activator runs at parse time and
-            # window.djust.lazyFill('X') from 40-lazy-fill.js performs
+            # window.djust.lazyFill('X') from 50-lazy-fill.js performs
             # the slot replacement.
             envelope = (
                 '<template id="djl-fill-'
