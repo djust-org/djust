@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`{% data_table %}` row-level navigation: accessibility, keyboard,
+  and CSP-strict layer (closes #1111)** — layers v0.9.1 quality
+  additions onto the prior #1111 row-navigation scaffolding (which
+  shipped `row_click_event` / `row_url` template-tag args, mixin
+  defaults, and structural wiring). What's added:
+  - **Accessibility**: every row-clickable `<tr>` now renders
+    `role="button"`, `tabindex="0"`, and `cursor:pointer`. Screen
+    readers announce the row as a button; keyboard users get focus.
+  - **Keyboard activation**: Enter and Space on a focused row fire
+    the configured action. Guarded by `document.activeElement === tr`
+    so Space inside a nested input doesn't hijack the keystroke.
+  - **Nested-control guard**: clicks inside `<a>`, `<button>`,
+    `<input>`, `<label>`, `<select>`, `<textarea>` are short-circuited
+    via capture-phase `stopImmediatePropagation`, so the row-level
+    action never fires for those clicks. This is the integration
+    point with `selectable=True` (per-row checkbox) and the
+    cell-level link column (#1110).
+  - **CSP-strict friendly**: the row_url path's previous inline
+    `onclick="window.location=this.dataset.href"` is replaced by a
+    new component JS module
+    (`python/djust/components/static/djust_components/data-table-row-click.js`).
+    No inline event handlers, no nonce plumbing — works under
+    `script-src 'self'` out of the box.
+  - **Defense-in-depth**: `data-href` values are regex-validated
+    against `/^(https?:|\/|\.)/` before `window.location.assign`,
+    so a hostile `javascript:` URI cannot execute even if it sneaks
+    into the row dict.
+  - **Multi-line template comments fixed**: the pre-existing
+    `{# ... #}` row-nav and link-column doc comments were rendering
+    as literal text in output because Django's `{# %}` is
+    single-line-only. Converted to `{% comment %}...{% endcomment %}`.
+
+  New cases in `TestRowClickAccessibility`,
+  `TestRowClickableMarkerClass`, `TestRowClickAffordance`,
+  `TestCSPInlineHandler`, `TestSelectableComposition`, `TestCSPNonce`
+  (`tests/unit/test_data_table_row_navigation_1111.py`, 14 Python
+  cases) plus 11 JS cases in `tests/js/data_table_row_click.test.js`
+  cover: role + tabindex presence, marker class on/off, no-inline-
+  onclick (CSP), checkbox cell composition, click navigation, nested
+  `<a>`/`<input>` guard, Enter/Space activation, `activeElement`
+  guard, javascript: URI rejection, dj-click composition (capture-phase
+  stop), and bindRow idempotence. One pre-existing structural test
+  in `python/tests/test_data_table_link_row_nav.py` was rewritten to
+  assert the new `data-table-row-clickable` marker class instead of
+  the removed inline `onclick`.
+
 - **Theming cookie namespace for per-project isolation on shared
   domains (closes #1158)** — adds opt-in
   `LIVEVIEW_CONFIG['theme']['cookie_namespace']` setting so multiple
