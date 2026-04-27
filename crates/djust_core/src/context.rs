@@ -84,6 +84,18 @@ impl Context {
         self.raw_py_objects.is_some()
     }
 
+    /// Borrow the raw Python objects sidecar, if attached.
+    ///
+    /// Used by the custom-tag bridge to pass Python-only context
+    /// (e.g. ``request``, ``view``) to handlers that need them — like
+    /// the Rust-path ``{% live_render %}`` handler which delegates to
+    /// the Django template tag. Returns ``None`` when no sidecar is
+    /// attached (the common case for templates rendered outside a
+    /// ``RustLiveView``).
+    pub fn raw_py_objects(&self) -> Option<&HashMap<String, PyObject>> {
+        self.raw_py_objects.as_deref()
+    }
+
     /// Mark a variable name as safe (skip auto-escaping on render).
     pub fn mark_safe(&mut self, key: String) {
         self.safe_keys.insert(key);

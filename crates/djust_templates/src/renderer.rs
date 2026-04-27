@@ -916,8 +916,21 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // Convert context to HashMap for the handler
             let context_map = context.to_hashmap();
 
-            // Call the Python handler
-            crate::registry::call_handler(name, &resolved_args, &context_map).map_err(|e| {
+            // Call the Python handler. We forward the optional
+            // raw-Python sidecar (``request``, ``view``, …) so handlers
+            // like ``live_render`` (#1145) that need access to Python
+            // objects in the parent's render context can pick them up
+            // from the ``context`` dict alongside the JSON-friendly
+            // values. Existing handlers ignore extra keys so this is
+            // backward compatible.
+            let raw_py = context.raw_py_objects();
+            crate::registry::call_handler_with_py_sidecar(
+                name,
+                &resolved_args,
+                &context_map,
+                raw_py,
+            )
+            .map_err(|e| {
                 DjangoRustError::TemplateError(format!("Custom tag '{}' error: {}", name, e))
             })
         }
