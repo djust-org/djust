@@ -369,19 +369,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         dj_root_open_start = dj_root_match.start()
         dj_root_open_end = dj_root_match.end()
 
-        # Mask script blocks so a literal "</body>" inside a JS string is
-        # not picked up as the real body close (mirrors _split_for_streaming).
-        tail = full_html[dj_root_open_start:]
-        masked_tail = _SCRIPT_BLOCK_RE.sub(
-            lambda s: "\x00" * len(s.group(0)),
-            tail,
-        )
-        # ``masked_tail`` only used for the body-close search; we don't
-        # need the absolute index — the closing </div> lookup below is
-        # the actual boundary.
-        _BODY_CLOSE_RE.search(masked_tail)
-
         # Find the matching </div> for <div dj-root> using shared logic.
+        # _find_closing_div_pos already handles balanced div nesting AND
+        # ignores script-block contents, so the script-mask + </body>
+        # search the Phase-1 splitter does is redundant here — the chunk
+        # boundary is the closing-</div>, not the </body>.
         result = TemplateMixin._find_closing_div_pos(full_html, dj_root_open_end)
         if result[1] is None:
             # Malformed HTML (no closing </div> for dj-root). Fall back to
@@ -394,15 +386,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         # result is (close_start, close_end); close_end is the index just
         # AFTER </div>. Slice the four pieces.
-        body_close_div_end = result[1]
-
         shell_open = full_html[:dj_root_open_start]
         body_open = full_html[dj_root_open_start:dj_root_open_end]
         body_content = full_html[dj_root_open_end : result[0]]
         # body_close: from the closing </div> through end-of-document.
-        body_close_chunk = (
-            full_html[result[0] : body_close_div_end] + full_html[body_close_div_end:]
-        )
+        body_close_chunk = full_html[result[0] :]
 
         try:
             # 1. Shell: <!DOCTYPE>, <head>, <body>, top chrome.

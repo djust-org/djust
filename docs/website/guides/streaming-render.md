@@ -93,6 +93,16 @@ class DashboardView(LiveView):
 That's it. No JS changes, no new template tags, no new URL routing —
 the existing `path("/dashboard/", DashboardView.as_view())` just works.
 
+> **PR-A foundation status (v0.9.0, in flight):** the async-streaming
+> render path (`aget()`, `ChunkEmitter`, `arender_chunks()`) lands as
+> PR-A. **Dispatch wiring** that auto-routes GET → `aget()` when
+> `streaming_render = True` lands together with PR-B
+> (`{% live_render lazy=True %}`), because the user-visible TTFB win
+> arrives at the same time as the user-facing API. Until PR-B merges,
+> setting `streaming_render = True` continues to take the Phase-1
+> regex-split-after-render path documented at the top — the ASGI shell-
+> flush behavior described below activates with PR-B.
+
 ---
 
 ## How it works

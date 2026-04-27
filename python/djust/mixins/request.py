@@ -440,6 +440,13 @@ class RequestMixin:
                 # Cancel the disconnect watcher to release its task.
                 if not disconnect_task.done():
                     disconnect_task.cancel()
+                # Clear the per-request emitter stash so a future request
+                # on a re-used view instance (rare in production but
+                # possible in long-lived test harnesses or custom
+                # threading) doesn't see a stale ``_chunk_emitter``
+                # reference that PR-B would mistake for the current
+                # render.
+                self._chunk_emitter = None
 
         response = StreamingHttpResponse(
             _streaming_iter(),

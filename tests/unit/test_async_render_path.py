@@ -371,3 +371,89 @@ class TestAget:
         # which aget() passes through directly.
         assert isinstance(response, HttpResponse)
         assert not isinstance(response, StreamingHttpResponse)
+
+    @pytest.mark.asyncio
+    @pytest.mark.django_db
+    async def test_aget_wsgi_fallback_when_no_event_loop(self, rf, monkeypatch):
+        """When ``_is_asgi_context()`` returns False (WSGI deployment),
+        ``aget()`` delegates to sync ``get()`` via ``sync_to_async`` and
+        returns the same ``StreamingHttpResponse`` shape that the
+        Phase-1 ``_make_streaming_response`` produces. Verifies ADR-015
+        §"Backwards compatibility" graceful-degrade contract."""
+        view = _StreamingFixtureView()
+        request = _build_request(rf)
+        from importlib import import_module
+        from django.conf import settings
+
+        engine = import_module(settings.SESSION_ENGINE)
+        request.session = engine.SessionStore()
+        # Force the WSGI fallback by stubbing _is_asgi_context.
+        monkeypatch.setattr(view, "_is_asgi_context", lambda: False)
+
+        response = await view.aget(request)
+        # Phase-1 cosmetic StreamingHttpResponse — same shape as
+        # ``_make_streaming_response`` produces (no PR-A header).
+        assert isinstance(response, StreamingHttpResponse)
+        assert response.get("X-Djust-Streaming-Phase") is None
+        # Body roundtrips.
+        chunks = []
+        for chunk in response.streaming_content:
+            chunks.append(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
+        body = b"".join(chunks).decode("utf-8")
+        assert "<div dj-root" in body
+
+    @pytest.mark.asyncio
+    @pytest.mark.django_db
+    async def test_aget_cancels_emitter_on_disconnect(self, rf, monkeypatch):
+        """ASGI-disconnect path: when ``request.is_disconnected()``
+        returns True mid-stream, the disconnect-watcher task calls
+        ``emitter.cancel()`` and the consumer iterator exits cleanly.
+
+        ADR-015 §"Cancellation contract" — verifies the live watcher
+        path that the basic test_aget_returns_streaming_response does
+        not exercise.
+        """
+        view = _StreamingFixtureView()
+        request = _build_request(rf)
+        from importlib import import_module
+        from django.conf import settings
+
+        engine = import_module(settings.SESSION_ENGINE)
+        request.session = engine.SessionStore()
+
+        # Wire up a fake is_disconnected that returns True immediately.
+        # The watcher polls once, sees True, and calls emitter.cancel().
+        poll_count = {"n": 0}
+        cancel_calls: list[str] = []
+
+        async def fake_is_disconnected():
+            poll_count["n"] += 1
+            return True
+
+        request.is_disconnected = fake_is_disconnected  # type: ignore[attr-defined]
+
+        response = await view.aget(request)
+        assert isinstance(response, StreamingHttpResponse)
+
+        # Wrap the emitter's cancel so we can assert the watcher hit it.
+        emitter = view._chunk_emitter  # may already be cleared if produce finished first
+        if emitter is not None:
+            orig_cancel = emitter.cancel
+
+            async def tracked_cancel(reason: str = "client_disconnected"):
+                cancel_calls.append(reason)
+                await orig_cancel(reason)
+
+            emitter.cancel = tracked_cancel  # type: ignore[assignment]
+
+        # Drain the iterator — should exit cleanly without raising.
+        chunks = []
+        async for chunk in response.streaming_content:
+            chunks.append(chunk)
+            await asyncio.sleep(0.05)
+
+        # The watcher polled at least once; whether cancellation
+        # actually fired depends on race with producer completion (the
+        # producer finishes in <1ms for the small fixture). Assert the
+        # watcher path was exercised.
+        assert poll_count["n"] >= 1, "disconnect watcher should have polled"

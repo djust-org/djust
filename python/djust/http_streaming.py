@@ -165,8 +165,12 @@ class ChunkEmitter:
 
         Called by :meth:`RequestMixin.aget` after the final chunk has
         been pushed. The async iterator exits cleanly when it sees the
-        sentinel.
+        sentinel. No-op when already cancelled — :meth:`cancel` already
+        pushed the sentinel and pushing a second one could fill a
+        size-1 queue and hang a slow consumer.
         """
+        if self.cancelled:
+            return
         await self._queue.put(_STREAM_END)
 
     # ------------------------------------------------------------------
