@@ -1300,34 +1300,60 @@ Three nyc-claims issues filed during the v0.8.6 session, plus async-enabled enha
 
 ---
 
-### Milestone: v0.9.0 — Full feature wave before 1.0 testing (4 features, shape C)
+### Milestone: v0.9.0 — Full feature wave before 1.0 testing (shape C, ~6 PRs)
 
 *Goal:* Ship all 4 v0.9.0 backlog candidates so 1.0 testing starts from a feature-complete base. ADR-006 #1044 (AI-generated UIs) is the only deferred candidate — pushed down the road to post-1.0 because it needs the AssistantMixin/LLM-provider design work first.
 
-**P1 — sticky-LiveView ergonomic gap (1.0-blocker)**:
+**Status (live):** 1 of 6 PRs shipped. PR #1128 closed #1032; remaining work below is broken into pipeline-runnable units.
 
-- **#1032 — `{% live_render %}` auto-detect preserved stickies**. Server-side template-tag intelligence to emit slot markers (`dj-sticky-slot`) when the client already holds the sticky. Removes the Dashboard→Dashboard re-mount limitation in the sticky LiveView demo. Affects every multi-tab dashboard built on `sticky=True` child LiveViews. Requires:
-  1. Server detection mechanism — cookie/header/WS handshake carrying preserved-sticky IDs from the client to the server before render
-  2. Tag conditional output — emit `<dj-sticky-slot>` placeholder when ID matches; full HTML otherwise
-  3. Test matrix covering return-trip vs fresh-tab vs partial-state cases
+#### Shipped
 
-**P2 — streaming arc completion**:
+- ✅ **#1032 — `{% live_render %}` auto-detect preserved stickies** (PR #1128, ADR-014, merged 2026-04-26). 1.0-blocker P1 cleared. Dashboard→Dashboard re-mount limitation closed.
 
-- **#1043 — Phase 2 streaming: lazy-child render + true server overlap**. v0.6.1's Phase 1 shipped the transport-layer chunked HTTP response; Phase 2 completes the arc. Lazy-child render means deferred subtrees stream in after the parent shell hits the wire; server overlap means the next chunk renders while the prior one's bytes are still on the wire (vs current sequential render→send). Needs an ADR for the lazy-child semantic and the cancellation/error-propagation contract. Bigger than #1032 (~3-5 days).
+#### In flight: #1043 split into 3 PRs (ADR-015 draft at `.pipeline-state/feat-streaming-phase2-1043-adr-draft.md`)
 
-**P3 — DevTools polish**:
+The Plan-stage pre-flight pass discovered that Phase 1 streaming (v0.6.1) was a regex-split-after-render — TTFB unchanged, retro #116 already documented this as doc overclaim. So #1043 is **introducing real streaming for the first time**, not "completing" Phase 1. Per retro #1122 split-foundation rule, this needs to ship as 3 PRs:
 
-- **#1041 — Component-level time-travel**. v0.6.1's time-travel ring-buffer records against the parent LiveView. Phase 2 captures component-level state too, so multi-component pages get per-component scrubbing in the debug panel. ~2-3 days.
+- [ ] **#1043 PR-A — async render path foundation** (P2, ~600 LoC core + 250 tests, ~1.5 days). Branch: `feat/streaming-phase2-1043-pr-a`. Pipeline state already exists at `.pipeline-state/feat-streaming-phase2-1043.json` (Stages 1-4 passed; ready to resume at Stage 5). Add `async def aget()` parallel to `RequestMixin.get()`; new `python/djust/http_streaming.py` with `ChunkEmitter`; `arender_chunks()` async generator in `mixins/template.py`. No new user-facing API. `streaming_render = True` flag actually shell-flushes for the first time. Rewrite `docs/website/guides/streaming-render.md` to close retro #116 doc-claim debt. Standalone ship value: TTFB win for slow `get_context_data()` views; releasable as v0.9.0rc1.
 
-- **#1042 — Forward-replay through branched timeline (Redux DevTools parity)**. Currently the time-travel debug panel only scrubs back through linear history. Forward-replay through alternative timelines (replay from state X with new event Y) closes the React DevTools / Redux DevTools UX parity gap. Smaller than #1041 (~2 days) but builds on it.
+- [ ] **#1043 PR-B — `{% live_render lazy=True %}` capability** (P2, ~500 LoC + 550 tests, ~2 days, depends on PR-A). Branch: `feat/streaming-phase2-1043-pr-b`. Tag `live_render` `lazy=` kwarg branch; emit `<dj-lazy-slot>` placeholder + register thunk on `parent._chunk_emitter`; new `static/djust/src/16-lazy-fill.js` for `<template id="djl-fill-X">` + inline-script slot replacement; system check A075 to flag `lazy=True + sticky=True` collision (`TemplateSyntaxError` at tag eval). `lazy="visible"` opts into IntersectionObserver-triggered fill (composes with `dj-lazy` from `13-lazy-hydration.js`). Demo: extend `examples/demo_project` with a `lazy_demo` view exercising 3 children at different render times.
 
-**Deferred to post-1.0**:
+- [ ] **#1043 PR-C — `asyncio.as_completed()` parallel render** (P2, ~80 LoC + 200 tests, ~0.5 days, depends on PR-A; can ship before PR-B if scheduling demands). Branch: `feat/streaming-phase2-1043-pr-c`. Replace sequential `await` over thunks with `asyncio.as_completed()`; per-task timeout; sentinel-based cancellation propagates via `request_token` from emitter on ASGI scope `disconnected`. Children render in parallel; chunks emerge in completion order. Closes #1043 (umbrella) on merge.
+
+#### Remaining P3 features (DevTools polish)
+
+- [ ] **#1041 — Component-level time-travel** (P3, ~2-3 days). v0.6.1's time-travel ring-buffer records against the parent LiveView. Phase 2 captures component-level state too, so multi-component pages get per-component scrubbing in the debug panel. **Stage-4 first-principles guideline** (canonicalized from #1032 retro): the Plan stage should grep for existing `time_travel`, `state_snapshot`, `ring_buffer` symbols before locking architecture; reuse the existing parent-level recorder if at all possible.
+
+- [ ] **#1042 — Forward-replay through branched timeline (Redux DevTools parity)** (P3, ~2 days, depends on #1041). Currently the time-travel debug panel only scrubs back through linear history. Forward-replay through alternative timelines (replay from state X with new event Y) closes the React DevTools / Redux DevTools UX parity gap. Smaller than #1041 but builds on its data model.
+
+#### Deferred to post-1.0
 
 - ~~ADR-006 AI-generated UIs (#1044)~~ — needs AssistantMixin/LLM-provider design first. Reconsider after 1.0 ships.
 
-**After v0.9.0**: enter 1.0 testing phase. v1.0.0 ships after the bake.
+#### After v0.9.0
 
-**Sequencing strategy** (within v0.9.0): #1032 first (smallest, real 1.0-blocker), then #1043 (streaming arc completion), then #1041 + #1042 as a paired pipeline (component time-travel comes first since #1042 builds on its data model). Each item ships as its own PR; v0.9.0 release cuts after all 4 merge.
+- Enter 1.0 testing phase.
+- v1.0.0 ships after the bake.
+
+#### Sequencing strategy (locked)
+
+Each item ships as its own PR. Within v0.9.0:
+
+1. ✅ **#1032** (smallest, real 1.0-blocker) — DONE, PR #1128.
+2. **#1043 PR-A** (foundation; standalone-shippable, releasable as v0.9.0rc1) — in flight, plan complete.
+3. **#1043 PR-B** (lazy capability; rides PR-A foundation) — blocked by PR-A.
+4. **#1043 PR-C** (overlap; rides PR-A foundation; can ship before PR-B if cleaner). Closes #1043 umbrella.
+5. **#1041** (component time-travel) — independent of streaming work; can ship in parallel with PR-B/PR-C if a fresh session picks it up.
+6. **#1042** (forward-replay) — blocked by #1041.
+
+v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each foundation PR (PR-A, #1041) lands.
+
+#### Pipeline runner notes
+
+- `/pipeline-run --milestone v0.9.0` picks the next available unit by priority + dependency.
+- `/pipeline-next --milestone v0.9.0 --feature "streaming-phase2-1043-pr-a"` to resume the in-flight PR-A pipeline (state file already exists; Stages 1-4 passed).
+- The Plan-stage ADR draft at `.pipeline-state/feat-streaming-phase2-1043-adr-draft.md` is the canonical design for ALL three #1043 PRs.
+- Apply Stage-4 first-principles rule: every Plan pass should grep the codebase before committing to architecture (canon from #1032 retro — what looked like "needs new transport" was actually "use the WS pipeline that already carries the data"; analogous traps may lurk in #1041/#1042).
 
 ---
 
