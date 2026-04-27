@@ -90,6 +90,22 @@ survives the tear-down, and re-attaches at the ``dj-sticky-slot`` in
 Settings. Same ``<audio>`` element, same playback position, same
 Python instance — ``is_playing`` and ``track_title`` unchanged.
 
+### Return-trip navigation (Dashboard → Settings → Dashboard)
+
+The destination page can declare the same sticky inline via
+``{% live_render ... sticky=True %}`` even when it's *also* the page
+that originally mounted the sticky. As of v0.9.0 (ADR-014), the tag
+auto-detects the carried-over survivor at template-render time, emits
+a ``<dj-sticky-slot>`` placeholder rather than a fresh subtree, and
+re-registers the survivor onto the new parent without re-running its
+``mount()``. Dashboard → Settings → Dashboard preserves the audio
+playback identical to Dashboard → Settings → Reports.
+
+The only path that fresh-mounts a sticky is the one where the consumer
+genuinely has no survivor — first navigation, HTTP GET / hard reload,
+or after an intermediate page that omitted the slot AND the inline tag
+(see "What happens when a slot is missing" below).
+
 ## The `sticky` class attribute
 
 Two class attributes control sticky behavior:

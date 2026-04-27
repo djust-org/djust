@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`{% live_render ... sticky=True %}` auto-detects preserved stickies (closes #1032, ADR-014)** —
+  the v0.6.0 Sticky LiveViews work shipped Dashboard→Settings→Reports
+  preservation but left a known limitation: returning to a page that
+  declares the sticky inline (`Dashboard → Settings → Dashboard`)
+  re-mounted the child instead of reattaching the survivor — audio
+  playback and any in-flight state on the sticky child died.
+
+  The v0.9.0 P1 1.0-blocker fix teaches the `{% live_render %}` template
+  tag to consult the consumer's `_sticky_preserved` registry at render
+  time. When a survivor exists for the resolved `sticky_id`, the tag
+  re-registers the survivor onto the new parent, marks the id in a new
+  `consumer._sticky_auto_reattached` set, and emits a `<dj-sticky-slot>`
+  placeholder rather than a fresh subtree. The consumer's existing slot
+  scan + the client's existing `replaceWith` reattach then complete the
+  round-trip without ever calling `mount()` on the survivor again.
+
+  No wire-protocol changes. No new transport (cookie/header/handshake)
+  needed — the existing WS pipeline already carries survivor info to
+  the exact moment the tag renders. Falls through to fresh-mount
+  unchanged on the HTTP GET path (no `_ws_consumer` back-reference) and
+  on first-navigation (empty `_sticky_preserved`).
+
+  Files: `python/djust/templatetags/live_tags.py` (~30 LoC tag-side
+  branch), `python/djust/websocket.py` (`_sticky_auto_reattached` set
+  init/reset + slot-scan skip-on-claim, ~12 LoC),
+  `docs/adr/014-sticky-liveview-autodetect.md` (new ADR).
+  4 new cases in `TestStickyAutoDetect` in
+  `tests/unit/test_live_render_tag.py` cover no-consumer, empty-preserved,
+  preserved-for-our-id, and preserved-for-other-id paths.
+
 ## [0.8.7rc1] - 2026-04-26
 
 ### Fixed

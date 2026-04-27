@@ -28,10 +28,13 @@ The base.html default slot blocks would otherwise render empty
 [dj-sticky-slot] placeholders below the widgets — since the stickies
 are already mounted inline, we suppress those placeholders.
 
-NOTE (limitation): returning to Dashboard from Settings/Reports will
-re-mount the stickies fresh (server collision — see ADR-011's
-"Failure modes" section and README step 4). Dashboard -> Settings ->
-Reports is the preservation happy path demonstrated here.
+NOTE: as of v0.9.0 (ADR-014), returning to Dashboard from
+Settings/Reports auto-detects the carried-over stickies — the inline
+`{% live_render ... sticky=True %}` calls above emit
+`<dj-sticky-slot>` placeholders rather than fresh subtrees when the
+consumer holds a survivor. Dashboard -> Settings -> Dashboard now
+preserves audio playback identity, just like Dashboard -> Settings ->
+Reports.
 {% endcomment %}
 {% block sticky_embeds %}{% endblock %}
 {% block audio_slot %}{% endblock %}

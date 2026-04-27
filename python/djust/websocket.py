@@ -372,6 +372,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # old view is torn down. Re-registered on the new parent after
         # its mount completes.
         self._sticky_preserved: Dict[str, Any] = {}
+        # Sticky auto-detect (ADR-014): IDs that ``{% live_render sticky=True %}``
+        # already re-registered onto the new parent during template render.
+        # The post-render slot-scan reads this set and skips the second
+        # ``_register_child`` call (which would ``ValueError``) while still
+        # including the ID in the ``sticky_hold`` survivor list. Reset at
+        # every ``handle_mount`` and ``handle_live_redirect_mount`` entry.
+        self._sticky_auto_reattached: set[str] = set()
         # Render lock: serializes tick and event render operations so they
         # cannot concurrently access view_instance state or increment the
         # VDOM version. This prevents the version mismatch race in #560.
@@ -1639,6 +1646,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         logger = logging.getLogger(__name__)
 
+        # Reset auto-reattach tracker (ADR-014): each mount starts with
+        # an empty set; the tag pushes ids onto it as it claims survivors.
+        self._sticky_auto_reattached = set()
+
         view_path = data.get("view")
         params = data.get("params", {})
         has_prerendered = data.get("has_prerendered", False)
@@ -2280,7 +2291,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 matched_ids = _find_sticky_slot_ids(html or "")
                 survivors_final: Dict[str, Any] = {}
                 for sticky_id, child in sticky_preserved.items():
-                    if sticky_id in matched_ids:
+                    if sticky_id in self._sticky_auto_reattached:
+                        # ADR-014: tag already re-registered the survivor onto
+                        # the new parent at template-render time. Don't call
+                        # ``_register_child`` again (it would ``ValueError``);
+                        # do still include in survivors_final so the
+                        # ``sticky_hold`` frame's ``views`` list stays
+                        # authoritative for the client's reconcileStickyHold.
+                        survivors_final[sticky_id] = child
+                    elif sticky_id in matched_ids:
                         # Re-register onto the new parent. _register_child
                         # updates child._parent_view and child._view_id.
                         if hasattr(self.view_instance, "_register_child"):
@@ -3923,6 +3942,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
           the final survivor ids, so the client reconciles its
           stickyStash against an authoritative list.
         """
+        # Reset auto-reattach tracker (ADR-014): a redirect mount starts
+        # a fresh template render; any IDs the tag claims should be tracked
+        # against this navigation only.
+        self._sticky_auto_reattached = set()
         # Reuse handle_mount — it already handles everything
         # But first, stage the old view's sticky children (Phase B).
         old_view = self.view_instance
