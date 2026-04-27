@@ -271,3 +271,59 @@ describe("data-table-row-click — idempotence", () => {
     expect(dom.window.__locationAssignSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("data-table-row-click — URL allowlist (open-redirect defense)", () => {
+  // Stage 11 review of PR #1170 found `/^(https?:|\/|\.)/` allowed
+  // protocol-relative URLs (`//evil.com/path`) — same-origin assumption
+  // fails. Tightened to `/^(https?:\/\/|\/(?!\/)|\.)/` which rejects `//`.
+  it("rejects protocol-relative URL `//evil.com/path` (cross-origin)", () => {
+    const dom = buildDom(`
+      <table><tbody>
+        <tr class="data-table-row-clickable" role="button" tabindex="0"
+            data-href="//evil.com/path">
+          <td>cell</td>
+        </tr>
+      </tbody></table>
+    `);
+    const tr = dom.window.document.querySelector("tr.data-table-row-clickable");
+    dom.window.djustDataTableRowClick.bindRow(tr);
+
+    tr.click();
+
+    expect(dom.window.__locationAssignSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts single-leading-slash absolute path `/claims/42`", () => {
+    const dom = buildDom(`
+      <table><tbody>
+        <tr class="data-table-row-clickable" role="button" tabindex="0"
+            data-href="/claims/42">
+          <td>cell</td>
+        </tr>
+      </tbody></table>
+    `);
+    const tr = dom.window.document.querySelector("tr.data-table-row-clickable");
+    dom.window.djustDataTableRowClick.bindRow(tr);
+
+    tr.click();
+
+    expect(dom.window.__locationAssignSpy).toHaveBeenCalledWith("/claims/42");
+  });
+
+  it("rejects `javascript:alert(1)` (existing guard, regression)", () => {
+    const dom = buildDom(`
+      <table><tbody>
+        <tr class="data-table-row-clickable" role="button" tabindex="0"
+            data-href="javascript:alert(1)">
+          <td>cell</td>
+        </tr>
+      </tbody></table>
+    `);
+    const tr = dom.window.document.querySelector("tr.data-table-row-clickable");
+    dom.window.djustDataTableRowClick.bindRow(tr);
+
+    tr.click();
+
+    expect(dom.window.__locationAssignSpy).not.toHaveBeenCalled();
+  });
+});

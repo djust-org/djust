@@ -97,4 +97,21 @@
   </div>
   {% endif %}
   {% endif %}
+
+  {% if row_click_event or row_url %}
+  {% comment %}
+    #1111: auto-load the row-click handler when row navigation is enabled.
+
+    Hardcoded /static/ prefix (default STATIC_URL). Works for the default
+    Django configuration without requiring `{% load static %}` (which a
+    bare `Engine()` test renderer can't resolve). Sites with a custom
+    STATIC_URL can override `djust_components/table.html` via Django's
+    standard template-customization mechanism — drop a copy in their
+    own templates dir with their `{% static %}` resolution.
+
+    Defer attribute → loads after parsing; the JS module is idempotent if
+    multiple data_tables on one page each emit this script tag.
+  {% endcomment %}
+  <script src="/static/djust_components/data-table-row-click.js" defer></script>
+  {% endif %}
 </div>

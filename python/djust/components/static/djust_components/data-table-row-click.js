@@ -50,11 +50,14 @@
     // Static-URL path: navigate via dataset.href.
     var href = tr.dataset && tr.dataset.href;
     if (href) {
-      // Only allow http(s) and relative-path URLs to defend against a
-      // hostile data-href value sneaking in (e.g. javascript: URIs).
+      // Only allow http(s) and SAME-ORIGIN relative-path URLs to defend
+      // against a hostile data-href value sneaking in (e.g. javascript:
+      // URIs or protocol-relative `//evil.com/...` cross-origin redirects).
       // Developer-controlled values from `reverse()` are always either
       // absolute or relative paths, never `javascript:` schemes.
-      if (/^(https?:|\/|\.)/.test(href)) {
+      // The `(?!\/)` lookahead on the leading `/` rejects `//host` while
+      // still allowing single-leading-slash absolute paths.
+      if (/^(https?:\/\/|\/(?!\/)|\.)/.test(href)) {
         // Tests override window.__djustRowClickNavigate to capture the
         // target URL since JSDOM's window.location.assign is
         // non-configurable. Production code path is the default arm.
