@@ -971,3 +971,63 @@ class TestReplayEvent:
         assert replay_snap is not None
         assert view.observed == 10
         assert view._components["a"].value == 10  # restored
+
+    def test_replay_rejects_dunder_event_name(self):
+        """Defense-in-depth — a hand-edited snapshot with
+        ``event_name='__init__'`` could re-invoke the constructor
+        through bare ``getattr``. Replay refuses dunder/private
+        names."""
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="__init__",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+
+    def test_nested_replay_of_replay_snapshot(self):
+        """A snapshot produced by a previous replay can itself be
+        replayed — the branched timeline is scrubbable end-to-end."""
+        view = _CounterView()
+        # Original event.
+        snap1 = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap1)
+        assert view.count == 5
+
+        # First replay produces snap2 (branched timeline).
+        snap2 = replay_event(view, snap1, override_params={"n": 7})
+        assert snap2 is not None
+        assert view.count == 7
+
+        # Replay snap2. Re-uses snap2's state_before (count=0) +
+        # n=7 → count=7.
+        snap3 = replay_event(view, snap2)
+        assert snap3 is not None
+        assert snap3.state_after == {"count": 7}
+        assert view.count == 7
+
+    def test_replay_when_time_travel_disabled_mid_way_returns_none(self):
+        """If ``time_travel_enabled`` is flipped to False between
+        snapshot capture and replay, ``replay_event`` still mutates
+        the view (handler runs from state_before) but the new
+        snapshot is NOT recorded — same shape as the dry-replay
+        path."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+        assert view.count == 5
+
+        # Disable time-travel.
+        view.time_travel_enabled = False
+        before_count = len(view._time_travel_buffer)
+
+        # Replay — buffer unchanged, view still mutated.
+        result = replay_event(view, snap)
+        assert result is None
+        assert len(view._time_travel_buffer) == before_count
+        assert view.count == 5  # mutated from state_before (0) + n=5
