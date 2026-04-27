@@ -29,6 +29,7 @@ from django.utils.safestring import mark_safe
 
 from .._html import build_tag
 from ..config import config
+from ..utils import get_csp_nonce
 
 register = template.Library()
 logger = logging.getLogger(__name__)
@@ -1541,6 +1542,19 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         # _assign_view_id has already mutated the parent's id-counter.
         escaped_id = escape(view_id)
 
+        # #1147 — CSP nonce propagation. When the project uses
+        # ``django-csp`` (or compatible) middleware, ``request.csp_nonce``
+        # carries the per-response nonce. Strict-CSP deployments
+        # (``script-src 'nonce-...'``, no ``unsafe-inline``) reject the
+        # inline ``<script>`` activator unless it carries a matching
+        # nonce attribute. We thread the nonce through to BOTH the
+        # ``<template>`` element and the activator ``<script>``. When
+        # no nonce is set (the common case for sites without CSP
+        # middleware), the attribute is omitted entirely — preserving
+        # backward compatibility for non-CSP deployments.
+        _csp_nonce_raw = get_csp_nonce(request)
+        _csp_nonce_attr = ' nonce="' + escape(_csp_nonce_raw) + '"' if _csp_nonce_raw else ""
+
         async def _lazy_thunk():
             """Run the eager mount+render path and emit the fill chunk
             envelope. Catches its own exceptions and wraps them in a
@@ -1636,6 +1650,11 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             # the inline <script> activator runs at parse time and
             # window.djust.lazyFill('X') from 50-lazy-fill.js performs
             # the slot replacement.
+            #
+            # #1147 — both the <template> and the <script> activator
+            # carry ``nonce="..."`` when ``request.csp_nonce`` is set,
+            # so strict-CSP deployments (``script-src 'nonce-...'``)
+            # don't reject the activator.
             envelope = (
                 '<template id="djl-fill-'
                 + escaped_id
@@ -1643,10 +1662,14 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 + escaped_id
                 + '" data-status="'
                 + status
-                + '">'
+                + '"'
+                + _csp_nonce_attr
+                + ">"
                 + body
                 + "</template>"
-                + '<script>window.djust&&window.djust.lazyFill&&window.djust.lazyFill("'
+                + "<script"
+                + _csp_nonce_attr
+                + '>window.djust&&window.djust.lazyFill&&window.djust.lazyFill("'
                 + escaped_id
                 + '")</script>'
             )
@@ -1668,12 +1691,19 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             inner = str(custom_placeholder)
         else:
             inner = ""
+        # #1147 — propagate ``request.csp_nonce`` onto the <dj-lazy-slot>
+        # placeholder so client code can read it via ``getAttribute``
+        # if it ever needs to inject CSP-bound scripts under the same
+        # policy. The load-bearing nonce is the one on the <script>
+        # activator emitted by the thunk above.
         return mark_safe(
             '<dj-lazy-slot data-id="'
             + escaped_id
             + '" data-trigger="'
             + lazy_config["trigger"]
-            + '">'
+            + '"'
+            + _csp_nonce_attr
+            + ">"
             + inner
             + "</dj-lazy-slot>"
         )
