@@ -327,10 +327,120 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     return ok
 
 
+def replay_event(
+    view: Any,
+    snapshot: EventSnapshot,
+    override_params: Optional[Dict[str, Any]] = None,
+    record_replay: bool = True,
+) -> Optional[EventSnapshot]:
+    """Replay a recorded event from a snapshot's ``state_before``.
+
+    Forward-replay (#1042, v0.9.0) — Redux DevTools parity. Restores
+    the view to the snapshot's ``state_before``, then re-invokes the
+    recorded ``event_name`` handler with either the original ``params``
+    OR a caller-supplied ``override_params`` (branched timeline).
+    Returns the new :class:`EventSnapshot` for the replayed event so
+    callers can inspect the resulting state.
+
+    The replay path produces a fresh snapshot in the time-travel
+    buffer (when ``record_replay=True``, the default) so the branched
+    timeline is itself scrubbable. Setting ``record_replay=False``
+    runs a "dry" replay that mutates the view but doesn't append to
+    the buffer — useful for the debug panel's "preview this branch"
+    UI.
+
+    The handler lookup uses ``getattr(view, snapshot.event_name)``;
+    callers are responsible for ensuring the handler hasn't been
+    renamed since the snapshot was captured. If the handler is
+    missing, returns ``None`` and logs a warning.
+
+    Restoration uses :func:`restore_snapshot` (with ``which="before"``)
+    so component state from #1041 captures replays correctly.
+
+    :param view: The LiveView instance to replay against.
+    :param snapshot: The original :class:`EventSnapshot` providing the
+        ``state_before`` baseline AND the ``event_name`` / ``params``
+        to re-execute.
+    :param override_params: When non-``None``, replaces
+        ``snapshot.params`` for the replay invocation. Use to fork
+        the timeline with different inputs.
+    :param record_replay: When ``True`` (default), the replayed event
+        is appended to the view's time-travel buffer as a NEW
+        snapshot. When ``False``, the replay still mutates the view
+        but the buffer is unchanged.
+    :returns: The new :class:`EventSnapshot` capturing the replay's
+        before/after state when ``record_replay=True``, or ``None``
+        when the handler is missing, time-travel is disabled, OR
+        ``record_replay=False`` (dry-replay path always returns None).
+    """
+    # Defense-in-depth: reject dunder / private event names. The
+    # snapshot is normally produced by the framework's own dispatcher
+    # which only records ``@event_handler``-decorated public methods,
+    # but a hand-edited or malicious snapshot could specify
+    # ``__init__`` and replay would re-invoke the constructor. The
+    # bare-``getattr`` resolution would happily return it. Belt +
+    # suspenders for the future ws-replay wiring.
+    if snapshot.event_name.startswith("_"):
+        logger.warning(
+            "time_travel: replay_event refused dunder/private event_name %r",
+            snapshot.event_name,
+        )
+        return None
+    handler = getattr(view, snapshot.event_name, None)
+    if handler is None or not callable(handler):
+        logger.warning(
+            "time_travel: replay_event handler %r not found on view %s",
+            snapshot.event_name,
+            type(view).__name__,
+        )
+        return None
+
+    # Capture the handler reference and the live ``time_travel_enabled``
+    # flag BEFORE ``restore_snapshot`` because the restore's
+    # ghost-attr cleanup phase (Phase 1) deletes any public attrs
+    # that aren't in the snapshot — including handler functions a
+    # test may have monkey-patched onto the instance after the
+    # snapshot was captured, AND including ``time_travel_enabled``
+    # if the caller disabled it after the snapshot was taken (the
+    # CURRENT user intent matters more than the snapshot's
+    # historical state).
+    live_tt_enabled = bool(getattr(view, "time_travel_enabled", False))
+
+    # Restore the view to state_before so the handler runs from the
+    # captured baseline. Component state restores via the #1041 path.
+    restore_snapshot(view, snapshot, which="before")
+
+    # Build the params to invoke the handler with — original by
+    # default, override for branched timelines.
+    params = override_params if override_params is not None else dict(snapshot.params)
+
+    if record_replay and live_tt_enabled:
+        # Capture a fresh snapshot pair around the replay so the
+        # branched timeline is scrubbable itself.
+        replay_snap = record_event_start(view, snapshot.event_name, params, ref=None)
+        try:
+            handler(**params) if params else handler()
+        except Exception as exc:  # noqa: BLE001 — replay shouldn't break caller
+            logger.exception("time_travel: replay handler %s raised", snapshot.event_name)
+            record_event_end(view, replay_snap, error=str(exc))
+            return replay_snap
+        record_event_end(view, replay_snap)
+        return replay_snap
+
+    # Dry-replay path — mutate view but don't record. Caller wants
+    # to preview a branch without polluting the buffer.
+    try:
+        handler(**params) if params else handler()
+    except Exception:  # noqa: BLE001 — dry replay swallows for preview
+        logger.exception("time_travel: dry replay handler %s raised", snapshot.event_name)
+    return None
+
+
 __all__ = [
     "EventSnapshot",
     "TimeTravelBuffer",
     "record_event_start",
     "record_event_end",
     "restore_snapshot",
+    "replay_event",
 ]

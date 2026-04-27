@@ -31,6 +31,7 @@ from djust.time_travel import (
     TimeTravelBuffer,
     record_event_end,
     record_event_start,
+    replay_event,
     restore_snapshot,
 )
 
@@ -797,3 +798,236 @@ class TestComponentLevelTimeTravel:
         snap = view._capture_snapshot_state()
         assert "template" not in snap["__components__"]["alpha"]
         assert "template_name" not in snap["__components__"]["alpha"]
+
+
+# ===========================================================================
+# v0.9.0 #1042: replay_event (Redux DevTools forward-replay parity)
+# ===========================================================================
+
+
+class _CounterView:
+    """LiveView-like fixture with a counter handler used to test replay."""
+
+    time_travel_enabled = True
+
+    def __init__(self):
+        self.count = 0
+        self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+    def _capture_snapshot_state(self):
+        from djust.live_view import LiveView
+
+        return LiveView._capture_snapshot_state(self)
+
+    def _capture_components_snapshot(self):
+        from djust.live_view import LiveView
+
+        return LiveView._capture_components_snapshot(self)
+
+    def increment(self, n=1, **kwargs):
+        self.count += n
+
+
+class TestReplayEvent:
+    """v0.9.0 #1042 — forward-replay through branched timeline."""
+
+    def test_replay_with_original_params_is_deterministic(self):
+        """Replaying a snapshot with its original ``params`` produces
+        identical ``state_after``."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+        assert view.count == 5
+
+        # Now mutate state, then replay.
+        view.count = 100
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        # Replay restored to state_before (count=0) then incremented by 5.
+        assert view.count == 5
+        # The new snapshot reflects the replay.
+        assert replay_snap.state_before == {"count": 0}
+        assert replay_snap.state_after == {"count": 5}
+
+    def test_replay_with_override_params_branches_timeline(self):
+        """Replaying with ``override_params`` produces a different
+        ``state_after`` — Redux DevTools "swap action" parity."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+
+        # Replay with a different n.
+        replay_snap = replay_event(view, snap, override_params={"n": 100})
+        assert replay_snap is not None
+        assert replay_snap.state_after == {"count": 100}
+        assert view.count == 100
+
+    def test_replay_records_new_snapshot_in_buffer(self):
+        """The replay snapshot lands in the buffer so the branched
+        timeline is itself scrubbable."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+
+        before_count = len(view._time_travel_buffer)
+        replay_event(view, snap)
+        after_count = len(view._time_travel_buffer)
+        assert after_count == before_count + 1
+
+    def test_dry_replay_does_not_record(self):
+        """``record_replay=False`` mutates the view but skips the
+        buffer append — useful for "preview branch" UI."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+
+        before_count = len(view._time_travel_buffer)
+        result = replay_event(view, snap, record_replay=False)
+        assert result is None
+        assert len(view._time_travel_buffer) == before_count
+        # View was still mutated (state_before restored, then handler ran).
+        assert view.count == 5
+
+    def test_replay_missing_handler_returns_none(self):
+        """If the recorded ``event_name`` is no longer a method on the
+        view, ``replay_event`` logs and returns ``None``."""
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="renamed_handler",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+
+    def test_replay_handler_exception_recorded_in_replay_snapshot(self):
+        """If the replayed handler raises, the new snapshot's
+        ``error`` field is set and the snapshot is still returned
+        (so the debug panel can show 'this branch errored at step
+        N')."""
+        view = _CounterView()
+
+        def _bad(**kwargs):
+            raise ValueError("intentional")
+
+        view.bad_handler = _bad
+
+        snap = EventSnapshot(
+            event_name="bad_handler",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        assert replay_snap.error is not None
+        assert "intentional" in replay_snap.error
+
+    def test_replay_restores_component_state_before_invoking(self):
+        """Replay uses ``restore_snapshot`` to set ``state_before``,
+        which includes per-component state via #1041. So a handler
+        whose body reads ``self._components[id].value`` sees the
+        captured value, not the live value."""
+
+        class _ComponentReadingView:
+            time_travel_enabled = True
+
+            def __init__(self):
+                self._components = {"a": _FakeComponent(value=10)}
+                self.observed = None
+                self._time_travel_buffer = TimeTravelBuffer(max_events=10)
+
+            def _capture_snapshot_state(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_snapshot_state(self)
+
+            def _capture_components_snapshot(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_components_snapshot(self)
+
+            def read_component(self, **kwargs):
+                self.observed = self._components["a"].value
+
+        view = _ComponentReadingView()
+        # Capture a snapshot when component value is 10.
+        snap = record_event_start(view, "read_component", {}, ref=1)
+        view.read_component()
+        record_event_end(view, snap)
+        assert view.observed == 10
+
+        # Now MUTATE the component to 999 and replay. Replay should
+        # see the captured value of 10, not the live 999.
+        view._components["a"].value = 999
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        assert view.observed == 10
+        assert view._components["a"].value == 10  # restored
+
+    def test_replay_rejects_dunder_event_name(self):
+        """Defense-in-depth — a hand-edited snapshot with
+        ``event_name='__init__'`` could re-invoke the constructor
+        through bare ``getattr``. Replay refuses dunder/private
+        names."""
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="__init__",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+
+    def test_nested_replay_of_replay_snapshot(self):
+        """A snapshot produced by a previous replay can itself be
+        replayed — the branched timeline is scrubbable end-to-end."""
+        view = _CounterView()
+        # Original event.
+        snap1 = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap1)
+        assert view.count == 5
+
+        # First replay produces snap2 (branched timeline).
+        snap2 = replay_event(view, snap1, override_params={"n": 7})
+        assert snap2 is not None
+        assert view.count == 7
+
+        # Replay snap2. Re-uses snap2's state_before (count=0) +
+        # n=7 → count=7.
+        snap3 = replay_event(view, snap2)
+        assert snap3 is not None
+        assert snap3.state_after == {"count": 7}
+        assert view.count == 7
+
+    def test_replay_when_time_travel_disabled_mid_way_returns_none(self):
+        """If ``time_travel_enabled`` is flipped to False between
+        snapshot capture and replay, ``replay_event`` still mutates
+        the view (handler runs from state_before) but the new
+        snapshot is NOT recorded — same shape as the dry-replay
+        path."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+        assert view.count == 5
+
+        # Disable time-travel.
+        view.time_travel_enabled = False
+        before_count = len(view._time_travel_buffer)
+
+        # Replay — buffer unchanged, view still mutated.
+        result = replay_event(view, snap)
+        assert result is None
+        assert len(view._time_travel_buffer) == before_count
+        assert view.count == 5  # mutated from state_before (0) + n=5
