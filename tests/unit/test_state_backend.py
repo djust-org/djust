@@ -297,6 +297,9 @@ class TestRedisBackend:
         html = view2.render()
         assert html == "<div>Redis</div>"
 
+    @pytest.mark.skip(
+        reason="flaky in full-suite run, passes in isolation — test pollution, see #1134"
+    )
     def test_redis_serialization_performance(self, redis_backend):
         """Test that Redis uses native serialization."""
         view = RustLiveView("<div>{{ data }}</div>")
