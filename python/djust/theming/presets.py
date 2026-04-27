@@ -62,6 +62,7 @@ from .themes.art_deco import PRESET as ART_DECO_THEME  # noqa: E402
 from .themes.handcraft import PRESET as HANDCRAFT_THEME  # noqa: E402
 from .themes.terminal import PRESET as TERMINAL_THEME  # noqa: E402
 from .themes.magazine import PRESET as MAGAZINE_THEME  # noqa: E402
+from .themes.docs import PRESET as DOCS_THEME  # noqa: E402
 from .themes.swiss import PRESET as SWISS_THEME  # noqa: E402
 from .themes.candy import PRESET as CANDY_THEME  # noqa: E402
 from .themes.retro_computing import PRESET as RETRO_COMPUTING_THEME  # noqa: E402
@@ -131,6 +132,7 @@ THEME_PRESETS: dict[str, ThemePreset] = {
     "handcraft": HANDCRAFT_THEME,
     "terminal": TERMINAL_THEME,
     "magazine": MAGAZINE_THEME,
+    "docs": DOCS_THEME,
     "swiss": SWISS_THEME,
     "candy": CANDY_THEME,
     "retro_computing": RETRO_COMPUTING_THEME,

@@ -588,7 +588,7 @@ wheels = [
 
 [[package]]
 name = "djust"
-version = "0.8.8rc1"
+version = "0.8.8rc2"
 source = { editable = "." }
 dependencies = [
     { name = "channels", extra = ["daphne"] },
