@@ -818,6 +818,44 @@ Then use theme colors in Tailwind classes:
 </button>
 ```
 
+### Cross-project cookie isolation (`cookie_namespace`)
+
+If you run two or more djust projects on the same domain (e.g.
+`localhost:8001`, `localhost:8002`, etc.), browsers scope cookies by domain
+only — *not* by port. Without isolation, the four theming cookies
+(`djust_theme`, `djust_theme_preset`, `djust_theme_pack`,
+`djust_theme_layout`) leak across projects, so picking the "Cyberpunk" pack
+in project A pins it for project B too.
+
+For sites without a user-facing theme switcher, the simpler fix is
+`enable_client_override: False` (introduced in v0.8.2 / #1013), which makes
+the server ignore client cookies entirely.
+
+For sites *with* a user-facing switcher — where cookie writes must stay on —
+set a per-project namespace:
+
+```python
+LIVEVIEW_CONFIG = {
+    "theme": {
+        "cookie_namespace": "djust_org",   # any unique-per-project string
+    },
+}
+```
+
+When set, theming cookies are read and written under
+`<ns>_djust_theme`, `<ns>_djust_theme_preset`, `<ns>_djust_theme_pack`, and
+`<ns>_djust_theme_layout`, so each project gets its own slot in the shared
+cookie jar.
+
+The read path tries the namespaced cookie first and falls back to the legacy
+unprefixed cookie once on the first request after upgrade — users keep their
+existing theme choice. After the user clicks the switcher (or any other path
+that calls `setPreset` / `setPack` / `setTheme` / `setLayout`), only the
+namespaced cookie is written.
+
+When `cookie_namespace` is unset (default), the unprefixed names are used —
+existing deployments don't lose their theme on upgrade.
+
 ## Choosing a Styling Approach
 
 | Approach                                 | When to Use                                                                                                                           |
