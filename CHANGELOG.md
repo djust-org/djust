@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0rc2] - 2026-04-27
+
 ### Changed
 
 - **`WizardMixin.as_live_field` auto-picks `dom_event` by widget class
