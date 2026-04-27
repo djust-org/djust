@@ -198,6 +198,12 @@ def record_event_end(
     buffer.append(snapshot)
 
 
+#: Reserved snapshot key for component-level state (#1041).
+#: Lives at the top level of the state dict to keep components out of
+#: the parent's flat-attr namespace.
+_COMPONENTS_SNAPSHOT_KEY = "__components__"
+
+
 def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") -> bool:
     """Restore view public state from a snapshot.
 
@@ -212,12 +218,24 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     of ``{a:5, b:10}`` leaves the view as ``{a:1}`` — not
     ``{a:1, b:10}``. Framework-internal names (``_FRAMEWORK_INTERNAL_ATTRS``)
     and any key starting with ``_`` are never deleted.
+
+    Component-level restoration (#1041, v0.9.0): when the snapshot
+    contains a top-level ``"__components__"`` key, each
+    ``{component_id: state}`` entry is dispatched to the matching
+    component in ``view._components``. Components missing from the
+    snapshot keep their current state (no ghost-attr cleanup across
+    component boundaries — components are first-class instances, not
+    parent-scoped attrs).
     """
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
     from djust.security import safe_setattr
 
     state = snapshot.state_before if which == "before" else snapshot.state_after
+    # Pull components out before computing parent-state keys so they
+    # don't get mistaken for top-level ghost-attr candidates.
+    components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {})
+    state = {k: v for k, v in state.items() if k != _COMPONENTS_SNAPSHOT_KEY}
     state_keys = set(state.keys())
 
     # Framework-internal attrs must never be removed even if they're
@@ -264,6 +282,42 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
             # Blocked by safe_setattr (dunder, read-only, etc.).
             logger.warning("time_travel: restore blocked for key=%s", key)
             ok = False
+
+    # Phase 3 (#1041): restore per-component state. Each component
+    # entry in ``__components__`` is dispatched to the matching
+    # ``view._components[component_id]`` instance via safe_setattr.
+    # Components absent from the snapshot keep current state — they
+    # are first-class instances, not parent-scoped attrs, so the
+    # ghost-attr cleanup model doesn't apply.
+    if components_state:
+        registry = getattr(view, "_components", None) or {}
+        for component_id, component_snap in components_state.items():
+            component = registry.get(component_id)
+            if component is None:
+                logger.warning(
+                    "time_travel: component %r in snapshot but not in registry",
+                    component_id,
+                )
+                ok = False
+                continue
+            for key, value in component_snap.items():
+                try:
+                    applied = safe_setattr(component, key, value, allow_private=False)
+                except Exception:  # noqa: BLE001 — dev-only, log + degrade
+                    logger.exception(
+                        "time_travel: component restore failed for id=%s key=%s",
+                        component_id,
+                        key,
+                    )
+                    ok = False
+                    continue
+                if not applied:
+                    logger.warning(
+                        "time_travel: component restore blocked for id=%s key=%s",
+                        component_id,
+                        key,
+                    )
+                    ok = False
     return ok
 
 

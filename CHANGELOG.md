@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Component-level time-travel (closes #1041, v0.9.0 P3)** — extends
+  the v0.6.1 time-travel ring buffer to capture per-component public
+  state alongside the parent LiveView's state. Multi-component pages
+  can now scrub back through history with each component's state
+  faithfully restored.
+
+  Snapshot format: `_capture_snapshot_state` adds a reserved
+  `__components__` key holding a `{component_id: {field: value}}`
+  nested dict. Components in `self._components` (registered by
+  `_assign_component_ids`) each contribute their public state. The
+  reserved key keeps component snapshots out of the parent's flat
+  attr namespace and gives the time-travel debug panel a clean shape
+  to render per-component scrubbers.
+
+  Restoration: `time_travel.restore_snapshot` detects
+  `__components__` in the snapshot and dispatches each
+  `{component_id: state}` entry to the matching component in
+  `view._components` via `safe_setattr`. Components absent from the
+  snapshot keep their current state — components are first-class
+  instances, not parent-scoped attrs, so the ghost-attr cleanup model
+  used for parent state doesn't apply.
+
+  Files: `python/djust/live_view.py` (~60 LoC: `_capture_components_snapshot`
+  helper + `_capture_snapshot_state` extension); `python/djust/time_travel.py`
+  (~40 LoC: `_COMPONENTS_SNAPSHOT_KEY` constant + per-component
+  restoration phase). 7 new cases in `TestComponentLevelTimeTravel`
+  in `tests/unit/test_time_travel.py` cover capture-with-components,
+  capture-without-components, private/callable filtering, restoration
+  dispatch, unknown-component-id handling, absent-component
+  preservation, and snapshot/live disconnection (mirrors the
+  parent-state aliasing fix from PR #1023's Stage 11 review).
+
 - **Parallel lazy render via `asyncio.as_completed` (v0.9.0 PR-C, closes #1043)** —
   closes the v0.9.0 streaming arc. PR-B shipped sequential thunk
   invocation in `arender_chunks` Phase 5 (one thunk runs to
