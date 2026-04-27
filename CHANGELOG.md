@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0rc1] - 2026-04-27
+
 ### Added
 
 - **Forward-replay through branched timeline (closes #1042, v0.9.0 P3)** —
