@@ -1,25 +1,70 @@
-# Streaming Initial Render (v0.6.1)
+# Streaming Initial Render
 
-> **Phase 1 — shipped in v0.6.1.** Transport-layer chunked transfer.
-> Lazy-child streaming and true server-side render overlap (Phase 2) are
-> tracked for v0.6.2.
+> **Phase 1 (v0.6.1)** — transport-layer chunked transfer, regex-split-after-render.
+> **Phase 2 PR-A (v0.9.0)** — async render path; the shell chunk now flushes
+> to the wire BEFORE `get_context_data()` runs (real TTFB win on ASGI).
+> **Phase 2 PR-B (v0.9.0)** — `{% live_render lazy=True %}` opt-in lazy children.
+> **Phase 2 PR-C (v0.9.0)** — `asyncio.as_completed()` parallel render across
+> lazy children.
+
+## Honest Phase-1 vs Phase-2 caveat (closes retro #116)
+
+The original v0.6.1 release notes called this feature "streaming initial
+render" but the shipped path was actually a regex-split applied to the
+**already-fully-rendered** HTML string. The chunks landed on the wire
+*after* the entire view had completed `get_context_data()` and template
+render. Time-to-first-byte was unchanged from `HttpResponse`. Phase 2 PR-A
+(v0.9.0, ADR-015) delivers the actual shell-flush-before-render
+semantic via `async def aget()` + `python/djust/http_streaming.py`'s
+`ChunkEmitter`. Phase 1 is retained as the WSGI-deployment fallback —
+WSGI cannot push real chunks before the response is assembled, so on
+WSGI the user gets the cosmetic 3-chunk split with no TTFB win.
 
 djust can return a LiveView page as an **HTTP/1.1 chunked-transfer
-response** instead of a single buffered response. Phase 1's payoff is
-transport-level: the browser receives the shell chunk
-(`<!DOCTYPE>` + `<head>` + `<body>` open) as soon as the view has
-finished rendering, without waiting for the whole response to be
-assembled in a gzip or reverse-proxy buffer. Intermediate proxies that
-honor chunked encoding can relay each chunk as it arrives.
+response** instead of a single buffered response. **On ASGI deployments
+running v0.9.0 or later**, the browser receives the shell chunk
+(`<!DOCTYPE>` + `<head>` + `<body>` open) as soon as the parent view's
+template is *parsed*, not when it's fully rendered. Intermediate proxies
+that honor chunked encoding relay each chunk as it arrives.
 
-**What Phase 1 does NOT do (yet):** true server-side overlap — rendering
-the main content *while* the browser is parsing the shell. Today `get()`
-fully assembles the rendered HTML string before handing it to the
-streaming iterator, so the server-render time and the first chunk's wire
-time are sequential. **Phase 2** (v0.6.2, lazy children) moves each
-`{% live_render lazy=True %}` child's render into a separate post-shell
-chunk, delivering the real concurrency win. Phase 1 lays the response-
-type plumbing that Phase 2 builds on.
+## Deployment requirements
+
+* **ASGI** (Daphne, Uvicorn, Hypercorn) — full Phase-2 PR-A streaming.
+  The shell chunk reaches the wire while body chunks are still being
+  prepared by `arender_chunks()` on the same event loop.
+* **WSGI** — falls back to Phase-1 cosmetic chunked response. The chunks
+  are correct but TTFB is unchanged from non-streaming. `aget()` detects
+  the missing event loop via `_is_asgi_context()` and routes to `get()`
+  via `sync_to_async`.
+* **Reverse proxies** — nginx default `proxy_buffering on` eats the
+  TTFB win by buffering the entire response before relaying. To preserve
+  Phase-2 streaming end-to-end:
+  - nginx: `proxy_buffering off` in the location block, OR set
+    `X-Accel-Buffering: no` on the response (djust does not set this
+    by default — add it via middleware if needed).
+  - Cloudflare: chunked transfer is supported; no extra config.
+  - AWS ALB / GCP LB: chunked transfer supported.
+
+## Foundation for lazy children (PR-B preview)
+
+Phase 2 PR-B introduces `{% live_render "..." lazy=True %}` opt-in. The
+tag emits a `<dj-lazy-slot>` placeholder synchronously and registers a
+render thunk on `parent._chunk_emitter`. After the parent shell
+flushes, the emitter runs each thunk and emits a
+`<template id="djl-fill-X">` chunk + inline `<script>` that the browser
+parses and the client uses to `replaceWith` the slot.
+
+PR-A ships ONLY the foundation (`aget()`, `ChunkEmitter`,
+`arender_chunks()`). PR-B ships the user-facing `lazy=True` API. PR-C
+adds parallelization via `asyncio.as_completed()`. This split-foundation
+shape follows retro #1122.
+
+---
+
+> **Original Phase-1 caveat (kept for archival reference):** Phase 1
+> doesn't do true server-side overlap — rendering the main content
+> *while* the browser is parsing the shell. Phase 2 PR-A introduces
+> that capability.
 
 This is the djust analog of Next.js
 [`renderToPipeableStream`](https://nextjs.org/docs/app/building-your-application/routing/loading-ui-and-streaming):
@@ -47,6 +92,16 @@ class DashboardView(LiveView):
 
 That's it. No JS changes, no new template tags, no new URL routing —
 the existing `path("/dashboard/", DashboardView.as_view())` just works.
+
+> **PR-A foundation status (v0.9.0, in flight):** the async-streaming
+> render path (`aget()`, `ChunkEmitter`, `arender_chunks()`) lands as
+> PR-A. **Dispatch wiring** that auto-routes GET → `aget()` when
+> `streaming_render = True` lands together with PR-B
+> (`{% live_render lazy=True %}`), because the user-visible TTFB win
+> arrives at the same time as the user-facing API. Until PR-B merges,
+> setting `streaming_render = True` continues to take the Phase-1
+> regex-split-after-render path documented at the top — the ASGI shell-
+> flush behavior described below activates with PR-B.
 
 ---
 
