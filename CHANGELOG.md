@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0rc3] - 2026-04-28
+
 ### Fixed
 
 - **v0.9.3 test-infra cleanup — suppress unhandled errors in JS + Python
