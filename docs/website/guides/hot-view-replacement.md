@@ -17,29 +17,16 @@ Gated on `DEBUG=True` and enabled by default. Zero cost in production.
 
 ## Quick start
 
-Hot View Replacement (HVR) rides on top of the existing
-`enable_hot_reload()` machinery. If you already enabled hot reload, HVR
-is already working — no new config needed.
+**Auto-enabled in DEBUG since v0.9.0.** Add djust to `INSTALLED_APPS`,
+keep `DEBUG=True`, install `watchdog`, and HVR works. No
+`AppConfig.ready()` boilerplate needed.
 
 ```python
-# myapp/apps.py
-from django.apps import AppConfig
-
-class MyAppConfig(AppConfig):
-    name = "myapp"
-
-    def ready(self):
-        from django.conf import settings
-        if settings.DEBUG:
-            from djust import enable_hot_reload
-            enable_hot_reload()
-```
-
-```python
-# settings.py (defaults shown)
+# settings.py (defaults shown — all True out of the box)
 LIVEVIEW_CONFIG = {
-    "hot_reload": True,    # file watcher on
-    "hvr_enabled": True,   # v0.6.1 — state-preserving reload
+    "hot_reload": True,                # file watcher on
+    "hot_reload_auto_enable": True,    # call enable_hot_reload() from DjustConfig.ready()
+    "hvr_enabled": True,               # v0.6.1 — state-preserving reload
 }
 ```
 
@@ -48,6 +35,34 @@ it's missing:
 
 ```bash
 pip install watchdog
+```
+
+### Manual opt-in / advanced control
+
+The auto-enable is on by default. If you orchestrate the file watcher
+externally (e.g. `watchfiles` wrapping `uvicorn`, or a custom dev
+loop), opt out with:
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
+```
+
+You can still call `enable_hot_reload()` yourself from any AppConfig.
+The function is idempotent — calling it manually is a safe no-op when
+the server is already running, so explicit calls coexist with the
+auto-enable.
+
+```python
+# myapp/apps.py — only needed if hot_reload_auto_enable is False
+from django.apps import AppConfig
+
+class MyAppConfig(AppConfig):
+    name = "myapp"
+
+    def ready(self):
+        from djust import enable_hot_reload
+        enable_hot_reload()
 ```
 
 ## What gets preserved

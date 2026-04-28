@@ -80,6 +80,10 @@ class LiveViewConfig:
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
         "hot_reload_exclude_dirs": None,  # Directories to exclude (None = use defaults)
+        # Auto-call enable_hot_reload() from DjustConfig.ready() in DEBUG.
+        # Set to False if you orchestrate the file watcher externally (e.g.
+        # watchfiles wrapping uvicorn) and want full manual control.
+        "hot_reload_auto_enable": True,
         # Hot View Replacement (v0.6.1) — state-preserving Python code
         # reload in dev. Gated on DEBUG=True AND hot_reload=True.
         "hvr_enabled": True,

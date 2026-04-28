@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **HVR auto-enabled in DEBUG (no AppConfig.ready() boilerplate
+  required)** — djust's own `DjustConfig.ready()` now auto-calls
+  `enable_hot_reload()` whenever `DEBUG=True` and `watchdog` is
+  installed. Existing per-consumer `enable_hot_reload()` calls keep
+  working unchanged (idempotent via `hot_reload_server.is_running()`).
+  Opt out via `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False` for
+  projects that orchestrate the file watcher externally. Test runs
+  auto-skip via `PYTEST_CURRENT_TEST` so pytest sessions don't spawn
+  a watchdog thread per test. Files: `python/djust/apps.py` (auto-enable
+  call appended to `ready()`), `python/djust/config.py`
+  (new `hot_reload_auto_enable: True` default),
+  `python/djust/__init__.py` (docstring update). 6 new cases covering
+  auto-fire, opt-out config, pytest-env skip, idempotency, exception
+  isolation, and other-setup completion (new file
+  `python/djust/tests/test_auto_hot_reload.py`). Drops the one-line
+  `enable_hot_reload()` call from
+  `examples/demo_project/demo_app/apps.py`. Closes the friction
+  observed across downstream consumers (docs.djust.org, djust.org,
+  djustlive) that were either rolling their own `watchfiles`
+  process-restart wrappers or silently missing the integration step
+  altogether — the framework's HVR is strictly better than process
+  restart (preserves view state, scroll position, form input across
+  edits) but the consumer-side integration step was easy to skip.
+
 ## [0.9.0rc3] - 2026-04-28
 
 ### Fixed

@@ -82,7 +82,19 @@ def enable_hot_reload():
     for changes. When a change is detected, all connected WebSocket clients are sent
     a reload message, triggering an automatic page refresh.
 
-    Usage:
+    Auto-enabled by default (since v0.9.0):
+        djust's own ``DjustConfig.ready()`` auto-calls this whenever
+        ``DEBUG=True`` and the ``watchdog`` package is installed. You no
+        longer need to call it explicitly from your own ``AppConfig.ready()``.
+        The function is idempotent — calling it manually is a safe no-op
+        when the server is already running, so existing per-consumer calls
+        keep working unchanged.
+
+        To opt out (e.g. you orchestrate the file watcher externally), set::
+
+            LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
+
+    Manual usage (advanced — only needed if auto-enable is disabled):
         # In your Django app's AppConfig.ready() method:
         from djust import enable_hot_reload
 
