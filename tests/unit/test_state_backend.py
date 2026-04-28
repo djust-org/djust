@@ -298,15 +298,15 @@ class TestRedisBackend:
         assert html == "<div>Redis</div>"
 
     def test_redis_serialization_performance(self, redis_backend):
-        """Test that Redis uses native serialization (set/get are fast).
-
-        The bound is 100ms (not the ideal microsecond-range a localhost
-        Redis can hit) because this assertion previously hard-coded 10ms
-        and flaked under heavy full-suite load — pytest scheduling jitter
-        + GC pauses + occasional Redis hiccups blow past 10ms even when
-        the codepath is healthy. See #1134. 100ms is still ~10× faster
-        than any "we forgot to use native serialization" regression
-        would produce, so the assertion still has signal.
+        """Smoke test that JSON/pickle round-trip doesn't catastrophically
+        regress. The 100ms bound is INTENTIONALLY GENEROUS — it catches
+        only catastrophic regressions (e.g. ~10× slowdown from accidental
+        double-serialization), not gradual perf drift. For a real perf
+        SLA, use a benchmark suite with median-based assertions over N
+        runs (pytest-benchmark or similar). Wall-clock 10ms was the
+        original bound but flaked under heavy suite load (pytest
+        scheduling jitter + GC pauses + occasional Redis hiccups);
+        see #1134 retro and #1160 for the bound-vs-claim reconciliation.
         """
         view = RustLiveView("<div>{{ data }}</div>")
         view.update_state({"data": "x" * 1000})

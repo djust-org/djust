@@ -230,6 +230,35 @@ class DashboardView(LiveView):
 
 The `component_id` is automatically set to the attribute name (`"counter"`) by the framework. No manual ID management needed.
 
+### Descriptor-pattern auto-promotion gap
+
+When LiveComponents are declared as **class-level descriptors** (the preferred
+pattern shown above), the framework's component-id walker (`_assign_component_ids`)
+only inspects instance-level attributes. As a result, **descriptor-pattern
+components are NOT auto-registered in `view._components`** today. Framework
+features that walk `_components` -- including time-travel snapshots, session-based
+component-state save/restore, and other introspection paths -- will silently miss
+descriptor-pattern components unless the view appends them manually during
+`mount()`.
+
+**Workaround** -- register the descriptor's instance in `_components` explicitly:
+
+```python
+class MyView(LiveView):
+    greeting = GreetingWidget.descriptor()  # class-level descriptor
+
+    def mount(self, request, **kwargs):
+        # Required until auto-promotion ships: makes the descriptor's
+        # instance visible to time-travel snapshots and other framework
+        # walkers that iterate self._components.
+        self._components.append(self.greeting)
+```
+
+Auto-promotion is planned future framework work (tracked separately). Until it
+ships, document this gap in any code that mixes descriptor-pattern components
+with time-travel or session restore -- otherwise the component will appear to
+"vanish" from snapshots even though its public state is intact on the view.
+
 ### Lifecycle
 
 ```
