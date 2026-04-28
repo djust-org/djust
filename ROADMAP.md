@@ -1540,6 +1540,70 @@ All three can ship as ONE PR titled `chore(test-infra): suppress unhandled error
 
 ---
 
+### Milestone: v0.9.4 — Debug Panel UI + post-rc3 polish
+
+*Goal:* Build the user-facing **Debug Panel UI** on top of the v0.9.0 time-travel + forward-replay primitives (#1041 + #1042), plus a small batch of test-infra polish and process canon items that have been accumulating in the Action Tracker.
+
+Headlined by #1151 (real user-visible feature). Test-infra polish bundles cleanly alongside since both touch the dev-experience surface. Process canon items batch into a single ROADMAP/CLAUDE.md PR at the end.
+
+**Status (planning):** 0 of ~3 PRs shipped. 8 issues identified.
+
+#### Headliner — Debug Panel UI for time-travel + forward-replay
+
+- [ ] **#1151 — Debug panel UI for per-component scrubbing + forward-replay** (P1, feature). The v0.9.0 milestone shipped the *capability*: per-component time-travel (#1041) and Redux-DevTools-parity forward-replay through branched timelines (#1042). The Python/JS plumbing exists. What's missing: the user-facing UI in the existing debug panel. Concrete asks:
+  - Per-component scrubber widget (timeline slider per LiveComponent, not just the whole-view ring buffer).
+  - Forward-replay button — "fast-forward through this branched timeline" — once you've rewound and you want to re-run from the current state.
+  - Branch indicator — visualize that the current cursor is on a branch (not the main timeline) so users don't lose work.
+  - Wire the existing `time_travel_max_events` config knob into the panel as a settings dropdown.
+  - Stage 4 plan should grep `python/djust/static/djust/src/14-debug-panel.js` for the existing panel scaffold; this is an additive feature inside an existing module, not a new one.
+  - Test plan: vitest cases for the new UI components; one Playwright case that scrubs back N steps + forward-replays and asserts state recovery; add a `tests/js/debug-panel-time-travel.test.js`.
+  - Likely a single PR; bigger if the Python-side `branch_id` exposure needs work.
+
+#### Test-infra polish (P3 batch)
+
+- [ ] **#1189 — `test_large_template` wall-clock perf bound flakes under heavy suite load** (P3). Same class as the v0.9.0 wall-clock flake noted at v0.9.0rc3 retry. Two fix paths:
+  - **(1)** Bump the perf bound + add explanatory comment (cheapest).
+  - **(2)** Mark with `@pytest.mark.benchmark` so it only runs in dedicated benchmark sessions, not the regular suite.
+  - Path 1 is fine if the wall-clock variance is bounded; Path 2 is correct if the test is fundamentally a benchmark masquerading as a regression.
+- [ ] **#1188 — PR #1187 follow-ups** (P3). Vitest filter narrowing (the `onUnhandledError` hook from v0.9.3 currently matches a broad message+stack pattern; tighten to the specific undici/happy-dom shape) + regression test using `gc.collect()` to verify no resource leaks across the filtered errors.
+
+#### Process canon (P3 batch)
+
+Single PR titled `docs(process): canonicalize 4 retro patterns from v0.8.x + v0.9.x arc`. Each adds a section to CLAUDE.md and (if applicable) the PR-checklist. No code changes.
+
+- [ ] **#1185 — PR-checklist canon: each `Closes #N` on its own body line** (P3). Parenthesized comma-list form silently fails GitHub's auto-close parser. v0.9.2 retro tracker #184.
+- [ ] **#1144 — Branch-name verify check in pipeline-run skill** (P3). Twice in v0.9.0 a commit landed on the wrong branch. Add a pre-commit `git symbolic-ref --short HEAD` match against the active state file's `branch_name`. v0.9.0 retro tracker #169. (Skill change, not a framework change — bundle here for atomicity.)
+- [ ] **#1143 — Stage-4 first-principles canonicalization in CLAUDE.md** (P3). Plan stage's grep-before-architecting pass paid off in #1128, #1041, #1135. v0.9.0 retro tracker #168.
+- [ ] **#1180 — PR #1179 follow-ups: filter polish + test strength** (P3). Lightweight, mechanical.
+
+Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon items. Optional addition to the same canon PR if scope allows; otherwise defer to v0.9.5.
+
+#### Acceptance
+
+- #1151 ships with vitest + at least one Playwright case; debug panel scrubbing + forward-replay demonstrably work in a browser.
+- `make test` still exits 0 after #1189 + #1188 land (no perf regressions, no over-eager filter swallowing real errors).
+- The 4 process canon items become CLAUDE.md / PR-checklist rules anyone can grep for.
+
+#### Sequencing strategy
+
+1. **#1151 first** — biggest feature, most uncertainty in Stage 4 design (panel module surgery). Land it standalone with full Stage 11.
+2. **#1189 + #1188 together** — sibling test-infra polish. One PR titled `chore(test-infra): tighten v0.9.3 vitest filter + suppress test_large_template flake`.
+3. **Process canon PR last** — `docs(process): canonicalize 4 retro patterns from v0.8.x + v0.9.x arc`. Closes #1185, #1144, #1143, #1180.
+
+#### After v0.9.4
+
+- v0.9.5 candidates (post-release-tag):
+  - **docs.djust.org Makefile migration** — drop `watchfiles` wrapper, use plain `uvicorn`. Needs djust submodule bumped to a release containing PR #1190 (HVR auto-enable). Filed as PR #1190 retro follow-up.
+  - **docs.djust.org green-theming experiment** — apply djust.org's green accent palette to docs.djust.org. User-flagged 2026-04-28; needs a brief design pass first.
+  - Remaining canon items: #1125, #1124, #1123 (v0.8.6 patterns) if not bundled into v0.9.4 canon PR.
+
+#### Pipeline runner notes
+
+- `/pipeline-drain --milestone v0.9.4` to triage. Likely 3 PRs (feature + test-infra + canon).
+- v0.9.x retro lessons all apply: single-agent-per-checkout (#1172), two-commit shape (#1173), 3-clean-runs gate for any pollution-class fix (#1174), CSP-strict defaults for new client-side code (#1175 — relevant for #1151 since the debug panel UI emits HTML).
+
+---
+
 ### ~~Milestone: v0.9.0 — Backlog (deferred features from v0.8.1 reconcile)~~ — superseded
 
 *Superseded by the shape C v0.9.0 milestone above (4 features ship; ADR-006 #1044 deferred post-1.0). Original block kept here for audit-trail only.*
