@@ -172,6 +172,9 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P3** | Tag registry test isolation + sidecar bridge extension (#1167) | Pre-existing test-isolation flake in `tests/unit/test_assign_tag.py` (after `test_tag_registry.py` leaks a `broken` handler) — tighten teardown with autouse fixture. Plus extend `call_handler_with_py_sidecar` pattern to block-tag and assign-tag handlers for symmetry with custom-tag handlers (mechanical follow-up to PR #1166). | v0.9.2 |
 | **P3** | Cookie namespace polish (#1169) | 4 sub-items from PR #1168 Stage 11 review: empty-namespaced-cookie defeats fallback (`_read('') or None` masks empty case), no validation on namespace value (whitespace/`=`/`;` produces malformed cookies), no JSDOM test for the WRITE side of `theme.js`, legacy unprefixed cookie persists indefinitely after migration. | v0.9.2 |
 | **P3** | data_table row navigation polish (#1171) | 3 sub-items from PR #1170 Stage 11 review: missing `<details>`/`<summary>`/`<option>` from nested-control selector, refactor `window.__djustRowClickNavigate` test-hook into the namespaced exports, add Python-side allowlist regression test. | v0.9.2 |
+| **P1** | happy-dom + undici WebSocket unhandled errors in `tests/js/sw_advanced.test.js` (#1186) | Blocks `/djust-release 0.9.0rc3` pre-flight: `make test` exits non-zero with 3 unhandled `WebSocket.dispatchEvent` errors. CI's vitest config silently swallows these; local `make test` surfaces them. All actual tests pass. Filter in vitest.config OR stub WebSocket constructor in test setup. | v0.9.3 |
+| **P2** | Vitest unhandled-rejection in `tests/js/view-transitions.test.js` (#1152) | Sibling issue to #1186: non-deterministic `EnvironmentTeardownError` during the test's own teardown phase. Same class (test-environment WebSocket / async-callback interop). v0.9.0 retro Action Tracker #178. | v0.9.3 |
+| **P2** | `asyncio.as_completed._wait_for_one` warning suppression in `tests/integration/test_chunks_overlap.py` (#1153) | Python-side analog to #1186/#1152: `DeprecationWarning: There is no current event loop` under teardown. Filter locally OR fix `_cancel_pending` lifecycle in `arender_chunks`. v0.9.0 retro Action Tracker #179. | v0.9.3 |
 
 ---
 
@@ -1481,7 +1484,8 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 
 #### After v0.9.2
 
-- v0.9.0 stable promotion (rc2 → final) once v0.9.2 has soaked for one cycle.
+- **v0.9.3 test-infra cleanup** (see milestone below) — REQUIRED before `/djust-release 0.9.0rc3` because `make test` exits non-zero with happy-dom + undici unhandled errors (CI is green, but local make-test pre-flight is the canonical release gate).
+- v0.9.0 stable promotion (rc3 → final) once v0.9.3 fixes land + soak.
 - Then enter the v1.0.0 testing arc — deferred 1.0-blockers are Dead View / Progressive Enhancement and Accessibility (ARIA/WCAG) per the Priority Matrix.
 
 #### Pipeline runner notes
@@ -1489,6 +1493,50 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 - `/pipeline-drain --milestone v0.9.2` to triage all 7 PR candidates into an `--all`-mode run.
 - `/pipeline-run --milestone v0.9.2 --group --all` to bundle the small P3 drain items per the sequencing strategy above.
 - Apply the v0.9.1 retro lessons proactively: serial agents (#1172/#180), two-commit shape (#1173/#181), 3-clean-runs gate (#1174/#182). The drain is the right place to dogfood these rules.
+
+---
+
+### Milestone: v0.9.3 — Test-infra cleanup (release-blocker for v0.9.0rc3)
+
+*Goal:* Get `make test` exiting clean so `/djust-release 0.9.0rc3` can proceed. Three sibling unhandled-error / warning issues from JS + Python test environments — same class (test-runtime cross-pollination between real Web-platform implementations and emulated test environments). All three are pre-existing (not introduced by v0.9.1 or v0.9.2 work) but only surfaced as a release-blocker at v0.9.0rc3 pre-flight when CI's vitest config silently swallows them while `make test` doesn't.
+
+**Status (planning):** 0 of 3 PRs shipped. All 3 issues open. Single drain — small, mechanical, no design work.
+
+#### The 3 issues (all P1/P2, test-infra only)
+
+- [ ] **#1186 — happy-dom + undici WebSocket unhandled errors in `tests/js/sw_advanced.test.js`** (P1, release-blocker). 3× `TypeError: Failed to execute 'dispatchEvent' on 'EventTarget'` — undici constructs an Event that happy-dom's `instanceof` check rejects. All actual tests pass; only the unhandled-error count makes vitest exit non-zero. Filed during v0.9.0rc3 pre-flight 2026-04-28. Three fix paths:
+  - **(1)** Filter in `vitest.config.ts` `onUnhandledRejection` hook (cheapest, ~5 LoC).
+  - **(2)** Stub the WebSocket constructor in `sw_advanced.test.js` setup using happy-dom's Event class (mirrors v0.8.5 retro #1113 microtask-yield-stub pattern).
+  - **(3)** Pin happy-dom + undici versions to a known-good combination.
+  - Path 1 + a TODO comment is recommended.
+
+- [ ] **#1152 — Vitest unhandled-rejection in `tests/js/view-transitions.test.js`** (P2, sibling). v0.9.0 retro Action Tracker #178. Non-deterministic `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending` during teardown. Same root-cause class as #1186 — JS test runtime async-callback interop. Audit per CLAUDE.md retro #1113 microtask-yield rule.
+
+- [ ] **#1153 — `asyncio.as_completed._wait_for_one` warning suppression** (P2, Python-side analog). v0.9.0 retro Action Tracker #179. `DeprecationWarning: There is no current event loop` under teardown in `tests/integration/test_chunks_overlap.py`. Filter locally OR fix `_cancel_pending` lifecycle in `arender_chunks` (the latter is a real bug if the cancellation isn't awaited cleanly).
+
+#### Acceptance
+
+- `make test` exits 0 on a clean checkout. All three issues closed (or downgraded to filtered-suppression) before tag.
+- No actual test logic regresses (the 1463 JS + ~6729 Python tests still pass).
+- `/djust-release 0.9.0rc3` pre-flight `make test` passes, unblocking the release.
+
+#### Sequencing strategy
+
+1. **#1186 first** — release-blocker. Path 1 (vitest.config filter) is the cheapest unblock; Path 2 (stub) is the cleaner fix. Pick by judgment during the Plan stage.
+2. **#1152 next** — same class; the fix-pattern from #1186 likely applies.
+3. **#1153 last** — Python-side; small. Determine whether it's a real \`_cancel_pending\` lifecycle bug (fix forward) or a benign teardown warning (filter).
+
+All three can ship as ONE PR titled `chore(test-infra): suppress unhandled errors in JS + Python test runtimes` if the fixes align (likely cheapest path); OR as 3 small PRs if the diagnoses diverge. Plan stage decides.
+
+#### After v0.9.3
+
+- `/djust-release 0.9.0rc3` retry. Soak. Promote rc3 → v0.9.0 stable.
+- Then v1.0.0 testing arc.
+
+#### Pipeline runner notes
+
+- `/pipeline-drain --milestone v0.9.3` to triage. Likely results in 1-PR drain (combine all 3 fixes) since the issues are mechanically similar and all touch test-infrastructure files.
+- v0.9.1 retro lessons still apply: single-agent-per-checkout, two-commit shape, 3-clean-runs gate (the latter relevant if any of the 3 turns out to be pollution-class rather than runtime-interop).
 
 ---
 
