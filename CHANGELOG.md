@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Debug Panel UI for time-travel — per-component scrubber, forward-replay
+  button, branch indicator (PR-B for #1151)** — the user-facing UI built
+  on top of the wire-protocol shipped in PR-A (#1193). Closes #1151.
+  - **Branch indicator** at the top of the Time Travel tab — distinct
+    badge styling for `main` (blue) vs branched timelines (orange,
+    `branch-N` from forward-replay). Tracks the active `branch_id` from
+    every server frame (both ack and event push).
+  - **"X / max" event count** in the header so the user can see when
+    they're approaching the configured `time_travel_max_events` cap.
+  - **Forward-replay button** (`⏵ replay`) on every history row.
+    Clicking sends a `forward_replay` frame with `from_index` set to
+    that row's index; the server allocates a new `branch_id` if the
+    replay diverges (non-tip cursor or override_params present).
+  - **Per-component expand-toggle** (`▶ N comp`) on rows whose
+    snapshot includes a `__components__` dict. Expanding reveals a
+    sub-row for each component with its truncated state preview and
+    `↶ comp` / `↷ comp` buttons that scrub a SINGLE component's state
+    via `time_travel_component_jump` — leaves parent view + other
+    components alone.
+  - **CSP-strict**: zero inline event handlers, all interactivity via
+    the existing delegated click handler on the panel root. Per
+    CLAUDE.md canon #1175.
+  - **Replay-hint** label appears in the header when
+    `forward_replay_enabled` is true (cursor is not at the buffer tip).
+
+  Files: `python/djust/static/djust/src/debug/09a-tab-time-travel.js`
+  (rewrote from 156 LoC to 320 LoC), `python/djust/static/djust/debug-panel.css`
+  (90 LoC of additive `.tt-branch*`/`.tt-comp-*`/`.tt-forward-replay`/
+  `.tt-expand-toggle` rules), regenerated bundles
+  `debug-panel.js` / `.min.js` / `.min.js.gz` / `.min.js.br` via
+  `scripts/build-client.sh`. 17 new vitest cases in
+  `tests/js/debug_panel_time_travel_ui.test.js` covering: backwards-
+  compat ack frames, branch badge selection, count formatting, replay
+  hint, expand-toggle visibility, component sub-row rendering, click
+  dispatch for component-jump and forward-replay, override-params
+  passthrough, branch_id update from event push frames.
+
+
+
 - **Time-travel wire-protocol exposure for branched timelines + per-component
   scrubbing (PR-A for #1151)** — server-side surface that the v0.9.4 debug
   panel UI (PR-B, follow-up) consumes. The Python plumbing for per-component
