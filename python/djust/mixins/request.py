@@ -319,8 +319,6 @@ class RequestMixin:
             except ImportError:  # pragma: no cover — Django <4.1
                 pass
         try:
-            import asyncio
-
             asyncio.get_running_loop()
             return True
         except RuntimeError:

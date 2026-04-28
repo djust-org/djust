@@ -516,7 +516,29 @@ class LiveViewWebSocket {
                     } else if (typeof window !== 'undefined' && window.location) {
                         // Fallback — hard navigation if the dispatcher
                         // isn't wired (non-LiveView pages).
-                        window.location.href = nav.to;
+                        // Same-origin guard: server-controlled `nav.to`
+                        // is generally trusted but defense-in-depth
+                        // prevents an attacker who breaches the wire
+                        // protocol from pivoting to open-redirect /
+                        // javascript: scheme XSS. Only allow same-origin
+                        // absolute paths; reject protocol-relative
+                        // (`//evil.com`), absolute URLs to other origins,
+                        // and `javascript:` / `data:` schemes.
+                        // Closes CodeQL js/client-side-unvalidated-url-redirection.
+                        const target = nav.to;
+                        const isSameOriginPath = (
+                            target.length > 0 &&
+                            target.charAt(0) === '/' &&
+                            target.charAt(1) !== '/'  // reject protocol-relative
+                        );
+                        if (isSameOriginPath) {
+                            window.location.href = target;
+                        } else if (globalThis.djustDebug) {
+                            console.warn(
+                                '[djust] live_redirect rejected non-same-origin target:',
+                                target,
+                            );
+                        }
                     }
                 }
                 if (views.length > 0) {
