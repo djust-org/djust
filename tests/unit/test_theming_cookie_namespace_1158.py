@@ -156,6 +156,92 @@ def test_namespace_applies_to_all_four_cookies():
 
 
 # ---------------------------------------------------------------------------
+# #1169(a) — empty namespaced cookie must NOT fall through to legacy
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_empty_namespaced_cookie_does_not_fall_back_to_legacy():
+    """#1169(a): when the namespaced cookie is SET but empty (e.g. user
+    cleared their layout), the read must NOT fall through to the legacy
+    unprefixed cookie. Empty != not-set. Falling back re-opens the
+    cross-project bleed path #1158 closed.
+
+    This regresses against the `_read('<ns>_name') or None` pattern,
+    which evaluated empty string as falsy and triggered the unprefixed
+    fallback.
+    """
+    from djust.theming.manager import ThemeManager
+
+    rf = RequestFactory()
+    req = rf.get("/")
+    # Namespaced cookie present but empty — the user's deliberate "no value".
+    req.COOKIES["proj_djust_theme_layout"] = ""
+    # Stale unprefixed cookie from another project — must NOT win, even
+    # though the namespaced cookie is empty.
+    req.COOKIES["djust_theme_layout"] = "sidebar"
+    req.session = {}
+
+    mgr = ThemeManager(request=req)
+    mgr.config = dict(mgr.config, cookie_namespace="proj", enable_client_override=True)
+    state = mgr.get_state()
+    assert state.layout == "", (
+        "empty namespaced cookie must NOT fall back to legacy unprefixed cookie; "
+        f"got layout={state.layout!r} (likely the bleed bug — see PR #1169 sub-item a)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #1169(b) — cookie_namespace validation at config-load
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_cookie_namespace_validator_accepts_valid_values(settings):
+    """#1169(b): valid namespace strings (letters, digits, underscores,
+    hyphens) pass validation and round-trip through `get_theme_config()`."""
+    from djust.theming.manager import get_theme_config
+
+    for value in ("djust_org", "Project-A", "abc123", "x", "_", "-"):
+        settings.LIVEVIEW_CONFIG = {"theme": {"cookie_namespace": value}}
+        config = get_theme_config()
+        assert config["cookie_namespace"] == value, (
+            f"valid namespace {value!r} must round-trip; got {config.get('cookie_namespace')!r}"
+        )
+
+    # Empty string and missing key are both accepted as "no namespace".
+    settings.LIVEVIEW_CONFIG = {"theme": {"cookie_namespace": ""}}
+    assert get_theme_config().get("cookie_namespace") == ""
+
+    settings.LIVEVIEW_CONFIG = {"theme": {}}
+    assert get_theme_config().get("cookie_namespace") is None
+
+
+@pytest.mark.django_db
+def test_cookie_namespace_validator_rejects_illegal_characters(settings):
+    """#1169(b): values containing whitespace, '=', ';', or non-ASCII raise
+    `ImproperlyConfigured` at config-load — silent malformed cookies were the
+    bug."""
+    from django.core.exceptions import ImproperlyConfigured
+    from djust.theming.manager import get_theme_config
+
+    illegal = (
+        "has space",  # whitespace
+        "has=equals",  # '='
+        "has;semi",  # ';'
+        "café",  # non-ASCII
+        "tab\there",  # tab whitespace
+        "new\nline",  # newline
+        "has,comma",  # ','
+        "(parens)",  # parens
+    )
+    for value in illegal:
+        settings.LIVEVIEW_CONFIG = {"theme": {"cookie_namespace": value}}
+        with pytest.raises(ImproperlyConfigured, match="cookie_namespace"):
+            get_theme_config()
+
+
+# ---------------------------------------------------------------------------
 # Write side — theme_head.html template emits __djust_theme_cookie_prefix
 # ---------------------------------------------------------------------------
 

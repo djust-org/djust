@@ -4,13 +4,24 @@ Theme state management for djust.
 Manages theme preset and mode preferences, with session persistence.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest
 
 from .presets import ThemePreset, get_preset
+
+# #1169(b) — cookie_namespace is interpolated directly into cookie names. RFC
+# 6265 forbids whitespace, control chars, '=' and ';' inside cookie names;
+# non-ASCII is implementation-defined and unsafe in practice. Restrict to
+# ASCII alphanumerics + underscore + hyphen (a strict subset of RFC 6265
+# token chars) so misconfiguration fails loudly at config-load instead of
+# silently emitting malformed Set-Cookie headers that browsers reject or
+# split into multiple cookies.
+COOKIE_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 ThemeMode = Literal["light", "dark", "system"]
 
@@ -48,11 +59,42 @@ DEFAULT_CONFIG = {
 }
 
 
+def _validate_cookie_namespace(value):
+    """Validate ``LIVEVIEW_CONFIG['theme']['cookie_namespace']`` (#1169(b)).
+
+    The value is interpolated directly into cookie names; characters
+    illegal in cookie names (whitespace, ``=``, ``;``, non-ASCII)
+    silently produce malformed Set-Cookie headers. Validate at
+    config-load so the failure mode is a loud
+    :class:`~django.core.exceptions.ImproperlyConfigured` at startup
+    instead of broken cookies in production.
+
+    ``None`` and empty string are accepted as "no namespace configured".
+    """
+    if value is None or value == "":
+        return value
+    if not isinstance(value, str) or not COOKIE_NAMESPACE_RE.match(value):
+        raise ImproperlyConfigured(
+            f"LIVEVIEW_CONFIG['theme']['cookie_namespace']={value!r} contains "
+            f"characters illegal in cookie names. Use only ASCII letters, "
+            f"digits, underscores, and hyphens."
+        )
+    return value
+
+
 def get_theme_config() -> dict:
-    """Get theme configuration from Django settings."""
+    """Get theme configuration from Django settings.
+
+    Raises:
+        ImproperlyConfigured: if ``cookie_namespace`` contains characters
+            illegal in cookie names (#1169(b)).
+    """
     liveview_config = getattr(settings, "LIVEVIEW_CONFIG", {})
     theme_config = liveview_config.get("theme", {})
-    return {**DEFAULT_CONFIG, **theme_config}
+    merged = {**DEFAULT_CONFIG, **theme_config}
+    # Validate cookie_namespace at config-load (#1169(b)).
+    _validate_cookie_namespace(merged.get("cookie_namespace"))
+    return merged
 
 
 @dataclass
@@ -303,14 +345,29 @@ class ThemeManager:
             prefix = f"{ns}_" if ns else ""
 
             # Read namespaced first; fall back to unprefixed (migration window).
+            #
+            # #1169(a) — distinguish "namespaced cookie not set" from
+            # "namespaced cookie set to empty string". An empty string is a
+            # deliberate value (e.g. user cleared a layout); falling through
+            # to the legacy unprefixed cookie in that case re-introduces
+            # cross-project bleed via the same path #1158 closed.
             def _read(name: str, default: str = "") -> str:
                 if prefix:
-                    return cookies.get(f"{prefix}{name}", cookies.get(name, default))
+                    namespaced = cookies.get(f"{prefix}{name}")
+                    if namespaced is not None:
+                        return namespaced
+                    return cookies.get(name, default)
                 return cookies.get(name, default)
 
-            theme = _read("djust_theme") or None
-            preset = _read("djust_theme_preset") or None
-            pack = _read("djust_theme_pack") or None
+            # _read returns "" when the cookie is set to empty; preserve that
+            # rather than coercing to None via `or None` (which would re-trigger
+            # the bleed-through path the namespaced read just closed).
+            raw_theme = _read("djust_theme")
+            raw_preset = _read("djust_theme_preset")
+            raw_pack = _read("djust_theme_pack")
+            theme = raw_theme if raw_theme else None
+            preset = raw_preset if raw_preset else None
+            pack = raw_pack if raw_pack else None
             layout = _read("djust_theme_layout", "")
             logger.debug(
                 "Cookies (ns=%r): theme=%s, preset=%s, pack=%s, layout=%s",

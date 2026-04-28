@@ -209,6 +209,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Theming cookie namespace polish — 4 sub-items (closes #1169)** —
+  Stage 11 follow-ups from PR #1168 (the original cookie-namespace work
+  for #1158):
+  - **(a) Empty namespaced cookie no longer falls back to legacy.**
+    `ThemeManager.get_state()` previously evaluated the namespaced
+    cookie via `_read('<ns>_name') or None`, so an empty-string value
+    (`""`) silently fell through to the unprefixed legacy cookie —
+    re-opening the cross-project bleed path #1158 closed. The read
+    now distinguishes `None` (cookie not in jar) from `""` (cookie set
+    to empty), and only falls back in the former case.
+  - **(b) `cookie_namespace` validated at config-load.** The value is
+    interpolated directly into cookie names; whitespace, `=`, `;`, and
+    non-ASCII characters previously produced malformed Set-Cookie
+    headers (browsers reject or split such cookies).
+    `_validate_cookie_namespace()` now raises `ImproperlyConfigured`
+    at startup for any value outside `[A-Za-z0-9_-]+`.
+  - **(c) JSDOM tests for the cookie WRITE side.** The 8 #1158
+    Python tests only asserted on `theme.js` source-text patterns; new
+    `tests/js/theming_cookie_namespace_write.test.js` loads the file
+    in JSDOM, sets `window.__djust_theme_cookie_prefix`, fires
+    `setPack`/`setPreset`/`setLayout`, and inspects `document.cookie`.
+  - **(d) Legacy-cookie cleanup on first namespaced write.** When
+    `cookie_namespace` is set, every theming-cookie write in
+    `theme.js` now also emits `Max-Age=0` for the unprefixed legacy
+    name. Stale legacy cookies left over from before namespace was
+    configured no longer sit in the jar forever and bleed back if the
+    namespace is later removed. Cleanup is inert when no prefix is
+    configured (back-compat).
+
+  3 new regression cases in `tests/unit/test_theming_cookie_namespace_1158.py`
+  (1 for sub-item (a), 2 for sub-item (b)) plus 7 new JS cases in
+  `tests/js/theming_cookie_namespace_write.test.js` (4 for sub-item (c),
+  3 for sub-item (d)).
+
 - **Tag-registry test isolation + sidecar bridge extension to block /
   assign tags (closes #1167)** — two Stage 11 follow-ups from PR #1166
   (which wired the raw-Python sidecar into ``Node::CustomTag``):
