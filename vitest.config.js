@@ -49,11 +49,15 @@ export default defineConfig({
       }
 
       // Pattern 2: view-transitions teardown (#1152)
+      // Match only the diagnosed cause: vitest's `Closing rpc` teardown
+      // signature paired with the specific console-log RPC handler that
+      // had a pending call when the environment was torn down. The
+      // earlier broader `stack.includes('view-transitions')` disjunct
+      // (PR #1187) widened the net beyond the diagnosed shape — closes
+      // #1188 🟡 #1.
       if (
         msg.includes('Closing rpc') &&
-        (msg.includes('onUserConsoleLog') ||
-          msg.includes('onConsoleLog') ||
-          stack.includes('view-transitions'))
+        (msg.includes('onUserConsoleLog') || msg.includes('onConsoleLog'))
       ) {
         return false;
       }
