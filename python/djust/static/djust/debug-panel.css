@@ -958,3 +958,96 @@
 .network-payload {
     position: relative;
 }
+
+/* ============================================================
+ * Time Travel tab — v0.9.4 (#1151) UI additions: branch indicator,
+ * forward-replay button, per-component scrubber rows.
+ * Existing v0.6.1 classes (.tt-row, .tt-jump, .tt-active, etc.)
+ * are styled by the panel default sheet; these rules ADD to them.
+ * ============================================================ */
+.tt-branch {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-right: 6px;
+}
+.tt-branch-main {
+    background: #e8f4ff;
+    color: #1f6fb2;
+}
+.tt-branch-fork {
+    background: #fff4e6;
+    color: #b6611c;
+    border: 1px solid #f0a050;
+}
+.tt-replay-hint {
+    margin-left: auto;
+    font-size: 11px;
+    color: #b6611c;
+    font-style: italic;
+}
+.tt-forward-replay {
+    margin-left: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    background: #fff4e6;
+    border: 1px solid #f0a050;
+    border-radius: 3px;
+    cursor: pointer;
+}
+.tt-forward-replay:hover {
+    background: #ffe0b3;
+}
+.tt-expand-toggle {
+    margin-left: auto;
+    padding: 1px 6px;
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.tt-expand-toggle:hover {
+    background: #f0f0f0;
+}
+.tt-components {
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-left: 2px solid #ccc;
+    background: #fafafa;
+    font-size: 11px;
+}
+.tt-comp-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+}
+.tt-comp-id {
+    font-weight: 600;
+    color: #1f6fb2;
+    min-width: 80px;
+}
+.tt-comp-state {
+    flex: 1;
+    color: #555;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tt-comp-jump {
+    padding: 1px 6px;
+    font-size: 10px;
+    background: #f0f8ff;
+    border: 1px solid #b0c8e0;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+}
+.tt-comp-jump:hover {
+    background: #e0f0ff;
+}
