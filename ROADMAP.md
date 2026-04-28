@@ -165,6 +165,13 @@ This roadmap outlines what has been built, what is actively being worked on, and
 | **P3** | Descriptor-pattern component time-travel verification test (#1150) | PR #1141 Stage 11 deferral. End-to-end test that constructs a view with a class-level `LiveComponent.descriptor()` and asserts capture+restore preserves the component's state. Locks in the `_COMPONENT_INTERNAL_ATTRS` defense layer. | v0.9.1 |
 | **P3** | `markdown` package missing from default test env (#1149) | Carryover from v0.8.7 retro. Add to dev-dependencies or mark dependent tests with `pytest.importorskip("markdown")`. | v0.9.1 |
 | **P3** | data_table row-level navigation — `row_click_event` / `row_url` (#1111) | Feat slot — common UX pattern for click-to-detail. Decide: handler attribute on `<tr>` vs URL builder, accessibility (Enter/Space, role=button), default-prevent for nested controls. | v0.9.1 |
+| **P2** | Pipeline template canonicalization (#1173 + #1174) | Add two-commit shape (impl+tests / docs+CHANGELOG) as a Stage 9 boundary in `.pipeline-templates/feature-state.json` + `.pipeline-templates/bugfix-state.json`; add "3 clean full-suite runs" verification gate in Stage 6 for pollution-class fixes. | v0.9.2 |
+| **P2** | CSP-strict defaults canonicalization (#1175) | CLAUDE.md + `docs/PULL_REQUEST_CHECKLIST.md` + `docs/website/guides/security.md` addition documenting "external static JS module + auto-bind on marker class" as the canonical CSP-friendly pattern for new client-side framework code. v1.0 readiness. | v0.9.2 |
+| **P2** | Custom filter bridge polish (#1162) | 6 sub-items from PR #1161 Stage 11 review: hot-path Mutex perf via `AtomicBool` short-circuit, hardcoded autoescape consultation, weak negative-case test tightening, drop unused `custom_filter_exists`, fixture isolation, silent async filter handling. All in `crates/djust_templates/`. | v0.9.2 |
+| **P3** | Test/dev-env hygiene group (#1160 + #1165) | Tighten `test_redis_serialization_performance` perf bound or soften docstring (#1160). Add `caplog` assertions for #1148 replay rejection logging + descriptor auto-promotion gap doc + `scripts/check-dev-env-imports.py` (#1165). | v0.9.2 |
+| **P3** | Tag registry test isolation + sidecar bridge extension (#1167) | Pre-existing test-isolation flake in `tests/unit/test_assign_tag.py` (after `test_tag_registry.py` leaks a `broken` handler) — tighten teardown with autouse fixture. Plus extend `call_handler_with_py_sidecar` pattern to block-tag and assign-tag handlers for symmetry with custom-tag handlers (mechanical follow-up to PR #1166). | v0.9.2 |
+| **P3** | Cookie namespace polish (#1169) | 4 sub-items from PR #1168 Stage 11 review: empty-namespaced-cookie defeats fallback (`_read('') or None` masks empty case), no validation on namespace value (whitespace/`=`/`;` produces malformed cookies), no JSDOM test for the WRITE side of `theme.js`, legacy unprefixed cookie persists indefinitely after migration. | v0.9.2 |
+| **P3** | data_table row navigation polish (#1171) | 3 sub-items from PR #1170 Stage 11 review: missing `<details>`/`<summary>`/`<option>` from nested-control selector, refactor `window.__djustRowClickNavigate` test-hook into the namespaced exports, add Python-side allowlist regression test. | v0.9.2 |
 
 ---
 
@@ -1423,6 +1430,65 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 - `/pipeline-drain --milestone v0.9.1` to triage all 10 candidates into an `--all`-mode run.
 - `/pipeline-run --milestone v0.9.1 --priority P1 --all` to ship #1134 + #1121 first.
 - `/pipeline-run --milestone v0.9.1 --group --all` to bundle the small P2/P3 drain items per the sequencing strategy above.
+
+---
+
+### Milestone: v0.9.2 — v0.9.1 retro follow-up drain (~7 PRs + 1 skill update)
+
+*Goal:* Land the 10 follow-up issues filed during v0.9.1 Stage 11 reviews. Mostly polish on top of working implementations — no real bugs, no headline features. Locks in the process canonicalizations from v0.9.1's lessons learned (parallel-agent serialization, two-commit shape, "3 clean runs" gate, CSP-strict defaults). Bake v0.9.0 stable on the back of this drain.
+
+**Status (planning):** 0 of 7 PRs shipped. All 10 candidate issues open and triaged into 7 work units (4 grouped + 3 solo) plus 1 skill-only update (#1172) that lands directly without a PR.
+
+#### Process / canonicalization (P2)
+
+- [ ] **Skill update — Serialize implementer agents per checkout (#1172)** — applied directly to `~/.claude/skills/pipeline-run/SKILL.md`, NOT a djust-repo PR. ~20 LoC doc addition. Land first; encodes the lesson that benefits the rest of this drain.
+- [ ] **Pipeline template canonicalization (#1173 + #1174)** — `.pipeline-templates/feature-state.json` + `.pipeline-templates/bugfix-state.json` updates: enforce two-commit shape (impl+tests / docs+CHANGELOG, Stage 9 boundary) and add "3 clean full-suite runs" mandatory gate at Stage 6 for pollution-class fixes. ~30 LoC across templates + ~15 LoC skill text. Branch `chore/v0.9.2-pipeline-template-canon`.
+- [ ] **CSP-strict defaults canonicalization (#1175)** — CLAUDE.md addition + `docs/PULL_REQUEST_CHECKLIST.md` + `docs/website/guides/security.md` addition. Pattern: external static JS module + auto-bind on marker class as the canonical CSP-friendly shape for new client-side framework code. ~50 LoC docs. Branch `docs/v0.9.2-csp-strict-canon`.
+
+#### Custom filter bridge polish (P2, #1162 → 1 PR, 6 sub-items)
+
+- [ ] **PR: `crates/djust_templates/` polish** — closes #1162. (a) Hot-path Mutex perf: `AtomicBool ANY_CUSTOM_FILTERS_REGISTERED` short-circuit so apps with zero custom filters skip the lock entirely. (b) Hardcoded `autoescape=true` for `needs_autoescape` filters → consult renderer state. (c) Tighten unknown-filter test to assert the specific error message shape. (d) Drop unused `pub fn custom_filter_exists` (or wire to a parser-time use). (e) Test fixture autouse-scope `filter_registry::clear()`. (f) Raise clear error on async filters instead of silently calling them. Branch `fix/1162-custom-filter-bridge-polish`. ~50 LoC core + 4-6 tests.
+
+#### Test / dev-env hygiene (P3, grouped)
+
+- [ ] **PR: hygiene group #1160 + #1165** — closes #1160 (Redis perf bound — tighten via median-based assertion or soften docstring) and #1165 (3 sub-items: caplog assertions for replay rejection logging, document the descriptor auto-promotion gap, optional `scripts/check-dev-env-imports.py` for `markdown`/`nh3` regression coverage). Branch `chore/v0.9.2-hygiene-group`. ~30 LoC core + ~8 tests.
+
+#### Tag-registry isolation + sidecar extension (P3, #1167 → 1 PR, 2 sub-items)
+
+- [ ] **PR: `tag_registry` test isolation + `call_handler_with_py_sidecar` parity** — closes #1167. (a) Tighten `tests/unit/test_tag_registry.py` teardown so the leaked `"broken"` handler doesn't break `tests/unit/test_assign_tag.py` under specific test orderings. (b) Extend `call_handler_with_py_sidecar` (PR #1166) to block-tag and assign-tag handlers for symmetry — currently only `Node::CustomTag` gets the sidecar. ~30 LoC across `crates/djust_templates/src/registry.rs` + `renderer.rs` + tests. Branch `fix/1167-tag-isolation-sidecar`.
+
+#### Cookie namespace polish (P3, #1169 → 1 PR, 4 sub-items)
+
+- [ ] **PR: `python/djust/theming/` polish** — closes #1169. (a) `_read('djust_theme_<ns>')` `or None` defeats the migration fallback when the namespaced cookie is empty-string — switch to explicit `None` check. (b) Validate `cookie_namespace` config value: reject characters illegal in cookie names (whitespace, `=`, `;`). (c) Add JSDOM test asserting `document.cookie` after a theme switch contains the prefixed name. (d) Clean up legacy unprefixed cookie on first namespaced write to avoid indefinite jar persistence. Branch `fix/1169-cookie-namespace-polish`. ~30 LoC + 1-2 JSDOM tests.
+
+#### data_table row navigation polish (P3, #1171 → 1 PR, 3 sub-items)
+
+- [ ] **PR: `python/djust/components/static/djust_components/data-table-row-click.js` polish** — closes #1171. (a) Add `<details>`/`<summary>`/`<option>` to `NESTED_CONTROL_SELECTOR` (currently 6 tags; misses 3 common interactive elements). (b) Refactor the test-hook (`window.__djustRowClickNavigate`) into the existing `window.djustDataTableRowClick` namespace export so tests can `vi.spyOn(djustDataTableRowClick, 'navigate')` without the magic underscored global. (c) Add a Python-side allowlist regression test (cell-rendered HTML doesn't navigate; the JS guard is the actual defense, but a Python test documents the allowed shapes). Branch `fix/1171-data-table-row-nav-polish`. ~30 LoC core + 4-5 tests.
+
+#### Out of scope for v0.9.2
+
+- **#1170 deferred 🟡 R3-R5** — covered by #1171 above.
+- **#1166 self-flag #3 (asymmetric sidecar)** — covered by #1167 above.
+- **Anything from v0.9.0 retro that wasn't already drained in v0.9.1** — those are now blocked by deeper design work (e.g., #1151 debug panel UI is its own milestone).
+
+#### Sequencing strategy (locked)
+
+1. **#1172 first** (skill file update, no PR) — encodes the parallel-agent serialization rule that the rest of this drain benefits from.
+2. **#1173 + #1174 (template PR)** + **#1175 (CSP docs PR)** can run in parallel since they touch disjoint files.
+3. **#1162 (custom filter polish)** — sole heavy Rust task; runs solo to avoid Cargo.lock churn collisions.
+4. **#1160 + #1165 (hygiene group)** + **#1169 (cookie polish)** + **#1171 (data_table polish)** + **#1167 (tag-registry + sidecar)** — 4 small PRs, can run in any order. Touch disjoint files: `tests/unit/`, `python/djust/theming/`, `python/djust/components/static/djust_components/`, `crates/djust_templates/`.
+5. After all 7 PRs land + #1172 skill update applied, **promote v0.9.0rc2 → v0.9.0 stable** as the bake closes.
+
+#### After v0.9.2
+
+- v0.9.0 stable promotion (rc2 → final) once v0.9.2 has soaked for one cycle.
+- Then enter the v1.0.0 testing arc — deferred 1.0-blockers are Dead View / Progressive Enhancement and Accessibility (ARIA/WCAG) per the Priority Matrix.
+
+#### Pipeline runner notes
+
+- `/pipeline-drain --milestone v0.9.2` to triage all 7 PR candidates into an `--all`-mode run.
+- `/pipeline-run --milestone v0.9.2 --group --all` to bundle the small P3 drain items per the sequencing strategy above.
+- Apply the v0.9.1 retro lessons proactively: serial agents (#1172/#180), two-commit shape (#1173/#181), 3-clean-runs gate (#1174/#182). The drain is the right place to dogfood these rules.
 
 ---
 
