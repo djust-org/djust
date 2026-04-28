@@ -205,9 +205,16 @@ class StickyChildRegistry:
                         logger.exception("sticky child %s _on_sticky_unmount raised", sticky_id)
                 continue
             # Update request back-reference so handlers see the new request.
+            # Some child types (slot descriptors, read-only proxies) can't
+            # accept a `request` attr — that's expected and fine; the child
+            # just doesn't get the live request handle. Log at DEBUG so the
+            # absence is observable without spamming production logs.
             try:
                 child.request = new_request
             except AttributeError:
-                pass
+                logger.debug(
+                    "sticky child %s does not accept request attribute (expected for read-only proxies)",
+                    sticky_id,
+                )
             survivors[sticky_id] = child
         return survivors

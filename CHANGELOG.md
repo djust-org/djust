@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Code-scanning cleanup batch (4 fixes + 15 false-positive dismissals)** —
+  19 open CodeQL / Dependabot alerts addressed:
+  - **JS open-redirect defense-in-depth (`src/03-websocket.js:519`)**: the
+    fallback `window.location.href = nav.to` path now validates the
+    target is a same-origin absolute path. Rejects protocol-relative
+    URLs (`//evil.com`), absolute URLs to other origins, and
+    `javascript:` / `data:` schemes. Closes CodeQL #2195.
+  - **postcss bumped 8.5.9 → 8.5.10** in `package-lock.json` —
+    transitive via vitest → vite. Closes Dependabot #90 (XSS via
+    unescaped `</style>` in CSS stringify output, GHSA).
+  - **Empty `except AttributeError: pass` in
+    `mixins/sticky.py:210`** now logs at DEBUG with a comment
+    explaining the expected case (read-only proxy children that
+    can't accept a `request` attr). Closes CodeQL #2194.
+  - **Duplicate `import asyncio` in `mixins/request.py:322`** removed
+    — module already imports asyncio at line 5. Closes CodeQL #2267.
+  - **15 false-positive dismissals** with documented reasoning:
+    - 8× py/log-injection (#2254, #2253, #2239, #2238, #2237, #2236,
+      #2235, #2183) — log calls already pass user-controlled input
+      through `sanitize_for_log()` (the analyzer doesn't recognize
+      the sanitizer).
+    - 2× py/cyclic-import (#2231, #2230) — intentional lazy late-imports
+      to break circular deps.
+    - 1× py/not-named-self (#2268) — `as_view` is a `@classonlymethod`;
+      `cls` is correct.
+    - 2× py/unused-global-variable (#2272, #2175) — both are referenced
+      multiple times (`_CUSTOM_FILTERS_BRIDGED` x4, `_GCS_CHUNK_MIN_SIZE` x3).
+    - 1× py/catch-base-exception (#2273) — diagnostic CI script that
+      must catch SystemExit subclasses; documented via `noqa: BLE001`.
+    - 1× js/useless-assignment (#2174) — minified bundle artifact, not
+      source; the 52 source modules in `static/djust/src/` are authoritative.
+
 ## [0.9.0rc4] - 2026-04-28
 
 ### Added
