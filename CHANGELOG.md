@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **v0.9.4 process canon (closes #1185, closes #1143, closes #1144)** —
+  three retro patterns from the v0.9.x arc canonicalized so the next
+  drain doesn't repeat the same mistakes:
+  - **#1185**: `docs/PULL_REQUEST_CHECKLIST.md` Closing-Keywords rule
+    expanded to call out the parenthesized form `(closes #X, closes
+    #Y)` explicitly. PR #1176 used it in the title and silently failed
+    to close both issues. The checklist now names the failure mode and
+    recommends always using PR-body lines for closing keywords.
+  - **#1143**: `CLAUDE.md` "Process canonicalizations from v0.9.0
+    retro arc" section added — Stage-4 first-principles grep before
+    architecting. Lists 5 canonical grep targets (wire-protocol,
+    state-snapshot, async dispatch, decorator composition, component
+    lifecycle) so Plan stages cite file:line of the pattern being
+    mirrored.
+  - **#1144**: same section — branch-name verify reflex. Pre-commit
+    one-liner that compares `git symbolic-ref --short HEAD` against
+    the active state file's `branch_name` field, catching the silent
+    "wrong-branch commit" failure observed twice in v0.9.0.
+
 ### Fixed
 
 - **v0.9.4 test-infra polish (closes #1188, closes #1189)** — three
