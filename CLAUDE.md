@@ -201,6 +201,17 @@ The Rust template engine supports **all 57 Django built-in filters** in `crates/
 - **Ruff F509**: `%`-format strings containing CSS semicolons trigger false positives. Separate HTML (`%s` substitution) from CSS (static string) and concatenate.
 - **VDOM form values**: Ensure form field values are preserved during updates. See `VDOM_PATCHING_ISSUE.md`.
 - **Pre-commit reformatting**: If commit fails due to ruff auto-format, re-stage and commit again.
+- **Hot reload integration (v0.9.0+)**: djust auto-enables HVR from its
+  own `DjustConfig.ready()` whenever `DEBUG=True` and `watchdog` is
+  installed. Downstream consumers do NOT need to add
+  `enable_hot_reload()` to their own `AppConfig.ready()`. Existing
+  explicit calls keep working (idempotent). Opt out via
+  `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False`. Tests skip the
+  auto-enable via `PYTEST_CURRENT_TEST` so pytest sessions don't spawn
+  a watchdog thread per test. Don't wrap `uvicorn` in
+  `watchfiles` / `--reload` for djust dev servers — that's process
+  restart and drops view state; djust's HVR is strictly better
+  (preserves form input, scroll position, counters).
 
 ## Process canonicalizations from PR retros (2026-04-26 View Transitions arc)
 
