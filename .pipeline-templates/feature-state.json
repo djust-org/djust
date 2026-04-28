@@ -62,7 +62,7 @@
         {"action": "write tests first (TDD)", "done": false, "mandatory": true},
         {"action": "implement to pass tests", "done": false},
         {"action": "edge case checklist (null/empty/boundary/concurrent)", "done": false},
-        {"action": "update CHANGELOG.md if project has one", "done": false},
+        {"action": "DO NOT modify CHANGELOG.md in this stage — defer all [Unreleased] hunks to the Stage 9 docs commit (two-commit shape per v0.9.1 retro / Action Tracker #181 / GitHub #1173)", "done": false, "mandatory": true},
         {"action": "if .gitignore blocks new files: use git add -f and note the gitignore issue", "done": false},
         {"action": "git add -u + new files", "done": false},
         {"action": "git status clean", "done": false, "mandatory": true},
@@ -77,6 +77,7 @@
       "checklist": [
         {"action": "run full test suite (read-only, no source modifications)", "done": false},
         {"action": "report pass/fail counts", "done": false},
+        {"action": "if pipeline_type == 'bugfix' AND task_description matches /pollution|leak|flak|test isolation/i — run the full pytest suite 3 times consecutively; ALL THREE must be clean. Single-run pass is insufficient for pollution-class fixes by definition (v0.9.1 retro / Action Tracker #182 / GitHub #1174)", "done": false, "mandatory": true},
         {"action": "output TESTS_PASSED or TESTS_FAILED", "done": false, "mandatory": true}
       ]
     },
@@ -122,7 +123,8 @@
         {"action": "create or update user-facing guide if new feature", "done": false},
         {"action": "update existing docs that reference changed areas", "done": false},
         {"action": "add new doc to docs index if created", "done": false},
-        {"action": "update CHANGELOG.md for feat/fix changes", "done": false, "mandatory": true},
+        {"action": "update CHANGELOG.md for feat/fix changes (CANONICAL CHANGELOG COMMIT BOUNDARY — Stage 5 deferred all [Unreleased] hunks here per v0.9.1 retro / Action Tracker #181 / GitHub #1173)", "done": false, "mandatory": true},
+        {"action": "this Stage 9 commit must include ONLY docs + CHANGELOG hunks; no implementation code (the two-commit shape gate)", "done": false, "mandatory": true},
         {"action": "verify no broken internal links or orphaned docs", "done": false},
         {"action": "output DOCS_UPDATED with categorized list", "done": false, "mandatory": true}
       ]

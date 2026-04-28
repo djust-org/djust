@@ -26,6 +26,36 @@ in commit metadata or file contents. PR #836 nearly shipped "NYC Claims"
 in its commit subject + PR body — caught at Stage 3 during pipeline-ship,
 but reviewer vigilance is not a durable gate. This mechanical grep is.
 
+### Stage 5 (Implementation) / Stage 9 (Documentation) — two-commit shape gate
+
+`feature-state.json` Stage 5 forbids CHANGELOG.md edits; Stage 9 is the
+canonical CHANGELOG commit boundary. The implementation commit must
+contain only code + tests; the docs commit must contain only docs +
+CHANGELOG.
+
+**Why**: v0.9.1 PRs #1163 + #1164 ran two implementer agents
+concurrently on the same checkout. Both edited `[Unreleased]` while
+their branches were alternately checked out via pre-commit
+stash/restore. The first agent's commit captured the second agent's
+CHANGELOG hunks — Stage 11 caught it as a 🔴 (CHANGELOG cross-
+contamination). Three subsequent v0.9.1 PRs (#1166, #1168, #1170)
+adopted the two-commit shape and shipped clean. Canonicalized in
+v0.9.1 retro / Action Tracker #181 / GitHub #1173.
+
+### Stage 6 (Test Execution) — 3-clean-runs gate for pollution-class fixes
+
+When `pipeline_type == 'bugfix'` AND the task description matches
+`/pollution|leak|flak|test isolation/i`, Stage 6 must run the full
+pytest suite **3 times consecutively** — all three runs clean.
+Single-run pass is insufficient for pollution-class fixes by definition
+(pollution shows up under specific orderings).
+
+**Why**: v0.9.1 PR #1159 (the #1134 bisect) caught a hidden second
+polluter (`sys.modules` rebind in `test_dev_server_watchdog_missing.py`)
+on the third verification run — would have shipped silently otherwise,
+and the next PR would have tripped the same flake. Canonicalized in
+v0.9.1 retro / Action Tracker #182 / GitHub #1174.
+
 ### `.customer-names`
 
 Sibling file in the project root (gitignored). Plaintext, one name per
