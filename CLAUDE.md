@@ -356,6 +356,65 @@ Five additional rules from the View Transitions arc + nyc-claims data_table arc.
   string (`errors[0][0].toContain('label')`). Decouples the test from
   later parameterization fixes for tainted-format-string warnings.
 
+## Process canonicalizations from v0.9.0 retro arc
+
+Each rule below was a v0.9.0 retro tracker row that surfaced repeated
+failure modes across the 6-PR shape-C wave (#1128, #1135, #1138, #1139,
+#1141, #1142). Canonicalized here so the next feature wave doesn't
+repeat them.
+
+- **Stage-4 first-principles grep before architecting** (#168 / #1143).
+  Before proposing a new abstraction or wire-protocol shape in Stage 4,
+  grep the codebase for how *existing* call sites solve the same
+  problem. Three v0.9.0 PRs (#1128 mount-batch, #1041 component
+  time-travel, #1135 lazy=True dispatch) shipped cleaner because the
+  Plan stage opened with a "how do other features do X?" pass that
+  surfaced the existing pattern. Skipping this step produces NIH
+  abstractions that add surface area without adding capability — and
+  Stage 11 reviewers correctly flag them. The grep targets:
+  - **Wire-protocol decisions**: `python/djust/websocket.py` and
+    `python/djust/streaming.py` for outbound frame shapes.
+  - **State-snapshot patterns**: `python/djust/time_travel.py` and
+    `python/djust/live_view.py:_capture_snapshot_state`.
+  - **Async dispatch**: `python/djust/mixins/async_work.py:45` for the
+    canonical `start_async` definition (see also the dispatch site
+    that consumes it).
+  - **Decorator composition**: `python/djust/decorators.py` — every
+    djust decorator stamps metadata on `func._djust_decorators` (a
+    dict keyed by decorator name, e.g. `{"event_handler": True,
+    "action": {...}, "lazy": True}`). Inspect existing decorators
+    via `is_event_handler` / `is_action` (line ~220 / ~396) to see
+    the contract before adding a new one.
+  - **Component lifecycle hooks**: `python/djust/components/base.py`
+    for the canonical mount/unmount/refresh order.
+
+  The Plan stage output should explicitly cite the file:line of the
+  pattern being mirrored. "Mirrors `mixins/async_work.py:45` shape" is
+  better than "follow the standard pattern" — the latter is unverifiable.
+
+- **Branch-name verify check before commit** (#169 / #1144). Twice in
+  v0.9.0 a commit landed on the wrong branch — the implementer was on
+  branch X but had a state file pointing at branch Y, and the commit
+  silently went to whichever branch git's HEAD pointed at. Add a
+  pre-commit reflex: discover the active state file by matching its
+  `branch_name` field against `git symbolic-ref --short HEAD`. The
+  one-liner (no placeholder — copy-paste runnable):
+  ```bash
+  HEAD=$(git symbolic-ref --short HEAD)
+  STATE=$(grep -l "\"branch_name\": \"$HEAD\"" .pipeline-state/*.json 2>/dev/null | head -1)
+  if [ -z "$STATE" ]; then
+    echo "ERROR: no state file for branch $HEAD — run /pipeline-next or /pipeline-ship first"
+    exit 1
+  fi
+  echo "OK: HEAD=$HEAD matches state file $STATE"
+  ```
+  Add this to the pipeline-run skill's pre-commit checklist (alongside
+  the existing post-commit `&& git log -1 --oneline` reflex). The
+  failure mode is silent (commit lands on wrong branch, gets pushed,
+  then the state file's pr_number points at a PR with the wrong
+  changes) and the recovery is expensive (cherry-pick, force-push,
+  re-run pre-push hooks).
+
 ## Process canonicalizations from v0.9.1 retro arc
 
 Each rule below was a v0.9.1 retro tracker row distilled across the
@@ -401,57 +460,6 @@ Canonicalized here so the next drain doesn't repeat the failure mode.
   are the rare exception (lazy-fill / #1147 case). The PR-checklist
   has a CSP-Strict Defaults block at `docs/PULL_REQUEST_CHECKLIST.md`
   with concrete external-module-shape references.
-
-## Process canonicalizations from v0.9.0 retro arc
-
-Each rule below was a v0.9.0 retro tracker row that surfaced repeated
-failure modes across the 6-PR shape-C wave (#1128, #1135, #1138, #1139,
-#1141, #1142). Canonicalized here so the next feature wave doesn't
-repeat them.
-
-- **Stage-4 first-principles grep before architecting** (#168 / #1143).
-  Before proposing a new abstraction or wire-protocol shape in Stage 4,
-  grep the codebase for how *existing* call sites solve the same
-  problem. Three v0.9.0 PRs (#1128 mount-batch, #1041 component
-  time-travel, #1135 lazy=True dispatch) shipped cleaner because the
-  Plan stage opened with a "how do other features do X?" pass that
-  surfaced the existing pattern. Skipping this step produces NIH
-  abstractions that add surface area without adding capability — and
-  Stage 11 reviewers correctly flag them. The grep targets:
-  - **Wire-protocol decisions**: `python/djust/websocket.py` and
-    `python/djust/streaming.py` for outbound frame shapes.
-  - **State-snapshot patterns**: `python/djust/time_travel.py` and
-    `python/djust/live_view.py:_capture_snapshot_state`.
-  - **Async dispatch**: `python/djust/mixins/async_work.py` for the
-    canonical `start_async` shape.
-  - **Decorator composition**: `python/djust/decorators.py` for how
-    existing decorators stack `_event_handler`, `_action`, `_lazy`,
-    `_background` markers.
-  - **Component lifecycle hooks**: `python/djust/components/base.py`
-    for the canonical mount/unmount/refresh order.
-
-  The Plan stage output should explicitly cite the file:line of the
-  pattern being mirrored. "Mirrors `mixins/async_work.py:88` shape" is
-  better than "follow the standard pattern" — the latter is unverifiable.
-
-- **Branch-name verify check before commit** (#169 / #1144). Twice in
-  v0.9.0 a commit landed on the wrong branch — the implementer was on
-  branch X but had a state file pointing at branch Y, and the commit
-  silently went to whichever branch git's HEAD pointed at. Add a
-  pre-commit reflex: run `git symbolic-ref --short HEAD` and verify
-  it matches the active state file's `branch_name` field. The
-  one-liner:
-  ```bash
-  ACTIVE_BRANCH=$(git symbolic-ref --short HEAD)
-  STATE_BRANCH=$(jq -r '.branch_name' .pipeline-state/<state-file>.json)
-  [ "$ACTIVE_BRANCH" = "$STATE_BRANCH" ] || { echo "BRANCH MISMATCH: HEAD=$ACTIVE_BRANCH state=$STATE_BRANCH"; exit 1; }
-  ```
-  Add this to the pipeline-run skill's pre-commit checklist (alongside
-  the existing post-commit `&& git log -1 --oneline` reflex). The
-  failure mode is silent (commit lands on wrong branch, gets pushed,
-  then the state file's pr_number points at a PR with the wrong
-  changes) and the recovery is expensive (cherry-pick, force-push,
-  re-run pre-push hooks).
 
 ## Additional Documentation
 
