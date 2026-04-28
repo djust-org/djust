@@ -138,33 +138,43 @@ def test_ready_swallows_enable_hot_reload_exceptions(caplog):
 
     The try/except around the auto-enable call mirrors the observability
     setup pattern already in ``ready()`` — dev-mode plumbing must never
-    take down app startup.
+    take down app startup. Uses ``logger.exception()`` so the captured
+    record's ``exc_info`` carries the traceback for debugability.
     """
     app = _make_app_config()
     with (
         _no_pytest_env(),
-        caplog.at_level(logging.WARNING, logger="djust"),
+        caplog.at_level(logging.ERROR, logger="djust"),
         mock.patch("djust.enable_hot_reload", side_effect=RuntimeError("boom")),
     ):
         # Must not raise.
         app.ready()
     assert "auto-enable" in caplog.text
-    assert "boom" in caplog.text
+    # logger.exception() attaches exc_info to the LogRecord; verify that
+    # a record with both the auto-enable message AND a traceback was emitted.
+    matching = [r for r in caplog.records if "auto-enable" in r.message]
+    assert matching, "expected an auto-enable failure log record"
+    assert any(r.exc_info for r in matching), "expected exc_info on the log record"
 
 
 def test_ready_completes_other_setup_even_when_auto_enable_skipped():
     """The auto-enable call is the LAST thing ``ready()`` does; the log-sanitizer
-    filter and observability handler installs must still happen regardless.
+    filter install must still happen regardless of whether auto-enable
+    fires.
 
-    This test asserts that the existing ``ready()`` setup (which the
-    auto-enable call was appended after) still executes during a normal
-    pytest run (where auto-enable is skipped via ``PYTEST_CURRENT_TEST``).
+    Snapshots the filter count BEFORE calling ``ready()`` and asserts the
+    count grew by exactly 1 — proving this test's own ``ready()`` call
+    actually installed a filter. (Asserting ``any(...)`` would pass
+    trivially because prior tests in the file have already populated the
+    logger.)
     """
-    djust_logger = logging.getLogger("djust")
-    # Snapshot existing filters; we'll assert at least one DjustLogSanitizerFilter
-    # is present after ``ready()`` runs.
-    app = _make_app_config()
-    app.ready()
     from djust.security import DjustLogSanitizerFilter
 
-    assert any(isinstance(f, DjustLogSanitizerFilter) for f in djust_logger.filters)
+    djust_logger = logging.getLogger("djust")
+    before = sum(1 for f in djust_logger.filters if isinstance(f, DjustLogSanitizerFilter))
+
+    app = _make_app_config()
+    app.ready()
+
+    after = sum(1 for f in djust_logger.filters if isinstance(f, DjustLogSanitizerFilter))
+    assert after == before + 1

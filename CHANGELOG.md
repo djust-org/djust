@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a watchdog thread per test. Files: `python/djust/apps.py` (auto-enable
   call appended to `ready()`), `python/djust/config.py`
   (new `hot_reload_auto_enable: True` default),
-  `python/djust/__init__.py` (docstring update). 6 new regression
-  cases in `TestAutoEnableHotReload` (file
+  `python/djust/__init__.py` (docstring update). 6 new cases covering
+  auto-fire, opt-out config, pytest-env skip, idempotency, exception
+  isolation, and other-setup completion (new file
   `python/djust/tests/test_auto_hot_reload.py`). Drops the one-line
   `enable_hot_reload()` call from
   `examples/demo_project/demo_app/apps.py`. Closes the friction

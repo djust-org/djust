@@ -35,7 +35,11 @@ class DjustConfig(AppConfig):
         # ``hot_reload_server.is_running()``, so this is safe in production
         # (early-return) and safe alongside an explicit consumer call.
         # Skip during pytest runs to avoid spawning a watchdog thread for
-        # every test session.
+        # every test session — pytest sets ``PYTEST_CURRENT_TEST`` for the
+        # duration of every test invocation. (Tests that need to exercise
+        # the auto-enable path itself temporarily clear this env var; see
+        # ``_no_pytest_env()`` in
+        # ``python/djust/tests/test_auto_hot_reload.py``.)
         import os
 
         if not os.environ.get("PYTEST_CURRENT_TEST"):
@@ -46,7 +50,7 @@ class DjustConfig(AppConfig):
                     from djust import enable_hot_reload
 
                     enable_hot_reload()
-            except Exception as e:  # noqa: BLE001
-                logging.getLogger("djust").warning(
-                    "[HotReload] auto-enable in DjustConfig.ready() failed: %s", e
+            except Exception:  # noqa: BLE001
+                logging.getLogger("djust").exception(
+                    "[HotReload] auto-enable in DjustConfig.ready() failed"
                 )
