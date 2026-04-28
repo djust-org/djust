@@ -1591,6 +1591,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._debug_panel_active = False
             elif msg_type == "time_travel_jump":
                 await self.handle_time_travel_jump(data)
+            elif msg_type == "time_travel_component_jump":
+                await self.handle_time_travel_component_jump(data)
+            elif msg_type == "forward_replay":
+                await self.handle_forward_replay(data)
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -4231,15 +4235,67 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "_size": len(json.dumps(state_after, default=str)),
                 }
                 entry["_truncated"] = True
+            # Surface __components__ at the top level too (#1151, v0.9.4)
+            # so the client doesn't have to dig into entry.state_after to
+            # find per-component state. Mirrors the existing additive-
+            # field pattern from mount-batch frames.
+            components_mirror = None
+            if not entry.get("_truncated"):
+                state_after = entry.get("state_after") or {}
+                components_mirror = state_after.get("__components__")
             await self.send_json(
                 {
                     "type": "time_travel_event",
                     "entry": entry,
                     "history_len": len(buffer),
+                    "branch_id": getattr(view, "_time_travel_branch_id", "main"),
+                    "components": components_mirror,
                 }
             )
         except Exception:  # noqa: BLE001 — dev-only, degrade silently
             logger.exception("time_travel: failed to push event frame")
+
+    def _build_time_travel_state(
+        self,
+        view: Any,
+        buffer: Any,
+        cursor: int,
+        which: str,
+    ) -> Dict[str, Any]:
+        """Build the ``time_travel_state`` ack frame (#1151, v0.9.4).
+
+        Augments the v0.6.1 ack shape (cursor / which / history_len) with
+        ``branch_id``, ``forward_replay_enabled``, and ``max_events`` so
+        the debug panel UI can render the per-component scrubber, the
+        forward-replay button, and the max-events indicator without a
+        second request.
+
+        ``forward_replay_enabled`` is true iff replaying from the current
+        cursor would produce a meaningful branch — i.e., the cursor is
+        not at the canonical tip of the buffer. Tip semantics depend on
+        ``which``: with ``which="after"`` the tip is the last index;
+        with ``which="before"`` the tip is the index PAST the last (the
+        baseline before any future event would land), so a cursor at
+        ``len-1`` with ``which="before"`` is still pre-tip.
+        """
+        from djust.config import config as _djust_config
+
+        history_len = len(buffer)
+        if which == "after":
+            forward_replay_enabled = cursor < history_len - 1
+        else:  # which == "before"
+            forward_replay_enabled = cursor < history_len
+        return {
+            "type": "time_travel_state",
+            "cursor": cursor,
+            "which": which,
+            "history_len": history_len,
+            "branch_id": getattr(view, "_time_travel_branch_id", "main"),
+            "forward_replay_enabled": forward_replay_enabled,
+            "max_events": getattr(
+                buffer, "max_events", _djust_config.get("time_travel_max_events", 100)
+            ),
+        }
 
     async def handle_time_travel_jump(self, data: Dict[str, Any]):
         """Jump the view to a past :class:`EventSnapshot`.
@@ -4307,12 +4363,174 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         await self.send_json(
-            {
-                "type": "time_travel_state",
-                "cursor": index,
-                "which": which,
-                "history_len": len(buffer),
-            }
+            self._build_time_travel_state(self.view_instance, buffer, index, which)
+        )
+
+    async def handle_time_travel_component_jump(self, data: Dict[str, Any]):
+        """Scrub a SINGLE component's state (#1151, v0.9.4).
+
+        Dev-only. Mirrors :meth:`handle_time_travel_jump` but restores
+        only ``view._components[component_id]`` from the snapshot at
+        ``index``, leaving the parent view and other components alone.
+        Used by the debug panel's per-component scrubber.
+
+        Frame: ``{"type": "time_travel_component_jump", "index": N,
+        "component_id": "<id>", "which": "before"|"after"}``.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            await self.send_error("time_travel requires DEBUG=True")
+            return
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        if buffer is None:
+            await self.send_error("time_travel not enabled on this view")
+            return
+
+        index = data.get("index")
+        component_id = data.get("component_id")
+        which = data.get("which", "before")
+        if not isinstance(index, int):
+            await self.send_error("time_travel_component_jump: index must be int")
+            return
+        if not isinstance(component_id, str) or not component_id:
+            await self.send_error(
+                "time_travel_component_jump: component_id must be a non-empty string"
+            )
+            return
+        if which not in ("before", "after"):
+            await self.send_error("time_travel_component_jump: which must be 'before' or 'after'")
+            return
+
+        snapshot = buffer.jump(index)
+        if snapshot is None:
+            await self.send_error("time_travel_component_jump: no snapshot at index %d" % index)
+            return
+
+        from djust.time_travel import restore_component_snapshot
+
+        ok = await sync_to_async(restore_component_snapshot)(
+            self.view_instance, snapshot, component_id, which
+        )
+        if not ok:
+            await self.send_error("time_travel_component_jump: restore failed")
+            return
+
+        try:
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            patch_list = None
+            if patches is not None:
+                patch_list = fast_json_loads(patches) if patches else []
+            await self._send_update(
+                patches=patch_list,
+                html=html,
+                version=version,
+                event_name="__time_travel_component_jump__",
+            )
+        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
+            logger.exception("time_travel_component_jump: re-render failed")
+            await self.send_error("time_travel_component_jump: re-render failed: %s" % exc)
+            return
+
+        await self.send_json(
+            self._build_time_travel_state(self.view_instance, buffer, index, which)
+        )
+
+    async def handle_forward_replay(self, data: Dict[str, Any]):
+        """Forward-replay a recorded event with optional override params (#1151, v0.9.4).
+
+        Dev-only. Restores the view to ``state_before`` of the snapshot at
+        ``from_index`` and re-invokes the recorded event handler with
+        either the original params or caller-supplied ``override_params``.
+        When the cursor is not at the buffer tip, allocates a new
+        ``branch_id`` for the resulting branched timeline.
+
+        Frame: ``{"type": "forward_replay", "from_index": N,
+        "override_params": {...}}`` (override_params is optional).
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            await self.send_error("time_travel requires DEBUG=True")
+            return
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        if buffer is None:
+            await self.send_error("time_travel not enabled on this view")
+            return
+
+        from_index = data.get("from_index")
+        override_params = data.get("override_params")
+        if not isinstance(from_index, int):
+            await self.send_error("forward_replay: from_index must be int")
+            return
+        if override_params is not None and not isinstance(override_params, dict):
+            await self.send_error("forward_replay: override_params must be dict or null")
+            return
+
+        snapshot = buffer.jump(from_index)
+        if snapshot is None:
+            await self.send_error("forward_replay: no snapshot at index %d" % from_index)
+            return
+
+        # Decide whether this replay forks the timeline. Two conditions
+        # warrant a new branch_id (either is sufficient):
+        #   1. ``from_index`` is not the buffer tip — replaying a past
+        #      event diverges from the recorded successor.
+        #   2. ``override_params`` is non-None — replay runs with
+        #      different inputs than originally recorded, so it diverges
+        #      even when from the tip. (Caught by Stage 11 review:
+        #      replaying the LAST entry with override_params silently
+        #      merged into "main" before this fix.)
+        # Replay from the tip with no overrides just re-records to
+        # "main". Branch-id is allocated AFTER ``replay_event`` succeeds
+        # — otherwise a missing / un-decorated handler would leak a
+        # counter bump and a stale branch_id with no recorded events.
+        from djust.time_travel import next_branch_id, replay_event
+
+        history_len_before = len(buffer)
+        forks_timeline = from_index < history_len_before - 1 or override_params is not None
+
+        replayed = await sync_to_async(replay_event)(
+            self.view_instance, snapshot, override_params, True
+        )
+        if replayed is None:
+            await self.send_error("forward_replay: replay handler missing or refused")
+            return
+
+        # Replay succeeded — commit the branch_id mutation now.
+        if forks_timeline:
+            new_branch = next_branch_id(self.view_instance)
+            try:
+                self.view_instance._time_travel_branch_id = new_branch
+            except Exception:  # noqa: BLE001 — slot/descriptor readonly
+                logger.exception("forward_replay: failed to set branch_id")
+
+        try:
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            patch_list = None
+            if patches is not None:
+                patch_list = fast_json_loads(patches) if patches else []
+            await self._send_update(
+                patches=patch_list,
+                html=html,
+                version=version,
+                event_name="__forward_replay__",
+            )
+        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
+            logger.exception("forward_replay: re-render failed")
+            await self.send_error("forward_replay: re-render failed: %s" % exc)
+            return
+
+        # Cursor lands at the new tip after the replay's recorded snapshot.
+        new_cursor = len(buffer) - 1
+        await self.send_json(
+            self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
         )
 
     async def presence_event(self, event):

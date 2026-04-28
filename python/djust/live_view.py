@@ -490,6 +490,12 @@ class LiveView(
         # Allocated only when the subclass opts in via the class attr so
         # the 99% of views that don't use it pay zero memory cost.
         self._time_travel_buffer = None
+        # Branched-timeline tracking (#1151, v0.9.4). Default branch is
+        # "main" — the canonical recorded timeline. Forward-replay from
+        # a non-tip cursor allocates a fresh branch id from the counter.
+        # Both fields are inert when the buffer isn't allocated.
+        self._time_travel_branch_id = "main"
+        self._time_travel_branch_counter = 0
         if getattr(self.__class__, "time_travel_enabled", False):
             try:
                 from djust.time_travel import TimeTravelBuffer
