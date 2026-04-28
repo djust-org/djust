@@ -4478,18 +4478,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("forward_replay: no snapshot at index %d" % from_index)
             return
 
-        # Allocate a new branch id when forking from a non-tip cursor.
-        # Replay from the tip just appends to the canonical timeline and
-        # keeps branch_id="main".
+        # Decide whether this replay forks the timeline. Two conditions
+        # warrant a new branch_id (either is sufficient):
+        #   1. ``from_index`` is not the buffer tip — replaying a past
+        #      event diverges from the recorded successor.
+        #   2. ``override_params`` is non-None — replay runs with
+        #      different inputs than originally recorded, so it diverges
+        #      even when from the tip. (Caught by Stage 11 review:
+        #      replaying the LAST entry with override_params silently
+        #      merged into "main" before this fix.)
+        # Replay from the tip with no overrides just re-records to
+        # "main". Branch-id is allocated AFTER ``replay_event`` succeeds
+        # — otherwise a missing / un-decorated handler would leak a
+        # counter bump and a stale branch_id with no recorded events.
         from djust.time_travel import next_branch_id, replay_event
 
         history_len_before = len(buffer)
-        if from_index < history_len_before - 1:
-            new_branch = next_branch_id(self.view_instance)
-            try:
-                self.view_instance._time_travel_branch_id = new_branch
-            except Exception:  # noqa: BLE001 — slot/descriptor readonly
-                logger.exception("forward_replay: failed to set branch_id")
+        forks_timeline = from_index < history_len_before - 1 or override_params is not None
 
         replayed = await sync_to_async(replay_event)(
             self.view_instance, snapshot, override_params, True
@@ -4497,6 +4502,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if replayed is None:
             await self.send_error("forward_replay: replay handler missing or refused")
             return
+
+        # Replay succeeded — commit the branch_id mutation now.
+        if forks_timeline:
+            new_branch = next_branch_id(self.view_instance)
+            try:
+                self.view_instance._time_travel_branch_id = new_branch
+            except Exception:  # noqa: BLE001 — slot/descriptor readonly
+                logger.exception("forward_replay: failed to set branch_id")
 
         try:
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()

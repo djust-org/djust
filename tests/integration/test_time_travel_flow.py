@@ -555,3 +555,146 @@ async def test_handle_forward_replay_returns_new_branch_id():
     assert new_entry["params"] == {"n": 42}
     # And the live view reflects the replayed state.
     assert view.count == 0 + 42  # restored to state_before (count=0), then handler added 42
+
+
+@pytest.mark.asyncio
+async def test_handle_forward_replay_branches_on_tip_with_override_params():
+    """Replay from the LAST entry with override_params still allocates a
+    new branch — overrides diverge from the recorded `state_after` even
+    when from_index == tip. Regression for the Stage 11 off-by-one fix.
+    """
+    from djust.decorators import event_handler
+
+    class _ReplayView(LiveView):
+        template = "<div>{{ count }}</div>"
+        time_travel_enabled = True
+
+        def mount(self, request=None, **kwargs):
+            self.count = 0
+
+        @event_handler()
+        def increment(self, n: int = 1, **kwargs):
+            self.count += n
+
+    view = _ReplayView()
+    view.mount()
+    consumer, sent = _make_consumer(view)
+    buf = view._time_travel_buffer
+    # Single entry — replay target is the very last (tip).
+    buf.append(
+        EventSnapshot(
+            event_name="increment",
+            params={"n": 1},
+            ref=None,
+            ts=0.0,
+            state_before={"count": 0},
+            state_after={"count": 1},
+        )
+    )
+    view.count = 1
+
+    with override_settings(DEBUG=True):
+        await consumer.handle_forward_replay(
+            {
+                "type": "forward_replay",
+                "from_index": 0,  # tip
+                "override_params": {"n": 99},  # diverges from recorded n=1
+            }
+        )
+
+    # Override-params at tip ⇒ branch (not "main").
+    assert view._time_travel_branch_id == "branch-0"
+    frame = next(m for m in sent if m.get("type") == "time_travel_state")
+    assert frame["branch_id"] == "branch-0"
+
+
+@pytest.mark.asyncio
+async def test_handle_forward_replay_does_not_leak_branch_id_on_failure():
+    """When replay_event returns None (handler missing / un-decorated),
+    branch_id and the counter MUST stay at their pre-call values.
+    Regression for the Stage 11 finding: branch_id was being mutated
+    BEFORE replay_event was awaited, so a failed replay leaked a stale
+    branch_id with no recorded events.
+    """
+
+    class _ViewWithoutHandler(LiveView):
+        template = "<div>{{ count }}</div>"
+        time_travel_enabled = True
+
+        def mount(self, request=None, **kwargs):
+            self.count = 0
+
+        # No `increment` handler defined — replay_event will return None.
+
+    view = _ViewWithoutHandler()
+    view.mount()
+    consumer, sent = _make_consumer(view)
+    buf = view._time_travel_buffer
+    buf.append(
+        EventSnapshot(
+            event_name="increment",  # not on the view
+            params={"n": 1},
+            ref=None,
+            ts=0.0,
+            state_before={"count": 0},
+            state_after={"count": 1},
+        )
+    )
+    pre_branch_id = view._time_travel_branch_id
+    pre_counter = view._time_travel_branch_counter
+
+    with override_settings(DEBUG=True):
+        await consumer.handle_forward_replay(
+            {
+                "type": "forward_replay",
+                "from_index": 0,
+                "override_params": {"n": 99},
+            }
+        )
+
+    # Branch_id and counter unchanged — no leak.
+    assert view._time_travel_branch_id == pre_branch_id
+    assert view._time_travel_branch_counter == pre_counter
+    # An error frame was emitted, no time_travel_state ack.
+    assert any(m.get("type") == "error" for m in sent)
+    assert not any(m.get("type") == "time_travel_state" for m in sent)
+
+
+@pytest.mark.asyncio
+async def test_handle_time_travel_component_jump_supports_which_after():
+    """Component jump with which="after" restores from state_after."""
+    view = _TwoComponentView()
+    view.mount()
+    consumer, sent = _make_consumer(view)
+    view._time_travel_buffer.append(
+        EventSnapshot(
+            event_name="increment",
+            params={},
+            ref=None,
+            ts=0.0,
+            state_before={
+                "total": 0,
+                "__components__": {"comp-a": {"value": 5}, "comp-b": {"value": 7}},
+            },
+            state_after={
+                "total": 12,
+                "__components__": {"comp-a": {"value": 6}, "comp-b": {"value": 8}},
+            },
+        )
+    )
+    view._components["comp-a"].value = 99
+
+    with override_settings(DEBUG=True):
+        await consumer.handle_time_travel_component_jump(
+            {
+                "type": "time_travel_component_jump",
+                "index": 0,
+                "component_id": "comp-a",
+                "which": "after",
+            }
+        )
+
+    # Restored from state_after (value=6), not state_before (value=5).
+    assert view._components["comp-a"].value == 6
+    frame = next(m for m in sent if m.get("type") == "time_travel_state")
+    assert frame["which"] == "after"

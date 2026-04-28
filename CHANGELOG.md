@@ -42,11 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Files: `python/djust/websocket.py` (dispatch arms + 2 handlers + ack
   builder), `python/djust/time_travel.py` (`restore_component_snapshot`,
-  `next_branch_id`), `python/djust/live_view.py` (branch fields). 9 new
-  cases (5 integration + 4 unit) covering ack-frame shape, replay-enabled
-  semantics, component-only restore isolation, branch-id allocation, and
-  defensive defaults. PR-B (the debug panel UI consuming these fields)
-  is the next v0.9.4 PR.
+  `next_branch_id`), `python/djust/live_view.py` (branch fields). 12 new
+  cases (8 integration + 4 unit) covering ack-frame shape, replay-enabled
+  semantics, component-only restore isolation, branch-id allocation,
+  defensive defaults, override-params-at-tip branching, branch-id
+  no-leak on replay failure, and `which="after"` component restore.
+  PR-B (the debug panel UI consuming these fields) is the next v0.9.4 PR.
 
 ### Documentation
 
