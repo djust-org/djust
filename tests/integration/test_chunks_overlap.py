@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import warnings
 from typing import List
 
 import pytest
@@ -224,3 +225,46 @@ class TestParallelRender:
         assert b'id="djl-fill-slot-slow-1"' not in body
         assert b'id="djl-fill-slot-slow-2"' not in body
         assert b'id="djl-fill-slot-slow-3"' not in body
+
+    @pytest.mark.asyncio
+    async def test_cancel_does_not_leak_wait_for_one_warning(self, rf, make_parent):
+        """Regression for #1153 — when ``arender_chunks`` is cancelled
+        mid-stream, the ``asyncio.as_completed`` iterator's internal
+        ``_wait_for_one`` coroutines must be drained, not GC'd.
+
+        Without the explicit ``await _drain_iterator(...)`` after
+        ``_cancel_pending()``, Python emits ``RuntimeWarning: coroutine
+        '_wait_for_one' was never awaited`` because ``task.cancel()``
+        only signals — it doesn't unblock the queue ``done.get()`` is
+        sitting on, and the next coroutine the for-protocol pulls is
+        dropped on early ``return``.
+
+        Asserting absence of warning here is the canonical guard that
+        future refactors don't regress the lifecycle.
+        """
+        parent = make_parent()
+        parent.request = rf.get("/")
+        emitter = ChunkEmitter(parent.request)
+
+        for vid in ("slot-slow-1", "slot-slow-2", "slot-slow-3"):
+            emitter.register_thunk(vid, _make_sleeping_thunk(vid, 1.0))
+
+        async def _drain():
+            return [c async for c in emitter]
+
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+
+            consumer = asyncio.create_task(_drain())
+            render_task = asyncio.create_task(parent.arender_chunks(parent.template, emitter))
+            await asyncio.sleep(0.05)
+            await emitter.cancel("test-disconnect")
+            await asyncio.wait_for(render_task, timeout=0.5)
+            await emitter.close()
+            await consumer
+
+        wait_for_one_warnings = [w for w in captured if "_wait_for_one" in str(w.message)]
+        assert not wait_for_one_warnings, (
+            "expected no '_wait_for_one' RuntimeWarnings; got: "
+            f"{[str(w.message) for w in wait_for_one_warnings]}"
+        )
