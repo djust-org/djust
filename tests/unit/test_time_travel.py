@@ -1281,3 +1281,88 @@ class TestDescriptorPatternComponentTimeTravel:
             assert key not in captured, (
                 "framework-internal attr %r leaked into descriptor component snapshot" % key
             )
+
+
+# ---------------------------------------------------------------------------
+# #1151, v0.9.4 — restore_component_snapshot + next_branch_id unit tests.
+# ---------------------------------------------------------------------------
+
+
+def test_restore_component_snapshot_does_not_touch_parent_state():
+    """Single-component restore writes only to the named component."""
+    from djust.time_travel import restore_component_snapshot
+
+    class _Comp:
+        def __init__(self):
+            self.value = 0
+
+    class _View:
+        def __init__(self):
+            self.total = 100  # parent attr — must be untouched
+            self._components = {"comp-a": _Comp(), "comp-b": _Comp()}
+
+    view = _View()
+    view._components["comp-a"].value = 99
+    view._components["comp-b"].value = 88
+    snap = EventSnapshot(
+        event_name="evt",
+        params={},
+        ref=None,
+        ts=0.0,
+        state_before={
+            "total": 0,
+            "__components__": {"comp-a": {"value": 5}, "comp-b": {"value": 7}},
+        },
+        state_after={
+            "total": 12,
+            "__components__": {"comp-a": {"value": 6}, "comp-b": {"value": 8}},
+        },
+    )
+
+    ok = restore_component_snapshot(view, snap, "comp-a", which="before")
+    assert ok is True
+    assert view._components["comp-a"].value == 5  # restored
+    assert view._components["comp-b"].value == 88  # untouched
+    assert view.total == 100  # parent attr — never written
+
+
+def test_restore_component_snapshot_returns_false_for_missing_component():
+    """Missing component_id ⇒ False, no exception."""
+    from djust.time_travel import restore_component_snapshot
+
+    class _View:
+        _components: dict = {}
+
+    snap = EventSnapshot(
+        event_name="evt",
+        params={},
+        ref=None,
+        ts=0.0,
+        state_before={"__components__": {"comp-a": {"value": 1}}},
+        state_after={"__components__": {"comp-a": {"value": 2}}},
+    )
+    assert restore_component_snapshot(_View(), snap, "comp-missing", which="before") is False
+
+
+def test_next_branch_id_increments_counter():
+    """Branch-id allocator yields branch-0, branch-1, … and bumps the counter."""
+    from djust.time_travel import next_branch_id
+
+    class _View:
+        _time_travel_branch_counter = 0
+
+    view = _View()
+    assert next_branch_id(view) == "branch-0"
+    assert view._time_travel_branch_counter == 1
+    assert next_branch_id(view) == "branch-1"
+    assert view._time_travel_branch_counter == 2
+
+
+def test_next_branch_id_defaults_to_main_when_counter_missing():
+    """Defensive default: views without the counter attr stay on 'main'."""
+    from djust.time_travel import next_branch_id
+
+    class _LegacyView:
+        pass
+
+    assert next_branch_id(_LegacyView()) == "main"

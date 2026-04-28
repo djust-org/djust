@@ -308,3 +308,250 @@ async def test_permission_denied_view_handler_records_with_error():
     # State was not mutated — state_before and state_after match.
     assert entries[0]["state_before"]["count"] == 5
     assert entries[0]["state_after"]["count"] == 5
+
+
+# ---------------------------------------------------------------------------
+# #1151, v0.9.4 — wire-protocol exposure for per-component time-travel +
+# forward-replay. Five integration cases against the augmented
+# time_travel_state ack frame and the two new handlers.
+# ---------------------------------------------------------------------------
+
+
+class _TwoComponentView(LiveView):
+    """LiveView with a `_components` registry for component-jump tests."""
+
+    template = "<div>{{ total }}</div>"
+    time_travel_enabled = True
+
+    def mount(self, request=None, **kwargs):
+        self.total = 0
+        self._components = {
+            "comp-a": _CompStub("comp-a"),
+            "comp-b": _CompStub("comp-b"),
+        }
+
+
+class _CompStub:
+    """Minimal component stub — only what restore_component_snapshot needs."""
+
+    def __init__(self, component_id: str):
+        self._component_id = component_id
+        self.value = 0
+
+
+def _make_consumer(view):
+    consumer = LiveViewConsumer()
+    consumer.view_instance = view
+    sent: list = []
+    consumer.send_json = AsyncMock(side_effect=lambda msg: sent.append(msg))
+    consumer.send_error = AsyncMock(
+        side_effect=lambda msg, **kw: sent.append({"type": "error", "error": msg})
+    )
+    consumer._send_update = AsyncMock()
+    return consumer, sent
+
+
+@pytest.mark.asyncio
+async def test_time_travel_state_carries_branch_id_and_max_events_at_tip():
+    """Augmented ack frame: defaults branch_id=main, replay disabled at tip, max_events from buffer."""
+    view = _TTView()
+    view.count = 5
+    consumer, sent = _make_consumer(view)
+    view._time_travel_buffer.append(
+        EventSnapshot(
+            event_name="increment",
+            params={},
+            ref=None,
+            ts=0.0,
+            state_before={"count": 4},
+            state_after={"count": 5},
+        )
+    )
+
+    with override_settings(DEBUG=True):
+        # Jump to the tip (cursor=0, which="after" — i.e., last index, post-event).
+        await consumer.handle_time_travel_jump(
+            {"type": "time_travel_jump", "index": 0, "which": "after"}
+        )
+
+    tt_frames = [m for m in sent if m.get("type") == "time_travel_state"]
+    assert len(tt_frames) == 1
+    frame = tt_frames[0]
+    assert frame["cursor"] == 0
+    assert frame["which"] == "after"
+    assert frame["history_len"] == 1
+    assert frame["branch_id"] == "main"
+    assert frame["forward_replay_enabled"] is False  # at tip — nothing to replay forward
+    assert frame["max_events"] == view._time_travel_buffer.max_events
+
+
+@pytest.mark.asyncio
+async def test_time_travel_state_forward_replay_enabled_when_cursor_not_at_tip():
+    """Cursor before the tip ⇒ forward_replay_enabled=True."""
+    view = _TTView()
+    consumer, sent = _make_consumer(view)
+    buf = view._time_travel_buffer
+    for i in range(3):
+        buf.append(
+            EventSnapshot(
+                event_name="increment",
+                params={"n": i},
+                ref=None,
+                ts=float(i),
+                state_before={"count": i},
+                state_after={"count": i + 1},
+            )
+        )
+
+    with override_settings(DEBUG=True):
+        await consumer.handle_time_travel_jump(
+            {"type": "time_travel_jump", "index": 0, "which": "before"}
+        )
+
+    frame = next(m for m in sent if m.get("type") == "time_travel_state")
+    assert frame["cursor"] == 0
+    assert frame["forward_replay_enabled"] is True
+    assert frame["history_len"] == 3
+
+
+@pytest.mark.asyncio
+async def test_time_travel_event_frame_includes_components_top_level():
+    """Per-event push surfaces __components__ at frame top level (#1151)."""
+    view = _TwoComponentView()
+    view.mount()
+    consumer, sent = _make_consumer(view)
+    snapshot = EventSnapshot(
+        event_name="increment",
+        params={},
+        ref=None,
+        ts=0.0,
+        state_before={"total": 0, "__components__": {"comp-a": {"value": 1}}},
+        state_after={
+            "total": 1,
+            "__components__": {"comp-a": {"value": 2}, "comp-b": {"value": 7}},
+        },
+    )
+    view._time_travel_buffer.append(snapshot)
+
+    with override_settings(DEBUG=True):
+        await consumer._maybe_push_tt_event(view, snapshot)
+
+    event_frames = [m for m in sent if m.get("type") == "time_travel_event"]
+    assert len(event_frames) == 1
+    frame = event_frames[0]
+    assert frame["branch_id"] == "main"
+    # Top-level mirror equals state_after.__components__.
+    assert frame["components"] == {"comp-a": {"value": 2}, "comp-b": {"value": 7}}
+    # And the entry's nested copy is intact (no destructive surfacing).
+    assert frame["entry"]["state_after"]["__components__"]["comp-a"]["value"] == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_time_travel_component_jump_isolates_to_one_component():
+    """Component-only jump scrubs comp-a but leaves comp-b alone."""
+    view = _TwoComponentView()
+    view.mount()
+    consumer, sent = _make_consumer(view)
+    # Snapshot captured at comp-a=5, comp-b=7.
+    view._time_travel_buffer.append(
+        EventSnapshot(
+            event_name="increment",
+            params={},
+            ref=None,
+            ts=0.0,
+            state_before={
+                "total": 0,
+                "__components__": {"comp-a": {"value": 5}, "comp-b": {"value": 7}},
+            },
+            state_after={
+                "total": 12,
+                "__components__": {"comp-a": {"value": 6}, "comp-b": {"value": 8}},
+            },
+        )
+    )
+    # Mutate live state — both components way ahead, parent at 100.
+    view.total = 100
+    view._components["comp-a"].value = 99
+    view._components["comp-b"].value = 88
+
+    with override_settings(DEBUG=True):
+        await consumer.handle_time_travel_component_jump(
+            {
+                "type": "time_travel_component_jump",
+                "index": 0,
+                "component_id": "comp-a",
+                "which": "before",
+            }
+        )
+
+    # comp-a restored to 5 from snapshot.state_before; comp-b untouched at 88.
+    assert view._components["comp-a"].value == 5
+    assert view._components["comp-b"].value == 88
+    # Parent state untouched — component jump doesn't write to the view.
+    assert view.total == 100
+    # Ack frame emitted.
+    frame = next(m for m in sent if m.get("type") == "time_travel_state")
+    assert frame["cursor"] == 0
+    assert frame["which"] == "before"
+
+
+@pytest.mark.asyncio
+async def test_handle_forward_replay_returns_new_branch_id():
+    """Forward-replay from a non-tip cursor allocates a fresh branch_id."""
+    from djust.decorators import event_handler
+
+    class _ReplayView(LiveView):
+        template = "<div>{{ count }}</div>"
+        time_travel_enabled = True
+
+        def mount(self, request=None, **kwargs):
+            self.count = 0
+
+        @event_handler()
+        def increment(self, n: int = 1, **kwargs):
+            self.count += n
+
+    view = _ReplayView()
+    view.mount()
+    consumer, sent = _make_consumer(view)
+    buf = view._time_travel_buffer
+    # Two recorded events: count 0→1, then 1→2.
+    buf.append(
+        EventSnapshot(
+            event_name="increment",
+            params={"n": 1},
+            ref=None,
+            ts=0.0,
+            state_before={"count": 0},
+            state_after={"count": 1},
+        )
+    )
+    buf.append(
+        EventSnapshot(
+            event_name="increment",
+            params={"n": 1},
+            ref=None,
+            ts=1.0,
+            state_before={"count": 1},
+            state_after={"count": 2},
+        )
+    )
+    view.count = 2
+
+    with override_settings(DEBUG=True):
+        await consumer.handle_forward_replay(
+            {"type": "forward_replay", "from_index": 0, "override_params": {"n": 42}}
+        )
+
+    # Branch id allocated; original was "main", new should be "branch-0".
+    assert view._time_travel_branch_id == "branch-0"
+    # Ack frame carries the new branch_id.
+    frame = next(m for m in sent if m.get("type") == "time_travel_state")
+    assert frame["branch_id"] == "branch-0"
+    # History grew by 1 (the replay was recorded).
+    assert frame["history_len"] == 3
+    # The new entry has the override params.
+    new_entry = buf.history()[-1]
+    assert new_entry["params"] == {"n": 42}
+    # And the live view reflects the replayed state.
+    assert view.count == 0 + 42  # restored to state_before (count=0), then handler added 42

@@ -327,6 +327,104 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     return ok
 
 
+def restore_component_snapshot(
+    view: Any,
+    snapshot: EventSnapshot,
+    component_id: str,
+    which: str = "before",
+) -> bool:
+    """Restore a SINGLE component's state from a snapshot (#1151, v0.9.4).
+
+    Single-component variant of :func:`restore_snapshot` Phase 3. Touches
+    ONLY ``view._components[component_id]``; never the parent view, never
+    other components. Used by the debug panel's per-component scrubber so
+    the user can rewind component A's history without disturbing component
+    B's current live state.
+
+    Returns ``True`` if every key was applied via :func:`safe_setattr`.
+    Returns ``False`` (and logs at WARN) when:
+
+    * ``component_id`` is not in ``view._components``.
+    * The snapshot's ``state_before`` / ``state_after`` lacks
+      ``"__components__"`` or has no entry for ``component_id``.
+    * Any individual key fails ``safe_setattr`` (dunder / read-only).
+
+    Mirrors the Phase 3 loop in :func:`restore_snapshot` (lines ~298-326)
+    so behaviour stays consistent — same fallback shape, same logging.
+    """
+    if which not in ("before", "after"):
+        raise ValueError("which must be 'before' or 'after', got %r" % (which,))
+    from djust.security import safe_setattr
+
+    state = snapshot.state_before if which == "before" else snapshot.state_after
+    components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {}) or {}
+    component_snap = components_state.get(component_id)
+    if component_snap is None:
+        logger.warning(
+            "time_travel: restore_component_snapshot — no entry for %r in snapshot",
+            component_id,
+        )
+        return False
+    registry = getattr(view, "_components", None) or {}
+    component = registry.get(component_id)
+    if component is None:
+        logger.warning(
+            "time_travel: restore_component_snapshot — component %r not in registry",
+            component_id,
+        )
+        return False
+    ok = True
+    for key, value in component_snap.items():
+        try:
+            applied = safe_setattr(component, key, value, allow_private=False)
+        except Exception:  # noqa: BLE001 — dev-only, log + degrade
+            logger.exception(
+                "time_travel: component restore failed for id=%s key=%s",
+                component_id,
+                key,
+            )
+            ok = False
+            continue
+        if not applied:
+            logger.warning(
+                "time_travel: component restore blocked for id=%s key=%s",
+                component_id,
+                key,
+            )
+            ok = False
+    return ok
+
+
+def next_branch_id(view: Any) -> str:
+    """Allocate a fresh branch id for forward-replay (#1151, v0.9.4).
+
+    Returns a string of the form ``"branch-{N}"`` where N is the current
+    value of ``view._time_travel_branch_counter``, then increments the
+    counter so the next call yields a fresh id.
+
+    Stable within a single :class:`TimeTravelBuffer` lifetime — the
+    counter lives on the view instance alongside the buffer, so reconnects
+    against the same view get a deterministic sequence (`branch-0`,
+    `branch-1`, …). Resets to zero on view re-mount because the buffer
+    itself is reallocated then. The ids are only meaningful within a
+    single buffer's lifetime; clients should not assume cross-mount
+    stability.
+
+    Defaults to ``"main"`` when the view doesn't have the counter
+    attribute (defensive — pre-v0.9.4 instances or views constructed
+    via test bypasses).
+    """
+    counter = getattr(view, "_time_travel_branch_counter", None)
+    if counter is None:
+        return "main"
+    new_id = "branch-%d" % counter
+    try:
+        view._time_travel_branch_counter = counter + 1
+    except Exception:  # noqa: BLE001 — slot/descriptor readonly
+        logger.exception("time_travel: failed to increment branch counter")
+    return new_id
+
+
 def replay_event(
     view: Any,
     snapshot: EventSnapshot,
