@@ -29,16 +29,15 @@ function buildDom(bodyHtml) {
     `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
     { runScripts: "dangerously", url: "http://localhost/" }
   );
-  // JSDOM 26+ marks window.location.assign as non-writable +
-  // non-configurable, so we can't intercept it directly. The handler
-  // module honours a test-only hook, window.__djustRowClickNavigate,
-  // when present — used here to capture target URLs without actually
-  // navigating.
-  const assignSpy = vi.fn();
-  dom.window.__djustRowClickNavigate = assignSpy;
-  dom.window.__locationAssignSpy = assignSpy;
-  // Eval the component module into the JSDOM window.
+  // Eval the component module into the JSDOM window. Module installs
+  // window.djustDataTableRowClick.navigate as the production hook into
+  // window.location.assign; we replace it with a vitest spy so tests
+  // can capture target URLs without JSDOM 26+'s non-configurable
+  // Location.prototype.assign getting in the way (#1171 R4).
   dom.window.eval(rowClickCode);
+  const assignSpy = vi.fn();
+  dom.window.djustDataTableRowClick.navigate = assignSpy;
+  dom.window.__locationAssignSpy = assignSpy;
   // The module hooks DOMContentLoaded when readyState === "loading"
   // (which is true under JSDOM); fire it explicitly so initAll() runs.
   dom.window.document.dispatchEvent(
@@ -269,6 +268,82 @@ describe("data-table-row-click — idempotence", () => {
     tr.click();
 
     expect(dom.window.__locationAssignSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("data-table-row-click — extended nested-control selector (#1171 R3)", () => {
+  // PR #1170 selector covered a/button/input/label/select/textarea (6
+  // tags). #1171 adds details/summary/option so disclosure widgets and
+  // <option>s inside a <select> don't trigger row navigation when the
+  // user toggles them. The <option> case is largely transitive (clicks
+  // bubble via the parent <select>) — we cover it explicitly to lock
+  // the contract in.
+  it("does NOT navigate when click target is a nested <summary> (details disclosure)", () => {
+    const dom = buildDom(`
+      <table class="data-table"><tbody>
+        <tr class="data-table-row-clickable" role="button" tabindex="0"
+            data-href="/c/1/">
+          <td>
+            <details id="row-details">
+              <summary id="row-summary">More info</summary>
+              <p>Body</p>
+            </details>
+          </td>
+        </tr>
+      </tbody></table>
+    `);
+    const summary = dom.window.document.getElementById("row-summary");
+    expect(summary).not.toBeNull();
+
+    summary.click();
+
+    expect(dom.window.__locationAssignSpy).not.toHaveBeenCalled();
+  });
+
+  it("does NOT navigate when click target is a nested <option> (transitive via <select>)", () => {
+    const dom = buildDom(`
+      <table class="data-table"><tbody>
+        <tr class="data-table-row-clickable" role="button" tabindex="0"
+            data-href="/c/1/">
+          <td>
+            <select id="row-select">
+              <option id="row-option-a" value="a">A</option>
+              <option value="b">B</option>
+            </select>
+          </td>
+        </tr>
+      </tbody></table>
+    `);
+    const opt = dom.window.document.getElementById("row-option-a");
+    expect(opt).not.toBeNull();
+
+    opt.click();
+
+    expect(dom.window.__locationAssignSpy).not.toHaveBeenCalled();
+  });
+
+  it("DOES navigate when click is on a row containing <details> but outside the disclosure (happy path regression)", () => {
+    // Regression check: extending the selector did not break the
+    // happy path. Clicking a plain <td> sibling of a <details> still
+    // navigates.
+    const dom = buildDom(`
+      <table class="data-table"><tbody>
+        <tr class="data-table-row-clickable" role="button" tabindex="0"
+            data-href="/c/1/">
+          <td id="plain-cell">Plain cell</td>
+          <td>
+            <details><summary>More</summary><p>Body</p></details>
+          </td>
+        </tr>
+      </tbody></table>
+    `);
+    const cell = dom.window.document.getElementById("plain-cell");
+    expect(cell).not.toBeNull();
+
+    cell.click();
+
+    expect(dom.window.__locationAssignSpy).toHaveBeenCalledTimes(1);
+    expect(dom.window.__locationAssignSpy).toHaveBeenCalledWith("/c/1/");
   });
 });
 
