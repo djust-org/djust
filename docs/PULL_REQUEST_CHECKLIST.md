@@ -181,6 +181,35 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Privacy considerations** - PII handling follows regulations
 - [ ] **Secure defaults** - New features are secure by default
 
+### CSP-Strict Defaults for New Client-Side Framework Code
+
+Any new framework feature that emits HTML must default to a CSP-strict
+shape so deployments running `script-src 'self'` (no `'unsafe-inline'`,
+no `'unsafe-eval'`) work without configuration. Canonicalized in v0.9.1
+retro / Action Tracker #183 / GitHub #1175.
+
+- [ ] **No inline `<script>` blocks** - new client-side behavior lives in
+  external static JS modules served from `python/djust/...static/`
+- [ ] **No inline event handlers** - no `onclick=`, `onchange=`,
+  `oninput=`, etc. in emitted HTML
+- [ ] **Auto-bind via marker class** - the static JS module attaches a
+  delegated listener on `document` (or root) and dispatches based on a
+  marker class set on the emitted element (e.g. `data-table-row-clickable`,
+  `dj-form`, `dj-track-static`). Compose with `MutationObserver` for
+  morphdom-managed regions.
+- [ ] **CSP nonce only when genuinely required** - inline `<script>` is
+  only acceptable when the activator must run synchronously inline (rare;
+  the lazy-fill case from #1147 is the canonical exception). When that's
+  unavoidable, propagate `request.csp_nonce` per the #1147 pattern.
+- [ ] **External-module shape canonical references**:
+  - `python/djust/components/static/djust_components/data-table-row-click.js`
+    + `tr.data-table-row-clickable` marker class (PR #1170, the cleanest
+    example).
+  - `python/djust/static/djust/src/50-lazy-fill.js` + `<dj-lazy-slot>`
+    custom element (PR #1138).
+  - `python/djust/static/djust/src/39-dj-track-static.js` + Phoenix-style
+    `phx-track-static` parity attribute (existing pattern).
+
 ### Security Hot Spot Changes
 
 If the PR modifies any file listed in [Security Hot Spot Files](SECURITY_GUIDELINES.md#security-hot-spot-files), the following additional requirements apply:
