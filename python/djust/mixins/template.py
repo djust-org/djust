@@ -463,10 +463,50 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 if not task.done():
                     task.cancel()
 
+        async def _drain_iterator(it):
+            """Drain a partially-consumed ``asyncio.as_completed``
+            iterator so its internally-queued ``_wait_for_one``
+            coroutines are awaited and don't trigger
+            ``RuntimeWarning: coroutine '_wait_for_one' was never
+            awaited`` (#1153).
+
+            CPython's ``asyncio.as_completed`` is a generator that
+            yields one ``_wait_for_one()`` coroutine per pending
+            task. When we ``return`` mid-loop after an
+            ``emitter.cancelled`` check, Python's for-protocol has
+            ALREADY pulled the next coroutine via ``next()`` into
+            ``completed`` — and any further pending coroutines the
+            generator would have produced get discarded along with
+            the generator itself.
+
+            ``task.cancel()`` only schedules cancellation; it doesn't
+            unblock ``_wait_for_one``'s ``done.get()`` from the
+            ``as_completed`` queue. We need to keep iterating + await
+            each remaining coroutine so the queue drains. Cancelled
+            tasks raise ``CancelledError`` from ``f.result()`` inside
+            ``_wait_for_one``; we swallow those, since the cancellation
+            was self-inflicted via ``_cancel_pending``.
+            """
+            for remaining in it:
+                try:
+                    await remaining
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    # Swallow — we cancelled these tasks ourselves.
+                    pass
+
+        as_completed_iter = asyncio.as_completed(thunk_tasks)
         try:
-            for completed in asyncio.as_completed(thunk_tasks):
+            for completed in as_completed_iter:
                 if emitter.cancelled:
                     _cancel_pending()
+                    # Drain ``completed`` (already pulled by for-protocol)
+                    # plus any further coroutines the iterator would
+                    # produce, so no ``_wait_for_one`` is GC'd unawaited.
+                    try:
+                        await completed
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                        pass
+                    await _drain_iterator(as_completed_iter)
                     return
                 try:
                     view_id, chunk_bytes, exc = await completed
@@ -501,13 +541,23 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 await asyncio.sleep(0)
         except ChunkEmitterCancelled:
             _cancel_pending()
+            await _drain_iterator(as_completed_iter)
             logger.debug("arender_chunks: cancelled during lazy phase")
             return
         finally:
-            # Defensive — drain any remaining pending tasks so we don't
-            # leak ``coroutine '_AsCompletedIterator._wait_for_one'
-            # was never awaited`` warnings on early-return paths.
+            # Defensive — cancel + drain any remaining pending tasks so
+            # we don't leak ``coroutine '_wait_for_one' was never
+            # awaited`` warnings on paths that bypass the explicit
+            # cancellation branches above (e.g. the emit call raising
+            # something we don't catch). ``_cancel_pending`` is
+            # idempotent; ``_drain_iterator`` is a no-op once the
+            # generator is exhausted.
             _cancel_pending()
+            try:
+                await _drain_iterator(as_completed_iter)
+            except Exception:  # noqa: BLE001
+                # Best-effort drain — never raise from finally.
+                pass
 
     def _split_for_streaming(self, full_html: str) -> tuple:
         """Split rendered HTML into ``(shell_open, main_content, shell_close)``.

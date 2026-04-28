@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **v0.9.3 test-infra cleanup — suppress unhandled errors in JS + Python
+  test runtimes (closes #1186, closes #1152, closes #1153)** —
+  release-blocker for v0.9.0rc3. Three test-runtime warnings/errors that
+  surfaced during local `make test` but never affected production
+  behavior, all unblocking the canonical exit-0 gate:
+  - **#1186 (P1)**: happy-dom + undici WebSocket `dispatchEvent`
+    cross-pollination — undici fires a Node-side `Event` that
+    happy-dom's `EventTarget.dispatchEvent` runtime check rejects (the
+    two runtimes don't share a Web-platform `Event` prototype).
+    Filtered via a new `onUnhandledError` hook in `vitest.config.js`
+    matching a narrow message + stack pattern. Anything outside the
+    pattern still re-throws.
+  - **#1152 (P2)**: `view-transitions.test.js` non-deterministic
+    teardown `EnvironmentTeardownError: Closing rpc while
+    "onUserConsoleLog" was pending`. Stubs already yielded a microtask
+    per CLAUDE.md retro #1113, so the diagnosis was RPC-timing
+    teardown noise, not a stub regression. Filtered via the same
+    `onUnhandledError` hook.
+  - **#1153 (P2)**: real lifecycle bug in
+    `python/djust/mixins/template.py` `arender_chunks`, not warning
+    suppression. `task.cancel()` only signals cancellation — it
+    doesn't unblock `done.get()` inside `asyncio.as_completed`'s
+    internal `_wait_for_one`. When `arender_chunks` returned mid-loop
+    on `emitter.cancelled`, the for-protocol's already-pulled
+    coroutine plus any further iterator-yielded coroutines were GC'd
+    unawaited and Python emitted
+    `RuntimeWarning: coroutine '_wait_for_one' was never awaited`.
+    Fix: explicit `_drain_iterator(as_completed_iter)` after
+    `_cancel_pending()` so the iterator's queue empties cleanly.
+    Regression test
+    `test_cancel_does_not_leak_wait_for_one_warning` in
+    `tests/integration/test_chunks_overlap.py` asserts no
+    `_wait_for_one` warnings via `warnings.catch_warnings`
+    (1 new case).
+  - Three consecutive `make test` runs exit 0 post-fix (was
+    non-deterministic 1-3 unhandled errors out of 1463 passing JS
+    tests + 4047 passing Python tests).
 - **`{% data_table %}` row navigation polish — 3 sub-items from PR #1170
   Stage 11 review (closes #1171)** — final v0.9.2 drain item; tightens
   the row-navigation client module that shipped in #1170:
