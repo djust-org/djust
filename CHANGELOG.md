@@ -39,12 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (90 LoC of additive `.tt-branch*`/`.tt-comp-*`/`.tt-forward-replay`/
   `.tt-expand-toggle` rules), regenerated bundles
   `debug-panel.js` / `.min.js` / `.min.js.gz` / `.min.js.br` via
-  `scripts/build-client.sh`. 17 new vitest cases in
+  `scripts/build-client.sh`. 23 new vitest cases in
   `tests/js/debug_panel_time_travel_ui.test.js` covering: backwards-
   compat ack frames, branch badge selection, count formatting, replay
   hint, expand-toggle visibility, component sub-row rendering, click
   dispatch for component-jump and forward-replay, override-params
-  passthrough, branch_id update from event push frames.
+  passthrough, branch_id update from event push frames, AND end-to-end
+  delegated-click integration (real DOM clicks through
+  `registerTimeTravelClickHandlers`).
 
 
 

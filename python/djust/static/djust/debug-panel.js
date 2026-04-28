@@ -2758,6 +2758,12 @@
         }
 
         onTimeTravelJumpClick(index, which) {
+            // Programmatic-caller guard. Restored after the v0.9.4
+            // refactor inadvertently dropped it — the DOM dispatch path
+            // already validates via parseInt+isNaN, but callers that
+            // invoke this method directly need the same protection so
+            // malformed frames can't reach the WS layer.
+            if (typeof index !== 'number') return;
             this._sendTimeTravelMessage({ type: 'time_travel_jump', index: index, which: which || 'before' });
         }
 

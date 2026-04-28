@@ -240,3 +240,102 @@ describe('Time-Travel tab — onTimeTravelEvent picks up branch_id', () => {
         expect(panel.timeTravelBranchId).toBe('branch-1');
     });
 });
+
+describe('Time-Travel tab — delegated click handler integration', () => {
+    let panel;
+    let sentMessages;
+    let panelEl;
+
+    beforeEach(() => {
+        panel = createPanel();
+        sentMessages = [];
+        window.djust = {
+            liveViewInstance: {
+                sendMessage: (payload) => sentMessages.push(payload),
+            },
+        };
+        // Real DOM that registerTimeTravelClickHandlers attaches to.
+        // The panel's constructor already ran init() against its own
+        // internal DOM, so _ttClickBound is true. Reset it so we can
+        // register a fresh handler against our test container.
+        panelEl = document.createElement('div');
+        document.body.appendChild(panelEl);
+        panel.panel = panelEl;
+        panel._ttClickBound = false;
+        panel.registerTimeTravelClickHandlers();
+    });
+
+    afterEach(() => {
+        if (panelEl && panelEl.parentNode) panelEl.parentNode.removeChild(panelEl);
+        delete window.DjustDebugPanel;
+        delete window.djustDebugPanel;
+        delete window.djust;
+    });
+
+    it('click on .tt-jump dispatches time_travel_jump frame', () => {
+        const button = document.createElement('button');
+        button.className = 'tt-jump';
+        button.dataset.ttJump = '5';
+        button.dataset.ttWhich = 'after';
+        panelEl.appendChild(button);
+        button.click();
+        expect(sentMessages).toEqual([
+            { type: 'time_travel_jump', index: 5, which: 'after' },
+        ]);
+    });
+
+    it('click on .tt-comp-jump dispatches time_travel_component_jump frame', () => {
+        const button = document.createElement('button');
+        button.className = 'tt-comp-jump';
+        button.dataset.ttCompJump = '3';
+        button.dataset.ttCompId = 'comp-a';
+        button.dataset.ttWhich = 'before';
+        panelEl.appendChild(button);
+        button.click();
+        expect(sentMessages).toEqual([
+            { type: 'time_travel_component_jump', index: 3, component_id: 'comp-a', which: 'before' },
+        ]);
+    });
+
+    it('click on .tt-forward-replay dispatches forward_replay frame', () => {
+        const button = document.createElement('button');
+        button.className = 'tt-forward-replay';
+        button.dataset.ttForwardReplay = '2';
+        panelEl.appendChild(button);
+        button.click();
+        expect(sentMessages).toEqual([
+            { type: 'forward_replay', from_index: 2 },
+        ]);
+    });
+
+    it('click on .tt-expand-toggle flips the per-row expanded state', () => {
+        const button = document.createElement('button');
+        button.className = 'tt-expand-toggle';
+        button.dataset.ttExpand = '7';
+        panelEl.appendChild(button);
+        button.click();
+        expect(panel.timeTravelExpandedRows[7]).toBe(true);
+        button.click();
+        expect(panel.timeTravelExpandedRows[7]).toBe(false);
+        // Expand-toggle is local UI state — no WS frame should fire.
+        expect(sentMessages).toHaveLength(0);
+    });
+
+    it('click on a non-tt button is ignored (no double-firing across branches)', () => {
+        const button = document.createElement('button');
+        button.className = 'unrelated-button';
+        panelEl.appendChild(button);
+        button.click();
+        expect(sentMessages).toHaveLength(0);
+    });
+
+    it('click on .tt-jump with non-numeric data attribute is ignored', () => {
+        const button = document.createElement('button');
+        button.className = 'tt-jump';
+        button.dataset.ttJump = 'not-a-number';
+        button.dataset.ttWhich = 'before';
+        panelEl.appendChild(button);
+        button.click();
+        expect(sentMessages).toHaveLength(0);
+    });
+});
