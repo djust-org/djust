@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`{% data_table %}` row navigation polish — 3 sub-items from PR #1170
+  Stage 11 review (closes #1171)** — final v0.9.2 drain item; tightens
+  the row-navigation client module that shipped in #1170:
+  - **(a) Nested-control selector — add `<details>`/`<summary>`/`<option>`
+    (R3).** `NESTED_CONTROL_SELECTOR` was 6 tags
+    (`a, button, input, label, select, textarea`); missed three common
+    interactive elements. Disclosure widgets (`<details>`) and `<select>`
+    children (`<option>`) now suppress row navigation when the user
+    toggles or selects them. Pure additive selector change, no
+    behaviour change for existing markup.
+  - **(b) Test-hook namespace refactor — drop `window.__djustRowClickNavigate`
+    (R4).** Production code now dispatches through
+    `window.djustDataTableRowClick.navigate`, which is also the property
+    tests stub via direct assignment (vi.fn). The underscored magic
+    global is gone — cleaner contract; the namespace was already
+    exported for `bindRow` / `initAll` in #1170.
+  - **(c) Server-side contract test for URL allowlist (R5).** New
+    `tests/unit/test_data_table_url_allowlist_1171.py` parametrizes 6
+    URL shapes (3 allowed, 3 hostile — `//evil.com`, `javascript:...`,
+    `data:...`) and locks in the "render-doesn't-crash, wiring-is-stable"
+    contract that the JS guard depends on. The actual open-redirect
+    defense remains the regex in `data-table-row-click.js`; this Python
+    test documents the server-side half of the boundary.
+  - Test count delta: `tests/js/data_table_row_click.test.js` 14 → 17
+    (+3); new `test_data_table_url_allowlist_1171.py` 7 cases.
+
 ### Changed
 
 - **v0.9.2 hygiene group — Redis perf docstring softened, replay-rejection
