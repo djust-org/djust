@@ -406,12 +406,15 @@ Framework code that emits HTML defaults to:
 - **No inline event handlers** — no `onclick=`, `onchange=`,
   `oninput=` in emitted markup. Click/keyboard/input behavior comes
   from delegated listeners installed by the static modules.
-- **Auto-bind via marker class** — when an element opts into a
-  framework behavior, it carries a marker class (e.g.
-  `data-table-row-clickable`, `dj-form`, `dj-track-static`) plus the
-  data attributes the behavior reads. The static JS module attaches a
-  delegated listener on `document` (or root) and dispatches based on
-  `event.target.closest('.<marker-class>')`. Compose with
+- **Auto-bind via marker class or attribute** — when an element opts
+  into a framework behavior, it carries a marker (CSS class OR HTML
+  attribute) plus the data attributes the behavior reads. Two real
+  patterns: CSS class — `tr.data-table-row-clickable` (PR #1170) — and
+  attribute — `[dj-track-static]` (`39-dj-track-static.js`),
+  `[dj-submit]` on forms (`09-event-binding.js`). The static JS module
+  attaches a delegated listener on `document` (or root) and dispatches
+  based on `event.target.closest('.<marker-class>')` or
+  `event.target.closest('[<marker-attr>]')`. Compose with
   `MutationObserver` for morphdom-managed regions so the binding
   survives VDOM patches.
 - **CSP nonce only when genuinely required** — the lazy-fill protocol

@@ -192,10 +192,13 @@ retro / Action Tracker #183 / GitHub #1175.
   external static JS modules served from `python/djust/...static/`
 - [ ] **No inline event handlers** - no `onclick=`, `onchange=`,
   `oninput=`, etc. in emitted HTML
-- [ ] **Auto-bind via marker class** - the static JS module attaches a
-  delegated listener on `document` (or root) and dispatches based on a
-  marker class set on the emitted element (e.g. `data-table-row-clickable`,
-  `dj-form`, `dj-track-static`). Compose with `MutationObserver` for
+- [ ] **Auto-bind via marker class or attribute** - the static JS module
+  attaches a delegated listener on `document` (or root) and dispatches
+  based on a marker (CSS class OR HTML attribute) set on the emitted
+  element. Two real patterns: marker CSS class
+  (`tr.data-table-row-clickable` in PR #1170) and marker attribute
+  (`[dj-track-static]` in `39-dj-track-static.js`, `[dj-submit]` on
+  forms in `09-event-binding.js`). Compose with `MutationObserver` for
   morphdom-managed regions.
 - [ ] **CSP nonce only when genuinely required** - inline `<script>` is
   only acceptable when the activator must run synchronously inline (rare;
