@@ -3,9 +3,9 @@
  *
  * Adds keyboard accessibility (Enter / Space activate a focused row) and
  * a nested-control guard (clicks inside an interactive descendant
- * <a>/<button>/<input>/<label>/<select> do NOT trigger row navigation)
- * to data_table rows that opt in via the `data-table-row-clickable`
- * marker class.
+ * <a>/<button>/<input>/<label>/<select>/<textarea>/<details>/<summary>/<option>
+ * do NOT trigger row navigation) to data_table rows that opt in via
+ * the `data-table-row-clickable` marker class.
  *
  * The template tag emits one of two row shapes when row navigation is
  * enabled:
@@ -42,9 +42,25 @@
   // Selectors for descendants whose clicks should NOT propagate up to
   // row-level navigation. Matches the Stage 4 brief enumeration plus
   // textarea (a non-button form control whose accidental row-nav would
-  // be just as user-hostile as the others).
+  // be just as user-hostile as the others), plus details/summary/option
+  // — disclosure widgets and select children that the user expects to
+  // toggle/select without triggering row navigation (#1171 R3).
   var NESTED_CONTROL_SELECTOR =
-    "a, button, input, label, select, textarea";
+    "a, button, input, label, select, textarea, details, summary, option";
+
+  // Expose navigate via the public namespace so tests can spy on it
+  // (vi.spyOn) without needing a magic underscored global. JSDOM 26+
+  // marks Location.prototype.assign as non-configurable, so direct
+  // interception isn't possible — going through this namespace lets
+  // tests stub it cleanly. (#1171 R4)
+  if (typeof window !== "undefined") {
+    window.djustDataTableRowClick = window.djustDataTableRowClick || {};
+    if (!window.djustDataTableRowClick.navigate) {
+      window.djustDataTableRowClick.navigate = function (h) {
+        window.location.assign(h);
+      };
+    }
+  }
 
   function navigateForRow(tr) {
     // Static-URL path: navigate via dataset.href.
@@ -58,16 +74,10 @@
       // The `(?!\/)` lookahead on the leading `/` rejects `//host` while
       // still allowing single-leading-slash absolute paths.
       if (/^(https?:\/\/|\/(?!\/)|\.)/.test(href)) {
-        // Tests override window.__djustRowClickNavigate to capture the
-        // target URL since JSDOM's window.location.assign is
-        // non-configurable. Production code path is the default arm.
-        var navigate =
-          (typeof window !== "undefined" &&
-            window.__djustRowClickNavigate) ||
-          function (h) {
-            window.location.assign(h);
-          };
-        navigate(href);
+        // Dispatch through the namespace so tests can vi.spyOn() the
+        // navigate property. Production path is the default function
+        // installed on the namespace above.
+        window.djustDataTableRowClick.navigate(href);
       }
       return true;
     }
@@ -153,12 +163,13 @@
     }
   }
 
-  // Expose for tests and for explicit re-init from app code.
+  // Expose for tests and for explicit re-init from app code. Merge
+  // onto the namespace (the navigate property was already set up at
+  // module top so the closure can call it via the namespace).
   if (typeof window !== "undefined") {
-    window.djustDataTableRowClick = {
-      initAll: initAll,
-      initWrapper: initWrapper,
-      bindRow: bindRow,
-    };
+    window.djustDataTableRowClick = window.djustDataTableRowClick || {};
+    window.djustDataTableRowClick.initAll = initAll;
+    window.djustDataTableRowClick.initWrapper = initWrapper;
+    window.djustDataTableRowClick.bindRow = bindRow;
   }
 })();
