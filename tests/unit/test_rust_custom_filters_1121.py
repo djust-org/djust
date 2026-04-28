@@ -19,6 +19,16 @@ and dispatches to the Python callable. ``is_safe`` and ``needs_autoescape``
 flags from the Django filter object are honoured so the renderer's
 auto-escape / safe-output policy works for custom filters the same way it
 does for built-ins.
+
+.. note::
+   This file is **not safe to run in parallel** with other tests that
+   touch the Rust filter registry (#1162). The module-scoped autouse
+   fixture ``_register_custom_filters`` registers filters at module
+   setup and clears the global ``FILTER_REGISTRY`` at teardown.
+   Parallel test runs (e.g. ``pytest-xdist``) that interleave
+   registration calls from another module would race. The
+   ``scope="module"`` keeps the registry stable across the tests in
+   this file; cross-module isolation requires running serially.
 """
 
 from __future__ import annotations
@@ -74,6 +84,14 @@ def _autoescape_aware(value, autoescape=True):
 # `djust.template_filters` triggers the Django-libraries scan; we also
 # inject this module's library directly so unit tests don't depend on a
 # Django app's templatetags module being loaded.
+#
+# IMPORTANT (#1162): scope="module" — registration happens once per file
+# import, teardown clears the registry once after the last test in this
+# file. A function-scoped clear-then-register would race with parallel
+# tests in another file that register at the same global Mutex. Even at
+# module scope, this file is **not safe to run in parallel with other
+# files** that touch the Rust filter registry; run those serially or in
+# separate worker processes.
 @pytest.fixture(autouse=True, scope="module")
 def _register_custom_filters():
     from djust.template_filters import register_django_filter
@@ -84,7 +102,11 @@ def _register_custom_filters():
     register_django_filter("prefix", _prefix)
     register_django_filter("autoescape_aware", _autoescape_aware)
     yield
-    # Teardown: clear so other modules' tests start clean.
+    # Teardown: clear so other modules' tests start clean. Note: clear
+    # only empties the HashMap — the per-process
+    # ``ANY_CUSTOM_FILTERS_REGISTERED`` AtomicBool guard intentionally
+    # stays ``true`` for the rest of the process. See the Rust
+    # ``filter_registry`` doc comment for why.
     from djust._rust import clear_custom_filters
 
     clear_custom_filters()
@@ -182,13 +204,24 @@ def test_unknown_filter_still_raises_clear_error():
     """The bridge must NOT silently swallow misses — an unknown filter
     name still produces ``Unknown filter: <name>`` so authors find typos
     and missing imports fast.
+
+    Tightened (#1162): assert the canonical message shape
+    ``Unknown filter: <name>`` rather than just substring-matching the
+    name. A future regression that, say, reformatted the error to
+    ``filter not found`` would slip past the looser check.
     """
-    with pytest.raises(Exception) as exc_info:
+    # ``RuntimeError`` is what the Rust extension raises for any template
+    # error reaching Python. We pin the type to catch a future regression
+    # where the bridge swallows it into a different error class.
+    with pytest.raises(RuntimeError) as exc_info:
         render_template(
             "{{ x|definitely_not_a_filter_xyz }}",
             {"x": "val"},
         )
-    assert "definitely_not_a_filter_xyz" in str(exc_info.value)
+    msg = str(exc_info.value)
+    # Canonical shape: ``Unknown filter: <name>`` (from filters.rs:510).
+    assert "Unknown filter:" in msg, f"unexpected error shape: {msg!r}"
+    assert "definitely_not_a_filter_xyz" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -210,3 +243,80 @@ def test_lookup_filter_in_rust_live_view():
     )
     html_out = rv.render()
     assert "/sort?col=filed_date" in html.unescape(html_out)
+
+
+# ---------------------------------------------------------------------------
+# Polish from #1162 — Stage 11 review of #1161
+# ---------------------------------------------------------------------------
+
+
+class TestNewBehavior_1162:
+    """New regression cases added in PR #1162 for the polish sub-items
+    deferred from PR #1161's Stage 11 review.
+
+    These cover:
+    - sub-item 2: ``autoescape`` param flows from renderer through
+      ``apply_filter_full`` → ``apply_custom_filter`` → Python kwarg.
+    - sub-item 6: async (``async def``) filters are rejected loudly
+      with a clear error instead of silently emitting
+      ``"<coroutine object ...>"`` into the rendered HTML.
+    """
+
+    def test_async_filter_raises_clear_error(self):
+        """An ``async def`` filter must be rejected with a clear,
+        actionable error — not silently stringify the coroutine into
+        the HTML output (sub-item 6 of #1162).
+        """
+        from djust._rust import register_custom_filter, unregister_custom_filter
+
+        async def _async_broken(value):
+            return f"async:{value}"
+
+        register_custom_filter("async_broken_1162", _async_broken, False, False)
+        try:
+            with pytest.raises(RuntimeError) as exc_info:
+                render_template(
+                    "{{ x|async_broken_1162 }}",
+                    {"x": "v"},
+                )
+            msg = str(exc_info.value)
+            # Error must name the filter, name the problem, and suggest
+            # a fix. We don't pin the exact phrasing — but all three
+            # must be present.
+            assert "async_broken_1162" in msg, msg
+            assert "async" in msg.lower(), msg
+            assert "sync" in msg.lower() or "def" in msg or "coroutine" in msg.lower(), msg
+        finally:
+            unregister_custom_filter("async_broken_1162")
+
+    def test_needs_autoescape_filter_receives_autoescape_kwarg(self):
+        """The ``autoescape`` param threads from the renderer through
+        the bridge (sub-item 2 of #1162). Today the renderer always
+        passes ``true``; this test asserts the kwarg arrives at the
+        Python callable so the future ``{% autoescape off %}`` block
+        feature has a working substrate.
+        """
+        from djust._rust import register_custom_filter, unregister_custom_filter
+
+        captured = {}
+
+        def _autoescape_capturing(value, autoescape=None):
+            captured["autoescape"] = autoescape
+            return f"v={value}|ae={autoescape}"
+
+        # Mark needs_autoescape via the function attribute Django uses.
+        _autoescape_capturing.needs_autoescape = True
+
+        register_custom_filter("ae_capture_1162", _autoescape_capturing, False, True)
+        try:
+            out = render_template(
+                "{{ x|ae_capture_1162 }}",
+                {"x": "hi"},
+            )
+            # Today: renderer hardcodes True (the historical behaviour).
+            # When autoescape-block tracking lands, the renderer will
+            # vary this — but the kwarg MUST flow through either way.
+            assert captured["autoescape"] is True
+            assert "ae=True" in html.unescape(out)
+        finally:
+            unregister_custom_filter("ae_capture_1162")

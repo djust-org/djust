@@ -179,6 +179,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Custom filter bridge polish — 6 sub-items deferred from #1161
+  (closes #1162)** — Stage 11 review of PR #1161 (which closed #1121
+  by adding the eager Rust filter registry) flagged six follow-ups.
+  All are addressed in this PR:
+  1. **Hot-path Mutex perf**: ``is_custom_filter_safe`` and
+     ``apply_custom_filter`` short-circuit on a new
+     ``ANY_CUSTOM_FILTERS_REGISTERED`` ``AtomicBool`` so projects with
+     no custom filters pay only an atomic load on every variable
+     expansion's ``filter_specs.iter().any(...)`` loop, never a Mutex
+     acquire. Acquire/Release ordering pairs the load with the store
+     in ``register_custom_filter``.
+  2. **Hardcoded ``autoescape=True`` plumbing**: ``apply_custom_filter``
+     now accepts an ``autoescape: bool`` parameter threaded through
+     ``apply_filter_full`` from the renderer call site. Today still
+     always ``true`` (matches prior behaviour) but the call chain is
+     ready for ``{% autoescape %}`` block tracking landing in a future
+     PR without further changes to ``filter_registry.rs``.
+  3. **Unknown-filter test tightened**: assert ``RuntimeError`` type
+     AND the canonical ``"Unknown filter:"`` message shape, not just
+     ``pytest.raises(Exception)`` + substring on filter name only.
+  4. **Dropped unused ``custom_filter_exists``**: dead public Rust
+     function with no callers in the workspace; PyO3 macros suppress
+     the dead-code warning so it would have rotted silently.
+  5. **Fixture isolation comment**: the ``scope="module"`` autouse
+     fixture in ``tests/unit/test_rust_custom_filters_1121.py`` now
+     carries an explicit comment that this file is not safe to run
+     in parallel with other Rust-filter-registry-touching tests.
+  6. **Silent async filter handling**: an ``async def`` custom filter
+     previously stringified the unawaited coroutine (``"<coroutine
+     object ...>"``) into the rendered HTML with a "coroutine was
+     never awaited" RuntimeWarning at GC. Now uses
+     ``inspect.iscoroutine`` to detect and reject with a clear,
+     actionable error and ``coro.close()`` to suppress the GC warning.
+
+  New cases in ``TestNewBehavior_1162``
+  (``tests/unit/test_rust_custom_filters_1121.py``, 2 Python cases)
+  cover async-filter rejection (sub-item 6) and ``autoescape`` kwarg
+  flow (sub-item 2). Two new Rust unit tests in
+  ``filter_registry::tests`` cover the ``AtomicBool`` short-circuit
+  pre-registration.
+
 - **`replay_event` validates handler is `@event_handler`-decorated
   (closes #1148)** — defense-in-depth strengthening of the v0.9.0
   #1042 forward-replay path. The original guard rejected only

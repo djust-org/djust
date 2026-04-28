@@ -498,12 +498,18 @@ pub fn apply_filter_full(
             // registry for project-defined ``@register.filter`` callables
             // (issue #1121). Bridge: ``filter_registry::apply_custom_filter``
             // returns ``Some(Ok|Err)`` on hit, ``None`` on miss.
+            //
+            // ``autoescape=true`` is supplied here as the engine's current
+            // (pinned) policy. When ``{% autoescape %}`` block tracking
+            // lands in a future PR, the renderer will thread the
+            // surrounding policy through this call site (#1162).
             if let Some(result) = filter_registry::apply_custom_filter(
                 filter_name,
                 value,
                 arg,
                 context,
                 arg_was_quoted,
+                true,
             ) {
                 return result.map_err(DjangoRustError::TemplateError);
             }
