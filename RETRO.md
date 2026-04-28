@@ -198,8 +198,8 @@ issue or be explicitly closed with a reason.
 | 165 | CodeQL `js/tainted-format-string` self-review checkpoint | Retro v0.8.6 / PR #1120 | #1124 | Open | Caught by CodeQL post-CI; canonical safe pattern is `console.error('msg %s:', val, e)`, not template literals with user-controlled `${val}`. Add to CLAUDE.md JS-side patterns + Stage 7. |
 | 166 | Bulk dispatch-site refactor + count-test pattern (canonicalize) | Retro v0.8.6 / PRs #1117 + #1120 | #1125 | Open | Pattern: many similar sites → one helper + a count-based test that catches future additions that forget the pattern. |
 | 167 | v0.8.5 milestone retro never written | Retro v0.8.6 (backfill bookkeeping) | #1126 | Closed | Backfilled v0.8.5 entry in RETRO.md alongside the v0.8.6 retro session, 2026-04-26. |
-| 168 | Stage-4 first-principles canonicalization in CLAUDE.md | Retro v0.9.0 / 3 of 6 PRs | #1143 | Open | Plan stage's grep-before-architecting pass paid off in #1128, #1041, #1135. Canonicalize as a CLAUDE.md rule. |
-| 169 | Branch-name verify check in pipeline-run skill | Retro v0.9.0 / PR-A + PR-C drift | #1144 | Open | Twice in v0.9.0 a commit landed on the wrong branch. Add a pre-commit `git symbolic-ref --short HEAD` match against the active state file's `branch_name`. |
+| 168 | Stage-4 first-principles canonicalization in CLAUDE.md | Retro v0.9.0 / 3 of 6 PRs | #1143 | Closed | **Resolved in v0.9.4 via PR #1192** — CLAUDE.md "Process canonicalizations from v0.9.0 retro arc" section added with 5 concrete grep targets (wire-protocol, state-snapshot, async dispatch, decorator composition, component lifecycle) so Plan stages cite file:line. |
+| 169 | Branch-name verify check in pipeline-run skill | Retro v0.9.0 / PR-A + PR-C drift | #1144 | Closed | **Resolved in v0.9.4 via PR #1192** — same CLAUDE.md section adds the pre-commit one-liner that compares `git symbolic-ref --short HEAD` against the active state file's `branch_name` field. Catches the silent wrong-branch-commit failure mode. |
 | 170 | #1134 polluting-test bisect (HIGH-priority) | Retro v0.9.0 / 6 PRs | #1134 | Closed | **Resolved in v0.9.1 via PR #1159** — bisect identified two independent polluters (in-memory SQLite `aclose_old_connections` leak + `sys.modules` rebind in watchdog test). 6 flaky tests unskipped; 3 clean full-suite runs verified. |
 | 171 | Rust template engine `{% live_render %}` tag handler (lazy=True parity) | Retro v0.9.0 / PR #1138 | #1145 | Closed | **Resolved in v0.9.1 via PR #1166** — lazy callback delegation via shared registry sidecar; new `call_handler_with_py_sidecar` bridge generic for future Rust-path tags. 8 parity tests. |
 | 172 | A075 system check — sticky+lazy template scan | Retro v0.9.0 / PR #1138 deferral / ADR-015 §"Deferred from PR-B" | #1146 | Closed | **Resolved in v0.9.1 via PR #1163** — A075 check + verbatim-block guard (mirrors A070/A071 pattern); 8 regression tests. |
@@ -207,14 +207,98 @@ issue or be explicitly closed with a reason.
 | 174 | Replay handler argument validation (defense-in-depth) | Retro v0.9.0 / PR #1142 Stage 11 | #1148 | Closed | **Resolved in v0.9.1 via PR #1164** — `is_event_handler(handler)` registry check after dunder guard. 3 regression tests in `TestReplayHandlerValidation`. |
 | 175 | `markdown` package missing from default test env | Retro v0.9.0 (carryover from v0.8.7 retro) | #1149 | Closed | **Resolved in v0.9.1 via PR #1164** — `markdown` + `nh3` added to `[project.optional-dependencies.dev]`. |
 | 176 | Descriptor-pattern component time-travel verification test | Retro v0.9.0 / PR #1141 Stage 11 | #1150 | Closed | **Resolved in v0.9.1 via PR #1164** — `TestDescriptorPatternComponentTimeTravel` (2 cases) added; descriptor auto-promotion gap noted as follow-up in #1165. |
-| 177 | Debug panel UI for per-component scrubbing + forward-replay | Retro v0.9.0 / PR #1141 + PR #1142 follow-up | #1151 | Open | Build the user-facing UI on top of the time-travel + replay primitives shipped in v0.9.0. |
+| 177 | Debug panel UI for per-component scrubbing + forward-replay | Retro v0.9.0 / PR #1141 + PR #1142 follow-up | #1151 | Closed | **Resolved in v0.9.4 via PR #1193 (wire-protocol PR-A) + PR #1194 (debug panel UI PR-B)** — branch indicator badge, "X / max" event count, forward-replay button, per-component expand-toggle with sub-row scrubbers. CSP-strict throughout. 12 server-side cases + 23 client-side cases. |
 | 178 | Vitest unhandled-rejection in `view-transitions.test.js` | Retro v0.9.0 / PR #1135 pre-push | #1152 | Open | Non-deterministic teardown error; audit test stubs against the v0.8.5 retro #1113 microtask-yield rule. |
 | 179 | `asyncio.as_completed._wait_for_one` warning suppression | Retro v0.9.0 / PR #1138 Stage 11 | #1153 | Open | DeprecationWarning under teardown in tests/integration/test_chunks_overlap.py; either filter locally or fix `_cancel_pending` lifecycle. |
 | 180 | Serialize implementer agents per checkout (parallel-agent CHANGELOG contamination) | Retro v0.9.1 / PR #1163 + #1164 | #1172 | Closed | **Resolved in v0.9.2** — applied directly to `~/.claude/skills/pipeline-run/SKILL.md` "One Implementer Agent Per Checkout" section. Validated across all 7 v0.9.2 PRs: zero CHANGELOG cross-contamination after enforcement. |
 | 181 | Two-commit shape (impl+tests / docs+CHANGELOG) as canonical pipeline stage gate | Retro v0.9.1 / PRs #1166 + #1168 + #1170 | #1173 | Closed | **Resolved in v0.9.2 via PR #1176** — `.pipeline-templates/feature-state.json` Stage 5 forbids CHANGELOG; Stage 9 mandates docs-only. `bugfix-state.json` + `ship-state.json` symmetric. Validated on all 7 v0.9.2 PRs — Stage 11 reviewers verified clean splits. |
 | 182 | "3 clean full-suite runs" verification gate for pollution-class fixes | Retro v0.9.1 / PR #1159 (#1134 bisect) | #1174 | Closed | **Resolved in v0.9.2 via PR #1176** — `.pipeline-templates/bugfix-state.json` Stage 6 mandates 3 clean full-suite runs when task description matches `/pollution\|leak\|flak\|test isolation/i`. Not exercised in v0.9.2 (no pollution-class fixes in the drain). |
 | 183 | CSP-strict defaults for new client-side framework code (no inline scripts, no inline event handlers) | Retro v0.9.1 / PRs #1163 + #1170 | #1175 | Closed | **Resolved in v0.9.2 via PR #1178** — codified in CLAUDE.md ("Process canonicalizations from v0.9.1 retro arc" section) + `docs/PULL_REQUEST_CHECKLIST.md` ("CSP-Strict Defaults" subsection) + `docs/guides/security.md` ("CSP-Strict Defaults for Framework Code" section). 3-doc canonicalization. |
-| 184 | "Closes #N, closes #M" each on its own body line (parenthesized comma-list silently fails) | Retro v0.9.2 / PR #1176 (self-defeating) | #1185 | Open | PR #1176 — the very PR canonicalizing v0.9.1 retro lessons — used `(closes #1173, closes #1174)` parenthesized syntax in its title, GitHubs auto-close parser missed both. Implementer caught + fixed in PR-body update. Add to PR-checklist: each closes-reference on its own body line; comma-list-in-parens is a known auto-close failure mode. |
+| 184 | "Closes #N, closes #M" each on its own body line (parenthesized comma-list silently fails) | Retro v0.9.2 / PR #1176 (self-defeating) | #1185 | Closed | **Resolved in v0.9.4 via PR #1192** — `docs/PULL_REQUEST_CHECKLIST.md` Closing-Keywords rule expanded to explicitly name the parenthesized form `(closes #X, closes #Y)` as a known auto-close failure mode and recommend PR body over title. |
+| 185 | Refactor-with-helper guard audit pattern | Retro v0.9.4 / PR #1194 | #1195 | Open | When extracting a helper from N call sites with inline input-validation logic, audit each call site to decide where validation lives. PR #1194 inadvertently dropped a `typeof index !== 'number'` guard when routing through `_sendTimeTravelMessage`. Failure mode is silent — production code keeps working when inputs are well-formed. |
+| 186 | Delegated-listener integration test pattern | Retro v0.9.4 / PR #1194 | #1196 | Open | For any "marker class + delegated listener" feature, unit tests (direct method) and integration tests (real DOM event → handler → method) need separate coverage. PR #1194's first version had 17 method-level cases but ZERO integration tests. Stage 11 caught it; backfill added 6 integration cases. |
+| 187 | Canon-doc citation discipline (grep-verify before commit) | Retro v0.9.4 / PR #1192 | #1197 | Open | Every `file:line` / attribute name / bash one-liner cited in a canon doc (CLAUDE.md, PR-checklist, ADR) should be `grep`-verified. PR #1192 had 5 inaccuracies in a 3-rule docs PR. Pre-empt Stage 11 by running greps in self-review. |
+| 188 | Commit-or-rollback handler shape | Retro v0.9.4 / PR #1193 | #1198 | Open | Async handlers with both state mutation AND early-return paths must mutate AFTER the commit point. PR #1193's `handle_forward_replay` set `branch_id = new_branch` before awaiting `replay_event`; on `replayed is None`, branch state stayed bumped with no recorded events. View+client diverged silently. |
+| 189 | Edge-case coverage for index/cursor logic | Retro v0.9.4 / PR #1193 | #1199 | Open | When implementing handlers with index/cursor logic, run cases at `index=0`, `len/2`, `len-1`, `len`. PR #1193 had an off-by-one between `_build_time_travel_state` and `handle_forward_replay`'s gate that disagreed at `cursor=len-1`. Mental trace catches it; the four-boundary discipline catches it before Stage 11. |
+| 190 | Tautology test detection | Retro v0.9.4 / PR #1190 | #1200 | Open | When a test asserts "this thing happened", check whether the assertion would pass if the action did nothing. PR #1190's `test_ready_completes_other_setup` asserted `any(isinstance(filters, DjustLogSanitizerFilter))` but every prior test populates the logger; the assertion was tautological. Fix pattern: snapshot count before, assert grew by exactly 1. |
+
+---
+
+## v0.9.4 — DX wave: HVR auto-enable + Debug Panel time-travel UI (PRs #1190, #1191, #1192, #1193, #1194)
+
+**Date**: 2026-04-28
+**Scope**: Five-PR drain closing the v0.9.4 milestone in a single session. Headlined by #1151 (Debug Panel UI for per-component time-travel + forward-replay), shipped as a foundation/capability split (wire-protocol PR-A → UI PR-B). Surrounded by two DX wins (#1190 HVR auto-enable, #1192 process canon) and one test-infra polish drain (#1191). 6 issues closed (#1151, #1185, #1188, #1189, #1143, #1144), 6 new tracker rows opened (#185–#190 → GitHub #1195–#1200).
+**Tests at close**: 4047 Python + 1480 JS = 5527 total (+~75 added this milestone).
+
+### What We Learned
+
+**1. Refactor-with-helper guard audit.**
+When extracting a helper from N call sites with inline input-validation logic, audit each call site to decide explicitly: push the validation INTO the helper, or keep it AT the call site. The "deferred to helper" assumption is silent — production code keeps working when inputs are well-formed; breaks only on malformed inputs that may not appear in tests. PR #1194 introduced `_sendTimeTravelMessage` and routed `onTimeTravelJumpClick` through it, inadvertently dropping a `typeof index !== 'number'` guard. The DOM dispatch path still validated, so the bug only mattered for programmatic callers — Stage 11 caught it.
+
+**Action taken**: Open — tracked in Action Tracker #185 (GitHub #1195).
+
+**2. Delegated-listener integration test pattern.**
+For any "marker class + delegated event listener" feature, unit tests (direct method invocation) and integration tests (real DOM event → registered handler → method) need separate coverage. PR #1194's first version had 17 method-level vitest cases but ZERO integration tests — the `target.closest()` containment check, `parseInt` click-time parsing, and 4-branch dispatch order were entirely untested. Stage 11 caught it; backfill added 6 integration cases (one per click branch + non-tt-button + non-numeric data). Generalizable: every delegated-listener selector branch deserves at least one integration test.
+
+**Action taken**: Open — tracked in Action Tracker #186 (GitHub #1196).
+
+**3. Canon-doc citation discipline (grep-verify before commit).**
+Every `file:line`, attribute name, method name, and bash one-liner cited in a canon doc (CLAUDE.md, PR-checklist, ADR) should be `grep`-verified before committing. Stage 11 reviewers will run those greps anyway; pre-empting saves a roundtrip. PR #1192 had 5 inaccuracies in a 3-rule docs PR — wrong line numbers, wrong attribute names, bash placeholder, wrong section ordering, speculative prose claims. None individually catastrophic, but the cumulative effect would have been a canon entry future readers couldn't trust.
+
+**Action taken**: Open — tracked in Action Tracker #187 (GitHub #1197).
+
+**4. Commit-or-rollback handler shape.**
+Async handlers with BOTH state mutation AND early-return paths must mutate AFTER the commit point — otherwise the early-return path leaves state in a half-committed shape. PR #1193's `handle_forward_replay` set `view._time_travel_branch_id = new_branch` BEFORE awaiting `replay_event`; on `replayed is None` (handler missing/un-decorated), branch state stayed bumped with no recorded events, and view + client diverged about the active branch. Failure mode is silent (no exception); observability won't flag it. Two clean fix shapes: (a) defer the mutation past all early-return checks, (b) try/except with explicit rollback (only when multiple mutations need atomic rollback).
+
+**Action taken**: Open — tracked in Action Tracker #188 (GitHub #1198).
+
+**5. Edge-case coverage for index/cursor logic.**
+When implementing a handler with index or cursor logic, run through cases at `index=0`, `index=len/2`, `index=len-1`, `index=len` (out of range) before declaring done. Four mental cases catches most off-by-one classes. PR #1193's `_build_time_travel_state` and `handle_forward_replay`'s gate answered the same boolean question with different formulas (`cursor < history_len` vs `from_index < history_len_before - 1`); they disagreed at `cursor=len-1, which="before"` with override_params. The mental trace catches it; the four-boundary discipline catches it before Stage 11.
+
+**Action taken**: Open — tracked in Action Tracker #189 (GitHub #1199).
+
+**6. Tautology test detection.**
+When a test asserts "this thing happened", check whether the assertion would ALSO pass if the action under test did nothing. If yes, it's a tautology — production state from prior tests, fixtures, or module setup is making it pass for the wrong reason. Failure mode is silent: the test stays green forever even after the function under test silently breaks. Coverage metrics still report it as covered. PR #1190's `test_ready_completes_other_setup_even_when_auto_enable_skipped` asserted `any(isinstance(filters, DjustLogSanitizerFilter))` — but every prior test in the file calls `app.ready()` which adds another filter (no idempotency guard). The assertion would pass even if test #6's own ready() did nothing. Fix pattern: snapshot count BEFORE, assert grew by exactly 1.
+
+**Action taken**: Open — tracked in Action Tracker #190 (GitHub #1200).
+
+### Insights
+
+- **Two-PR foundation/capability split worked again.** PR #1193 (wire protocol) and PR #1194 (UI on top) shipped separately with a tight contract — PR #1193's CHANGELOG explicitly noted what would arrive in PR #1194; PR #1194 referenced PR #1193's contract. A reviewer reading PR #1194 can verify against PR #1193's tests without scrolling through 800 LoC of server-side logic. Same pattern that worked for v0.8.6 View Transitions arc and v0.9.0 PR-A/PR-B/PR-C streaming arc. Worth preserving as a milestone-level pattern.
+- **Stage 11 reviewers consistently catch real bugs.** Across 5 PRs this milestone: 11 🟡 findings, all real correctness or test-coverage gaps. Zero 🔴. Self-review missed these; the independent reviewer found them. The cost (~5min per review) is dwarfed by the cost of shipping the bugs. The retro-artifact gate also held: every PR retro posted as a comment.
+- **CSP-strict canon (#1175) paid off.** PR #1194 added a new debug panel UI feature emitting HTML, and following the existing delegated-listener + marker-class pattern took zero design effort. The canon entry from v0.9.1 retro arc is doing exactly what canon entries are for: making the right pattern the easy pattern.
+- **Pre-commit hooks remain a friction source.** PR #1194's first commit attempt failed because `end-of-file-fixer` rewrote the source file and `build-js` regenerated bundles — required a re-stage and re-commit. Not a defect (the hooks did their job), but a 10-second tax that adds up across milestones. `pre-commit run --files <staged>` before the first commit attempt would eliminate it.
+- **Wall-clock budget**: 5 PRs from branch to merge in one session. Average ~45 min per PR (Plan → Implementation → Stage 11 → fix-pass → CI → merge → retro). The pipeline-ship + autonomous --all flag held all the way through; no manual intervention beyond the user's initial `/pipeline-run` invocation.
+
+### Review Stats
+
+| Metric | #1190 | #1191 | #1192 | #1193 | #1194 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Tests added | 6 | 0 (existing test edits) | 0 (docs only) | 12 | 23 | 41 |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 2 | 1 | 5 | 2 | 2 | 12 |
+| Findings fixed pre-merge | 2 of 2 | 1 of 1 | 5 of 5 | 2 of 2 | 2 of 2 | 12 of 12 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0 |
+| Commits | 3 | 2 | 2 | 3 | 3 | 13 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New "Process canonicalizations from v0.9.0 retro arc" section added in PR #1192 with 2 rules — Stage-4 first-principles grep canon (#168) + branch-name verify reflex (#169). Section ordering corrected to chronological (v0.9.0 before v0.9.1).
+
+**PR-checklist (`docs/PULL_REQUEST_CHECKLIST.md`)**: Closes-#N rule expanded in PR #1192 to explicitly call out the parenthesized form `(closes #X, closes #Y)` as a known auto-close failure mode (#184).
+
+**Pipeline templates**: No template changes this milestone — the canon items (#1185, #1144, #1143) all landed in repo-level docs. Skill-level changes deferred to a future skill-update PR.
+
+**Vitest config**: PR #1191 narrowed Pattern 2 of `vitest.config.js` to drop the broader `stack.includes('view-transitions')` disjunct that could mask future genuinely-different failures. Same PR added `gc.collect()` to the `_wait_for_one`-warning absence test for deterministic finalization across CPython / PyPy / free-threaded.
+
+### Open Items
+
+- [ ] Refactor-with-helper guard audit pattern — tracked in Action Tracker #185 (GitHub #1195)
+- [ ] Delegated-listener integration test pattern — tracked in Action Tracker #186 (GitHub #1196)
+- [ ] Canon-doc citation discipline — tracked in Action Tracker #187 (GitHub #1197)
+- [ ] Commit-or-rollback handler shape — tracked in Action Tracker #188 (GitHub #1198)
+- [ ] Edge-case coverage for index/cursor logic — tracked in Action Tracker #189 (GitHub #1199)
+- [ ] Tautology test detection — tracked in Action Tracker #190 (GitHub #1200)
 
 ---
 
@@ -287,7 +371,7 @@ PR #1183 (cookie namespace polish) found a write-side issue and applied the lega
 
 ### Open Items
 
-- [ ] "Closes #N each on its own body line" PR-checklist canon — Action Tracker #184 (GitHub #1185).
+- [x] "Closes #N each on its own body line" PR-checklist canon — Action Tracker #184 (GitHub #1185). — resolved in v0.9.4 (PR #1192)
 - [ ] PR #1170 row-nav 3 🟡 follow-ups (now closed via PR #1184) — superseded.
 - [ ] PR #1179 custom filter polish 3 🟡 follow-ups — GitHub #1180.
 - [ ] Executor-side post-stage hook enforcement (Stage 5 / 9 / 6 mechanical gates) — GitHub #1177.
@@ -440,8 +524,8 @@ The integration test for `lazy=True` initially used the parent's `template = "..
 
 ### Open Items
 
-- [ ] Stage-4 first-principles canonicalization in CLAUDE.md — tracked in Action Tracker #168 (GitHub #1143).
-- [ ] Branch-name verify check in pipeline-run skill — tracked in Action Tracker #169 (GitHub #1144).
+- [x] Stage-4 first-principles canonicalization in CLAUDE.md — tracked in Action Tracker #168 (GitHub #1143). — resolved in v0.9.4 (PR #1192)
+- [x] Branch-name verify check in pipeline-run skill — tracked in Action Tracker #169 (GitHub #1144). — resolved in v0.9.4 (PR #1192)
 - [ ] #1134 polluting-test bisect (HIGH-priority bump) — tracked in Action Tracker #170 (GitHub #1134, comment + label bump).
 - [ ] Rust template engine `{% live_render %}` tag handler — tracked in Action Tracker #171 (GitHub #1145).
 - [ ] A075 system check (sticky+lazy template scan) — tracked in Action Tracker #172 (GitHub #1146).
@@ -449,7 +533,7 @@ The integration test for `lazy=True` initially used the parent's `template = "..
 - [ ] Replay handler argument validation (defense-in-depth) — tracked in Action Tracker #174 (GitHub #1148).
 - [ ] `markdown` package missing from default test env (carryover from v0.8.7 retro) — tracked in Action Tracker #175 (GitHub #1149).
 - [ ] Descriptor-pattern component time-travel verification test — tracked in Action Tracker #176 (GitHub #1150).
-- [ ] Debug panel UI for per-component scrubbing + forward-replay — tracked in Action Tracker #177 (GitHub #1151).
+- [x] Debug panel UI for per-component scrubbing + forward-replay — tracked in Action Tracker #177 (GitHub #1151). — resolved in v0.9.4 (PRs #1193 + #1194)
 - [ ] Vitest unhandled-rejection in `view-transitions.test.js` — tracked in Action Tracker #178 (GitHub #1152).
 - [ ] `asyncio.as_completed._wait_for_one` warning suppression — tracked in Action Tracker #179 (GitHub #1153).
 
