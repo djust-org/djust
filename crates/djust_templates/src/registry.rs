@@ -251,11 +251,36 @@ pub fn block_handler_exists(name: &str) -> Option<String> {
 ///
 /// The handler's `render(args, content, context)` method is called and the
 /// returned string is inserted into the rendered output.
+///
+/// Back-compat shim around [`call_block_handler_with_py_sidecar`] —
+/// equivalent to passing `None` for the raw Python sidecar.
 pub fn call_block_handler(
     name: &str,
     args: &[String],
     content: &str,
     context: &HashMap<String, djust_core::Value>,
+) -> Result<String, String> {
+    call_block_handler_with_py_sidecar(name, args, content, context, None)
+}
+
+/// Variant of [`call_block_handler`] that additionally injects raw
+/// Python objects from the [`Context::raw_py_objects`] sidecar into
+/// the handler's ``context`` dict.
+///
+/// Mirrors [`call_handler_with_py_sidecar`] (extended in PR #1166)
+/// for `Node::CustomTag`. Block handlers (``modal``, ``card`` …)
+/// that need access to Python-only objects in the parent's render
+/// context (notably ``request`` / ``view``) can read those keys from
+/// the dict directly. Sidecar values overwrite same-named JSON keys
+/// so a Python model instance wins over a normalized dict snapshot.
+///
+/// Existing block handlers that ignore the extra keys are unaffected.
+pub fn call_block_handler_with_py_sidecar(
+    name: &str,
+    args: &[String],
+    content: &str,
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::PyObject>>,
 ) -> Result<String, String> {
     let handler = {
         let registry = BLOCK_TAG_HANDLERS
@@ -288,6 +313,18 @@ pub fn call_block_handler(
             py_context
                 .set_item(key, py_value)
                 .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+        }
+
+        // Inject raw Python sidecar objects (e.g. ``request``, ``view``)
+        // so block handlers needing full Python context can reach them.
+        // Overwrites same-named JSON entries — the Python object is the
+        // source of truth.
+        if let Some(raw) = raw_py_objects {
+            for (key, obj) in raw {
+                py_context
+                    .set_item(key, obj.bind(py))
+                    .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+            }
         }
 
         let handler_ref = handler.bind(py);
@@ -520,10 +557,34 @@ pub fn assign_handler_exists(name: &str) -> bool {
 /// Returns a map of context updates to merge into the surrounding
 /// render context. Error strings bubble up through
 /// [`crate::renderer`] as `DjangoRustError::TemplateError`.
+///
+/// Back-compat shim around [`call_assign_handler_with_py_sidecar`] —
+/// equivalent to passing `None` for the raw Python sidecar.
 pub fn call_assign_handler(
     name: &str,
     args: &[String],
     context: &HashMap<String, djust_core::Value>,
+) -> Result<HashMap<String, djust_core::Value>, String> {
+    call_assign_handler_with_py_sidecar(name, args, context, None)
+}
+
+/// Variant of [`call_assign_handler`] that additionally injects raw
+/// Python objects from the [`Context::raw_py_objects`] sidecar into
+/// the handler's ``context`` dict.
+///
+/// Mirrors [`call_handler_with_py_sidecar`] (extended in PR #1166)
+/// for `Node::CustomTag`. Assign handlers needing access to
+/// Python-only context (e.g. ``request`` / ``view``) can read those
+/// keys from the dict directly. Sidecar values overwrite same-named
+/// JSON keys.
+///
+/// Existing assign handlers that ignore the extra keys are
+/// unaffected.
+pub fn call_assign_handler_with_py_sidecar(
+    name: &str,
+    args: &[String],
+    context: &HashMap<String, djust_core::Value>,
+    raw_py_objects: Option<&HashMap<String, pyo3::PyObject>>,
 ) -> Result<HashMap<String, djust_core::Value>, String> {
     let handler = {
         let registry = ASSIGN_TAG_HANDLERS
@@ -550,6 +611,17 @@ pub fn call_assign_handler(
             py_context
                 .set_item(key, py_value)
                 .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
+        }
+
+        // Inject raw Python sidecar objects (e.g. ``request``, ``view``)
+        // so assign handlers needing full Python context can reach them.
+        // Overwrites same-named JSON entries.
+        if let Some(raw) = raw_py_objects {
+            for (key, obj) in raw {
+                py_context
+                    .set_item(key, obj.bind(py))
+                    .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+            }
         }
 
         let handler_ref = handler.bind(py);

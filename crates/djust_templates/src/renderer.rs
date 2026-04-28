@@ -61,13 +61,19 @@ pub fn render_nodes_with_loader<L: TemplateLoader>(
                     .collect();
 
                 let context_map = active_ctx.to_hashmap();
-                let updates =
-                    crate::registry::call_assign_handler(name, &resolved_args, &context_map)
-                        .map_err(|e| {
-                            DjangoRustError::TemplateError(format!(
-                                "Assign tag '{name}' error: {e}"
-                            ))
-                        })?;
+                // Forward the raw-Python sidecar so assign handlers
+                // can reach Python-only context (request, view) the
+                // same way `Node::CustomTag` handlers do (#1167).
+                let raw_py = active_ctx.raw_py_objects();
+                let updates = crate::registry::call_assign_handler_with_py_sidecar(
+                    name,
+                    &resolved_args,
+                    &context_map,
+                    raw_py,
+                )
+                .map_err(|e| {
+                    DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
+                })?;
 
                 // Promote to owned context if we haven't already, then
                 // merge the handler's returned dict.
@@ -150,13 +156,17 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
                     .map(|arg| resolve_tag_arg(arg, active_ctx))
                     .collect();
                 let context_map = active_ctx.to_hashmap();
-                let updates =
-                    crate::registry::call_assign_handler(name, &resolved_args, &context_map)
-                        .map_err(|e| {
-                            DjangoRustError::TemplateError(format!(
-                                "Assign tag '{name}' error: {e}"
-                            ))
-                        })?;
+                // Forward raw-Python sidecar (#1167).
+                let raw_py = active_ctx.raw_py_objects();
+                let updates = crate::registry::call_assign_handler_with_py_sidecar(
+                    name,
+                    &resolved_args,
+                    &context_map,
+                    raw_py,
+                )
+                .map_err(|e| {
+                    DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
+                })?;
                 if mutated.is_none() {
                     mutated = Some(active_ctx.clone());
                 }
@@ -217,13 +227,17 @@ pub fn render_nodes_partial<L: TemplateLoader>(
                         .map(|arg| resolve_tag_arg(arg, active_ctx))
                         .collect();
                     let context_map = active_ctx.to_hashmap();
-                    let updates =
-                        crate::registry::call_assign_handler(name, &resolved_args, &context_map)
-                            .map_err(|e| {
-                                DjangoRustError::TemplateError(format!(
-                                    "Assign tag '{name}' error: {e}"
-                                ))
-                            })?;
+                    // Forward raw-Python sidecar (#1167).
+                    let raw_py = active_ctx.raw_py_objects();
+                    let updates = crate::registry::call_assign_handler_with_py_sidecar(
+                        name,
+                        &resolved_args,
+                        &context_map,
+                        raw_py,
+                    )
+                    .map_err(|e| {
+                        DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
+                    })?;
                     if mutated.is_none() {
                         mutated = Some(active_ctx.clone());
                     }
@@ -828,10 +842,20 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             let context_map = context.to_hashmap();
 
-            crate::registry::call_block_handler(name, &resolved_args, &content, &context_map)
-                .map_err(|e| {
-                    DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e))
-                })
+            // Forward raw-Python sidecar so block handlers can reach
+            // Python-only context (request, view) the same way
+            // ``Node::CustomTag`` handlers do (#1167).
+            let raw_py = context.raw_py_objects();
+            crate::registry::call_block_handler_with_py_sidecar(
+                name,
+                &resolved_args,
+                &content,
+                &context_map,
+                raw_py,
+            )
+            .map_err(|e| {
+                DjangoRustError::TemplateError(format!("Block tag '{}' error: {}", name, e))
+            })
         }
 
         Node::AssignTag { name, args } => {
@@ -845,9 +869,17 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 .map(|arg| resolve_tag_arg(arg, context))
                 .collect();
             let context_map = context.to_hashmap();
-            crate::registry::call_assign_handler(name, &resolved_args, &context_map).map_err(
-                |e| DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}")),
-            )?;
+            // Forward raw-Python sidecar (#1167).
+            let raw_py = context.raw_py_objects();
+            crate::registry::call_assign_handler_with_py_sidecar(
+                name,
+                &resolved_args,
+                &context_map,
+                raw_py,
+            )
+            .map_err(|e| {
+                DjangoRustError::TemplateError(format!("Assign tag '{name}' error: {e}"))
+            })?;
             Ok(String::new())
         }
 
