@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Time-travel wire-protocol exposure for branched timelines + per-component
+  scrubbing (PR-A for #1151)** — server-side surface that the v0.9.4 debug
+  panel UI (PR-B, follow-up) consumes. The Python plumbing for per-component
+  time-travel (#1041) and forward-replay through branched timelines (#1042)
+  shipped in v0.9.0; this PR exposes the missing wire fields so the debug
+  panel can drive both.
+  - **`time_travel_state` ack frame**: 3 new additive fields — `branch_id`
+    (defaults `"main"`; new branches allocated as `branch-{N}` on
+    forward-replay from a non-tip cursor), `forward_replay_enabled` (true
+    iff cursor is not at the tip — meaningful replay would produce a
+    branch), `max_events` (the configured ring-buffer cap, so the UI
+    can show "X / max"). Old clients ignore the new keys.
+  - **`time_travel_event` per-event push frame**: 2 new additive fields —
+    `branch_id` and a top-level `components` mirror of
+    `entry.state_after.__components__` so the UI doesn't have to dig into
+    the nested entry.
+  - **New handler `time_travel_component_jump`**: scrubs a SINGLE
+    component's state without touching the parent view or other
+    components. Mirrors the existing `time_travel_jump` validation and
+    re-render path; backed by a new `restore_component_snapshot()`
+    helper in `python/djust/time_travel.py`.
+  - **New handler `forward_replay`**: replays a recorded event with
+    optional `override_params` and allocates a fresh branch id when
+    the cursor is not at the buffer tip. Backed by the existing
+    `replay_event()` (#1042) plus a new `next_branch_id()` allocator.
+  - **Live-view init**: 2 new instance fields on `LiveView.__init__` —
+    `_time_travel_branch_id` (default `"main"`) and
+    `_time_travel_branch_counter` (default `0`). Both are inert when the
+    buffer isn't allocated; zero memory cost for views that don't opt
+    in to time-travel.
+
+  Files: `python/djust/websocket.py` (dispatch arms + 2 handlers + ack
+  builder), `python/djust/time_travel.py` (`restore_component_snapshot`,
+  `next_branch_id`), `python/djust/live_view.py` (branch fields). 9 new
+  cases (5 integration + 4 unit) covering ack-frame shape, replay-enabled
+  semantics, component-only restore isolation, branch-id allocation, and
+  defensive defaults. PR-B (the debug panel UI consuming these fields)
+  is the next v0.9.4 PR.
+
 ### Documentation
 
 - **v0.9.4 process canon (closes #1185, closes #1143, closes #1144)** —
