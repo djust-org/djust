@@ -2,10 +2,64 @@
 Tests for the Tag Handler Registry.
 
 Tests the Rust registry, Python handlers, and integration between them.
+
+Test isolation (#1167)
+----------------------
+Some tests in this file register transient handlers (e.g.
+``BrokenHandler`` for the ``broken`` tag) into the Rust-side
+``TAG_HANDLERS`` registry. The previous per-class ``setup_registry``
+fixture only re-registered the *built-in* Python handlers on
+teardown and did NOT clear the registry first, so transient test
+handlers leaked into subsequent test files. ``test_assign_tag.py``
+running after this file would then see ``handler_exists("broken")``
+== True and the parser would dispatch ``{% broken %}`` as a
+``CustomTag`` instead of an ``AssignTag`` — flake.
+
+The module-scoped ``_isolate_tag_registries`` fixture below clears
+ALL three registries (tag, block-tag, assign-tag) at module setup
+and after every test, then re-registers the built-ins from the
+Python ``_registered_handlers`` snapshot. This makes the file
+self-contained: no test in this module can leak any handler into
+the rest of the suite.
 """
 
 import pytest
 from unittest.mock import patch
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tag_registries():
+    """Hard-isolate all three Rust tag registries per test (#1167).
+
+    Clears tag / block-tag / assign-tag registries before and after every
+    test in this module, then restores the built-in tag handlers from the
+    Python ``_registered_handlers`` snapshot. Any transient handler a
+    test registers (e.g. ``BrokenHandler`` from
+    ``test_handler_exception_returns_error``) is wiped on teardown — it
+    cannot leak into ``test_assign_tag.py`` or other downstream files.
+    """
+    try:
+        from djust._rust import (
+            clear_tag_handlers,
+            clear_block_tag_handlers,
+            clear_assign_tag_handlers,
+            register_tag_handler,
+        )
+        from djust.template_tags import _registered_handlers
+    except ImportError:
+        pytest.skip("Rust extension not available")
+        return
+
+    def _reset() -> None:
+        clear_tag_handlers()
+        clear_block_tag_handlers()
+        clear_assign_tag_handlers()
+        for name, handler in _registered_handlers.items():
+            register_tag_handler(name, handler)
+
+    _reset()
+    yield
+    _reset()
 
 
 class TestTagHandlerBase:
@@ -183,27 +237,11 @@ class TestStaticTagHandler:
 
 
 class TestRegistryIntegration:
-    """Integration tests for the registry system."""
+    """Integration tests for the registry system.
 
-    @pytest.fixture(autouse=True)
-    def setup_registry(self):
-        """Clear registry before each test, restore built-in handlers after."""
-        try:
-            from djust._rust import clear_tag_handlers
-
-            clear_tag_handlers()
-        except ImportError:
-            pytest.skip("Rust extension not available")
-        yield
-        # Restore built-in handlers to prevent test pollution
-        try:
-            from djust._rust import register_tag_handler
-            from djust.template_tags import _registered_handlers
-
-            for name, handler in _registered_handlers.items():
-                register_tag_handler(name, handler)
-        except ImportError:
-            pass  # Rust extension not available; nothing to restore
+    The module-scoped ``_isolate_tag_registries`` autouse fixture
+    handles cleanup; this class no longer needs its own setup_registry.
+    """
 
     def test_register_and_check(self):
         """Handler can be registered and checked."""
@@ -286,27 +324,11 @@ class TestRegistryIntegration:
 
 
 class TestRenderIntegration:
-    """Tests for rendering templates with custom tags."""
+    """Tests for rendering templates with custom tags.
 
-    @pytest.fixture(autouse=True)
-    def setup_registry(self):
-        """Clear registry before each test, restore built-in handlers after."""
-        try:
-            from djust._rust import clear_tag_handlers
-
-            clear_tag_handlers()
-        except ImportError:
-            pytest.skip("Rust extension not available")
-        yield
-        # Restore built-in handlers to prevent test pollution
-        try:
-            from djust._rust import register_tag_handler
-            from djust.template_tags import _registered_handlers
-
-            for name, handler in _registered_handlers.items():
-                register_tag_handler(name, handler)
-        except ImportError:
-            pass  # Rust extension not available; nothing to restore
+    The module-scoped ``_isolate_tag_registries`` autouse fixture
+    handles cleanup; this class no longer needs its own setup_registry.
+    """
 
     def test_render_custom_tag(self):
         """Custom tag is rendered via Python handler."""

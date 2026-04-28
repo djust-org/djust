@@ -209,6 +209,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tag-registry test isolation + sidecar bridge extension to block /
+  assign tags (closes #1167)** — two Stage 11 follow-ups from PR #1166
+  (which wired the raw-Python sidecar into ``Node::CustomTag``):
+  - **Test isolation**: ``tests/unit/test_tag_registry.py`` previously
+    used per-class ``setup_registry`` fixtures that re-registered the
+    Python built-in handlers on teardown but did NOT clear the global
+    Rust ``TAG_HANDLERS`` registry first. Transient handlers from the
+    file (notably ``BrokenHandler`` registered for the ``broken`` tag
+    in ``test_handler_exception_returns_error``) leaked into
+    subsequent test files. ``test_assign_tag.py`` running after this
+    file would see ``handler_exists("broken")`` == True; the parser
+    dispatches ``handler_exists`` before ``assign_handler_exists``
+    so ``{% broken %}`` was routed to the leaked CustomTag handler
+    and ``test_non_dict_return_is_empty_merge`` failed with the leaked
+    handler's exception. Fix: replace the per-class fixtures with one
+    function-scoped autouse fixture that clears all three Rust
+    registries (tag / block-tag / assign-tag) before AND after every
+    test, then re-registers the built-ins from
+    ``djust.template_tags._registered_handlers``. The file is now
+    self-contained.
+  - **Sidecar parity**: PR #1166's
+    ``call_handler_with_py_sidecar`` only fired for ``Node::CustomTag``.
+    Block tags (``Node::BlockCustomTag``) and assign tags
+    (``Node::AssignTag``) didn't receive the ``request`` / ``view``
+    sidecar, so a custom block or assign handler couldn't reach the
+    parent view. Added ``call_block_handler_with_py_sidecar`` and
+    ``call_assign_handler_with_py_sidecar`` mirroring the PR #1166
+    pattern; the existing variants are kept as back-compat shims that
+    delegate with ``None``. All five renderer call sites (1× block,
+    4× assign — single-node, sibling-aware, collecting, and
+    partial-render paths) forward ``context.raw_py_objects()``.
+
+  New cases in ``TestBlockTagSidecar`` and ``TestAssignTagSidecar``
+  (``tests/unit/test_tag_sidecar_parity_1167.py``, 6 Python cases)
+  cover sidecar receipt of ``request`` and ``view`` per node type
+  plus a back-compat regression per node type confirming legacy
+  handlers that ignore the sidecar continue to work unchanged.
+
 - **Custom filter bridge polish — 6 sub-items deferred from #1161
   (closes #1162)** — Stage 11 review of PR #1161 (which closed #1121
   by adding the eager Rust filter registry) flagged six follow-ups.
