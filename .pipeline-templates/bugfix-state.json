@@ -1,5 +1,5 @@
 {
-  "pipeline_type": "feature",
+  "pipeline_type": "bugfix",
   "task_description": "",
   "branch_name": "",
   "pr_target_branch": "main",
@@ -169,6 +169,11 @@
         {
           "action": "report pass/fail counts",
           "done": false
+        },
+        {
+          "action": "if task is pollution-class (description matches /pollution|leak|flak|test isolation/i): run the full pytest suite 3 times consecutively; ALL THREE must be clean. Single-run pass is insufficient for pollution-class fixes by definition (v0.9.1 retro / Action Tracker #182 / GitHub #1174)",
+          "done": false,
+          "mandatory": true
         },
         {
           "action": "output TESTS_PASSED or TESTS_FAILED",

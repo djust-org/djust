@@ -44,17 +44,35 @@ v0.9.1 retro / Action Tracker #181 / GitHub #1173.
 
 ### Stage 6 (Test Execution) — 3-clean-runs gate for pollution-class fixes
 
-When `pipeline_type == 'bugfix'` AND the task description matches
-`/pollution|leak|flak|test isolation/i`, Stage 6 must run the full
-pytest suite **3 times consecutively** — all three runs clean.
-Single-run pass is insufficient for pollution-class fixes by definition
-(pollution shows up under specific orderings).
+The `bugfix-state.json` template (loaded by `pipeline-next` when the
+task is a bugfix) has an unconditional Stage 6 mandatory item: when
+the task description matches `/pollution|leak|flak|test isolation/i`,
+run the full pytest suite **3 times consecutively** — all three runs
+clean. Single-run pass is insufficient for pollution-class fixes by
+definition (pollution shows up under specific orderings).
+
+The gate lives in `bugfix-state.json` (not `feature-state.json`)
+because feature pipelines hardcode `pipeline_type: "feature"` — a
+"if pipeline_type == 'bugfix'" predicate in feature-state.json would
+never evaluate true. Bugfix pipelines load the bugfix template, where
+the predicate is implicit.
 
 **Why**: v0.9.1 PR #1159 (the #1134 bisect) caught a hidden second
 polluter (`sys.modules` rebind in `test_dev_server_watchdog_missing.py`)
 on the third verification run — would have shipped silently otherwise,
 and the next PR would have tripped the same flake. Canonicalized in
 v0.9.1 retro / Action Tracker #182 / GitHub #1174.
+
+### Symmetric ship-pipeline gates (`ship-state.json`)
+
+The two-commit-shape rule applies to ship-pipelines too: even though
+`/pipeline-ship` starts from existing implementation in the working
+tree, the docs commit it produces (Stage 5 in ship-state, not Stage 9
+as in feature-state) is the CANONICAL CHANGELOG COMMIT BOUNDARY for
+that pipeline. The Stage 5 mandatory item enforces "docs + CHANGELOG
+only" — no implementation code in this commit. Eliminates the same
+class of cross-edit collision when two ship-pipelines run on adjacent
+feature work.
 
 ### `.customer-names`
 
