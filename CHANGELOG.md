@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **v0.9.2 hygiene group — Redis perf docstring softened, replay-rejection
+  caplog assertions, descriptor-pattern auto-promotion gap documented,
+  dev-env import regression guard (closes #1160, closes #1165)** — Stage 11
+  follow-ups from the v0.9.1 retro arc, batched as a single chore PR:
+  - **#1160**: rewrite `test_redis_serialization_performance` docstring
+    in `tests/unit/test_state_backend.py` to match what the 100ms bound
+    actually catches (catastrophic ~10× regressions, e.g. accidental
+    JSON/pickle round-trip), not gradual perf drift. Points to
+    `pytest-benchmark`-style median-based assertions for SLA-grade
+    perf checks.
+  - **#1165 (a)**: extend `TestReplayHandlerValidation` rejection-path
+    tests in `tests/unit/test_time_travel.py` to assert via `caplog`
+    that the `logger.warning(...)` record fires with the expected
+    message (`"refused unregistered method"` / `"refused dunder/private
+    event_name"`). Side-effect-only assertions previously stayed green
+    if the warning silently regressed to a no-op.
+  - **#1165 (b)**: document the descriptor-pattern auto-promotion gap
+    in the `LiveComponent` docstring (`python/djust/components/base.py`)
+    and in `docs/website/guides/components.md`. The framework's
+    `_assign_component_ids` walker only inspects instance-level attrs,
+    so descriptor components must be appended to `self._components` in
+    `mount()` until auto-promotion ships. Time-travel snapshots and
+    other walkers silently miss them otherwise.
+  - **#1165 (c)**: add `scripts/check-dev-env-imports.py` and a paired
+    pytest module (`tests/unit/test_dev_env_imports.py`, 2 new
+    parametrized cases) that hard-fail (not skip) if
+    `djust.components.components` or its `.markdown` submodule cannot
+    import. Locks in the #1149 fix where missing `markdown`/`nh3`
+    caused opaque pytest collection failures. Script is standalone for
+    now; a follow-up PR can wire it into pre-commit / Makefile.
 - **CSP-strict defaults canonicalized for new client-side framework code
   (closes #1175)** — adds explicit guidance in `CLAUDE.md`,
   `docs/PULL_REQUEST_CHECKLIST.md`, and `docs/guides/security.md` that

@@ -1080,11 +1080,20 @@ class TestReplayHandlerValidation:
         assert replay_snap is not None
         assert replay_snap.state_after == {"count": 3}
 
-    def test_replay_unregistered_method_returns_none(self):
+    def test_replay_unregistered_method_returns_none(self, caplog):
         """A snapshot naming a non-handler method (no
         ``@event_handler`` decorator) is rejected by the guard.
         ``view.some_helper`` exists, is callable, and isn't
-        underscore-prefixed — but it isn't a registered handler."""
+        underscore-prefixed — but it isn't a registered handler.
+
+        Also asserts the rejection emits a ``logger.warning`` record
+        with the expected message text (#1165 sub-item a). Without
+        this, a future regression that silently demotes the
+        ``logger.warning(...)`` call to a no-op (e.g. dropped during
+        a refactor) would leave the side-effect assertion green and
+        the regression invisible to CI."""
+        import logging
+
         view = _CounterView()
         assert callable(view.some_helper)
 
@@ -1095,14 +1104,28 @@ class TestReplayHandlerValidation:
             ts=0.0,
             state_before={"count": 0},
         )
-        result = replay_event(view, snap)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="djust.time_travel"):
+            result = replay_event(view, snap)
         assert result is None
         assert view.count != -999  # helper body never ran
+        assert any(
+            "refused unregistered method" in record.getMessage()
+            and "some_helper" in record.getMessage()
+            for record in caplog.records
+        ), "expected a 'refused unregistered method' warning; got: " + repr(
+            [r.getMessage() for r in caplog.records]
+        )
 
-    def test_replay_dunder_still_rejected(self):
+    def test_replay_dunder_still_rejected(self, caplog):
         """Regression for the existing underscore-prefix guard: even
         with the new ``is_event_handler`` check, dunder/private
-        names are rejected by the earlier short-circuit."""
+        names are rejected by the earlier short-circuit.
+
+        Also asserts the rejection emits a ``logger.warning`` record
+        with the expected message text (#1165 sub-item a)."""
+        import logging
+
         view = _CounterView()
         snap = EventSnapshot(
             event_name="__init__",
@@ -1111,8 +1134,17 @@ class TestReplayHandlerValidation:
             ts=0.0,
             state_before={"count": 0},
         )
-        result = replay_event(view, snap)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="djust.time_travel"):
+            result = replay_event(view, snap)
         assert result is None
+        assert any(
+            "refused dunder/private event_name" in record.getMessage()
+            and "__init__" in record.getMessage()
+            for record in caplog.records
+        ), "expected a 'refused dunder/private event_name' warning; got: " + repr(
+            [r.getMessage() for r in caplog.records]
+        )
 
 
 # ===========================================================================

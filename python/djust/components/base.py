@@ -427,6 +427,34 @@ class LiveComponent(ContextProviderMixin):
         The attribute name becomes the component_id. State is stored in
         ``obj.__dict__["_component_{name}"]`` (underscore prefix excludes it from
         djust's context pipeline; the public attribute via ``__get__`` is included).
+
+    Descriptor-pattern auto-promotion gap (#1165):
+        Currently, descriptor-pattern components are NOT auto-promoted into
+        ``view._components`` by the framework. The
+        :func:`djust.mixins.components.ComponentManagementMixin._assign_component_ids`
+        walker only inspects instance-level (``self.__dict__``) attributes,
+        so a class-level descriptor never lands in ``_components`` unless
+        the view explicitly appends it during ``mount()``.
+
+        Framework features that walk ``_components`` (time-travel snapshots
+        in :mod:`djust.time_travel`, the component-state session save path,
+        etc.) will silently miss descriptor-pattern components otherwise.
+
+        **Workaround** — register manually in ``mount()``::
+
+            class MyView(LiveView):
+                greeting = MyComponent.descriptor()  # class-level descriptor
+
+                def mount(self, request, **kwargs):
+                    # Required until auto-promotion ships: include the
+                    # descriptor's instance in ``self._components`` so
+                    # snapshot machinery and other framework walkers can
+                    # see it.
+                    self._components.append(self.greeting)
+
+        Auto-promotion is tracked separately as future framework work.
+        Until it ships, document the gap so users aren't surprised when
+        time-travel or session-restore appears to "lose" a component.
     """
 
     # Component configuration
