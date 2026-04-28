@@ -14,6 +14,7 @@ These tests are wall-clock-sensitive but use generous tolerances
 from __future__ import annotations
 
 import asyncio
+import gc
 import time
 import warnings
 from typing import List
@@ -262,6 +263,15 @@ class TestParallelRender:
             await asyncio.wait_for(render_task, timeout=0.5)
             await emitter.close()
             await consumer
+
+            # The `_wait_for_one was never awaited` warning fires from
+            # CPython's coroutine GC, not from explicit code. Without an
+            # explicit gc.collect() the test passes today by accident of
+            # CPython's reference-counting timing — under PyPy or a
+            # different GC mode the orphan coroutine may not be finalized
+            # before the assertion runs. Force collection here so the
+            # absence-assertion below is deterministic. Closes #1188 🟡 #2.
+            gc.collect()
 
         wait_for_one_warnings = [w for w in captured if "_wait_for_one" in str(w.message)]
         assert not wait_for_one_warnings, (

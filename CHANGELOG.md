@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **v0.9.4 test-infra polish (closes #1188, closes #1189)** — three
+  small follow-ups bundled as one PR:
+  - **#1188 🟡 #1**: narrowed `vitest.config.js` Pattern 2 filter to
+    match only the diagnosed `Closing rpc` + `onUserConsoleLog` /
+    `onConsoleLog` cause from PR #1187. Dropped the broader
+    `stack.includes('view-transitions')` disjunct so future
+    genuinely-different failure shapes in `view-transitions.test.js`
+    can no longer be silently swallowed.
+  - **#1188 🟡 #2**: added `gc.collect()` before the
+    `_wait_for_one`-warning absence check in
+    `tests/integration/test_chunks_overlap.py::test_cancel_does_not_leak_wait_for_one_warning`.
+    The warning fires from CPython's coroutine GC, not explicit code;
+    the prior test passed by accident of CPython's reference-counting
+    timing. Forcing collection makes the assertion deterministic
+    under PyPy / free-threaded / different GC modes.
+  - **#1189**: bumped `test_large_template` wall-clock bound from
+    100ms → 500ms with a comment explaining the test is a regression
+    bound, not a benchmark. The prior tight bound flaked on busy CI
+    runners (5-10ms typical local; 100ms+ under py3.13 free-threaded
+    parallel suite load). Real perf tracking lives in
+    pytest-benchmark, not this assertion.
+
 ### Changed
 
 - **HVR auto-enabled in DEBUG (no AppConfig.ready() boilerplate
