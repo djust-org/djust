@@ -387,6 +387,89 @@ Example output:
       * search(value: str = "")          @debounce(wait=0.3)
 ```
 
+## CSP-Strict Defaults for Framework Code
+
+djust is designed to work under stricter Content Security Policy
+deployments — `script-src 'self'` (no `'unsafe-inline'`, no
+`'unsafe-eval'`) — without configuration. v1.0 readiness positions
+strict-CSP as a design constraint, not an opt-in.
+
+### What this means in practice
+
+Framework code that emits HTML defaults to:
+
+- **External static JS modules** served from
+  `python/djust/static/djust/` or
+  `python/djust/components/static/djust_components/`. Every behavior
+  the framework adds at the client lives in a versioned, addressable
+  module. No `eval`, no `Function(string)`.
+- **No inline event handlers** — no `onclick=`, `onchange=`,
+  `oninput=` in emitted markup. Click/keyboard/input behavior comes
+  from delegated listeners installed by the static modules.
+- **Auto-bind via marker class or attribute** — when an element opts
+  into a framework behavior, it carries a marker (CSS class OR HTML
+  attribute) plus the data attributes the behavior reads. Two real
+  patterns: CSS class — `tr.data-table-row-clickable` (PR #1170) — and
+  attribute — `[dj-track-static]` (`39-dj-track-static.js`),
+  `[dj-submit]` on forms (`09-event-binding.js`). The static JS module
+  attaches a delegated listener on `document` (or root) and dispatches
+  based on `event.target.closest('.<marker-class>')` or
+  `event.target.closest('[<marker-attr>]')`. Compose with
+  `MutationObserver` for morphdom-managed regions so the binding
+  survives VDOM patches.
+- **CSP nonce only when genuinely required** — the lazy-fill protocol
+  (`<dj-lazy-slot>` activator scripts) is the canonical exception
+  where an inline `<script>` is needed because the activator must run
+  synchronously inline. When you need an inline script, propagate
+  `request.csp_nonce` per
+  `python/djust/templatetags/live_tags.py:live_render`'s `lazy=True`
+  branch.
+
+### Canonical reference modules
+
+If you're adding a new framework feature that needs client-side
+behavior, the cleanest examples to copy are:
+
+- **`python/djust/components/static/djust_components/data-table-row-click.js`**
+  + the `tr.data-table-row-clickable` marker class (PR #1170). External
+  module + delegated listener + nested-control guard + keyboard
+  activation. The "no inline script, ever" example.
+- **`python/djust/static/djust/src/50-lazy-fill.js`** + the
+  `<dj-lazy-slot>` custom element (PR #1138). The exception case where
+  an inline activator script is unavoidable; demonstrates the
+  `request.csp_nonce` propagation pattern.
+- **`python/djust/static/djust/src/39-dj-track-static.js`** +
+  Phoenix-style `phx-track-static` parity attribute. Existing canonical
+  pattern for attribute-driven behavior dispatch.
+
+### What CSP headers your deployment should set
+
+For djust apps using only the canonical modules:
+
+```
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data:;
+  connect-src 'self' wss://your-host;
+```
+
+For djust apps using the lazy-fill protocol:
+
+```
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' 'nonce-<csp_nonce>';
+  ...
+```
+
+Set `request.csp_nonce` via `django-csp` middleware (pip
+`django-csp>=4.0`); djust's lazy-fill template tag reads
+`getattr(request, 'csp_nonce', None)` automatically.
+
+Canonicalized in v0.9.1 retro / Action Tracker #183 / GitHub #1175.
+
 ## Further Reading
 
 - [Security Guidelines for Contributors](../SECURITY_GUIDELINES.md) — banned patterns, code review checklist, security testing

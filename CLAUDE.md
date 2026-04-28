@@ -345,6 +345,52 @@ Five additional rules from the View Transitions arc + nyc-claims data_table arc.
   string (`errors[0][0].toContain('label')`). Decouples the test from
   later parameterization fixes for tainted-format-string warnings.
 
+## Process canonicalizations from v0.9.1 retro arc
+
+Each rule below was a v0.9.1 retro tracker row distilled across the
+7-PR drain (#1159, #1161, #1163, #1164, #1166, #1168, #1170).
+Canonicalized here so the next drain doesn't repeat the failure mode.
+
+- **One implementer agent per checkout** (#180 / #1172, applied to
+  `~/.claude/skills/pipeline-run/SKILL.md`). Two background implementer
+  agents on the same git working tree flip branches via pre-commit
+  stash/restore mid-edit and produce CHANGELOG cross-contamination +
+  duplicate-heading collisions on `[Unreleased]` blocks. Either
+  serialize agent execution OR use the single-script-transformation
+  pattern (each agent writes one Python script that applies all edits
+  in one filesystem pass + commits immediately). Different git
+  worktrees or different repos are safe — the rule is one-checkout =
+  one-agent.
+
+- **Two-commit shape: impl+tests / docs+CHANGELOG** (#181 / #1173,
+  applied to `.pipeline-templates/feature-state.json`,
+  `bugfix-state.json`, `ship-state.json`). Stage 5 (Implementation)
+  forbids CHANGELOG.md edits; Stage 9 (feature/bugfix) or Stage 5
+  (ship-pipelines, since they have no separate Implementation stage)
+  is the canonical CHANGELOG commit boundary. Defends against
+  cross-edit collisions on `[Unreleased]` even under serial execution.
+
+- **3-clean-runs verification gate for pollution-class fixes** (#182 /
+  #1174, applied to `.pipeline-templates/bugfix-state.json` Stage 6).
+  When the bugfix task description matches `/pollution|leak|flak|test
+  isolation/i`, run the full pytest suite three times consecutively;
+  all three must be clean. Single-run pass is insufficient — pollution
+  by definition shows up under specific orderings, and the "second
+  hidden polluter" failure mode is real (PR #1159 caught
+  `sys.modules`-rebind on the third verification run after the
+  primary SQLite leak fix).
+
+- **CSP-strict defaults for new client-side framework code** (#183 /
+  #1175). Any new framework feature that emits HTML must default to:
+  no inline `<script>` blocks, no inline event handlers, auto-bind
+  via marker class + delegated listener on `document`/root. Use a
+  static JS module served from `python/djust/.../static/` that
+  registers itself on `DOMContentLoaded` + a `MutationObserver` for
+  morphdom-managed regions. Inline scripts with `request.csp_nonce`
+  are the rare exception (lazy-fill / #1147 case). The PR-checklist
+  has a CSP-Strict Defaults block at `docs/PULL_REQUEST_CHECKLIST.md`
+  with concrete external-module-shape references.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

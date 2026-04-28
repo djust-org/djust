@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CSP-strict defaults canonicalized for new client-side framework code
+  (closes #1175)** — adds explicit guidance in `CLAUDE.md`,
+  `docs/PULL_REQUEST_CHECKLIST.md`, and `docs/guides/security.md` that
+  any new framework feature emitting HTML must default to: external
+  static JS modules (no inline `<script>` blocks), no inline event
+  handlers (no `onclick=`/`onchange=`/`oninput=`), auto-bind via marker
+  class + delegated listener on `document`/root, CSP nonce propagation
+  only when genuinely required (lazy-fill case from #1147 is the
+  canonical exception). Reference-module shapes documented (PR #1170
+  `data-table-row-click.js`, PR #1138 `50-lazy-fill.js`, existing
+  `39-dj-track-static.js`). v1.0 readiness — positions strict-CSP
+  deployments as a design constraint, not an opt-in.
+
 ### Added
 
 - **`{% data_table %}` row-level navigation: accessibility, keyboard,
