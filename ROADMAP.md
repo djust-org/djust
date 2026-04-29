@@ -1754,6 +1754,66 @@ Three ship items + one explicit non-goal. Together they define how djust relates
   - Better strategy: make existing React libraries embeddable via the islands story. djust serves the data; React serves the components. Drop in shadcn/ui, drop in Recharts, drop in TanStack Table — all work because of the bridge + islands infrastructure.
   - The existing `djust-components` package ships *server-rendered* components — that's the right shape for djust core. React component libraries belong in the React ecosystem.
 
+### Moonshots — Path to #1 (post-1.0 strategic bets)
+
+The roadmap items above (React/Phoenix gap-closing, Rust expansion, JS/React ecosystem) keep djust competitive. The five Tier-1 moonshots below put djust **in front** — they leverage primitives that no other framework has, and each opens a market segment djust isn't in today.
+
+**The defensive moat = the time-travel primitive.** Items #1, #2, and partial-credit #3 all ride on it. Other frameworks would need 1-2 years to rebuild the foundation; use the window.
+
+#### Tier 1 — "djust does what nobody else can"
+
+- **M1. Time-travel-driven test generation (~3 weeks).** Record a session in dev mode → emit a runnable pytest file with state assertions. Cypress/Playwright record clicks; djust records *state transitions*. State-shape tests survive UI refactors. *"djust is the only framework where E2E tests write themselves."* Touches: `time_travel.py`, `testing.py`, new `manage.py djust_gentest`. Risk: low.
+
+- **M2. Production time-travel for debugging (~6 weeks).** Sentry-Replay-class but with the actual application state, not just DOM video. Field-level redaction policies (`@redact` decorator) + safe encrypted export + admin import-into-sandbox tool. *"Time-travel debugging works in production."* Touches: `time_travel.py`, new `python/djust/admin/replay.py`. Risk: medium — privacy compliance is the bar.
+
+- **M3. Native CRDT primitives `assign_crdt()` (~3 months).** Real-time collaborative editing with conflict-free merge baked in. Multiple users editing the same view; framework merges concurrent edits. Replaces Liveblocks ($X/MAU) for djust users. Touches: new crate `crates/djust_crdt/` (port Automerge or Yrs), new `mixins/crdt.py`, new client-side ops applier. Risk: medium-high — CRDTs are subtle. Market expansion: Notion-clones, Figma-clones, code editors.
+
+- **M4. AI-native components `{% chat %}` / `{% rag_search %}` / `{% agent_workflow %}` (~6 weeks).** Single template tag wires up streaming LLM, tool dispatch, conversation state, retry, error UI. Replaces 200 LoC of glue with 1 line. Provider plugins as separate `djust-ai` extras. *"djust is the AI framework that happens to be Django."* Touches: new `python/djust/contrib/ai/templatetags/ai.py`, new optional `djust-ai` package. Risk: low — primitives all exist; this is composition.
+
+- **M5. Declarative real-time queryset subscriptions `subscribe(queryset)` (~8 weeks).** Subscribe to a Django queryset; auto-rerender when any matching row changes. PostgreSQL LISTEN/NOTIFY foundation already shipped (`@notify_on_save`); add ORM dependency-tracking + filter-aware fan-out + coalescing. Replaces Firestore for Django apps. *"`subscribe(queryset)` — Firestore for Django, real-time, type-safe, zero polling."* Touches: `db.py` extension, new `mixins/realtime_query.py`, integration with v0.10 auto-memoization. Risk: medium — complex `.annotate()` / `.raw()` querysets need a clear "too complex" warning.
+
+#### Tier 2 — Productivity multipliers
+
+- **M6. Schema-first scaffolding (~4 weeks).** `djust generate Todo --field title:str --field done:bool` emits Django model + LiveView (list/detail/CRUD) + Tailwind template + form + admin + REST + GraphQL + OpenAPI + tests. Rails generators × 10. Every output respects existing canon (CSP-strict, CSRF, ARIA roles).
+
+- **M7. Live state migration across versions (~6 weeks).** Extend HVR (currently dev-only class swap) to PROD. Deploy v2 → existing v1 sessions migrate via `__migrate_state__` classmethod. Zero-downtime stateful upgrades; no reconnect spinner; no data loss. Other frameworks rely on "users reconnect after deploy" — djust skips it.
+
+- **M8. Generative UI from natural language (~8 weeks, depends on M4 + M6).** `djust generate "dashboard with sales chart and recent orders table"` calls a configurable LLM with introspected schema + auth context, emits scaffolded LiveView + template + queries + tests. *"v0.dev for Django, but it knows your data."*
+
+#### Tier 3 — Ops + ecosystem moats
+
+- **M9. Built-in observability dashboard (~4 weeks).** Self-hosted Sentry+Datadog-lite at `/admin/djust/observability/`: active sessions, P50/P95/P99 per handler, error rates, time-travel buffer occupancy, slow-query/N+1 detection. Free for the 80% case. Builds on the v0.10 OTel taxonomy work.
+
+- **M10. Edge runtime target (~3 months, high risk).** `djust deploy edge --provider cloudflare`. Compiles djust runtime to Pyodide/RustPython on Cloudflare Workers / Deno Deploy. Marketing pages render in <50ms globally; cost drops 100×. Subsumes the existing "Rust-side WASM compilation" entry. Worth a 1-week feasibility prototype before committing.
+
+- **M11. Component marketplace ("djust hub") with state-aware live previews (~3 months).** Browse community-built `LiveComponent`s; click "preview" → component runs in a sandbox iframe with mock state (NOT screenshots — actual interactive previews). Network-effect lever — once it has critical mass, the framework grows on its own. What made WordPress dominant.
+
+#### Recommended sequencing (3-year arc)
+
+| Year | Focus |
+|---|---|
+| 1 | Tier 1 — defensive moats. Q1: M1 + M4. Q2: M5. Q3: M2 + M3. Q4: marketing. Each quarter ships a Show HN with a feature competitors literally cannot match. |
+| 2 | Tier 2 + ecosystem. Q1: M6 + M9. Q2: M8. Q3: M7 + M11 MVP. Q4: M10 prototype + Marketplace launch. |
+| 3 | Defensive consolidation. M10 productionization, partnerships, framework certifications (DSF alignment, hosting partner programs). |
+
+#### Strategic context
+
+- **Biggest defensive moat**: the time-travel primitive (M1, M2, partial M3). 1-2 year lead time for competitors to replicate.
+- **Biggest market expansion**: AI + CRDT + queryset subscriptions (M3, M4, M5). djust enters segments where Django doesn't currently compete.
+- **Biggest velocity multiplier**: schema-first + generative UI (M6, M8). Single-dev MVP in a weekend that would take a Next.js team a sprint.
+- **Biggest ecosystem moat**: marketplace (M11). Network effects compound non-linearly.
+
+#### Out of scope (explicit non-goals for the moonshots)
+
+- Replacing Django ORM. Stay on top of Django; don't compete with it.
+- Replacing Celery / Channels / pg. Ecosystem alignment is the moat.
+- Self-rebuilding djust in another language (Go, Elixir). Python + Rust + Django is the moat.
+- A no-code builder for non-developers. Audience mismatch.
+
+(Full strategic memo with deeper rationale and verification plan: `~/.claude/plans/we-need-to-truely-rustling-zephyr.md`.)
+
+---
+
 ### Phoenix LiveView gaps that are NOT closable
 
 Documented for honesty — these are architectural impossibilities given Python, not roadmap items:
