@@ -7,50 +7,209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-29
+
+The "Time Travel" release — the biggest release since 0.3.0, two years of
+work compressed into the v0.7 → v0.9 arc. Last release before the 1.0
+testing arc.
+
+The detailed per-rc breakdown is preserved in the [0.9.0rc1] through
+[0.9.0rc5] sections below; this is the consolidated GA summary plus
+post-rc5 additions.
+
 ### Added
 
-- **Dedicated documentation site at [docs.djust.org](https://docs.djust.org).**
-  Extracted from `djust.org/docs/` into a standalone Django site built with
-  djust itself (dogfooding). Pulls markdown from this repository via a pinned
-  git submodule, so docs always match a specific released version of the
-  framework. Launch covers all 23 user-facing guides, 9 API reference pages
-  (from `docs/ai/`), the full 20-page component catalog, the changelog with
-  deep-linkable per-release anchors, and the migration guide — **60 pages
-  total**. Uses djust 0.7.0rc1 features including `{% djust_markdown %}`
-  (Rust pulldown-cmark), the built-in `djust` theme pack in dark mode, and
-  `dj-prefetch` hints on nav links. Source:
+- **Time-Travel Debugging — per-component scrubber, forward-replay, branched
+  timelines.** Redux DevTools-class debugging for the server: every event
+  captured, every component scrubbable, every counterfactual replay-able.
+  Per-component time-travel (`time_travel_component_jump`) restores a single
+  component's state without touching parent or siblings. Forward-replay
+  (`replay_event` with optional `override_params`) re-runs a recorded event;
+  if the cursor is not at the buffer tip OR override params are present, the
+  framework allocates a fresh `branch_id` (`branch-N`) so the user sees
+  exactly when they've forked the timeline. CSP-strict debug panel UI ships
+  with branch indicator, replay buttons on every history row, and component
+  expand-toggles. Closes #1041, #1042, #1151. Files:
+  `python/djust/time_travel.py`, `python/djust/websocket.py`,
+  `python/djust/static/djust/src/debug/09a-tab-time-travel.js`.
+
+- **Server Actions — React 19 parity, Django-native.** The `@action` decorator
+  exposes a pending/error/result triple via `self._action_state[name]` to
+  templates. No more boilerplate `self.creating = True; try: ...; finally:`.
+  The dispatch pipeline catches errors and exposes them structurally.
+  Mirrors React 19 `useActionState` shape closely enough that React refugees
+  can port mental models without translation.
+
+- **Async Streams — token-by-token UI.** Three primitives (`stream_to`,
+  `stream_append`, `stream_prune`) plus a `StreamingMixin`. Streaming
+  infinite scroll, real-time feeds, and especially LLM output now have
+  first-class support. Phoenix LiveView 1.0 parity, with Django ORM and
+  the Django template language.
+
+- **View Transitions API integration (Phase 2).** djust now wraps every
+  patch in a CSS View Transition where supported (Chrome / Edge); CSS
+  escape hatches (`view-transition-name`, `::view-transition-old/new`)
+  work out of the box. Falls through to instant DOM updates on
+  Firefox/Safari.
+
+- **Sticky LiveViews + `{% live_render %}` auto-detect.** Embedded
+  LiveViews survive `live_redirect` navigation: WebSocket stays open,
+  state preserved, in-flight `start_async()` tasks keep running.
+  Auto-detect pass scans new layouts for matching `[dj-sticky-slot]`
+  elements and preserves children that map.
+
+- **HVR auto-enabled in DEBUG (zero-config hot reload).** djust's own
+  `DjustConfig.ready()` auto-calls `enable_hot_reload()` whenever
+  `DEBUG=True` and `watchdog` is installed. Existing per-consumer calls
+  keep working unchanged. Opt-out via
+  `LIVEVIEW_CONFIG['hot_reload_auto_enable']: False`. Drop your
+  `watchfiles` / `--reload` wrappers — HVR preserves view state, scroll
+  position, and form input across edits.
+
+- **Async render path (`streaming_render = True`) + lazy slots
+  (`{% lazy %}`).** Views with multiple slow data sources opt in to a
+  fully-async render path; slots resolve via `asyncio.as_completed` (out
+  of template order, fastest-first). Sync rendering remains the default.
+
+- **Rust template engine `{% live_render %}` parity (#1145).** The Rust
+  engine now ships a registered handler for `{% live_render %}`. `lazy=True`
+  users on `RustLiveView` no longer hit "no handler registered" errors;
+  behaviour is byte-for-byte identical on Rust and Python paths.
+
+- **`{% data_table %}` row-level navigation: a11y, keyboard, CSP-strict
+  (#1111).** Row-clickable rows render `role="button"`, `tabindex="0"`,
+  respond to Enter/Space, short-circuit nested controls via capture-phase.
+  Inline `onclick` replaced with external module so `script-src 'self'`
+  works out of the box. Defense-in-depth regex validates `data-href`
+  against `javascript:` / `data:` URIs.
+
+- **Time-travel wire-protocol additive fields.** `time_travel_state` ack
+  frame and `time_travel_event` push frame both carry `branch_id` and
+  related metadata; old clients ignore unknown keys (no flag day, no
+  migration script).
+
+- **Dedicated documentation site at
+  [docs.djust.org](https://docs.djust.org).** Extracted from
+  `djust.org/docs/` into a standalone Django site built with djust itself
+  (dogfooding). Pulls markdown from this repository via a pinned git
+  submodule, so docs always match a specific released version of the
+  framework. Launch covers all 23 user-facing guides, 9 API reference
+  pages (from `docs/ai/`), the full 20-page component catalog, the
+  changelog with deep-linkable per-release anchors, and the migration
+  guide — **60 pages total**. Source:
   [djust-org/docs.djust.org](https://github.com/djust-org/docs.djust.org).
-- **`RichSelect` — per-option `variant` support and `variant_map` convenience
-  kwarg.** Each option dict can now carry a `variant` key
-  (`info`/`success`/`warning`/`danger`/`muted`/`primary`/`secondary`) that
-  tints the dropdown row AND the trigger when that option is currently
-  selected. The variant vocabulary matches `Badge`/`Button`/`Tag`/`Alert` so
-  one theme palette covers every signal component. For status pickers, the
-  `variant_map={"NEW": "info", "DONE": "success", ...}` constructor
-  convenience mirrors `Badge.status()`. Disabled pickers suppress the
-  trigger variant so the "greyed-out" state isn't competing with a bright
-  signal colour.
 
-  Variant names are validated with a permissive regex
-  (`^[a-z0-9][a-z0-9-]{0,31}$`), so downstream projects can add custom
-  variants by shipping a matching
-  `.rich-select-option--variant-<name>` CSS rule — the built-in set is
-  the baseline, not a closed allow-list. Malformed names (quotes, spaces,
-  HTML escapes, uppercase) are rejected and fall back to `"default"`.
+- **`RichSelect` — per-option `variant` support and `variant_map`
+  convenience kwarg.** Each option dict can carry a `variant` key
+  (`info`/`success`/`warning`/`danger`/`muted`/`primary`/`secondary`)
+  that tints the dropdown row AND the trigger when selected. The variant
+  vocabulary matches `Badge`/`Button`/`Tag`/`Alert`. Status-picker
+  convenience: `variant_map={"NEW": "info", "DONE": "success", ...}`.
+  Variant names validated with a permissive regex; downstream projects
+  add custom variants by shipping matching CSS. 7 CSS rule blocks,
+  18 new unit tests, no breaking changes.
 
-  7 new CSS rule blocks (theme-variable-backed with HSL fallbacks);
-  18 new unit tests; no breaking changes — options without a `variant`
-  key render exactly as before.
+### Changed
+
+- **CSP-strict defaults canonicalized for new client-side framework code
+  (#1175).** New framework features emitting HTML must default to:
+  external static JS modules (no inline `<script>`), no inline event
+  handlers, marker class + delegated listener pattern. Reference modules:
+  `data-table-row-click.js`, `50-lazy-fill.js`, `39-dj-track-static.js`.
+  Strict-CSP deployments are now a design constraint, not an opt-in.
+
+- **Theming cookie namespace for per-project isolation on shared domains
+  (#1158).** Opt-in `LIVEVIEW_CONFIG['theme']['cookie_namespace']` so
+  multiple djust projects on `localhost:80xx` don't overwrite each
+  other's theme preferences.
+
+- **Dev-deps include `markdown` and `nh3` (#1149).** `[components]` extra
+  runtime deps are now also pulled in via
+  `[project.optional-dependencies.dev]` so `uv sync --extra dev` brings
+  them in alongside the rest of the test toolchain.
 
 ### Fixed
 
+- **`server_push` recovery-state consistency (#1202).** Push-driven
+  sessions previously left `_recovery_html`/`_recovery_version` unset, so
+  a client `request_html` after a failed VDOM patch on a broadcast
+  returned `recoverable=false` and force-reloaded the page. `server_push`
+  now mirrors the `handle_event` pattern of populating recovery state
+  immediately before dispatching broadcast patches.
+
 - **Programmatic `RichSelect` class now emits the open/close interaction
-  handlers that were previously only rendered by the `{% rich_select %}`
-  template tag.** Before: clicking the trigger did nothing, forcing
-  consumers to monkey-patch the rendered HTML. After: `onclick` /
-  `onkeydown` (Enter + Space) toggle the dropdown open; each option row
-  closes the dropdown on click. Parity with the template-tag variant is
-  maintained by the shared `_rich_select_resolve_variant` helper.
+  handlers** previously only rendered by the `{% rich_select %}`
+  template tag. `onclick` / `onkeydown` (Enter + Space) toggle the
+  dropdown; each option row closes the dropdown on click. Parity with
+  the template-tag variant via the shared
+  `_rich_select_resolve_variant` helper.
+
+- **Theming cookie namespace polish (#1169).** Empty namespaced cookies
+  no longer fall back to legacy unprefixed; whitespace-only namespace
+  values rejected; write-side honours the namespace.
+
+- **`{% data_table %}` row navigation polish (#1171).** Nested-control
+  selector now includes `<details>`, `<summary>`, `<option>`. Test-hook
+  namespace cleaned up. Server-side URL allowlist contract test added.
+
+- **A075 system check: `{% live_render sticky=True lazy=True %}`
+  collision (#1146).** Promoted from tag-eval-time `TemplateSyntaxError`
+  to startup-time warning. Verbatim regions skipped; suppressible
+  per-project.
+
+- **Async iterator drain in `arender_chunks` (#1153).** Unawaited
+  `_wait_for_one` coroutine warning fixed via explicit `_drain_iterator`
+  after `_cancel_pending`.
+
+- **Test-runtime hygiene (#1186, #1152).** Cross-runtime `dispatchEvent`
+  warnings (happy-dom + undici) and view-transitions teardown noise
+  filtered via narrow `onUnhandledError` patterns. Three consecutive
+  `make test` runs exit 0 post-fix.
+
+### Security
+
+- **Code-scanning cleanup (4 fixes + 15 documented FP dismissals).**
+  19 open CodeQL/Dependabot alerts addressed, including JS open-redirect
+  defense-in-depth (`src/03-websocket.js`), postcss 8.5.9 → 8.5.10
+  (CVE-grade XSS via unescaped `</style>`), empty `except` logging in
+  `mixins/sticky.py`, and a duplicate `import asyncio` in
+  `mixins/request.py`.
+
+- **CSP-nonce-aware activator for `<dj-lazy-slot>` fills (#1147).**
+  `{% live_render lazy=True %}` propagates `request.csp_nonce` onto both
+  the `<template>` element and the inline `<script>` activator.
+  Strict-CSP sites no longer silently fail to mount lazy children.
+
+### Migration
+
+Zero breaking changes from v0.8.x. All v0.7.x and v0.8.x APIs work
+unchanged.
+
+Recommended cleanup (optional):
+
+```python
+# Old — still works, but now redundant in DEBUG=True
+class MyAppConfig(AppConfig):
+    def ready(self):
+        from djust import enable_hot_reload
+        enable_hot_reload()
+
+# New — djust handles it for you
+class MyAppConfig(AppConfig):
+    pass
+```
+
+Full migration notes: [`MIGRATION.md`](MIGRATION.md).
+
+### Quality bar at GA
+
+- 4080+ Python tests, 1486+ JavaScript tests — all green
+- 0 open security alerts as of GA
+- CSP-strict everywhere
+- Wire-protocol back-compat: 0.9.0 servers send all new fields
+  additively; 0.6.1+ clients ignore unknown keys
+
+---
 
 ## [0.9.0rc5] - 2026-04-28
 
