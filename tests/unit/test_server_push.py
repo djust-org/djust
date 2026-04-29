@@ -216,6 +216,25 @@ class TestServerPushHandler:
         assert consumer._recovery_html == "<div>third</div>"
         assert consumer._recovery_version == 3
 
+    @pytest.mark.asyncio
+    async def test_no_patches_does_not_clobber_recovery_html(self):
+        """A no-op render (patches=None) must NOT overwrite _recovery_html.
+        A previously-good recovery HTML must survive an unchanged broadcast,
+        otherwise we'd lose recovery state on every quiet push."""
+        consumer = self._make_consumer()
+        consumer._recovery_html = "<div>previously-good</div>"
+        consumer._recovery_version = 7
+
+        # Render returns no patches (state didn't change).
+        consumer.view_instance.render_with_diff = MagicMock(
+            return_value=("<div>fresh-but-unused</div>", None, 8)
+        )
+
+        await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
+
+        assert consumer._recovery_html == "<div>previously-good</div>"
+        assert consumer._recovery_version == 7
+
 
 # ---------------------------------------------------------------------------
 # Group join / leave

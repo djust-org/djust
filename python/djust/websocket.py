@@ -4637,12 +4637,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     if isinstance(patches, str):
                         patches = fast_json_loads(patches)
                     # Store rendered HTML for on-demand recovery, mirroring
-                    # handle_event. Without this, a VDOM patch failure on a
-                    # broadcast-triggered render (e.g. {% if %} blocks shifting
-                    # DOM structure after a push-driven state change) triggers
-                    # `request_html` with no `_recovery_html` to serve —
-                    # server returns `recoverable=false` and the client
-                    # force-reloads the page. See #1202.
+                    # handle_event. Without this, request_html after a failed
+                    # broadcast-triggered patch finds _recovery_html=None and
+                    # forces a page reload. See #1202.
                     self._recovery_html = html
                     self._recovery_version = version
                     await self._send_update(

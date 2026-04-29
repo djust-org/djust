@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`server_push` now stores `_recovery_html` / `_recovery_version` after
+  broadcast renders (#1202)** — push-driven sessions previously left recovery
+  state unset, so a client `request_html` after a failed VDOM patch
+  (e.g. `{% if %}` shifting DOM structure on a broadcast) returned
+  `recoverable=false` and force-reloaded the page. `server_push` now mirrors
+  the `handle_event` pattern of populating `_recovery_html` /
+  `_recovery_version` immediately before dispatching the broadcast patches.
+  Added 3 regression cases in `tests/unit/test_server_push.py`
+  (single-push, multi-push refresh, no-op-push leaves recovery state intact).
+
 ### Security
 
 - **Code-scanning cleanup batch (4 fixes + 15 false-positive dismissals)** —
