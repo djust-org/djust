@@ -175,6 +175,47 @@ class TestServerPushHandler:
         # Should not raise
         await consumer.server_push({"state": {"x": 1}})
 
+    @pytest.mark.asyncio
+    async def test_stores_recovery_html_after_broadcast(self):
+        """After a broadcast-triggered render, _recovery_html and
+        _recovery_version must be updated so a later `request_html`
+        recovery (triggered by a failed VDOM patch on the client) has
+        fresh HTML to serve. See #1202.
+
+        Regression: previously only handle_event set _recovery_html.
+        If a session received only broadcasts after mount, _recovery_html
+        stayed None, request_html returned `recoverable=false`, and the
+        client force-reloaded the page.
+        """
+        consumer = self._make_consumer()
+        consumer.view_instance.render_with_diff = MagicMock(
+            return_value=("<div>rendered-after-push</div>", '[{"op":"replace"}]', 42)
+        )
+
+        await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
+
+        assert consumer._recovery_html == "<div>rendered-after-push</div>"
+        assert consumer._recovery_version == 42
+
+    @pytest.mark.asyncio
+    async def test_recovery_html_refreshed_across_multiple_pushes(self):
+        """Consecutive pushes must each refresh _recovery_html so a stale
+        render from an earlier broadcast isn't served on a later recovery."""
+        consumer = self._make_consumer()
+        consumer.view_instance.render_with_diff = MagicMock(
+            side_effect=[
+                ("<div>first</div>", '[{"op":"replace","v":"first"}]', 1),
+                ("<div>second</div>", '[{"op":"replace","v":"second"}]', 2),
+                ("<div>third</div>", '[{"op":"replace","v":"third"}]', 3),
+            ]
+        )
+
+        for _ in range(3):
+            await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
+
+        assert consumer._recovery_html == "<div>third</div>"
+        assert consumer._recovery_version == 3
+
 
 # ---------------------------------------------------------------------------
 # Group join / leave
