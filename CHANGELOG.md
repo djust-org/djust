@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`RichSelect` — per-option `variant` support and `variant_map` convenience
+  kwarg.** Each option dict can now carry a `variant` key
+  (`info`/`success`/`warning`/`danger`/`muted`/`primary`/`secondary`) that
+  tints the dropdown row AND the trigger when that option is currently
+  selected. The variant vocabulary matches `Badge`/`Button`/`Tag`/`Alert` so
+  one theme palette covers every signal component. For status pickers, the
+  `variant_map={"NEW": "info", "DONE": "success", ...}` constructor
+  convenience mirrors `Badge.status()`. Disabled pickers suppress the
+  trigger variant so the "greyed-out" state isn't competing with a bright
+  signal colour.
+
+  Variant names are validated with a permissive regex
+  (`^[a-z0-9][a-z0-9-]{0,31}$`), so downstream projects can add custom
+  variants by shipping a matching
+  `.rich-select-option--variant-<name>` CSS rule — the built-in set is
+  the baseline, not a closed allow-list. Malformed names (quotes, spaces,
+  HTML escapes, uppercase) are rejected and fall back to `"default"`.
+
+  7 new CSS rule blocks (theme-variable-backed with HSL fallbacks);
+  18 new unit tests; no breaking changes — options without a `variant`
+  key render exactly as before.
+
+### Fixed
+
+- **Programmatic `RichSelect` class now emits the open/close interaction
+  handlers that were previously only rendered by the `{% rich_select %}`
+  template tag.** Before: clicking the trigger did nothing, forcing
+  consumers to monkey-patch the rendered HTML. After: `onclick` /
+  `onkeydown` (Enter + Space) toggle the dropdown open; each option row
+  closes the dropdown on click. Parity with the template-tag variant is
+  maintained by the shared `_rich_select_resolve_variant` helper.
+
 ## [0.9.0rc5] - 2026-04-28
 
 ### Fixed

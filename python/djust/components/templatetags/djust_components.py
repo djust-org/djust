@@ -4432,6 +4432,35 @@ def do_announcement_bar(parser, token):
 # ---------------------------------------------------------------------------
 
 
+# Built-in variants for which djust ships CSS. Downstream projects can add
+# their own variants by shipping a matching CSS rule — any name passing
+# ``_RICH_SELECT_VARIANT_NAME_RE`` is accepted.
+_RICH_SELECT_BUILTIN_VARIANTS = {
+    "default",
+    "info",
+    "success",
+    "warning",
+    "danger",
+    "muted",
+    "primary",
+    "secondary",
+}
+
+_RICH_SELECT_VARIANT_NAME_RE = _re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+def _rich_select_resolve_variant(opt, variant_map):
+    """Mirror of RichSelect._resolve_variant for the template-tag entry point."""
+    explicit = opt.get("variant", "")
+    if explicit:
+        return explicit if _RICH_SELECT_VARIANT_NAME_RE.match(str(explicit)) else "default"
+    if variant_map:
+        mapped = variant_map.get(str(opt.get("value", "")), "")
+        if mapped:
+            return mapped if _RICH_SELECT_VARIANT_NAME_RE.match(str(mapped)) else "default"
+    return "default"
+
+
 @register.simple_tag
 def rich_select(
     name="",
@@ -4442,20 +4471,25 @@ def rich_select(
     disabled=False,
     searchable=False,
     label="",
+    variant_map=None,
 ):
     """Render a rich select dropdown where each option can include icons, images,
-    descriptions, or badges alongside the label.
+    descriptions, badges, or variant coloring alongside the label.
 
     Args:
         name: form field name
         options: list of dicts with keys: value, label, and optional icon, image,
-                 description, badge
+                 description, badge, variant
         value: currently selected value
         event: dj-click event name for selection
         placeholder: text shown when nothing is selected
-        disabled: disables the control
+        disabled: disables the control; suppresses trigger variant tint
         searchable: adds a search input to filter options
         label: optional label above the control
+        variant_map: optional dict mapping option value → variant name;
+                     applied to any option that doesn't already declare its
+                     own ``variant`` key. Variants: info, success, warning,
+                     danger, muted (plus implicit default).
     """
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
@@ -4463,6 +4497,8 @@ def rich_select(
         searchable = searchable.lower() not in ("false", "0", "")
     if options is None:
         options = []
+    if variant_map is None:
+        variant_map = {}
 
     value = str(value) if value else ""
 
@@ -4482,24 +4518,36 @@ def rich_select(
             selected_opt = opt
             break
 
+    # Trigger mirrors the selected option's variant when enabled. See
+    # the programmatic RichSelect class for rationale.
+    trigger_variant_cls = ""
+    if selected_opt and not disabled:
+        v = _rich_select_resolve_variant(selected_opt, variant_map)
+        if v != "default":
+            trigger_variant_cls = f" rich-select-trigger--variant-{v}"
+
     if selected_opt:
         selected_html = _rich_select_option_html(selected_opt, is_display=True)
     else:
         selected_html = f'<span class="rich-select-placeholder">{e_placeholder}</span>'
 
-    # Build option list
+    # Build option list. Each option closes the dropdown on click; the
+    # subsequent dj-click round-trip re-renders with the new value.
     opt_parts = []
     for opt in options:
         if not isinstance(opt, dict):
             continue
         ov = str(opt.get("value", ""))
         active_cls = " rich-select-option--active" if ov == value else ""
+        v = _rich_select_resolve_variant(opt, variant_map)
+        variant_cls = f" rich-select-option--variant-{v}" if v != "default" else ""
         opt_html = _rich_select_option_html(opt, is_display=False)
         opt_parts.append(
-            f'<div class="rich-select-option{active_cls}" '
+            f'<div class="rich-select-option{active_cls}{variant_cls}" '
             f'data-value="{conditional_escape(ov)}" '
             f'dj-click="{dj_event}" '
-            f'role="option" aria-selected="{"true" if ov == value else "false"}">'
+            f'role="option" aria-selected="{"true" if ov == value else "false"}" '
+            f"onclick=\"this.closest('.rich-select').classList.remove('rich-select--open')\">"
             f"{opt_html}"
             f"</div>"
         )
@@ -4519,15 +4567,24 @@ def rich_select(
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
 
+    # Disabled pickers drop the toggle handlers entirely so the trigger
+    # doesn't open a dropdown against the user's disabled intent.
+    trigger_behaviour = (
+        ""
+        if disabled
+        else " onclick=\"this.parentElement.classList.toggle('rich-select--open')\""
+        " onkeydown=\"if(event.key==='Enter'||event.key===' '){event.preventDefault();"
+        "this.parentElement.classList.toggle('rich-select--open');}\""
+    )
+
     return mark_safe(
         f'<div class="rich-select{disabled_cls}" id="{uid}">'
         f"{label_html}"
         f'<input type="hidden" name="{e_name}" value="{conditional_escape(value)}">'
-        f'<div class="rich-select-trigger" tabindex="0" role="combobox" '
-        f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr} '
-        f"onclick=\"this.parentElement.classList.toggle('rich-select--open')\" "
-        f"onkeydown=\"if(event.key==='Enter'||event.key===' '){{event.preventDefault();"
-        f"this.parentElement.classList.toggle('rich-select--open');}}\">"
+        f'<div class="rich-select-trigger{trigger_variant_cls}" '
+        f'tabindex="0" role="combobox" '
+        f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}'
+        f"{trigger_behaviour}>"
         f"{selected_html}"
         f'<span class="rich-select-chevron">&#9662;</span>'
         f"</div>"
