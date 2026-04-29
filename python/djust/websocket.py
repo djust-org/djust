@@ -4636,6 +4636,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if patches is not None:
                     if isinstance(patches, str):
                         patches = fast_json_loads(patches)
+                    # Store rendered HTML for on-demand recovery, mirroring
+                    # handle_event. Without this, request_html after a failed
+                    # broadcast-triggered patch finds _recovery_html=None and
+                    # forces a page reload. See #1202.
+                    self._recovery_html = html
+                    self._recovery_version = version
                     await self._send_update(
                         patches=patches,
                         version=version,

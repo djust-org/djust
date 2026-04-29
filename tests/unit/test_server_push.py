@@ -175,6 +175,66 @@ class TestServerPushHandler:
         # Should not raise
         await consumer.server_push({"state": {"x": 1}})
 
+    @pytest.mark.asyncio
+    async def test_stores_recovery_html_after_broadcast(self):
+        """After a broadcast-triggered render, _recovery_html and
+        _recovery_version must be updated so a later `request_html`
+        recovery (triggered by a failed VDOM patch on the client) has
+        fresh HTML to serve. See #1202.
+
+        Regression: previously only handle_event set _recovery_html.
+        If a session received only broadcasts after mount, _recovery_html
+        stayed None, request_html returned `recoverable=false`, and the
+        client force-reloaded the page.
+        """
+        consumer = self._make_consumer()
+        consumer.view_instance.render_with_diff = MagicMock(
+            return_value=("<div>rendered-after-push</div>", '[{"op":"replace"}]', 42)
+        )
+
+        await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
+
+        assert consumer._recovery_html == "<div>rendered-after-push</div>"
+        assert consumer._recovery_version == 42
+
+    @pytest.mark.asyncio
+    async def test_recovery_html_refreshed_across_multiple_pushes(self):
+        """Consecutive pushes must each refresh _recovery_html so a stale
+        render from an earlier broadcast isn't served on a later recovery."""
+        consumer = self._make_consumer()
+        consumer.view_instance.render_with_diff = MagicMock(
+            side_effect=[
+                ("<div>first</div>", '[{"op":"replace","v":"first"}]', 1),
+                ("<div>second</div>", '[{"op":"replace","v":"second"}]', 2),
+                ("<div>third</div>", '[{"op":"replace","v":"third"}]', 3),
+            ]
+        )
+
+        for _ in range(3):
+            await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
+
+        assert consumer._recovery_html == "<div>third</div>"
+        assert consumer._recovery_version == 3
+
+    @pytest.mark.asyncio
+    async def test_no_patches_does_not_clobber_recovery_html(self):
+        """A no-op render (patches=None) must NOT overwrite _recovery_html.
+        A previously-good recovery HTML must survive an unchanged broadcast,
+        otherwise we'd lose recovery state on every quiet push."""
+        consumer = self._make_consumer()
+        consumer._recovery_html = "<div>previously-good</div>"
+        consumer._recovery_version = 7
+
+        # Render returns no patches (state didn't change).
+        consumer.view_instance.render_with_diff = MagicMock(
+            return_value=("<div>fresh-but-unused</div>", None, 8)
+        )
+
+        await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
+
+        assert consumer._recovery_html == "<div>previously-good</div>"
+        assert consumer._recovery_version == 7
+
 
 # ---------------------------------------------------------------------------
 # Group join / leave
