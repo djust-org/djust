@@ -1651,7 +1651,7 @@ function _applyPatchesInner(patches, rootEl = null) {
         // child without a dj-id needs removal: the index-based fallback
         // resolves to the just-inserted content instead of the old child,
         // and the wrong node gets deleted.  See regression fixtures for
-        // NYC Claims tab switches (#641).
+        // a downstream consumer tab switches (#641).
         //
         // Fix: apply all non-Insert patches individually FIRST, then batch
         // the consecutive inserts, then apply any remaining inserts that

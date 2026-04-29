@@ -216,7 +216,7 @@ The Rust template engine supports **all 57 Django built-in filters** in `crates/
 ## Process canonicalizations from PR retros (2026-04-26 View Transitions arc)
 
 Each rule below was a Stage 11 finding or retro-tracker item from the View
-Transitions PR-A → PR-B arc and the nyc-claims gap-fix arc. Canonicalized
+Transitions PR-A → PR-B arc and the downstream-consumer gap-fix arc. Canonicalized
 here so the next migration / mechanical-replacement / mixin-forwarding /
 filter-shape PR doesn't repeat the failure mode.
 
@@ -290,7 +290,7 @@ filter-shape PR doesn't repeat the failure mode.
 
 ## Process canonicalizations from v0.8.6 retro arc
 
-Five additional rules from the View Transitions arc + nyc-claims data_table arc.
+Five additional rules from the View Transitions arc + downstream-consumer data_table arc.
 
 - **Split-foundation pattern for high-blast-radius features** (#1122).
   When a feature has blast radius (signature changes, new patterns

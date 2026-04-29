@@ -109,7 +109,7 @@
           "mandatory": true
         },
         {
-          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) \u2014 djust sits alongside multiple private downstream apps (NYC Claims, Rezme, Ridgeview MHP, JBM, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines \u2014 they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
+          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) \u2014 djust sits alongside multiple private downstream apps (the downstream apps listed in .customer-names, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines \u2014 they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
           "done": false,
           "mandatory": true
         },

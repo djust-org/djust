@@ -139,7 +139,7 @@ git commit -m "feat: add CSS framework setup command"
 
 **PR #296 is now clean and focused:**
 
-✅ **What it contains (Lessons Learned from USAI Admin Portal)**:
+✅ **What it contains (Lessons Learned from a production djust deployment)**:
 - V006: Service instance detection
 - V007: Event handler signature validation
 - T005: Template structure validation

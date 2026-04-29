@@ -5,7 +5,7 @@ The static `djust_audit` / `djust_check` pipeline cannot see a class of
 production security issues that only appear at runtime: security headers
 correctly configured in ``settings.py`` but stripped by an nginx ingress,
 a CloudFront behavior, a service-mesh sidecar, or a response-rewriting
-middleware running after ``CSPMiddleware``. The NYC Claims pentest
+middleware running after ``CSPMiddleware``. A downstream consumer pentest
 (2026-04-10) caught a critical case where ``django-csp`` was fully
 configured but the ``Content-Security-Policy`` header was absent from
 production responses.

@@ -539,10 +539,10 @@ The integration test for `lazy=True` initially used the parent's `template = "..
 
 ---
 
-## v0.8.6 — View Transitions PR-B + 3 nyc-claims data_table issues + async-hooks (PRs #1112, #1113, #1115, #1116, #1117, #1119, #1120)
+## v0.8.6 — View Transitions PR-B + 3 downstream-consumer data_table issues + async-hooks (PRs #1112, #1113, #1115, #1116, #1117, #1119, #1120)
 
 **Date**: 2026-04-26
-**Scope**: Closes the View Transitions arc started in v0.8.5; ships the actual user-facing wrap (PR-B). Resolves 3 nyc-claims data_table issues that surfaced during the session (#1110, #1111, #1114 HIGH). 7-PR milestone with 16 GitHub issues closed plus the View Transitions ADR-013 row.
+**Scope**: Closes the View Transitions arc started in v0.8.5; ships the actual user-facing wrap (PR-B). Resolves 3 downstream-consumer data_table issues that surfaced during the session (#1110, #1111, #1114 HIGH). 7-PR milestone with 16 GitHub issues closed plus the View Transitions ADR-013 row.
 **Tests at close**: 4767 Python + 1419 JS = ~6186 across the suite (was 4745 + 1402 = 6147 at v0.8.5 close).
 
 ### What We Learned
@@ -635,10 +635,10 @@ PR #1117 decorated 21 `on_table_*` methods via Python regex script. PR #1120 ref
 
 ---
 
-## v0.8.5 — async applyPatches foundation + 3 nyc-claims gap fixes (PRs #1099, #1102, #1105, #1107)
+## v0.8.5 — async applyPatches foundation + 3 downstream-consumer gap fixes (PRs #1099, #1102, #1105, #1107)
 
 **Date**: 2026-04-26 (released as v0.8.5rc1)
-**Scope**: View Transitions PR-A (foundational `applyPatches` async signature change), `self.defer()` (Phoenix `send(self(), :foo)` parity), and 3 nyc-claims-reported workarounds-replaced-with-features (`wizard_input_event`, T012 partial-suppress, `wizard_rendered_fields`).
+**Scope**: View Transitions PR-A (foundational `applyPatches` async signature change), `self.defer()` (Phoenix `send(self(), :foo)` parity), and 3 downstream-consumer-reported workarounds-replaced-with-features (`wizard_input_event`, T012 partial-suppress, `wizard_rendered_fields`).
 **Note**: Backfill — this milestone shipped without a milestone retro at the time; entry written 2026-04-26 alongside the v0.8.6 retro.
 
 ### What We Learned
@@ -670,7 +670,7 @@ PR #1107's `wizard_rendered_fields` annotated as `list | None`, but the code use
 
 ### Insights
 
-- **Three nyc-claims gap-fix PRs (#1102, #1105, #1107) all had Stage 11 catches.** Each was small (~30-100 LOC) and "looked easy", and each had one or two genuine 🟡 findings in review. Reinforces the rule: "small change → no Stage 11 catch" is a fallacy; Stage 11 finds non-obvious things across PR sizes.
+- **Three downstream-consumer gap-fix PRs (#1102, #1105, #1107) all had Stage 11 catches.** Each was small (~30-100 LOC) and "looked easy", and each had one or two genuine 🟡 findings in review. Reinforces the rule: "small change → no Stage 11 catch" is a fallacy; Stage 11 finds non-obvious things across PR sizes.
 
 - **PR-A (#1099) was the first to use the new pipeline-retro state-file flow** (skill update from PR #1083 context). Per-PR retro file landed cleanly; milestone retro was missed at the time (this entry is the backfill). Suggests the pipeline-run → pipeline-retro handoff still misses milestone-boundary detection.
 
@@ -706,7 +706,7 @@ PR #1107's `wizard_rendered_fields` annotated as `list | None`, but the code use
 **Action taken**: Open — tracked in Action Tracker #158. New rule: every AST round-trip (inheritance, serialization, cache-rebuild) needs a "parse the source, round-trip, re-parse, assert AST equality" test driven from parser output, not from direct AST construction. PR #1086 added that round-trip case (`test_round_trip_through_resolve_inheritance_preserves_date_filter_arg_1081`).
 
 **2. Multi-reopen issues need bit-exact repro before claiming root cause.**
-Issue #1081 went through 4 reopens, each with a confidently-stated different root cause from the reporter (and 3 confidently-stated "found it" replies from me). All three of my framework-side theories tested clean against the published cp312 wheel SHA — and were wrong. Posted "smoking gun" comments based on theoretical-flow testing without a runnable script that reproduced against the reporter's exact environment. The actual fix landed in 5 minutes once the user provided direct project access at `/Users/tip/online_projects/Flexion/proposals/nyc_comptroller_claims/nyc-claims/`.
+Issue #1081 went through 4 reopens, each with a confidently-stated different root cause from the reporter (and 3 confidently-stated "found it" replies from me). All three of my framework-side theories tested clean against the published cp312 wheel SHA — and were wrong. Posted "smoking gun" comments based on theoretical-flow testing without a runnable script that reproduced against the reporter's exact environment. The actual fix landed in 5 minutes once the user provided direct project access at `/Users/tip/online_projects/Flexion/proposals/nyc_a downstream-consumer agency_claims/downstream-consumer/`.
 
 **Action taken**: Open — tracked in Action Tracker #162. New triage process rule: on any issue with N≥2 reopens, refuse to post a root-cause claim without a runnable script that reproduces against the user's exact environment. Bit-exact diagnostic-script ask precedes any "found it" claim.
 
@@ -734,7 +734,7 @@ When picking the next "Quick Win" task, 6 of the 8 candidates I checked were alr
 
 - **The release process improvement from Action #155 worked.** v0.8.4rc1's bump-version commit staged 6 files (pyproject + Cargo.toml + Cargo.lock + CHANGELOG + 2 init files) in a single commit with no fix-pass needed. Skill's documented "3 files" was caught and corrected at v0.8.2rc1 via Action #155; this milestone validates the lesson is being applied.
 - **User direction is load-bearing.** The "two PRs is the right ceiling before I see them" rule prevented merging #1086 prematurely with the wrong fix-shape. The eventual real fix (`nodes_to_template_string`) replaced what would have been a no-op test-only PR — exactly the kind of correction the review-gate exists for.
-- **Direct project access trumps theory-side investigation.** Once the user shared the path to the reporter's nyc-claims project, identifying the bug took two commands: read the resolved template, see the doubled `""M d, Y""`. Several hours of upstream-side variation testing produced no progress. Future similar investigations: ask earlier.
+- **Direct project access trumps theory-side investigation.** Once the user shared the path to the reporter's downstream-consumer project, identifying the bug took two commands: read the resolved template, see the doubled `""M d, Y""`. Several hours of upstream-side variation testing produced no progress. Future similar investigations: ask earlier.
 - **Pure docs-only PRs (#1087) still warrant the retro-artifact gate.** Action #157's "3rd-strike RETRO_GATE_VIOLATION" pattern from v0.8.3 milestones — small bookkeeping PRs bypass the retro gate — repeated here for both #1086 and #1087 (no `pr/feedback/retro-N.md` file). Keeping this milestone's retro entry as the canonical source of lessons rather than backfilling per-PR retro files for a 2-PR milestone where lessons are already captured in the issue+PR conversation.
 
 ### Review Stats
@@ -2190,7 +2190,7 @@ PR #788's `register_block_tag_handler` was the primitive that carried seven subs
 Pattern worth pinning: Stage 7 tends to miss security/correctness issues in **doc examples** and at **contract boundaries** (what reaches the client). **Action taken**: Session-wide "fix ALL findings in one push" discipline held — each was resolved in a single follow-up commit before merge, not deferred.
 
 **3. "Closed without code" claims must be verified against the reporting downstream test.**
-PR #779 was originally credited with closing #783 in both the ROADMAP and the issue tracker. The NYC Claims downstream test (`test_autofill_then_next_step_works`) stayed red. Re-opening exposed that #779 only fixed the Python-side `id()` comparison; the real bug was in `extract_from_nodes` silently dropping deps from nested `Include`/`InlineIf`. PR #784 fixed the actual root cause; PR #785 added the P0 correctness harness (compile-time `Node` variant exhaustiveness + Rust unit tests on `extract_per_node_deps` + Python byte-identical partial-vs-full oracle) so a third instance of this bug class cannot ship silently.
+PR #779 was originally credited with closing #783 in both the ROADMAP and the issue tracker. A downstream consumer downstream test (`test_autofill_then_next_step_works`) stayed red. Re-opening exposed that #779 only fixed the Python-side `id()` comparison; the real bug was in `extract_from_nodes` silently dropping deps from nested `Include`/`InlineIf`. PR #784 fixed the actual root cause; PR #785 added the P0 correctness harness (compile-time `Node` variant exhaustiveness + Rust unit tests on `extract_per_node_deps` + Python byte-identical partial-vs-full oracle) so a third instance of this bug class cannot ship silently.
 
 **Action taken**: ROADMAP attribution corrected in PR #784. Dep-extractor now has three complementary guards.
 

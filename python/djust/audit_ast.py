@@ -3,7 +3,7 @@ AST-based security anti-pattern scanner for ``djust_audit --ast`` (#660).
 
 This module walks user Python source code looking for five specific
 anti-patterns that the 2026-04-10 pentest found either as live
-vulnerabilities or as near-misses in the NYC Claims application. Each
+vulnerabilities or as near-misses in a downstream consumer's application. Each
 checker is intentionally narrow — false positives are worse than false
 negatives for a linter that runs on every push.
 

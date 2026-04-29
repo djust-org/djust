@@ -19,10 +19,10 @@ Adds one extra mandatory checklist item (djust-specific):
 > (project root, gitignored). Any match = REVIEW_FAILED; fix with
 > `git commit --amend` + `gh pr edit` before proceeding.
 
-Why: djust sits alongside multiple private downstream apps (NYC Claims,
-Rezme, Ridgeview MHP, JBM, etc.). Patterns extracted upstream into the
+Why: djust sits alongside multiple private downstream apps (a downstream consumer,
+a downstream consumer, a downstream consumer, a downstream consumer, etc.). Patterns extracted upstream into the
 public framework repo must not ship with private-project identifiers
-in commit metadata or file contents. PR #836 nearly shipped "NYC Claims"
+in commit metadata or file contents. PR #836 nearly shipped "a downstream consumer"
 in its commit subject + PR body — caught at Stage 3 during pipeline-ship,
 but reviewer vigilance is not a durable gate. This mechanical grep is.
 
