@@ -1618,6 +1618,38 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 ---
 
+### Milestone: v0.10.0 — Rust Polish (next minor after v0.9.0 stable)
+
+*Goal:* Three sub-week, low-risk Rust additions that compound the existing Rust-side wins (template engine, VDOM, fragment cache). Each is Django-compatible — no surface change for user code; just faster + safer plumbing underneath.
+
+**Status (planning):** 0 of 3 PRs shipped. Targeted to ship as the next minor after v0.9.0 stable cuts. If 1.0 has cut by then, this becomes v1.1.
+
+**Why ship as v0.10 not v1.0:** the 1.0 quality gates (accessibility / WCAG, Dead View / progressive enhancement, soak) are the 1.0 blocker. These three Rust items are pure-perf / pure-safety wins — they don't move the 1.0 release-readiness needle. Better to land them in a focused minor where soak is bounded.
+
+#### Items
+
+- [ ] **#1 — WebSocket payload validation in Rust** (P1, security + perf double-win, ~1 week). Every inbound WS frame today goes through Python: type whitelist, `ref` is int, `params` is dict, `event` name is allowed. djust_core can pre-validate before any Python touches it. Drops malformed/malicious frames before Python overhead; tightens the security surface (rate-limit, message-size cap, schema validation in one hot Rust path). First-PR shape: `crates/djust_core/src/wire.rs` — `validate_inbound_frame(json: &str) -> Result<ValidatedFrame, FrameError>`. `LiveViewConsumer.receive()` calls it, dispatches based on the validated shape.
+
+- [ ] **#2 — Patch coalescing buffer** (P1, smoother high-frequency UIs, ~1 week). When multiple events fire within ~16ms (cursor moves, slider drags, animations), djust currently sends N patch frames; the browser applies them sequentially — wasted work. Rust adds a 16ms windowed buffer that merges patches targeting the same node before flushing. Cursor-tracking demos that fire 60 events/sec become ~6 frames/sec on the wire with no UI difference. First-PR shape: `crates/djust_vdom/src/coalesce.rs`. Activated by config: `LIVEVIEW_CONFIG = {"patch_coalesce_window_ms": 16}`. Default off until v0.10 soak.
+
+- [ ] **#3 — Settings/config validator at startup** (P2, catches prod misconfig early, ~3 days). `LIVEVIEW_CONFIG` is a Python dict. Mistypes (`"hot_reload_auto_enable": "True"` instead of `True`) only surface at the first relevant code path. Rust-side validator at `django.setup()` time can check shape + types up front. Misconfig → loud error at boot, not silent broken behavior in prod. First-PR shape: `crates/djust_core/src/config_schema.rs` with serde-style schema. Reuses existing `LIVEVIEW_CONFIG` defaults from `python/djust/config.py`. Wired into `DjustConfig.ready()` (alongside the existing observability handler + HVR auto-enable blocks).
+
+#### Acceptance
+
+- All 3 PRs ship without breaking the existing wire protocol (additive only).
+- Bench: WS payload validation in Rust beats the Python equivalent by ≥3× on the standard event-dispatch benchmark.
+- Bench: patch coalescing reduces the 60-event/sec cursor demo's wire frames by ≥80%.
+- Misconfig validator catches the 5 most common `LIVEVIEW_CONFIG` typos with a clear actionable error message.
+- No regression in `make test` (4047 Python + 1486+ JS).
+
+#### Out of scope (post-1.0)
+
+- **Form validation hybrid** (Rust does mechanical validators; Python does `clean_*`) — needs careful soak because every Django form touches it. Logged in "Investigate & Decide" / Rust gap-closing.
+- **Pre-render cache for static-ish routes** — bigger surface area, deserves its own milestone.
+- **Rust + WASM client patcher** — biggest architectural Rust play but ~2-3 months and high risk; v1.x or v2.x.
+
+---
+
 ## Investigate & Decide
 
 Open questions that inform future direction:
@@ -1672,6 +1704,29 @@ Items below close concrete Phoenix LiveView features that djust doesn't have. Or
   - Backends: `channels` (default), `redis`, `pg_notify`. Pluggable.
   - Subscribe via `@subscribe_to("topic")` decorator on `handle_info` methods.
   - The composition gain: handlers fan out via the same primitive regardless of backend; tests substitute in-memory.
+
+### Rust expansion (post-1.0)
+
+Items below expand Rust's footprint beyond the existing template-engine / VDOM / fragment-cache surface, while preserving Django compatibility (no user-code surface change). Smaller / lower-risk Rust polish items live in the v0.10.0 milestone above; items here are bigger surface area or higher risk and want post-1.0 soak.
+
+- **Form validation hybrid (post-1.0)** — Django form validation is all Python; Rust can handle the mechanical layer (type coercion, regex match, length/range bounds) without touching user-defined `clean_X` methods. Concrete plan, ~2 weeks:
+  - User-written `clean_email()` / `clean()` Python methods unchanged. Rust runs FIRST for built-in validators (`MinLengthValidator`, `EmailValidator`, `RegexValidator`, `URLValidator`); Python `clean_*` runs on the already-coerced output.
+  - `EmailValidator` regex in Rust is ~30× faster than Django's Python-regex equivalent; aggregate matters for big admin forms.
+  - First-PR shape: `crates/djust_forms/src/validators.rs`. `LiveViewForm` opt-in via `class Meta: rust_validators = True`.
+  - Why post-1.0: every Django form touches it. Needs careful soak.
+
+- **Pre-render cache for static-ish routes (post-1.0)** — Marketing pages (homepage, docs landing) re-render on every WebSocket mount. They almost never change. A Rust process at deploy-time pre-renders initial HTML for top-N routes into a CDN-friendly cache; the WebSocket only sends patches if state diverges. Concrete plan, ~3 weeks:
+  - Reuses the existing Rust template engine (already shipped) to bake initial HTML into static files at deploy time.
+  - `manage.py djust_prerender` command emits `staticfiles/djust-prerender/<route_hash>.html`. Middleware serves from cache when present.
+  - WebSocket subscription pulls from the cache, then takes over for live patches.
+  - Win: TTI on marketing pages drops from "WebSocket connect + initial render" to "static HTML + WebSocket upgrade." Real meaningful for SEO / first-paint perception.
+
+- **Rust + WASM client patcher (post-1.0, v1.x or v2.x ambitious bet)** — The biggest single Rust opportunity djust hasn't taken yet: replace `client.js` (~87 KB gzipped raw / ~37 KB minified target) with a Rust-compiled WASM patcher. Wire protocol unchanged — just a different patcher implementation on the client side. ~2-3 month project. Wins:
+  - **Bundle size**: ~50% reduction (target ~30-40 KB gzipped).
+  - **Apply perf**: VDOM apply in Rust > VDOM apply in JS, especially for large diffs (1000+ node tables).
+  - **Code sharing**: client and server share the same VDOM types from `crates/djust_vdom` — eliminates "the JS patcher and Rust differ on edge case X" failure class.
+  - Risks: WASM has different lazy-loading semantics; some browsers throttle WASM compile. Need careful soak. Bench target: VDOM apply on 1000-row table change in <2ms.
+  - Why post-1.0 (v1.x or v2.x): too risky for the 1.0 stability bar. Subsumes the existing "Rust-side WASM compilation" entry above.
 
 ### Phoenix LiveView gaps that are NOT closable
 
