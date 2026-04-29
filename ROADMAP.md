@@ -1728,6 +1728,32 @@ Items below expand Rust's footprint beyond the existing template-engine / VDOM /
   - Risks: WASM has different lazy-loading semantics; some browsers throttle WASM compile. Need careful soak. Bench target: VDOM apply on 1000-row table change in <2ms.
   - Why post-1.0 (v1.x or v2.x): too risky for the 1.0 stability bar. Subsumes the existing "Rust-side WASM compilation" entry above.
 
+### JS/React ecosystem strategy (post-1.0)
+
+Three ship items + one explicit non-goal. Together they define how djust relates to the JS ecosystem without becoming JS-flavored.
+
+- **`@djust/react` bridge — TanStack Query replacement (post-1.0, biggest external lever)** — Separate package; doesn't touch djust core. Ships a `useDjust(path)` React hook that subscribes to a LiveView's state stream over WebSocket and exposes it as React state. Concrete plan, ~2-3 months for v1:
+  - **Server-side**: a "state-mode" WebSocket variant emits JSON state diffs instead of DOM patches. Additive — existing morph mode untouched. Reuses the wire protocol's existing assigns-on-patch shape; only the client interpreter differs.
+  - **Client-side**: `@djust/react` npm package with hooks: `useDjust(path)` (subscribe + read state), `useDjustEvent(name)` (send events), `useDjustOptimistic()` (matches React 19 `useOptimistic` shape), `useDjustAction()` (matches `useActionState`).
+  - **TypeScript types** generated from view classes (similar to existing `djust_typecheck`); `useDjust<TodoListView>("/todos/")` is fully typed.
+  - **Marketing positioning: "TanStack Query, but real-time. And free, because djust does it server-side."** TanStack Query's 5M weekly downloads solve four problems (cache-fetched-data, auto-revalidate, mutate-with-rollback, cross-tab-sync); djust's bridge solves all four BETTER, structurally — server pushes when state changes, no polling, no manual cache invalidation, optimistic updates first-class, cross-tab sync free via shared WebSocket. The 5-line `useDjust()` example beats the 20-line TanStack Query equivalent on every metric.
+  - **Why this matters**: React has the largest dev mind-share. djust is invisible to that audience today. The bridge is the lever. Far bigger top-of-funnel than the Django community by itself.
+  - **Lives in a separate repo / npm package** (`djust-org/djust-react`); doesn't pollute djust core. Reuses the React-islands hosting infrastructure from the RSC analog item above (compounding value).
+
+- **"djust hooks starter" — reference patterns for `dj-hook` (post-1.0, sharpens existing primitive)** — djust already has the JS-component primitive: `{% colocated_hook %}` + `dj-hook` element bindings. What's missing is curation. Concrete plan, ~2 weeks of focused docs work, no new infrastructure:
+  - 10 reference patterns in `docs.djust.org/content/website/guides/`: chart wrapper (Chart.js), autocomplete dropdown, file dropzone with preview, drag/drop reorder, infinite scroll, keyboard shortcut handler, modal manager, copy-to-clipboard, virtualized list, observable scroll position. Each ~50 LoC.
+  - Each pattern is plain JS — no React, no build pipeline, no node_modules. Just `dj-hook` + the colocated_hook tag.
+  - Closes the gap users hit when they need <16ms response time (animation, drag/drop) or third-party DOM-API libraries.
+  - Frames the existing primitive as the canonical answer to "how do I write a custom widget in djust?" so users stop reaching for React/Vue/Stimulus by default.
+
+- **RSC-style islands (cross-reference)** — already captured above as a separate entry. Note: the React bridge above and the islands story compound — same React-hosting infrastructure serves both "embed a React island for animation" (islands) and "drive a React tree from a djust LiveView" (bridge). One implementation, two product narratives.
+
+- **Explicit NON-GOAL: our own React component library** — djust will NOT ship `@djust/components-react` competing with shadcn/ui, Radix, MUI, Chakra, Mantine, NextUI. Reasons:
+  - Saturated market. Each competitor has years of polish, design-system consistency, accessibility audits, dark-mode/RTL/i18n support.
+  - Wrong shape. djust's value is "Python framework + reactivity"; React component libraries are a 5-year, 10-person-company effort with zero defensible moat.
+  - Better strategy: make existing React libraries embeddable via the islands story. djust serves the data; React serves the components. Drop in shadcn/ui, drop in Recharts, drop in TanStack Table — all work because of the bridge + islands infrastructure.
+  - The existing `djust-components` package ships *server-rendered* components — that's the right shape for djust core. React component libraries belong in the React ecosystem.
+
 ### Phoenix LiveView gaps that are NOT closable
 
 Documented for honesty — these are architectural impossibilities given Python, not roadmap items:
