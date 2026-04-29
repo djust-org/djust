@@ -68,6 +68,39 @@ class MyView(LiveView):
 
 `data-*` attributes are converted: `data-item-id` → `item_id`. See [Data Attribute Naming Convention](#data-attribute-naming-convention) for full details.
 
+### Inline handler arguments
+
+For literal one-shot values, you can pass arguments to the handler
+inline using function-call syntax in the directive — no `data-*`
+attribute needed:
+
+```html
+<button dj-click="set_period('month')">Monthly</button>
+<button dj-click="set_period('year')">Yearly</button>
+
+<!-- Multiple positional args -->
+<button dj-click="add_to_cart('SKU-42', 3)">Add 3</button>
+
+<!-- Mixed literal types: strings, numbers, booleans, null -->
+<button dj-click="apply_filters('active', 18, true, null)">Adults only</button>
+```
+
+The handler receives the args positionally:
+
+```python
+@event_handler
+def set_period(self, period: str):
+    self.period = period
+
+@event_handler
+def add_to_cart(self, sku: str, quantity: int):
+    ...
+```
+
+Use `data-*` attributes when the value comes from a template
+expression (`{{ item.id }}`); use inline args when the value is a
+literal known at template-author time. (Available since v0.1.7.)
+
 ### Input
 
 ```html

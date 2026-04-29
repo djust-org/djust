@@ -234,7 +234,7 @@ class BaseAdapter(FrameworkAdapter):
         if field.required:
             attrs["required"] = "required"
         if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
-            attrs["dj-change"] = kwargs.get("event_name", "validate_field")
+            attrs[kwargs.get("dom_event", "dj-change")] = kwargs.get("event_name", "validate_field")
             # Pass field_name so event handler knows which field changed
             attrs["data-field_name"] = field_name
 
@@ -286,7 +286,7 @@ class BaseAdapter(FrameworkAdapter):
         if field.required:
             attrs["required"] = "required"
         if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
-            attrs["dj-change"] = kwargs.get("event_name", "validate_field")
+            attrs[kwargs.get("dom_event", "dj-change")] = kwargs.get("event_name", "validate_field")
             # Pass field_name so event handler knows which field changed
             attrs["data-field_name"] = field_name
 
@@ -342,7 +342,9 @@ class BaseAdapter(FrameworkAdapter):
             if field.required:
                 attrs["required"] = "required"
             if kwargs.get("auto_validate", config.get("auto_validate_on_change", True)):
-                attrs["dj-change"] = kwargs.get("event_name", "validate_field")
+                attrs[kwargs.get("dom_event", "dj-change")] = kwargs.get(
+                    "event_name", "validate_field"
+                )
             # Pass field_name so event handler knows which field changed
             attrs["data-field_name"] = field_name
             # Merge widget.attrs (data-*, custom classes, etc.)

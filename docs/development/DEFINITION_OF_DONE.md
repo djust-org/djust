@@ -507,8 +507,8 @@ Create a PR to update this document.
 ## Related Documents
 
 - [AI_WORKFLOW_PROCESS.md](AI_WORKFLOW_PROCESS.md) - Workflow process guide
-- [IMPLEMENTATION_PHASE1.md](IMPLEMENTATION_PHASE1.md) - Example tracking document
-- [CLAUDE.md](../CLAUDE.md) - AI guidance for project
+- [IMPLEMENTATION_PHASE1.md](../state-management/IMPLEMENTATION_PHASE1.md) - Example tracking document
+- [CLAUDE.md](../../CLAUDE.md) - AI guidance for project
 
 ---
 

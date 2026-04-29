@@ -71,7 +71,7 @@ P007   INFO      ``roles`` declaration (djust cannot verify at static-analysis
                  time — treated as documentation)
 =====  ========  ==============================================================
 
-See issue #657 (NYC Claims pentest, FINDING-10/11 motivation).
+See issue #657 (a downstream consumer pentest, FINDING-10/11 motivation).
 """
 
 from __future__ import annotations

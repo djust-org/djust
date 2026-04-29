@@ -107,6 +107,30 @@ DJUST_TEMPLATE_GLOBALS = ["navbar", "breadcrumbs"]
 
 For names injected by base templates, context processors, or framework plumbing outside djust.
 
+## Tag coverage
+
+Beyond the obvious `{{ var }}` / `{% if %}` / `{% for %}` references,
+the extractor follows positional context-variable arguments inside
+several Django built-in tags so the checker reports neither
+false-positives on tag-local names nor false-negatives on positional
+references. Coverage as of v0.5.2:
+
+| Tag | What's extracted | What's ignored |
+|---|---|---|
+| `{% firstof a b "literal" %}` | `a`, `b` (positional refs) | string literals |
+| `{% cycle a b c as label %}` | `a`, `b`, `c` (positional refs) | `as <label>` suffix |
+| `{% blocktrans with x=expr count y=qty %}` | `expr`, `qty` (the references) | `x`, `y` (template-local bindings, scoped to the block) |
+| `{% blocktranslate %}` | same as `blocktrans` | same |
+| `{% with name=expr %}` | `expr` | `name` (block-local) |
+| `{% include "path" with k=v only %}` | `v` | `k`, `only` |
+| `{% url "name" arg1 arg2 %}` | `arg1`, `arg2` | the URL name string |
+
+Adding tag coverage is mostly a question of teaching
+`python/djust/management/commands/djust_typecheck.py` what each tag's
+arguments mean — the extractor is regex-based and incremental. File
+an issue if you hit a built-in or third-party tag whose arguments
+should be tracked.
+
 ## Known limitations
 
 - **Dynamic dict returns** — `get_context_data` that builds its dict in a loop, via `dict(...)`, or with `update()` calls is not followed. Declare the keys on `self` instead, or list them in `DJUST_TEMPLATE_GLOBALS`.

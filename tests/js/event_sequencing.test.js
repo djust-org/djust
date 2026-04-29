@@ -67,14 +67,14 @@ function createDom() {
  * Create a mounted LiveViewWebSocket with VDOM version initialized to 1.
  * Uses the mount message to initialize clientVdomVersion in the correct scope.
  */
-function makeWS(dom) {
+async function makeWS(dom) {
     const ws = new dom.window.djust.LiveViewWebSocket();
     ws.enabled = true;
     ws.ws = new dom.window.WebSocket();
     ws.viewMounted = true;
 
     // Initialize VDOM version via mount (sets let-scoped clientVdomVersion)
-    ws.handleMessage({
+    await ws.handleMessage({
         type: 'mount',
         view: 'test.views.TestView',
         version: 1,
@@ -87,9 +87,9 @@ function makeWS(dom) {
 describe('Event sequencing (#560)', () => {
 
     describe('sendEvent ref tracking', () => {
-        it('sendEvent includes a monotonic ref in the message', () => {
+        it('sendEvent includes a monotonic ref in the message', async () => {
             const { dom, sentMessages } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', { id: 1 });
             ws.sendEvent('click', { id: 2 });
@@ -101,9 +101,9 @@ describe('Event sequencing (#560)', () => {
             expect(events[1].ref).toBeGreaterThan(events[0].ref);
         });
 
-        it('sendEvent sets the event name and params correctly', () => {
+        it('sendEvent sets the event name and params correctly', async () => {
             const { dom, sentMessages } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('search', { value: 'hello' });
 
@@ -113,9 +113,9 @@ describe('Event sequencing (#560)', () => {
             expect(events[0].params.value).toBe('hello');
         });
 
-        it('sendEvent sets pending event state', () => {
+        it('sendEvent sets pending event state', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
 
@@ -126,14 +126,14 @@ describe('Event sequencing (#560)', () => {
     });
 
     describe('tick buffering during pending events', () => {
-        it('tick patches with source=tick are buffered when event is pending', () => {
+        it('tick patches with source=tick are buffered when event is pending', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
 
             // Simulate tick arriving while event is pending
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -144,15 +144,15 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(1);
         });
 
-        it('event response is processed and clears pending state', () => {
+        it('event response is processed and clears pending state', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
             const ref = getSeqState().pendingEventRef;
 
             // Event response with matching ref
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -163,15 +163,15 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().pendingEventRef).toBeNull();
         });
 
-        it('buffered tick patches are flushed after event response', () => {
+        it('buffered tick patches are flushed after event response', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
             const ref = getSeqState().pendingEventRef;
 
             // Tick arrives during pending event — gets buffered
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -180,7 +180,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(1);
 
             // Event response arrives — should flush buffered tick
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 3,
@@ -191,14 +191,14 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
 
-        it('tick patches without pending event are not buffered', () => {
+        it('tick patches without pending event are not buffered', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             // No pending event
             expect(getSeqState().pendingEventRef).toBeNull();
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -209,12 +209,12 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
 
-        it('non-tick patches without ref are not buffered', () => {
+        it('non-tick patches without ref are not buffered', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             // Patch without source or ref (e.g., broadcast)
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -225,22 +225,22 @@ describe('Event sequencing (#560)', () => {
     });
 
     describe('noop response clears pending state', () => {
-        it('noop with matching ref clears pending event', () => {
+        it('noop with matching ref clears pending event', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('toggle', {});
             const ref = getSeqState().pendingEventRef;
             expect(ref).not.toBeNull();
 
-            ws.handleMessage({ type: 'noop', ref: ref });
+            await ws.handleMessage({ type: 'noop', ref: ref });
 
             expect(getSeqState().pendingEventRef).toBeNull();
         });
 
-        it('noop flushes buffered tick patches', () => {
+        it('noop flushes buffered tick patches', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('toggle', {});
             const ref = getSeqState().pendingEventRef;
@@ -250,21 +250,21 @@ describe('Event sequencing (#560)', () => {
             });
             expect(getSeqState().tickBufferLength).toBe(1);
 
-            ws.handleMessage({ type: 'noop', ref: ref });
+            await ws.handleMessage({ type: 'noop', ref: ref });
 
             expect(getSeqState().tickBufferLength).toBe(0);
         });
     });
 
     describe('error clears pending state', () => {
-        it('error response clears pending event ref and buffer', () => {
+        it('error response clears pending event ref and buffer', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('broken', {});
             dom.window.djust._pushTickBuffer({});
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'error',
                 error: 'Something went wrong'
             });
@@ -275,9 +275,9 @@ describe('Event sequencing (#560)', () => {
     });
 
     describe('disconnect clears pending state', () => {
-        it('WebSocket close clears pending event ref and buffer', () => {
+        it('WebSocket close clears pending event ref and buffer', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('test', {});
             dom.window.djust._pushTickBuffer({});
@@ -294,14 +294,14 @@ describe('Event sequencing (#560)', () => {
     });
 
     describe('broadcast and async patch buffering', () => {
-        it('broadcast patches are buffered when event is pending', () => {
+        it('broadcast patches are buffered when event is pending', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
 
             // Simulate broadcast arriving while event is pending
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -312,14 +312,14 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(1);
         });
 
-        it('async patches are buffered when event is pending', () => {
+        it('async patches are buffered when event is pending', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
 
             // Simulate async completion arriving while event is pending
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -330,21 +330,21 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(1);
         });
 
-        it('broadcast and async patches are flushed after event response', () => {
+        it('broadcast and async patches are flushed after event response', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
             const ref = getSeqState().pendingEventRef;
 
             // Buffer both broadcast and async patches
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
                 source: 'broadcast'
             });
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 3,
@@ -353,7 +353,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(2);
 
             // Event response arrives — should flush all buffered patches
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 4,
@@ -364,14 +364,14 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
 
-        it('broadcast patches without pending event pass through', () => {
+        it('broadcast patches without pending event pass through', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             // No pending event
             expect(getSeqState().pendingEventRef).toBeNull();
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -382,14 +382,14 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
 
-        it('async patches without pending event pass through', () => {
+        it('async patches without pending event pass through', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             // No pending event
             expect(getSeqState().pendingEventRef).toBeNull();
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -402,9 +402,9 @@ describe('Event sequencing (#560)', () => {
     });
 
     describe('multiple pending events (Set-based tracking)', () => {
-        it('multiple sendEvent calls track all pending refs', () => {
+        it('multiple sendEvent calls track all pending refs', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', { id: 1 });
             const state1 = getSeqState();
@@ -419,9 +419,9 @@ describe('Event sequencing (#560)', () => {
             expect(refs2).toContain(refs1[0]);
         });
 
-        it('buffer flushes only when all pending events resolve', () => {
+        it('buffer flushes only when all pending events resolve', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', { id: 1 });
             const ref1 = getSeqState().pendingEventRefs[0];
@@ -431,7 +431,7 @@ describe('Event sequencing (#560)', () => {
             const ref2 = refs.find(r => r !== ref1);
 
             // Buffer a tick patch
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -440,7 +440,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(1);
 
             // First event response — still one pending
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 3,
@@ -453,7 +453,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().pendingEventRefs.length).toBe(1);
 
             // Second event response — all resolved
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 4,
@@ -465,9 +465,9 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().pendingEventRefs.length).toBe(0);
         });
 
-        it('disconnect clears all pending refs', () => {
+        it('disconnect clears all pending refs', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('a', {});
             ws.sendEvent('b', {});
@@ -480,15 +480,15 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
 
-        it('error clears all pending refs', () => {
+        it('error clears all pending refs', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('a', {});
             ws.sendEvent('b', {});
             expect(getSeqState().pendingEventRefs.length).toBe(2);
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'error',
                 error: 'Something went wrong'
             });
@@ -497,14 +497,14 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().tickBufferLength).toBe(0);
         });
 
-        it('non-source patches pass through (backward compat)', () => {
+        it('non-source patches pass through (backward compat)', async () => {
             const { dom, getSeqState } = createDom();
-            const ws = makeWS(dom);
+            const ws = await makeWS(dom);
 
             ws.sendEvent('click', {});
 
             // Patch without source — backward compat, should not buffer
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,

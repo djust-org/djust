@@ -198,6 +198,12 @@ def record_event_end(
     buffer.append(snapshot)
 
 
+#: Reserved snapshot key for component-level state (#1041).
+#: Lives at the top level of the state dict to keep components out of
+#: the parent's flat-attr namespace.
+_COMPONENTS_SNAPSHOT_KEY = "__components__"
+
+
 def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") -> bool:
     """Restore view public state from a snapshot.
 
@@ -212,12 +218,24 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     of ``{a:5, b:10}`` leaves the view as ``{a:1}`` — not
     ``{a:1, b:10}``. Framework-internal names (``_FRAMEWORK_INTERNAL_ATTRS``)
     and any key starting with ``_`` are never deleted.
+
+    Component-level restoration (#1041, v0.9.0): when the snapshot
+    contains a top-level ``"__components__"`` key, each
+    ``{component_id: state}`` entry is dispatched to the matching
+    component in ``view._components``. Components missing from the
+    snapshot keep their current state (no ghost-attr cleanup across
+    component boundaries — components are first-class instances, not
+    parent-scoped attrs).
     """
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
     from djust.security import safe_setattr
 
     state = snapshot.state_before if which == "before" else snapshot.state_after
+    # Pull components out before computing parent-state keys so they
+    # don't get mistaken for top-level ghost-attr candidates.
+    components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {})
+    state = {k: v for k, v in state.items() if k != _COMPONENTS_SNAPSHOT_KEY}
     state_keys = set(state.keys())
 
     # Framework-internal attrs must never be removed even if they're
@@ -264,7 +282,278 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
             # Blocked by safe_setattr (dunder, read-only, etc.).
             logger.warning("time_travel: restore blocked for key=%s", key)
             ok = False
+
+    # Phase 3 (#1041): restore per-component state. Each component
+    # entry in ``__components__`` is dispatched to the matching
+    # ``view._components[component_id]`` instance via safe_setattr.
+    # Components absent from the snapshot keep current state — they
+    # are first-class instances, not parent-scoped attrs, so the
+    # ghost-attr cleanup model doesn't apply.
+    #
+    # NOTE: parent-from-component derivations (e.g. ``parent.total =
+    # sum(comp.value for comp in components)``) are NOT recomputed
+    # here. Time-travel restores literal captured state at each layer;
+    # if the user wants live-recomputed invariants they should derive
+    # them at render time, not at restore time.
+    if components_state:
+        registry = getattr(view, "_components", None) or {}
+        for component_id, component_snap in components_state.items():
+            component = registry.get(component_id)
+            if component is None:
+                logger.warning(
+                    "time_travel: component %r in snapshot but not in registry",
+                    component_id,
+                )
+                ok = False
+                continue
+            for key, value in component_snap.items():
+                try:
+                    applied = safe_setattr(component, key, value, allow_private=False)
+                except Exception:  # noqa: BLE001 — dev-only, log + degrade
+                    logger.exception(
+                        "time_travel: component restore failed for id=%s key=%s",
+                        component_id,
+                        key,
+                    )
+                    ok = False
+                    continue
+                if not applied:
+                    logger.warning(
+                        "time_travel: component restore blocked for id=%s key=%s",
+                        component_id,
+                        key,
+                    )
+                    ok = False
     return ok
+
+
+def restore_component_snapshot(
+    view: Any,
+    snapshot: EventSnapshot,
+    component_id: str,
+    which: str = "before",
+) -> bool:
+    """Restore a SINGLE component's state from a snapshot (#1151, v0.9.4).
+
+    Single-component variant of :func:`restore_snapshot` Phase 3. Touches
+    ONLY ``view._components[component_id]``; never the parent view, never
+    other components. Used by the debug panel's per-component scrubber so
+    the user can rewind component A's history without disturbing component
+    B's current live state.
+
+    Returns ``True`` if every key was applied via :func:`safe_setattr`.
+    Returns ``False`` (and logs at WARN) when:
+
+    * ``component_id`` is not in ``view._components``.
+    * The snapshot's ``state_before`` / ``state_after`` lacks
+      ``"__components__"`` or has no entry for ``component_id``.
+    * Any individual key fails ``safe_setattr`` (dunder / read-only).
+
+    Mirrors the Phase 3 loop in :func:`restore_snapshot` (lines ~298-326)
+    so behaviour stays consistent — same fallback shape, same logging.
+    """
+    if which not in ("before", "after"):
+        raise ValueError("which must be 'before' or 'after', got %r" % (which,))
+    from djust.security import safe_setattr
+
+    state = snapshot.state_before if which == "before" else snapshot.state_after
+    components_state = state.get(_COMPONENTS_SNAPSHOT_KEY, {}) or {}
+    component_snap = components_state.get(component_id)
+    if component_snap is None:
+        logger.warning(
+            "time_travel: restore_component_snapshot — no entry for %r in snapshot",
+            component_id,
+        )
+        return False
+    registry = getattr(view, "_components", None) or {}
+    component = registry.get(component_id)
+    if component is None:
+        logger.warning(
+            "time_travel: restore_component_snapshot — component %r not in registry",
+            component_id,
+        )
+        return False
+    ok = True
+    for key, value in component_snap.items():
+        try:
+            applied = safe_setattr(component, key, value, allow_private=False)
+        except Exception:  # noqa: BLE001 — dev-only, log + degrade
+            logger.exception(
+                "time_travel: component restore failed for id=%s key=%s",
+                component_id,
+                key,
+            )
+            ok = False
+            continue
+        if not applied:
+            logger.warning(
+                "time_travel: component restore blocked for id=%s key=%s",
+                component_id,
+                key,
+            )
+            ok = False
+    return ok
+
+
+def next_branch_id(view: Any) -> str:
+    """Allocate a fresh branch id for forward-replay (#1151, v0.9.4).
+
+    Returns a string of the form ``"branch-{N}"`` where N is the current
+    value of ``view._time_travel_branch_counter``, then increments the
+    counter so the next call yields a fresh id.
+
+    Stable within a single :class:`TimeTravelBuffer` lifetime — the
+    counter lives on the view instance alongside the buffer, so reconnects
+    against the same view get a deterministic sequence (`branch-0`,
+    `branch-1`, …). Resets to zero on view re-mount because the buffer
+    itself is reallocated then. The ids are only meaningful within a
+    single buffer's lifetime; clients should not assume cross-mount
+    stability.
+
+    Defaults to ``"main"`` when the view doesn't have the counter
+    attribute (defensive — pre-v0.9.4 instances or views constructed
+    via test bypasses).
+    """
+    counter = getattr(view, "_time_travel_branch_counter", None)
+    if counter is None:
+        return "main"
+    new_id = "branch-%d" % counter
+    try:
+        view._time_travel_branch_counter = counter + 1
+    except Exception:  # noqa: BLE001 — slot/descriptor readonly
+        logger.exception("time_travel: failed to increment branch counter")
+    return new_id
+
+
+def replay_event(
+    view: Any,
+    snapshot: EventSnapshot,
+    override_params: Optional[Dict[str, Any]] = None,
+    record_replay: bool = True,
+) -> Optional[EventSnapshot]:
+    """Replay a recorded event from a snapshot's ``state_before``.
+
+    Forward-replay (#1042, v0.9.0) — Redux DevTools parity. Restores
+    the view to the snapshot's ``state_before``, then re-invokes the
+    recorded ``event_name`` handler with either the original ``params``
+    OR a caller-supplied ``override_params`` (branched timeline).
+    Returns the new :class:`EventSnapshot` for the replayed event so
+    callers can inspect the resulting state.
+
+    The replay path produces a fresh snapshot in the time-travel
+    buffer (when ``record_replay=True``, the default) so the branched
+    timeline is itself scrubbable. Setting ``record_replay=False``
+    runs a "dry" replay that mutates the view but doesn't append to
+    the buffer — useful for the debug panel's "preview this branch"
+    UI.
+
+    The handler lookup uses ``getattr(view, snapshot.event_name)``;
+    callers are responsible for ensuring the handler hasn't been
+    renamed since the snapshot was captured. If the handler is
+    missing, returns ``None`` and logs a warning.
+
+    Restoration uses :func:`restore_snapshot` (with ``which="before"``)
+    so component state from #1041 captures replays correctly.
+
+    :param view: The LiveView instance to replay against.
+    :param snapshot: The original :class:`EventSnapshot` providing the
+        ``state_before`` baseline AND the ``event_name`` / ``params``
+        to re-execute.
+    :param override_params: When non-``None``, replaces
+        ``snapshot.params`` for the replay invocation. Use to fork
+        the timeline with different inputs.
+    :param record_replay: When ``True`` (default), the replayed event
+        is appended to the view's time-travel buffer as a NEW
+        snapshot. When ``False``, the replay still mutates the view
+        but the buffer is unchanged.
+    :returns: The new :class:`EventSnapshot` capturing the replay's
+        before/after state when ``record_replay=True``, or ``None``
+        when the handler is missing, time-travel is disabled, OR
+        ``record_replay=False`` (dry-replay path always returns None).
+    """
+    # Defense-in-depth: reject dunder / private event names. The
+    # snapshot is normally produced by the framework's own dispatcher
+    # which only records ``@event_handler``-decorated public methods,
+    # but a hand-edited or malicious snapshot could specify
+    # ``__init__`` and replay would re-invoke the constructor. The
+    # bare-``getattr`` resolution would happily return it. Belt +
+    # suspenders for the future ws-replay wiring.
+    if snapshot.event_name.startswith("_"):
+        logger.warning(
+            "time_travel: replay_event refused dunder/private event_name %r",
+            snapshot.event_name,
+        )
+        return None
+    handler = getattr(view, snapshot.event_name, None)
+    if handler is None or not callable(handler):
+        logger.warning(
+            "time_travel: replay_event handler %r not found on view %s",
+            snapshot.event_name,
+            type(view).__name__,
+        )
+        return None
+
+    # Defense-in-depth (#1148): the dunder filter alone admits ANY
+    # non-underscore method on the view (e.g. helper methods,
+    # property getters, inherited utilities), not just registered
+    # ``@event_handler`` methods. A hand-edited or malicious snapshot
+    # could name e.g. ``delete_all_records`` and replay would happily
+    # invoke it. Validate that the resolved attribute is decorated
+    # with ``@event_handler`` (matching the dispatcher's own
+    # acceptance criteria — see ``websocket.py`` server_push handler
+    # validation around line 4389).
+    try:
+        from djust.decorators import is_event_handler
+    except ImportError:  # pragma: no cover — decorators is in-tree
+        is_event_handler = None  # type: ignore[assignment]
+    if is_event_handler is not None and not is_event_handler(handler):
+        logger.warning(
+            "time_travel: replay_event refused unregistered method %r on %s "
+            "(not decorated with @event_handler)",
+            snapshot.event_name,
+            type(view).__name__,
+        )
+        return None
+
+    # Capture the handler reference and the live ``time_travel_enabled``
+    # flag BEFORE ``restore_snapshot`` because the restore's
+    # ghost-attr cleanup phase (Phase 1) deletes any public attrs
+    # that aren't in the snapshot — including handler functions a
+    # test may have monkey-patched onto the instance after the
+    # snapshot was captured, AND including ``time_travel_enabled``
+    # if the caller disabled it after the snapshot was taken (the
+    # CURRENT user intent matters more than the snapshot's
+    # historical state).
+    live_tt_enabled = bool(getattr(view, "time_travel_enabled", False))
+
+    # Restore the view to state_before so the handler runs from the
+    # captured baseline. Component state restores via the #1041 path.
+    restore_snapshot(view, snapshot, which="before")
+
+    # Build the params to invoke the handler with — original by
+    # default, override for branched timelines.
+    params = override_params if override_params is not None else dict(snapshot.params)
+
+    if record_replay and live_tt_enabled:
+        # Capture a fresh snapshot pair around the replay so the
+        # branched timeline is scrubbable itself.
+        replay_snap = record_event_start(view, snapshot.event_name, params, ref=None)
+        try:
+            handler(**params) if params else handler()
+        except Exception as exc:  # noqa: BLE001 — replay shouldn't break caller
+            logger.exception("time_travel: replay handler %s raised", snapshot.event_name)
+            record_event_end(view, replay_snap, error=str(exc))
+            return replay_snap
+        record_event_end(view, replay_snap)
+        return replay_snap
+
+    # Dry-replay path — mutate view but don't record. Caller wants
+    # to preview a branch without polluting the buffer.
+    try:
+        handler(**params) if params else handler()
+    except Exception:  # noqa: BLE001 — dry replay swallows for preview
+        logger.exception("time_travel: dry replay handler %s raised", snapshot.event_name)
+    return None
 
 
 __all__ = [
@@ -273,4 +562,5 @@ __all__ = [
     "record_event_start",
     "record_event_end",
     "restore_snapshot",
+    "replay_event",
 ]

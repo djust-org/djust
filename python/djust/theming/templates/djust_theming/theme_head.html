@@ -1,10 +1,12 @@
 {# Theme head block: anti-FOUC script, CSS, and optional JS include #}
 {# Safety: autoescape off is safe here — all variables (css_block, direction, etc.) #}
 {# are framework-generated in theme_tags.py, not user input. #}
+{# cookie_prefix_js is a JSON-encoded string ("" or "<ns>_"), framework-generated. #}
 {% load static %}
 {% autoescape off %}
 <script>
 (function() {
+    window.__djust_theme_cookie_prefix = {{ cookie_prefix_js }};
     {% if loading_class %}document.documentElement.classList.add('loading');
     {% endif %}var storageKey = 'djust-theme-mode';
     var storedMode = localStorage.getItem(storageKey);

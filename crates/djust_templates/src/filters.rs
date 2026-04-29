@@ -5,6 +5,8 @@ use djust_core::{Context, DjangoRustError, Result, Value};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use crate::filter_registry;
+
 pub fn apply_filter(filter_name: &str, value: &Value, arg: Option<&str>) -> Result<Value> {
     apply_filter_with_context(filter_name, value, arg, None)
 }
@@ -14,6 +16,26 @@ pub fn apply_filter_with_context(
     value: &Value,
     arg: Option<&str>,
     context: Option<&Context>,
+) -> Result<Value> {
+    // The classic call site: arg has already been quote-stripped by
+    // ``strip_filter_arg_quotes``. We can no longer tell quoted literals
+    // from bare identifiers, so default ``arg_was_quoted=true`` for the
+    // custom-filter fallback — i.e. assume callers pre-resolved any
+    // context-variable args. New call sites (renderer.rs) call
+    // ``apply_filter_full`` directly with the original arg + quoting hint.
+    apply_filter_full(filter_name, value, arg, context, true)
+}
+
+/// Internal entry point used by the renderer when full quoting metadata
+/// is available. The ``arg_was_quoted`` flag tells the custom-filter
+/// fallback whether to treat the arg as a literal string (quoted) or a
+/// context-variable identifier (bare).
+pub fn apply_filter_full(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+    arg_was_quoted: bool,
 ) -> Result<Value> {
     match filter_name {
         "upper" => Ok(Value::String(value.to_string().to_uppercase())),
@@ -247,7 +269,21 @@ pub fn apply_filter_with_context(
             let datetime_str = value.to_string();
             match format_date(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
-                Err(_) => Ok(value.clone()), // If parsing fails, return original value
+                Err(e) => {
+                    // #1090: surface silent parse failures so template authors
+                    // can diagnose without instrumentation. Common cause:
+                    // upstream JSON-encoding of datetime objects produces
+                    // strings with embedded literal `\"` chars that don't
+                    // round-trip through chrono's parsers.
+                    tracing::debug!(
+                        target: "djust.templates.filters",
+                        value = %datetime_str,
+                        format = %format_str,
+                        error = %e,
+                        "|date filter parse failed; returning original value unchanged",
+                    );
+                    Ok(value.clone()) // If parsing fails, return original value
+                }
             }
         }
         "time" => {
@@ -269,7 +305,18 @@ pub fn apply_filter_with_context(
             let datetime_str = value.to_string();
             match format_time(&datetime_str, format_str) {
                 Ok(formatted) => Ok(Value::String(formatted)),
-                Err(_) => Ok(value.clone()),
+                Err(e) => {
+                    // #1090: see |date filter — same parse-failure surface,
+                    // same diagnostic value when log target is enabled.
+                    tracing::debug!(
+                        target: "djust.templates.filters",
+                        value = %datetime_str,
+                        format = %format_str,
+                        error = %e,
+                        "|time filter parse failed; returning original value unchanged",
+                    );
+                    Ok(value.clone())
+                }
             }
         }
         "dictsort" => {
@@ -446,9 +493,30 @@ pub fn apply_filter_with_context(
                 num_words,
             )))
         }
-        _ => Err(DjangoRustError::TemplateError(format!(
-            "Unknown filter: {filter_name}"
-        ))),
+        _ => {
+            // Built-in match miss — fall through to the custom filter
+            // registry for project-defined ``@register.filter`` callables
+            // (issue #1121). Bridge: ``filter_registry::apply_custom_filter``
+            // returns ``Some(Ok|Err)`` on hit, ``None`` on miss.
+            //
+            // ``autoescape=true`` is supplied here as the engine's current
+            // (pinned) policy. When ``{% autoescape %}`` block tracking
+            // lands in a future PR, the renderer will thread the
+            // surrounding policy through this call site (#1162).
+            if let Some(result) = filter_registry::apply_custom_filter(
+                filter_name,
+                value,
+                arg,
+                context,
+                arg_was_quoted,
+                true,
+            ) {
+                return result.map_err(DjangoRustError::TemplateError);
+            }
+            Err(DjangoRustError::TemplateError(format!(
+                "Unknown filter: {filter_name}"
+            )))
+        }
     }
 }
 

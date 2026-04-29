@@ -1136,6 +1136,46 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground) / 0
 .rich-select-option-desc { font-size: var(--text-xs, 0.75rem); color: hsl(var(--muted-foreground, 220 9% 46%)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rich-select-option-badge { font-size: var(--text-xs, 0.75rem); padding: 0 var(--space-2, 0.5rem); border-radius: var(--radius-full, 9999px); background: hsl(var(--primary, 222 47% 51%) / 0.1); color: hsl(var(--primary, 222 47% 51%)); font-weight: var(--font-medium, 500); white-space: nowrap; line-height: 1.5; flex-shrink: 0; }
 
+/* Rich Select variants — option rows and trigger tint by status category.
+   All colors derive from theme tokens (--info, --success, etc.) with sensible
+   HSL fallbacks so the component stays visually coherent even without a theme.
+   A variant applied to the trigger signals the current value's category; the
+   same variant on a dropdown row colors that row in the picker list. */
+.rich-select-option--variant-info { background: hsl(var(--info, 200 98% 39%) / 0.08); border-left: 3px solid hsl(var(--info, 200 98% 39%)); }
+.rich-select-option--variant-info:hover { background: hsl(var(--info, 200 98% 39%) / 0.16); }
+.rich-select-option--variant-info.rich-select-option--active { background: hsl(var(--info, 200 98% 39%) / 0.20); }
+.rich-select-trigger--variant-info { background: hsl(var(--info, 200 98% 39%) / 0.12); border-color: hsl(var(--info, 200 98% 39%) / 0.4); color: hsl(var(--info-foreground, 200 98% 20%)); }
+
+.rich-select-option--variant-success { background: hsl(var(--success, 142 71% 45%) / 0.08); border-left: 3px solid hsl(var(--success, 142 71% 45%)); }
+.rich-select-option--variant-success:hover { background: hsl(var(--success, 142 71% 45%) / 0.16); }
+.rich-select-option--variant-success.rich-select-option--active { background: hsl(var(--success, 142 71% 45%) / 0.20); }
+.rich-select-trigger--variant-success { background: hsl(var(--success, 142 71% 45%) / 0.12); border-color: hsl(var(--success, 142 71% 45%) / 0.4); color: hsl(var(--success-foreground, 142 71% 20%)); }
+
+.rich-select-option--variant-warning { background: hsl(var(--warning, 38 92% 50%) / 0.08); border-left: 3px solid hsl(var(--warning, 38 92% 50%)); }
+.rich-select-option--variant-warning:hover { background: hsl(var(--warning, 38 92% 50%) / 0.16); }
+.rich-select-option--variant-warning.rich-select-option--active { background: hsl(var(--warning, 38 92% 50%) / 0.20); }
+.rich-select-trigger--variant-warning { background: hsl(var(--warning, 38 92% 50%) / 0.15); border-color: hsl(var(--warning, 38 92% 50%) / 0.4); color: hsl(var(--warning-foreground, 38 92% 25%)); }
+
+.rich-select-option--variant-danger { background: hsl(var(--destructive, 0 84% 60%) / 0.08); border-left: 3px solid hsl(var(--destructive, 0 84% 60%)); }
+.rich-select-option--variant-danger:hover { background: hsl(var(--destructive, 0 84% 60%) / 0.16); }
+.rich-select-option--variant-danger.rich-select-option--active { background: hsl(var(--destructive, 0 84% 60%) / 0.20); }
+.rich-select-trigger--variant-danger { background: hsl(var(--destructive, 0 84% 60%) / 0.12); border-color: hsl(var(--destructive, 0 84% 60%) / 0.4); color: hsl(var(--destructive-foreground, 0 84% 30%)); }
+
+.rich-select-option--variant-muted { background: hsl(var(--muted, 220 14% 96%) / 0.8); border-left: 3px solid hsl(var(--muted-foreground, 220 9% 46%) / 0.5); }
+.rich-select-option--variant-muted:hover { background: hsl(var(--muted, 220 14% 96%)); }
+.rich-select-option--variant-muted.rich-select-option--active { background: hsl(var(--muted, 220 14% 96%)); }
+.rich-select-trigger--variant-muted { background: hsl(var(--muted, 220 14% 96%) / 0.6); border-color: hsl(var(--muted-foreground, 220 9% 46%) / 0.3); color: hsl(var(--muted-foreground, 220 9% 46%)); }
+
+.rich-select-option--variant-primary { background: hsl(var(--primary, 222 47% 51%) / 0.08); border-left: 3px solid hsl(var(--primary, 222 47% 51%)); }
+.rich-select-option--variant-primary:hover { background: hsl(var(--primary, 222 47% 51%) / 0.16); }
+.rich-select-option--variant-primary.rich-select-option--active { background: hsl(var(--primary, 222 47% 51%) / 0.20); }
+.rich-select-trigger--variant-primary { background: hsl(var(--primary, 222 47% 51%) / 0.12); border-color: hsl(var(--primary, 222 47% 51%) / 0.4); color: hsl(var(--primary-foreground, 222 47% 25%)); }
+
+.rich-select-option--variant-secondary { background: hsl(var(--secondary, 220 14% 60%) / 0.10); border-left: 3px solid hsl(var(--secondary, 220 14% 60%)); }
+.rich-select-option--variant-secondary:hover { background: hsl(var(--secondary, 220 14% 60%) / 0.18); }
+.rich-select-option--variant-secondary.rich-select-option--active { background: hsl(var(--secondary, 220 14% 60%) / 0.22); }
+.rich-select-trigger--variant-secondary { background: hsl(var(--secondary, 220 14% 60%) / 0.14); border-color: hsl(var(--secondary, 220 14% 60%) / 0.4); color: hsl(var(--secondary-foreground, 220 14% 25%)); }
+
 /* Data Grid */
 .data-grid-wrapper { border: 1px solid hsl(var(--border, 220 13% 91%)); border-radius: var(--radius-md, 0.375rem); overflow: hidden; background: hsl(var(--card, 0 0% 100%)); }
 .data-grid-scroll { overflow-x: auto; }

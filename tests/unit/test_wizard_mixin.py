@@ -443,6 +443,249 @@ class TestWizardContext:
 
 
 # ---------------------------------------------------------------------------
+# as_live_field — widget-aware dom_event default (#1156)
+# ---------------------------------------------------------------------------
+
+
+class MixedWidgetForm(forms.Form):
+    """A form covering every widget category that `as_live_field` dispatches on."""
+
+    # text-stream widgets — should track wizard_input_event
+    first_name = forms.CharField(max_length=100)
+    bio = forms.CharField(widget=forms.Textarea, required=False)
+    age = forms.IntegerField(required=False)
+    email = forms.EmailField()
+
+    # click-fired widgets — should always be dj-change
+    has_attorney = forms.ChoiceField(
+        choices=[("yes", "Yes"), ("no", "No")],
+        widget=forms.RadioSelect,
+    )
+    terms_accepted = forms.BooleanField(required=False)
+    state = forms.ChoiceField(
+        choices=[("ny", "NY"), ("ca", "CA")],
+        # default widget is Select
+    )
+    tags = forms.MultipleChoiceField(
+        choices=[("a", "A"), ("b", "B")],
+        widget=forms.CheckboxSelectMultiple,
+        required=False,
+    )
+
+
+class MixedWidgetWizard(WizardMixin, LiveView):
+    wizard_steps = [
+        {"name": "mixed", "title": "Mixed", "form_class": MixedWidgetForm},
+    ]
+    template = "<div dj-root></div>"
+
+
+class MixedWidgetWizardStreaming(MixedWidgetWizard):
+    """Same wizard but opts into dj-input for text streams (per #1095)."""
+
+    wizard_input_event = "dj-input"
+
+
+class TestAsLiveFieldWidgetAwareDomEvent:
+    """#1156 — as_live_field picks dj-change for click-fired widgets regardless of
+    wizard_input_event. Text-stream widgets track wizard_input_event."""
+
+    # -- text-stream widgets ------------------------------------------------
+
+    @pytest.mark.django_db
+    def test_text_input_uses_wizard_input_event_default(self, get_request):
+        view = MixedWidgetWizard()
+        view.get(get_request)
+        html = view.as_live_field("first_name")
+        # default wizard_input_event = "dj-change"
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_text_input_uses_dj_input_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("first_name")
+        assert 'dj-input="validate_field"' in html
+
+    @pytest.mark.django_db
+    def test_textarea_uses_dj_input_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("bio")
+        assert 'dj-input="validate_field"' in html
+
+    @pytest.mark.django_db
+    def test_integer_input_uses_dj_input_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("age")
+        assert 'dj-input="validate_field"' in html
+
+    @pytest.mark.django_db
+    def test_email_input_uses_dj_input_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("email")
+        assert 'dj-input="validate_field"' in html
+
+    # -- click-fired widgets -----------------------------------------------
+
+    @pytest.mark.django_db
+    def test_radio_uses_dj_change_even_when_streaming(self, get_request):
+        """Radios commit one value per click — no event stream to debounce.
+        Must emit dj-change regardless of wizard_input_event = dj-input."""
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("has_attorney")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_select_uses_dj_change_even_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("state")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_checkbox_uses_dj_change_even_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("terms_accepted")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_checkbox_select_multiple_uses_dj_change_even_when_streaming(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("tags")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    # -- explicit override wins --------------------------------------------
+
+    @pytest.mark.django_db
+    def test_caller_passed_dom_event_wins_on_click_widget(self, get_request):
+        """Caller can force dj-input on a radio if they really want to —
+        the widget-aware default is only a default."""
+        view = MixedWidgetWizard()
+        view.get(get_request)
+        html = view.as_live_field("has_attorney", dom_event="dj-input")
+        assert 'dj-input="validate_field"' in html
+
+    @pytest.mark.django_db
+    def test_caller_passed_dom_event_wins_on_text_widget(self, get_request):
+        view = MixedWidgetWizardStreaming()
+        view.get(get_request)
+        html = view.as_live_field("first_name", dom_event="dj-change")
+        assert 'dj-change="validate_field"' in html
+
+    # -- subclass extension --------------------------------------------
+
+    @pytest.mark.django_db
+    def test_subclass_can_extend_click_fired_set(self, get_request):
+        """Apps with custom widgets can add them to _CLICK_FIRED_WIDGET_CLASSES
+        without touching as_live_field itself."""
+
+        class _MyCommitWidget(forms.TextInput):
+            pass
+
+        class _FormWithCustom(forms.Form):
+            committed = forms.CharField(widget=_MyCommitWidget())
+
+        class _WizardWithCustom(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            # Extend rather than replace so built-in click widgets still win
+            _CLICK_FIRED_WIDGET_CLASSES = frozenset(
+                {
+                    *WizardMixin._CLICK_FIRED_WIDGET_CLASSES,
+                    "_MyCommitWidget",
+                }
+            )
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _FormWithCustom}]
+            template = "<div dj-root></div>"
+
+        view = _WizardWithCustom()
+        view.get(get_request)
+        html = view.as_live_field("committed")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    # -- MRO walk covers Django Select subclasses ---------------------------
+
+    @pytest.mark.django_db
+    def test_select_multiple_uses_dj_change_via_mro(self, get_request):
+        """SelectMultiple is a Django builtin Select subclass — its leaf
+        class name isn't in _CLICK_FIRED_WIDGET_CLASSES, but the MRO walk
+        picks up Select. SelectMultiple is the default widget for
+        forms.MultipleChoiceField, so this is a common scenario."""
+
+        class _Form(forms.Form):
+            # Default widget for MultipleChoiceField is forms.SelectMultiple
+            choices = forms.MultipleChoiceField(
+                choices=[("a", "A"), ("b", "B")],
+            )
+
+        class _Wizard(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
+            template = "<div dj-root></div>"
+
+        view = _Wizard()
+        view.get(get_request)
+        html = view.as_live_field("choices")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_null_boolean_select_uses_dj_change_via_mro(self, get_request):
+        """NullBooleanSelect is a Django builtin Select subclass for
+        nullable booleans. Same MRO scenario as SelectMultiple."""
+
+        class _Form(forms.Form):
+            agreed = forms.NullBooleanField(required=False)
+
+        class _Wizard(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
+            template = "<div dj-root></div>"
+
+        view = _Wizard()
+        view.get(get_request)
+        html = view.as_live_field("agreed")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+    @pytest.mark.django_db
+    def test_app_subclass_of_radio_select_inherits_commit_semantics(self, get_request):
+        """An app's RadioSelect subclass should be matched via MRO without
+        having to register the subclass in _CLICK_FIRED_WIDGET_CLASSES."""
+
+        class _MyRadio(forms.RadioSelect):
+            pass
+
+        class _Form(forms.Form):
+            pick = forms.ChoiceField(
+                choices=[("y", "Y"), ("n", "N")],
+                widget=_MyRadio,
+            )
+
+        class _Wizard(WizardMixin, LiveView):
+            wizard_input_event = "dj-input"
+            wizard_steps = [{"name": "x", "title": "X", "form_class": _Form}]
+            template = "<div dj-root></div>"
+
+        view = _Wizard()
+        view.get(get_request)
+        html = view.as_live_field("pick")
+        assert 'dj-change="validate_field"' in html
+        assert "dj-input" not in html
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 

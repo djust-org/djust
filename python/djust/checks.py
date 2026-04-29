@@ -182,8 +182,44 @@ def _check_tailwind_cdn_in_production(errors):
                             pass
 
 
+def _output_css_looks_built(path: str) -> bool:
+    """Return True if ``path`` looks like a real compiled Tailwind output.
+
+    #1003 — `os.path.exists()` is insufficient: a committed placeholder
+    `output.css` (e.g. ``/* Run tailwindcss ... */``) passes that test
+    but the site renders without any Tailwind utilities. This helper
+    extends the contract to "the file exists AND looks built":
+
+    - **Size threshold**: real Tailwind v4 output is always > 10 KB
+      (even a tiny project pulls in the preflight reset + utility set).
+    - **Header marker**: the Tailwind v4 minifier emits a
+      ``/*! tailwindcss ... */`` banner; bare-bones theme CSS or
+      stand-alone hand-written stylesheets contain ``@layer`` blocks.
+      Either marker in the first 512 bytes is sufficient.
+
+    Both checks must pass — a 50 KB hand-rolled stylesheet without
+    Tailwind markers is also "not built Tailwind output". A real
+    placeholder fails both.
+
+    Returns False on any I/O error (missing file, permission denied,
+    invalid encoding) — the safest behavior is to treat the missing
+    signal as "not built" and let C011 fire.
+    """
+    try:
+        if not os.path.exists(path):
+            return False
+        size = os.path.getsize(path)
+        if size <= 10_000:
+            return False
+        with open(path, "rb") as f:
+            head = f.read(512).decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    return "tailwindcss" in head.lower() or "@layer" in head
+
+
 def _check_missing_compiled_css(errors):
-    """Warn if Tailwind is configured but compiled CSS is missing."""
+    """Warn if Tailwind is configured but compiled CSS is missing or stale."""
     from django.conf import settings
 
     # Check common Tailwind indicators
@@ -208,21 +244,27 @@ def _check_missing_compiled_css(errors):
                 pass
 
     if has_tailwind_config or has_input_css:
-        # Check if output.css exists
-        output_exists = False
+        # #1003 — a committed-but-stale placeholder `output.css` (e.g.
+        # `/* Run tailwindcss ... */`) silently passes a bare
+        # `os.path.exists()` test, leading to a broken site that
+        # serves with no Tailwind utilities and no `manage.py check`
+        # warning. Use the content-sniffing helper instead so a
+        # placeholder is treated the same as a missing file.
+        output_built = False
         for static_dir in static_dirs:
-            if os.path.exists(os.path.join(static_dir, "css", "output.css")):
-                output_exists = True
+            if _output_css_looks_built(os.path.join(static_dir, "css", "output.css")):
+                output_built = True
                 break
 
-        if not output_exists:
+        if not output_built:
             if settings.DEBUG:
                 errors.append(
                     DjustInfo(
-                        "Tailwind CSS configured but output.css not found (development mode).",
+                        "Tailwind CSS configured but output.css is missing or stale (development mode).",
                         hint=(
                             "djust will use Tailwind CDN as fallback in development. "
-                            "For better performance, compile CSS:\n"
+                            "A placeholder or empty output.css triggers this — run a "
+                            "real Tailwind build for production-grade output:\n"
                             "  python manage.py djust_setup_css tailwind --watch"
                         ),
                         id="djust.C011",
@@ -231,14 +273,93 @@ def _check_missing_compiled_css(errors):
             else:
                 errors.append(
                     DjustWarning(
-                        "Tailwind CSS configured but output.css not found.",
+                        "Tailwind CSS configured but output.css is missing or stale.",
                         hint=(
-                            "Run: tailwindcss -i static/css/input.css -o static/css/output.css --minify\n"
+                            "A committed placeholder or empty output.css produces a site "
+                            "that serves with no Tailwind utilities applied. Run:\n"
+                            "  tailwindcss -i static/css/input.css -o static/css/output.css --minify\n"
                             "Or: python manage.py djust_setup_css tailwind"
                         ),
                         id="djust.C011",
                     )
                 )
+
+
+def _check_stale_collected_client(errors):
+    """C013 — STATIC_ROOT/djust/client.min.js is older than the wheel-bundled
+    copy at python/djust/static/djust/client.min.js (closes #1088).
+
+    The trap: anyone with STATIC_ROOT configured (typical production setup
+    behind WhiteNoise / nginx / a CDN) can ship a stale client.min.js after
+    a djust wheel upgrade if they forget `collectstatic --clear`. The
+    server runs new code; the browser loads old client.js → wire-protocol
+    skew → mysterious VDOM patch failures. #1081 was reopened twice
+    before the reporter root-caused this.
+
+    Honors DJUST_CONFIG['suppress_checks'] = ['C013'] for users who
+    deliberately serve client.min.js from elsewhere (CDN, custom build).
+    """
+    import hashlib
+    from pathlib import Path
+
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C013"):
+        return
+
+    static_root = getattr(settings, "STATIC_ROOT", None)
+    if not static_root:
+        # No STATIC_ROOT means collectstatic isn't part of the deploy story
+        return
+
+    collected = Path(static_root) / "djust" / "client.min.js"
+    if not collected.exists():
+        # Either collectstatic hasn't run or the user serves client.min.js
+        # from a different path. Either way, not our problem to flag here —
+        # C011 (missing compiled CSS) and C012 (manual client.js) cover the
+        # related symptoms.
+        return
+
+    # Find the wheel-bundled copy. djust.__file__ resolves to the installed
+    # package path; static/djust/client.min.js is right alongside.
+    try:
+        from djust import __file__ as djust_init_path
+    except ImportError:
+        return
+    wheel_bundled = Path(djust_init_path).parent / "static" / "djust" / "client.min.js"
+    if not wheel_bundled.exists():
+        return
+
+    # Compare by content hash — mtime is unreliable across pip-install,
+    # tar extraction, file-system mounts.
+    def _sha256(p: Path) -> str:
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    try:
+        if _sha256(collected) == _sha256(wheel_bundled):
+            return  # Up-to-date — quiet
+    except OSError:
+        return  # Permission / IO error — don't fail the check at startup
+
+    errors.append(
+        DjustWarning(
+            f"Stale collectstatic copy of client.min.js detected at "
+            f"{collected}. The wheel-bundled copy is different — your browser "
+            f"will load outdated client code.",
+            hint=(
+                "Run `python manage.py collectstatic --clear --noinput` to refresh, "
+                "then hard-reload the browser (Cmd+Shift+R / Ctrl+Shift+R). "
+                "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['C013']} "
+                "if you serve client.min.js from a CDN or custom build."
+            ),
+            id="djust.C013",
+            fix_hint=("Run: python manage.py collectstatic --clear --noinput"),
+        )
+    )
 
 
 def _check_manual_client_js(errors):
@@ -487,6 +608,9 @@ def check_configuration(app_configs, **kwargs):
 
     # C012 -- Manual client.js in base templates
     _check_manual_client_js(errors)
+
+    # C013 -- Stale collectstatic copy of client.min.js (closes #1088)
+    _check_stale_collected_client(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
@@ -1931,11 +2055,94 @@ _DJ_EVENT_DIRECTIVES_RE = re.compile(
     r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
+# #1096 — opt-out marker for fragment templates that are intentionally
+# {% include %}d from a parent LiveView root. Fragment authors annotate
+# the file with `{# djust:partial #}` (case-insensitive, optional surrounding
+# whitespace) to silence T012 without introducing a global suppression.
+_DJ_PARTIAL_MARKER_RE = re.compile(r"\{#\s*djust\s*:\s*partial\s*#\}", re.IGNORECASE)
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 # A090 — scanner for {% djust_markdown %} (v0.7.0). Fires info-level once
 # per project when the tag is detected, confirming the Rust-side safe
 # renderer is in use (raw HTML escaped, provisional-line splitter active).
 _DJ_MARKDOWN_TAG_RE = re.compile(r"\{%\s*djust_markdown\b")
+
+# A075 — `{% live_render ... %}` sticky+lazy collision scanner (v0.9.1, #1146).
+# Captures the raw kwarg-list body so we can inspect it for both
+# ``sticky=`` and ``lazy=`` truthy assignments. The two are mutually
+# exclusive at tag-eval time (``TemplateSyntaxError`` in
+# ``live_tags.live_render``); A075 promotes that runtime error to a
+# startup-time warning so the misuse never reaches a request.
+_LIVE_RENDER_TAG_RE = re.compile(r"\{%\s*live_render\b([^%]*?)%\}", re.DOTALL)
+# Truthy assignments for sticky=/lazy=. Matches:
+#   sticky=True / lazy=True  (literal)
+#   sticky="..." / lazy="..." with non-empty quoted value (any non-empty string)
+#   sticky=<bare-identifier> / lazy=<bare-identifier> (variable, conservatively
+#       treated as truthy at scan time — false positives are silenceable
+#       via the suppress_checks knob)
+# False / "" / 0 are explicitly excluded.
+_LIVE_RENDER_STICKY_TRUTHY_RE = re.compile(
+    r"""\bsticky\s*=\s*(?:True|"[^"]+"|'[^']+'|[A-Za-z_]\w*)"""
+)
+_LIVE_RENDER_LAZY_TRUTHY_RE = re.compile(
+    r"""\blazy\s*=\s*(?:True|"[^"]+"|'[^']+'|[A-Za-z_]\w*|\{[^}]*\})"""
+)
+# Explicit "this kwarg is FALSY" — overrides the truthy match above. We
+# exclude these to avoid flagging ``sticky=False lazy=True`` (a legitimate
+# pattern when toggling at template-evaluation time).
+_LIVE_RENDER_STICKY_FALSY_RE = re.compile(r"""\bsticky\s*=\s*(?:False|"\s*"|'\s*'|0)\b""")
+_LIVE_RENDER_LAZY_FALSY_RE = re.compile(r"""\blazy\s*=\s*(?:False|"\s*"|'\s*'|0)\b""")
+
+# #1004 — `{% verbatim %}...{% endverbatim %}` regions hold raw template
+# source that Django renders as-is without parsing. Docs and marketing
+# templates routinely wrap literal `{% dj_activity %}` examples in
+# verbatim blocks; the A070 / A071 scanner used to treat those as real
+# uninstrumented activity calls and false-positive. The pre-processor
+# below replaces each verbatim region with whitespace (preserving line
+# breaks) so downstream regex scanners see no `{% dj_activity %}` text
+# inside the region, while line numbers from the original source remain
+# accurate for any matches OUTSIDE the region.
+#
+# Both unnamed (`{% verbatim %}`) and named (`{% verbatim foo %}`)
+# variants are matched. The endverbatim form must match the opening
+# variant, but Django allows either to close — we accept either since
+# the goal is to redact the BODY of the region, not validate Django
+# syntax (the template engine itself will reject malformed verbatim
+# blocks at render time).
+_VERBATIM_BLOCK_RE = re.compile(
+    r"\{%\s*verbatim\b[^%]*%\}.*?\{%\s*endverbatim\b[^%]*%\}",
+    re.DOTALL,
+)
+
+
+def _strip_verbatim_blocks(content: str) -> str:
+    """Replace the BODY of every ``{% verbatim %}...{% endverbatim %}`` region
+    with whitespace, preserving newlines so line numbers stay accurate for
+    matches outside the region.
+
+    Used before regex-scanning for A070 / A071 (and any future scanner
+    that walks template source as raw text) — without this, literal
+    `{% dj_activity %}` examples wrapped in verbatim blocks (a common
+    pattern on docs / marketing pages that document the tag) get
+    flagged as real uninstrumented activity calls.
+
+    The verbatim tags themselves are kept (so the scanner doesn't see
+    a totally absent region), but their content is blanked. We replace
+    every non-newline character with a space and keep newlines verbatim
+    — line numbers stay aligned with the original source.
+
+    Returns ``content`` unchanged if no verbatim region is present (the
+    common case). Cost: one regex pass plus one rewrite when at least
+    one verbatim region exists.
+    """
+    if "verbatim" not in content:
+        return content
+
+    def _redact(match: re.Match) -> str:
+        body = match.group(0)
+        # Preserve newlines, blank everything else.
+        return "".join("\n" if ch == "\n" else " " for ch in body)
+
+    return _VERBATIM_BLOCK_RE.sub(_redact, content)
 
 
 @register("djust")
@@ -2064,21 +2271,32 @@ def check_templates(app_configs, **kwargs):
         _check_unsupported_tags(content, relpath, filepath, errors)
 
         # T012 -- template uses dj-* event directives but missing dj-view
-        if _DJ_EVENT_DIRECTIVES_RE.search(content) and not _DJ_VIEW_RE.search(content):
-            # Only fire if this isn't a component template (components don't need dj-view)
-            if not _DJ_COMPONENT_RE.search(content):
-                errors.append(
-                    DjustWarning(
-                        "%s -- template uses dj-* event directives but has no dj-view attribute."
-                        % relpath,
-                        hint=(
-                            'Add dj-view="yourapp.views.YourView" to the root element, '
-                            "or this template won't be connected to a LiveView."
-                        ),
-                        id="djust.T012",
-                        file_path=filepath,
-                    )
+        if (
+            _DJ_EVENT_DIRECTIVES_RE.search(content)
+            and not _DJ_VIEW_RE.search(content)
+            # Component templates (dj-component) don't need dj-view
+            and not _DJ_COMPONENT_RE.search(content)
+            # #1096: partial-template opt-out marker
+            and not _DJ_PARTIAL_MARKER_RE.search(content)
+            # Global suppression via DJUST_CONFIG['suppress_checks']
+            and not _is_check_suppressed("djust.T012")
+        ):
+            errors.append(
+                DjustWarning(
+                    "%s -- template uses dj-* event directives but has no dj-view attribute."
+                    % relpath,
+                    hint=(
+                        'Add dj-view="yourapp.views.YourView" to the root element, '
+                        "or this template won't be connected to a LiveView. "
+                        "If this template is an intentional fragment included from "
+                        "a parent LiveView root, add a `{# djust:partial #}` "
+                        "comment to silence this check, or suppress globally "
+                        "with DJUST_CONFIG = {'suppress_checks': ['T012']}."
+                    ),
+                    id="djust.T012",
+                    file_path=filepath,
                 )
+            )
 
         # T013 -- dj-view with empty or invalid value
         for match in re.finditer(r'dj-view="([^"]*)"', content):
@@ -2108,8 +2326,15 @@ def check_templates(app_configs, **kwargs):
         # A071 (Error): two tags in one template share the same name — the
         # later registration silently overwrites the earlier one at render
         # time and all events route to the last-declared state.
+        #
+        # #1004 — strip {% verbatim %}...{% endverbatim %} regions before
+        # the regex scan so literal `{% dj_activity %}` examples on docs /
+        # marketing pages (which Django renders as-is, without parsing the
+        # tag) don't false-positive. `_strip_verbatim_blocks` preserves
+        # line numbers by replacing the body with whitespace.
+        _activity_scan_source = _strip_verbatim_blocks(content)
         _seen_activity_names = {}  # type: ignore[var-annotated]
-        for match in _DJ_ACTIVITY_TAG_RE.finditer(content):
+        for match in _DJ_ACTIVITY_TAG_RE.finditer(_activity_scan_source):
             args = match.group(1)
             lineno = content[: match.start()].count("\n") + 1
             name_match = _DJ_ACTIVITY_NAME_RE.match(args)
@@ -2171,6 +2396,57 @@ def check_templates(app_configs, **kwargs):
                 )
             else:
                 _seen_activity_names[name_literal] = lineno
+
+        # A075 — `{% live_render ... sticky=True lazy=True %}` collision scan
+        # (v0.9.1, #1146). The two kwargs are mutually exclusive: sticky
+        # preservation requires the slot to exist at mount-frame time so
+        # the WS reattach can ``replaceWith`` the stashed subtree, while
+        # lazy by definition defers slot rendering until after mount.
+        # ``live_tags.live_render`` already raises TemplateSyntaxError at
+        # tag-eval time; A075 promotes that runtime check to startup so
+        # ``manage.py check`` flags the misuse before any request hits.
+        #
+        # Re-uses ``_strip_verbatim_blocks`` so docs/marketing pages that
+        # show the anti-pattern as a literal example don't false-positive
+        # (mirrors the A070/A071 / #1004 fix).
+        if not _is_check_suppressed("djust.A075"):
+            _live_render_scan_source = _strip_verbatim_blocks(content)
+            for match in _LIVE_RENDER_TAG_RE.finditer(_live_render_scan_source):
+                args = match.group(1)
+                # Reject FALSY assignments first so e.g. ``sticky=False
+                # lazy=True`` is silently accepted.
+                sticky_falsy = bool(_LIVE_RENDER_STICKY_FALSY_RE.search(args))
+                lazy_falsy = bool(_LIVE_RENDER_LAZY_FALSY_RE.search(args))
+                sticky_truthy = (
+                    bool(_LIVE_RENDER_STICKY_TRUTHY_RE.search(args)) and not sticky_falsy
+                )
+                lazy_truthy = bool(_LIVE_RENDER_LAZY_TRUTHY_RE.search(args)) and not lazy_falsy
+                if sticky_truthy and lazy_truthy:
+                    lineno = content[: match.start()].count("\n") + 1
+                    errors.append(
+                        DjustWarning(
+                            "%s:%d -- {%% live_render %%} has both sticky=True and "
+                            "lazy=True — these kwargs are mutually exclusive." % (relpath, lineno),
+                            hint=(
+                                "Sticky preservation requires the slot to exist at "
+                                "mount-frame time so the WebSocket reattach can "
+                                "replaceWith the stashed subtree. Lazy defers slot "
+                                "rendering until after mount, so the stash-target "
+                                "doesn't exist when reattach runs. Pick one. "
+                                "Suppress with DJUST_CONFIG = "
+                                "{'suppress_checks': ['A075']} if you have a "
+                                "deliberate reason."
+                            ),
+                            id="djust.A075",
+                            fix_hint=(
+                                "Remove either `sticky=True` or `lazy=True` from "
+                                "the {%% live_render %%} tag at line %d in `%s`."
+                                % (lineno, relpath)
+                            ),
+                            file_path=filepath,
+                            line_number=lineno,
+                        )
+                    )
 
         # A090 — tally {% djust_markdown %} occurrences (v0.7.0). The
         # actual Info-level check is emitted once per project after the

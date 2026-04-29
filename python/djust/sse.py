@@ -43,6 +43,7 @@ same worker process (e.g., nginx ``ip_hash`` or a sticky load-balancer).
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -506,9 +507,10 @@ async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[s
             update_msg["async_pending"] = True
         session.push(update_msg)
 
-    # Flush push_events and navigation commands
+    # Flush push_events, navigation commands, and deferred callbacks
     _flush_push_events_to_queue(session, view_instance)
     _flush_navigation_to_queue(session, view_instance)
+    await _flush_deferred_to_sse(view_instance)
 
     if has_async:
         asyncio.ensure_future(_sse_run_async_work(session, event_name))
@@ -534,6 +536,44 @@ def _flush_navigation_to_queue(session: SSESession, view_instance) -> None:
         return
     for cmd in view_instance._drain_navigation():
         session.push({**cmd, "type": "navigation", "action": cmd["type"]})
+
+
+async def _flush_deferred_to_sse(view_instance) -> None:
+    """Drain ``self.defer(...)`` callbacks from the view and execute them.
+
+    Mirrors :meth:`LiveViewConsumer._flush_deferred` for the SSE transport.
+    Without this, ``defer()`` calls on a view served over SSE would
+    accumulate in ``_deferred_callbacks`` indefinitely (slow leak +
+    contract violation — Phoenix-parity says "after each render+patch").
+
+    Sync callbacks run directly; async callbacks (``async def`` or
+    coroutine-returning) are awaited inline. A failing callback logs at
+    WARN with traceback and execution continues to the next callback —
+    a deferred callback's failure must not break the SSE stream or the
+    user's interactive flow.
+    """
+    if not view_instance:
+        return
+    if not hasattr(view_instance, "_drain_deferred"):
+        return
+    callbacks = view_instance._drain_deferred()
+    # Defensive: same shape as ``LiveViewConsumer._flush_deferred`` —
+    # guard against test mocks (Mock view returns Mock, not list) and
+    # any legacy view that overrode ``_drain_deferred`` to return non-list.
+    if not isinstance(callbacks, list) or not callbacks:
+        return
+    for callback, args, kwargs in callbacks:
+        try:
+            result = callback(*args, **kwargs)
+            if inspect.iscoroutine(result):
+                await result
+        except Exception:
+            logger.warning(
+                "[djust SSE] Deferred callback %s on %s raised; continuing to next",
+                getattr(callback, "__qualname__", repr(callback)),
+                view_instance.__class__.__name__,
+                exc_info=True,
+            )
 
 
 async def _sse_run_async_work(session: SSESession, event_name: Optional[str]) -> None:
@@ -612,6 +652,7 @@ async def _sse_execute_async_task(
 
         session.push(msg)
         _flush_push_events_to_queue(session, view_instance)
+        await _flush_deferred_to_sse(view_instance)
 
     except Exception as exc:
         logger.exception(

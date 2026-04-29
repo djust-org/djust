@@ -78,7 +78,7 @@ describe('VDOM patch failure recovery', () => {
             const root = dom.window.document.querySelector('[dj-root]');
             expect(root.querySelector('#content').textContent).toBe('original');
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">recovered</p></div>',
                 version: 5,
@@ -95,7 +95,7 @@ describe('VDOM patch failure recovery', () => {
             const root = dom.window.document.querySelector('[dj-root]');
             const originalP = root.querySelector('#content');
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">updated</p></div>',
                 version: 2,
@@ -114,7 +114,7 @@ describe('VDOM patch failure recovery', () => {
             const ws = dom.window.djust.liveViewInstance;
             const root = dom.window.document.querySelector('[dj-root]');
 
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">kept</p><span id="new">added</span></div>',
                 version: 3,
@@ -134,7 +134,7 @@ describe('VDOM patch failure recovery', () => {
             expect(ws).toBeDefined();
 
             // Simulate receiving a mount response to initialize version
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p>init</p></div>',
                 version: 1,
@@ -145,7 +145,7 @@ describe('VDOM patch failure recovery', () => {
             // Send patches that will fail (path points to non-existent node)
             ws.lastEventName = 'test_event';
             ws.lastTriggerElement = null;
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [
                     { type: 'SetText', path: [999, 999], text: 'nonexistent' }
@@ -167,7 +167,7 @@ describe('VDOM patch failure recovery', () => {
             const root = dom.window.document.querySelector('[dj-root]');
 
             // 1. Initialize with html_recovery
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">v1</p></div>',
                 version: 1,
@@ -178,7 +178,7 @@ describe('VDOM patch failure recovery', () => {
 
             // 2. Receive bad patches — triggers request_html
             ws.lastEventName = 'toggle';
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'patch',
                 patches: [{ type: 'SetText', path: [999, 999], text: 'bad' }],
                 version: 2,
@@ -187,7 +187,7 @@ describe('VDOM patch failure recovery', () => {
             expect(sentMessages.find(m => m.type === 'request_html')).toBeDefined();
 
             // 3. Server responds with html_recovery
-            ws.handleMessage({
+            await ws.handleMessage({
                 type: 'html_recovery',
                 html: '<div dj-root><p id="content">v2-recovered</p></div>',
                 version: 2,

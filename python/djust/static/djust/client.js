@@ -312,7 +312,7 @@ function clearOptimisticPending() {
  * @param {HTMLElement} triggerElement - Element that triggered the event
  * @returns {boolean} - True if handled successfully, false otherwise
  */
-function handleServerResponse(data, eventName, triggerElement) {
+async function handleServerResponse(data, eventName, triggerElement) {
     try {
         // Handle cache storage (from @cache decorator)
         if (data.cache_request_id && pendingCacheRequests.has(data.cache_request_id)) {
@@ -388,7 +388,7 @@ function handleServerResponse(data, eventName, triggerElement) {
             // ``handleStickyUpdate`` with a scoped ``rootEl``. No ambiguity
             // here — calling applyPatches(data.patches) with the default
             // null rootEl is correct for the root view.
-            const success = applyPatches(data.patches);
+            const success = await applyPatches(data.patches);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -785,7 +785,13 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    setTimeout(() => this.handleMessage(data), actual);
+                    // ``handleMessage`` is the queue-wrapper (#1098); its
+                    // returned promise is the chain-tail with an internal
+                    // ``.catch`` that already logs and swallows. The
+                    // returned promise never rejects, so we just ignore it.
+                    setTimeout(() => {
+                        this.handleMessage(data);
+                    }, actual);
                 } else {
                     this.handleMessage(data);
                 }
@@ -795,7 +801,32 @@ class LiveViewWebSocket {
         };
     }
 
+    /**
+     * Public entry point — serializes rapid-fire messages.
+     *
+     * Each invocation chains onto the prior in-flight promise so that
+     * adjacent inbound frames cannot interleave their internal awaits.
+     * Without this, two frames arriving in quick succession could each
+     * start `_handleMessageImpl`, then both `await handleServerResponse`,
+     * and race on shared state like ``_pendingEventRefs`` /
+     * ``_tickBuffer``. Closes #1098.
+     *
+     * The returned promise resolves AFTER this frame's drain completes;
+     * callers may ignore it. Errors propagate through `.catch()` to
+     * preserve unhandled-rejection visibility.
+     */
     handleMessage(data) {
+        const prev = this._inflight || Promise.resolve();
+        const next = prev
+            .then(() => this._handleMessageImpl(data))
+            .catch((err) => {
+                console.error('[LiveView] handleMessage threw:', err);
+            });
+        this._inflight = next;
+        return next;
+    }
+
+    async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
@@ -917,7 +948,12 @@ class LiveViewWebSocket {
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }
-                    } catch (_e) { /* best-effort cache put */ }
+                    } catch (_e) {
+                        // #1030 — best-effort cache write; only log under
+                        // djustDebug so production console stays quiet but
+                        // developers can diagnose cache misses.
+                        if (globalThis.djustDebug) console.log('[LiveView] cache-write failed:', _e);
+                    }
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
                         if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
@@ -965,6 +1001,11 @@ class LiveViewWebSocket {
                 // [dj-view] element, track per-target VDOM versions, and run
                 // reinitAfterDOMUpdate() ONCE after the batch is applied.
                 this.viewMounted = true;
+                // #1031: clear the lazy-hydration in-flight batch so a late
+                // arriving error frame doesn't trigger a phantom fallback.
+                if (window.djust && window.djust.lazyHydration) {
+                    window.djust.lazyHydration.inFlightBatch = null;
+                }
                 const views = Array.isArray(data.views) ? data.views : [];
                 const failed = Array.isArray(data.failed) ? data.failed : [];
                 if (!window.djust._clientVdomVersions) {
@@ -1009,7 +1050,29 @@ class LiveViewWebSocket {
                     } else if (typeof window !== 'undefined' && window.location) {
                         // Fallback — hard navigation if the dispatcher
                         // isn't wired (non-LiveView pages).
-                        window.location.href = nav.to;
+                        // Same-origin guard: server-controlled `nav.to`
+                        // is generally trusted but defense-in-depth
+                        // prevents an attacker who breaches the wire
+                        // protocol from pivoting to open-redirect /
+                        // javascript: scheme XSS. Only allow same-origin
+                        // absolute paths; reject protocol-relative
+                        // (`//evil.com`), absolute URLs to other origins,
+                        // and `javascript:` / `data:` schemes.
+                        // Closes CodeQL js/client-side-unvalidated-url-redirection.
+                        const target = nav.to;
+                        const isSameOriginPath = (
+                            target.length > 0 &&
+                            target.charAt(0) === '/' &&
+                            target.charAt(1) !== '/'  // reject protocol-relative
+                        );
+                        if (isSameOriginPath) {
+                            window.location.href = target;
+                        } else if (globalThis.djustDebug) {
+                            console.warn(
+                                '[djust] live_redirect rejected non-same-origin target:',
+                                target,
+                            );
+                        }
                     }
                 }
                 if (views.length > 0) {
@@ -1064,7 +1127,7 @@ class LiveViewWebSocket {
                     evTrigger = null;
                 }
 
-                handleServerResponse(data, evName, evTrigger);
+                await handleServerResponse(data, evName, evTrigger);
 
                 if (!isServerInitiated) {
                     this.lastEventName = null;
@@ -1079,7 +1142,7 @@ class LiveViewWebSocket {
                     }
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -1113,6 +1176,19 @@ class LiveViewWebSocket {
                 if (data.traceback) {
                     // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
+                }
+
+                // #1031: if the error is about mount_batch (older server
+                // doesn't recognize the frame type), fall back to per-view
+                // mounts so the lazy-hydrated views still come up.
+                if (
+                    typeof data.error === 'string'
+                    && /mount_batch|unknown\s+message\s+type/i.test(data.error)
+                    && window.djust && window.djust.lazyHydration
+                    && typeof window.djust.lazyHydration.handleMountBatchFallback === 'function'
+                ) {
+                    window.djust.lazyHydration.handleMountBatchFallback();
+                    break;
                 }
 
                 // Non-recoverable errors (e.g. server restart lost state) — auto-reload
@@ -1208,7 +1284,7 @@ class LiveViewWebSocket {
                 if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -1241,7 +1317,7 @@ class LiveViewWebSocket {
                 // Sticky LiveViews Phase A: VDOM patch frame targeted at
                 // a specific child view via view_id. Routed to 45-child-view.js.
                 if (window.djust.childView && window.djust.childView.handleChildUpdate) {
-                    window.djust.childView.handleChildUpdate(data);
+                    await window.djust.childView.handleChildUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -1269,7 +1345,7 @@ class LiveViewWebSocket {
                 // sticky's dj-id namespace is independent of the
                 // parent's, so doc-wide lookups would be incorrect.
                 if (window.djust.stickyPreserve && window.djust.stickyPreserve.handleStickyUpdate) {
-                    window.djust.stickyPreserve.handleStickyUpdate(data);
+                    await window.djust.stickyPreserve.handleStickyUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -1740,6 +1816,10 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
+                // ``handleMessage`` is the queue-wrapper (#1098); its
+                // returned promise is the chain-tail with an internal
+                // ``.catch`` that already logs and swallows. The returned
+                // promise never rejects, so we just ignore it.
                 this.handleMessage(data);
             } catch (err) {
                 console.error('[SSE] Failed to parse message:', err);
@@ -1778,12 +1858,30 @@ class LiveViewSSE {
     }
 
     /**
+     * Public entry point — serializes rapid-fire messages.
+     *
+     * Each invocation chains onto the prior in-flight promise so adjacent
+     * inbound SSE frames cannot interleave their internal awaits. Same
+     * shape as `LiveViewWebSocket.handleMessage`. Closes #1098.
+     */
+    handleMessage(data) {
+        const prev = this._inflight || Promise.resolve();
+        const next = prev
+            .then(() => this._handleMessageImpl(data))
+            .catch((err) => {
+                console.error('[SSE] handleMessage threw:', err);
+            });
+        this._inflight = next;
+        return next;
+    }
+
+    /**
      * Handle a server-pushed message.
      * The message format is identical to the WebSocket protocol so that
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    handleMessage(data) {
+    async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
 
         switch (data.type) {
@@ -1840,13 +1938,13 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;
 
             case 'html_update':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;
@@ -2547,7 +2645,10 @@ function initTodoItems() {
 }
 
 // Smart default rate limiting by input type
-// Prevents VDOM version mismatches from high-frequency events
+// Prevents VDOM version mismatches from high-frequency events.
+// Click-fired widgets (radio/checkbox/select) commit one value per user
+// interaction, so there's no event stream to batch — 'passthrough' skips
+// the rate-limit wrapper entirely.
 const DEFAULT_RATE_LIMITS = {
     'range': { type: 'throttle', ms: 150 },      // Sliders
     'number': { type: 'throttle', ms: 100 },     // Number spinners
@@ -2558,7 +2659,11 @@ const DEFAULT_RATE_LIMITS = {
     'url': { type: 'debounce', ms: 300 },        // URL inputs
     'tel': { type: 'debounce', ms: 300 },        // Phone inputs
     'password': { type: 'debounce', ms: 300 },   // Password inputs
-    'textarea': { type: 'debounce', ms: 300 }    // Multi-line text
+    'textarea': { type: 'debounce', ms: 300 },   // Multi-line text
+    'radio': { type: 'passthrough' },            // Click-fired, one value per click
+    'checkbox': { type: 'passthrough' },         // Click-fired, one value per click
+    'select-one': { type: 'passthrough' },       // Click-fired, one value per click
+    'select-multiple': { type: 'passthrough' }   // Click-fired, committed per option click
 };
 
 /**
@@ -3315,6 +3420,76 @@ function _applyDisableWith(element) {
     element.disabled = true;
 }
 
+/**
+ * Toggle pending state on a `<form dj-submit>` and all `[dj-form-pending]`
+ * descendants. v0.8.0 — React 19 `useFormStatus` equivalent (#991 follow-up):
+ * any element nested inside a form-with-dj-submit can declare
+ * `dj-form-pending="hide|show|disabled"` and react automatically when its
+ * ancestor form's submit handler is in-flight.
+ *
+ * Modes:
+ *   - `hide`     — hidden while pending, visible otherwise
+ *   - `show`     — visible while pending, hidden otherwise
+ *   - `disabled` — `disabled=true` while pending, original state otherwise
+ *
+ * The form itself gets a `data-djust-form-pending="true"` attribute so CSS
+ * selectors (`form[data-djust-form-pending] .submit-spinner`) can hook in
+ * without JS. Removed when the submission resolves (success or error).
+ *
+ * @param {HTMLFormElement} form - Form being submitted
+ * @param {boolean} pending - true at submit start, false on resolve
+ */
+function _setFormPending(form, pending) {
+    if (!form) return;
+    if (pending) {
+        form.setAttribute('data-djust-form-pending', 'true');
+    } else {
+        form.removeAttribute('data-djust-form-pending');
+    }
+    const targets = form.querySelectorAll('[dj-form-pending]');
+    for (const el of targets) {
+        const mode = el.getAttribute('dj-form-pending');
+        if (mode === 'hide') {
+            // Hidden while pending. Use the `hidden` attribute (not display:none)
+            // so user CSS overrides keep working.
+            if (pending) {
+                el.setAttribute('hidden', '');
+            } else {
+                el.removeAttribute('hidden');
+            }
+        } else if (mode === 'show') {
+            // Visible while pending — opposite of `hide`.
+            if (pending) {
+                el.removeAttribute('hidden');
+            } else {
+                el.setAttribute('hidden', '');
+            }
+        } else if (mode === 'disabled') {
+            // `disabled` is property-only on form controls; setAttribute also
+            // works for non-form elements (e.g. <a> with aria-disabled wiring).
+            if (pending) {
+                if (!el.hasAttribute('data-djust-form-pending-was-disabled')) {
+                    el.setAttribute(
+                        'data-djust-form-pending-was-disabled',
+                        el.disabled ? 'true' : 'false',
+                    );
+                }
+                el.disabled = true;
+            } else {
+                const wasDisabled = el.getAttribute('data-djust-form-pending-was-disabled');
+                if (wasDisabled !== null) {
+                    el.disabled = wasDisabled === 'true';
+                    el.removeAttribute('data-djust-form-pending-was-disabled');
+                } else {
+                    el.disabled = false;
+                }
+            }
+        }
+        // Unknown modes are silently ignored — future-extensible without
+        // breaking forward compat.
+    }
+}
+
 // ============================================================================
 // Delegated Event Handlers
 // ============================================================================
@@ -3521,6 +3696,13 @@ async function _handleDjSubmit(element, e) {
         _applyDisableWith(e.submitter);
     }
 
+    // v0.8.0 — `dj-form-pending` (React 19 useFormStatus equivalent):
+    // toggle visibility/disabled-state on every nested element that declared
+    // a `dj-form-pending="hide|show|disabled"` mode. Set BEFORE the network
+    // round-trip so the loading UI flips immediately; cleared in `finally`
+    // so it always resolves regardless of error.
+    _setFormPending(element, true);
+
     const formData = new FormData(element);
     const params = Object.fromEntries(formData.entries());
 
@@ -3535,7 +3717,11 @@ async function _handleDjSubmit(element, e) {
     // Pass target element for optimistic updates (Phase 3)
     params._targetElement = element;
 
-    await handleEvent(submitHandler, params);
+    try {
+        await handleEvent(submitHandler, params);
+    } finally {
+        _setFormPending(element, false);
+    }
 }
 
 /**
@@ -3869,9 +4055,15 @@ function installDelegatedListeners(root) {
                 // Build the raw handler
                 var rawHandler = function(ev) { return _handleDjInput(inputEl, ev); };
 
-                // Determine rate limit strategy
+                // Determine rate limit strategy.
+                // Clone the default before letting dj-* overrides mutate it,
+                // otherwise the shared const entry in DEFAULT_RATE_LIMITS gets
+                // permanently flipped and pollutes every subsequently-bound
+                // element of the same type.
                 var inputType = inputEl.type || inputEl.tagName.toLowerCase();
-                var rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType) ? DEFAULT_RATE_LIMITS[inputType] : { type: 'debounce', ms: 300 };
+                var rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType)
+                    ? Object.assign({}, DEFAULT_RATE_LIMITS[inputType])
+                    : { type: 'debounce', ms: 300 };
 
                 // Check for explicit overrides: dj-* attributes take precedence
                 if (inputEl.hasAttribute('dj-debounce')) {
@@ -3896,7 +4088,13 @@ function installDelegatedListeners(root) {
 
                 // Apply rate limiting wrapper
                 var wrapped;
-                if (rateLimit.type === 'blur') {
+                if (rateLimit.type === 'passthrough') {
+                    // Click-fired widgets (radio/checkbox/select) — one value
+                    // per interaction, no rate-limiting needed. Fire the
+                    // handler synchronously so the WS event goes out on the
+                    // same tick as the input event.
+                    wrapped = rawHandler;
+                } else if (rateLimit.type === 'blur') {
                     // dj-debounce="blur": defer until element loses focus
                     var latestArgs = null;
                     wrapped = function() {
@@ -4798,7 +4996,7 @@ async function handleEvent(eventName, params = {}) {
 
         // Apply cached patches
         if (cached.patches && cached.patches.length > 0) {
-            applyPatches(cached.patches);
+            await applyPatches(cached.patches);
             reinitAfterDOMUpdate();
         }
 
@@ -4869,7 +5067,7 @@ async function handleEvent(eventName, params = {}) {
         }
 
         const data = await response.json();
-        handleServerResponse(data, eventName, triggerElement);
+        await handleServerResponse(data, eventName, triggerElement);
 
     } catch (error) {
         console.error('[LiveView] HTTP fallback failed:', error);
@@ -6377,7 +6575,93 @@ function applySinglePatch(patch, rootEl = null) {
  *   ``rootEl`` so they cannot spill into or from another view's
  *   subtree.
  */
-function applyPatches(patches, rootEl = null) {
+/**
+ * Should the next ``applyPatches`` call wrap its DOM mutations in
+ * ``document.startViewTransition()``? All four conditions must hold:
+ *
+ *   1. ``document`` is defined (not in a worker / non-browser context)
+ *   2. ``document.startViewTransition`` is a function (Chrome 111+,
+ *      Edge 111+, Safari 18+; Firefox graceful degrade — returns false)
+ *   3. ``document.body`` is not null (yes, it can be — early bootstrap,
+ *      ``<head>``-only HTML responses, mid-navigation)
+ *   4. ``<body dj-view-transitions>`` opt-in attribute is present
+ *   5. The user has NOT requested ``prefers-reduced-motion: reduce``
+ *      (accessibility — motion-sensitive users get instant patches)
+ *
+ * Re-evaluated on every patch so dynamic mid-session opt-in via
+ * ``document.body.setAttribute('dj-view-transitions', '')`` works.
+ */
+function _shouldUseViewTransition() {
+    if (typeof document === 'undefined') return false;
+    if (typeof document.startViewTransition !== 'function') return false;
+    if (!document.body) return false;
+    if (!document.body.hasAttribute('dj-view-transitions')) return false;
+    if (
+        typeof window !== 'undefined' &&
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Apply VDOM patches to the DOM. Returns ``Promise<boolean>`` — ``true``
+ * on full success, ``false`` if any patch failed (caller may trigger a
+ * full re-render fallback).
+ *
+ * **Two paths**:
+ *
+ * - **Direct (default)**: just runs the inner patch loop and resolves
+ *   with its boolean result.
+ * - **Wrapped (opt-in via** ``<body dj-view-transitions>`` **)**: wraps
+ *   the inner loop in ``document.startViewTransition()``. The browser
+ *   captures a pre-state frame, runs our callback, captures the
+ *   post-state, and animates between them (cross-fade by default;
+ *   ``view-transition-name`` enables shared-element morphs). We
+ *   ``await transition.updateCallbackDone`` so the returned promise
+ *   correctly reflects whether the inner loop succeeded — the View
+ *   Transitions spec runs the callback in a microtask, NOT
+ *   synchronously, so a non-async wrap would lose the boolean
+ *   (this was PR #1092's bug).
+ *
+ * If the View Transitions callback throws, we ``transition.skipTransition()``
+ * to abandon the animation and return false so the caller can trigger
+ * a full re-render fallback. ADR-013.
+ */
+async function applyPatches(patches, rootEl = null) {
+    if (!patches || patches.length === 0) {
+        return true;
+    }
+
+    if (_shouldUseViewTransition()) {
+        let innerResult = true;
+        const transition = document.startViewTransition(() => {
+            innerResult = _applyPatchesInner(patches, rootEl);
+        });
+        try {
+            await transition.updateCallbackDone;
+        } catch (err) {
+            console.error('[djust] applyPatches threw inside View Transition:', err);
+            transition.skipTransition();
+            return false;
+        }
+        return innerResult;
+    }
+
+    return _applyPatchesInner(patches, rootEl);
+}
+
+/**
+ * Synchronous inner patch loop. Extracted from the original sync
+ * ``applyPatches`` body — no behavior changes, just renamed. The View
+ * Transitions wrap above invokes this from inside the
+ * ``startViewTransition`` callback; the direct path invokes it
+ * unwrapped. Either way, this is the same DOM-mutating loop that has
+ * shipped for many releases.
+ */
+function _applyPatchesInner(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -6444,7 +6728,7 @@ function applyPatches(patches, rootEl = null) {
         // child without a dj-id needs removal: the index-based fallback
         // resolves to the just-inserted content instead of the old child,
         // and the wrong node gets deleted.  See regression fixtures for
-        // NYC Claims tab switches (#641).
+        // a downstream consumer tab switches (#641).
         //
         // Fix: apply all non-Insert patches individually FIRST, then batch
         // the consecutive inserts, then apply any remaining inserts that
@@ -6555,6 +6839,16 @@ function applyPatches(patches, rootEl = null) {
     return true;
 }
 
+// Expose applyPatches on the public namespace for test-side eval and
+// third-party hook integration. ``async function`` declarations don't
+// always hoist to the host scope under JSDOM's eval; without this
+// explicit binding, ``dom.window.eval(clientCode + '...applyPatches...')``
+// throws ReferenceError. Public-surface change documented in CHANGELOG.
+if (typeof globalThis !== 'undefined') {
+    globalThis.djust = globalThis.djust || {};
+    globalThis.djust.applyPatches = applyPatches;
+}
+
 // ============================================================================
 // Lazy Hydration Support (Performance Optimization)
 // ============================================================================
@@ -6590,6 +6884,12 @@ const lazyHydrationManager = {
 
     // Queue of elements waiting for WebSocket connection
     pendingMounts: [],
+
+    // In-flight mount_batch — populated when a mount_batch frame is sent, cleared
+    // when the server responds (success or known error). #1031: enables fallback
+    // to per-view mount when an old server returns "Unknown message type:
+    // mount_batch" instead of handling the batch frame.
+    inFlightBatch: null,
 
     // Initialize lazy hydration
     init() {
@@ -6759,6 +7059,10 @@ const lazyHydrationManager = {
             try {
                 clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
             } catch (_e) { /* tz detect failure — omit */ }
+            // #1031: stash the original mounts so the websocket error
+            // handler can fall back to per-view mounts if the server
+            // returns "Unknown message type: mount_batch".
+            this.inFlightBatch = mounts;
             liveViewWS.sendMessage({
                 type: 'mount_batch',
                 views: viewEntries,
@@ -6768,6 +7072,27 @@ const lazyHydrationManager = {
         }
 
         mounts.forEach(({ element, viewPath }) => {
+            this.mountElement(element, viewPath);
+        });
+    },
+
+    // #1031: invoked from the websocket error handler when the server
+    // doesn't recognize the mount_batch frame. Falls back to per-view
+    // mount calls so older servers (pre-v0.6.0) keep working with newer
+    // clients. Idempotent — clears inFlightBatch before iterating so a
+    // late mount_batch response can't double-trigger.
+    handleMountBatchFallback() {
+        if (!this.inFlightBatch) return;
+        const mounts = this.inFlightBatch;
+        this.inFlightBatch = null;
+        if (globalThis.djustDebug) {
+            console.warn('[LiveView:lazy] mount_batch unsupported by server — falling back to %d per-view mounts', mounts.length);
+        }
+        mounts.forEach(({ element, viewPath }) => {
+            // Reset the data-live-hydrated attr that processPendingMounts
+            // set optimistically; mountElement will set it again on success.
+            element.removeAttribute('data-live-hydrated');
+            element.setAttribute('dj-lazy', '');
             this.mountElement(element, viewPath);
         });
     },
@@ -8756,6 +9081,41 @@ function _createHookInstance(hookDef, el) {
 }
 
 /**
+ * Safely invoke a hook lifecycle method. Tolerates both sync and async
+ * implementations (v0.8.6 async-hooks enhancement, leveraging PR-A's
+ * async patch path + #1098's queued handleMessage):
+ *
+ * - Sync return: errors caught and logged immediately.
+ * - Async return (Promise): errors caught via ``.catch`` and logged when
+ *   the Promise rejects. The dispatcher does NOT await — hooks fire-and-
+ *   forget on the lifecycle path so user I/O in a hook can't block the
+ *   render loop. User code that needs sequencing across hook completion
+ *   should coordinate that explicitly.
+ *
+ * No API signature change for hook authors — sync hooks behave exactly
+ * as before. Async hooks now have safe error reporting instead of
+ * Unhandled Promise Rejection logs.
+ */
+function _safeCallHook(fn, label, ...args) {
+    // Use %s placeholders for ``label`` so the format string is constant
+    // and ``label`` (which derives from a user-controlled ``dj-hook``
+    // attribute) is passed as a parameter — silences CodeQL's tainted-
+    // format-string warning. console.error doesn't reach an exploitable
+    // sink, but the parameterized form is the canonical safe pattern.
+    try {
+        const result = fn(...args);
+        if (result && typeof result.then === 'function') {
+            result.catch((e) =>
+                console.error('[dj-hook] Error in %s:', label, e),
+            );
+        }
+    } catch (e) {
+        console.error('[dj-hook] Error in %s:', label, e);
+    }
+}
+
+
+/**
  * Scan the DOM for elements with dj-hook and mount their hooks.
  * Called on init. For post-patch and post-navigation updates, use updateHooks().
  */
@@ -8783,13 +9143,9 @@ function mountHooks(root) {
         const instance = _createHookInstance(hookDef, el);
         _activeHooks.set(elId, { hookName, instance, el });
 
-        // Call mounted()
+        // Call mounted() (async-tolerant — see _safeCallHook)
         if (typeof instance.mounted === 'function') {
-            try {
-                instance.mounted();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
-            }
+            _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
         }
     });
 }
@@ -8804,11 +9160,10 @@ function beforeUpdateHooks(root) {
     for (const [, entry] of _activeHooks) {
         // Only call if element is still in the DOM
         if (root.contains(entry.el) && typeof entry.instance.beforeUpdate === 'function') {
-            try {
-                entry.instance.beforeUpdate();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.beforeUpdate():`, e);
-            }
+            _safeCallHook(
+                entry.instance.beforeUpdate.bind(entry.instance),
+                `${entry.hookName}.beforeUpdate()`,
+            );
         }
     }
 }
@@ -8835,11 +9190,10 @@ function updateHooks(root) {
             existing.el = el; // Update reference in case DOM was replaced
             existing.instance.el = el;
             if (typeof existing.instance.updated === 'function') {
-                try {
-                    existing.instance.updated();
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${hookName}.updated():`, e);
-                }
+                _safeCallHook(
+                    existing.instance.updated.bind(existing.instance),
+                    `${hookName}.updated()`,
+                );
             }
         } else {
             // New element — mount it
@@ -8851,11 +9205,7 @@ function updateHooks(root) {
             const instance = _createHookInstance(hookDef, el);
             _activeHooks.set(elId, { hookName, instance, el });
             if (typeof instance.mounted === 'function') {
-                try {
-                    instance.mounted();
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${hookName}.mounted():`, e);
-                }
+                _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
             }
         }
     });
@@ -8864,11 +9214,10 @@ function updateHooks(root) {
     for (const [elId, entry] of _activeHooks) {
         if (!currentElements.has(elId)) {
             if (typeof entry.instance.destroyed === 'function') {
-                try {
-                    entry.instance.destroyed();
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
-                }
+                _safeCallHook(
+                    entry.instance.destroyed.bind(entry.instance),
+                    `${entry.hookName}.destroyed()`,
+                );
             }
             _activeHooks.delete(elId);
         }
@@ -8882,11 +9231,10 @@ function notifyHooksDisconnected() {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.disconnected === 'function') {
-            try {
-                entry.instance.disconnected();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.disconnected():`, e);
-            }
+            _safeCallHook(
+                entry.instance.disconnected.bind(entry.instance),
+                `${entry.hookName}.disconnected()`,
+            );
         }
     }
 }
@@ -8898,11 +9246,10 @@ function notifyHooksReconnected() {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.reconnected === 'function') {
-            try {
-                entry.instance.reconnected();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.reconnected():`, e);
-            }
+            _safeCallHook(
+                entry.instance.reconnected.bind(entry.instance),
+                `${entry.hookName}.reconnected()`,
+            );
         }
     }
 }
@@ -8915,12 +9262,11 @@ function dispatchPushEventToHooks(eventName, payload) {
     for (const [, entry] of _activeHooks) {
         const handlers = entry.instance._eventHandlers[eventName];
         if (handlers) {
-            handlers.forEach(cb => {
-                try {
-                    cb(payload);
-                } catch (e) {
-                    console.error(`[dj-hook] Error in ${entry.hookName}.handleEvent("${eventName}"):`, e);
-                }
+            handlers.forEach((cb) => {
+                _safeCallHook(
+                    () => cb(payload),
+                    `${entry.hookName}.handleEvent("${eventName}")`,
+                );
             });
         }
     }
@@ -8933,11 +9279,10 @@ function destroyAllHooks() {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
         if (typeof entry.instance.destroyed === 'function') {
-            try {
-                entry.instance.destroyed();
-            } catch (e) {
-                console.error(`[dj-hook] Error in ${entry.hookName}.destroyed():`, e);
-            }
+            _safeCallHook(
+                entry.instance.destroyed.bind(entry.instance),
+                `${entry.hookName}.destroyed()`,
+            );
         }
     }
     _activeHooks.clear();
@@ -13382,7 +13727,7 @@ globalThis.djust.djTransitionGroup = {
      * this is a no-op so the receiver still dispatches its lifecycle
      * event without tripping an exception.
      */
-    function _applyScopedPatches(patches, rootEl) {
+    async function _applyScopedPatches(patches, rootEl) {
         if (typeof applyPatches !== "function") {
             if (globalThis.djustDebug) {
                 console.warn("[djust] applyPatches is not in scope; skipping");
@@ -13402,7 +13747,7 @@ globalThis.djust.djTransitionGroup = {
      * see pre-apply state; this matches the Phase A event shape with
      * ``phase: 'B'``.
      */
-    function handleChildUpdate(message) {
+    async function handleChildUpdate(message) {
         if (!message) return;
         const viewId = message.view_id;
         if (!viewId) {
@@ -13431,7 +13776,7 @@ globalThis.djust.djTransitionGroup = {
         // namespace; without rootEl the doc-wide lookup in
         // getNodeByPath would cross subtree boundaries.
         if (Array.isArray(message.patches) && message.patches.length > 0) {
-            _applyScopedPatches(message.patches, root);
+            await _applyScopedPatches(message.patches, root);
         }
         clientVdomVersions.set(viewId, message.version);
     }
@@ -13441,7 +13786,7 @@ globalThis.djust.djTransitionGroup = {
      * ``child_update`` but targets a sticky subtree via the
      * ``[dj-sticky-view]`` selector.
      */
-    function handleStickyUpdate(message) {
+    async function handleStickyUpdate(message) {
         if (!message) return;
         const viewId = message.view_id;
         if (!viewId) return;
@@ -13458,7 +13803,7 @@ globalThis.djust.djTransitionGroup = {
             patches: message.patches || [],
         });
         if (Array.isArray(message.patches) && message.patches.length > 0) {
-            _applyScopedPatches(message.patches, root);
+            await _applyScopedPatches(message.patches, root);
         }
         clientVdomVersions.set(viewId, message.version);
     }
@@ -14044,4 +14389,137 @@ globalThis.djust.djTransitionGroup = {
         activityVisible: activityVisible,
     };
     window.djust.activityVisible = activityVisible;
+})();
+// 50-lazy-fill.js — v0.9.0 PR-B (#1043, ADR-015): client-side reception
+// for `{% live_render lazy=True %}` chunks.
+//
+// Wire format from the server:
+//
+//   <dj-lazy-slot data-id="X" data-trigger="flush"></dj-lazy-slot>     // shell chunk
+//   ...rest of body, </body></html>...                                  // body close
+//   <template id="djl-fill-X" data-target="X" data-status="ok">
+//       <div dj-view data-djust-embedded="X">...rendered child...</div>
+//   </template>
+//   <script>window.djust&&window.djust.lazyFill&&window.djust.lazyFill("X")</script>
+//
+// The browser parses each chunk as it streams in. Templates are
+// inert-by-spec; the inline <script> after each fills runs at parse
+// time and calls into this module to swap the slot.
+//
+// `data-trigger="visible"` defers the actual replaceWith until the
+// slot enters the viewport — useful for below-fold lazy content where
+// the user may never scroll to it.
+//
+// Status="error" / "timeout" wraps the fill in `<dj-error
+// aria-live="polite">` for screen-reader announcement.
+
+(function () {
+  'use strict';
+
+  if (!window.djust) window.djust = {};
+
+  // Re-bind dj-* events on a freshly-inserted subtree. djust's
+  // standard post-mutation reinit hook lives at window.djustReinit
+  // when registered; if absent, slot-fills still work but events on
+  // the new subtree won't bind until the next full reinit.
+  function _reinitAfterFill() {
+    try {
+      if (typeof window.djustReinit === 'function') window.djustReinit();
+    } catch (e) {
+      if (window.djustDebug) console.warn('[lazy-fill] djustReinit threw', e);
+    }
+  }
+
+  function _replaceSlot(slot, tpl, status) {
+    if (status === 'ok') {
+      // tpl.content is a DocumentFragment; cloneNode keeps the template
+      // intact for double-fire idempotency.
+      slot.replaceWith(tpl.content.cloneNode(true));
+    } else {
+      // error / timeout — wrap in <dj-error aria-live="polite"> so
+      // screen readers announce. Custom element name is treated as
+      // HTMLUnknownElement which is fine for layout-only purposes.
+      var err = document.createElement('dj-error');
+      err.setAttribute('aria-live', 'polite');
+      err.appendChild(tpl.content.cloneNode(true));
+      slot.replaceWith(err);
+    }
+    tpl.remove();
+    _reinitAfterFill();
+  }
+
+  /**
+   * Replace the `<dj-lazy-slot data-id="X">` placeholder with the
+   * contents of `<template id="djl-fill-X">`. Idempotent — second call
+   * for the same slot id is a no-op.
+   *
+   * Called by the inline activator script the server emits after each
+   * fill chunk, AND by the auto-scan on DOMContentLoaded for templates
+   * that arrived before this module loaded.
+   */
+  window.djust.lazyFill = function lazyFill(slotId) {
+    var tpl = document.getElementById('djl-fill-' + slotId);
+    if (!tpl || tpl.tagName !== 'TEMPLATE') {
+      // Already filled (template removed) OR the template arrived
+      // before this module loaded — auto-scan will retry.
+      return;
+    }
+
+    var slot = document.querySelector(
+      'dj-lazy-slot[data-id="' + (window.CSS && window.CSS.escape ? window.CSS.escape(slotId) : slotId) + '"]'
+    );
+    if (!slot) {
+      // The fill chunk arrived but the slot was never in the DOM
+      // (template-author error) or was removed by user JS. Drop the
+      // template so a future call doesn't see stale state.
+      tpl.remove();
+      if (window.djustDebug) {
+        console.warn('[lazy-fill] no slot found for id %s', slotId);
+      }
+      return;
+    }
+
+    var status = (tpl.dataset && tpl.dataset.status) || 'ok';
+    var trigger = (slot.dataset && slot.dataset.trigger) || 'flush';
+
+    if (trigger === 'visible' && 'IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            if (entries[i].isIntersecting) {
+              _replaceSlot(slot, tpl, status);
+              io.disconnect();
+              return;
+            }
+          }
+        },
+        { rootMargin: '50px' }
+      );
+      io.observe(slot);
+      return;
+    }
+
+    // Default flush trigger OR visible-trigger fallback when
+    // IntersectionObserver is unavailable.
+    _replaceSlot(slot, tpl, status);
+  };
+
+  // Auto-scan: catch templates that landed before this module
+  // initialized. Race scenarios: (1) the module is at slot 50, late
+  // in the bundle; (2) the inline activator <script> runs before
+  // window.djust.lazyFill is defined when the bundle loads
+  // asynchronously.
+  function _autoFillOnDOMReady() {
+    var tpls = document.querySelectorAll('template[id^="djl-fill-"]');
+    for (var i = 0; i < tpls.length; i++) {
+      var slotId = tpls[i].id.slice('djl-fill-'.length);
+      window.djust.lazyFill(slotId);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _autoFillOnDOMReady);
+  } else {
+    _autoFillOnDOMReady();
+  }
 })();

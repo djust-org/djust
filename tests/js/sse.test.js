@@ -73,44 +73,44 @@ describe('LiveViewSSE', () => {
     });
 
     describe('constructor', () => {
-        it('starts with enabled=true, viewMounted=false', () => {
+        it('starts with enabled=true, viewMounted=false', async () => {
             expect(sse.enabled).toBe(true);
             expect(sse.viewMounted).toBe(false);
         });
 
-        it('initialises stats counters at zero', () => {
+        it('initialises stats counters at zero', async () => {
             expect(sse.stats.sent).toBe(0);
             expect(sse.stats.received).toBe(0);
         });
     });
 
     describe('_generateSessionId', () => {
-        it('returns a UUID-shaped string', () => {
+        it('returns a UUID-shaped string', async () => {
             const id = sse._generateSessionId();
             expect(id).toMatch(
                 /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
             );
         });
 
-        it('returns a unique ID on each call', () => {
+        it('returns a unique ID on each call', async () => {
             const ids = new Set(Array.from({ length: 10 }, () => sse._generateSessionId()));
             expect(ids.size).toBe(10);
         });
     });
 
     describe('sendEvent', () => {
-        it('returns false when disabled', () => {
+        it('returns false when disabled', async () => {
             sse.enabled = false;
             expect(sse.sendEvent('increment', {})).toBe(false);
         });
 
-        it('returns false when viewMounted=false', () => {
+        it('returns false when viewMounted=false', async () => {
             sse.enabled = true;
             sse.viewMounted = false;
             expect(sse.sendEvent('increment', {})).toBe(false);
         });
 
-        it('returns true and posts when enabled and mounted', () => {
+        it('returns true and posts when enabled and mounted', async () => {
             sse.enabled = true;
             sse.viewMounted = true;
             sse.sseBaseUrl = '/djust/sse/test-id/';
@@ -136,13 +136,13 @@ describe('LiveViewSSE', () => {
     });
 
     describe('startHeartbeat', () => {
-        it('is a no-op (SSE uses server-side keepalives)', () => {
+        it('is a no-op (SSE uses server-side keepalives)', async () => {
             expect(() => sse.startHeartbeat()).not.toThrow();
         });
     });
 
     describe('disconnect', () => {
-        it('closes the EventSource and resets state', () => {
+        it('closes the EventSource and resets state', async () => {
             sse.connect('myapp.views.TestView', {});
             sse.viewMounted = true;
 
@@ -153,14 +153,14 @@ describe('LiveViewSSE', () => {
             expect(sse.sessionId).toBeNull();
         });
 
-        it('is safe to call when not connected', () => {
+        it('is safe to call when not connected', async () => {
             expect(() => sse.disconnect()).not.toThrow();
         });
     });
 
     describe('handleMessage', () => {
-        it('sets viewMounted on mount message', () => {
-            sse.handleMessage({
+        it('sets viewMounted on mount message', async () => {
+            await sse.handleMessage({
                 type: 'mount',
                 view: 'myapp.views.Test',
                 version: 5,
@@ -169,9 +169,9 @@ describe('LiveViewSSE', () => {
             expect(global.clientVdomVersion).toBe(5);
         });
 
-        it('calls handleServerResponse on patch message', () => {
+        it('calls handleServerResponse on patch message', async () => {
             sse.lastEventName = 'increment';
-            sse.handleMessage({
+            await sse.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
@@ -184,8 +184,8 @@ describe('LiveViewSSE', () => {
             expect(sse.lastEventName).toBeNull();
         });
 
-        it('calls handleServerResponse on html_update message', () => {
-            sse.handleMessage({
+        it('calls handleServerResponse on html_update message', async () => {
+            await sse.handleMessage({
                 type: 'html_update',
                 html: '<div>hello</div>',
                 version: 3,
@@ -193,31 +193,31 @@ describe('LiveViewSSE', () => {
             expect(global.handleServerResponse).toHaveBeenCalled();
         });
 
-        it('clears loading state on noop without async_pending', () => {
+        it('clears loading state on noop without async_pending', async () => {
             sse.lastEventName = 'search';
-            sse.handleMessage({ type: 'noop' });
+            await sse.handleMessage({ type: 'noop' });
             expect(global.globalLoadingManager.stopLoading).toHaveBeenCalledWith('search', null);
             expect(sse.lastEventName).toBeNull();
         });
 
-        it('keeps loading state on noop with async_pending=true', () => {
+        it('keeps loading state on noop with async_pending=true', async () => {
             sse.lastEventName = 'generate';
-            sse.handleMessage({ type: 'noop', async_pending: true });
+            await sse.handleMessage({ type: 'noop', async_pending: true });
             // stopLoading should NOT be called
             expect(global.globalLoadingManager.stopLoading).not.toHaveBeenCalled();
         });
 
-        it('dispatches djust:error event on error message', () => {
+        it('dispatches djust:error event on error message', async () => {
             const listener = vi.fn();
             global.window.addEventListener('djust:error', listener);
 
-            sse.handleMessage({ type: 'error', error: 'Something broke' });
+            await sse.handleMessage({ type: 'error', error: 'Something broke' });
 
             expect(listener).toHaveBeenCalled();
             global.window.removeEventListener('djust:error', listener);
         });
 
-        it('reloads page on reload message', () => {
+        it('reloads page on reload message', async () => {
             const reloadMock = vi.fn();
             Object.defineProperty(global.window, 'location', {
                 value: { reload: reloadMock, href: '' },
@@ -225,7 +225,7 @@ describe('LiveViewSSE', () => {
                 configurable: true,
             });
 
-            sse.handleMessage({ type: 'reload' });
+            await sse.handleMessage({ type: 'reload' });
 
             expect(reloadMock).toHaveBeenCalled();
         });

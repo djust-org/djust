@@ -9,6 +9,7 @@ import socket
 import threading
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from django.utils.decorators import classonlymethod
 from django.views import View
 
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
@@ -120,6 +121,26 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "temporary_assigns",
         "sticky",
         "sticky_id",
+    }
+)
+
+
+# Component-level analog (#1041): framework-internal LiveComponent
+# attrs that DON'T start with ``_`` but aren't user state. Excluded
+# from the ``__components__`` snapshot to keep the time-travel state
+# focused on actual user state. Mirrors the parent's
+# :data:`_FRAMEWORK_INTERNAL_ATTRS` for component fields.
+#
+# ``component_id`` in particular is the registry key — restoring it
+# from stale snapshot state would desync the registry from the
+# instance's ``component_id`` attribute.
+_COMPONENT_INTERNAL_ATTRS: frozenset = frozenset(
+    {
+        "component_id",
+        "template",
+        "template_name",
+        "assigns",
+        "slots",
     }
 )
 
@@ -369,6 +390,59 @@ class LiveView(
     time_travel_enabled: bool = False
 
     # ============================================================================
+    # AS_VIEW DISPATCH (PR-B for v0.9.0 streaming, ADR-015)
+    # ============================================================================
+
+    @classonlymethod
+    def as_view(cls, **initkwargs):
+        """Override Django's ``View.as_view`` to route GET to :meth:`aget`
+        when ``streaming_render = True`` AND we're running on ASGI.
+
+        Django's stock dispatch routes by ``request.method.lower()`` so
+        GET → sync ``self.get()``. Adding async ``aget()`` next to sync
+        ``get()`` doesn't change the routing — Django's
+        ``view_is_async`` only checks handlers in ``http_method_names``.
+
+        For ``streaming_render = True`` views we therefore return a
+        custom async view callable that:
+
+        * Routes GET → ``await self.aget(...)`` when in ASGI context.
+        * Routes everything else (POST, PUT, etc., AND GET on WSGI)
+          through ``await sync_to_async(self.dispatch)(...)``.
+
+        For ``streaming_render = False`` (default) we delegate to
+        ``super().as_view()`` so non-streaming views run through stock
+        Django dispatch with zero overhead and no behavior change.
+        """
+        if not getattr(cls, "streaming_render", False):
+            return super().as_view(**initkwargs)
+
+        from asgiref.sync import markcoroutinefunction, sync_to_async
+
+        async def view(request, *args, **kwargs):
+            self = cls(**initkwargs)
+            self.setup(request, *args, **kwargs)
+            if not hasattr(self, "request"):
+                raise AttributeError(
+                    "%s instance has no 'request' attribute. Did you override "
+                    "setup() and forget to call super()?" % cls.__name__
+                )
+            if request.method == "GET" and self._is_asgi_context(request):
+                return await self.aget(request, *args, **kwargs)
+            return await sync_to_async(self.dispatch)(request, *args, **kwargs)
+
+        view.view_class = cls  # type: ignore[attr-defined]
+        view.view_initkwargs = initkwargs  # type: ignore[attr-defined]
+        view.__doc__ = cls.__doc__
+        view.__module__ = cls.__module__
+        view.__annotations__ = cls.dispatch.__annotations__
+        # Copy possible attributes set by decorators (e.g. ``@csrf_exempt``)
+        # from dispatch — mirrors Django's stock as_view behavior.
+        view.__dict__.update(cls.dispatch.__dict__)
+        markcoroutinefunction(view)
+        return view
+
+    # ============================================================================
     # INITIALIZATION & SETUP
     # ============================================================================
 
@@ -383,6 +457,12 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+        # v0.8.0 — @action server-action state. Each entry is keyed by the
+        # action's method name and holds {"pending": bool, "error": str|None,
+        # "result": Any}. Populated by the @action decorator's wrapper at
+        # handler entry/exit; exposed to templates by ContextMixin's
+        # get_context_data() for `{{ <action_name>.pending }}` access.
+        self._action_state: Dict[str, Dict[str, Any]] = {}
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
 
@@ -410,6 +490,12 @@ class LiveView(
         # Allocated only when the subclass opts in via the class attr so
         # the 99% of views that don't use it pay zero memory cost.
         self._time_travel_buffer = None
+        # Branched-timeline tracking (#1151, v0.9.4). Default branch is
+        # "main" — the canonical recorded timeline. Forward-replay from
+        # a non-tip cursor allocates a fresh branch id from the counter.
+        # Both fields are inert when the buffer isn't allocated.
+        self._time_travel_branch_id = "main"
+        self._time_travel_branch_counter = 0
         if getattr(self.__class__, "time_travel_enabled", False):
             try:
                 from djust.time_travel import TimeTravelBuffer
@@ -624,6 +710,20 @@ class LiveView(
         client to post a ``STATE_SNAPSHOT`` message to the service worker
         when opt-in via :attr:`enable_state_snapshot` is True.
 
+        Component state (#1041, v0.9.0): when this view has registered
+        :class:`~djust.components.LiveComponent` instances in
+        ``self._components`` (the registry populated by
+        :meth:`_assign_component_ids`), each component's public state
+        is captured under the special ``"__components__"`` key as a
+        ``{component_id: {field: value}}`` nested dict. The reserved
+        name keeps component snapshots out of the parent's flat state
+        namespace and gives the time-travel debug panel a clean shape
+        to render per-component scrubbers. Descriptor-pattern
+        components are auto-registered via the framework's existing
+        descriptor-init machinery; once they live in
+        ``self._components`` they're captured the same way as legacy-
+        instantiated ones.
+
         The server never calls this directly — it's primarily exposed for
         testing and observability. Restoration uses
         :meth:`_restore_snapshot`.
@@ -652,7 +752,66 @@ class LiveView(
             except (TypeError, ValueError, OverflowError):
                 # Skip non-serializable — matches _get_private_state pattern.
                 continue
+
+        # Component-level state (#1041). Each registered component
+        # contributes its own public-state dict under
+        # ``__components__`` keyed by ``component_id``.
+        components_state = self._capture_components_snapshot()
+        if components_state:
+            result["__components__"] = components_state
         return result
+
+    def _capture_components_snapshot(self) -> Dict[str, Dict[str, Any]]:
+        """Return a ``{component_id: {field: value}}`` snapshot map.
+
+        Walks ``self._components`` (the registry of LiveComponent
+        instances populated by ``_assign_component_ids``) and captures
+        each component's public state. Returns an empty dict when the
+        registry is empty or absent — no key is added to the parent
+        snapshot in that case.
+
+        Capture rules per component:
+        - Public (non-``_``-prefixed) attrs from ``component.__dict__``.
+        - Skip callables and non-serializable values (same rules as
+          parent state).
+        - Skip ``_descriptor_*`` machinery and other framework-
+          internal attrs that begin with ``_``.
+        - Skip framework-internal config attrs that DON'T start with
+          ``_`` but aren't user state (see
+          :data:`_COMPONENT_INTERNAL_ATTRS`). ``component_id`` in
+          particular is the registry key — restoring it from stale
+          state would desync the registry from the instance attr.
+
+        Failures on individual components are logged and the bad
+        component is skipped — degrade gracefully rather than break
+        the whole snapshot.
+        """
+        registry = getattr(self, "_components", None)
+        if not registry:
+            return {}
+        components_state: Dict[str, Dict[str, Any]] = {}
+        for component_id, component in registry.items():
+            try:
+                comp_state: Dict[str, Any] = {}
+                for key, value in component.__dict__.items():
+                    if key.startswith("_"):
+                        continue
+                    if key in _COMPONENT_INTERNAL_ATTRS:
+                        continue
+                    if callable(value):
+                        continue
+                    try:
+                        comp_state[key] = json.loads(json.dumps(value, cls=DjangoJSONEncoder))
+                    except (TypeError, ValueError, OverflowError):
+                        # Skip non-serializable — matches parent rule.
+                        continue
+                components_state[component_id] = comp_state
+            except Exception:  # noqa: BLE001 — dev-only, log + degrade
+                logger.exception(
+                    "time_travel: component snapshot failed for id=%s",
+                    component_id,
+                )
+        return components_state
 
     def _restore_snapshot(self, state: Dict[str, Any]) -> None:
         """Apply a previously captured snapshot to this view.

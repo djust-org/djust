@@ -191,11 +191,11 @@ describe('LiveViewSSE', () => {
     });
 
     describe('handleMessage', () => {
-        it('handles mount message and sets viewMounted', () => {
+        it('handles mount message and sets viewMounted', async () => {
             const { window } = createEnv('<div dj-root></div>');
             const sse = new window.djust.LiveViewSSE();
 
-            sse.handleMessage({
+            await sse.handleMessage({
                 type: 'mount',
                 view: 'myapp.views.HomeView',
                 html: '<p>Hello</p>',
@@ -204,25 +204,25 @@ describe('LiveViewSSE', () => {
             expect(sse.viewMounted).toBe(true);
         });
 
-        it('handles error message', () => {
+        it('handles error message', async () => {
             const { window } = createEnv();
             const sse = new window.djust.LiveViewSSE();
             const errors = [];
             window.addEventListener('djust:error', (e) => errors.push(e.detail));
 
-            sse.handleMessage({ type: 'error', error: 'Something broke' });
+            await sse.handleMessage({ type: 'error', error: 'Something broke' });
 
             expect(errors).toHaveLength(1);
             expect(errors[0].error).toBe('Something broke');
         });
 
-        it('handles reload message without throwing', () => {
+        it('handles reload message without throwing', async () => {
             const { window } = createEnv();
             const sse = new window.djust.LiveViewSSE();
 
             // reload triggers navigation which JSDOM doesn't support,
             // but the handler should not throw
-            expect(() => sse.handleMessage({ type: 'reload' })).not.toThrow();
+            await expect(sse.handleMessage({ type: 'reload' })).resolves.not.toThrow();
         });
 
         it('tracks received stats', () => {

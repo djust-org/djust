@@ -532,6 +532,128 @@ Documentation-only. No new djust attributes, no new JS module, no wire-protocol 
 
 ---
 
+## `dj-dialog` — native `<dialog>` modal integration
+
+The HTML `<dialog>` element ships with the browser's
+focus-trap, backdrop, and Escape-to-close behavior built in. `dj-dialog`
+flips the modal's open state declaratively without writing a hook.
+
+### Quick start
+
+```django
+<button dj-click="open_modal">Edit profile</button>
+
+<dialog dj-dialog="{{ modal_open|yesno:'open,close' }}">
+    <form method="dialog">
+        …
+        <button value="save">Save</button>
+        <button value="cancel">Cancel</button>
+    </form>
+</dialog>
+```
+
+| Value | Effect |
+|---|---|
+| `dj-dialog="open"`  | calls `dialog.showModal()` |
+| `dj-dialog="close"` | calls `dialog.close()` |
+
+### Behavior
+
+A document-level `MutationObserver` watches for attribute changes and
+DOM insertions, so VDOM morphs that swap `dj-dialog` work without
+per-element re-registration. Re-asserting `"open"` on an
+already-open dialog is a no-op (idempotent). Non-`<dialog>` elements
+carrying the attribute are silently ignored — the attribute does not
+upgrade arbitrary elements into modals.
+
+### Pairing with `dj-ignore-attrs`
+
+When the user dismisses a `<dialog>` by pressing Escape, the browser
+flips the `open` attribute on its own. If the server hasn't yet
+re-rendered with `modal_open=False`, the next VDOM patch could
+accidentally re-open the dialog. Add `dj-ignore-attrs="open"` to mark
+the `open` attribute as client-owned so VDOM `SetAttr` skips it:
+
+```html
+<dialog dj-dialog="{{ modal_open|yesno:'open,close' }}"
+        dj-ignore-attrs="open">…</dialog>
+```
+
+### Scope
+
+`python/djust/static/djust/src/35-dj-dialog.js` (~80 LOC). 8 JSDOM
+tests in `tests/js/dj_dialog.test.js`.
+
+---
+
+## Form polish — `dj-no-submit`, `dj-trigger-action`, `dj-loading=""`
+
+Three small declarative attributes that close the most common form-UX
+gaps without requiring a hook.
+
+### `dj-no-submit="enter"` — block Enter-to-submit
+
+```html
+<form dj-no-submit="enter" dj-submit="save">
+  <input type="text" name="title">
+  <input type="text" name="tag">
+  <button>Save</button>
+</form>
+```
+
+Pressing Enter inside a single-line `<input>` no longer submits the
+whole form — users can confirm a field with Enter and tab to the next
+one. Textareas (multi-line input), submit-button clicks, and modified
+keys (Shift+Enter, Ctrl+Enter) are unaffected. Comma-separated mode
+list is reserved for future expansion (currently only `"enter"` is
+recognized).
+
+### `dj-trigger-action` + `self.trigger_submit(selector)` — bridge to native POST
+
+For OAuth redirects, payment-gateway handoffs, or any flow that needs
+the browser's native form-submit (full page navigation, no AJAX):
+
+```python
+class CheckoutView(LiveView):
+    def handle_event_pay(self):
+        result = stripe.PaymentIntent.create(...)
+        if result.ok:
+            self.trigger_submit('#stripe-form')   # client posts the form natively
+```
+
+```django
+<form id="stripe-form" action="https://checkout.stripe.com/..." method="POST"
+      dj-trigger-action>
+    <input type="hidden" name="token" value="{{ stripe_token }}">
+</form>
+```
+
+The form must explicitly opt in with `dj-trigger-action` — refusal to
+submit a form without the attribute is logged in debug mode. This
+prevents a server-pushed event from submitting an unintended form.
+
+### `dj-loading="event_name"` — scoped loading indicator (shorthand)
+
+```html
+<button dj-click="search">Search</button>
+<div dj-loading="search">Searching…</div>
+```
+
+The element shows only while the named event is in-flight; on
+register, it auto-hides without an inline `style="display:none"`.
+Equivalent to the verbose form `<div dj-loading.show dj-loading.for="search">`,
+just shorter for the common case. The verbose `dj-loading.*` modifier
+family still works alongside it.
+
+### Scope
+
+`python/djust/static/djust/src/34-form-polish.js` (~90 LOC) +
+`self.trigger_submit()` in `python/djust/mixins/push_events.py`.
+11 JSDOM tests in `tests/js/form_polish.test.js`, 4 Python tests
+covering the push-event shape.
+
+---
+
 ## See also
 
 - [Hooks](hooks.md) — the `dj-hook` primitive these attributes replace

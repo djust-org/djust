@@ -46,7 +46,7 @@ describe('HVR client', () => {
         vi.restoreAllMocks();
     });
 
-    it("routes hvr-applied frame to djust:hvr-applied CustomEvent", () => {
+    it("routes hvr-applied frame to djust:hvr-applied CustomEvent", async () => {
         const dom = createDom();
         const { document } = dom.window;
         // NOTE: djustDebug left falsy here so showIndicator no-ops and we
@@ -59,7 +59,7 @@ describe('HVR client', () => {
         // Construct an LiveViewWebSocket and invoke its message handler
         // directly — the same path that runs on a real `onmessage`.
         const ws = new dom.window.djust.LiveViewWebSocket();
-        ws.handleMessage({
+        await ws.handleMessage({
             type: 'hvr-applied',
             view: 'app.views.Dashboard',
             version: 3,

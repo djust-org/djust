@@ -442,6 +442,53 @@ def clear_assign_tag_handlers() -> None:
     ...
 
 # ============================================================================
+# Custom Filter Registry (project-defined ``@register.filter``)
+# ============================================================================
+
+def register_custom_filter(
+    name: str,
+    callable: Any,
+    is_safe: bool = False,
+    needs_autoescape: bool = False,
+) -> None:
+    """Register a project-defined custom template filter (#1121).
+
+    Bridges Django's ``@register.filter`` callables into the Rust
+    template engine. The Rust renderer's filter dispatch consults this
+    registry when its built-in match falls through.
+
+    Most callers use the higher-level
+    :func:`djust.template_filters.register_django_filter` (single
+    filter) or :func:`djust.template_filters.bootstrap_django_filters`
+    (walk every registered Django Library).
+
+    Args:
+        name: Filter name as used in templates (``{{ x|name }}``).
+        callable: Django filter callable (``(value, arg=None) -> str``).
+        is_safe: Django ``filter.is_safe`` attribute — when True,
+            output bypasses auto-escape (filter returns SafeString).
+        needs_autoescape: Django ``filter.needs_autoescape`` attribute —
+            when True, ``autoescape=True`` is passed as a kwarg.
+    """
+    ...
+
+def unregister_custom_filter(name: str) -> bool:
+    """Unregister a custom filter. Returns True if a filter was removed."""
+    ...
+
+def has_custom_filter(name: str) -> bool:
+    """Check if a custom filter is registered."""
+    ...
+
+def clear_custom_filters() -> None:
+    """Clear all registered custom filters (primarily for tests)."""
+    ...
+
+def get_registered_custom_filters() -> List[str]:
+    """Return the names of all registered custom filters."""
+    ...
+
+# ============================================================================
 # Actor System
 # ============================================================================
 
@@ -820,6 +867,12 @@ __all__ = [
     "has_assign_tag_handler",
     "unregister_assign_tag_handler",
     "clear_assign_tag_handlers",
+    # Custom filter registry (project-defined ``@register.filter``)
+    "register_custom_filter",
+    "unregister_custom_filter",
+    "has_custom_filter",
+    "clear_custom_filters",
+    "get_registered_custom_filters",
     # Actor system
     "SessionActorHandle",
     "SupervisorStatsPy",

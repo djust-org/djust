@@ -2,6 +2,99 @@
 
 This guide helps you upgrade between major versions of djust.
 
+## Upgrading to 0.9.0 — Additive Changes (No Breaking Changes)
+
+The 0.9.0 release is **fully backwards-compatible**. All listed
+behaviors are additive — your existing v0.8.x apps will continue
+working without changes. The notes below describe optional
+opt-ins and the new defaults that downstream consumers can take
+advantage of.
+
+### 1. Hot View Replacement (HVR) auto-enabled in DEBUG
+
+**What changed:** djust's own `DjustConfig.ready()` now auto-calls
+`enable_hot_reload()` whenever `DEBUG=True` and `watchdog` is
+installed. This means HVR — the state-preserving `__class__` swap
+on `.py` save shipped in v0.6.1 — works **out of the box** with no
+integration step.
+
+**Action required:** none. Existing `enable_hot_reload()` calls in
+your own `AppConfig.ready()` keep working unchanged (the function
+is idempotent).
+
+**Recommended cleanup:** if you previously added
+`from djust import enable_hot_reload; enable_hot_reload()` to an
+`AppConfig.ready()`, you can delete those lines — they are now
+redundant. Existing calls still work; this is purely cosmetic.
+
+**Opt out:** if you orchestrate the file watcher externally (e.g.
+`watchfiles` wrapping `uvicorn`):
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
+```
+
+If you previously wrapped `uvicorn` in `watchfiles` to get
+auto-reload, **drop that wrapper** and switch to plain `uvicorn`
+— djust's HVR is strictly better (preserves form input, scroll
+position, counters across edits).
+
+### 2. Async render path (`streaming_render`)
+
+**What's new:** views can opt in to a fully-async render path that
+streams the HTML response chunk-by-chunk:
+
+```python
+class MyView(LiveView):
+    streaming_render = True  # opt-in; default is False (sync render)
+
+    async def aget(self, request, *args, **kwargs):
+        # Optional async GET handler. Default is sync get().
+        ...
+```
+
+**Action required:** none. Sync rendering remains the default; the
+async path is purely opt-in.
+
+**When to enable:** views that fan out to multiple slow data
+sources (DB queries, LLM calls, external APIs) benefit from
+`streaming_render = True` paired with `lazy=True` slots — the
+shell streams immediately, slow regions fill in as their data
+arrives.
+
+### 3. Per-component time-travel + forward-replay (debug panel)
+
+**What's new:** the debug panel's Time Travel tab now supports:
+
+- **Per-component scrubbing** — scrub a single component's history
+  without affecting the parent view or other components.
+- **Forward-replay** — re-run a recorded event from its
+  `state_before` baseline, optionally with override params,
+  producing a branched timeline.
+- **Branch indicator** — visualizes which timeline branch the
+  current cursor is on (`main` or `branch-N`).
+
+**Action required:** none. The debug panel only runs in `DEBUG=True`.
+
+**Wire protocol additions:** the `time_travel_state` and
+`time_travel_event` frames now include three additive fields
+(`branch_id`, `forward_replay_enabled`, `max_events`). Old clients
+ignore unknown fields; new clients fall back to v0.6.1 behavior
+when the server doesn't supply them. No breakage on either side.
+
+### 4. Behavior unchanged but worth noting
+
+- All v0.8.x APIs (`@event_handler`, `assign_async`, `Component`,
+  `LiveComponent`, `start_async`, `@background`, etc.) are
+  unchanged.
+- Wire protocol versions are backwards-compatible with v0.6.1+
+  clients.
+- `time_travel_max_events` default (100) is unchanged.
+- HVR fallback to full-page reload on settings/migration changes
+  is unchanged — only view-code edits get the state-preserving
+  path.
+
 ## Upgrading to 1.0 — Breaking Changes
 
 ### 1. VDOM tracking attribute renamed: `data-dj-id` → `dj-id`

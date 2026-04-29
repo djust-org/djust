@@ -712,7 +712,7 @@ if (globalThis.djustDebug) {
 
 ## Audit / Static Security Checks (A0xx)
 
-These checks were added as follow-ups to the 2026-04-10 NYC Claims penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
+These checks were added as follow-ups to the 2026-04-10 a downstream consumer penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
 
 ### A001: WebSocket router missing AllowedHostsOriginValidator
 
@@ -811,7 +811,7 @@ Then set `DJANGO_SECRET_KEY` in your deployment environment.
 
 **What causes it**: `LOGIN_REDIRECT_URL` is a single hardcoded path (e.g. `/dashboard/`) but the project uses a role-based auth model (detected via known packages like `rolepermissions`, `rules`, `guardian`, or via multiple entries in the `Group` table). All roles land on the same page after login — both a UX problem and a strong signal that per-role access control wasn't considered.
 
-**What you see**: A lower-privilege user logs in and lands on the same dashboard as a supervisor, immediately exposing any broken RBAC. This is how the NYC Claims pentest team found broken role isolation in minutes.
+**What you see**: A lower-privilege user logs in and lands on the same dashboard as a supervisor, immediately exposing any broken RBAC. This is how a downstream consumer pentest team found broken role isolation in minutes.
 
 **Fix**: Subclass `django.contrib.auth.views.LoginView` and override `get_success_url()`:
 
@@ -1303,7 +1303,7 @@ Preferred-Languages: en
 
 ## AST Anti-Pattern Scanner Findings (X0xx)
 
-These findings are emitted by `manage.py djust_audit --ast`, which walks your Python source and Django templates looking for five specific security anti-patterns. Every pattern here was either a live vulnerability or a near-miss in the 2026-04-10 pentest of NYC Claims. The checks are intentionally narrow: false positives are worse than missed findings for a linter that runs on every push.
+These findings are emitted by `manage.py djust_audit --ast`, which walks your Python source and Django templates looking for five specific security anti-patterns. Every pattern here was either a live vulnerability or a near-miss in the 2026-04-10 pentest of a downstream consumer. The checks are intentionally narrow: false positives are worse than missed findings for a linter that runs on every push.
 
 Suppress a single finding with `# djust: noqa X001` on the offending line (or `{# djust: noqa X006 #}` inside a template). Bare `# djust: noqa` suppresses every djust.X finding on that line.
 

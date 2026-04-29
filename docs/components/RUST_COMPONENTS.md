@@ -1673,7 +1673,7 @@ To contribute new components:
 
 ## See Also
 
-- [LiveView Documentation](LIVEVIEW.md)
-- [Template Engine](TEMPLATES.md)
-- [VDOM System](VDOM_PATCHING_ISSUE.md)
-- [Forms Integration](PYTHONIC_FORMS_IMPLEMENTATION.md)
+- [LiveView API Reference](../website/api-reference/liveview.md) — class structure, lifecycle, and patterns
+- [Template Cheatsheet](../website/guides/template-cheatsheet.md) — djust template tags + filters
+- [VDOM Patching](../vdom/VDOM_PATCHING_ISSUE.md) — diff/patch implementation notes
+- [Forms Guide](../website/guides/forms.md) — FormMixin + real-time validation

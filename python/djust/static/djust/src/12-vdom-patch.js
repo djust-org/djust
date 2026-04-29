@@ -1498,7 +1498,93 @@ function applySinglePatch(patch, rootEl = null) {
  *   ``rootEl`` so they cannot spill into or from another view's
  *   subtree.
  */
-function applyPatches(patches, rootEl = null) {
+/**
+ * Should the next ``applyPatches`` call wrap its DOM mutations in
+ * ``document.startViewTransition()``? All four conditions must hold:
+ *
+ *   1. ``document`` is defined (not in a worker / non-browser context)
+ *   2. ``document.startViewTransition`` is a function (Chrome 111+,
+ *      Edge 111+, Safari 18+; Firefox graceful degrade — returns false)
+ *   3. ``document.body`` is not null (yes, it can be — early bootstrap,
+ *      ``<head>``-only HTML responses, mid-navigation)
+ *   4. ``<body dj-view-transitions>`` opt-in attribute is present
+ *   5. The user has NOT requested ``prefers-reduced-motion: reduce``
+ *      (accessibility — motion-sensitive users get instant patches)
+ *
+ * Re-evaluated on every patch so dynamic mid-session opt-in via
+ * ``document.body.setAttribute('dj-view-transitions', '')`` works.
+ */
+function _shouldUseViewTransition() {
+    if (typeof document === 'undefined') return false;
+    if (typeof document.startViewTransition !== 'function') return false;
+    if (!document.body) return false;
+    if (!document.body.hasAttribute('dj-view-transitions')) return false;
+    if (
+        typeof window !== 'undefined' &&
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Apply VDOM patches to the DOM. Returns ``Promise<boolean>`` — ``true``
+ * on full success, ``false`` if any patch failed (caller may trigger a
+ * full re-render fallback).
+ *
+ * **Two paths**:
+ *
+ * - **Direct (default)**: just runs the inner patch loop and resolves
+ *   with its boolean result.
+ * - **Wrapped (opt-in via** ``<body dj-view-transitions>`` **)**: wraps
+ *   the inner loop in ``document.startViewTransition()``. The browser
+ *   captures a pre-state frame, runs our callback, captures the
+ *   post-state, and animates between them (cross-fade by default;
+ *   ``view-transition-name`` enables shared-element morphs). We
+ *   ``await transition.updateCallbackDone`` so the returned promise
+ *   correctly reflects whether the inner loop succeeded — the View
+ *   Transitions spec runs the callback in a microtask, NOT
+ *   synchronously, so a non-async wrap would lose the boolean
+ *   (this was PR #1092's bug).
+ *
+ * If the View Transitions callback throws, we ``transition.skipTransition()``
+ * to abandon the animation and return false so the caller can trigger
+ * a full re-render fallback. ADR-013.
+ */
+async function applyPatches(patches, rootEl = null) {
+    if (!patches || patches.length === 0) {
+        return true;
+    }
+
+    if (_shouldUseViewTransition()) {
+        let innerResult = true;
+        const transition = document.startViewTransition(() => {
+            innerResult = _applyPatchesInner(patches, rootEl);
+        });
+        try {
+            await transition.updateCallbackDone;
+        } catch (err) {
+            console.error('[djust] applyPatches threw inside View Transition:', err);
+            transition.skipTransition();
+            return false;
+        }
+        return innerResult;
+    }
+
+    return _applyPatchesInner(patches, rootEl);
+}
+
+/**
+ * Synchronous inner patch loop. Extracted from the original sync
+ * ``applyPatches`` body — no behavior changes, just renamed. The View
+ * Transitions wrap above invokes this from inside the
+ * ``startViewTransition`` callback; the direct path invokes it
+ * unwrapped. Either way, this is the same DOM-mutating loop that has
+ * shipped for many releases.
+ */
+function _applyPatchesInner(patches, rootEl = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -1565,7 +1651,7 @@ function applyPatches(patches, rootEl = null) {
         // child without a dj-id needs removal: the index-based fallback
         // resolves to the just-inserted content instead of the old child,
         // and the wrong node gets deleted.  See regression fixtures for
-        // NYC Claims tab switches (#641).
+        // a downstream consumer tab switches (#641).
         //
         // Fix: apply all non-Insert patches individually FIRST, then batch
         // the consecutive inserts, then apply any remaining inserts that
@@ -1674,4 +1760,14 @@ function applyPatches(patches, rootEl = null) {
 
     restoreFocusState(focusState, rootEl);
     return true;
+}
+
+// Expose applyPatches on the public namespace for test-side eval and
+// third-party hook integration. ``async function`` declarations don't
+// always hoist to the host scope under JSDOM's eval; without this
+// explicit binding, ``dom.window.eval(clientCode + '...applyPatches...')``
+// throws ReferenceError. Public-surface change documented in CHANGELOG.
+if (typeof globalThis !== 'undefined') {
+    globalThis.djust = globalThis.djust || {};
+    globalThis.djust.applyPatches = applyPatches;
 }

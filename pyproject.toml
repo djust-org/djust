@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "0.7.1rc1"
+version = "0.9.0rc5"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
@@ -113,6 +113,14 @@ dev = [
     "requests-mock>=1.11,<2",  # HTTP mocking for deploy CLI tests
     "mcp[cli]>=1.2.0,<2",  # djust.mcp server tests (test_mcp.py)
     "fakeredis>=2.20,<3",  # In-memory Redis for test_security_upload_resumable.py (closes #961)
+    # #1149 — both packages are runtime deps of the [components] extra
+    # (see ``components.components.markdown``). Including them in [dev]
+    # ensures a clean ``uv sync`` (or ``pip install -e .[dev]``) picks
+    # them up so tests that import ``djust.components.components`` (which
+    # eagerly imports the Markdown component) collect cleanly. Bisect
+    # agents and CI hit collection failures otherwise.
+    "markdown>=3.0,<4",
+    "nh3>=0.2,<1",
 ]
 
 [project.scripts]

@@ -71,6 +71,10 @@ class LiveViewSSE {
                 this.stats.received++;
                 this.stats.receivedBytes += event.data.length;
                 const data = JSON.parse(event.data);
+                // ``handleMessage`` is the queue-wrapper (#1098); its
+                // returned promise is the chain-tail with an internal
+                // ``.catch`` that already logs and swallows. The returned
+                // promise never rejects, so we just ignore it.
                 this.handleMessage(data);
             } catch (err) {
                 console.error('[SSE] Failed to parse message:', err);
@@ -109,12 +113,30 @@ class LiveViewSSE {
     }
 
     /**
+     * Public entry point — serializes rapid-fire messages.
+     *
+     * Each invocation chains onto the prior in-flight promise so adjacent
+     * inbound SSE frames cannot interleave their internal awaits. Same
+     * shape as `LiveViewWebSocket.handleMessage`. Closes #1098.
+     */
+    handleMessage(data) {
+        const prev = this._inflight || Promise.resolve();
+        const next = prev
+            .then(() => this._handleMessageImpl(data))
+            .catch((err) => {
+                console.error('[SSE] handleMessage threw:', err);
+            });
+        this._inflight = next;
+        return next;
+    }
+
+    /**
      * Handle a server-pushed message.
      * The message format is identical to the WebSocket protocol so that
      * 02-response-handler.js and all other message-handling modules work
      * without modification.
      */
-    handleMessage(data) {
+    async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
 
         switch (data.type) {
@@ -171,13 +193,13 @@ class LiveViewSSE {
                 break;
 
             case 'patch':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;
 
             case 'html_update':
-                handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
+                await handleServerResponse(data, this.lastEventName, this.lastTriggerElement);
                 this.lastEventName = null;
                 this.lastTriggerElement = null;
                 break;

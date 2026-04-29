@@ -35,6 +35,12 @@ const lazyHydrationManager = {
     // Queue of elements waiting for WebSocket connection
     pendingMounts: [],
 
+    // In-flight mount_batch — populated when a mount_batch frame is sent, cleared
+    // when the server responds (success or known error). #1031: enables fallback
+    // to per-view mount when an old server returns "Unknown message type:
+    // mount_batch" instead of handling the batch frame.
+    inFlightBatch: null,
+
     // Initialize lazy hydration
     init() {
         // Clear pending mounts on reinit (e.g., TurboNav navigation)
@@ -203,6 +209,10 @@ const lazyHydrationManager = {
             try {
                 clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
             } catch (_e) { /* tz detect failure — omit */ }
+            // #1031: stash the original mounts so the websocket error
+            // handler can fall back to per-view mounts if the server
+            // returns "Unknown message type: mount_batch".
+            this.inFlightBatch = mounts;
             liveViewWS.sendMessage({
                 type: 'mount_batch',
                 views: viewEntries,
@@ -212,6 +222,27 @@ const lazyHydrationManager = {
         }
 
         mounts.forEach(({ element, viewPath }) => {
+            this.mountElement(element, viewPath);
+        });
+    },
+
+    // #1031: invoked from the websocket error handler when the server
+    // doesn't recognize the mount_batch frame. Falls back to per-view
+    // mount calls so older servers (pre-v0.6.0) keep working with newer
+    // clients. Idempotent — clears inFlightBatch before iterating so a
+    // late mount_batch response can't double-trigger.
+    handleMountBatchFallback() {
+        if (!this.inFlightBatch) return;
+        const mounts = this.inFlightBatch;
+        this.inFlightBatch = null;
+        if (globalThis.djustDebug) {
+            console.warn('[LiveView:lazy] mount_batch unsupported by server — falling back to %d per-view mounts', mounts.length);
+        }
+        mounts.forEach(({ element, viewPath }) => {
+            // Reset the data-live-hydrated attr that processPendingMounts
+            // set optimistically; mountElement will set it again on success.
+            element.removeAttribute('data-live-hydrated');
+            element.setAttribute('dj-lazy', '');
             this.mountElement(element, viewPath);
         });
     },

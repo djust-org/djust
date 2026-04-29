@@ -17,6 +17,8 @@ Usage:
     {% theme_preset_selector layout="dropdown" %}
 """
 
+import json
+
 from django import template
 from django.template.loader import render_to_string
 from django.urls import reverse, NoReverseMatch
@@ -129,6 +131,13 @@ def theme_head(context, include_js: bool = True, link_css: bool = False):
     # Resolve text direction
     direction = get_direction()
 
+    # #1158 — namespace prefix for theming cookies (cross-project isolation
+    # on shared domains like localhost). JSON-encoded for safe inlining in a
+    # <script> context (json.dumps gives a valid JS string literal).
+    ns = (config.get("cookie_namespace") or "").strip()
+    cookie_prefix = f"{ns}_" if ns else ""
+    cookie_prefix_js = json.dumps(cookie_prefix)
+
     # Render via shared template
     html = render_to_string(
         "djust_theming/theme_head.html",
@@ -140,6 +149,7 @@ def theme_head(context, include_js: bool = True, link_css: bool = False):
             "include_component_link": include_component_link,
             "include_js": include_js,
             "direction": direction,
+            "cookie_prefix_js": cookie_prefix_js,
         },
     )
     return mark_safe(html)
@@ -162,6 +172,58 @@ def theme_css(context):
     css = generate_css_for_state(state, css_prefix=get_css_prefix())
 
     return format_html("<style data-djust-theme>{}</style>", mark_safe(css))
+
+
+@register.simple_tag(takes_context=True)
+def theme_css_link(context):
+    """
+    Render a ``<link>`` to ``/_theming/theme.css`` with cache-busting URL params.
+
+    Chrome's ``Vary: Cookie`` handling is unreliable for per-cookie dynamic
+    content: after a pack switch, the browser often serves the prior pack's
+    CSS from its own HTTP cache and the page renders with the stale palette
+    until manual cache clear. The fix is to make different pack/mode produce
+    a different URL — the browser then can't re-use the cached body. (#1012)
+
+    Usage::
+
+        <link rel="stylesheet" href="{% theme_css_link %}">
+
+    Or directly drop the tag where you'd put the URL — it returns the URL
+    string when used inside an ``href=""``. The tag reads the same
+    ``ThemeManager.get_state()`` the view itself reads, so the link URL and
+    the served body stay in lockstep.
+    """
+    from django.urls import NoReverseMatch, reverse
+
+    request = context.get("request")
+    manager = get_theme_manager(request)
+    state = manager.get_state()
+
+    try:
+        base_url = reverse("djust_theming:theme_css")
+    except NoReverseMatch:
+        # URL not mounted (e.g. test environment that doesn't include
+        # djust_theming.urls). Fall back to a stable path so templates
+        # that include the tag don't crash.
+        base_url = "/_theming/theme.css"
+
+    # ThemeState is a dataclass, not a dict — use attribute access.
+    pack = (getattr(state, "pack", None) or "").strip()
+    mode = (getattr(state, "resolved_mode", None) or getattr(state, "mode", None) or "").strip()
+    preset = (getattr(state, "preset", None) or "").strip()
+
+    parts = []
+    if pack:
+        parts.append(f"p={pack}")
+    if mode:
+        parts.append(f"m={mode}")
+    if preset:
+        parts.append(f"r={preset}")
+
+    qs = "&".join(parts)
+    full = f"{base_url}?{qs}" if qs else base_url
+    return mark_safe(full)
 
 
 @register.simple_tag(takes_context=True)

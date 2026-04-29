@@ -7,7 +7,10 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **PR Title** follows format: `[type]: brief description` (e.g., `feat:`, `fix:`, `docs:`, `refactor:`)
 - [ ] **PR Description** includes purpose, changes, and testing approach
 - [ ] **Breaking Changes** are clearly identified and documented
-- [ ] **Linked Issues** are referenced (if applicable). Each issue that should be closed by the PR must appear on its own line using GitHub closing keywords (e.g., `Closes #123`). Multiple issues must be listed one per line — do not combine them on a single line (e.g., `Closes #123, closes #456` will only close the last one)
+- [ ] **Linked Issues** are referenced (if applicable). Each issue that should be closed by the PR must appear on its own line using GitHub closing keywords (e.g., `Closes #123`). Multiple issues must be listed one per line. Specifically AVOID:
+  - **Inline comma-list**: `Closes #123, closes #456` — only the *last* issue closes; GitHub stops parsing after the first match on the line.
+  - **Parenthesized form**: `(closes #1173, closes #1174)` — neither issue closes; GitHub's auto-close parser does not recognize closing keywords inside parens. Validated against PR #1176 (v0.9.2) which used this form in its title and silently failed to close the two issues it was meant to close.
+  - **Always prefer the PR body** over the title for closing keywords. The body has unlimited length and is preserved verbatim, eliminating the parenthesized-form trap above and any other title-shape constraints.
 - [ ] **Target Branch** is correct (typically `main` for releases)
 - [ ] **All new files are tracked** — `git status` shows no untracked files that should be part of the PR. Tests must not depend on files absent from the diff
 
@@ -30,6 +33,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Test-implementation alignment** - Tests actually import and exercise the code in the PR. No references to phantom modules, renamed tags, or APIs that don't exist in the diff
 - [ ] **Import names match shipped code** - Template tag library names, module paths, and class names used in tests match the actual files in the PR diff
 - [ ] **Performance tests** for features affecting rendering/VDOM (if applicable)
+- [ ] **Misleading existing tests are part of the bug.** When fixing a check or invariant, audit the existing tests for fixtures that exemplify the broken behavior the issue describes. If you find one, *update* it — don't just add a new test. A test that passes for the wrong reason is worse than no test, because future readers assume the contract is locked when it isn't. *Source: PR #1008 (issue #1003) — `test_c011_passes_when_output_exists` had been writing an 18-byte placeholder and asserting no C011 fired, which was exactly the bug. See `docs/development/check-authoring.md` for the canonical example.*
 
 ## 💻 Code Quality
 
@@ -45,6 +49,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Dual-path wiring** - Features touching mount, lifecycle, events, or state must be wired into BOTH `LiveViewConsumer` (WebSocket in `websocket.py`) AND `RequestMixin.get/post` (HTTP in `mixins/request.py`). Missing one creates silent failures — e.g., auth hooks that only enforce on WebSocket *(PRs #568, #569)*
 - [ ] **Mixin wiring checklist** - New mixins must verify: (a) added to LiveView MRO, (b) exported from `__init__.py`, (c) consumer calls flush/process methods, (d) client JS routes the new command type, (e) HTTP request path calls mixin methods *(PRs #568, #569)*
 - [ ] **Test file location** - Test files must be in a directory listed in pytest `testpaths` (`pyproject.toml`). Tests in unlisted directories are never executed *(PR #570)*
+- [ ] **Framework-internal attrs filter sync** — If you added a new framework-set attribute on `LiveView` / `LiveComponent` (anything assigned by mount/dispatch/lifecycle code rather than user code), did you also add it to `_FRAMEWORK_INTERNAL_ATTRS` in `python/djust/live_view.py`? The frozenset is the single source of truth for `get_state()` filtering — missing entries silently leak into reactive-state debug payloads + the client-side state mirror. *Source: ADR-012 / issue #962 / PR #1002.*
 
 ### Python Code Standards
 
@@ -178,6 +183,38 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Sensitive data handling** - No passwords/keys in logs or responses
 - [ ] **Privacy considerations** - PII handling follows regulations
 - [ ] **Secure defaults** - New features are secure by default
+
+### CSP-Strict Defaults for New Client-Side Framework Code
+
+Any new framework feature that emits HTML must default to a CSP-strict
+shape so deployments running `script-src 'self'` (no `'unsafe-inline'`,
+no `'unsafe-eval'`) work without configuration. Canonicalized in v0.9.1
+retro / Action Tracker #183 / GitHub #1175.
+
+- [ ] **No inline `<script>` blocks** - new client-side behavior lives in
+  external static JS modules served from `python/djust/...static/`
+- [ ] **No inline event handlers** - no `onclick=`, `onchange=`,
+  `oninput=`, etc. in emitted HTML
+- [ ] **Auto-bind via marker class or attribute** - the static JS module
+  attaches a delegated listener on `document` (or root) and dispatches
+  based on a marker (CSS class OR HTML attribute) set on the emitted
+  element. Two real patterns: marker CSS class
+  (`tr.data-table-row-clickable` in PR #1170) and marker attribute
+  (`[dj-track-static]` in `39-dj-track-static.js`, `[dj-submit]` on
+  forms in `09-event-binding.js`). Compose with `MutationObserver` for
+  morphdom-managed regions.
+- [ ] **CSP nonce only when genuinely required** - inline `<script>` is
+  only acceptable when the activator must run synchronously inline (rare;
+  the lazy-fill case from #1147 is the canonical exception). When that's
+  unavoidable, propagate `request.csp_nonce` per the #1147 pattern.
+- [ ] **External-module shape canonical references**:
+  - `python/djust/components/static/djust_components/data-table-row-click.js`
+    + `tr.data-table-row-clickable` marker class (PR #1170, the cleanest
+    example).
+  - `python/djust/static/djust/src/50-lazy-fill.js` + `<dj-lazy-slot>`
+    custom element (PR #1138).
+  - `python/djust/static/djust/src/39-dj-track-static.js` + Phoenix-style
+    `phx-track-static` parity attribute (existing pattern).
 
 ### Security Hot Spot Changes
 

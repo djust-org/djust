@@ -372,6 +372,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # old view is torn down. Re-registered on the new parent after
         # its mount completes.
         self._sticky_preserved: Dict[str, Any] = {}
+        # Sticky auto-detect (ADR-014): IDs that ``{% live_render sticky=True %}``
+        # already re-registered onto the new parent during template render.
+        # The post-render slot-scan reads this set and skips the second
+        # ``_register_child`` call (which would ``ValueError``) while still
+        # including the ID in the ``sticky_hold`` survivor list. Reset at
+        # every ``handle_mount`` and ``handle_live_redirect_mount`` entry.
+        self._sticky_auto_reattached: set[str] = set()
         # Render lock: serializes tick and event render operations so they
         # cannot concurrently access view_instance state or increment the
         # VDOM version. This prevents the version mismatch race in #560.
@@ -508,6 +515,64 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 "html": layout_html,
             }
         )
+
+    async def _flush_deferred(self) -> None:
+        """Drain and execute callbacks queued via :meth:`LiveView.defer`.
+
+        Wire-in pattern: this method is called from two locations —
+        (a) inside :meth:`_send_update` itself (alongside the other
+        ``_flush_*`` methods), and (b) at every per-handler post-render
+        site that already calls ``_flush_pending_layout`` (10 sites).
+        The (b) sites are technically redundant when (a) preceded — the
+        drain is idempotent on an empty queue — but they preserve
+        symmetry with the existing ``_flush_*`` family which has the same
+        redundancy. Removing only ``_flush_deferred``'s (b) wiring would
+        create asymmetry that future contributors would re-introduce.
+        See post-merge follow-up Action #163 for a milestone-level
+        cleanup that drops all redundant ``_flush_*`` calls together.
+
+        Runs **after** every other post-render flush (push events, flash,
+        page metadata, layout) so deferred callbacks observe the
+        post-patch state. Phoenix-style ``send(self(), :foo)`` semantics —
+        useful for telemetry, post-render cleanup, or follow-up side
+        effects that should fire after the user sees the change.
+
+        Each callback is invoked in a try/except. Sync callbacks run
+        directly; async callbacks (``async def`` or coroutine-returning)
+        are awaited inline. A failing deferred callback logs at WARN with
+        full traceback and continues to the next — a deferred callback's
+        failure must not break the WebSocket connection or the user's
+        interactive flow.
+
+        Does NOT trigger a re-render after callbacks complete; if a
+        callback needs to re-render, the caller should use
+        :meth:`AsyncWorkMixin.start_async` instead.
+        """
+        if not self.view_instance:
+            return
+        if not hasattr(self.view_instance, "_drain_deferred"):
+            return
+        callbacks = self.view_instance._drain_deferred()
+        # Defensive: same shape as ``_flush_flash`` — guard against test
+        # mocks (a ``Mock`` ``view_instance`` returns a ``Mock``, not a
+        # list) and any legacy view that overrode ``_drain_deferred`` to
+        # return non-list.
+        if not isinstance(callbacks, list) or not callbacks:
+            return
+        for callback, args, kwargs in callbacks:
+            try:
+                result = callback(*args, **kwargs)
+                # Async callbacks: await inline. Mirrors the inspect-based
+                # detection used elsewhere (e.g. async event handlers).
+                if inspect.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.warning(
+                    "[djust] Deferred callback %s on %s raised; continuing to next",
+                    getattr(callback, "__qualname__", repr(callback)),
+                    self.view_instance.__class__.__name__,
+                    exc_info=True,
+                )
 
     async def _send_noop(self, async_pending: bool = False, ref: Optional[int] = None) -> None:
         """
@@ -857,6 +922,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_flash()
             await self._flush_page_metadata()
             await self._flush_pending_layout()
+            await self._flush_deferred()
 
         except Exception as e:
             error = e
@@ -1017,6 +1083,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._flush_flash()
                 await self._flush_page_metadata()
                 await self._flush_pending_layout()
+                await self._flush_deferred()
                 await self._flush_navigation()
                 await self._flush_accessibility()
                 await self._flush_i18n()
@@ -1044,6 +1111,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_flash()
             await self._flush_page_metadata()
             await self._flush_pending_layout()
+            await self._flush_deferred()
             await self._flush_navigation()
             await self._flush_accessibility()
             await self._flush_i18n()
@@ -1144,6 +1212,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._flush_flash()
             await self._flush_page_metadata()
             await self._flush_pending_layout()
+            await self._flush_deferred()
             await self._send_noop(async_pending=has_async, ref=event_ref)
             if has_async:
                 await self._dispatch_async_work()
@@ -1522,6 +1591,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self._debug_panel_active = False
             elif msg_type == "time_travel_jump":
                 await self.handle_time_travel_jump(data)
+            elif msg_type == "time_travel_component_jump":
+                await self.handle_time_travel_component_jump(data)
+            elif msg_type == "forward_replay":
+                await self.handle_forward_replay(data)
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -1576,6 +1649,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.conf import settings
 
         logger = logging.getLogger(__name__)
+
+        # Reset auto-reattach tracker (ADR-014): each mount starts with
+        # an empty set; the tag pushes ids onto it as it claims survivors.
+        self._sticky_auto_reattached = set()
 
         view_path = data.get("view")
         params = data.get("params", {})
@@ -2218,7 +2295,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 matched_ids = _find_sticky_slot_ids(html or "")
                 survivors_final: Dict[str, Any] = {}
                 for sticky_id, child in sticky_preserved.items():
-                    if sticky_id in matched_ids:
+                    if sticky_id in self._sticky_auto_reattached:
+                        # ADR-014: tag already re-registered the survivor onto
+                        # the new parent at template-render time. Don't call
+                        # ``_register_child`` again (it would ``ValueError``);
+                        # do still include in survivors_final so the
+                        # ``sticky_hold`` frame's ``views`` list stays
+                        # authoritative for the client's reconcileStickyHold.
+                        survivors_final[sticky_id] = child
+                    elif sticky_id in matched_ids:
                         # Re-register onto the new parent. _register_child
                         # updates child._parent_view and child._view_id.
                         if hasattr(self.view_instance, "_register_child"):
@@ -2956,6 +3041,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             await self._flush_flash()
                             await self._flush_page_metadata()
                             await self._flush_pending_layout()
+                            await self._flush_deferred()
                             await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
                                 await self._dispatch_async_work()
@@ -3082,6 +3168,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
                     await self._flush_navigation()
                     await self._flush_i18n()
                 else:
@@ -3859,6 +3946,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
           the final survivor ids, so the client reconciles its
           stickyStash against an authoritative list.
         """
+        # Reset auto-reattach tracker (ADR-014): a redirect mount starts
+        # a fresh template render; any IDs the tag claims should be tracked
+        # against this navigation only.
+        self._sticky_auto_reattached = set()
         # Reuse handle_mount — it already handles everything
         # But first, stage the old view's sticky children (Phase B).
         old_view = self.view_instance
@@ -4144,15 +4235,67 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "_size": len(json.dumps(state_after, default=str)),
                 }
                 entry["_truncated"] = True
+            # Surface __components__ at the top level too (#1151, v0.9.4)
+            # so the client doesn't have to dig into entry.state_after to
+            # find per-component state. Mirrors the existing additive-
+            # field pattern from mount-batch frames.
+            components_mirror = None
+            if not entry.get("_truncated"):
+                state_after = entry.get("state_after") or {}
+                components_mirror = state_after.get("__components__")
             await self.send_json(
                 {
                     "type": "time_travel_event",
                     "entry": entry,
                     "history_len": len(buffer),
+                    "branch_id": getattr(view, "_time_travel_branch_id", "main"),
+                    "components": components_mirror,
                 }
             )
         except Exception:  # noqa: BLE001 — dev-only, degrade silently
             logger.exception("time_travel: failed to push event frame")
+
+    def _build_time_travel_state(
+        self,
+        view: Any,
+        buffer: Any,
+        cursor: int,
+        which: str,
+    ) -> Dict[str, Any]:
+        """Build the ``time_travel_state`` ack frame (#1151, v0.9.4).
+
+        Augments the v0.6.1 ack shape (cursor / which / history_len) with
+        ``branch_id``, ``forward_replay_enabled``, and ``max_events`` so
+        the debug panel UI can render the per-component scrubber, the
+        forward-replay button, and the max-events indicator without a
+        second request.
+
+        ``forward_replay_enabled`` is true iff replaying from the current
+        cursor would produce a meaningful branch — i.e., the cursor is
+        not at the canonical tip of the buffer. Tip semantics depend on
+        ``which``: with ``which="after"`` the tip is the last index;
+        with ``which="before"`` the tip is the index PAST the last (the
+        baseline before any future event would land), so a cursor at
+        ``len-1`` with ``which="before"`` is still pre-tip.
+        """
+        from djust.config import config as _djust_config
+
+        history_len = len(buffer)
+        if which == "after":
+            forward_replay_enabled = cursor < history_len - 1
+        else:  # which == "before"
+            forward_replay_enabled = cursor < history_len
+        return {
+            "type": "time_travel_state",
+            "cursor": cursor,
+            "which": which,
+            "history_len": history_len,
+            "branch_id": getattr(view, "_time_travel_branch_id", "main"),
+            "forward_replay_enabled": forward_replay_enabled,
+            "max_events": getattr(
+                buffer, "max_events", _djust_config.get("time_travel_max_events", 100)
+            ),
+        }
 
     async def handle_time_travel_jump(self, data: Dict[str, Any]):
         """Jump the view to a past :class:`EventSnapshot`.
@@ -4220,12 +4363,174 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         await self.send_json(
-            {
-                "type": "time_travel_state",
-                "cursor": index,
-                "which": which,
-                "history_len": len(buffer),
-            }
+            self._build_time_travel_state(self.view_instance, buffer, index, which)
+        )
+
+    async def handle_time_travel_component_jump(self, data: Dict[str, Any]):
+        """Scrub a SINGLE component's state (#1151, v0.9.4).
+
+        Dev-only. Mirrors :meth:`handle_time_travel_jump` but restores
+        only ``view._components[component_id]`` from the snapshot at
+        ``index``, leaving the parent view and other components alone.
+        Used by the debug panel's per-component scrubber.
+
+        Frame: ``{"type": "time_travel_component_jump", "index": N,
+        "component_id": "<id>", "which": "before"|"after"}``.
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            await self.send_error("time_travel requires DEBUG=True")
+            return
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        if buffer is None:
+            await self.send_error("time_travel not enabled on this view")
+            return
+
+        index = data.get("index")
+        component_id = data.get("component_id")
+        which = data.get("which", "before")
+        if not isinstance(index, int):
+            await self.send_error("time_travel_component_jump: index must be int")
+            return
+        if not isinstance(component_id, str) or not component_id:
+            await self.send_error(
+                "time_travel_component_jump: component_id must be a non-empty string"
+            )
+            return
+        if which not in ("before", "after"):
+            await self.send_error("time_travel_component_jump: which must be 'before' or 'after'")
+            return
+
+        snapshot = buffer.jump(index)
+        if snapshot is None:
+            await self.send_error("time_travel_component_jump: no snapshot at index %d" % index)
+            return
+
+        from djust.time_travel import restore_component_snapshot
+
+        ok = await sync_to_async(restore_component_snapshot)(
+            self.view_instance, snapshot, component_id, which
+        )
+        if not ok:
+            await self.send_error("time_travel_component_jump: restore failed")
+            return
+
+        try:
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            patch_list = None
+            if patches is not None:
+                patch_list = fast_json_loads(patches) if patches else []
+            await self._send_update(
+                patches=patch_list,
+                html=html,
+                version=version,
+                event_name="__time_travel_component_jump__",
+            )
+        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
+            logger.exception("time_travel_component_jump: re-render failed")
+            await self.send_error("time_travel_component_jump: re-render failed: %s" % exc)
+            return
+
+        await self.send_json(
+            self._build_time_travel_state(self.view_instance, buffer, index, which)
+        )
+
+    async def handle_forward_replay(self, data: Dict[str, Any]):
+        """Forward-replay a recorded event with optional override params (#1151, v0.9.4).
+
+        Dev-only. Restores the view to ``state_before`` of the snapshot at
+        ``from_index`` and re-invokes the recorded event handler with
+        either the original params or caller-supplied ``override_params``.
+        When the cursor is not at the buffer tip, allocates a new
+        ``branch_id`` for the resulting branched timeline.
+
+        Frame: ``{"type": "forward_replay", "from_index": N,
+        "override_params": {...}}`` (override_params is optional).
+        """
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            await self.send_error("time_travel requires DEBUG=True")
+            return
+        if not self.view_instance:
+            await self.send_error("View not mounted")
+            return
+        buffer = getattr(self.view_instance, "_time_travel_buffer", None)
+        if buffer is None:
+            await self.send_error("time_travel not enabled on this view")
+            return
+
+        from_index = data.get("from_index")
+        override_params = data.get("override_params")
+        if not isinstance(from_index, int):
+            await self.send_error("forward_replay: from_index must be int")
+            return
+        if override_params is not None and not isinstance(override_params, dict):
+            await self.send_error("forward_replay: override_params must be dict or null")
+            return
+
+        snapshot = buffer.jump(from_index)
+        if snapshot is None:
+            await self.send_error("forward_replay: no snapshot at index %d" % from_index)
+            return
+
+        # Decide whether this replay forks the timeline. Two conditions
+        # warrant a new branch_id (either is sufficient):
+        #   1. ``from_index`` is not the buffer tip — replaying a past
+        #      event diverges from the recorded successor.
+        #   2. ``override_params`` is non-None — replay runs with
+        #      different inputs than originally recorded, so it diverges
+        #      even when from the tip. (Caught by Stage 11 review:
+        #      replaying the LAST entry with override_params silently
+        #      merged into "main" before this fix.)
+        # Replay from the tip with no overrides just re-records to
+        # "main". Branch-id is allocated AFTER ``replay_event`` succeeds
+        # — otherwise a missing / un-decorated handler would leak a
+        # counter bump and a stale branch_id with no recorded events.
+        from djust.time_travel import next_branch_id, replay_event
+
+        history_len_before = len(buffer)
+        forks_timeline = from_index < history_len_before - 1 or override_params is not None
+
+        replayed = await sync_to_async(replay_event)(
+            self.view_instance, snapshot, override_params, True
+        )
+        if replayed is None:
+            await self.send_error("forward_replay: replay handler missing or refused")
+            return
+
+        # Replay succeeded — commit the branch_id mutation now.
+        if forks_timeline:
+            new_branch = next_branch_id(self.view_instance)
+            try:
+                self.view_instance._time_travel_branch_id = new_branch
+            except Exception:  # noqa: BLE001 — slot/descriptor readonly
+                logger.exception("forward_replay: failed to set branch_id")
+
+        try:
+            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
+            patch_list = None
+            if patches is not None:
+                patch_list = fast_json_loads(patches) if patches else []
+            await self._send_update(
+                patches=patch_list,
+                html=html,
+                version=version,
+                event_name="__forward_replay__",
+            )
+        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
+            logger.exception("forward_replay: re-render failed")
+            await self.send_error("forward_replay: re-render failed: %s" % exc)
+            return
+
+        # Cursor lands at the new tip after the replay's recorded snapshot.
+        new_cursor = len(buffer) - 1
+        await self.send_json(
+            self._build_time_travel_state(self.view_instance, buffer, new_cursor, "after")
         )
 
     async def presence_event(self, event):
@@ -4317,6 +4622,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
                     await self._send_noop()
                     return
 
@@ -4330,6 +4636,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if patches is not None:
                     if isinstance(patches, str):
                         patches = fast_json_loads(patches)
+                    # Store rendered HTML for on-demand recovery, mirroring
+                    # handle_event. Without this, request_html after a failed
+                    # broadcast-triggered patch finds _recovery_html=None and
+                    # forces a page reload. See #1202.
+                    self._recovery_html = html
+                    self._recovery_version = version
                     await self._send_update(
                         patches=patches,
                         version=version,
@@ -4342,6 +4654,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
             finally:
                 self._render_lock.release()
 
@@ -4434,6 +4747,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
                     await self._send_noop()
                     return
 
@@ -4456,6 +4770,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self._flush_flash()
                     await self._flush_page_metadata()
                     await self._flush_pending_layout()
+                    await self._flush_deferred()
 
                 # v0.7.0 — If handle_info flipped an activity to visible,
                 # drain its queue in the same round-trip. The flush is

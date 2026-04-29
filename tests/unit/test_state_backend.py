@@ -298,7 +298,16 @@ class TestRedisBackend:
         assert html == "<div>Redis</div>"
 
     def test_redis_serialization_performance(self, redis_backend):
-        """Test that Redis uses native serialization."""
+        """Smoke test that JSON/pickle round-trip doesn't catastrophically
+        regress. The 100ms bound is INTENTIONALLY GENEROUS — it catches
+        only catastrophic regressions (e.g. ~10× slowdown from accidental
+        double-serialization), not gradual perf drift. For a real perf
+        SLA, use a benchmark suite with median-based assertions over N
+        runs (pytest-benchmark or similar). Wall-clock 10ms was the
+        original bound but flaked under heavy suite load (pytest
+        scheduling jitter + GC pauses + occasional Redis hiccups);
+        see #1134 retro and #1160 for the bound-vs-claim reconciliation.
+        """
         view = RustLiveView("<div>{{ data }}</div>")
         view.update_state({"data": "x" * 1000})
 
@@ -312,9 +321,10 @@ class TestRedisBackend:
         result = redis_backend.get("perf_key")
         get_time = time.time() - start
 
-        # Should be fast (sub-10ms for small data)
-        assert set_time < 0.01  # 10ms
-        assert get_time < 0.01  # 10ms
+        # Should be fast — 100ms is a generous regression bound that still
+        # catches "we accidentally serialized via JSON/pickle round-trip".
+        assert set_time < 0.1, f"set took {set_time * 1000:.1f}ms"
+        assert get_time < 0.1, f"get took {get_time * 1000:.1f}ms"
         assert result is not None
 
     def test_redis_ttl_expiration(self, redis_backend):

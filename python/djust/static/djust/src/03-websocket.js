@@ -251,7 +251,13 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    setTimeout(() => this.handleMessage(data), actual);
+                    // ``handleMessage`` is the queue-wrapper (#1098); its
+                    // returned promise is the chain-tail with an internal
+                    // ``.catch`` that already logs and swallows. The
+                    // returned promise never rejects, so we just ignore it.
+                    setTimeout(() => {
+                        this.handleMessage(data);
+                    }, actual);
                 } else {
                     this.handleMessage(data);
                 }
@@ -261,7 +267,32 @@ class LiveViewWebSocket {
         };
     }
 
+    /**
+     * Public entry point — serializes rapid-fire messages.
+     *
+     * Each invocation chains onto the prior in-flight promise so that
+     * adjacent inbound frames cannot interleave their internal awaits.
+     * Without this, two frames arriving in quick succession could each
+     * start `_handleMessageImpl`, then both `await handleServerResponse`,
+     * and race on shared state like ``_pendingEventRefs`` /
+     * ``_tickBuffer``. Closes #1098.
+     *
+     * The returned promise resolves AFTER this frame's drain completes;
+     * callers may ignore it. Errors propagate through `.catch()` to
+     * preserve unhandled-rejection visibility.
+     */
     handleMessage(data) {
+        const prev = this._inflight || Promise.resolve();
+        const next = prev
+            .then(() => this._handleMessageImpl(data))
+            .catch((err) => {
+                console.error('[LiveView] handleMessage threw:', err);
+            });
+        this._inflight = next;
+        return next;
+    }
+
+    async _handleMessageImpl(data) {
         if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
 
         switch (data.type) {
@@ -383,7 +414,12 @@ class LiveViewWebSocket {
                                 : '/';
                             window.djust._sw.cacheVdom(cacheUrl, data.html, typeof data.version === 'number' ? data.version : 0);
                         }
-                    } catch (_e) { /* best-effort cache put */ }
+                    } catch (_e) {
+                        // #1030 — best-effort cache write; only log under
+                        // djustDebug so production console stays quiet but
+                        // developers can diagnose cache misses.
+                        if (globalThis.djustDebug) console.log('[LiveView] cache-write failed:', _e);
+                    }
                     // No pre-rendered content - use server HTML directly
                     if (hasDataDjAttrs) {
                         if (globalThis.djustDebug) console.log('[LiveView] Hydrating DOM with dj-id attributes for reliable patching');
@@ -431,6 +467,11 @@ class LiveViewWebSocket {
                 // [dj-view] element, track per-target VDOM versions, and run
                 // reinitAfterDOMUpdate() ONCE after the batch is applied.
                 this.viewMounted = true;
+                // #1031: clear the lazy-hydration in-flight batch so a late
+                // arriving error frame doesn't trigger a phantom fallback.
+                if (window.djust && window.djust.lazyHydration) {
+                    window.djust.lazyHydration.inFlightBatch = null;
+                }
                 const views = Array.isArray(data.views) ? data.views : [];
                 const failed = Array.isArray(data.failed) ? data.failed : [];
                 if (!window.djust._clientVdomVersions) {
@@ -475,7 +516,29 @@ class LiveViewWebSocket {
                     } else if (typeof window !== 'undefined' && window.location) {
                         // Fallback — hard navigation if the dispatcher
                         // isn't wired (non-LiveView pages).
-                        window.location.href = nav.to;
+                        // Same-origin guard: server-controlled `nav.to`
+                        // is generally trusted but defense-in-depth
+                        // prevents an attacker who breaches the wire
+                        // protocol from pivoting to open-redirect /
+                        // javascript: scheme XSS. Only allow same-origin
+                        // absolute paths; reject protocol-relative
+                        // (`//evil.com`), absolute URLs to other origins,
+                        // and `javascript:` / `data:` schemes.
+                        // Closes CodeQL js/client-side-unvalidated-url-redirection.
+                        const target = nav.to;
+                        const isSameOriginPath = (
+                            target.length > 0 &&
+                            target.charAt(0) === '/' &&
+                            target.charAt(1) !== '/'  // reject protocol-relative
+                        );
+                        if (isSameOriginPath) {
+                            window.location.href = target;
+                        } else if (globalThis.djustDebug) {
+                            console.warn(
+                                '[djust] live_redirect rejected non-same-origin target:',
+                                target,
+                            );
+                        }
                     }
                 }
                 if (views.length > 0) {
@@ -530,7 +593,7 @@ class LiveViewWebSocket {
                     evTrigger = null;
                 }
 
-                handleServerResponse(data, evName, evTrigger);
+                await handleServerResponse(data, evName, evTrigger);
 
                 if (!isServerInitiated) {
                     this.lastEventName = null;
@@ -545,7 +608,7 @@ class LiveViewWebSocket {
                     }
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -579,6 +642,19 @@ class LiveViewWebSocket {
                 if (data.traceback) {
                     // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
+                }
+
+                // #1031: if the error is about mount_batch (older server
+                // doesn't recognize the frame type), fall back to per-view
+                // mounts so the lazy-hydrated views still come up.
+                if (
+                    typeof data.error === 'string'
+                    && /mount_batch|unknown\s+message\s+type/i.test(data.error)
+                    && window.djust && window.djust.lazyHydration
+                    && typeof window.djust.lazyHydration.handleMountBatchFallback === 'function'
+                ) {
+                    window.djust.lazyHydration.handleMountBatchFallback();
+                    break;
                 }
 
                 // Non-recoverable errors (e.g. server restart lost state) — auto-reload
@@ -674,7 +750,7 @@ class LiveViewWebSocket {
                 if (_pendingEventRefs.size === 0 && _tickBuffer.length > 0) {
                     const buffered = _tickBuffer.splice(0);
                     for (const tickData of buffered) {
-                        handleServerResponse(tickData, null, null);
+                        await handleServerResponse(tickData, null, null);
                     }
                 }
                 break;
@@ -707,7 +783,7 @@ class LiveViewWebSocket {
                 // Sticky LiveViews Phase A: VDOM patch frame targeted at
                 // a specific child view via view_id. Routed to 45-child-view.js.
                 if (window.djust.childView && window.djust.childView.handleChildUpdate) {
-                    window.djust.childView.handleChildUpdate(data);
+                    await window.djust.childView.handleChildUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -735,7 +811,7 @@ class LiveViewWebSocket {
                 // sticky's dj-id namespace is independent of the
                 // parent's, so doc-wide lookups would be incorrect.
                 if (window.djust.stickyPreserve && window.djust.stickyPreserve.handleStickyUpdate) {
-                    window.djust.stickyPreserve.handleStickyUpdate(data);
+                    await window.djust.stickyPreserve.handleStickyUpdate(data);
                 }
                 if (this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);

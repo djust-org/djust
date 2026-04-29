@@ -329,3 +329,152 @@ async def test_live_redirect_to_non_live_session_full_reload_unmounts_sticky():
             survivors.pop(sticky_id)
     assert survivors == {}
     assert unmount_calls == ["audio-unmounted"]
+
+
+# ---------------------------------------------------------------------------
+# 4. ADR-014: tag auto-detect drives the full pipeline
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dashboard_to_dashboard_auto_reattach_emits_slot_via_tag():
+    """ADR-014: when the destination parent's template re-issues
+    ``{% live_render sticky=True %}`` for the same sticky_id the consumer
+    is holding, the tag itself emits a ``<dj-sticky-slot>`` placeholder
+    rather than a fresh subtree.
+
+    This test deliberately exercises the destination template render
+    (the existing ``_redirect`` helper bypasses it). Without ADR-014's
+    fix the freshly-mounted child would collide with the survivor on
+    ``_register_child`` and the survivor would be discarded via
+    ``_on_sticky_unmount``.
+    """
+    consumer = _FakeConsumer()
+    _mount_parent(
+        consumer,
+        "tests.integration.test_sticky_redirect_flow._DashboardView",
+    )
+    dashboard_a = consumer.view_instance
+    audio = dashboard_a._child_views["audio-player"]
+    audio.play()  # mutate state we expect to survive
+
+    # Stage stickies for a Dashboard → Dashboard return-trip.
+    rf = RequestFactory()
+    new_request = rf.get("/")
+    from django.contrib.auth.models import AnonymousUser
+
+    new_request.user = AnonymousUser()
+    survivors = dashboard_a._preserve_sticky_children(new_request)
+    assert survivors.get("audio-player") is audio
+
+    # Wire the consumer's sticky state as the real pipeline does — this
+    # is the bridge ADR-014 added: the tag reads from
+    # ``consumer._sticky_preserved`` and writes to
+    # ``consumer._sticky_auto_reattached``.
+    consumer._sticky_preserved = dict(survivors)
+    consumer._sticky_auto_reattached = set()
+
+    # Build the destination Dashboard. The ``_ws_consumer`` back-reference
+    # is what the tag uses to find the consumer.
+    dashboard_b = _DashboardView()
+    dashboard_b.request = new_request
+    dashboard_b._ws_consumer = consumer
+    dashboard_b.mount(new_request)
+
+    # Render the Dashboard template — this is the step that the new tag
+    # branch executes. The OLD behavior would mount a fresh
+    # AudioPlayerSticky and emit ``dj-sticky-view``; the NEW behavior
+    # detects the survivor and emits ``dj-sticky-slot`` instead.
+    from django.template import Context, Template
+
+    rendered = Template(dashboard_b.template).render(
+        Context({"view": dashboard_b, "request": new_request})
+    )
+
+    # Tag took the auto-detect branch.
+    assert 'dj-sticky-slot="audio-player"' in rendered
+    assert "dj-sticky-view=" not in rendered
+
+    # Survivor was re-registered onto the new parent without re-running
+    # mount() — its state is preserved.
+    assert dashboard_b._child_views.get("audio-player") is audio
+    assert audio.current_track == "next-track"
+
+    # Tag pushed onto the consumer's auto-reattach set so the post-render
+    # slot scan in ``handle_mount`` will skip the second
+    # ``_register_child`` and not ``ValueError``.
+    assert "audio-player" in consumer._sticky_auto_reattached
+
+
+@pytest.mark.asyncio
+async def test_dashboard_to_dashboard_via_full_handle_mount_pipeline():
+    """End-to-end check that ``handle_mount`` running with both
+    ``sticky_preserved`` AND a destination template carrying inline
+    ``{% live_render sticky=True %}`` ends in the right place: survivor
+    registered exactly once, ``sticky_hold`` frame includes the id, and
+    the ``mount`` frame body contains ``dj-sticky-slot`` (not
+    ``dj-sticky-view``) for the auto-reattached id.
+
+    This is the ADR-014 §"Test contract" T8/T9 case — verifying that
+    the auto-reattach path coordinates correctly with the consumer's
+    post-render slot-scan + frame-emission logic.
+    """
+    consumer = _FakeConsumer()
+    _mount_parent(
+        consumer,
+        "tests.integration.test_sticky_redirect_flow._DashboardView",
+    )
+    dashboard_a = consumer.view_instance
+    audio = dashboard_a._child_views["audio-player"]
+    audio.play()
+
+    rf = RequestFactory()
+    new_request = rf.get("/")
+    from django.contrib.auth.models import AnonymousUser
+
+    new_request.user = AnonymousUser()
+    survivors = dashboard_a._preserve_sticky_children(new_request)
+    consumer._sticky_preserved = dict(survivors)
+    consumer._sticky_auto_reattached = set()
+
+    # Build the new parent with the consumer back-reference, render its
+    # template (auto-reattach branch fires), then run the consumer's
+    # post-render slot scan via the real path.
+    dashboard_b = _DashboardView()
+    dashboard_b.request = new_request
+    dashboard_b._ws_consumer = consumer
+    dashboard_b.mount(new_request)
+    from django.template import Context, Template
+
+    rendered_html = Template(dashboard_b.template).render(
+        Context({"view": dashboard_b, "request": new_request})
+    )
+    consumer.view_instance = dashboard_b
+
+    # Inline the consumer's post-render slot-scan + sticky_hold emission
+    # logic from handle_mount (lines around websocket.py:2278). Tests
+    # the integration of: tag's auto-reattach + slot-scan skip-on-claim
+    # + sticky_hold survivor list.
+    from djust.websocket import _find_sticky_slot_ids
+
+    matched_ids = _find_sticky_slot_ids(rendered_html)
+    survivors_final: Dict[str, Any] = {}
+    for sticky_id, child in consumer._sticky_preserved.items():
+        if sticky_id in consumer._sticky_auto_reattached:
+            survivors_final[sticky_id] = child
+        elif sticky_id in matched_ids:
+            try:
+                consumer.view_instance._register_child(sticky_id, child)
+                survivors_final[sticky_id] = child
+            except ValueError:
+                pass
+
+    # ``audio-player`` survives via the auto-reattach branch.
+    assert "audio-player" in survivors_final
+    assert survivors_final["audio-player"] is audio
+    # ``mount`` frame body uses dj-sticky-slot, NOT dj-sticky-view.
+    assert 'dj-sticky-slot="audio-player"' in rendered_html
+    # Survivor was registered exactly once (no ValueError, no duplicate).
+    assert dashboard_b._child_views.get("audio-player") is audio
+    # State preserved.
+    assert audio.current_track == "next-track"

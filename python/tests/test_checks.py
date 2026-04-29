@@ -381,74 +381,159 @@ class TestC010TailwindCdnInProduction:
 class TestC011MissingCompiledCss:
     """C011 -- Tailwind configured but compiled CSS not found."""
 
-    def test_c011_detects_missing_output_css_dev(self, tmp_path, settings, monkeypatch):
-        """C011 fires as Info when Tailwind configured but output.css missing in dev."""
-        # Create tailwind.config.js
+    # Sentinel for "real built Tailwind output" — first-512-bytes
+    # banner that the v4 minifier emits, padded to >10 KB so it
+    # passes the `_output_css_looks_built` size threshold.
+    _REAL_TAILWIND_OUTPUT = (
+        "/*! tailwindcss v4.0.0 | MIT License | https://tailwindcss.com */\n"
+        + ".test{color:red}" * 1000  # ~16 KB of plausible CSS
+    )
+
+    def _setup_djust_tailwind_project(
+        self, tmp_path, settings, monkeypatch, debug, output_css_content=None
+    ):
+        """Helper: create tailwind.config.js + input.css + (optional) output.css."""
         config_file = tmp_path / "tailwind.config.js"
         config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
-
-        # Create static dir with input.css but no output.css
         static_dir = tmp_path / "static" / "css"
         static_dir.mkdir(parents=True)
         (static_dir / "input.css").write_text("@import 'tailwindcss';")
-
+        if output_css_content is not None:
+            (static_dir / "output.css").write_text(output_css_content)
         monkeypatch.chdir(tmp_path)
-        settings.DEBUG = True
+        settings.DEBUG = debug
         settings.STATICFILES_DIRS = [str(tmp_path / "static")]
         settings.ASGI_APPLICATION = "myproject.asgi.application"
         settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
         settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+    def test_c011_detects_missing_output_css_dev(self, tmp_path, settings, monkeypatch):
+        """C011 fires as Info when Tailwind configured but output.css missing in dev."""
+        self._setup_djust_tailwind_project(tmp_path, settings, monkeypatch, debug=True)
 
         from djust.checks import check_configuration
 
         errors = check_configuration(None)
         c011 = [e for e in errors if e.id == "djust.C011"]
         assert len(c011) == 1
-        assert "output.css not found" in c011[0].msg
+        assert "missing or stale" in c011[0].msg
 
     def test_c011_detects_missing_output_css_production(self, tmp_path, settings, monkeypatch):
         """C011 fires as Warning when Tailwind configured but output.css missing in production."""
-        # Create tailwind.config.js
-        config_file = tmp_path / "tailwind.config.js"
-        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
-
-        # Create static dir with input.css but no output.css
-        static_dir = tmp_path / "static" / "css"
-        static_dir.mkdir(parents=True)
-        (static_dir / "input.css").write_text("@import 'tailwindcss';")
-
-        monkeypatch.chdir(tmp_path)
-        settings.DEBUG = False
-        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
-        settings.ASGI_APPLICATION = "myproject.asgi.application"
-        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
-        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+        self._setup_djust_tailwind_project(tmp_path, settings, monkeypatch, debug=False)
 
         from djust.checks import check_configuration
 
         errors = check_configuration(None)
         c011 = [e for e in errors if e.id == "djust.C011"]
         assert len(c011) == 1
-        assert "output.css not found" in c011[0].msg
+        assert "missing or stale" in c011[0].msg
 
-    def test_c011_passes_when_output_exists(self, tmp_path, settings, monkeypatch):
-        """C011 should not fire when output.css exists."""
-        # Create tailwind.config.js
-        config_file = tmp_path / "tailwind.config.js"
-        config_file.write_text("module.exports = { content: ['./templates/**/*.html'] }")
+    def test_c011_passes_when_real_tailwind_output_exists(self, tmp_path, settings, monkeypatch):
+        """C011 should not fire when output.css contains real Tailwind output.
 
-        # Create static dir with both input.css and output.css
-        static_dir = tmp_path / "static" / "css"
-        static_dir.mkdir(parents=True)
-        (static_dir / "input.css").write_text("@import 'tailwindcss';")
-        (static_dir / "output.css").write_text("/* compiled css */")
+        After #1003: the test must use a realistic minified Tailwind file
+        (banner + >10 KB), not a placeholder comment — see the
+        ``test_c011_fires_on_placeholder_output_css`` test below for the
+        explicit placeholder regression."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=self._REAL_TAILWIND_OUTPUT,
+        )
 
-        monkeypatch.chdir(tmp_path)
-        settings.DEBUG = False
-        settings.STATICFILES_DIRS = [str(tmp_path / "static")]
-        settings.ASGI_APPLICATION = "myproject.asgi.application"
-        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
-        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 0
+
+    # ------------------------------------------------------------------
+    # #1003 — stale / placeholder output.css must trigger C011
+    # ------------------------------------------------------------------
+
+    def test_c011_fires_on_placeholder_output_css(self, tmp_path, settings, monkeypatch):
+        """#1003: a committed-but-stale placeholder output.css is the
+        canonical failure mode — file "exists" so a bare os.path.exists()
+        check passes, but the page renders without any Tailwind
+        utilities. Locks the new content-sniff behavior."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content="/* Run tailwindcss to generate this file */\n",
+        )
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1, (
+            "C011 must fire on a placeholder output.css — that's the #1003 fix. "
+            f"Got: {[e.msg for e in errors]}"
+        )
+        assert "missing or stale" in c011[0].msg
+
+    def test_c011_fires_on_empty_output_css(self, tmp_path, settings, monkeypatch):
+        """#1003: a 0-byte output.css is also "not built" — same as
+        a placeholder. Edge case in the size threshold."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content="",
+        )
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1
+
+    def test_c011_fires_on_under_threshold_output_css(self, tmp_path, settings, monkeypatch):
+        """#1003: a sub-10 KB output.css fails the size threshold even
+        if it has Tailwind markers. Real Tailwind v4 builds always
+        ship the preflight reset + at least the utility skeleton, so
+        anything below 10 KB is suspicious by definition."""
+        # 5 KB content with the banner — looks built by header but
+        # fails the size threshold.
+        suspicious = "/*! tailwindcss v4.0.0 */\n" + "/* hand-trimmed file */\n" * 200
+        assert len(suspicious) < 10_000
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=suspicious,
+        )
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c011 = [e for e in errors if e.id == "djust.C011"]
+        assert len(c011) == 1
+
+    def test_c011_does_not_fire_on_layer_marker_above_threshold(
+        self, tmp_path, settings, monkeypatch
+    ):
+        """A hand-rolled Tailwind-style stylesheet with `@layer` directives
+        and >10 KB body should pass — the marker isn't strictly the
+        Tailwind banner, but it's a legitimate signal of a built CSS
+        artifact. Locks the inclusive `tailwindcss OR @layer` semantics
+        documented in `_output_css_looks_built`."""
+        layered = "@layer base { html { font-family: sans; } }\n" + ".test{color:blue}" * 1000
+        assert len(layered) > 10_000
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=layered,
+        )
 
         from djust.checks import check_configuration
 
@@ -592,6 +677,97 @@ def _force_gc():
     import gc
 
     gc.collect()
+
+
+class TestC013StaleCollectstatic:
+    """C013 — stale collectstatic copy of client.min.js (closes #1088)."""
+
+    def _baseline_settings(self, settings):
+        settings.ASGI_APPLICATION = "myproject.asgi.application"
+        settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+        settings.INSTALLED_APPS = ["daphne", "django.contrib.staticfiles", "djust"]
+
+    def test_c013_no_static_root_skips(self, tmp_path, settings):
+        """No STATIC_ROOT configured → check is a no-op."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = None
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+    def test_c013_no_collected_file_skips(self, tmp_path, settings):
+        """STATIC_ROOT exists but no djust/client.min.js inside → no-op."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+    def test_c013_matching_content_quiet(self, tmp_path, settings):
+        """Collected copy hashes-equal to wheel-bundled → no warning."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+
+        # Mirror the wheel's client.min.js exactly into STATIC_ROOT
+        from djust import __file__ as djust_init
+        from pathlib import Path
+        import shutil
+
+        wheel_path = Path(djust_init).parent / "static" / "djust" / "client.min.js"
+        if not wheel_path.exists():
+            import pytest
+
+            pytest.skip("wheel-bundled client.min.js not present in this dev tree")
+
+        target_dir = tmp_path / "djust"
+        target_dir.mkdir()
+        shutil.copyfile(wheel_path, target_dir / "client.min.js")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
+
+    def test_c013_diverged_content_warns(self, tmp_path, settings):
+        """Collected copy diverges from wheel-bundled → warning."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+
+        target_dir = tmp_path / "djust"
+        target_dir.mkdir()
+        # Plant intentionally-stale content
+        (target_dir / "client.min.js").write_bytes(b"// stale 0.5.5rc1-era client\n")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 1
+        assert "Stale collectstatic" in c013[0].msg
+        assert "collectstatic --clear" in c013[0].hint
+
+    def test_c013_suppressed_via_djust_config(self, tmp_path, settings):
+        """DJUST_CONFIG['suppress_checks'] = ['C013'] silences the check."""
+        self._baseline_settings(settings)
+        settings.STATIC_ROOT = str(tmp_path)
+        settings.DJUST_CONFIG = {"suppress_checks": ["C013"]}
+
+        target_dir = tmp_path / "djust"
+        target_dir.mkdir()
+        (target_dir / "client.min.js").write_bytes(b"// stale content\n")
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        c013 = [e for e in errors if e.id == "djust.C013"]
+        assert len(c013) == 0
 
 
 class TestV001MissingTemplateName:
@@ -3052,6 +3228,123 @@ class TestT012EventDirectivesWithoutView:
         errors = check_templates(None)
         t012 = [e for e in errors if e.id == "djust.T012"]
         assert len(t012) == 0
+
+    def test_t012_passes_with_partial_marker(self, tmp_path, settings):
+        """#1096: T012 should not fire when {# djust:partial #} marker is present.
+
+        Templates included via {% include %} from a parent LiveView root are
+        intentional fragments — the parent owns dj-view. The partial marker
+        opts the file out of T012 without introducing a global suppression.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "step_partial.html").write_text(
+            textwrap.dedent(
+                """\
+                {# djust:partial #}
+                <fieldset>
+                    <input dj-input="validate_field" name="vin" />
+                    <button dj-click="next_step">Next</button>
+                </fieldset>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_partial_marker_case_insensitive(self, tmp_path, settings):
+        """The partial marker should be matched case-insensitively."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "step.html").write_text(
+            textwrap.dedent(
+                """\
+                {# Djust: Partial #}
+                <button dj-click="next">Next</button>
+                """
+            )
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_global_suppress_via_djust_config(self, tmp_path, settings):
+        """#1096: T012 honours DJUST_CONFIG['suppress_checks']=['T012']."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text('<button dj-click="next">Next</button>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.DJUST_CONFIG = {"suppress_checks": ["T012"]}
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_global_suppress_accepts_qualified_id(self, tmp_path, settings):
+        """Qualified id 'djust.T012' should also be accepted."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text('<button dj-click="next">Next</button>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.T012"]}
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 0
+
+    def test_t012_hint_mentions_partial_and_global_suppress(self, tmp_path, settings):
+        """The fired warning's hint should describe both opt-out paths."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "no_view.html").write_text('<button dj-click="next">Next</button>')
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t012 = [e for e in errors if e.id == "djust.T012"]
+        assert len(t012) == 1
+        hint = t012[0].hint
+        assert "djust:partial" in hint
+        assert "suppress_checks" in hint
 
 
 class TestT013InvalidViewPath:

@@ -65,7 +65,7 @@ Several design decisions here work around known djust serialization constraints:
 
 import logging
 import math
-from typing import Any
+from typing import Any, ClassVar
 
 from .decorators import event_handler
 
@@ -84,6 +84,36 @@ class WizardMixin:
     """
 
     wizard_steps: list = []  # Subclasses override with a list of step dicts
+
+    #: DOM event that triggers `validate_field` on **text-stream widgets**
+    #: (``TextInput``, ``Textarea``, ``NumberInput``, ``EmailInput``,
+    #: ``URLInput``, ``PasswordInput``). Default ``"dj-change"`` fires on
+    #: blur. Set to ``"dj-input"`` to fire on every keystroke (debounced
+    #: client-side) — required when fields can be pre-filled and submitted
+    #: without an intermediate blur (#1095).
+    #:
+    #: Click-fired widgets (``RadioSelect``, ``CheckboxInput``,
+    #: ``CheckboxSelectMultiple``, ``Select``) always use ``"dj-change"``
+    #: regardless of this setting — they commit exactly one value per user
+    #: interaction, so there's no event stream to batch. This scoping keeps
+    #: ``wizard_input_event = "dj-input"`` doing what #1095 intends (capture
+    #: unblurred text edits) without accidentally also applying dj-input
+    #: semantics to widgets that don't have a text stream.
+    wizard_input_event: str = "dj-change"
+
+    #: Optional opt-in to skip ``field_html`` rendering for fields not in this
+    #: collection. Default ``None`` renders ALL fields in the current step's
+    #: form (pre-#1097 behavior). Set to any iterable of field names (list,
+    #: tuple, set, frozenset — anything that supports ``in`` membership) to
+    #: render only those — useful when a step's form has many fields but the
+    #: template only references a subset (e.g. conditional owner-info fields
+    #: hidden behind ``is_vehicle_owner == "no"``). Per-step overrides via
+    #: the step dict's ``"rendered_fields"`` key — explicit ``None`` at the
+    #: step level reverts that step to render-all. Excluded field names
+    #: produce no ``field_html[fname]`` entry; templates that reference them
+    #: via ``{{ field_html.unused|safe }}`` render empty (intentional — the
+    #: opt-out is a contract between view and template). Closes #1097.
+    wizard_rendered_fields = None
 
     @property
     def _steps(self) -> list:
@@ -112,12 +142,69 @@ class WizardMixin:
     # Field rendering
     # ------------------------------------------------------------------
 
+    #: Widget classes that commit one value per user interaction and therefore
+    #: belong on ``dj-change`` regardless of ``wizard_input_event``. Subclasses
+    #: can extend this frozenset to cover custom widgets (e.g. a color-picker
+    #: component that fires a single commit event). Using string class names
+    #: avoids pulling ``django.forms`` into this module at import time.
+    _CLICK_FIRED_WIDGET_CLASSES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "RadioSelect",
+            "CheckboxInput",
+            "CheckboxSelectMultiple",
+            "Select",
+        }
+    )
+
+    def _default_dom_event_for(self, field) -> str:
+        """Pick the correct default ``dom_event`` for a form field's widget.
+
+        Click-fired widgets (radio / checkbox / select) commit exactly one
+        value per user interaction and belong on ``dj-change``. Text-stream
+        widgets (TextInput / Textarea / etc.) use ``wizard_input_event`` so
+        a wizard that opts into ``"dj-input"`` for text (#1095) doesn't
+        accidentally also apply dj-input semantics to radios — which have
+        no stream to fire on.
+
+        Walks the widget's MRO so any subclass of an enumerated builtin
+        (e.g. ``SelectMultiple``/``NullBooleanSelect`` subclassing
+        ``Select``, or an app's ``MyRadioSelect`` subclassing
+        ``RadioSelect``) inherits the commit-style default automatically —
+        without forcing apps to register every subclass in
+        ``_CLICK_FIRED_WIDGET_CLASSES`` themselves.
+        """
+        widget = getattr(field, "widget", None)
+        if widget is not None:
+            click_set = self._CLICK_FIRED_WIDGET_CLASSES
+            for cls in type(widget).__mro__:
+                if cls.__name__ in click_set:
+                    return "dj-change"
+        return self.wizard_input_event
+
     def as_live_field(self, field_name: str, event_name: str = "validate_field", **kwargs) -> str:
         """Render a form field as HTML with djust event bindings.
 
         Returns an HTML string containing the widget markup with
-        ``dj-change="<event_name>"`` and ``data-field="<field_name>"``
+        ``<dom_event>="<event_name>"`` and ``data-field="<field_name>"``
         attributes so the field participates in real-time validation.
+
+        ``dom_event`` is auto-picked from the field's widget class:
+
+        * Text-stream widgets (TextInput, Textarea, NumberInput, EmailInput,
+          URLInput, PasswordInput) default to the view's
+          ``wizard_input_event`` class attribute (``"dj-change"`` by default;
+          set to ``"dj-input"`` to fire on every keystroke, debounced
+          client-side — required when fields can be pre-filled and submitted
+          without an intermediate blur, per #1095).
+        * Click-fired widgets (RadioSelect, CheckboxInput,
+          CheckboxSelectMultiple, Select) always use ``"dj-change"``
+          regardless of ``wizard_input_event`` — they commit one value per
+          click, there's no stream to batch. Before this scoping, setting
+          ``wizard_input_event = "dj-input"`` class-wide applied dj-input
+          to radios too, which was semantically wrong and (pre-#1155)
+          incurred an unnecessary 300ms debounce stall on every click.
+        * Caller-passed ``dom_event="..."`` always wins — this is only a
+          smarter default.
 
         Pre-render all fields in get_context_data() and pass as field_html
         dict — the Rust renderer cannot call Python methods with arguments
@@ -159,6 +246,12 @@ class WizardMixin:
         errors = step_errors.get(field_name, [])
 
         adapter = get_adapter(kwargs.pop("framework", None))
+        # setdefault would not overwrite a caller-passed None; coalesce explicitly
+        # so attrs[<dom_event>] never receives None and produces broken HTML.
+        # Widget-aware default (#1156): dj-change for click-fired widgets,
+        # wizard_input_event for text streams.
+        if kwargs.get("dom_event") is None:
+            kwargs["dom_event"] = self._default_dom_event_for(field)
         return adapter.render_field(
             field, field_name, value, errors, event_name=event_name, **kwargs
         )
@@ -208,6 +301,9 @@ class WizardMixin:
             form_instance = (
                 form_class(data=current_step_data) if current_step_data else form_class()
             )
+            # #1097: opt-in field_html filter. Per-step "rendered_fields" wins
+            # over the class-level default. None = render all (legacy behavior).
+            rendered_filter = current_step.get("rendered_fields", self.wizard_rendered_fields)
             for fname, field in form_instance.fields.items():
                 val = current_step_data.get(fname, field.initial or "")
                 form_data[fname] = val if val is not None else ""
@@ -216,7 +312,8 @@ class WizardMixin:
                     form_choices[fname] = [
                         {"value": str(k), "label": str(v)} for k, v in field.choices if str(k)
                     ]
-                field_html[fname] = self.as_live_field(fname, event_name="validate_field")
+                if rendered_filter is None or fname in rendered_filter:
+                    field_html[fname] = self.as_live_field(fname, event_name="validate_field")
 
         # Expose choices as flat top-level vars too (e.g. borough_choices)
         # so templates can use either form_choices.borough or borough_choices.

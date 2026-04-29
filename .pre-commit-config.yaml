@@ -138,3 +138,25 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
+
+      # Flag new `# noqa: F822` annotations in __all__ (Action #146)
+      # Ruff silences py/undefined-export but CodeQL flags it; prefer
+      # TYPE_CHECKING-conditional imports (PR #924 pattern). See
+      # scripts/check-noqa-f822.sh for rationale + override path.
+      - id: check-noqa-f822
+        name: check noqa F822
+        entry: bash scripts/check-noqa-f822.sh
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+
+      # Sweep docs/**/*.md for stale cross-references (#1075)
+      # Pairs with `make docs-lint` for manual / CI invocation.
+      - id: docs-lint
+        name: docs stale-MD-ref check
+        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/docs-lint.py'
+        language: system
+        files: ^docs/.*\.md$
+        pass_filenames: false
+        stages: [pre-push]

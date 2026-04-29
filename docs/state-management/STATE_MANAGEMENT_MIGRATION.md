@@ -1084,10 +1084,10 @@ navigator.geolocation.getCurrentPosition((pos) => {
 - **[STATE_MANAGEMENT_COMPARISON.md](STATE_MANAGEMENT_COMPARISON.md)** - vs Phoenix LiveView & Laravel Livewire
 
 ### Marketing & Competitive Analysis
-- **[MARKETING.md](MARKETING.md)** - Feature highlights and positioning
-- **[FRAMEWORK_COMPARISON.md](FRAMEWORK_COMPARISON.md)** - djust vs 13+ frameworks
-- **[TECHNICAL_PITCH.md](TECHNICAL_PITCH.md)** - Technical selling points
-- **[WHY_NOT_ALTERNATIVES.md](WHY_NOT_ALTERNATIVES.md)** - When to choose djust
+- **MARKETING.md** - Feature highlights and positioning
+- **FRAMEWORK_COMPARISON.md** - djust vs 13+ frameworks
+- **TECHNICAL_PITCH.md** - Technical selling points
+- **WHY_NOT_ALTERNATIVES.md** - When to choose djust
 
 ---
 

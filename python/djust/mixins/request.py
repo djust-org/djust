@@ -2,6 +2,7 @@
 RequestMixin - HTTP GET/POST request handling for LiveView.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -52,8 +53,17 @@ class RequestMixin:
 
     @method_decorator(ensure_csrf_cookie)
     def get(self, request, *args, **kwargs):
-        """Handle GET requests - initial page load"""
+        """Handle GET requests - initial page load.
+
+        On WSGI deployments, or when ``streaming_render = False``, this is
+        the only path. ASGI deployments with ``streaming_render = True``
+        route through :meth:`aget` (PR-A foundation, ADR-015).
+        """
         t_start = time.perf_counter()
+        # PR-B (ADR-015): defensive reset so a re-used view instance
+        # doesn't see lazy thunks from a prior request stashed by the
+        # template tag during sync render.
+        self._lazy_thunks = []
 
         # Check login_required / permission_required (matches WebSocket path).
         # Without this, views with login_required=True render their full HTML
@@ -284,6 +294,197 @@ class RequestMixin:
         # Explicitly DO NOT set Content-Length — chunked transfer. Middleware
         # that reads/modifies the response body must be streaming-aware.
         response["X-Djust-Streaming"] = "1"
+        return response
+
+    def _is_asgi_context(self, request=None) -> bool:
+        """Detect whether we are handling a real ASGI request.
+
+        The accurate signal is ``isinstance(request, ASGIRequest)`` —
+        Django's WSGI test ``Client`` produces ``WSGIRequest`` even
+        when the view is async-callable (``async_to_sync`` wraps the
+        coroutine but the request object itself is sync). Checking
+        ``asyncio.get_running_loop()`` is fooled by that wrapping,
+        which produces false-positive ASGI detection on sync test
+        clients.
+
+        Falls back to the loop-based check when ``request`` is not
+        provided (callers like ``aget`` always pass it; older callers
+        may not).
+        """
+        if request is not None:
+            try:
+                from django.core.handlers.asgi import ASGIRequest
+
+                return isinstance(request, ASGIRequest)
+            except ImportError:  # pragma: no cover — Django <4.1
+                pass
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    async def aget(self, request, *args, **kwargs):
+        """Async-streaming GET path. PR-A foundation (ADR-015).
+
+        Parallel to :meth:`get`. Returns a ``StreamingHttpResponse`` whose
+        ``streaming_content`` is an async iterator over chunks produced
+        by :meth:`TemplateMixin.arender_chunks`. ``await asyncio.sleep(0)``
+        between chunks gives the ASGI handler an opportunity to flush
+        the shell to the wire before the body chunks are queued.
+
+        Activation rules:
+
+        * ``streaming_render = False`` (default) — never activates;
+          callers route to :meth:`get`.
+        * WSGI deployment (no running asyncio loop) — falls back to
+          :meth:`get` via ``sync_to_async`` so the same Phase-1
+          cosmetic chunked response shape is preserved. Documented
+          gracefully-degrade contract per ADR-015 risk #10.
+        * ASGI deployment with ``streaming_render = True`` —
+          shell-then-body chunks via the async iterator.
+
+        ASGI disconnect handling: a background task polls
+        ``request.is_disconnected()`` (Django 5.x) and calls
+        :meth:`ChunkEmitter.cancel` when the client closes the
+        connection. Tasks already kicked off by ``start_async`` chains
+        keep running per the explicit ADR cancellation contract.
+        """
+        from asgiref.sync import sync_to_async
+
+        from ..http_streaming import ChunkEmitter
+
+        # WSGI fallback: sync get() does the right thing already
+        # (returns HttpResponse or Phase-1 streaming wrapper).
+        if not self._is_asgi_context(request):
+            return await sync_to_async(self.get)(request, *args, **kwargs)
+
+        # Run the existing sync GET pipeline to produce the fully-rendered
+        # HTML and any redirect / error responses. We do this in a thread
+        # via sync_to_async so the per-request mount/render work doesn't
+        # block the event loop. The result is one of:
+        #   - HttpResponseRedirect (auth or hook redirect) — pass through.
+        #   - StreamingHttpResponse (Phase-1 path when streaming_render
+        #     is True but we somehow re-enter — defensive).
+        #   - HttpResponse (normal render output) — upgrade to async.
+        sync_response = await sync_to_async(self.get)(request, *args, **kwargs)
+
+        if isinstance(sync_response, HttpResponseRedirect):
+            return sync_response
+
+        # If streaming wasn't requested, deliver the plain HttpResponse
+        # untouched. (aget should only be reached when streaming_render
+        # is True, but be defensive.)
+        if not getattr(self, "streaming_render", False):
+            return sync_response
+
+        # Pull the rendered HTML out of the response. For an HttpResponse
+        # this is .content; for a Phase-1 StreamingHttpResponse it's the
+        # joined sync iterator.
+        if isinstance(sync_response, StreamingHttpResponse):
+            html_bytes = b"".join(
+                chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+                for chunk in sync_response.streaming_content
+            )
+        else:
+            html_bytes = sync_response.content
+
+        try:
+            full_html = html_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            full_html = html_bytes.decode("utf-8", errors="replace")
+
+        emitter = ChunkEmitter(request)
+        # Stash on the view so PR-B's lazy thunks can find it from the
+        # template-tag render path.
+        self._chunk_emitter = emitter
+
+        # PR-B (ADR-015): the live_render tag stashes lazy thunks on
+        # ``self._lazy_thunks`` during the sync ``get()`` render (the
+        # tag has no access to the emitter at render time because aget
+        # constructs the emitter AFTER ``sync_to_async(self.get)``
+        # returns). Transfer the stash to the emitter so phase-5 of
+        # ``arender_chunks`` can invoke them.
+        stashed_thunks = getattr(self, "_lazy_thunks", None) or []
+        self._lazy_thunks = []  # reset to defend against view-instance re-use
+        for view_id, thunk_fn in stashed_thunks:
+            emitter.register_thunk(view_id, thunk_fn)
+
+        # Producer task: render chunks into the emitter's queue.
+        # ``arender_chunks`` is a regular coroutine that pushes via
+        # ``emitter.emit()``; awaiting it once drives the full emit loop.
+        async def _produce():
+            try:
+                await self.arender_chunks(full_html, emitter)
+            except Exception:  # pragma: no cover — defensive
+                logger.exception("arender_chunks raised; cancelling emitter")
+                await emitter.cancel("producer_error")
+            finally:
+                await emitter.close()
+
+        produce_task = asyncio.ensure_future(_produce())
+
+        # Disconnect watcher: poll request.is_disconnected() (Django 5.x).
+        # Older Django versions don't expose it; we degrade silently.
+        async def _watch_disconnect():
+            is_disconnected = getattr(request, "is_disconnected", None)
+            if not callable(is_disconnected):
+                return
+            try:
+                while not produce_task.done():
+                    try:
+                        if await is_disconnected():
+                            await emitter.cancel("client_disconnected")
+                            return
+                    except Exception:
+                        # Disconnect APIs vary between Django/Daphne/Uvicorn.
+                        # Log once and stop polling rather than crashing.
+                        logger.debug(
+                            "is_disconnected() raised; halting watcher",
+                            exc_info=True,
+                        )
+                        return
+                    await asyncio.sleep(0.1)
+            except asyncio.CancelledError:
+                return
+
+        disconnect_task = asyncio.ensure_future(_watch_disconnect())
+
+        async def _streaming_iter():
+            try:
+                async for chunk in emitter:
+                    yield chunk
+            finally:
+                # Producer should be done by now (it pushed STREAM_END).
+                # Cancel the disconnect watcher to release its task.
+                if not disconnect_task.done():
+                    disconnect_task.cancel()
+                # Clear the per-request emitter stash so a future request
+                # on a re-used view instance (rare in production but
+                # possible in long-lived test harnesses or custom
+                # threading) doesn't see a stale ``_chunk_emitter``
+                # reference that PR-B would mistake for the current
+                # render.
+                self._chunk_emitter = None
+
+        response = StreamingHttpResponse(
+            _streaming_iter(),
+            content_type="text/html; charset=utf-8",
+        )
+        # Mirror the Phase-1 observability marker so existing tests and
+        # ops dashboards still detect streaming responses.
+        response["X-Djust-Streaming"] = "1"
+        # PR-A marker so callers can tell the async path was used.
+        response["X-Djust-Streaming-Phase"] = "2"
+        # Copy any cookies/headers the sync_response set (CSRF cookie etc.)
+        # so we don't drop them by re-wrapping.
+        for header, value in sync_response.items():
+            if header.lower() in {"content-length", "content-type"}:
+                continue
+            response[header] = value
+        for cookie in sync_response.cookies.values():
+            response.cookies[cookie.key] = cookie
+
         return response
 
     def post(self, request, *args, **kwargs):

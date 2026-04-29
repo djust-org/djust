@@ -135,7 +135,48 @@ All 57 Django built-in filters are supported. Some notes:
 
 - HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) are in the Rust engine's `safe_output_filters` whitelist — they're automatically marked as safe without requiring `|safe`. Do not pipe them through `|safe` or you'll double-escape. *(Standard Django achieves this via `SafeData` type-checking; djust uses an explicit whitelist instead.)*
 - `|safe` works as expected for pre-escaped HTML strings
-- Custom template filters defined with `@register.filter` in Python work automatically
+
+### Custom filters (`@register.filter`)
+
+Project-defined custom filters work in the Rust render path the same way they work in Django's Python renderer. djust walks each Django ``Library`` registered by your apps' ``templatetags/`` modules at the first LiveView render and forwards every filter callable to the Rust engine. Both ``filter.is_safe`` and ``filter.needs_autoescape`` are honoured.
+
+```python
+# apps/shared/templatetags/dict_lookup.py
+from django import template
+
+register = template.Library()
+
+
+@register.filter(name="lookup")
+def lookup(mapping, key):
+    return mapping.get(key, "") if isinstance(mapping, dict) else ""
+```
+
+```html
+{# templates/foo.html #}
+{% load dict_lookup %}
+
+<a href="{{ sort_urls|lookup:col }}">Sort by {{ col }}</a>
+```
+
+Custom filters can take 0 or 1 argument:
+
+- Quoted args (``|prefix:"hello"``) are passed as literal strings.
+- Bare-identifier args (``|prefix:greeting``) are resolved against the
+  template context first, then passed to the filter.
+
+Filters that produce HTML should declare ``is_safe=True`` so the
+renderer doesn't double-escape:
+
+```python
+@register.filter(name="bold_html", is_safe=True)
+def bold_html(value):
+    return mark_safe(f"<b>{value}</b>")
+```
+
+Filters that need to know whether the surrounding template is in
+auto-escape mode declare ``needs_autoescape=True`` and accept
+``autoescape`` as a kwarg — same as Django.
 
 ## Inline Templates
 

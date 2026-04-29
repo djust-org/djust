@@ -301,6 +301,23 @@ class ContextMixin:
 
         self._jit_serialized_keys = jit_serialized_keys
 
+        # v0.8.0 — `@action` server-action state injection. Each action's
+        # name becomes a context variable so templates can read
+        # ``{{ create_todo.pending }}``, ``{{ create_todo.error }}``,
+        # ``{{ create_todo.result }}``. Action state is populated by the
+        # @action decorator's wrapper at handler entry/exit; this just
+        # exposes it to the renderer.
+        #
+        # Done AFTER the public-attribute walk + JIT serialization so an
+        # action name that collides with a user-defined attribute wins
+        # — actions are always the canonical reading of that name. Conflict
+        # is unlikely (action names are method names) but the precedence
+        # is documented.
+        action_state = getattr(self, "_action_state", None)
+        if action_state:
+            for action_name, state in action_state.items():
+                context[action_name] = state
+
         return context
 
     def _deep_serialize_dict(self, d: dict, template_content=None, var_name: str = "") -> dict:

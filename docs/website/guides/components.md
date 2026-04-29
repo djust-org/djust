@@ -230,6 +230,35 @@ class DashboardView(LiveView):
 
 The `component_id` is automatically set to the attribute name (`"counter"`) by the framework. No manual ID management needed.
 
+### Descriptor-pattern auto-promotion gap
+
+When LiveComponents are declared as **class-level descriptors** (the preferred
+pattern shown above), the framework's component-id walker (`_assign_component_ids`)
+only inspects instance-level attributes. As a result, **descriptor-pattern
+components are NOT auto-registered in `view._components`** today. Framework
+features that walk `_components` -- including time-travel snapshots, session-based
+component-state save/restore, and other introspection paths -- will silently miss
+descriptor-pattern components unless the view appends them manually during
+`mount()`.
+
+**Workaround** -- register the descriptor's instance in `_components` explicitly:
+
+```python
+class MyView(LiveView):
+    greeting = GreetingWidget.descriptor()  # class-level descriptor
+
+    def mount(self, request, **kwargs):
+        # Required until auto-promotion ships: makes the descriptor's
+        # instance visible to time-travel snapshots and other framework
+        # walkers that iterate self._components.
+        self._components.append(self.greeting)
+```
+
+Auto-promotion is planned future framework work (tracked separately). Until it
+ships, document this gap in any code that mixes descriptor-pattern components
+with time-travel or session restore -- otherwise the component will appear to
+"vanish" from snapshots even though its public state is intact on the view.
+
 ### Lifecycle
 
 ```
@@ -680,6 +709,95 @@ INSTALLED_APPS = [
 | `{% pagination %}`                         | Page navigation                      |
 | `{% avatar %}`                             | User avatar with initials fallback   |
 
+### `{% data_table %}` row-level navigation (#1111)
+
+Two ways to make whole rows clickable for navigation. Both render
+`role="button"`, `tabindex="0"`, and `cursor:pointer` on every row, and
+both respect Enter / Space for keyboard activation. Clicks inside
+nested interactive descendants (`<a>`, `<button>`, `<input>`,
+`<label>`, `<select>`, `<textarea>`) are short-circuited so they
+**never** trigger row navigation.
+
+**Option B — `row_click_event` (preferred, LiveView-idiomatic)**: each
+`<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
+Your `@event_handler` receives the row's value via `**kwargs` and can
+`self.redirect(...)` (or do anything else):
+
+```python
+from djust import LiveView
+from djust.decorators import event_handler
+from django.urls import reverse
+
+class ClaimsListView(LiveView):
+    template_name = "claims/list.html"
+
+    def mount(self, request, **kwargs):
+        self.rows = list(Claim.objects.values("id", "claim_number", "status"))
+        self.columns = [
+            {"key": "claim_number", "label": "Claim #"},
+            {"key": "status", "label": "Status"},
+        ]
+
+    @event_handler()
+    def open_claim(self, value: str = "", **kwargs):
+        self.redirect(reverse("claims:detail", kwargs={"claim_id": value}))
+```
+
+```django
+{% data_table rows=rows columns=columns
+              row_click_event="open_claim"
+              row_click_value_key="id" %}
+```
+
+`row_click_value_key` defaults to `"id"`; override for slug-based
+routing (e.g. `"uuid"`, `"slug"`).
+
+**Option A — `row_url` (static-URL fallback)**: each `<tr>` gets
+`data-href` from a row dict key; the component JS module navigates via
+`window.location.assign(href)` on click / Enter / Space. Use when the
+target URL is computed once in the view and doesn't need a server
+round-trip:
+
+```python
+def get_context_data(self, **kwargs):
+    ctx = super().get_context_data(**kwargs)
+    ctx["rows"] = [
+        {"claim_number": "C-001", "claim_url": reverse("claims:detail", args=[1])},
+    ]
+    ctx["columns"] = [{"key": "claim_number", "label": "Claim #"}]
+    return ctx
+```
+
+```django
+{% data_table rows=rows columns=columns row_url="claim_url" %}
+```
+
+`row_click_event` takes precedence when both are set.
+
+**Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
+announce as buttons (`role="button"`), and activate on Enter or Space.
+Screen reader users get the same affordance as mouse / touch users.
+
+**CSP-strict friendly**: no inline event handlers, no `eval`, no nonce
+plumbing required. Both options work under
+`Content-Security-Policy: script-src 'self'` once the component JS
+module is served as a static asset (no `'unsafe-inline'`).
+
+**Composition with `selectable=True`**: per-row checkbox cells are
+`<input>` elements, which are in the nested-control guard's protected
+list. Clicking the checkbox fires the existing `select_event` and does
+**not** also fire row navigation.
+
+**Composition with cell-level link columns (#1110)**: cell `<a>` tags
+also "win" — clicking a cell link follows the link without firing the
+row event.
+
+**Static-URL safety**: Option A's `data-href` value is regex-validated
+(`/^(https?:|\/|\.)/`) before navigation, so a hostile `javascript:`
+URI cannot execute even if it sneaks into the row dict. Always prefer
+URLs computed from `reverse()` in your view; never assign
+user-controlled strings to `row_url` data.
+
 ### Customization
 
 All components use CSS custom properties. Override them to match any theme:
@@ -817,6 +935,44 @@ Then use theme colors in Tailwind classes:
   Primary Button
 </button>
 ```
+
+### Cross-project cookie isolation (`cookie_namespace`)
+
+If you run two or more djust projects on the same domain (e.g.
+`localhost:8001`, `localhost:8002`, etc.), browsers scope cookies by domain
+only — *not* by port. Without isolation, the four theming cookies
+(`djust_theme`, `djust_theme_preset`, `djust_theme_pack`,
+`djust_theme_layout`) leak across projects, so picking the "Cyberpunk" pack
+in project A pins it for project B too.
+
+For sites without a user-facing theme switcher, the simpler fix is
+`enable_client_override: False` (introduced in v0.8.2 / #1013), which makes
+the server ignore client cookies entirely.
+
+For sites *with* a user-facing switcher — where cookie writes must stay on —
+set a per-project namespace:
+
+```python
+LIVEVIEW_CONFIG = {
+    "theme": {
+        "cookie_namespace": "djust_org",   # any unique-per-project string
+    },
+}
+```
+
+When set, theming cookies are read and written under
+`<ns>_djust_theme`, `<ns>_djust_theme_preset`, `<ns>_djust_theme_pack`, and
+`<ns>_djust_theme_layout`, so each project gets its own slot in the shared
+cookie jar.
+
+The read path tries the namespaced cookie first and falls back to the legacy
+unprefixed cookie once on the first request after upgrade — users keep their
+existing theme choice. After the user clicks the switcher (or any other path
+that calls `setPreset` / `setPack` / `setTheme` / `setLayout`), only the
+namespaced cookie is written.
+
+When `cookie_namespace` is unset (default), the unprefixed names are used —
+existing deployments don't lose their theme on upgrade.
 
 ## Choosing a Styling Approach
 

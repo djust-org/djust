@@ -18,10 +18,38 @@
     const STORAGE_KEY_PACK = 'djust-theme-pack';
     const STORAGE_KEY_LAYOUT = 'djust-theme-layout';
 
-    const COOKIE_KEY_PRESET = 'djust_theme_preset';
-    const COOKIE_KEY_THEME = 'djust_theme';
-    const COOKIE_KEY_PACK = 'djust_theme_pack';
-    const COOKIE_KEY_LAYOUT = 'djust_theme_layout';
+    // #1158 — Per-project cookie namespace. The server emits
+    // `window.__djust_theme_cookie_prefix` from `theme_head.html` based on
+    // `LIVEVIEW_CONFIG['theme']['cookie_namespace']`. Empty string means the
+    // legacy unprefixed cookie names (back-compat). When set, every theming
+    // cookie this script writes is prefixed so two djust projects on the
+    // same localhost domain don't overwrite each other's theme preferences.
+    const COOKIE_PREFIX = (typeof window !== 'undefined' && typeof window.__djust_theme_cookie_prefix === 'string')
+        ? window.__djust_theme_cookie_prefix
+        : '';
+    const COOKIE_KEY_PRESET = COOKIE_PREFIX + 'djust_theme_preset';
+    const COOKIE_KEY_THEME = COOKIE_PREFIX + 'djust_theme';
+    const COOKIE_KEY_PACK = COOKIE_PREFIX + 'djust_theme_pack';
+    const COOKIE_KEY_LAYOUT = COOKIE_PREFIX + 'djust_theme_layout';
+
+    /**
+     * #1169(d) — Delete the legacy unprefixed cookie when writing a
+     * namespaced theming cookie. After a user changes their theme on a
+     * namespaced site, the legacy `djust_theme*` cookies otherwise sit in
+     * the jar forever and can bleed back in if the namespace is ever
+     * removed (or read by another project on the same localhost domain).
+     *
+     * Only fires when COOKIE_PREFIX is non-empty. With no prefix, the
+     * "namespaced" name and the legacy name are identical and deleting it
+     * would clobber the value we just wrote.
+     *
+     * @param {string} legacyName — the unprefixed cookie name to delete
+     *   (e.g. 'djust_theme_pack').
+     */
+    function _deleteLegacyCookie(legacyName) {
+        if (!COOKIE_PREFIX) return;
+        document.cookie = legacyName + '=; path=/; max-age=0; SameSite=Lax';
+    }
 
     class DjustThemeManager {
         constructor() {
@@ -177,6 +205,7 @@
 
             // Also set a cookie so the server can read it
             document.cookie = `${COOKIE_KEY_PRESET}=${preset};path=/;max-age=31536000;SameSite=Lax`;
+            _deleteLegacyCookie('djust_theme_preset');
 
             // Clear pack if setting preset manually
             this.clearPack();
@@ -198,6 +227,7 @@
 
             // Set cookie for server
             document.cookie = `${COOKIE_KEY_THEME}=${theme};path=/;max-age=31536000;SameSite=Lax`;
+            _deleteLegacyCookie('djust_theme');
 
             // Clear pack if setting theme manually
             this.clearPack();
@@ -214,6 +244,7 @@
 
             // Set cookie for server
             document.cookie = `${COOKIE_KEY_PACK}=${pack};path=/;max-age=31536000;SameSite=Lax`;
+            _deleteLegacyCookie('djust_theme_pack');
 
             // Reload to apply
             window.location.reload();
@@ -225,6 +256,7 @@
         clearPack() {
             localStorage.removeItem(STORAGE_KEY_PACK);
             document.cookie = `${COOKIE_KEY_PACK}=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+            _deleteLegacyCookie('djust_theme_pack');
         }
 
         /**
@@ -233,6 +265,7 @@
         setLayout(layout) {
             localStorage.setItem(STORAGE_KEY_LAYOUT, layout);
             document.cookie = `${COOKIE_KEY_LAYOUT}=${layout};path=/;max-age=31536000;SameSite=Lax`;
+            _deleteLegacyCookie('djust_theme_layout');
 
             // Apply layout class immediately (CSS-only switching)
             const wrapper = document.querySelector('[data-layout]');
@@ -333,6 +366,7 @@
 
                 // Set cookie for server-side rendering
                 document.cookie = `${COOKIE_KEY_PRESET}=${preset};path=/;max-age=31536000;SameSite=Lax`;
+                _deleteLegacyCookie('djust_theme_preset');
 
                 // Update the CSS dynamically
                 const styleElement = document.querySelector('#djust-theme-css');

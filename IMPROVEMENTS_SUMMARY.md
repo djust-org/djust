@@ -1,12 +1,12 @@
 # djust Framework Improvements - Implementation Summary
 
 **Date**: February 13, 2026
-**Based on**: lessons_learned/usai/DJUST_LESSONS_LEARNED.md
+**Based on**: lessons_learned/<consumer>/DJUST_LESSONS_LEARNED.md
 **Status**: ✅ Complete
 
 ## Overview
 
-This implementation addresses the top 8 issues identified from real-world usage of djust (building the USAI Admin Portal). All changes are backward compatible and provide immediate value through better error messages, static analysis, and comprehensive documentation.
+This implementation addresses the top 8 issues identified from real-world usage of djust (building the a production djust deployment). All changes are backward compatible and provide immediate value through better error messages, static analysis, and comprehensive documentation.
 
 ## Changes Implemented
 

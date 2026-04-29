@@ -1,0 +1,76 @@
+/*
+ * djust-forms.css — opt-in form layout helpers (#991).
+ *
+ * djust ships zero opinions on form aesthetics by default — bring your
+ * own CSS framework, theme, or stylesheet. This file is the small
+ * exception: a single layout helper for inline radio buttons, opt-in
+ * via a documented HTML data-attribute contract.
+ *
+ * Usage:
+ *
+ *   class MyForm(forms.Form):
+ *       status = forms.ChoiceField(
+ *           widget=forms.RadioSelect(attrs={"data-dj-inline": "true"}),
+ *           choices=STATUSES,
+ *       )
+ *
+ * Then in your base template:
+ *
+ *   <link rel="stylesheet" href="{% static 'djust/djust-forms.css' %}">
+ *
+ * Django widget mechanics: `attrs={...}` on a widget lands on each
+ * rendered form-control element, not on the wrapping container. So
+ * `data-dj-inline="true"` ends up on every `<input type="radio">`.
+ * The CSS rules below use the `:has()` parent selector (CSS Selectors
+ * Level 4 — Chromium 105+, Safari 15.4+, Firefox 121+, all stable in
+ * 2026) to walk up from the marked input and lay out its containing
+ * wrappers inline-flex.
+ *
+ * Manifesto: principle 7 — opinionated where it matters (the contract
+ * is `[data-dj-inline]` on the radio, and it's stable forever),
+ * flexible where it doesn't (the actual styling is replaceable;
+ * override or skip the file entirely).
+ */
+
+/* The outermost wrapper around all radios in a single field. Both
+ * Django's stock RadioSelect template (<ul>...) and djust-theming's
+ * div-based template are covered by enumerating `ul, ol, div`.
+ *
+ * Two `:has()` selectors — one for templates that wrap each choice in
+ * an inline element (<li> / nested <div>), one for templates that put
+ * the <label> directly under the outer wrapper. */
+:is(ul, ol, div):has(> :is(li, div) > label > input[type="radio"][data-dj-inline="true"]),
+:is(ul, ol, div):has(> label > input[type="radio"][data-dj-inline="true"]) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5em 1em;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+/* Each per-choice wrapper (<li> in stock Django, <div> in
+ * djust-theming) laid out inline so the label and radio sit
+ * side-by-side without a forced line break. */
+:is(li, div):has(> label > input[type="radio"][data-dj-inline="true"]) {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+}
+
+/* Make the entire <label> a single click target with the radio and
+ * its text aligned cleanly across browsers. Preserves the browser's
+ * native focus ring — no `outline: none`. */
+label:has(> input[type="radio"][data-dj-inline="true"]) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3em;
+    cursor: pointer;
+}
+
+/* Reset margin on the radio itself so the gap rule above does the
+ * spacing. */
+input[type="radio"][data-dj-inline="true"] {
+    margin: 0;
+}

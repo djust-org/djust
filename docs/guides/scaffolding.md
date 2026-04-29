@@ -133,3 +133,54 @@ Generated templates use djust directives:
 3. Include `yourapp.urls` in your root URL conf
 4. Create the model in `yourapp/models.py`
 5. Run `python manage.py makemigrations && python manage.py migrate`
+
+---
+
+## Project & app scaffolding (`djust new`, `startproject`, `startapp`)
+
+Beyond per-model CRUD generation, the `djust` CLI ships with three
+commands for bootstrapping projects and apps end-to-end (added in
+v0.3.0):
+
+```bash
+# Modern entrypoint (recommended) — feature flags select what to wire
+python -m djust new myapp
+
+# Pre-canned feature combos via flags
+python -m djust new myapp --with-auth --with-db --with-presence --with-streaming
+
+# Generate from a YAML schema describing your models
+python -m djust new myapp --from-schema schema.yml
+
+# Legacy entrypoints (still supported)
+python -m djust startproject myproject
+python -m djust startapp myapp
+```
+
+### `djust new`
+
+`djust new <name>` creates a full Django project layout pre-configured
+for djust:
+
+| What you get | Default | Toggled by |
+|---|---|---|
+| Django project + initial app | always | — |
+| `LIVEVIEW_CONFIG` settings stub | always | — |
+| WebSocket routing wired into `asgi.py` | always | — |
+| Auth + login/logout LiveViews | off | `--with-auth` |
+| Postgres `LISTEN/NOTIFY` wiring | off | `--with-db` |
+| `PresenceMixin` example | off | `--with-presence` |
+| Stream-friendly base templates | off | `--with-streaming` |
+| Models generated from a schema file | off | `--from-schema schema.yml` |
+
+The `--from-schema` mode reads a small YAML file describing models +
+fields and generates models, admin, migrations, LiveViews, and
+templates in one step — handy for spike projects.
+
+### `startproject` / `startapp`
+
+The legacy commands mirror Django's vanilla `django-admin startproject`
+/ `startapp` but add djust's defaults (`LIVEVIEW_CONFIG`,
+`LIVEVIEW_ALLOWED_MODULES`, `LiveSessionMiddleware`, the WS routing
+include). Reach for these when you want explicit Django parity over
+the curated `djust new` experience.

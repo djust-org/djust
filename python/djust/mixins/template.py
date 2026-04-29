@@ -2,13 +2,17 @@
 TemplateMixin - Template loading, rendering, and HTML extraction for LiveView.
 """
 
+import asyncio
 import json
 import logging
 import os
 import re
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from ..utils import get_template_dirs
+
+if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
+    from ..http_streaming import ChunkEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -305,8 +309,267 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         return html
 
+    async def arender_chunks(
+        self,
+        full_html: str,
+        emitter: "ChunkEmitter",
+    ) -> None:
+        """Async-generator producer that pushes shell-then-body chunks.
+
+        PR-A foundation for v0.9.0 streaming (ADR-015). Replaces the
+        synchronous regex-after-render path used by Phase 1
+        (:meth:`_split_for_streaming` + :meth:`RequestMixin._make_streaming_response`)
+        with a real async iterator. ``await asyncio.sleep(0)`` is used
+        between chunks to yield control to the ASGI event loop so the
+        shell can flush to the wire before the body chunks arrive at the
+        consumer.
+
+        Chunk schedule (4 yields when the page has a full document
+        wrapper, fewer for fragment templates):
+
+        1. ``shell_open`` — everything before ``<div dj-root>``
+           (``<!DOCTYPE>``, ``<head>``, ``<body>`` open, top chrome).
+        2. ``body_open`` — the ``<div dj-root>`` opening tag itself.
+        3. ``body_content`` — the children of ``<div dj-root>``.
+        4. ``body_close`` — ``</div>`` + ``</body></html>`` + trailing.
+
+        The 4-chunk shape is invariant when ``<div dj-root>`` is present
+        (covered by ``test_minimum_chunk_count_with_dj_root``). Templates
+        without a ``<div dj-root>`` (raw fragments) yield a single chunk
+        equivalent to the non-streaming path.
+
+        Each yield routes through :meth:`ChunkEmitter.emit` so backpressure
+        applies. When the emitter is cancelled
+        (:meth:`ChunkEmitter.cancel`), :class:`~djust.http_streaming.ChunkEmitterCancelled`
+        propagates out and the generator returns cleanly.
+
+        :param full_html: Fully-rendered HTML string from
+            :meth:`render_full_template` (post-injection of client script,
+            handler metadata, ``dj-view`` attribute).
+        :param emitter: Per-request :class:`ChunkEmitter` that this
+            coroutine pushes chunks through. The chunks then flow out
+            via ``emitter.__aiter__`` to the consumer (typically the
+            ``StreamingHttpResponse`` async iterator wired in
+            :meth:`RequestMixin.aget`).
+        :returns: ``None``. This is a coroutine, not an async generator —
+            chunks are delivered exclusively via ``emitter.emit()``.
+        """
+        from ..http_streaming import ChunkEmitterCancelled
+
+        # Find <div dj-root> opening tag start.
+        dj_root_match = _DJ_ROOT_RE.search(full_html)
+        if not dj_root_match:
+            # No dj-root wrapper: fragment template. Single-chunk fallback.
+            try:
+                await emitter.emit(full_html.encode("utf-8"))
+            except ChunkEmitterCancelled:
+                logger.debug("arender_chunks: cancelled during fragment emit")
+            return
+
+        dj_root_open_start = dj_root_match.start()
+        dj_root_open_end = dj_root_match.end()
+
+        # Find the matching </div> for <div dj-root> using shared logic.
+        # _find_closing_div_pos already handles balanced div nesting AND
+        # ignores script-block contents, so the script-mask + </body>
+        # search the Phase-1 splitter does is redundant here — the chunk
+        # boundary is the closing-</div>, not the </body>.
+        result = TemplateMixin._find_closing_div_pos(full_html, dj_root_open_end)
+        if result[1] is None:
+            # Malformed HTML (no closing </div> for dj-root). Fall back to
+            # a single chunk so we never produce broken output.
+            try:
+                await emitter.emit(full_html.encode("utf-8"))
+            except ChunkEmitterCancelled:
+                logger.debug("arender_chunks: cancelled during fallback emit")
+            return
+
+        # result is (close_start, close_end); close_end is the index just
+        # AFTER </div>. Slice the four pieces.
+        shell_open = full_html[:dj_root_open_start]
+        body_open = full_html[dj_root_open_start:dj_root_open_end]
+        body_content = full_html[dj_root_open_end : result[0]]
+        # body_close: from the closing </div> through end-of-document.
+        body_close_chunk = full_html[result[0] :]
+
+        try:
+            # 1. Shell: <!DOCTYPE>, <head>, <body>, top chrome.
+            if shell_open:
+                await emitter.emit(shell_open.encode("utf-8"))
+            # Yield to the loop so ASGI can flush the shell over the wire
+            # before we proceed. PR-B uses this same await as the boundary
+            # where lazy thunks become eligible to start rendering.
+            await asyncio.sleep(0)
+
+            # 2. Body open: <div dj-root ...> opening tag.
+            if body_open:
+                await emitter.emit(body_open.encode("utf-8"))
+            await asyncio.sleep(0)
+
+            # 3. Body content: dj-root children.
+            if body_content:
+                await emitter.emit(body_content.encode("utf-8"))
+            await asyncio.sleep(0)
+
+            # 4. Body close: </div></body></html> + trailing.
+            if body_close_chunk:
+                await emitter.emit(body_close_chunk.encode("utf-8"))
+        except ChunkEmitterCancelled:
+            logger.debug("arender_chunks: cancelled mid-stream")
+            return
+
+        # 5. Lazy thunks (PR-B + PR-C, ADR-015). The body of the page
+        # has already flushed; lazy ``<template id="djl-fill-X">``
+        # chunks are appended after </html>. Browsers tolerate
+        # post-</html> content per the HTML5 parser tree-construction
+        # spec — the template element + its inline <script> activator
+        # move into the implicit body and execute in order.
+        #
+        # PR-C: parallel render via ``asyncio.as_completed``. All
+        # thunks start concurrently; chunks emerge in completion order
+        # rather than registration order. Total wall-clock time =
+        # max(thunk_durations) instead of sum(thunk_durations). Client-
+        # side reconciliation is keyed by slot id (``data-target``) so
+        # out-of-order arrival is correct by construction.
+        if not emitter.thunks:
+            return
+
+        # Per-thunk wrapper returns ``(view_id, result, exc)`` so the
+        # surfacing task is unambiguously identified at completion
+        # time. A naive ``next(t for t in task_to_id if t.done() and
+        # t.exception() ...)`` recovery returns the FIRST done-with-
+        # exception task — on multi-failure that attributes the wrong
+        # view_id. Wrapping packages the identity at thunk-start time.
+        async def _wrap(view_id, thunk_fn):
+            try:
+                result = await thunk_fn()
+            except asyncio.CancelledError:
+                # Re-raise so as_completed sees the cancellation
+                # propagate; otherwise the wrapped task swallows the
+                # cancel signal and the caller can't tell.
+                raise
+            except ChunkEmitterCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 — captured for logging
+                return (view_id, None, exc)
+            return (view_id, result, None)
+
+        thunk_tasks = [
+            asyncio.ensure_future(_wrap(view_id, thunk_fn)) for view_id, thunk_fn in emitter.thunks
+        ]
+
+        def _cancel_pending():
+            for task in thunk_tasks:
+                if not task.done():
+                    task.cancel()
+
+        async def _drain_iterator(it):
+            """Drain a partially-consumed ``asyncio.as_completed``
+            iterator so its internally-queued ``_wait_for_one``
+            coroutines are awaited and don't trigger
+            ``RuntimeWarning: coroutine '_wait_for_one' was never
+            awaited`` (#1153).
+
+            CPython's ``asyncio.as_completed`` is a generator that
+            yields one ``_wait_for_one()`` coroutine per pending
+            task. When we ``return`` mid-loop after an
+            ``emitter.cancelled`` check, Python's for-protocol has
+            ALREADY pulled the next coroutine via ``next()`` into
+            ``completed`` — and any further pending coroutines the
+            generator would have produced get discarded along with
+            the generator itself.
+
+            ``task.cancel()`` only schedules cancellation; it doesn't
+            unblock ``_wait_for_one``'s ``done.get()`` from the
+            ``as_completed`` queue. We need to keep iterating + await
+            each remaining coroutine so the queue drains. Cancelled
+            tasks raise ``CancelledError`` from ``f.result()`` inside
+            ``_wait_for_one``; we swallow those, since the cancellation
+            was self-inflicted via ``_cancel_pending``.
+            """
+            for remaining in it:
+                try:
+                    await remaining
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    # Swallow — we cancelled these tasks ourselves.
+                    pass
+
+        as_completed_iter = asyncio.as_completed(thunk_tasks)
+        try:
+            for completed in as_completed_iter:
+                if emitter.cancelled:
+                    _cancel_pending()
+                    # Drain ``completed`` (already pulled by for-protocol)
+                    # plus any further coroutines the iterator would
+                    # produce, so no ``_wait_for_one`` is GC'd unawaited.
+                    try:
+                        await completed
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                        pass
+                    await _drain_iterator(as_completed_iter)
+                    return
+                try:
+                    view_id, chunk_bytes, exc = await completed
+                except ChunkEmitterCancelled:
+                    raise
+                except asyncio.CancelledError:
+                    # Suppressing CancelledError is safe HERE because
+                    # this is an INNER thunk task being cancelled by
+                    # ``_cancel_pending`` (in response to the outer
+                    # emitter cancel). The outer ``arender_chunks``
+                    # coroutine's own cancellation propagates via the
+                    # next iteration's ``emitter.cancelled`` check and
+                    # then the outer ``except ChunkEmitterCancelled``
+                    # branch. Re-raising here would short-circuit that.
+                    continue
+                if exc is not None:
+                    logger.exception(
+                        "arender_chunks: lazy thunk raised for view_id=%s; "
+                        "thunks should catch + emit error envelope themselves",
+                        view_id,
+                        exc_info=exc,
+                    )
+                    continue
+                if chunk_bytes is None:
+                    continue
+                if not isinstance(chunk_bytes, (bytes, bytearray)):
+                    chunk_bytes = chunk_bytes.encode("utf-8")
+                await emitter.emit(chunk_bytes)
+                # Yield between fills so each chunk has a chance to
+                # leave the wire before the next completed task is
+                # picked up.
+                await asyncio.sleep(0)
+        except ChunkEmitterCancelled:
+            _cancel_pending()
+            await _drain_iterator(as_completed_iter)
+            logger.debug("arender_chunks: cancelled during lazy phase")
+            return
+        finally:
+            # Defensive — cancel + drain any remaining pending tasks so
+            # we don't leak ``coroutine '_wait_for_one' was never
+            # awaited`` warnings on paths that bypass the explicit
+            # cancellation branches above (e.g. the emit call raising
+            # something we don't catch). ``_cancel_pending`` is
+            # idempotent; ``_drain_iterator`` is a no-op once the
+            # generator is exhausted.
+            _cancel_pending()
+            try:
+                await _drain_iterator(as_completed_iter)
+            except Exception:  # noqa: BLE001
+                # Best-effort drain — never raise from finally.
+                pass
+
     def _split_for_streaming(self, full_html: str) -> tuple:
         """Split rendered HTML into ``(shell_open, main_content, shell_close)``.
+
+        .. deprecated:: 0.9.0
+            This synchronous splitter is the Phase 1 (v0.6.1) regex-split-
+            after-render path. PR-A introduces :meth:`arender_chunks`, an
+            async generator that yields the same chunks with
+            ``await asyncio.sleep(0)`` boundaries between them so the
+            shell flushes over the ASGI socket before the body bytes are
+            queued. This sync helper is retained for the WSGI fallback in
+            :meth:`RequestMixin._make_streaming_response`.
 
         Used by :meth:`_make_streaming_response` to flush the page shell to
         the browser before the main LiveView body is written. The browser

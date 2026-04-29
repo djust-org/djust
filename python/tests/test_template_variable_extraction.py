@@ -355,7 +355,20 @@ class TestPerformance:
     """Test performance characteristics."""
 
     def test_large_template(self):
-        """Test extraction from large template completes quickly."""
+        """Test extraction from a 100-block template completes within a
+        catastrophic-regression budget — a flake-resistant smoke check,
+        not a benchmark.
+
+        Typical local runtime is well under 1ms (~0.5ms warm). The 500ms
+        ceiling is set to absorb worst-case CI variance under busy
+        parallel suite load + py3.13 free-threaded scheduling, not to
+        catch fine-grained regressions. A future change that introduces
+        a ~1000× slowdown (algorithmic regression, accidental N²) will
+        still trip this; small constant-factor regressions will not.
+        For tight perf tracking use ``pytest-benchmark`` runs in CI.
+        Closes #1189 — the prior 100ms bound flaked on busy runners and
+        the v0.9.0rc3 retry surfaced the same class of flake.
+        """
         import time
 
         # Generate a large template
@@ -374,8 +387,11 @@ class TestPerformance:
         result = extract_template_variables(template)
         elapsed = time.time() - start
 
-        # Should complete in less than 100ms
-        assert elapsed < 0.1, f"Extraction took {elapsed:.3f}s, expected < 0.1s"
+        # Catastrophic-regression bound: 500ms (typical local ~0.5ms;
+        # CI / free-threaded variance dictates the wide headroom).
+        # Sized to catch ~1000× regressions, not constant-factor ones —
+        # see docstring.
+        assert elapsed < 0.5, f"Extraction took {elapsed:.3f}s, expected < 0.5s"
 
         # Verify we got results
         assert len(result) > 0

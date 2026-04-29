@@ -16,6 +16,8 @@ from .decorators import (
     event_handler,
     event,
     is_event_handler,
+    action,
+    is_action,
     server_function,
     is_server_function,
     permission_required,
@@ -69,7 +71,7 @@ except ImportError:
     # Rust components not yet built - this is optional
     rust_components = None  # noqa: F841 — accessed as djust.rust_components by user code
 
-__version__ = "0.7.1rc1"
+__version__ = "0.9.0rc5"
 
 
 def enable_hot_reload():
@@ -80,7 +82,19 @@ def enable_hot_reload():
     for changes. When a change is detected, all connected WebSocket clients are sent
     a reload message, triggering an automatic page refresh.
 
-    Usage:
+    Auto-enabled by default (since v0.9.0):
+        djust's own ``DjustConfig.ready()`` auto-calls this whenever
+        ``DEBUG=True`` and the ``watchdog`` package is installed. You no
+        longer need to call it explicitly from your own ``AppConfig.ready()``.
+        The function is idempotent — calling it manually is a safe no-op
+        when the server is already running, so existing per-consumer calls
+        keep working unchanged.
+
+        To opt out (e.g. you orchestrate the file watcher externally), set::
+
+            LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
+
+    Manual usage (advanced — only needed if auto-enable is disabled):
         # In your Django app's AppConfig.ready() method:
         from djust import enable_hot_reload
 
@@ -241,6 +255,8 @@ __all__ = [
     "event_handler",
     "event",
     "is_event_handler",
+    "action",
+    "is_action",
     "server_function",
     "is_server_function",
     "permission_required",

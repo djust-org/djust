@@ -290,6 +290,88 @@ class FilterView(LiveView):
 
 See the [Model Binding guide](model-binding) for details.
 
+## Inline Radio Buttons
+
+Django's default `RadioSelect` renders each choice on its own line (vertical list). For segmented controls, filter pills, toolbar choices, or short Yes/No fields, you usually want them inline. djust ships a small opt-in CSS helper that does this without you writing any new Python:
+
+```python
+class FilterForm(forms.Form):
+    status = forms.ChoiceField(
+        widget=forms.RadioSelect(attrs={"data-dj-inline": "true"}),
+        choices=[("all", "All"), ("open", "Open"), ("closed", "Closed")],
+    )
+```
+
+In your base template, after djust's `client.js`, link the form helper stylesheet:
+
+```html
+{% load static %}
+<link rel="stylesheet" href="{% static 'djust/djust-forms.css' %}">
+```
+
+**That's it.** Django's widget mechanics put `attrs={...}` onto each `<input type="radio">`, so the rendered HTML looks like:
+
+```html
+<ul>
+  <li><label><input type="radio" name="status" value="all" data-dj-inline="true"> All</label></li>
+  <li><label><input type="radio" name="status" value="open" data-dj-inline="true"> Open</label></li>
+  ...
+</ul>
+```
+
+The bundled CSS uses the `:has()` parent selector to walk up from the marked input and lay out the containing `<ul>` (or `<div>` if you're using djust-theming's form templates) as inline-flex. Result: full keyboard navigation, native focus ring preserved, no extra Python required. Browser support: Chromium 105+, Safari 15.4+, Firefox 121+ — all stable since 2023.
+
+### Why a `data-` attribute and not a custom widget?
+
+Three reasons:
+
+- **Zero new Python.** `RadioSelect(attrs={...})` is already supported by Django; we just document the attribute name.
+- **Composes with anything.** Works with `forms.Form`, `LiveViewForm`, third-party form libraries, ModelForms, Django admin — anything that renders a `RadioSelect`.
+- **Skip-able.** Don't want our CSS? Don't link the file. Want different styling? Write your own rule on `[data-dj-inline]` — the contract is the attribute name, not the visual treatment.
+
+### Customizing the visual treatment
+
+Override the bundled rules in your own stylesheet (loaded after `djust-forms.css`):
+
+```css
+ul[data-dj-inline] {
+    /* Replace the default flex with a CSS Grid for fixed columns: */
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+}
+
+/* Or turn it into a segmented-control: */
+ul[data-dj-inline] > li > label {
+    border: 1px solid #ccc;
+    padding: 0.4em 0.8em;
+    border-radius: 4px;
+}
+ul[data-dj-inline] > li > label:has(input:checked) {
+    background: #1e88e5;
+    color: white;
+}
+```
+
+The `[data-dj-inline]` selector is the documented contract. The default styling is a starting point.
+
+### Multiple inline fields on one form
+
+Just add the attribute to each field's widget:
+
+```python
+class FilterForm(forms.Form):
+    status = forms.ChoiceField(
+        widget=forms.RadioSelect(attrs={"data-dj-inline": "true"}),
+        choices=STATUS_CHOICES,
+    )
+    priority = forms.ChoiceField(
+        widget=forms.RadioSelect(attrs={"data-dj-inline": "true"}),
+        choices=PRIORITY_CHOICES,
+    )
+```
+
+Each `<ul>` gets the attribute independently. No form-level config, no class hierarchy.
+
 ## Tips
 
 - **Always include `{% csrf_token %}`** inside `dj-submit` forms (needed for HTTP fallback).

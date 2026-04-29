@@ -168,7 +168,7 @@ Review every `TODO` note before committing the file.
 Runtime checks catch the class of issues that static analysis cannot
 see: middleware correctly configured in `settings.py` but the response
 is stripped by nginx/ingress/proxy, or a firewall allows what settings
-appear to deny. The NYC Claims pentest caught a critical "CSP header
+appear to deny. A downstream consumer pentest caught a critical "CSP header
 missing in production" case this way (django-csp was configured but an
 nginx ingress stripped the header).
 

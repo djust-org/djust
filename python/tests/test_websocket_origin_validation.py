@@ -143,7 +143,22 @@ class TestIsAllowedOriginUnit:
 
 @pytest.mark.asyncio
 class TestConnectOriginValidation:
-    """End-to-end tests: real Channels handshake with an Origin header."""
+    """End-to-end tests: real Channels handshake with an Origin header.
+
+    Tests that perform a successful handshake + ``disconnect()`` are marked
+    ``@pytest.mark.django_db``. Channels' default consumer dispatch invokes
+    ``aclose_old_connections`` during disconnect; if a prior django_db-marked
+    test left an in-memory SQLite connection in the cache (SQLite ignores
+    ``close()`` for in-memory DBs to prevent data loss, so ``.connection`` is
+    never reset to None), pytest-django's blocker raises inside
+    ``close_if_unusable_or_obsolete`` → ``get_autocommit`` →
+    ``ensure_connection``. Marking these tests with ``django_db`` opts them
+    into pytest-django's connection management so the DB blocker is lifted
+    while the consumer dispatch runs. See #1134.
+
+    Tests that reject the handshake (``connected is False``) do not call
+    ``disconnect()`` and therefore do not trigger the cleanup path.
+    """
 
     async def _communicator(self, origin):
         """Build a WebsocketCommunicator with (or without) an Origin header."""
@@ -154,6 +169,7 @@ class TestConnectOriginValidation:
             headers=headers,
         )
 
+    @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["example.com"])
     async def test_connect_accepts_missing_origin(self):
         """Non-browser clients (no Origin header) continue to work."""
@@ -162,6 +178,7 @@ class TestConnectOriginValidation:
         assert connected is True
         await communicator.disconnect()
 
+    @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["example.com"])
     async def test_connect_accepts_allowed_origin(self):
         """Browser with Origin in ALLOWED_HOSTS is accepted."""
@@ -170,6 +187,7 @@ class TestConnectOriginValidation:
         assert connected is True
         await communicator.disconnect()
 
+    @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["example.com"])
     async def test_connect_accepts_allowed_origin_with_port(self):
         """Origin with port matches ALLOWED_HOSTS host-only entry."""
@@ -202,6 +220,7 @@ class TestConnectOriginValidation:
         assert connected is False
         assert code == 4403
 
+    @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["*"])
     async def test_connect_allows_wildcard_allowed_hosts(self):
         """`*` in ALLOWED_HOSTS opens the door to any origin."""

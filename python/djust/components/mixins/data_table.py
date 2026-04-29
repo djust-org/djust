@@ -34,6 +34,7 @@ import math
 import re
 
 from djust.components.utils import format_cell, interpolate_color_gradient
+from djust.decorators import event_handler
 
 __all__ = ["DataTableMixin"]
 
@@ -183,8 +184,143 @@ def _safe_eval_arithmetic(expression, namespace):
     return parser.parse()
 
 
+# Minimal context returned by ``DataTableMixin.get_table_context()`` when
+# ``init_table_state()`` hasn't been called yet (e.g. during the pre-mount
+# ``get_context_data()`` build of the initial Rust VDOM snapshot — see
+# #1114). The ``{% data_table %}`` template tag must render this as an
+# empty table without raising.
+_PRE_MOUNT_TABLE_CONTEXT = {
+    "rows": [],
+    "columns": [],
+    "sort_by": "",
+    "sort_desc": False,
+    "sort_event": "table_sort",
+    "selectable": False,
+    "selected_rows": [],
+    "select_event": "table_select",
+    "row_key": "id",
+    "search": False,
+    "search_query": "",
+    "search_event": "table_search",
+    "search_debounce": 300,
+    "filters": {},
+    "filter_event": "table_filter",
+    "loading": False,
+    "empty_title": "No data",
+    "empty_description": "",
+    "empty_icon": "",
+    "paginate": False,
+    "page": 1,
+    "total_pages": 1,
+    "page_event": "table_page",
+    "striped": False,
+    "compact": False,
+    # Phase 2-5 keys default to falsy/empty so the template tag's
+    # ``{% if %}`` guards short-circuit and no event handlers wire up.
+    "editable_columns": [],
+    "edit_event": "table_cell_edit",
+    "resizable": False,
+    "reorderable": False,
+    "reorder_event": "table_reorder",
+    "frozen_left": 0,
+    "frozen_right": 0,
+    "column_visibility": False,
+    "visibility_event": "table_visibility",
+    "density": "comfortable",
+    "density_toggle": False,
+    "density_event": "table_density",
+    "responsive_cards": False,
+    "editable_rows": False,
+    "edit_row_event": "table_row_edit",
+    "save_row_event": "table_row_save",
+    "cancel_row_event": "table_row_cancel",
+    "editing_rows": [],
+    "expandable": False,
+    "expand_event": "table_expand",
+    "expanded_rows": [],
+    "bulk_actions": [],
+    "bulk_action_event": "table_bulk_action",
+    "exportable": False,
+    "export_event": "table_export",
+    "export_formats": ["csv", "json"],
+    "group_by": "",
+    "group_event": "table_group",
+    "group_toggle_event": "table_group_toggle",
+    "collapsible_groups": True,
+    "collapsed_groups": [],
+    "keyboard_nav": False,
+    "virtual_scroll": False,
+    "virtual_row_height": 40,
+    "virtual_buffer": 5,
+    "server_mode": False,
+    "facets": False,
+    "facet_counts": {},
+    "persist_key": "",
+    "printable": False,
+    "show_stats": False,
+    "column_stats": {},
+    "footer_aggregations": {},
+    "row_class_map": {},
+    "column_groups": [],
+    "row_drag": False,
+    "row_drag_event": "table_row_drag",
+    "copyable": False,
+    "copy_event": "table_copy",
+    "copy_format": "csv",
+    "importable": False,
+    "import_event": "table_import",
+    "import_formats": ["csv", "json"],
+    "import_preview": True,
+    "import_preview_data": [],
+    "import_errors": [],
+    "import_pending": False,
+    "computed_columns": [],
+    "cell_merge_key": "_merge",
+    "column_expressions": {},
+    "expression_event": "table_expression",
+    "active_expressions": {},
+    "conditional_formatting": [],
+    "row_order": [],
+    "current_group_by": "",
+    "column_order": [],
+    "visible_columns": [],
+    "current_density": "comfortable",
+    # Phase 6 (#1111: row-level navigation)
+    "row_click_event": "",
+    "row_click_value_key": "id",
+    "row_url": "",
+}
+
+
 class DataTableMixin:
-    """Mixin for LiveViews that provides automatic data table event handlers."""
+    """Mixin for LiveViews that provides automatic data table event handlers.
+
+    .. note::
+       **LiveView vs Component lifecycle (#1114)**
+
+       This mixin was originally designed for the ``Component`` API, where
+       ``get_template_context()`` runs only after ``__init__()`` has
+       completed. When used with ``LiveView`` (i.e. a class that mixes in
+       ``DataTableMixin`` AND ``LiveView``), djust's WebSocket consumer
+       calls ``get_context_data()`` BEFORE ``mount()`` runs, to build the
+       initial Rust VDOM snapshot. ``init_table_state()`` (typically called
+       from ``mount()``) hasn't run yet, so instance attributes like
+       ``self.table_rows`` don't exist.
+
+       The mixin handles this automatically via a pre-mount guard in
+       ``get_table_context()`` — the first call returns an empty-table
+       default; subsequent calls (after ``mount()``) return real state.
+
+       **All ``on_table_*`` event handlers below are decorated with
+       ``@event_handler()``** so they work under the default
+       ``event_security="strict"`` mode without per-view boilerplate.
+
+       For LiveView use cases that need FK traversal or large datasets,
+       prefer passing the queryset directly via ``get_context_data()`` and
+       defining ``@event_handler()``-decorated methods on your view —
+       djust's JIT serialization handles ORM objects natively without the
+       JSON-round-trip cost of ``self.table_rows``.
+    """
 
     # ── Class-level configuration ──
     # Note: mutable defaults (lists/dicts) are set to None here to avoid
@@ -269,6 +405,13 @@ class DataTableMixin:
     table_expression_event = "table_expression"
     table_conditional_formatting = None  # list of formatting preset dicts
 
+    # Phase 6 class-level configuration (#1111: row-level navigation)
+    table_row_click_event = (
+        ""  # if set, dj-click fires per row with data-value=row[row_click_value_key]
+    )
+    table_row_click_value_key = "id"  # which row key to send as data-value
+    table_row_url = ""  # if set, row becomes a static link (Option A in #1111)
+
     def init_table_state(self):
         """Initialize instance state. Call from mount()."""
         # Resolve None class-level defaults to fresh instances
@@ -329,6 +472,7 @@ class DataTableMixin:
 
     # ── Event Handlers ──
 
+    @event_handler()
     def on_table_sort(self, value, **kwargs):
         """Handle sort event: toggle direction or switch column."""
         column = str(value)
@@ -338,11 +482,13 @@ class DataTableMixin:
             self.table_sort_by = column
             self.table_sort_desc = False
 
+    @event_handler()
     def on_table_search(self, value, **kwargs):
         """Handle search event: update query, reset to page 1."""
         self.table_search_query = str(value)
         self.table_page = 1
 
+    @event_handler()
     def on_table_filter(self, value, column=None, **kwargs):
         """Handle filter event: set or clear per-column filter, reset to page 1."""
         if column is None:
@@ -355,6 +501,7 @@ class DataTableMixin:
             self.table_filters.pop(column, None)
         self.table_page = 1
 
+    @event_handler()
     def on_table_select(self, value, **kwargs):
         """Handle selection event: toggle row or select/deselect all."""
         value = str(value)
@@ -372,6 +519,7 @@ class DataTableMixin:
             else:
                 self.table_selected_rows.append(value)
 
+    @event_handler()
     def on_table_page(self, value, **kwargs):
         """Handle page event: navigate to page number."""
         try:
@@ -382,6 +530,7 @@ class DataTableMixin:
 
     # ── Phase 2 Event Handlers ──
 
+    @event_handler()
     def on_table_cell_edit(self, value, **kwargs):
         """Handle inline cell edit. value is JSON: {row_key, column, value}."""
         try:
@@ -399,29 +548,34 @@ class DataTableMixin:
         """Override this to persist inline cell edits. Called by on_table_cell_edit."""
         pass
 
+    @event_handler()
     def on_table_reorder(self, value, **kwargs):
         """Handle column reorder. value is comma-separated column keys."""
         new_order = [k.strip() for k in str(value).split(",") if k.strip()]
         if new_order:
             self.table_column_order = new_order
 
+    @event_handler()
     def on_table_visibility(self, value, **kwargs):
         """Handle column visibility toggle. value is comma-separated visible keys."""
         visible = [k.strip() for k in str(value).split(",") if k.strip()]
         self.table_visible_columns = visible
 
+    @event_handler()
     def on_table_density(self, value, **kwargs):
         """Handle density toggle. value is 'compact', 'comfortable', or 'spacious'."""
         val = str(value)
         if val in ("compact", "comfortable", "spacious"):
             self.table_current_density = val
 
+    @event_handler()
     def on_table_row_edit(self, value, **kwargs):
         """Handle entering row edit mode."""
         row_id = str(value)
         if row_id not in self.table_editing_rows:
             self.table_editing_rows.append(row_id)
 
+    @event_handler()
     def on_table_row_save(self, value, **kwargs):
         """Handle saving an edited row. Override handle_row_save to persist."""
         row_id = str(value)
@@ -429,6 +583,7 @@ class DataTableMixin:
         if row_id in self.table_editing_rows:
             self.table_editing_rows.remove(row_id)
 
+    @event_handler()
     def on_table_row_cancel(self, value, **kwargs):
         """Handle cancelling row edit."""
         row_id = str(value)
@@ -441,6 +596,7 @@ class DataTableMixin:
 
     # ── Phase 3 Event Handlers ──
 
+    @event_handler()
     def on_table_expand(self, value, **kwargs):
         """Handle row expansion toggle."""
         row_id = str(value)
@@ -449,6 +605,7 @@ class DataTableMixin:
         else:
             self.table_expanded_rows.append(row_id)
 
+    @event_handler()
     def on_table_bulk_action(self, value, **kwargs):
         """Handle bulk action on selected rows."""
         action = str(value)
@@ -458,6 +615,7 @@ class DataTableMixin:
         """Override this to handle bulk actions. Called with action key and selected row IDs."""
         pass
 
+    @event_handler()
     def on_table_export(self, value, **kwargs):
         """Handle export request. value is the format (csv/json)."""
         fmt = str(value)
@@ -489,10 +647,12 @@ class DataTableMixin:
             self.table_export_data = json.dumps(export_rows, default=str)
             self.table_export_format = "json"
 
+    @event_handler()
     def on_table_group(self, value, **kwargs):
         """Handle grouping by column."""
         self.table_current_group_by = str(value)
 
+    @event_handler()
     def on_table_group_toggle(self, value, **kwargs):
         """Handle group collapse/expand toggle."""
         group_key = str(value)
@@ -503,6 +663,7 @@ class DataTableMixin:
 
     # ── Phase 4 Event Handlers ──
 
+    @event_handler()
     def on_table_row_drag(self, value, **kwargs):
         """Handle row drag-and-drop reorder. value is JSON: {old_index, new_index}."""
         try:
@@ -524,6 +685,7 @@ class DataTableMixin:
         """Override this to persist row reorder. Called by on_table_row_drag."""
         pass
 
+    @event_handler()
     def on_table_copy(self, value, **kwargs):
         """Handle copy event. value is JSON list of row keys to copy."""
         try:
@@ -558,6 +720,7 @@ class DataTableMixin:
 
     # ── Phase 5 Event Handlers ──
 
+    @event_handler()
     def on_table_import(self, value, **kwargs):
         """Handle import event. value is JSON: {format, data, confirm}.
 
@@ -637,6 +800,7 @@ class DataTableMixin:
         """Override this to persist imported rows. Default appends to table_rows."""
         self.table_rows.extend(rows)
 
+    @event_handler()
     def on_table_expression(self, value, **kwargs):
         """Handle column expression filter. value is JSON: {column, expression}."""
         try:
@@ -991,7 +1155,30 @@ class DataTableMixin:
     # ── Context Generation ──
 
     def get_table_context(self):
-        """Return a dict suitable for the {% data_table %} template tag."""
+        """Return a dict suitable for the ``{% data_table %}`` template tag.
+
+        **Pre-mount safety (closes #1114)**: djust's WebSocket consumer calls
+        ``get_context_data()`` (which often calls this) BEFORE ``mount()``
+        runs, to build the initial Rust VDOM snapshot. Without ``mount()``,
+        ``init_table_state()`` hasn't run, so instance attributes like
+        ``self.table_rows``, ``self.table_sort_by``, etc. don't exist yet —
+        and a raw attribute read raises ``AttributeError`` (which djust
+        catches silently → empty initial VDOM → all subsequent patches diff
+        against empty content).
+
+        Guard: if ``init_table_state()`` hasn't run, return a minimal
+        pre-mount default that the ``{% data_table %}`` template tag can
+        render as an empty table without errors. The first patch after
+        ``mount()`` resolves to the real state.
+
+        Use ``table_rows`` as the sentinel attribute — it's set partway
+        through ``init_table_state()`` and serves as a cheap "init has
+        happened" signal. Any future re-ordering of ``init_table_state()``
+        should keep ``table_rows`` set on the instance before any code
+        path that calls ``get_table_context()`` runs.
+        """
+        if not hasattr(self, "table_rows"):
+            return _PRE_MOUNT_TABLE_CONTEXT
         return {
             "rows": self.table_rows,
             "columns": self.table_columns,
@@ -1060,6 +1247,7 @@ class DataTableMixin:
             "facet_counts": self.table_facet_counts,
             "persist_key": self.table_persist_key,
             "printable": self.table_printable,
+            "show_stats": self.table_show_stats,
             "column_stats": self.table_column_stats,
             # Phase 4
             "footer_aggregations": self.table_footer_aggregations,
@@ -1084,6 +1272,10 @@ class DataTableMixin:
             "expression_event": self.table_expression_event,
             "active_expressions": self.table_active_expressions,
             "conditional_formatting": self.table_conditional_formatting,
+            # Phase 6 (#1111: row-level navigation)
+            "row_click_event": self.table_row_click_event,
+            "row_click_value_key": self.table_row_click_value_key,
+            "row_url": self.table_row_url,
         }
 
     # ── Queryset Pipeline ──

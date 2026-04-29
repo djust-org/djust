@@ -26,11 +26,13 @@ from typing import Any, Dict
 
 import pytest
 
+from djust.decorators import event_handler
 from djust.time_travel import (
     EventSnapshot,
     TimeTravelBuffer,
     record_event_end,
     record_event_start,
+    replay_event,
     restore_snapshot,
 )
 
@@ -575,3 +577,792 @@ def test_capture_snapshot_state_deep_copies_nested_list():
     view.nested.append({"x": 3})
     view.nested[0]["x"] = 99
     assert captured["nested"] == [{"x": 1}, {"x": 2}]
+
+
+# ===========================================================================
+# v0.9.0 #1041: component-level time-travel
+# ===========================================================================
+
+
+class _FakeComponent:
+    """Stand-in for a LiveComponent — same surface time_travel walks."""
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class _ParentWithComponents:
+    """LiveView-like parent that registers components in ``self._components``,
+    same registry layout the production ``_assign_component_ids`` populates.
+    """
+
+    time_travel_enabled = True
+
+    def __init__(self):
+        self.title = "Parent"
+        self.count = 0
+        # Two components — Phase-2 multi-component scenario.
+        self._components = {
+            "alpha": _FakeComponent(active="q1", multiple=False),
+            "beta": _FakeComponent(value=10, label="ten"),
+        }
+        self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+    def _capture_snapshot_state(self):
+        # Borrow LiveView's real implementation. The parent helper
+        # calls ``self._capture_components_snapshot()`` so we also need
+        # to expose that on this stub.
+        from djust.live_view import LiveView
+
+        return LiveView._capture_snapshot_state(self)
+
+    def _capture_components_snapshot(self):
+        from djust.live_view import LiveView
+
+        return LiveView._capture_components_snapshot(self)
+
+
+class TestComponentLevelTimeTravel:
+    """v0.9.0 #1041 — component-level time-travel."""
+
+    def test_capture_includes_components_under_reserved_key(self):
+        """``_capture_snapshot_state`` adds a ``__components__`` key when
+        ``self._components`` is non-empty."""
+        view = _ParentWithComponents()
+        snap = view._capture_snapshot_state()
+        assert "__components__" in snap
+        assert set(snap["__components__"].keys()) == {"alpha", "beta"}
+        assert snap["__components__"]["alpha"] == {"active": "q1", "multiple": False}
+        assert snap["__components__"]["beta"] == {"value": 10, "label": "ten"}
+        # Parent state also captured.
+        assert snap["title"] == "Parent"
+        assert snap["count"] == 0
+
+    def test_capture_omits_components_key_when_registry_empty(self):
+        """A view without components produces a snapshot WITHOUT the
+        ``__components__`` key (no namespace pollution)."""
+        view = _ParentWithComponents()
+        view._components = {}
+        snap = view._capture_snapshot_state()
+        assert "__components__" not in snap
+
+    def test_capture_skips_private_and_callable_component_attrs(self):
+        """Component ``_private`` attrs and methods are not captured."""
+
+        class _ComponentWithPrivates:
+            def __init__(self):
+                self.public = "yes"
+                self._private = "no"
+                self.method = lambda: "no"
+
+        view = _ParentWithComponents()
+        view._components = {"x": _ComponentWithPrivates()}
+        snap = view._capture_snapshot_state()
+        assert snap["__components__"]["x"] == {"public": "yes"}
+
+    def test_restore_dispatches_per_component_state(self):
+        """``restore_snapshot`` applies each component's state to the
+        matching component in ``view._components``."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+
+        # Mutate parent and component state.
+        view.count = 5
+        view._components["alpha"].active = "q2"
+        view._components["beta"].value = 999
+
+        # Build a snapshot wrapping the captured "before" state.
+        snap = EventSnapshot(
+            event_name="mutate",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after=view._capture_snapshot_state(),
+        )
+
+        ok = restore_snapshot(view, snap, which="before")
+        assert ok is True
+        # Parent state restored.
+        assert view.count == 0
+        # Components restored.
+        assert view._components["alpha"].active == "q1"
+        assert view._components["alpha"].multiple is False
+        assert view._components["beta"].value == 10
+
+    def test_restore_unknown_component_id_logs_and_returns_false(self):
+        """Snapshot references a component not in current registry —
+        log a warning and return ``False``, but other components still
+        restore."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Mutate so we have something to restore.
+        view._components["alpha"].active = "q3"
+        # Inject a phantom component id into the snapshot.
+        before["__components__"]["ghost"] = {"foo": "bar"}
+
+        snap = EventSnapshot(
+            event_name="evt",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        # ghost id not in registry → False; alpha still restored.
+        assert ok is False
+        assert view._components["alpha"].active == "q1"
+
+    def test_restore_does_not_remove_components_absent_from_snapshot(self):
+        """Components in current registry but absent from the snapshot
+        keep their current state — components are first-class instances,
+        not parent-scoped attrs, so the ghost-attr cleanup model
+        (used for parent attrs) doesn't apply here."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Add a NEW component after the snapshot.
+        view._components["gamma"] = _FakeComponent(extra="present")
+
+        snap = EventSnapshot(
+            event_name="evt",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        assert ok is True
+        # gamma survives even though it's not in the snapshot.
+        assert "gamma" in view._components
+        assert view._components["gamma"].extra == "present"
+
+    def test_state_before_and_after_disconnect_from_live_components(self):
+        """Mirrors the parent-state aliasing fix: snapshots must NOT
+        share refs with live component attrs. Mutating
+        ``view._components[id].mutable`` after capture must not change
+        the snapshot."""
+
+        class _MutableComponent:
+            def __init__(self):
+                self.items = [1, 2, 3]
+
+        view = _ParentWithComponents()
+        view._components = {"m": _MutableComponent()}
+        snap = view._capture_snapshot_state()
+        # Mutate the live component state.
+        view._components["m"].items.append(99)
+        # Snapshot is untouched.
+        assert snap["__components__"]["m"]["items"] == [1, 2, 3]
+
+    def test_component_restore_blocks_dunder_via_safe_setattr(self):
+        """The safe_setattr defense layer applies to component restore
+        too: a hand-edited snapshot trying to set ``__class__`` on a
+        component is rejected with no class-level mutation."""
+        view = _ParentWithComponents()
+        before = view._capture_snapshot_state()
+        # Inject a malicious dunder into the alpha snapshot.
+        before["__components__"]["alpha"]["__class__"] = object
+
+        snap = EventSnapshot(
+            event_name="evil",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        # safe_setattr blocked the dunder; ok flag flipped to False.
+        assert ok is False
+        # Component class is unchanged.
+        assert isinstance(view._components["alpha"], _FakeComponent)
+
+    def test_component_id_excluded_from_snapshot(self):
+        """``component_id`` is in ``_COMPONENT_INTERNAL_ATTRS`` because
+        it's the registry key — restoring stale state would desync.
+        Verify it's not captured."""
+        view = _ParentWithComponents()
+        # Set the public attr that mirrors the registry key.
+        view._components["alpha"].component_id = "alpha"
+        snap = view._capture_snapshot_state()
+        assert "component_id" not in snap["__components__"]["alpha"]
+
+    def test_component_template_attrs_excluded_from_snapshot(self):
+        """``template`` / ``template_name`` are framework-internal —
+        not user state. Excluded from the snapshot."""
+        view = _ParentWithComponents()
+        view._components["alpha"].template = "<div>my-tpl</div>"
+        view._components["alpha"].template_name = "comp.html"
+        snap = view._capture_snapshot_state()
+        assert "template" not in snap["__components__"]["alpha"]
+        assert "template_name" not in snap["__components__"]["alpha"]
+
+
+# ===========================================================================
+# v0.9.0 #1042: replay_event (Redux DevTools forward-replay parity)
+# ===========================================================================
+
+
+class _CounterView:
+    """LiveView-like fixture with a counter handler used to test replay."""
+
+    time_travel_enabled = True
+
+    def __init__(self):
+        self.count = 0
+        self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+    def _capture_snapshot_state(self):
+        from djust.live_view import LiveView
+
+        return LiveView._capture_snapshot_state(self)
+
+    def _capture_components_snapshot(self):
+        from djust.live_view import LiveView
+
+        return LiveView._capture_components_snapshot(self)
+
+    @event_handler
+    def increment(self, n=1, **kwargs):
+        self.count += n
+
+    def some_helper(self, **kwargs):
+        """Plain method — NOT a registered handler. Used to verify
+        the replay arg-validation guard rejects unregistered methods
+        even though the underscore-prefix check passes."""
+        self.count = -999
+
+
+class TestReplayEvent:
+    """v0.9.0 #1042 — forward-replay through branched timeline."""
+
+    def test_replay_with_original_params_is_deterministic(self):
+        """Replaying a snapshot with its original ``params`` produces
+        identical ``state_after``."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+        assert view.count == 5
+
+        # Now mutate state, then replay.
+        view.count = 100
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        # Replay restored to state_before (count=0) then incremented by 5.
+        assert view.count == 5
+        # The new snapshot reflects the replay.
+        assert replay_snap.state_before == {"count": 0}
+        assert replay_snap.state_after == {"count": 5}
+
+    def test_replay_with_override_params_branches_timeline(self):
+        """Replaying with ``override_params`` produces a different
+        ``state_after`` — Redux DevTools "swap action" parity."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+
+        # Replay with a different n.
+        replay_snap = replay_event(view, snap, override_params={"n": 100})
+        assert replay_snap is not None
+        assert replay_snap.state_after == {"count": 100}
+        assert view.count == 100
+
+    def test_replay_records_new_snapshot_in_buffer(self):
+        """The replay snapshot lands in the buffer so the branched
+        timeline is itself scrubbable."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+
+        before_count = len(view._time_travel_buffer)
+        replay_event(view, snap)
+        after_count = len(view._time_travel_buffer)
+        assert after_count == before_count + 1
+
+    def test_dry_replay_does_not_record(self):
+        """``record_replay=False`` mutates the view but skips the
+        buffer append — useful for "preview branch" UI."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+
+        before_count = len(view._time_travel_buffer)
+        result = replay_event(view, snap, record_replay=False)
+        assert result is None
+        assert len(view._time_travel_buffer) == before_count
+        # View was still mutated (state_before restored, then handler ran).
+        assert view.count == 5
+
+    def test_replay_missing_handler_returns_none(self):
+        """If the recorded ``event_name`` is no longer a method on the
+        view, ``replay_event`` logs and returns ``None``."""
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="renamed_handler",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+
+    def test_replay_handler_exception_recorded_in_replay_snapshot(self):
+        """If the replayed handler raises, the new snapshot's
+        ``error`` field is set and the snapshot is still returned
+        (so the debug panel can show 'this branch errored at step
+        N')."""
+        view = _CounterView()
+
+        @event_handler
+        def _bad(self, **kwargs):
+            raise ValueError("intentional")
+
+        # Bind the decorated function as an instance attribute. The
+        # ``is_event_handler`` validator (#1148) accepts the
+        # decorated method so the replay guard passes; the body
+        # then raises and the error is recorded.
+        view.bad_handler = _bad.__get__(view, type(view))
+
+        snap = EventSnapshot(
+            event_name="bad_handler",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        assert replay_snap.error is not None
+        assert "intentional" in replay_snap.error
+
+    def test_replay_restores_component_state_before_invoking(self):
+        """Replay uses ``restore_snapshot`` to set ``state_before``,
+        which includes per-component state via #1041. So a handler
+        whose body reads ``self._components[id].value`` sees the
+        captured value, not the live value."""
+
+        class _ComponentReadingView:
+            time_travel_enabled = True
+
+            def __init__(self):
+                self._components = {"a": _FakeComponent(value=10)}
+                self.observed = None
+                self._time_travel_buffer = TimeTravelBuffer(max_events=10)
+
+            def _capture_snapshot_state(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_snapshot_state(self)
+
+            def _capture_components_snapshot(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_components_snapshot(self)
+
+            @event_handler
+            def read_component(self, **kwargs):
+                self.observed = self._components["a"].value
+
+        view = _ComponentReadingView()
+        # Capture a snapshot when component value is 10.
+        snap = record_event_start(view, "read_component", {}, ref=1)
+        view.read_component()
+        record_event_end(view, snap)
+        assert view.observed == 10
+
+        # Now MUTATE the component to 999 and replay. Replay should
+        # see the captured value of 10, not the live 999.
+        view._components["a"].value = 999
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        assert view.observed == 10
+        assert view._components["a"].value == 10  # restored
+
+    def test_replay_rejects_dunder_event_name(self):
+        """Defense-in-depth — a hand-edited snapshot with
+        ``event_name='__init__'`` could re-invoke the constructor
+        through bare ``getattr``. Replay refuses dunder/private
+        names."""
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="__init__",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        result = replay_event(view, snap)
+        assert result is None
+
+    def test_nested_replay_of_replay_snapshot(self):
+        """A snapshot produced by a previous replay can itself be
+        replayed — the branched timeline is scrubbable end-to-end."""
+        view = _CounterView()
+        # Original event.
+        snap1 = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap1)
+        assert view.count == 5
+
+        # First replay produces snap2 (branched timeline).
+        snap2 = replay_event(view, snap1, override_params={"n": 7})
+        assert snap2 is not None
+        assert view.count == 7
+
+        # Replay snap2. Re-uses snap2's state_before (count=0) +
+        # n=7 → count=7.
+        snap3 = replay_event(view, snap2)
+        assert snap3 is not None
+        assert snap3.state_after == {"count": 7}
+        assert view.count == 7
+
+    def test_replay_when_time_travel_disabled_mid_way_returns_none(self):
+        """If ``time_travel_enabled`` is flipped to False between
+        snapshot capture and replay, ``replay_event`` still mutates
+        the view (handler runs from state_before) but the new
+        snapshot is NOT recorded — same shape as the dry-replay
+        path."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 5}, ref=1)
+        view.increment(n=5)
+        record_event_end(view, snap)
+        assert view.count == 5
+
+        # Disable time-travel.
+        view.time_travel_enabled = False
+        before_count = len(view._time_travel_buffer)
+
+        # Replay — buffer unchanged, view still mutated.
+        result = replay_event(view, snap)
+        assert result is None
+        assert len(view._time_travel_buffer) == before_count
+        assert view.count == 5  # mutated from state_before (0) + n=5
+
+
+# ===========================================================================
+# v0.9.1 #1148: replay_event handler-registration validation
+# ===========================================================================
+
+
+class TestReplayHandlerValidation:
+    """v0.9.1 #1148 — defense-in-depth: replay_event must validate that
+    the resolved attribute is an ``@event_handler``-decorated method,
+    not just any non-underscore attribute on the view.
+
+    The original v0.9.0 #1042 guard rejected only dunder/private
+    names (``startswith("_")``). That admits ANY public method
+    (helpers, inherited utilities, property getters), so a
+    hand-edited or malicious snapshot could replay e.g.
+    ``view.delete_all_records()`` even when that's never been
+    exposed to the dispatcher. The fix tightens the guard to use
+    ``is_event_handler``, matching the same acceptance criteria the
+    dispatcher uses for ``server_push`` handlers (see
+    ``websocket.py`` ~ line 4389)."""
+
+    def test_replay_registered_handler_succeeds(self):
+        """Regression: replaying an ``@event_handler``-decorated
+        method still works after the validation guard was added."""
+        view = _CounterView()
+        snap = record_event_start(view, "increment", {"n": 3}, ref=1)
+        view.increment(n=3)
+        record_event_end(view, snap)
+        assert view.count == 3
+
+        replay_snap = replay_event(view, snap)
+        assert replay_snap is not None
+        assert replay_snap.state_after == {"count": 3}
+
+    def test_replay_unregistered_method_returns_none(self, caplog):
+        """A snapshot naming a non-handler method (no
+        ``@event_handler`` decorator) is rejected by the guard.
+        ``view.some_helper`` exists, is callable, and isn't
+        underscore-prefixed — but it isn't a registered handler.
+
+        Also asserts the rejection emits a ``logger.warning`` record
+        with the expected message text (#1165 sub-item a). Without
+        this, a future regression that silently demotes the
+        ``logger.warning(...)`` call to a no-op (e.g. dropped during
+        a refactor) would leave the side-effect assertion green and
+        the regression invisible to CI."""
+        import logging
+
+        view = _CounterView()
+        assert callable(view.some_helper)
+
+        snap = EventSnapshot(
+            event_name="some_helper",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="djust.time_travel"):
+            result = replay_event(view, snap)
+        assert result is None
+        assert view.count != -999  # helper body never ran
+        assert any(
+            "refused unregistered method" in record.getMessage()
+            and "some_helper" in record.getMessage()
+            for record in caplog.records
+        ), "expected a 'refused unregistered method' warning; got: " + repr(
+            [r.getMessage() for r in caplog.records]
+        )
+
+    def test_replay_dunder_still_rejected(self, caplog):
+        """Regression for the existing underscore-prefix guard: even
+        with the new ``is_event_handler`` check, dunder/private
+        names are rejected by the earlier short-circuit.
+
+        Also asserts the rejection emits a ``logger.warning`` record
+        with the expected message text (#1165 sub-item a)."""
+        import logging
+
+        view = _CounterView()
+        snap = EventSnapshot(
+            event_name="__init__",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before={"count": 0},
+        )
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="djust.time_travel"):
+            result = replay_event(view, snap)
+        assert result is None
+        assert any(
+            "refused dunder/private event_name" in record.getMessage()
+            and "__init__" in record.getMessage()
+            for record in caplog.records
+        ), "expected a 'refused dunder/private event_name' warning; got: " + repr(
+            [r.getMessage() for r in caplog.records]
+        )
+
+
+# ===========================================================================
+# v0.9.1 #1150: descriptor-pattern component time-travel verification
+# ===========================================================================
+
+
+class TestDescriptorPatternComponentTimeTravel:
+    """v0.9.1 #1150 — Stage 11 deferred from PR #1141.
+
+    The PR #1141 ``_capture_components_snapshot`` walks
+    ``self._components`` and the defense layer
+    (``_COMPONENT_INTERNAL_ATTRS``) keeps framework config attrs
+    (``component_id``, ``template``, ``template_name``, ``assigns``,
+    ``slots``) out of the snapshot. PR #1141 retro flagged that
+    descriptor-pattern components — declared as class attributes,
+    state stored under ``obj.__dict__["_component_<name>"]`` — were
+    never directly verified end-to-end.
+
+    These tests pin down the contract for descriptor-pattern
+    components: when a descriptor-pattern component is registered
+    in ``self._components`` (so the snapshot machinery sees it), the
+    capture/restore round-trip preserves its public state and the
+    defense layer correctly excludes framework-internal fields."""
+
+    def test_descriptor_pattern_component_round_trip(self):
+        """Build a view with a descriptor-pattern LiveComponent,
+        register it in ``_components``, capture/mutate/restore.
+        The round-trip leaves the component's state intact."""
+        from djust.components.assigns import Assign
+        from djust.components.base import LiveComponent
+
+        class _DescriptorBadge(LiveComponent):
+            template = "<span>{{ label }}</span>"
+            assigns = [Assign("label", type=str, default="ten")]
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.label = kwargs.get("label", "ten")
+                self.value = kwargs.get("value", 10)
+                self.component_id = kwargs.get("component_id", "badge_descr")
+
+        class _ParentView:
+            time_travel_enabled = True
+
+            def __init__(self):
+                self.title = "Parent"
+                badge = _DescriptorBadge(label="ten", value=10)
+                self._components = {badge.component_id: badge}
+                self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+            def _capture_snapshot_state(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_snapshot_state(self)
+
+            def _capture_components_snapshot(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_components_snapshot(self)
+
+        view = _ParentView()
+        snap_before = view._capture_snapshot_state()
+        assert "__components__" in snap_before
+        assert "badge_descr" in snap_before["__components__"]
+        captured = snap_before["__components__"]["badge_descr"]
+        assert captured["label"] == "ten"
+        assert captured["value"] == 10
+        # Defense layer #1141.
+        assert "component_id" not in captured
+        assert "template" not in captured
+        assert "assigns" not in captured
+
+        view._components["badge_descr"].label = "ninety-nine"
+        view._components["badge_descr"].value = 99
+
+        snap = EventSnapshot(
+            event_name="evt",
+            params={},
+            ref=1,
+            ts=0.0,
+            state_before=snap_before,
+            state_after={},
+        )
+        ok = restore_snapshot(view, snap, which="before")
+        assert ok is True
+        assert view._components["badge_descr"].label == "ten"
+        assert view._components["badge_descr"].value == 10
+        assert view._components["badge_descr"].component_id == "badge_descr"
+
+    def test_descriptor_pattern_component_internal_attrs_never_restored(self):
+        """Even if a hand-edited snapshot includes an
+        ``_COMPONENT_INTERNAL_ATTRS`` field for a descriptor-pattern
+        component, the field is filtered out of the captured state
+        in the first place. Confirms the defense layer applies
+        regardless of the component's declaration style."""
+        from djust.components.base import LiveComponent
+        from djust.live_view import _COMPONENT_INTERNAL_ATTRS
+
+        class _DescriptorWidget(LiveComponent):
+            template = "<div>{{ value }}</div>"
+
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.value = kwargs.get("value", "x")
+                self.component_id = "widget_descr"
+                self.template_name = "widgets/descr.html"
+                self.assigns = []
+                self.slots = []
+
+        class _ParentView:
+            time_travel_enabled = True
+
+            def __init__(self):
+                widget = _DescriptorWidget(value="hello")
+                self._components = {widget.component_id: widget}
+                self._time_travel_buffer = TimeTravelBuffer(max_events=20)
+
+            def _capture_snapshot_state(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_snapshot_state(self)
+
+            def _capture_components_snapshot(self):
+                from djust.live_view import LiveView
+
+                return LiveView._capture_components_snapshot(self)
+
+        view = _ParentView()
+        snap = view._capture_snapshot_state()
+        captured = snap["__components__"]["widget_descr"]
+        assert captured == {"value": "hello"}
+        for key in _COMPONENT_INTERNAL_ATTRS:
+            assert key not in captured, (
+                "framework-internal attr %r leaked into descriptor component snapshot" % key
+            )
+
+
+# ---------------------------------------------------------------------------
+# #1151, v0.9.4 — restore_component_snapshot + next_branch_id unit tests.
+# ---------------------------------------------------------------------------
+
+
+def test_restore_component_snapshot_does_not_touch_parent_state():
+    """Single-component restore writes only to the named component."""
+    from djust.time_travel import restore_component_snapshot
+
+    class _Comp:
+        def __init__(self):
+            self.value = 0
+
+    class _View:
+        def __init__(self):
+            self.total = 100  # parent attr — must be untouched
+            self._components = {"comp-a": _Comp(), "comp-b": _Comp()}
+
+    view = _View()
+    view._components["comp-a"].value = 99
+    view._components["comp-b"].value = 88
+    snap = EventSnapshot(
+        event_name="evt",
+        params={},
+        ref=None,
+        ts=0.0,
+        state_before={
+            "total": 0,
+            "__components__": {"comp-a": {"value": 5}, "comp-b": {"value": 7}},
+        },
+        state_after={
+            "total": 12,
+            "__components__": {"comp-a": {"value": 6}, "comp-b": {"value": 8}},
+        },
+    )
+
+    ok = restore_component_snapshot(view, snap, "comp-a", which="before")
+    assert ok is True
+    assert view._components["comp-a"].value == 5  # restored
+    assert view._components["comp-b"].value == 88  # untouched
+    assert view.total == 100  # parent attr — never written
+
+
+def test_restore_component_snapshot_returns_false_for_missing_component():
+    """Missing component_id ⇒ False, no exception."""
+    from djust.time_travel import restore_component_snapshot
+
+    class _View:
+        _components: dict = {}
+
+    snap = EventSnapshot(
+        event_name="evt",
+        params={},
+        ref=None,
+        ts=0.0,
+        state_before={"__components__": {"comp-a": {"value": 1}}},
+        state_after={"__components__": {"comp-a": {"value": 2}}},
+    )
+    assert restore_component_snapshot(_View(), snap, "comp-missing", which="before") is False
+
+
+def test_next_branch_id_increments_counter():
+    """Branch-id allocator yields branch-0, branch-1, … and bumps the counter."""
+    from djust.time_travel import next_branch_id
+
+    class _View:
+        _time_travel_branch_counter = 0
+
+    view = _View()
+    assert next_branch_id(view) == "branch-0"
+    assert view._time_travel_branch_counter == 1
+    assert next_branch_id(view) == "branch-1"
+    assert view._time_travel_branch_counter == 2
+
+
+def test_next_branch_id_defaults_to_main_when_counter_missing():
+    """Defensive default: views without the counter attr stay on 'main'."""
+    from djust.time_travel import next_branch_id
+
+    class _LegacyView:
+        pass
+
+    assert next_branch_id(_LegacyView()) == "main"
