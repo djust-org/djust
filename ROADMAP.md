@@ -1646,6 +1646,40 @@ Open questions that inform future direction:
 - **Django async views integration** — Django 4.1+ supports `async def` views natively. Evaluate deeper integration: `async def mount()`, `async def handle_event()`, native `await` in event handlers without `start_async` wrapper. Could simplify the async story significantly for Django 5.0+ projects.
 - **Trusted Types API** — Chrome enforces Trusted Types to prevent DOM XSS. Evaluate ensuring all djust client-side DOM writes (`innerHTML` in morph, streaming HTML injection) go through Trusted Types policies. This would make djust the first LiveView framework with Trusted Types compliance — a selling point for enterprise/security-conscious teams.
 - **Federated LiveView (cross-origin embedding)** — Evaluate a protocol for embedding a LiveView from one Django app inside another app's page, with cross-origin WebSocket communication. Use case: microservices architecture where each team owns a LiveView widget. Related to the WebComponent export idea but more dynamic.
+
+### Phoenix LiveView gap-closing (post-1.0)
+
+Items below close concrete Phoenix LiveView features that djust doesn't have. Ordered by leverage.
+
+- **`djust-native` (mobile, post-1.0)** — Phoenix LiveView Native renders the same LiveView class via SwiftUI / Jetpack Compose / Web. Biggest single Phoenix advantage today; teams building web + mobile from one codebase currently have to choose Phoenix. Concrete plan, ~2-3 month project as a separate `djust-native` package:
+  - Same `LiveView` Python class, same WebSocket transport, but native renderer emits SwiftUI/Compose widget commands instead of HTML patches.
+  - Reuses the existing wire protocol (mount/event/patch frames). New: a `render_native()` method that emits widget JSON instead of HTML.
+  - Templates need a native-equivalent format. Phoenix uses `.heex` for HTML and `.swiftui.heex` for native; djust would use `.html` + `.native.json` (or DSL).
+  - Worth a dedicated maintainer or contributor since it's its own platform-team-ish effort. Doesn't block 1.0 of djust core.
+
+- **`used_input?` server-side input-touched tracking (post-1.0)** — Phoenix's `Phoenix.Component.used_input?/2` tracks whether a form input was edited so error messages don't show on un-touched fields. djust doesn't have this; the matrix below at "**`used_input?` (server-side)**" is currently "Not started." Concrete plan, ~1 week:
+  - Track per-input dirty state in the form mixin (`python/djust/forms.py` / `mixins/form.py`).
+  - Expose `used_input(field_name) -> bool` for templates.
+  - Wire automatically into `LiveViewForm` so existing form-validation views opt in for free.
+
+- **OpenTelemetry event taxonomy (post-1.0)** — Phoenix emits standardized `[:phoenix, :live_view, :mount]` Telemetry events that DataDog / New Relic / Honeycomb integrations key off. djust has observability but with djust-specific event shapes, so off-the-shelf APM dashboards don't work. Concrete plan, ~2 weeks:
+  - Emit OpenTelemetry spans with conventional names: `djust.live_view.mount`, `djust.live_view.event`, `djust.live_view.render`, `djust.live_view.patch`, `djust.streaming.chunk`.
+  - Span attributes follow OTel semantic conventions (`http.route`, `user.id`, `code.namespace`).
+  - Subsumes the existing observability log handler; the OTel-aware backends (Honeycomb, DataDog) get rich traces out of the box.
+
+- **`djust.pubsub.broadcast` first-class abstraction (post-1.0)** — djust has Channel groups + `push_to_view` + PostgreSQL NOTIFY but it's not as composable as `Phoenix.PubSub.broadcast(MyApp.PubSub, "topic", msg)`. Concrete plan, ~1 week:
+  - Wrap the existing primitives in `djust.pubsub.broadcast(topic: str, payload: dict, *, backend: str = "channels")`.
+  - Backends: `channels` (default), `redis`, `pg_notify`. Pluggable.
+  - Subscribe via `@subscribe_to("topic")` decorator on `handle_info` methods.
+  - The composition gain: handlers fan out via the same primitive regardless of backend; tests substitute in-memory.
+
+### Phoenix LiveView gaps that are NOT closable
+
+Documented for honesty — these are architectural impossibilities given Python, not roadmap items:
+
+- **BEAM/GenServer crash isolation** — Phoenix LiveViews are supervised processes; a crash restarts cleanly without affecting siblings. Python uses async tasks. Mitigation is best-effort try/except wrappers (already in djust); no equivalent to "the supervisor restarts your view."
+- **Distribution** — Phoenix can run LiveViews on different BEAM nodes via Erlang Distribution; clients don't know. djust's cross-process story is Channel-layer Redis fan-out, which works but is nowhere near `:rpc.call` ergonomics.
+- **Hot code upgrade in production** — Phoenix can swap GenServer modules at runtime, preserving in-flight state across deploys. djust HVR is dev-only and view-class-only; production deploys spin up new workers. Probably not closable in any practical Python way.
 | ~~**Lock (prevent double-fire)**~~ | ~~**Event ack protocol**~~ | — | ✅ **Shipped** — `dj-lock` (event-binding.js, response-handler.js) | **v0.4.0** |
 | ~~**Auto-recover (custom)**~~ | ~~**`phx-auto-recover`**~~ | — | ✅ **Shipped** — `dj-auto-recover` reconnect handler (event-binding.js:1414, websocket.js:126,358,421) | **v0.4.0** |
 | ~~**Cloak (FOUC prevention)**~~ | — | ~~**`v-cloak` (Vue)**~~ | ✅ **Shipped** — `dj-cloak` (websocket.js + namespace.js) | **v0.4.0** |
