@@ -1,26 +1,68 @@
 """Rich Select component for programmatic use in LiveViews."""
 
 import html
-from typing import Optional
+import re
+from typing import Dict, List, Optional
 
 from djust import Component
 
 
+# Built-in variants for which djust ships CSS out of the box. Matches the
+# Badge / Button / Tag / Alert signal set, plus the theme-standard
+# `primary` / `secondary` for projects with more than 5 categories.
+_BUILTIN_VARIANTS = {
+    "default",
+    "info",
+    "success",
+    "warning",
+    "danger",
+    "muted",
+    "primary",
+    "secondary",
+}
+
+# Any variant name consumers pass through must match this pattern so it can
+# be safely interpolated into a CSS class attribute. Downstream projects can
+# define their own variants (e.g. `indigo`, `accent-2`) by shipping a
+# matching `.rich-select-option--variant-<name>` rule in their own CSS.
+_VARIANT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
 class RichSelect(Component):
     """Select dropdown where each option can include icons, images, descriptions,
-    or badges alongside the label.
+    badges, or variant coloring alongside the label.
 
     Usage in a LiveView::
 
         self.assignee = RichSelect(
             name="assignee",
             options=[
-                {"value": "alice", "label": "Alice", "icon": "A", "description": "Engineering"},
-                {"value": "bob", "label": "Bob", "badge": "Admin"},
+                {"value": "alice", "label": "Alice", "icon": "A", "variant": "success"},
+                {"value": "bob", "label": "Bob", "badge": "Admin", "variant": "info"},
             ],
             value="alice",
             event="select_assignee",
         )
+
+    Or colour a picker from a value → variant map (convenience, mirrors
+    ``Badge.status()``)::
+
+        self.status_picker = RichSelect(
+            name="status",
+            options=[
+                {"value": "NEW", "label": "New"},
+                {"value": "SETTLED", "label": "Settled"},
+                {"value": "DENIED", "label": "Denied"},
+            ],
+            value="NEW",
+            event="set_status",
+            variant_map={"NEW": "info", "SETTLED": "success", "DENIED": "danger"},
+        )
+
+    When an option has a variant, its row is tinted in the dropdown and —
+    if it is the currently selected option — the trigger itself is tinted
+    to match. Variants available: ``info``, ``success``, ``warning``,
+    ``danger``, ``muted`` (plus the implicit ``default`` = no tint).
 
     In template::
 
@@ -29,25 +71,29 @@ class RichSelect(Component):
     Args:
         name: form field name
         options: list of dicts with keys: value, label, and optional icon, image,
-                 description, badge
+                 description, badge, variant
         value: currently selected value
         event: dj-click event name for selection
         placeholder: text shown when nothing is selected
-        disabled: disables the control
+        disabled: disables the control; suppresses trigger variant tint
         searchable: adds search input to filter options
         label: optional label text
+        variant_map: optional dict mapping option value → variant name;
+                     applied to any option that doesn't already declare
+                     its own ``variant`` key
     """
 
     def __init__(
         self,
         name: str = "",
-        options: Optional[list] = None,
+        options: Optional[List[Dict]] = None,
         value: str = "",
         event: str = "",
         placeholder: str = "Select...",
         disabled: bool = False,
         searchable: bool = False,
         label: str = "",
+        variant_map: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -59,6 +105,7 @@ class RichSelect(Component):
             disabled=disabled,
             searchable=searchable,
             label=label,
+            variant_map=variant_map,
             **kwargs,
         )
         self.name = name
@@ -69,6 +116,29 @@ class RichSelect(Component):
         self.disabled = disabled
         self.searchable = searchable
         self.label = label
+        self.variant_map = variant_map or {}
+
+    def _resolve_variant(self, opt: Dict) -> str:
+        """Return the variant to render for a given option.
+
+        Per-option ``variant`` key wins; otherwise the constructor's
+        ``variant_map`` is consulted. The name is validated against
+        ``_VARIANT_NAME_RE`` so it can be safely interpolated into a
+        CSS class attribute — malformed or attacker-controlled names
+        fall back to ``"default"``.
+
+        Names outside the built-in set (``info``, ``success``, etc.) are
+        accepted verbatim, which lets downstream projects add their own
+        variants by shipping a matching
+        ``.rich-select-option--variant-<name>`` CSS rule.
+        """
+        explicit = opt.get("variant", "")
+        if explicit:
+            return explicit if _VARIANT_NAME_RE.match(str(explicit)) else "default"
+        mapped = self.variant_map.get(str(opt.get("value", "")), "")
+        if mapped:
+            return mapped if _VARIANT_NAME_RE.match(str(mapped)) else "default"
+        return "default"
 
     def _render_custom(self) -> str:
         """Render the rich select HTML."""
@@ -85,25 +155,38 @@ class RichSelect(Component):
                 selected_opt = opt
                 break
 
+        # Trigger inherits the selected option's variant (when enabled).
+        # Disabled pickers keep a neutral trigger so the "greyed out" cue
+        # isn't competing with a bright colour signal.
+        trigger_variant_cls = ""
+        if selected_opt and not self.disabled:
+            variant = self._resolve_variant(selected_opt)
+            if variant != "default":
+                trigger_variant_cls = f" rich-select-trigger--variant-{variant}"
+
         if selected_opt:
             selected_html = self._option_html(selected_opt)
         else:
             selected_html = f'<span class="rich-select-placeholder">{e_placeholder}</span>'
 
-        # Build option list
+        # Build option list. Each option carries an onclick that closes the
+        # dropdown — the subsequent dj-click round-trip re-renders with the
+        # new value so the trigger updates its variant tint automatically.
         opt_parts = []
         for opt in self.options:
             if not isinstance(opt, dict):
                 continue
             ov = str(opt.get("value", ""))
             active_cls = " rich-select-option--active" if ov == self.value else ""
-            opt_html = self._option_html(opt)
+            variant = self._resolve_variant(opt)
+            variant_cls = f" rich-select-option--variant-{variant}" if variant != "default" else ""
             opt_parts.append(
-                f'<div class="rich-select-option{active_cls}" '
+                f'<div class="rich-select-option{active_cls}{variant_cls}" '
                 f'data-value="{html.escape(ov)}" '
                 f'dj-click="{dj_event}" '
-                f'role="option" aria-selected="{"true" if ov == self.value else "false"}">'
-                f"{opt_html}"
+                f'role="option" aria-selected="{"true" if ov == self.value else "false"}" '
+                f"onclick=\"this.closest('.rich-select').classList.remove('rich-select--open')\">"
+                f"{self._option_html(opt)}"
                 f"</div>"
             )
 
@@ -111,12 +194,26 @@ class RichSelect(Component):
             f'<label class="form-label">{html.escape(self.label)}</label>' if self.label else ""
         )
 
+        # Trigger carries both the open/close toggle (onclick + keyboard) and
+        # its variant tint class. Keyboard handlers match the template-tag
+        # variant so parity is maintained between both entry points. Disabled
+        # pickers omit the handlers entirely.
+        trigger_behaviour = (
+            ""
+            if self.disabled
+            else " onclick=\"this.parentElement.classList.toggle('rich-select--open')\""
+            " onkeydown=\"if(event.key==='Enter'||event.key===' '){event.preventDefault();"
+            "this.parentElement.classList.toggle('rich-select--open');}\""
+        )
+
         return (
             f'<div class="rich-select{disabled_cls}">'
             f"{label_html}"
             f'<input type="hidden" name="{e_name}" value="{html.escape(self.value)}">'
-            f'<div class="rich-select-trigger" tabindex="0" role="combobox" '
-            f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}>'
+            f'<div class="rich-select-trigger{trigger_variant_cls}" '
+            f'tabindex="0" role="combobox" '
+            f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}'
+            f"{trigger_behaviour}>"
             f"{selected_html}"
             f'<span class="rich-select-chevron">&#9662;</span>'
             f"</div>"
