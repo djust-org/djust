@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dedicated documentation site at [docs.djust.org](https://docs.djust.org).**
+  Extracted from `djust.org/docs/` into a standalone Django site built with
+  djust itself (dogfooding). Pulls markdown from this repository via a pinned
+  git submodule, so docs always match a specific released version of the
+  framework. Launch covers all 23 user-facing guides, 9 API reference pages
+  (from `docs/ai/`), the full 20-page component catalog, the changelog with
+  deep-linkable per-release anchors, and the migration guide — **60 pages
+  total**. Uses djust 0.7.0rc1 features including `{% djust_markdown %}`
+  (Rust pulldown-cmark), the built-in `djust` theme pack in dark mode, and
+  `dj-prefetch` hints on nav links. Source:
+  [djust-org/docs.djust.org](https://github.com/djust-org/docs.djust.org).
 - **`RichSelect` — per-option `variant` support and `variant_map` convenience
   kwarg.** Each option dict can now carry a `variant` key
   (`info`/`success`/`warning`/`danger`/`muted`/`primary`/`secondary`) that
