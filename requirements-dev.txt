@@ -21,7 +21,7 @@ mypy>=1.0
 
 # Documentation
 sphinx>=5.0
-sphinx-rtd-theme>=1.0
+sphinx-rtd-theme>=3.1.0
 
 # Benchmarking
 memory-profiler>=0.61.0
