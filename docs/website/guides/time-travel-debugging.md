@@ -9,13 +9,10 @@ description: "Scrub back through event history and jump to any past view state (
 
 # Time-Travel Debugging
 
-**New in v0.6.1.** Dev-only. Every `@event_handler` dispatch records a
+**New in v0.6.1. Forward replay and branched timelines added in v0.9.0.** Dev-only. Every `@event_handler` dispatch records a
 snapshot of the view's public state *before* and *after* the handler
 runs. From the browser debug panel you can scrub back through the
-history and jump to any past state — the server restores the snapshot
-and re-renders so the page instantly reflects the past. Think
-Redux DevTools, but for Django LiveViews and with zero client-side
-state store.
+history, jump to any past state, and replay forward from that point — with optional branching so you can try alternate handler params without losing the original timeline. Think Redux DevTools, but for Django LiveViews and with zero client-side state store.
 
 Gated on `DEBUG=True` **and** per-view opt-in. Zero cost in
 production — when the opt-in is off, the event dispatch path runs
@@ -120,14 +117,62 @@ LIVEVIEW_CONFIG = {
 - **Non-JSON values are silently skipped.** Store primitives /
   dicts / lists in public attributes. ORM instances should be stored
   as serialized dicts or fetched by PK inside the handler.
-- **No forward replay.** Jumping backwards does not queue up
-  forward replay of the captured events — you see the state, not the
-  sequence. Redux DevTools' time-travel-through-action-log is on the
-  v0.6.2 roadmap.
 - **Dev only.** `DEBUG=False` silently disables the jump receiver at
   the consumer layer. The class attribute is still safe to leave on
   in shared codebases — production just won't allocate the buffer
   because the consumer rejects jumps before touching it.
+
+## Forward replay
+
+Jumping to a past event restores `state_before` for that event. To see
+what happens *after* the handler runs with different parameters, use
+`replay_event()` from the debug panel or programmatically:
+
+```python
+from djust.time_travel import replay_event
+
+# Replay event at index 3 from its state_before snapshot, but with
+# different params. Opens a branched timeline — the original history
+# is preserved.
+replay_event(
+    view,
+    snapshot=snapshots[3],
+    override_params={"user_id": 42},
+    record_replay=True,   # capture new state_after on this branch
+)
+```
+
+`override_params` is optional — omit it to replay the same event with
+identical parameters, which is useful for re-running a handler that had
+a network timeout or side-effect failure.
+
+`record_replay=True` writes the new `state_after` into a **branch** of
+the ring buffer, leaving the original event's snapshot untouched. You
+can open multiple branches from the same snapshot by calling
+`replay_event()` with different `override_params`.
+
+### Branches and the branched timeline panel
+
+The debug panel's **Time Travel** tab shows branches as a tree. Each
+branch is labeled with the `override_params` that produced it. Clicking
+any branch node jumps the view to that snapshot.
+
+Branches are **in-memory only** — they disappear on page refresh or
+server restart. To persist a branch for a regression test, use
+`time_travel.save_fixture()` (see [Testing](#testing-with-time-travel)).
+
+### Per-component snapshots
+
+v0.9.0 extends the ring buffer to capture per-component public state
+alongside the parent LiveView's state. A multi-component page (e.g.
+dashboard with a chart component, a data table, and an activity feed)
+can scrub back through history with each component's state faithfully
+restored.
+
+Component snapshots are enabled automatically when
+`time_travel_enabled = True` on the parent view — no per-component
+opt-in required. The debug panel shows a component selector dropdown
+when the page has more than one LiveComponent.
 
 ## Comparison
 
@@ -138,7 +183,8 @@ LIVEVIEW_CONFIG = {
 | State diff before / after       | ✓                      | ✓                      | ✗                      |
 | Client-side state store needed  | ✗ (server holds it)    | ✓ (entire store)       | N/A                    |
 | Works with server-side rendering | ✓                     | ✗                      | ✓                      |
-| Forward replay / branching      | ✗ (v0.6.2 roadmap)     | ✓                      | ✗                      |
+| Forward replay / branching      | ✓ (v0.9.0)             | ✓                      | ✗                      |
+| Per-component snapshots        | ✓ (v0.9.0)             | ✓ (per-slice)          | ✗                      |
 
 ## Security notes
 
