@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0rc5] - 2026-04-28
+
 ### Fixed
 
 - **`server_push` now stores `_recovery_html` / `_recovery_version` after
