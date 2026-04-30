@@ -1,20 +1,37 @@
 # MaD (Models as Data) extension — djust-specific sanitizer models.
 #
 # Teaches CodeQL that djust's internal log-value sanitizer is a valid
-# sanitizer for the log-injection taint-flow query. Closes #934.
+# sanitizer for the log-injection taint-flow query. Closes #934 (initial
+# model) + #1214 (canonical-path coverage expansion).
 #
 # Reference:
 #   https://codeql.github.com/docs/codeql-language-guides/customizing-library-models-for-python/
 #   https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning#extending-codeql-coverage-with-codeql-model-packs
 #
 # sanitizerModel tuple shape (Python):
-#   [namespace, type, subtypes, name, signature, ext, input, kind]
+#   [namespace, type, subtypes, name, signature, ext, input, output, kind]
 #
 # For log-injection, `input` is "Argument[0]" of the sanitize call and `kind`
-# is "log-injection". The easier form below uses the "extensible" form
-# (sinkSanitizerModel on a barrier), which expresses:
-#     "the ReturnValue of djust._log_utils.sanitize_for_log sanitizes data
-#      for the log-injection query".
+# is "log-injection". The "extensible" form expresses:
+#     "the ReturnValue of <namespace>.<name> sanitizes data for the
+#      log-injection query".
+#
+# Two entries cover the actual call sites in the codebase (#1214):
+#
+#   1. ``djust._log_utils.sanitize_for_log`` — the original (legacy)
+#      module path. Still imported directly by a few sites
+#      (e.g. ``rate_limit.py`` via ``from .security.log_sanitizer
+#      import sanitize_for_log``).
+#   2. ``djust.security.log_sanitizer.sanitize_for_log`` — the
+#      canonical definition site that 8+ files import via
+#      ``from djust.security import sanitize_for_log`` (re-exported
+#      through ``djust.security.__init__``). PR #1201's CodeQL sweep
+#      found 8 ``py/log-injection`` FPs in ``dispatch.py`` and
+#      adjacent files because ONLY entry 1 was in the model — the
+#      canonical-path call sites looked unsanitized to CodeQL.
+#
+# Both entries are needed because MaD matches on the namespace+name
+# tuple of the actual definition path, not the import re-export path.
 extensions:
   - addsTo:
       pack: codeql/python-queries
@@ -22,3 +39,4 @@ extensions:
     data:
       # namespace, type, subtypes, name, signature, ext, input, output, kind
       - ["djust._log_utils", "", False, "sanitize_for_log", "", "", "Argument[0]", "ReturnValue", "log-injection"]
+      - ["djust.security.log_sanitizer", "", False, "sanitize_for_log", "", "", "Argument[0]", "ReturnValue", "log-injection"]
