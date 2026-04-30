@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Transport-agnostic `ViewRuntime` shared between WebSocket and SSE
+  (#1237).** New `python/djust/runtime.py` module factors out
+  view-lifecycle dispatch (`dispatch_mount`, `dispatch_event`,
+  `dispatch_url_change`) so both transports share one code path for these
+  message types. WebSocket's `handle_url_change` is now a thin shim over
+  `ViewRuntime.dispatch_url_change`; SSE's new
+  `POST /djust/sse/<session_id>/message/` endpoint dispatches identically.
+  First slice of a multi-PR migration that will progressively move the
+  remaining WS handlers (`handle_event`, `handle_mount`, `handle_mount_batch`)
+  onto the shared runtime. Architecture decision documented in
+  [ADR-016](docs/adr/016-transport-runtime-interface.md).
+- **`LiveViewSSE.sendMessage(data)` — parity with `LiveViewWebSocket`
+  (#1237).** Existing `liveViewWS.sendMessage(...)` call sites in
+  `18-navigation.js`, `02-response-handler.js`, `13-lazy-hydration.js`,
+  and `15-uploads.js` now work transparently when the SSE transport is
+  active — no callsite-by-callsite branching. The existing `sendEvent`
+  API is preserved (delegates to `sendMessage`). The legacy
+  `POST /djust/sse/<sid>/event/` endpoint stays as a back-compat alias.
+
+### Fixed
+
+- **SSE: URL kwargs resolved from the mount-frame URL, not the SSE
+  endpoint path (#1237).** Previously a view like
+  `path("items/<int:pk>/", ItemView.as_view())` mounted with empty
+  `kwargs` over SSE because `_sse_mount_view` resolved against
+  `request.path` (the SSE endpoint URL `/djust/sse/<uuid>/`, not the
+  page). The client now sends a WebSocket-shaped mount frame containing
+  `url: window.location.pathname`, and the server resolves kwargs against
+  that URL — matching the WebSocket transport exactly. The HTTP Referer
+  header is deliberately not used for this; see
+  `docs/sse-transport.md#why-not-the-referer-header` for why.
+- **SSE: `LiveView.handle_params()` is now invoked after mount and on
+  `url_change` (#1237).** Phoenix-parity contract: `handle_params(params,
+  uri)` fires once after `mount()` and on every subsequent URL change.
+  Previously SSE never called it, causing views that read URL state in
+  `handle_params` (active tab, sort, page) to keep mount-time defaults
+  regardless of query string.
+- **SSE: `liveViewWS.sendMessage({type: 'url_change', ...})` no longer
+  TypeErrors (#1237).** `_executePatch()` in `18-navigation.js` calls
+  `sendMessage` for `dj-patch` URL updates; under SSE this previously
+  crashed because `LiveViewSSE` had no `sendMessage` method. Now both
+  transports expose the same outbound API. Eight other JS call sites
+  (popstate, lazy-hydration, response-handler, uploads, navigation) are
+  also unblocked.
+- **Service Worker reconnection bridge no longer needlessly buffers SSE
+  payloads (#1237).** `33-sw-registration.js` patches `sendMessage` to
+  buffer payloads when the WebSocket is closed. With SSE now also
+  exposing `sendMessage`, the patch was unconditionally applying — and
+  because `ws.ws` is undefined on `LiveViewSSE`, every SSE payload was
+  treated as "socket closed" and forwarded to the SW. The patch now
+  short-circuits on `LiveViewSSE` instances since SSE uses `fetch()`
+  directly and doesn't need the WS reconnection buffer.
+
 ## [0.9.1] - 2026-04-30
 
 Polish release on top of `0.9.0`. Five drain buckets shipped between the `0.9.0` GA bump and this tag (`0.9.1-1` through `0.9.1-5` under the new SemVer-pre-release-suffix milestone naming convention adopted 2026-04-30; equivalent to historical `v0.9.1`/`v0.9.2`/`v0.9.3`/`v0.9.4`/`v0.9.5` drain buckets under the old naming). Headlined by a real-bug VDOM fix (#1205), a broadcast-recovery fix (#1202), the Debug Panel UI (#1151), and a RichSelect ergonomics expansion (#1204).

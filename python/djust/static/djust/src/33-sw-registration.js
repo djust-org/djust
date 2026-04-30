@@ -150,7 +150,13 @@
         _waitForWs(function (ws) {
             // Monkey-patch sendMessage so that when the WS is not OPEN the
             // serialized payload is handed to the SW instead of dropped.
+            // Skip the patch when the active transport is SSE: SSE's
+            // sendMessage uses fetch (not a persistent socket), and ws.ws
+            // is undefined, so the state check would always treat the
+            // transport as closed and buffer every payload. (#1237)
             if (ws._djustBridgePatched) return;
+            if (globalThis.djust && globalThis.djust.LiveViewSSE
+                && ws instanceof globalThis.djust.LiveViewSSE) return;
             ws._djustBridgePatched = true;
 
             var originalSend = ws.sendMessage.bind(ws);

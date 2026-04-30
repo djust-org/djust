@@ -102,6 +102,13 @@ class SSESession:
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
 
+        # Lazy: avoid circular import at module load. The runtime is the
+        # transport-agnostic dispatcher (#1237) and is shared with the WS
+        # consumer's ``handle_url_change`` shim.
+        from .runtime import SSESessionTransport, ViewRuntime
+
+        self.runtime = ViewRuntime(SSESessionTransport(self), rate_limiter=self._rate_limiter)
+
     # ------------------------------------------------------------------ #
     # Queue helpers
     # ------------------------------------------------------------------ #
@@ -803,6 +810,51 @@ class DjustSSEEventView(View):
         return JsonResponse({"ok": True})
 
 
+@method_decorator(csrf_exempt, name="dispatch")
+class DjustSSEMessageView(View):
+    """
+    POST endpoint for client -> server messages over the SSE transport
+    (introduced in #1237).
+
+    Accepts the same JSON envelope shape as a WebSocket frame::
+
+        {"type": "mount", "view": ..., "params": ..., "url": ...}
+        {"type": "event", "event": "increment", "params": {...}}
+        {"type": "url_change", "params": {...}, "uri": "..."}
+
+    Delegates to ``session.runtime.dispatch_message(body)`` which routes
+    by type to the appropriate dispatch method on the shared runtime.
+
+    Response body is always ``{"ok": true}`` — the actual DOM update (or
+    error envelope) is pushed via the SSE stream.
+
+    The legacy ``DjustSSEEventView`` (``/event/``) remains as a deprecated
+    alias for back-compat.
+    """
+
+    async def post(self, request, session_id: str):
+        session = _get_session(session_id)
+        if not session:
+            return JsonResponse(
+                {"error": "SSE session not found or expired. Please reload the page."},
+                status=404,
+            )
+
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Request body must be valid JSON"}, status=400)
+
+        if not isinstance(body, dict):
+            return JsonResponse({"error": "Request body must be a JSON object"}, status=400)
+
+        # Route through the shared runtime. Validation of frame-specific
+        # shape (e.g., mount needs 'view') is handled by the runtime,
+        # which pushes structured error envelopes onto the SSE queue.
+        await session.runtime.dispatch_message(body)
+        return JsonResponse({"ok": True})
+
+
 # ------------------------------------------------------------------ #
 # URL patterns
 # ------------------------------------------------------------------ #
@@ -812,4 +864,9 @@ from django.urls import path  # noqa: E402 — import here to keep module-level 
 sse_urlpatterns = [
     path("sse/<str:session_id>/", DjustSSEStreamView.as_view(), name="djust-sse-stream"),
     path("sse/<str:session_id>/event/", DjustSSEEventView.as_view(), name="djust-sse-event"),
+    path(
+        "sse/<str:session_id>/message/",
+        DjustSSEMessageView.as_view(),
+        name="djust-sse-message",
+    ),
 ]

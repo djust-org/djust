@@ -123,11 +123,16 @@ describe('LiveViewSSE', () => {
             const result = sse.sendEvent('increment', { count: 1 });
 
             expect(result).toBe(true);
+            // #1237: sendEvent now delegates through sendMessage to /message/.
             expect(global.fetch).toHaveBeenCalledWith(
-                '/djust/sse/test-id/event/',
+                '/djust/sse/test-id/message/',
                 expect.objectContaining({
                     method: 'POST',
-                    body: JSON.stringify({ event: 'increment', params: { count: 1 } }),
+                    body: JSON.stringify({
+                        type: 'event',
+                        event: 'increment',
+                        params: { count: 1 },
+                    }),
                 })
             );
             expect(sse.lastEventName).toBe('increment');

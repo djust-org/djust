@@ -369,7 +369,350 @@ class TestSSEUrlPatterns:
     def test_urlpatterns_exported(self):
         from djust.sse import sse_urlpatterns
 
-        assert len(sse_urlpatterns) == 2
+        # 3 routes after #1237: stream, legacy event, new message endpoint.
+        assert len(sse_urlpatterns) == 3
         names = {p.name for p in sse_urlpatterns}
         assert "djust-sse-stream" in names
         assert "djust-sse-event" in names
+        assert "djust-sse-message" in names
+
+
+# ------------------------------------------------------------------ #
+# #1237 Bugfix: URL kwargs resolved from mount-frame URL, not endpoint path
+# ------------------------------------------------------------------ #
+
+
+class _DummyLiveView:
+    """In-test LiveView replacement registered as a class so dispatch_mount
+    can resolve it via `__import__` on this module's path."""
+
+
+# Lazy import + subclass to avoid circular import at module load.
+def _make_dummy_view_class():
+    from djust.live_view import LiveView
+
+    captured = {"mount_kwargs": None, "handle_params": []}
+
+    class _DummyLV(LiveView):
+        # Skip Rust VDOM init for these unit tests — render_with_diff is
+        # short-circuited.
+        def _initialize_rust_view(self, request):
+            pass
+
+        def _sync_state_to_rust(self):
+            pass
+
+        def render_with_diff(self):
+            return ("<div>" + str(getattr(self, "count", 0)) + "</div>", None, 1)
+
+        def _strip_comments_and_whitespace(self, html):
+            return html
+
+        def _extract_liveview_content(self, html):
+            return html
+
+        def mount(self, request, **kwargs):
+            captured["mount_kwargs"] = dict(kwargs)
+            self.count = 0
+
+        def handle_params(self, params, uri):
+            captured["handle_params"].append((params, uri))
+
+    return _DummyLV, captured
+
+
+class TestSSEMountFrameURLKwargs:
+    def setup_method(self):
+        _sse_sessions.clear()
+
+    def teardown_method(self):
+        _sse_sessions.clear()
+
+    @pytest.mark.asyncio
+    async def test_mount_resolves_url_kwargs_from_mount_frame(self):
+        """Bug 1 reproducer (end-to-end via runtime).
+
+        Posting a mount frame with ``url: /items/42/`` to the new
+        ``/message/`` endpoint must resolve URL kwargs against THAT URL,
+        not the SSE endpoint URL. Pre-fix, kwargs were resolved against
+        ``request.path`` (the SSE endpoint), so ``pk`` was never set.
+        """
+        from djust.runtime import ViewRuntime, SSESessionTransport
+
+        DummyLV, captured = _make_dummy_view_class()
+
+        # Register on the test module so __import__ can find it.
+        import sys
+
+        mod = sys.modules[__name__]
+        mod._DummyLV = DummyLV  # type: ignore[attr-defined]
+
+        session = make_session()
+        session.runtime = ViewRuntime(SSESessionTransport(session))
+
+        # Patch the URL resolver to simulate Django matching pk=42.
+        with patch("djust.runtime.resolve" if False else "django.urls.resolve") as mock_resolve:
+            mock_match = MagicMock()
+            mock_match.kwargs = {"pk": "42"}
+            mock_resolve.return_value = mock_match
+
+            with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", ["tests.", "test_sse."]):
+                # demo_project's settings allowlist doesn't include this test
+                # module — patch it to a permissive prefix that DOES match.
+                with patch.object(
+                    settings, "LIVEVIEW_ALLOWED_MODULES", [mod.__name__.split(".")[0]]
+                ):
+                    await session.runtime.dispatch_mount(
+                        {
+                            "type": "mount",
+                            "view": f"{mod.__name__}._DummyLV",
+                            "params": {},
+                            "url": "/items/42/",
+                        }
+                    )
+
+        # The mount kwargs include the resolved pk, NOT just the empty
+        # mount-frame params dict.
+        assert captured["mount_kwargs"] is not None
+        assert captured["mount_kwargs"].get("pk") == "42"
+
+    @pytest.mark.asyncio
+    async def test_mount_calls_handle_params_after_mount(self):
+        """Bug 3 reproducer.
+
+        ``handle_params(params, uri)`` must fire ONCE after mount() over SSE,
+        matching Phoenix-parity / WebSocket behavior at websocket.py:2129.
+        """
+        from djust.runtime import ViewRuntime, SSESessionTransport
+
+        DummyLV, captured = _make_dummy_view_class()
+        import sys
+
+        mod = sys.modules[__name__]
+        mod._DummyLV = DummyLV  # type: ignore[attr-defined]
+
+        session = make_session()
+        session.runtime = ViewRuntime(SSESessionTransport(session))
+
+        with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", [mod.__name__.split(".")[0]]):
+            await session.runtime.dispatch_mount(
+                {
+                    "type": "mount",
+                    "view": f"{mod.__name__}._DummyLV",
+                    "params": {"category": "books"},
+                    "url": "/list/",
+                }
+            )
+
+        assert len(captured["handle_params"]) == 1
+        called_params, called_uri = captured["handle_params"][0]
+        assert called_params == {"category": "books"}
+        assert "/list/" in called_uri
+
+
+# ------------------------------------------------------------------ #
+# #1237 Bugfix: url_change message dispatches handle_params
+# ------------------------------------------------------------------ #
+
+
+class TestSSEUrlChangeFlow:
+    def setup_method(self):
+        _sse_sessions.clear()
+
+    def teardown_method(self):
+        _sse_sessions.clear()
+
+    @pytest.mark.asyncio
+    async def test_url_change_message_dispatches_handle_params(self):
+        """Bug 2 reproducer (server side).
+
+        POST to ``/message/`` with ``{"type": "url_change", ...}`` must
+        run handle_params() and emit a patch / html_update frame to the
+        SSE queue.
+        """
+        from djust.runtime import ViewRuntime, SSESessionTransport
+
+        DummyLV, captured = _make_dummy_view_class()
+        import sys
+
+        mod = sys.modules[__name__]
+        mod._DummyLV = DummyLV  # type: ignore[attr-defined]
+
+        session = make_session()
+        session.runtime = ViewRuntime(SSESessionTransport(session))
+
+        # Pre-mount a view by injecting an instance directly.
+        view = DummyLV()
+        view.count = 5
+        session.view_instance = view
+        session.runtime.view_instance = view
+
+        await session.runtime.dispatch_url_change(
+            {"params": {"sort": "name"}, "uri": "/list/?sort=name"}
+        )
+
+        assert len(captured["handle_params"]) == 1
+        called_params, called_uri = captured["handle_params"][0]
+        assert called_params == {"sort": "name"}
+
+        # Frame was queued for the SSE stream.
+        messages = drain_queue(session)
+        types = [m.get("type") for m in messages]
+        assert "patch" in types or "html_update" in types
+
+
+# ------------------------------------------------------------------ #
+# #1237: New /message/ endpoint forward-compat error envelope
+# ------------------------------------------------------------------ #
+
+
+class TestSSEMessageEndpoint:
+    def setup_method(self):
+        _sse_sessions.clear()
+        self.factory = RequestFactory()
+
+    def teardown_method(self):
+        _sse_sessions.clear()
+
+    @pytest.mark.asyncio
+    async def test_message_endpoint_unknown_type_returns_error(self):
+        """Posting an unknown message type returns 200 with a queued error
+        envelope on the SSE stream."""
+        from djust.sse import DjustSSEMessageView
+        from djust.runtime import ViewRuntime, SSESessionTransport
+
+        session = make_session()
+        session.view_instance = MagicMock()  # marked as mounted
+        session.runtime = ViewRuntime(SSESessionTransport(session))
+        session.runtime.view_instance = session.view_instance
+
+        request = self.factory.post(
+            f"/djust/sse/{session.session_id}/message/",
+            data=json.dumps({"type": "totally_unknown"}),
+            content_type="application/json",
+        )
+
+        view = DjustSSEMessageView()
+        response = await view.post(request, session_id=session.session_id)
+        assert response.status_code == 200
+
+        messages = drain_queue(session)
+        types = [m.get("type") for m in messages]
+        assert "error" in types
+
+    @pytest.mark.asyncio
+    async def test_legacy_event_endpoint_still_works(self):
+        """The pre-#1237 ``/event/`` endpoint must keep working as a
+        deprecated alias so existing clients aren't broken."""
+        session = make_session()
+        session.view_instance = MagicMock()
+
+        request = self.factory.post(
+            f"/djust/sse/{session.session_id}/event/",
+            data=json.dumps({"event": "increment", "params": {}}),
+            content_type="application/json",
+        )
+
+        view = DjustSSEEventView()
+        # Legacy view delegates to either _sse_handle_event or runtime —
+        # both are acceptable, we only assert the endpoint stays reachable.
+        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
+            mock_dispatch.return_value = None
+            response = await view.post(request, session_id=session.session_id)
+
+        assert response.status_code == 200
+        data = json.loads(response.content)
+        assert data == {"ok": True}
+
+
+# ------------------------------------------------------------------ #
+# #1237: Double-mount idempotency
+# ------------------------------------------------------------------ #
+
+
+class TestSSEDoubleMountGuard:
+    def setup_method(self):
+        _sse_sessions.clear()
+
+    def teardown_method(self):
+        _sse_sessions.clear()
+
+    @pytest.mark.asyncio
+    async def test_double_mount_guard(self):
+        """Calling dispatch_mount twice on the same runtime is a no-op
+        on the second call. Guards the legacy `?view=` GET-mount + new
+        POST mount-frame double-fire (Risk #1)."""
+        from djust.runtime import ViewRuntime, SSESessionTransport
+
+        DummyLV, captured = _make_dummy_view_class()
+        import sys
+
+        mod = sys.modules[__name__]
+        mod._DummyLV = DummyLV  # type: ignore[attr-defined]
+
+        session = make_session()
+        session.runtime = ViewRuntime(SSESessionTransport(session))
+
+        with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", [mod.__name__.split(".")[0]]):
+            await session.runtime.dispatch_mount(
+                {
+                    "type": "mount",
+                    "view": f"{mod.__name__}._DummyLV",
+                    "params": {},
+                    "url": "/list/",
+                }
+            )
+            first_view = session.runtime.view_instance
+            assert first_view is not None
+            assert captured["mount_kwargs"] is not None
+
+            # Second call with a different URL — should be a no-op.
+            captured["mount_kwargs"] = None
+            await session.runtime.dispatch_mount(
+                {
+                    "type": "mount",
+                    "view": f"{mod.__name__}._DummyLV",
+                    "params": {"reset": "1"},
+                    "url": "/other/",
+                }
+            )
+            assert session.runtime.view_instance is first_view
+            # mount() was NOT re-invoked.
+            assert captured["mount_kwargs"] is None
+
+
+# ------------------------------------------------------------------ #
+# #1237: Runtime.dispatch_url_change shared with WS
+# ------------------------------------------------------------------ #
+
+
+class TestSSERuntimeUrlChangeSharedWithWs:
+    def setup_method(self):
+        _sse_sessions.clear()
+
+    def teardown_method(self):
+        _sse_sessions.clear()
+
+    @pytest.mark.asyncio
+    async def test_runtime_dispatch_url_change_shared_with_ws(self):
+        """Sanity check that dispatch_url_change is wire-blind:
+        the same view + frame produce the same on-wire shape regardless
+        of which transport the runtime is wired to. Detailed coverage in
+        python/tests/test_sse_ws_symmetry.py."""
+        from djust.runtime import ViewRuntime, SSESessionTransport
+
+        DummyLV, captured = _make_dummy_view_class()
+
+        session = make_session()
+        session.runtime = ViewRuntime(SSESessionTransport(session))
+        view = DummyLV()
+        view.count = 0
+        session.view_instance = view
+        session.runtime.view_instance = view
+
+        await session.runtime.dispatch_url_change({"params": {"page": "1"}, "uri": "/?page=1"})
+
+        # handle_params was invoked once; queue holds an html_update or patch.
+        assert len(captured["handle_params"]) == 1
+        types = [m.get("type") for m in drain_queue(session)]
+        assert types[0] in ("patch", "html_update")
