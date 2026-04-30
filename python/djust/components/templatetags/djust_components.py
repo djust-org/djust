@@ -4432,21 +4432,12 @@ def do_announcement_bar(parser, token):
 # ---------------------------------------------------------------------------
 
 
-# Built-in variants for which djust ships CSS. Downstream projects can add
-# their own variants by shipping a matching CSS rule — any name passing
-# ``_RICH_SELECT_VARIANT_NAME_RE`` is accepted.
-_RICH_SELECT_BUILTIN_VARIANTS = {
-    "default",
-    "info",
-    "success",
-    "warning",
-    "danger",
-    "muted",
-    "primary",
-    "secondary",
-}
-
-_RICH_SELECT_VARIANT_NAME_RE = _re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+# Built-in variants + variant-name regex are imported from the
+# rich_select Component module — single source of truth across the
+# programmatic API and the templatetag (#1287 dedup).
+from djust.components.components.rich_select import (
+    _VARIANT_NAME_RE as _RICH_SELECT_VARIANT_NAME_RE,
+)
 
 
 def _rich_select_resolve_variant(opt, variant_map):
