@@ -44,6 +44,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Single responsibility** - Functions and classes have clear, focused purposes
 - [ ] **Appropriate abstractions** - No over-engineering or under-engineering
 - [ ] **No code duplication** - Shared logic is properly abstracted
+- [ ] **No duplicate constants across files** — When two files in the same PR define the same constant (literal `set` / `dict` / `tuple` / regex / string), make one file the canonical source and have the other import from it. PR #1204 (RichSelect variants) defined an identical 8-element `_BUILTIN_VARIANTS` set in both `rich_select.py` and `djust_components.py`; PR #1231 had to consolidate later. CodeQL flagged the orphan via `py/unused-global-variable`. Catch at Stage 7 self-review by grepping for the constant name across the diff. *Source: PR #1231 retro / CodeQL alert #2287.*
 - [ ] **Separation of concerns** - UI, business logic, and data access properly separated
 - [ ] **No placeholder/stub implementations** - No hardcoded `return True`, simulated APIs, or fake data in shipped code. If a feature isn't ready, mark it clearly as `NotImplementedError` or exclude it from the PR
 - [ ] **No simulated/stub code** - Comments containing "simulate", "would be implemented", "in a real implementation", or "for now" indicate incomplete code that should not ship
