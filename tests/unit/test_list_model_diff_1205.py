@@ -248,6 +248,110 @@ class TestListModelDiff1205:
         html = client.render()
         assert "alice" in html or "plain dict" in html
 
+    # -----------------------------------------------------------------
+    # #1207 follow-up — heterogeneous + nested shapes
+    # -----------------------------------------------------------------
+
+    def test_heterogeneous_list_dict_first_propagates_field_mutations(self):
+        """``ctx["items"] = [dict, Model]`` (Model NOT first) must also
+        propagate field mutations.
+
+        The original PR #1206 normalize pass used ``is_model_list`` which
+        checks ``isinstance(value[0], Model)`` — so a dict in position 0
+        followed by a Model in position 1 fell through unnormalized. The
+        Model in position 1 then escaped change-detection via
+        ``Model.__eq__`` (pk-only), reproducing the #1205 bug for this
+        shape. Locks the #1207 fix in.
+        """
+
+        class HetView(LiveView):
+            template = (
+                "<div>"
+                "{% for t in items %}"
+                "<li>{% if t.is_active %}A{% else %}I{% endif %}{{ t.username }}</li>"
+                "{% endfor %}"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._user = User(username="alice", pk=1, is_active=True)
+
+            @event_handler
+            def toggle(self, **kwargs):
+                self._user.is_active = not self._user.is_active
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                # Header dict in position 0, Model in position 1 — the
+                # ``is_model_list(value[0])`` guard misses this shape.
+                ctx["items"] = [{"is_active": False, "username": "header"}, self._user]
+                return ctx
+
+        client = LiveViewTestClient(HetView).mount()
+        html_before = client.render()
+        assert "Aalice" in html_before, html_before
+
+        client.send_event("toggle")
+        html_after = client.render()
+        assert html_before != html_after, (
+            "Heterogeneous [dict, Model] should propagate field mutation; "
+            "got identical HTML — see #1207."
+        )
+        assert "Ialice" in html_after, html_after
+
+    def test_nested_list_of_lists_of_models_propagates_field_mutations(self):
+        """``ctx["groups"] = [[Model, Model], [Model]]`` (nested
+        list[list[Model]]) must also propagate field mutations.
+
+        The original PR #1206 normalize pass iterated only top-level
+        keys; a nested list[list[Model]] failed ``is_model_list`` because
+        ``value[0]`` was itself a list, not a Model. Field mutations on
+        any nested Model escaped change-detection. Locks the #1207
+        recurse-into-nested-list fix in.
+        """
+
+        class GroupedView(LiveView):
+            template = (
+                "<div>"
+                "{% for group in groups %}"
+                "<ul>{% for t in group %}"
+                "<li>{% if t.is_active %}A{% else %}I{% endif %}{{ t.username }}</li>"
+                "{% endfor %}</ul>"
+                "{% endfor %}"
+                "</div>"
+            )
+
+            def mount(self, request, **kwargs):
+                self._users = [
+                    User(username="alice", pk=1, is_active=True),
+                    User(username="bob", pk=2, is_active=False),
+                ]
+
+            @event_handler
+            def toggle(self, pk: int = 1, **kwargs):
+                for u in self._users:
+                    if u.pk == pk:
+                        u.is_active = not u.is_active
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                # Groups: [[alice], [bob]] — top-level list contains lists.
+                ctx["groups"] = [[self._users[0]], [self._users[1]]]
+                return ctx
+
+        client = LiveViewTestClient(GroupedView).mount()
+        html_before = client.render()
+        assert "Aalice" in html_before, html_before
+        assert "Ibob" in html_before, html_before
+
+        client.send_event("toggle", pk=1)
+        html_after = client.render()
+        assert html_before != html_after, (
+            "Nested list[list[Model]] should propagate field mutation; "
+            "got identical HTML — see #1207."
+        )
+        assert "Ialice" in html_after, html_after
+
 
 # ---------------------------------------------------------------------------
 # Dead code: _lazy_serialize_context must be gone
