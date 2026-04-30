@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Heterogeneous and nested `list[Model]` shapes now propagate field
+  mutations through change-detection (#1207).** Follow-up to PR #1206
+  (#1205 fix). The defensive normalize pass introduced in v0.9.5 covered
+  the homogeneous `list[Model]` shape but two related shapes were NOT
+  covered: heterogeneous `[dict, Model]` (Model not first — `is_model_list`
+  checks only `value[0]`) and nested `list[list[Model]]` (e.g., grouped
+  tasks — the outer list contains lists, not Models). Both reproduced the
+  #1205 bug for those shapes (in-place field mutations escaped
+  change-detection because `Model.__eq__` is pk-only). Fix: refactored the
+  inline normalize loop into a recursive `_normalize_db_values` helper
+  that scans the full list for any-position Model (heterogeneous-safe) and
+  recurses into nested lists with a bounded depth (`_NORMALIZE_DEPTH_LIMIT
+  = 3`). Idempotent on already-serialized values. Two regression cases in
+  `tests/unit/test_list_model_diff_1205.py` lock the new shape coverage in
+  (`test_heterogeneous_list_dict_first_propagates_field_mutations`,
+  `test_nested_list_of_lists_of_models_propagates_field_mutations`).
+
 ### Added
 
 - **`LiveViewTestClient.render_with_patches()` — VDOM-diff accessor for tests
