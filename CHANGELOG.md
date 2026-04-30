@@ -7,26 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.9.1] - 2026-04-30
 
-- **Heterogeneous and nested `list[Model]` shapes now propagate field
-  mutations through change-detection (#1207).** Follow-up to PR #1206
-  (#1205 fix). The defensive normalize pass introduced in v0.9.5 covered
-  the homogeneous `list[Model]` shape but two related shapes were NOT
-  covered: heterogeneous `[dict, Model]` (Model not first — `is_model_list`
-  checks only `value[0]`) and nested `list[list[Model]]` (e.g., grouped
-  tasks — the outer list contains lists, not Models). Both reproduced the
-  #1205 bug for those shapes (in-place field mutations escaped
-  change-detection because `Model.__eq__` is pk-only). Fix: refactored the
-  inline normalize loop into a recursive `_normalize_db_values` helper
-  that scans the full list for any-position Model (heterogeneous-safe) and
-  recurses into nested lists with a bounded depth (`_NORMALIZE_DEPTH_LIMIT
-  = 3`). Idempotent on already-serialized values. Two regression cases in
-  `tests/unit/test_list_model_diff_1205.py` lock the new shape coverage in
-  (`test_heterogeneous_list_dict_first_propagates_field_mutations`,
-  `test_nested_list_of_lists_of_models_propagates_field_mutations`).
+Polish release on top of `0.9.0`. Five drain buckets shipped between the `0.9.0` GA bump and this tag (`0.9.1-1` through `0.9.1-5` under the new SemVer-pre-release-suffix milestone naming convention adopted 2026-04-30; equivalent to historical `v0.9.1`/`v0.9.2`/`v0.9.3`/`v0.9.4`/`v0.9.5` drain buckets under the old naming). Headlined by a real-bug VDOM fix (#1205), a broadcast-recovery fix (#1202), the Debug Panel UI (#1151), and a RichSelect ergonomics expansion (#1204).
 
 ### Added
+
+- **RichSelect variant support, trigger tinting, and onclick parity (#1204).**
+  Each option dict accepts an optional `variant` key that tints the row in the
+  dropdown AND the trigger when that option is currently selected. Built-in
+  variants align with `Badge`/`Button`/`Tag`/`Alert` vocabulary (`info`,
+  `success`, `warning`, `danger`, `muted`, `primary`, `secondary`). New
+  `variant_map` kwarg mirrors `Badge.status()` for value→variant mapping
+  cases. Permissive variant-name regex (`^[a-z0-9][a-z0-9-]{0,31}$`) lets
+  downstream projects ship custom variants by adding a matching
+  `.rich-select-option--variant-<name>` CSS rule. Trigger now emits the
+  open/close `onclick` handlers that `{% rich_select %}` template tag
+  always emitted, eliminating the monkey-patch-rendered-HTML workaround
+  programmatic consumers used to need.
 
 - **`LiveViewTestClient.render_with_patches()` — VDOM-diff accessor for tests
   (#1208).** New public method on `djust.testing.LiveViewTestClient` that
@@ -43,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **JIT serializer silently degrades when context value is `list[Model]`
-  (#1205).** When a view's `get_context_data` override sets
+  (#1205, expanded by #1207).** When a view's `get_context_data` override sets
   `ctx["tasks"] = list(qs)` *after* calling `super().get_context_data()`,
   the JIT auto-serialization pipeline runs inside `super()` and never sees
   the user-added value. The raw `list[Model]` then flows through
@@ -54,19 +52,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Rust never receives the new state, and the rendered HTML is byte-identical
   on every event despite confirmed DB writes. Symptom from the issue
   reporter: `patch_count: 0` on every event, `_debug.variables.tasks.value`
-  shows only `__str__` strings. Fix: `_sync_state_to_rust` (in
+  shows only `__str__` strings.
+
+  Initial fix (#1206): `_sync_state_to_rust` (in
   `python/djust/mixins/rust_bridge.py`) now runs a defensive normalize pass
   over `full_context` immediately after fetching it, converting any
-  `list[Model]` / `Model` / `QuerySet` value to dicts via
+  homogeneous `list[Model]` / `Model` / `QuerySet` value to dicts via
   `normalize_django_value`. After normalization, change-detection compares
   `list[dict] != list[dict]` element-wise via `dict.__eq__` (structural),
   correctly catching field mutations. Idempotent on already-serialized
   values. Also removed dead `_lazy_serialize_context` method from
   `python/djust/mixins/jit.py` (zero call sites — was misleadingly cited as
-  the bug location in the issue). 7 regression cases in
-  `TestListModelDiff1205` and `TestLazySerializeContextRemoved` lock down
-  the user-override patterns (`list[Model]`, single Model, raw QuerySet)
-  plus idempotency and edge cases (empty list, mixed list).
+  the bug location in the issue).
+
+  Shape coverage expansion (#1207): the initial fix only handled
+  homogeneous `list[Model]`; PR-review surfaced two more shapes that escape
+  change-detection — heterogeneous `[dict, Model]` (Model not first;
+  `is_model_list` checked only `value[0]`) and nested `list[list[Model]]`
+  (grouped tasks). Refactored the inline normalize loop into a recursive
+  `_normalize_db_values` helper that scans the full list for any-position
+  Model and recurses into nested lists with bounded depth
+  (`_NORMALIZE_DEPTH_LIMIT = 3`). 9 regression cases in
+  `tests/unit/test_list_model_diff_1205.py` lock down all shape variants:
+  homogeneous `list[Model]`, single `Model`, raw `QuerySet`, heterogeneous
+  `[dict, Model]`, nested `list[list[Model]]`, idempotency, empty list,
+  and mixed-type list.
+
+- **Broadcast renders now refresh `_recovery_html` (#1202).** `server_push`
+  in `python/djust/websocket.py` was sending broadcast patches without
+  updating `self._recovery_html` / `self._recovery_version` (the
+  user-initiated event path did this; broadcasts were overlooked).
+  Consequence: when a subsequent `applyPatches` on the client failed (the
+  well-known `{% if %}`-shifts-DOM case), the client sent `request_html`
+  expecting fresh HTML, but `handle_request_html` read a stale or
+  `None`-valued `_recovery_html` and returned `recoverable: false`. The
+  client then triggered a full-page reload. Sessions that only received
+  broadcasts after mount (admin dashboards, real-time apps with Celery
+  pushes) never populated `_recovery_html` via the normal path.
+  PR #1203 mirrors the `handle_event` recovery-state-store at
+  `websocket.py:3271`: before sending broadcast patches, `server_push`
+  now stores the render output as `_recovery_html` / `_recovery_version`.
+  Two regression cases in `tests/unit/test_server_push.py` lock the
+  store-after-broadcast invariant + the no-patches branch.
+
+### Process & tooling (internal)
+
+The v0.9.1 arc shipped a substantial body of internal-tooling work that
+doesn't change user-facing API but improves contributor and maintainer
+ergonomics. Highlights for the audit trail (no migration needed):
+
+- **Pre-push lints**: `scripts/check-no-dead-private-methods.py` (#1209),
+  `scripts/check-no-comma-list-closes.py` (#1227),
+  `scripts/audit-pipeline-bypass.py` (#1212).
+- **Pipeline-template Stage 4 reproducer-first mandatory item** (#1210),
+  **Stage 11 reviewer-prompt budget guidelines** (#1211), and the
+  **two-commit shape canonicalization** + **3-clean-runs verification**
+  (Action Tracker #181/#182) as structural gates.
+- **CodeQL sanitizer model** for `djust.security.log_sanitizer.sanitize_for_log`
+  (#1214) — closes the FP class PR #1201's 8 dismissals worked around.
+- **CLAUDE.md "Bug-report triage" section** citing PR #1206 as the canonical
+  case study for issue-reporter-analysis-not-equal-root-cause discipline (#1213).
+- **20+ retro patterns canonicalized** across CLAUDE.md sections for
+  v0.6.x–v0.8.x retro arcs (#1226), v0.9.4 retro arc (#1225).
+- **Pre-commit `.pxd` exclude** prevents binary archive corruption (#1215).
+- **Hot-reload auto-enable** via `DjustConfig.ready()` in DEBUG mode (#1190).
+- **Debug Panel UI** for time-travel + forward-replay (#1151 / PR #1194,
+  on top of v0.9.0's wire-protocol foundation).
 
 ## [0.9.0] - 2026-04-29
 
