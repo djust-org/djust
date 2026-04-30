@@ -81,6 +81,32 @@ The v0.9.1 release window stays open until the git tag is cut. Work that surface
 - `/pipeline-drain --milestone v0.9.1-6 --label tech-debt` to triage. Will pick up the 5 work units listed above.
 - Convention recap: this is the 6th drain bucket toward release v0.9.1 (5 already shipped under old naming). After release tag, next bucket is v0.9.2-1.
 
+### Drain bucket: v0.9.1-7 — backlog cleanup before release (✅ shipped 2026-04-30)
+
+**Status:** ✅ shipped. PR #1226 (canon batch — 14 v0.6.x–v0.8.x retro patterns into CLAUDE.md + 2 PR-checklist bullets) plus 13 mechanical issue closures (6 already-addressed, 7 obsolete).
+
+**Why this bucket:** the user explicitly requested a backlog audit + cleanup before cutting release v0.9.1, on the principle that we'd been releasing too often and accumulating stale tech-debt. The audit categorized 32 open issues into A (already-addressed), B (small canon batch), C (complex defer), D (obsolete). 28 were closed (A+B+D); 4 remain (3 deferred to v0.9.2-1 + #1221 release-cut).
+
+**Backlog arithmetic:**
+
+| State | Count |
+|---|---|
+| Before tonight (start of v0.9.5 retro) | ~30 |
+| After v0.9.5 milestone retro filings | ~37 |
+| After v0.9.5 drain (5 PRs) + v0.9.1-6 drain (5 work units) | 32 |
+| After v0.9.1-7 cleanup (13 mechanical closures + PR #1226 closing 15) | **4** |
+
+**4 remaining open issues** (going into v0.9.1 release):
+
+- #1177 — programmatic post-stage hook enforcement for pipeline-template gates (deferred to v0.9.2-1; complex pipeline-skill flow control)
+- #1180 — PR #1179 follow-ups: filter polish accuracy + test strength (deferred to v0.9.2-1; real Rust test work + autoescape mock plumbing)
+- #1212 — audit pipeline-bypass merges + harden retro-gate (deferred to v0.9.2-1; one-time audit script + CI check + FP tuning)
+- #1221 — release: cut v0.9.1 from current main (the actual release-cut runbook below)
+
+Plus a new follow-up filed during the cleanup itself:
+
+- #1227 — pre-commit/CI lint for bare comma-list `Closes #X, #Y` auto-close failure (the comma-list bit PR #1225 + PR #1226 both — file for v0.9.2-1; not blocking v0.9.1).
+
 ### Release-cut checklist (#1221)
 
 - [ ] Bump `__version__` and Cargo crate versions: `0.9.0` → `0.9.1` (Python `pyproject.toml`, `python/djust/__init__.py`, 4 Cargo crates, `Cargo.lock`).
