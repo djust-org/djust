@@ -61,6 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treated as "socket closed" and forwarded to the SW. The patch now
   short-circuits on `LiveViewSSE` instances since SSE uses `fetch()`
   directly and doesn't need the WS reconnection buffer.
+- **`ViewRuntime.dispatch_mount` rejects `use_actors=True` views with a
+  structured error envelope over SSE (#1240).** Closes plan-fidelity
+  gap from #1237 — actor-based state management requires the
+  channel-layer code in `websocket.py` which the runtime path doesn't
+  traverse. Previously a `use_actors=True` mount over SSE would
+  partially succeed and fail downstream with an opaque `AttributeError`.
+  Now `dispatch_mount` short-circuits with a clear "use_actors is not
+  supported over SSE; mount over WebSocket instead" envelope. ADR-016
+  §Implementation notes promised this guard; PR #1239 deferred it to
+  this follow-up.
 
 ### Developer Experience
 

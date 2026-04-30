@@ -282,6 +282,20 @@ class ViewRuntime:
         if view_instance is None:
             return  # _instantiate_view already pushed an error
 
+        # ---- use_actors limitation guard (#1240 / ADR-016 §Implementation) ----
+        # SSE doesn't have a bidirectional channel for actor messages and
+        # the actor channel-layer code lives in `websocket.py`, which the
+        # runtime path doesn't traverse. Emit a structured error envelope
+        # rather than letting the mount partially succeed and fail
+        # downstream with an opaque AttributeError.
+        if getattr(view_instance, "use_actors", False):
+            await self.transport.send_error(
+                "use_actors is not supported over SSE; mount over WebSocket instead",
+                error_type="mount_error",
+                view_class=view_path,
+            )
+            return
+
         self.view_instance = view_instance
 
         # Stash transport identity on the view (used by VDOM caching).

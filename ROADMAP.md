@@ -192,14 +192,16 @@ Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is o
 
 #### Tracker carryovers from v0.9.1 retro (P2, deferred)
 
-- [ ] **#1234 — pipeline-bypass CI check (ongoing)** — scheduled GitHub Action that runs `scripts/audit-pipeline-bypass.py` daily and flags merged PRs without retro markers within 24h. Part 2 of #1212 (part 1 shipped as the audit script in PR #1229). v0.9.1 retro Action Tracker #200.
-- [ ] **#1235 — isolated cargo-test target for `filter_registry::tests`** — `OnceLock`-gated short-circuit test silently no-ops when a prior test in the same process registered a filter. Either a `cargo test --test filter_registry_isolated` target or a fresh-process spawn for the affected case. Carryover from #1180 item 4. v0.9.1 retro Action Tracker #201.
-- [ ] **#1236 — watch-list for release-workflow-touching dep bumps** — manual risk-review at refile time for any dependabot PR modifying `.github/workflows/release.yml`. Triggered by PR #1233 (action-gh-release v2 → v3) landing in the same window as the v0.9.1 cut. v0.9.1 retro Action Tracker #202.
+- [x] ~~**#1234 — pipeline-bypass CI check (ongoing)**~~ ✅ Shipped (PR #1241). Daily-cron `.github/workflows/retro-gate-audit.yml` calls `scripts/audit-pipeline-bypass.py --limit 50` and surfaces flagged PRs as workflow annotations. v0.9.1 retro Action Tracker #200.
+- [x] ~~**#1235 — isolated cargo-test target for `filter_registry::tests`**~~ ✅ Shipped (PR #1241). New integration-test file `crates/djust_templates/tests/test_filter_registry_isolated.rs`; in-module `OnceLock` workaround removed. v0.9.1 retro Action Tracker #201.
+- [x] ~~**#1236 — watch-list for release-workflow-touching dep bumps**~~ ✅ Shipped (PR #1241). New `.github/workflows/check-release-workflow-deps.yml` requires the `release-workflow-reviewed` label on PRs modifying release-critical workflow files. v0.9.1 retro Action Tracker #202.
+- [x] ~~**#1240 — explicit `use_actors` error envelope in `ViewRuntime.dispatch_mount` over SSE**~~ ✅ Shipped. Stage 11 review of #1239 flagged plan-fidelity slippage on plan §Risks #3 / ADR-016 — closed in this PR with a 5-line guard + 1 test. Filed post-#1239-merge as immediate-follow-up.
 
 #### Sequencing
 
-1. **#1237 first** — headline real-bug fix; the architecture extraction unlocks all three sub-bugs together.
-2. **#1234 / #1235 / #1236** — bundle as 1-3 small follow-up PRs (P2, mechanical). Order doesn't matter; touch disjoint files.
+1. **#1237 first** — ✅ shipped in PR #1239. Headline real-bug fix; architecture extraction unlocked all three sub-bugs.
+2. **#1234 / #1235 / #1236** — ✅ shipped together in PR #1241 (bundled, mechanical, disjoint files).
+3. **#1240** — ✅ shipped as immediate follow-up to PR #1239 (Stage 11 finding); rode alone since the carryovers had already shipped.
 
 #### Acceptance for v0.9.2-1
 
