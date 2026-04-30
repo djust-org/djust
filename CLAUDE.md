@@ -196,6 +196,37 @@ Key features:
 
 The Rust template engine supports **all 57 Django built-in filters** in `crates/djust_templates/src/filters.rs`. HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally and are listed in `safe_output_filters` in `renderer.rs` to prevent double-escaping.
 
+## Bug-report triage
+
+When investigating an issue with a code-location citation:
+
+1. **Trust the symptom, not the cited path.** The reporter's diagnostic data
+   (error messages, patch counts, observable behavior) is the load-bearing
+   evidence. The code location they cite is their hypothesis, which may be
+   wrong — even when the cited code looks like a perfect match for the
+   symptom (e.g., a dead-code fallback that produces the exact bytes the
+   reporter saw).
+
+2. **Trace from observable symptom to actual code path.** Write a reproducer
+   test FIRST (Stage 4 of the bugfix pipeline already requires this).
+   Confirm the reproducer fails. Then trace the data flow from where the
+   symptom appears (output, error, missing patch) BACKWARDS through the
+   framework until you find the offending code. This is symptom-up.
+
+3. **Don't trust path-down hypotheses.** If you start at the reporter-cited
+   location and try to verify the bug from there, you'll burn time when
+   the location is wrong.
+
+4. **Canonical case study**: PR #1206 (#1205 list[Model] VDOM fix). Reporter
+   cited `python/djust/mixins/jit.py:_lazy_serialize_context` — a method
+   with a `str(model)` fallback that exactly matched the reported symptom
+   (`__str__` strings in serialized context). The method had **zero call
+   sites** — dead code. The actual bug was upstream in
+   `python/djust/mixins/rust_bridge.py:_sync_state_to_rust` change-detection
+   comparing `list[Model]` via `Model.__eq__` (pk-only). Reproducer-first
+   TDD surfaced the real path; trying to fix the reporter-cited code would
+   have been a no-op.
+
 ## Common Pitfalls
 
 - **Ruff F509**: `%`-format strings containing CSS semicolons trigger false positives. Separate HTML (`%s` substitution) from CSS (static string) and concatenate.
