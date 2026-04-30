@@ -82,6 +82,11 @@
       "verdict": null,
       "checklist": [
         {
+          "action": "VERIFY ARTIFACT BEFORE PLANNING (#1210, v0.9.5 retro Action Tracker #191): for feature work, write a failing test or doc-snippet exercising the desired behavior so the plan reflects what users will observe; for security work, read the actual code at any cited line and confirm the alert's premise. Plan can ONLY lock in design AFTER the artifact exists. The reproducer-first discipline is generalizable from PR #1206 (bugfix) to feature work too — the artifact pins the contract.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "read codebase for current state",
           "done": false
         },

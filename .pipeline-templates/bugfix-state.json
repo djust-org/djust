@@ -82,6 +82,11 @@
       "verdict": null,
       "checklist": [
         {
+          "action": "VERIFY ARTIFACT BEFORE PLANNING (#1210, v0.9.5 retro Action Tracker #191): for bug reports, write a failing reproducer test that exhibits the reported symptom; for security alerts, read the actual code at the cited line and confirm the alert's premise. Plan can ONLY lock in fix location AFTER the artifact exists. PR #1206 burned ~10 min on a reporter-cited dead-code path because no reproducer was written first; PR #1201 saved ~2 min by reading the actual cited code lines first.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "read codebase for current state",
           "done": false
         },
