@@ -336,3 +336,59 @@ class TestMountIdempotency:
         assert runtime.view_instance is sentinel
         # No frames were emitted.
         assert transport.sent == []
+
+
+# ------------------------------------------------------------------ #
+# use_actors over SSE — ADR-016 §Implementation / #1240
+# ------------------------------------------------------------------ #
+
+
+class _FakeViewWithActors(_FakeView):
+    """A view subclass that opts into actor-based state management.
+
+    Used to verify that ``dispatch_mount`` emits a structured error
+    envelope rather than letting the mount partially succeed and fail
+    downstream when the actor channel-layer code (in ``websocket.py``)
+    isn't reachable on the runtime path.
+    """
+
+    use_actors = True
+
+
+class TestDispatchMountUseActorsGuard:
+    @pytest.mark.asyncio
+    async def test_dispatch_mount_use_actors_emits_error_envelope(self):
+        """#1240: when a use_actors=True view tries to mount over a
+        runtime whose transport doesn't support actor messages (i.e.,
+        SSE), emit a structured error envelope and skip the mount.
+
+        Plan-fidelity gate from ADR-016 §Implementation notes."""
+        from djust.runtime import ViewRuntime
+
+        transport = MockTransport()
+        runtime = ViewRuntime(transport)
+
+        view = _FakeViewWithActors()
+        runtime._instantiate_view = MagicMock(return_value=view)
+        runtime._check_auth = AsyncMock(return_value=None)
+        runtime._resolve_url_kwargs = MagicMock(return_value={})
+
+        with _patch_allowed_modules(["djust."]):
+            await runtime.dispatch_mount(
+                {
+                    "type": "mount",
+                    "view": "djust.tests.test_runtime._FakeViewWithActors",
+                    "params": {},
+                    "url": "/",
+                }
+            )
+
+        # Structured error envelope emitted.
+        assert len(transport.errors) == 1
+        err = transport.errors[0]
+        assert err["type"] == "error"
+        assert "use_actors" in err["error"]
+        # Mount did NOT succeed — runtime stays unmounted.
+        assert runtime.view_instance is None
+        # The view's mount() was never called (kwargs_received stays None).
+        assert view.kwargs_received is None
