@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode
 
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
-from ..utils import get_template_dirs
+from ..utils import get_template_dirs, is_model_list
 
 logger = logging.getLogger(__name__)
 
@@ -321,10 +321,26 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
+            from django.db.models import Model, QuerySet
 
             full_context = (
                 preloaded_context if preloaded_context is not None else self.get_context_data()
             )
+
+            # Defensive normalize pass for DB values added after super() (#1205).
+            # When a user overrides ``get_context_data`` and sets
+            # ``ctx["tasks"] = list(qs)`` AFTER calling ``super()``, the JIT
+            # pipeline never sees the list[Model] — and downstream change-
+            # detection would compare list[Model] via Model.__eq__ (pk-only),
+            # missing in-place field mutations. Normalize raw DB values to
+            # dicts here so the comparison below sees field-level changes.
+            for _key, _val in list(full_context.items()):
+                if isinstance(_val, Model):
+                    full_context[_key] = normalize_django_value(_val)
+                elif isinstance(_val, QuerySet):
+                    full_context[_key] = [normalize_django_value(_item) for _item in _val]
+                elif is_model_list(_val):
+                    full_context[_key] = [normalize_django_value(_item) for _item in _val]
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
             # Cache it to avoid creating a new string object each call,
