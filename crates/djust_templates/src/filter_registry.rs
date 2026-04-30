@@ -363,78 +363,14 @@ fn format_py_err(py: Python<'_>, name: &str, err: &PyErr) -> String {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    //! Unit tests for the hot-path short-circuit guard (#1162).
-    //!
-    //! Note: the [`ANY_CUSTOM_FILTERS_REGISTERED`] flag is process-global
-    //! and **never resets** for the lifetime of the process — once any
-    //! test registers a filter, every subsequent test sees the flag as
-    //! ``true``. That's the intended production semantics (see the
-    //! ``static`` doc comment), so these tests assert the
-    //! pre-registration state in ordering-independent ways.
-    //!
-    //! Functional cross-checks (registration → render → custom filter
-    //! produces output) live in the Python regression suite at
-    //! ``tests/unit/test_rust_custom_filters_1121.py``.
-    use super::*;
-    use std::sync::atomic::Ordering;
-    use std::sync::OnceLock;
-
-    /// Once this is set, the AtomicBool guard is observed flipped.
-    /// Used so the "before-registration" assertion in
-    /// [`test_atomicbool_short_circuit_when_no_filters_registered`] is
-    /// only made if no other test has already registered a filter.
-    static ALREADY_REGISTERED_BEFORE_TEST: OnceLock<bool> = OnceLock::new();
-
-    #[test]
-    fn test_atomicbool_short_circuit_when_no_filters_registered() {
-        // If a prior test in the same process has already registered
-        // anything, this assertion is meaningless — skip it. Cargo
-        // doesn't guarantee ordering.
-        let was_registered = *ALREADY_REGISTERED_BEFORE_TEST
-            .get_or_init(|| ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire));
-        if was_registered {
-            return;
-        }
-        // Pre-registration: ``is_custom_filter_safe`` must short-circuit
-        // and never touch the Mutex. We can't observe Mutex state from
-        // here, but we can assert the lookup returns ``false`` for
-        // arbitrary names — including names we know would be
-        // ``is_safe=true`` if registered. The guard means we never
-        // reach the HashMap.
-        assert!(!is_custom_filter_safe("definitely_not_registered_xyz"));
-        // And the apply path returns ``None`` (filter miss) so the
-        // built-in renderer falls through to the standard
-        // ``Unknown filter`` error.
-        let value = Value::String("x".to_string());
-        let result = apply_custom_filter(
-            "definitely_not_registered_xyz",
-            &value,
-            None,
-            None,
-            false,
-            true,
-        );
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_apply_custom_filter_short_circuits_when_no_filters_registered() {
-        // Same invariant as above, isolated. Independent of
-        // registration state of other tests because we use a name that
-        // can't possibly be registered.
-        let value = Value::String("x".to_string());
-        let result = apply_custom_filter(
-            "__provably_unregistered_name__",
-            &value,
-            None,
-            None,
-            false,
-            true,
-        );
-        // None == miss; an unknown name is always a miss whether or
-        // not the AtomicBool guard short-circuited the Mutex.
-        assert!(result.is_none());
-    }
-}
+// Tests for the hot-path short-circuit guard (#1162) live in an isolated
+// integration test at `tests/test_filter_registry_isolated.rs`. Cargo runs
+// each integration-test file in its own process binary, which gives the
+// `ANY_CUSTOM_FILTERS_REGISTERED` AtomicBool a guaranteed-clean starting
+// state — unlike in-module unit tests where the static persists across
+// every test in the same `cargo test` binary. See #1235 / v0.9.1 retro
+// Action Tracker #201 for the rationale.
+//
+// Functional cross-checks (registration → render → custom filter produces
+// output) live in the Python regression suite at
+// `tests/unit/test_rust_custom_filters_1121.py`.
