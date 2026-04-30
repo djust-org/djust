@@ -1,8 +1,23 @@
-ca# djust Roadmap
+# djust Roadmap
 
-> Current version: **0.3.8rc1** (Alpha) — Last updated: March 18, 2026 (roadmap refresh: Phoenix LV 1.1 parity audit, React 19.2 patterns, v0.5.0 scope split into v0.5.0/v0.5.1, new features: `handle_async`, declarative assigns, `used_input?`, programmable JS hook commands, server actions, keep-alive/activity, keyed for-loop change tracking, type-safe template validation, streaming markdown renderer, `self.defer()`, document metadata, temporary assigns, `djust_gen_live` scaffolding, transition/priority updates, suspense boundaries, named slots with attributes, static asset tracking, database change notifications, WebSocket compression, `dj-scroll-into-view`, multi-step wizard, virtual/windowed lists, `dj-paste`, runtime layout switching, i18n live switching)
+> Current version: **0.9.0** — Last roadmap refresh: 2026-04-30 (v0.9.5 drain-bucket complete; milestone-naming convention adopted — see below).
 
 This roadmap outlines what has been built, what is actively being worked on, and where djust is headed. Priorities are shaped by real-world usage across [djust.org](https://djust.org) and [djustlive](https://djustlive.com), and by feature parity goals with Phoenix LiveView 1.0 and React 19-level interactivity.
+
+## Milestone naming convention (adopted 2026-04-30)
+
+Two name shapes appear in this roadmap, with distinct meanings:
+
+| Shape | Meaning | Example | Becomes a release? |
+|---|---|---|---|
+| `v0.9.1` | An **actual release** (3-digit SemVer) | `v0.9.1`, `v0.10.0`, `v1.0.0` | Yes — gets a git tag, a CHANGELOG release entry, and a published version. |
+| `v0.9.2-1` | A **drain bucket** — one planning iteration toward the next release (SemVer pre-release suffix `-N`) | `v0.9.2-1`, `v0.9.2-2`, `v0.9.2-3` | No — drain buckets accumulate into the next 3-digit release. SemVer-orders before the release: `v0.9.2-1 < v0.9.2`. |
+
+**Why two shapes?** Drain buckets are work-in-progress checkpoints; releases are the user-facing artifact. Conflating them (the old scheme used `v0.9.1` for both, which is what produced 5 drain "milestones" between the v0.9.0 GA tag and the next planned tag) makes it ambiguous whether `v0.9.4` is a tagged release or a planning bucket. The new convention removes that ambiguity.
+
+**Historical note**: ROADMAP entries `v0.9.1` through `v0.9.5` (already shipped) were drain buckets under the old naming; they are equivalent to `v0.9.1-1` through `v0.9.1-5` under the new convention. They are NOT being retroactively renamed (would invalidate cross-references in 50+ PRs, retro files, and CHANGELOG entries). The convention applies forward-only.
+
+**Pending release**: 5 drain buckets of work have accumulated since the `v0.9.0` GA tag. The next release-tag should be `v0.9.1`, cut from current `main`. Tracked at [#1221](https://github.com/djust-org/djust/issues/1221).
 
 ### Priority Matrix — What Moves the Needle Most
 
