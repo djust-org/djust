@@ -1618,6 +1618,54 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 ---
 
+### Milestone: v0.9.5 — Process polish wave from v0.9.5 retro
+
+*Goal:* Ship the small process-improvement issues surfaced by the v0.9.5 milestone retrospective. All quick wins; each unblocks future-PR efficiency or future-investigator clarity. No framework code changes — only CLAUDE.md, pipeline templates, skill files, and test strengthening. The heavier issues from the same retro (#1207 list[Model] shape coverage, #1212 retro-gate audit, #1214 CodeQL sanitizer model) deferred to a later milestone where their design choices warrant their own planning passes.
+
+**Status (planning):** 0 of 5 PRs shipped. 5 issues identified.
+
+#### Process canon (P2 batch)
+
+- [ ] **#1210 — plan-template Stage 4 must require reproducer/artifact before plan finalization** (P2, tech-debt). v0.9.5 retro Action Tracker #191. Add a leading mandatory checklist item to `.pipeline-templates/feature-state.json` and `bugfix-state.json` Stage 4: bug plans require a failing reproducer test; security plans require reading actual code at the alert-cited location. Caught by PR #1206's ~10 min Stage 4 waste chasing dead code AND PR #1201's 8 alerts that all turned out to be FPs after reading the actual lines.
+- [ ] **#1211 — reviewer-prompt budget guidelines for pipeline-run Stage 11** (P2, tech-debt). v0.9.5 retro Action Tracker #192. Update `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt template to cap security PR review at 200 words, feature at 350, bugfix at 250. Forbid "edge-case spelunking" beyond the documented attack-shape list. PR #1201 reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; the right phrasing prevents this.
+- [ ] **#1213 — Bug-report triage section in CLAUDE.md citing PR #1206 as case study** (P2, docs). v0.9.5 retro Action Tracker #194. Add a "Bug-report triage" section to `CLAUDE.md` near the existing "Personality" section. Generalizes the "issue-reporter analysis ≠ root cause" lesson from PR #1206. Trace from observable symptom to actual code path; don't trust path-down hypotheses. ~20 min.
+
+#### Tooling (P2)
+
+- [ ] **#1209 — vulture-based pre-push check for unused private methods** (P2, tooling). v0.9.5 retro Action Tracker #197. Filed during PR #1206 cleanup. Add `scripts/check-dead-private-methods.py` (or a vulture wrapper) plus pre-push hook entry. Whitelist framework-hook patterns (`__init__`, `_meta`, descriptor protocols) and reflection-called methods. Would have caught `_lazy_serialize_context` months before PR #1206 if it had been in place.
+
+#### Test strengthening (P3)
+
+- [ ] **#1208 — strengthen idempotency test for normalize pass with explicit zero-patch assertion** (P3, test). v0.9.5 retro Action Tracker #196. Filed during PR #1206 cleanup. `test_normalize_idempotent_on_already_serialized` currently asserts no exception. Should also assert `dom_changes` count is 0 on noop event. ~15 min effort. May need to add a thin patch-count accessor to `LiveViewTestClient`.
+
+#### Acceptance
+
+- All 5 issues close via merged PRs.
+- `.pipeline-templates/{feature,bugfix}-state.json` Stage 4 has the reproducer-first mandatory item.
+- `CLAUDE.md` contains a "Bug-report triage" section.
+- Vulture (or equivalent) runs in pre-push and flags unused private methods.
+- Idempotency test asserts both no-exception AND zero-patches.
+
+#### Deferred to later milestone
+
+- **#1207** — heterogeneous + nested `list[Model]` shapes in normalize pass. Needs a design pass on whether to scan-full-list, recurse-bounded, or document-as-unsupported.
+- **#1212** — audit pipeline-bypass merges + harden retro-gate. Larger effort: audit script + scheduled CI check + tune false-positive thresholds.
+- **#1214** — CodeQL sanitizer model for `sanitize_for_log`. Requires investigation into CodeQL custom-query authoring; potentially 1-2 hours just to determine tractability.
+- **#1215** — `.pxd` line-ending cleanup. Small chore; can ship anytime, no blocker.
+
+#### Sequencing strategy
+
+1. **#1213 first** — pure docs, no code dependencies, ~20 min.
+2. **#1208 + #1210 + #1211 in parallel** — small standalone changes, no shared files. Could ship as 3 PRs or batched as one "v0.9.5 process polish" PR.
+3. **#1209 last** — needs the most investigation (vulture configuration, whitelist tuning). May expose pre-existing dead methods to triage.
+
+#### Pipeline runner notes
+
+- `/pipeline-drain --milestone v0.9.5 --label tech-debt` to triage. Will pick up issues already added to this milestone.
+- v0.9.5 retro lessons apply: reproducer-first (the issues being shipped here MAKE this discipline structural — meta-applicable), reviewer-prompt budget, two-commit shape per v0.9.1 retro #181.
+
+---
+
 ### Milestone: v0.10.0 — Rust Polish (next minor after v0.9.0 stable)
 
 *Goal:* Three sub-week, low-risk Rust additions that compound the existing Rust-side wins (template engine, VDOM, fragment cache). Each is Django-compatible — no surface change for user code; just faster + safer plumbing underneath.
