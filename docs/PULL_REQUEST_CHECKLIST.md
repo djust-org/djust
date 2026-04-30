@@ -50,6 +50,7 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Mixin wiring checklist** - New mixins must verify: (a) added to LiveView MRO, (b) exported from `__init__.py`, (c) consumer calls flush/process methods, (d) client JS routes the new command type, (e) HTTP request path calls mixin methods *(PRs #568, #569)*
 - [ ] **Test file location** - Test files must be in a directory listed in pytest `testpaths` (`pyproject.toml`). Tests in unlisted directories are never executed *(PR #570)*
 - [ ] **Framework-internal attrs filter sync** — If you added a new framework-set attribute on `LiveView` / `LiveComponent` (anything assigned by mount/dispatch/lifecycle code rather than user code), did you also add it to `_FRAMEWORK_INTERNAL_ATTRS` in `python/djust/live_view.py`? The frozenset is the single source of truth for `get_state()` filtering — missing entries silently leak into reactive-state debug payloads + the client-side state mirror. *Source: ADR-012 / issue #962 / PR #1002.*
+- [ ] **Dogfood pass for new CLI tools** — Any new CLI tool that reports on project state (`djust_audit`, `djust_typecheck`, `djust_check`, etc.) must be dry-run against the demo project before commit. v0.5.1 `djust_typecheck` originally produced 230+ lines of false positives; a dogfood pass caught it pre-commit. *Source: Retro v0.5.1 / Action Tracker #145 / GitHub #1060.*
 
 ### Python Code Standards
 
@@ -169,6 +170,7 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **No `|safe` on user input** - The `|safe` filter must only be used on server-generated HTML, never on user-controlled values
 - [ ] **Fuzz tests pass** - `LiveViewSmokeTest` mixin covers XSS and crash testing for new views
 - [ ] **Template tags escape user input** - Any use of `mark_safe()` must escape interpolated values with `django.utils.html.escape()` or `django.utils.html.format_html()`. Never inject raw parameters into HTML or JavaScript strings
+- [ ] **`mark_safe` XSS-trace audit** — For every new `mark_safe` call, trace each interpolated input back to a server-validated source. PR #1074's reviewer traced cookie inputs through `registry.has_theme/has_preset` validation in `get_state()` to confirm no XSS surface; making this a checklist item locks the discipline. *Source: Retro v0.8.2 / Action Tracker #153 / GitHub #1078.*
 - [ ] **JS string context uses `json.dumps()`** - Values embedded in JavaScript strings use `json.dumps()` for escaping, not HTML `escape()` which is insufficient for JS contexts
 - [ ] **CSRF protection** maintained - No bypass of Django's CSRF protection
 - [ ] **No unjustified `@csrf_exempt`** - New endpoints must not use `@csrf_exempt` without documented justification. Service worker / API endpoints should use token-based auth instead
