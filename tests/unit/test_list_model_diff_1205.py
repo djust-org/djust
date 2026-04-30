@@ -162,7 +162,17 @@ class TestListModelDiff1205:
         pass must NOT double-process. ``is_model_list`` returns False for
         ``list[dict]`` (first item isn't a Model), and ``isinstance(dict,
         Model)`` is False — so the pass is a no-op for already-serialized
-        values."""
+        values.
+
+        Strengthened (#1208): the noop event must produce **zero VDOM
+        patches**. If the normalize pass were ever to double-process
+        already-serialized values (e.g. via a future refactor that broadens
+        ``is_model_list`` to scan the full list), the ``prev_containers``
+        comparison in ``_sync_state_to_rust`` could spuriously mark the key
+        as changed and emit phantom patches. This locks the contract tightly
+        — no exception is necessary; behavioral idempotency is the actual
+        invariant.
+        """
 
         class JITView(LiveView):
             template = "<div>{% for t in tasks %}{{ t.username }}{% endfor %}</div>"
@@ -176,16 +186,25 @@ class TestListModelDiff1205:
                 pass
 
         client = LiveViewTestClient(JITView).mount()
-        # First render establishes baseline. Should not throw on the
-        # normalize pass (idempotent on serialized dicts).
+        # First render establishes baseline.
         html = client.render()
         assert "alice" in html and "bob" in html
 
-        # Second render — context unchanged, no field mutation.
+        # Establish VDOM baseline via render_with_patches so the second call
+        # produces patches relative to the baseline.
+        client.render_with_patches()
+
+        # Send a noop event — no field mutation, no state change.
         client.send_event("noop")
-        html2 = client.render()
-        # No change, but render must succeed (idempotency check).
+
+        # Second render after noop: render must succeed AND produce zero
+        # patches. The zero-patches assertion is the load-bearing invariant.
+        html2, patches, _ = client.render_with_patches()
         assert "alice" in html2
+        assert patches == [], (
+            f"Expected zero patches on noop event (idempotency invariant), "
+            f"got {len(patches)} patches: {patches[:3]!r}"
+        )
 
     def test_empty_list_normalize_safe(self):
         """An empty list (not list[Model]) must not trip the normalize pass."""

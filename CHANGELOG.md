@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`LiveViewTestClient.render_with_patches()` — VDOM-diff accessor for tests
+  (#1208).** New public method on `djust.testing.LiveViewTestClient` that
+  wraps `view_instance.render_with_diff()` and returns `(html, patches_list,
+  version)` with the JSON patches parsed into a Python list. Empty list when
+  no patches were produced. Reusable for any test that needs to assert on
+  VDOM-diff invariants (e.g. "this noop event must produce zero patches").
+  First user is the strengthened
+  `test_normalize_idempotent_on_already_serialized` regression test in
+  `tests/unit/test_list_model_diff_1205.py`, which now locks the #1206
+  normalize-pass idempotency contract via an explicit `patches == []`
+  assertion instead of the prior weaker "no exception" check.
+
 ### Fixed
 
 - **JIT serializer silently degrades when context value is `list[Model]`

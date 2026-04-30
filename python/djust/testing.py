@@ -317,6 +317,45 @@ class LiveViewTestClient:
         template = get_template(template_name)
         return template.render(context)
 
+    def render_with_patches(self) -> tuple:
+        """Render and return ``(html, patches_list, version)`` for VDOM-diff
+        assertions in tests.
+
+        Wraps ``view_instance.render_with_diff()`` and parses the JSON patches
+        into a Python list (empty list when no patches were produced).
+
+        Each call advances the diff baseline — i.e., the second call returns
+        patches relative to the first. The typical pattern for a "noop event
+        produces zero patches" assertion is:
+
+        .. code-block:: python
+
+            client.render_with_patches()              # baseline
+            client.send_event("noop")                  # mutate
+            _, patches, _ = client.render_with_patches()
+            assert patches == []
+
+        Returns:
+            ``(html, patches_list, version)`` where ``patches_list`` is a
+            ``list[dict]`` (empty when no patches), parsed from the Rust
+            view's diff JSON.
+
+        Raises:
+            RuntimeError: If view not mounted.
+        """
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+
+        request = getattr(self.view_instance, "request", None)
+        html, patches_json, version = self.view_instance.render_with_diff(request)
+        if patches_json:
+            import json as _json
+
+            patches_list = _json.loads(patches_json)
+        else:
+            patches_list = []
+        return (html, patches_list, version)
+
     def assert_state(self, **expected: Any) -> None:
         """
         Assert state variables match expected values.
