@@ -1622,21 +1622,21 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 *Goal:* Ship the small process-improvement issues surfaced by the v0.9.5 milestone retrospective. All quick wins; each unblocks future-PR efficiency or future-investigator clarity. No framework code changes — only CLAUDE.md, pipeline templates, skill files, and test strengthening. The heavier issues from the same retro (#1207 list[Model] shape coverage, #1212 retro-gate audit, #1214 CodeQL sanitizer model) deferred to a later milestone where their design choices warrant their own planning passes.
 
-**Status (planning):** 0 of 5 PRs shipped. 5 issues identified.
+**Status:** ✅ 5 of 5 PRs shipped (PRs #1216, #1217, #1218, #1219, #1220) — milestone complete 2026-04-30.
 
 #### Process canon (P2 batch)
 
-- [ ] **#1210 — plan-template Stage 4 must require reproducer/artifact before plan finalization** (P2, tech-debt). v0.9.5 retro Action Tracker #191. Add a leading mandatory checklist item to `.pipeline-templates/feature-state.json` and `bugfix-state.json` Stage 4: bug plans require a failing reproducer test; security plans require reading actual code at the alert-cited location. Caught by PR #1206's ~10 min Stage 4 waste chasing dead code AND PR #1201's 8 alerts that all turned out to be FPs after reading the actual lines.
-- [ ] **#1211 — reviewer-prompt budget guidelines for pipeline-run Stage 11** (P2, tech-debt). v0.9.5 retro Action Tracker #192. Update `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt template to cap security PR review at 200 words, feature at 350, bugfix at 250. Forbid "edge-case spelunking" beyond the documented attack-shape list. PR #1201 reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; the right phrasing prevents this.
-- [ ] **#1213 — Bug-report triage section in CLAUDE.md citing PR #1206 as case study** (P2, docs). v0.9.5 retro Action Tracker #194. Add a "Bug-report triage" section to `CLAUDE.md` near the existing "Personality" section. Generalizes the "issue-reporter analysis ≠ root cause" lesson from PR #1206. Trace from observable symptom to actual code path; don't trust path-down hypotheses. ~20 min.
+- ✅ **#1210 — plan-template Stage 4 must require reproducer/artifact before plan finalization** (P2, tech-debt). Shipped in PR #1218.
+- ✅ **#1211 — reviewer-prompt budget guidelines for pipeline-run Stage 11** (P2, tech-debt). Shipped in PR #1219.
+- ✅ **#1213 — Bug-report triage section in CLAUDE.md citing PR #1206 as case study** (P2, docs). Shipped in PR #1216.
 
 #### Tooling (P2)
 
-- [ ] **#1209 — vulture-based pre-push check for unused private methods** (P2, tooling). v0.9.5 retro Action Tracker #197. Filed during PR #1206 cleanup. Add `scripts/check-dead-private-methods.py` (or a vulture wrapper) plus pre-push hook entry. Whitelist framework-hook patterns (`__init__`, `_meta`, descriptor protocols) and reflection-called methods. Would have caught `_lazy_serialize_context` months before PR #1206 if it had been in place.
+- ✅ **#1209 — vulture-based pre-push check for unused private methods** (P2, tooling). Shipped in PR #1220 as `scripts/check-no-dead-private-methods.py` (pure-Python; no new dependency).
 
 #### Test strengthening (P3)
 
-- [ ] **#1208 — strengthen idempotency test for normalize pass with explicit zero-patch assertion** (P3, test). v0.9.5 retro Action Tracker #196. Filed during PR #1206 cleanup. `test_normalize_idempotent_on_already_serialized` currently asserts no exception. Should also assert `dom_changes` count is 0 on noop event. ~15 min effort. May need to add a thin patch-count accessor to `LiveViewTestClient`.
+- ✅ **#1208 — strengthen idempotency test for normalize pass with explicit zero-patch assertion** (P3, test). Shipped in PR #1217. Also added new public test API `LiveViewTestClient.render_with_patches()`.
 
 #### Acceptance
 
