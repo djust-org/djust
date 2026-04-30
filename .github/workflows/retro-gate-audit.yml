@@ -46,9 +46,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LIMIT="${{ github.event.inputs.limit || '50' }}"
-          # Capture stdout to both the log and a file for the summary step.
+          # `audit-pipeline-bypass.py` exits 1 when it finds flagged PRs.
+          # Capture that exit code without failing the step — the whole
+          # point of this workflow is to *surface* findings as
+          # annotations, not turn the daily cron red. The annotations
+          # themselves are the alert mechanism.
+          set +o pipefail
           python scripts/audit-pipeline-bypass.py --limit "$LIMIT" \
-            | tee audit-output.txt
+            > audit-output.txt 2>&1
+          AUDIT_EXIT=$?
+          set -o pipefail
+          cat audit-output.txt
+          echo "audit_exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
           # If the script printed any "potential bypass" rows, surface
           # them as annotations.
           if grep -q "potential bypass" audit-output.txt; then
