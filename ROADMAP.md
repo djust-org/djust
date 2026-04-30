@@ -107,7 +107,9 @@ Plus a new follow-up filed during the cleanup itself:
 
 - #1227 — pre-commit/CI lint for bare comma-list `Closes #X, #Y` auto-close failure (the comma-list bit PR #1225 + PR #1226 both — file for v0.9.2-1; not blocking v0.9.1).
 
-### Active drain bucket: v0.9.1-8 — final cleanup (carryover items pulled into v0.9.1)
+### Drain bucket: v0.9.1-8 — final cleanup (✅ shipped 2026-04-30)
+
+**Status:** ✅ all 4 work units shipped. Backlog now at ZERO open tech-debt issues; only #1221 (release-cut runbook) remains. v0.9.1 release window is genuinely empty.
 
 Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2-1) so the release window closes cleanly. Re-scoping the 3 v0.9.1-7-deferred items + #1227 filed during cleanup confirmed all 4 are bounded and fit in a single drain bucket (~3-4 hours autonomous).
 
@@ -129,9 +131,10 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 **Acceptance for v0.9.1-8**:
 
-- [ ] All 4 work units shipped (3 PRs + #1177 local fix).
-- [ ] Backlog count goes from 4 → 1 (just #1221 release-cut remaining).
-- [ ] Once bucket complete, proceed to release-cut runbook.
+- [x] All 4 work units shipped: PR #1228 (#1227), PR #1229 (#1212), PR #1230 (#1180), and #1177 local skill fix.
+- [x] Backlog count went from 4 → 1 (just #1221 release-cut remaining).
+- [x] 17 historical PR retros backfilled while running #1212's audit script (8 v0.9.2-era + 5 v0.9.4-era + 2 v0.9.5 known + #1226 + #1187/#1201).
+- [ ] Once bucket complete, proceed to release-cut runbook (next step).
 
 
 
