@@ -1,6 +1,6 @@
 # djust Roadmap
 
-> Current version: **0.9.0** — Last roadmap refresh: 2026-04-30 (v0.9.5 drain-bucket complete; milestone-naming convention adopted — see below).
+> Current version: **0.9.1** (released 2026-04-30) — Last roadmap refresh: 2026-04-30 (v0.9.1 cut, v0.9.2-1 drain bucket opened).
 
 This roadmap outlines what has been built, what is actively being worked on, and where djust is headed. Priorities are shaped by real-world usage across [djust.org](https://djust.org) and [djustlive](https://djustlive.com), and by feature parity goals with Phoenix LiveView 1.0 and React 19-level interactivity.
 
@@ -17,11 +17,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Historical note**: ROADMAP entries `v0.9.1` through `v0.9.5` (already shipped) were drain buckets under the old naming; they are equivalent to `v0.9.1-1` through `v0.9.1-5` under the new convention. They are NOT being retroactively renamed (would invalidate cross-references in 50+ PRs, retro files, and CHANGELOG entries). The convention applies forward-only.
 
-**Pending release**: 5 drain buckets of work have accumulated since the `v0.9.0` GA tag. The next release-tag should be `v0.9.1`, cut from current `main`. Tracked at [#1221](https://github.com/djust-org/djust/issues/1221).
+**Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
 
-## Pending release: v0.9.1
+## Released: v0.9.1 (2026-04-30)
 
-Release `v0.9.1` will package 5 drain buckets shipped between `v0.9.0` GA (2026-04-29) and 2026-04-30. All buckets were shipped under the old naming scheme (`v0.9.1` through `v0.9.5`) and are equivalent to drain buckets `v0.9.1-1` through `v0.9.1-5` under the new convention.
+Release `v0.9.1` packaged 8 drain buckets shipped between `v0.9.0` GA (2026-04-29) and 2026-04-30. The first 5 buckets shipped under the old naming scheme (`v0.9.1` through `v0.9.5`) and are equivalent to drain buckets `v0.9.1-1` through `v0.9.1-5` under the new convention. Buckets `v0.9.1-6` through `v0.9.1-8` shipped under the new naming.
 
 ### Drain buckets shipped, all rolling into release v0.9.1
 
@@ -157,6 +157,61 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 - #1215 — `.pxd` line-ending cleanup.
 
 (15 other older tech-debt issues from earlier milestones remain open and out of scope for v0.9.1.)
+
+---
+
+## Pending release: v0.9.2
+
+Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
+
+### Milestone: v0.9.2-1 — SSE transport DRY refactor + tracker carryovers
+
+**Status:** 🚧 in progress — opened 2026-04-30 immediately after the v0.9.1 release-cut.
+
+*Goal:* Fix the 3 SSE-transport bugs reported in #1237 by establishing a transport-agnostic dispatch layer (`ViewRuntime` + `Transport` Protocol) that both WebSocket and SSE share. The 3 bugs are fixed as a side-effect of routing SSE through the shared path, not as 3 separate one-off patches. Decision captured in [ADR-016](docs/adr/016-transport-runtime-interface.md).
+
+#### Headliner — #1237 SSE transport bug bundle (P1, 1 PR, 3 sub-bugs)
+
+- [ ] **PR: SSE transport DRY refactor** — closes #1237. Three SSE bugs filed post-v0.9.1-cut against the `use_websocket: False` mode (NYC Claims prototype):
+  1. URL kwargs not resolved — SSE reads `request.path` (the SSE endpoint URL) instead of the actual page URL. WebSocket equivalent at `websocket.py:1851` reads `data["url"]` from the client mount frame.
+  2. `LiveViewSSE.sendMessage()` missing — `_executePatch()` at `18-navigation.js:317-321` calls `liveViewWS.sendMessage({type: 'url_change', ...})`, crashes with `TypeError` over SSE. Eight other JS call sites also affected.
+  3. `handle_params()` never invoked over SSE — Phoenix-parity contract. Views that read URL state in `handle_params` keep mount-time defaults.
+
+  **Approach** (per ADR-016): new `python/djust/runtime.py` (~280 LoC) factors out `dispatch_mount` / `dispatch_event` / `dispatch_url_change` so both transports share one code path. New SSE `POST /djust/sse/<sid>/message/` endpoint dispatches identically to a WS frame. WebSocket's `handle_url_change` becomes a thin shim over `ViewRuntime.dispatch_url_change` (proves the shared codepath). `LiveViewSSE.sendMessage(data)` mirrors `LiveViewWebSocket.sendMessage` so existing call sites work transparently. The Referer header is deliberately NOT used (privacy + spoofability + correctness — see ADR-016).
+
+  **Scope** (~1100 LoC, ~750 of which is tests + docs):
+  - New `python/djust/runtime.py`
+  - `python/djust/sse.py` (+120 / -30): new `/message/` endpoint, `_sse_mount_view` shrinks to thin wrapper, `_sse_handle_event` deletes
+  - `python/djust/websocket.py` (+15 / -50): `handle_url_change` shim only — other handlers unchanged in this PR
+  - `python/djust/static/djust/src/03b-sse.js` (+90): `sendMessage`, `_sendMountFrame`, `sendEvent` delegating
+  - Tests: `python/tests/test_sse.py` (+200), new `python/djust/tests/test_runtime.py` (~150), new `python/tests/test_sse_ws_symmetry.py` (~80), `tests/js/sse-transport.test.js` (+120)
+  - Docs: `docs/sse-transport.md` (+40 / -8), `CHANGELOG.md` entry, `docs/adr/016-transport-runtime-interface.md` (this PR — already merged separately)
+  - Branch: `feat/sse-runtime-1237`
+
+  **Phasing** — PR-A scope is intentionally minimal; only `handle_url_change` migrates to the runtime (proves the shared codepath). Subsequent PRs migrate `handle_event`, `handle_mount`, `handle_mount_batch`, etc., none blocked by this one. See ADR-016 §Phasing.
+
+#### Tracker carryovers from v0.9.1 retro (P2, deferred)
+
+- [ ] **#1234 — pipeline-bypass CI check (ongoing)** — scheduled GitHub Action that runs `scripts/audit-pipeline-bypass.py` daily and flags merged PRs without retro markers within 24h. Part 2 of #1212 (part 1 shipped as the audit script in PR #1229). v0.9.1 retro Action Tracker #200.
+- [ ] **#1235 — isolated cargo-test target for `filter_registry::tests`** — `OnceLock`-gated short-circuit test silently no-ops when a prior test in the same process registered a filter. Either a `cargo test --test filter_registry_isolated` target or a fresh-process spawn for the affected case. Carryover from #1180 item 4. v0.9.1 retro Action Tracker #201.
+- [ ] **#1236 — watch-list for release-workflow-touching dep bumps** — manual risk-review at refile time for any dependabot PR modifying `.github/workflows/release.yml`. Triggered by PR #1233 (action-gh-release v2 → v3) landing in the same window as the v0.9.1 cut. v0.9.1 retro Action Tracker #202.
+
+#### Sequencing
+
+1. **#1237 first** — headline real-bug fix; the architecture extraction unlocks all three sub-bugs together.
+2. **#1234 / #1235 / #1236** — bundle as 1-3 small follow-up PRs (P2, mechanical). Order doesn't matter; touch disjoint files.
+
+#### Acceptance for v0.9.2-1
+
+- #1237 closed (all 3 sub-bugs fixed, runtime + transport interface in place, symmetry test green).
+- All 3 carryover issues either closed or explicitly deferred to `v0.9.2-2` with rationale.
+- Retro: `/pipeline-retro --milestone v0.9.2-1` per the established cadence.
+
+#### Pipeline runner notes
+
+- `/pipeline-drain --milestone v0.9.2-1 --label tech-debt` to triage carryovers.
+- `/pipeline-run --milestone v0.9.2-1` to start the #1237 PR.
+- Apply v0.9.1 retro lessons proactively: single-implementer-per-checkout (#180/#1172), two-commit shape impl+tests / docs+CHANGELOG (#181/#1173), reproducer-first per Stage 4 (#1218/#1210).
 
 ---
 
