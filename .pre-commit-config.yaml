@@ -180,3 +180,15 @@ repos:
         types: [python]
         pass_filenames: false
         stages: [pre-push]
+
+      # Flag bare comma-list ``Closes #X, #Y`` in branch commit messages (#1227).
+      # GitHub's auto-close parser only matches a closing keyword when it
+      # precedes EACH ref — comma-list shape closes only the FIRST issue.
+      # PR #1225 + PR #1226 both bit this in 24 hours; the fix is structural.
+      - id: check-no-comma-list-closes
+        name: check no comma-list Closes
+        entry: bash -c '.venv/bin/python scripts/check-no-comma-list-closes.py'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]

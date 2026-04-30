@@ -8,7 +8,8 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **PR Description** includes purpose, changes, and testing approach
 - [ ] **Breaking Changes** are clearly identified and documented
 - [ ] **Linked Issues** are referenced (if applicable). Each issue that should be closed by the PR must appear on its own line using GitHub closing keywords (e.g., `Closes #123`). Multiple issues must be listed one per line. Specifically AVOID:
-  - **Inline comma-list**: `Closes #123, closes #456` — only the *last* issue closes; GitHub stops parsing after the first match on the line.
+  - **Bare comma-list**: `Closes #123, #456, #789` — only the *first* issue closes; GitHub's auto-close parser requires a closing keyword to precede EACH ref. Bit PR #1225 (#1195 closed; #1196-#1200 left open) and PR #1226 (#1037 closed; #1039-#1079 left open) within 24 hours of each other in the v0.9.1 release-prep arc. **Programmatic enforcement**: `scripts/check-no-comma-list-closes.py` (pre-push hook) flags this pattern in branch commit messages. See #1227.
+  - **Inline keyword-repeated form is OK**: `Closes #123, closes #456` (each ref has its own keyword) — works correctly, but one-per-line is clearer.
   - **Parenthesized form**: `(closes #1173, closes #1174)` — neither issue closes; GitHub's auto-close parser does not recognize closing keywords inside parens. Validated against PR #1176 (v0.9.2) which used this form in its title and silently failed to close the two issues it was meant to close.
   - **Always prefer the PR body** over the title for closing keywords. The body has unlimited length and is preserved verbatim, eliminating the parenthesized-form trap above and any other title-shape constraints.
 - [ ] **Target Branch** is correct (typically `main` for releases)
