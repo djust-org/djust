@@ -10,22 +10,41 @@ from djust import Component
 # Built-in variants for which djust ships CSS out of the box. Matches the
 # Badge / Button / Tag / Alert signal set, plus the theme-standard
 # `primary` / `secondary` for projects with more than 5 categories.
-_BUILTIN_VARIANTS = {
-    "default",
-    "info",
-    "success",
-    "warning",
-    "danger",
-    "muted",
-    "primary",
-    "secondary",
-}
+#
+# This set is the canonical source of truth across the Component API
+# (``rich_select.py``) and the templatetag (``djust_components.py``) —
+# the templatetag imports from here rather than duplicating.
+_BUILTIN_VARIANTS = frozenset(
+    {
+        "default",
+        "info",
+        "success",
+        "warning",
+        "danger",
+        "muted",
+        "primary",
+        "secondary",
+    }
+)
 
 # Any variant name consumers pass through must match this pattern so it can
 # be safely interpolated into a CSS class attribute. Downstream projects can
 # define their own variants (e.g. `indigo`, `accent-2`) by shipping a
 # matching `.rich-select-option--variant-<name>` rule in their own CSS.
 _VARIANT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+
+
+def is_builtin_variant(name: str) -> bool:
+    """Return ``True`` if ``name`` is one of the variants djust ships CSS for.
+
+    Public helper for downstream consumers (Components, template tags,
+    docs generators) that want to distinguish "djust ships this CSS"
+    from "user shipped their own CSS for this name." Both are valid —
+    the variant-name regex (``_VARIANT_NAME_RE``) is the gatekeeper —
+    but the distinction matters for tooling that wants to warn on
+    typos vs. honor genuinely-custom variants.
+    """
+    return name in _BUILTIN_VARIANTS
 
 
 class RichSelect(Component):
