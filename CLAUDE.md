@@ -492,6 +492,85 @@ Canonicalized here so the next drain doesn't repeat the failure mode.
   has a CSP-Strict Defaults block at `docs/PULL_REQUEST_CHECKLIST.md`
   with concrete external-module-shape references.
 
+## Process canonicalizations from v0.9.4 retro arc
+
+Six rules distilled from v0.9.4 retro tracker rows #185–#190 (PRs #1190, #1192, #1193, #1194). Each was a Stage 11 finding; canonicalized here so the next time-travel/refactor/canon-doc/index-cursor PR doesn't repeat the failure mode.
+
+- **Refactor-with-helper guard audit** (#1195). When extracting a
+  helper from N call sites that previously had inline input-validation
+  logic, audit each call site to decide explicitly: push the
+  validation INTO the helper, or keep it AT the call site. Failure
+  mode is silent — production keeps working when inputs are well-formed,
+  breaks only on malformed inputs that may not appear in tests.
+  PR #1194's `_sendTimeTravelMessage` extraction inadvertently dropped
+  a `typeof index !== 'number'` guard for programmatic callers; the
+  DOM dispatch path still validated via `parseInt+isNaN`, so the bug
+  only mattered for non-DOM callers. Stage 11 caught it.
+
+- **Delegated-listener integration tests** (#1196). For any "marker
+  class + delegated event listener" feature, unit tests (direct method
+  invocation) and integration tests (real DOM event → registered
+  handler → method) need separate coverage. Method-level tests verify
+  methods, not the wiring (`parseInt`, `target.closest`, branch dispatch
+  order, containment check). PR #1194's first version had 17
+  method-level vitest cases but ZERO integration tests; backfill added
+  6 integration cases (one per click branch + non-tt-button +
+  non-numeric data). Rule: at least one integration test per
+  delegated-listener selector branch.
+
+- **Canon-doc citation discipline** (#1197). Every `file:line`,
+  attribute name, method name, and bash one-liner cited in a canon doc
+  (CLAUDE.md, PR-checklist, ADR) should be `grep`-verified before
+  committing. PR #1192 had 5 inaccuracies in a 3-rule docs PR —
+  wrong line numbers, wrong attribute names (e.g.,
+  `_event_handler` literal doesn't exist; the marker is the
+  `_djust_decorators` dict), bash one-liners with placeholder
+  `<state-file>.json` (not copy-paste runnable), wrong section
+  ordering, speculative prose claims. Stage 11 reviewers will run
+  the greps anyway — pre-empting saves a roundtrip and keeps adjacent
+  canon trustable. Rule: pre-commit on any canon-doc PR, grep every
+  cited symbol, run every code block, verify section ordering.
+
+- **Commit-or-rollback handler shape** (#1198). Any async handler
+  that does BOTH a state mutation AND has an early-return path
+  (validation failure, downstream failure, missing dependency) should
+  mutate AFTER the commit point. Two clean shapes:
+  1. Defer the mutation past all early-return checks (preferred for
+     single-attribute mutations).
+  2. Wrap in try/except with explicit rollback (justified only when
+     multiple mutations need atomic rollback).
+
+  Failure mode is silent — early-return doesn't raise, so observability
+  tools won't flag it. State stays in a half-committed shape. PR #1193's
+  `handle_forward_replay` set `view._time_travel_branch_id = new_branch`
+  BEFORE awaiting `replay_event`; on `replayed is None` (handler
+  missing), branch state stayed bumped with no recorded events; view
+  + client diverged. Stage 11 caught it.
+
+- **Index/cursor edge-case coverage** (#1199). When implementing a
+  handler with index or cursor logic, run through the cases at
+  `index=0`, `index=len/2`, `index=len-1`, `index=len` (out of range)
+  before declaring done. Four mental cases catch most off-by-one
+  classes. PR #1193's `_build_time_travel_state` and
+  `handle_forward_replay` answered the same boolean question with
+  different formulas; they disagreed at `cursor=len-1, which="before"`
+  with override_params. Rule: every handler with index logic gets at
+  least one test at each boundary (0, mid, len-1, out-of-range).
+
+- **Tautology test detection** (#1200). When a test asserts "this
+  thing happened", check whether the assertion would ALSO pass if the
+  action under test did nothing. If yes, it's a tautology — production
+  state from prior tests, fixtures, or module setup may be making it
+  pass for the wrong reason. PR #1190's
+  `test_ready_completes_other_setup_even_when_auto_enable_skipped`
+  asserted `any(isinstance(filters, DjustLogSanitizerFilter))`, but
+  every prior test in the file calls `app.ready()` which adds another
+  filter (no idempotency guard). By test #6, the filter was already on
+  the logger from prior calls — assertion passes even if test #6's
+  ready() did nothing. Fix pattern: snapshot count BEFORE, assert
+  count grew by exactly 1. Rule: for any "action happened" assertion,
+  ask "would this pass if the action didn't run?"
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
