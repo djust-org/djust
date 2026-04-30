@@ -19,6 +19,52 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Pending release**: 5 drain buckets of work have accumulated since the `v0.9.0` GA tag. The next release-tag should be `v0.9.1`, cut from current `main`. Tracked at [#1221](https://github.com/djust-org/djust/issues/1221).
 
+## Pending release: v0.9.1
+
+Release `v0.9.1` will package 5 drain buckets shipped between `v0.9.0` GA (2026-04-29) and 2026-04-30. All buckets were shipped under the old naming scheme (`v0.9.1` through `v0.9.5`) and are equivalent to drain buckets `v0.9.1-1` through `v0.9.1-5` under the new convention.
+
+### Drain buckets shipped, all rolling into release v0.9.1
+
+| Bucket (old name) | Theme | PRs | Retro |
+|---|---|---|---|
+| v0.9.1 | v0.9.0 follow-up drain | #1159, #1161, #1163, #1164, #1166, #1168, #1170 | RETRO.md §v0.9.1 |
+| v0.9.2 | retro follow-up drain + process canon | #1176, #1178, #1179, #1181, #1182, #1183, #1184 + skill #1172 | RETRO.md §v0.9.2 |
+| v0.9.3 | test-infra cleanup | (release-unblocker for v0.9.0rc3) | — |
+| v0.9.4 | Debug Panel UI + post-rc3 polish | #1190, #1191, #1192, #1193, #1194 | RETRO.md §v0.9.4 |
+| v0.9.5 | process polish wave (post-v0.9.0 GA) | #1206, #1216, #1217, #1218, #1219, #1220, plus #1201, #1203, #1204 | RETRO.md §v0.9.5 |
+
+### Headline themes that will land with v0.9.1
+
+- **Real-bug fixes**: `list[Model]` VDOM degradation (#1206), broadcast `_recovery_html` (#1203), Rust template `register.filter` parity (#1161), `{% live_render %}` `lazy=True` Rust parity (#1166), websocket interleaving (#1098).
+- **Debug Panel UI**: per-component scrubber + forward-replay UI on top of the v0.9.0 time-travel primitives (#1194).
+- **DX wins**: hot-reload auto-enable in DEBUG mode (#1190), RichSelect variants (#1204), data_table row-level navigation (#1119), theming cookie namespace fix (#1168).
+- **Framework correctness**: `_sync_state_to_rust` defensive normalize pass for `list[Model]` change-detection (#1206), `_lazy_serialize_context` dead-code removal (#1206).
+- **Process / tooling**: 19 code-scanning alerts closed (#1201), reproducer-first plan-template discipline (#1218), reviewer-prompt budget guidelines (#1219), Bug-report triage section in CLAUDE.md (#1216), pre-push dead-private-method check (#1220), idempotency test zero-patch assertion + new public test API (#1217).
+
+### Release-cut checklist (#1221)
+
+- [ ] Bump `__version__` and Cargo crate versions: `0.9.0` → `0.9.1` (Python `pyproject.toml`, `python/djust/__init__.py`, 4 Cargo crates, `Cargo.lock`).
+- [ ] Promote `[Unreleased]` block in `CHANGELOG.md` to `## [0.9.1] - <date>` block.
+- [ ] Tag: `git tag v0.9.1 && git push origin v0.9.1`.
+- [ ] Cut GitHub release with the CHANGELOG block as release notes.
+- [ ] After release, optionally bump version on dev branches to `0.9.2-1` (next drain bucket marker; can defer until first v0.9.2-1 PR lands).
+
+### Known follow-ups deferred from drain buckets (will not block v0.9.1)
+
+- #1207 — heterogeneous + nested `list[Model]` shapes in change-detection normalize pass (PR #1206 review).
+- #1208 — ✅ shipped in PR #1217.
+- #1209 — ✅ shipped in PR #1220.
+- #1210 — ✅ shipped in PR #1218.
+- #1211 — ✅ shipped in PR #1219.
+- #1212 — audit pipeline-bypass merges + harden retro-gate (v0.9.5 retro Action Tracker #193).
+- #1213 — ✅ shipped in PR #1216.
+- #1214 — CodeQL `sanitize_for_log` sanitizer model.
+- #1215 — `.pxd` line-ending cleanup.
+
+(15 other older tech-debt issues from earlier milestones remain open and out of scope for v0.9.1.)
+
+---
+
 ### Priority Matrix — What Moves the Needle Most
 
 | Priority | Feature | Why | Milestone |
@@ -170,26 +216,26 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | **P2** | docs: "misleading existing tests" pattern note (#1018) | One paragraph in `PULL_REQUEST_CHECKLIST.md` — when fixing a check, audit existing tests whose fixtures exemplify the broken behavior | v0.7.4 |
 | **P2** | docs: whitespace-preserving redaction pattern in check-authoring guide (#1019) | New section documenting the `_strip_verbatim_blocks` pattern as canonical reference for line-number-aware regex scanners | v0.7.4 |
 | **P2** | docs: scope-decision helper extraction pattern in check-authoring guide (#1020) | New section documenting `_contrast_check_scope` / `_presets_to_check` as canonical reference for config-driven check scope | v0.7.4 |
-| **P1** | Bisect 6 flaky tests that fail in full pytest run, pass in isolation (#1134) | Every PR pays a ~30s skip-marker tax on full-suite runs; root cause is a polluting test mutating global state (Django settings / Channels registry / Redis mock). Bisect first, fix the polluter — unblocks the pre-push hook for every future PR. | v0.9.1 |
-| **P1** | Rust template renderer rejects project-defined `register.filter` (#1121) | Real bug, surfaced post-v0.9.0 — projects that register custom filters via the Django registry don't see them in the Rust path. Asymmetry with the Python engine; same shape as the v0.7.2 `__str__` fix (#968). | v0.9.1 |
-| **P2** | A075 system check — sticky+lazy template scan (#1146) | ADR-015 §"Deferred from PR-B". Catch `{% live_render sticky=True lazy=True %}` collision at startup, not template-render time. ~80 LoC + tests. | v0.9.1 |
-| **P2** | CSP-nonce-aware activator script for `<dj-lazy-slot>` fills (#1147) | ADR-015 §"Deferred from PR-B". Sites with strict CSP need the framework to thread the request CSP nonce through `live_tags.py` + `50-lazy-fill.js` so inline activators match the document policy. | v0.9.1 |
-| **P2** | Rust template engine `{% live_render %}` lazy=True parity (#1145) | Surfaced in PR #1138 integration tests — production users on the Rust path can't use `lazy=True`. Port the Django implementation to a Rust tag handler in `crates/djust_templates/`. | v0.9.1 |
-| **P2** | Replay handler argument validation — defense-in-depth (#1148) | PR #1142 follow-up. Augment `replay_event` to validate `event_name` against `view._djust_event_handlers` registry rather than the bare underscore-prefix guard, limiting replay to actual handlers. | v0.9.1 |
-| **P2** | Theming cookie namespace to prevent cross-project bleed on localhost (#1158) | Follow-up to closed-as-workaround #1013. Cookies are domain-scoped, not port-scoped — multiple djust projects on `localhost:80xx` share `djust_theme*` cookies and overwrite each other. Add `LIVEVIEW_CONFIG['theme']['cookie_namespace']` setting; namespaced reads/writes with fallback to legacy unprefixed names. | v0.9.1 |
-| **P3** | Descriptor-pattern component time-travel verification test (#1150) | PR #1141 Stage 11 deferral. End-to-end test that constructs a view with a class-level `LiveComponent.descriptor()` and asserts capture+restore preserves the component's state. Locks in the `_COMPONENT_INTERNAL_ATTRS` defense layer. | v0.9.1 |
-| **P3** | `markdown` package missing from default test env (#1149) | Carryover from v0.8.7 retro. Add to dev-dependencies or mark dependent tests with `pytest.importorskip("markdown")`. | v0.9.1 |
-| **P3** | data_table row-level navigation — `row_click_event` / `row_url` (#1111) | Feat slot — common UX pattern for click-to-detail. Decide: handler attribute on `<tr>` vs URL builder, accessibility (Enter/Space, role=button), default-prevent for nested controls. | v0.9.1 |
-| **P2** | Pipeline template canonicalization (#1173 + #1174) | Add two-commit shape (impl+tests / docs+CHANGELOG) as a Stage 9 boundary in `.pipeline-templates/feature-state.json` + `.pipeline-templates/bugfix-state.json`; add "3 clean full-suite runs" verification gate in Stage 6 for pollution-class fixes. | v0.9.2 |
-| **P2** | CSP-strict defaults canonicalization (#1175) | CLAUDE.md + `docs/PULL_REQUEST_CHECKLIST.md` + `docs/website/guides/security.md` addition documenting "external static JS module + auto-bind on marker class" as the canonical CSP-friendly pattern for new client-side framework code. v1.0 readiness. | v0.9.2 |
-| **P2** | Custom filter bridge polish (#1162) | 6 sub-items from PR #1161 Stage 11 review: hot-path Mutex perf via `AtomicBool` short-circuit, hardcoded autoescape consultation, weak negative-case test tightening, drop unused `custom_filter_exists`, fixture isolation, silent async filter handling. All in `crates/djust_templates/`. | v0.9.2 |
-| **P3** | Test/dev-env hygiene group (#1160 + #1165) | Tighten `test_redis_serialization_performance` perf bound or soften docstring (#1160). Add `caplog` assertions for #1148 replay rejection logging + descriptor auto-promotion gap doc + `scripts/check-dev-env-imports.py` (#1165). | v0.9.2 |
-| **P3** | Tag registry test isolation + sidecar bridge extension (#1167) | Pre-existing test-isolation flake in `tests/unit/test_assign_tag.py` (after `test_tag_registry.py` leaks a `broken` handler) — tighten teardown with autouse fixture. Plus extend `call_handler_with_py_sidecar` pattern to block-tag and assign-tag handlers for symmetry with custom-tag handlers (mechanical follow-up to PR #1166). | v0.9.2 |
-| **P3** | Cookie namespace polish (#1169) | 4 sub-items from PR #1168 Stage 11 review: empty-namespaced-cookie defeats fallback (`_read('') or None` masks empty case), no validation on namespace value (whitespace/`=`/`;` produces malformed cookies), no JSDOM test for the WRITE side of `theme.js`, legacy unprefixed cookie persists indefinitely after migration. | v0.9.2 |
-| **P3** | data_table row navigation polish (#1171) | 3 sub-items from PR #1170 Stage 11 review: missing `<details>`/`<summary>`/`<option>` from nested-control selector, refactor `window.__djustRowClickNavigate` test-hook into the namespaced exports, add Python-side allowlist regression test. | v0.9.2 |
-| **P1** | happy-dom + undici WebSocket unhandled errors in `tests/js/sw_advanced.test.js` (#1186) | Blocks `/djust-release 0.9.0rc3` pre-flight: `make test` exits non-zero with 3 unhandled `WebSocket.dispatchEvent` errors. CI's vitest config silently swallows these; local `make test` surfaces them. All actual tests pass. Filter in vitest.config OR stub WebSocket constructor in test setup. | v0.9.3 |
-| **P2** | Vitest unhandled-rejection in `tests/js/view-transitions.test.js` (#1152) | Sibling issue to #1186: non-deterministic `EnvironmentTeardownError` during the test's own teardown phase. Same class (test-environment WebSocket / async-callback interop). v0.9.0 retro Action Tracker #178. | v0.9.3 |
-| **P2** | `asyncio.as_completed._wait_for_one` warning suppression in `tests/integration/test_chunks_overlap.py` (#1153) | Python-side analog to #1186/#1152: `DeprecationWarning: There is no current event loop` under teardown. Filter locally OR fix `_cancel_pending` lifecycle in `arender_chunks`. v0.9.0 retro Action Tracker #179. | v0.9.3 |
+| ~~**P1**~~ | ~~Bisect 6 flaky tests that fail in full pytest run, pass in isolation (#1134)~~ ✅ Shipped in PR #1159 | ~~Every PR pays a ~30s skip-marker tax on full-suite runs; root cause is a polluting test mutating global state (Django settings / Channels registry / Redis mock). Bisect first, fix the polluter — unblocks the pre-push hook for every future PR.~~ | ~~v0.9.1~~ |
+| ~~**P1**~~ | ~~Rust template renderer rejects project-defined `register.filter` (#1121)~~ ✅ Shipped in PR #1161 | ~~Real bug, surfaced post-v0.9.0 — projects that register custom filters via the Django registry don't see them in the Rust path. Asymmetry with the Python engine; same shape as the v0.7.2 `__str__` fix (#968).~~ | ~~v0.9.1~~ |
+| ~~**P2**~~ | ~~A075 system check — sticky+lazy template scan (#1146)~~ ✅ Shipped in PR #1163 | ~~ADR-015 §"Deferred from PR-B". Catch `{% live_render sticky=True lazy=True %}` collision at startup, not template-render time. ~80 LoC + tests.~~ | ~~v0.9.1~~ |
+| ~~**P2**~~ | ~~CSP-nonce-aware activator script for `<dj-lazy-slot>` fills (#1147)~~ ✅ Shipped in PR #1163 | ~~ADR-015 §"Deferred from PR-B". Sites with strict CSP need the framework to thread the request CSP nonce through `live_tags.py` + `50-lazy-fill.js` so inline activators match the document policy.~~ | ~~v0.9.1~~ |
+| ~~**P2**~~ | ~~Rust template engine `{% live_render %}` lazy=True parity (#1145)~~ ✅ Shipped in PR #1166 | ~~Surfaced in PR #1138 integration tests — production users on the Rust path can't use `lazy=True`. Port the Django implementation to a Rust tag handler in `crates/djust_templates/`.~~ | ~~v0.9.1~~ |
+| ~~**P2**~~ | ~~Replay handler argument validation — defense-in-depth (#1148)~~ ✅ Shipped in PR #1164 | ~~PR #1142 follow-up. Augment `replay_event` to validate `event_name` against `view._djust_event_handlers` registry rather than the bare underscore-prefix guard, limiting replay to actual handlers.~~ | ~~v0.9.1~~ |
+| ~~**P2**~~ | ~~Theming cookie namespace to prevent cross-project bleed on localhost (#1158)~~ ✅ Shipped in PR #1168 | ~~Follow-up to closed-as-workaround #1013. Cookies are domain-scoped, not port-scoped — multiple djust projects on `localhost:80xx` share `djust_theme*` cookies and overwrite each other. Add `LIVEVIEW_CONFIG['theme']['cookie_namespace']` setting; namespaced reads/writes with fallback to legacy unprefixed names.~~ | ~~v0.9.1~~ |
+| ~~**P3**~~ | ~~Descriptor-pattern component time-travel verification test (#1150)~~ ✅ Shipped in PR #1164 | ~~PR #1141 Stage 11 deferral. End-to-end test that constructs a view with a class-level `LiveComponent.descriptor()` and asserts capture+restore preserves the component's state. Locks in the `_COMPONENT_INTERNAL_ATTRS` defense layer.~~ | ~~v0.9.1~~ |
+| ~~**P3**~~ | ~~`markdown` package missing from default test env (#1149)~~ ✅ Shipped in PR #1164 | ~~Carryover from v0.8.7 retro. Add to dev-dependencies or mark dependent tests with `pytest.importorskip("markdown")`.~~ | ~~v0.9.1~~ |
+| ~~**P3**~~ | ~~data_table row-level navigation — `row_click_event` / `row_url` (#1111)~~ ✅ Shipped in PR #1119 | ~~Feat slot — common UX pattern for click-to-detail. Decide: handler attribute on `<tr>` vs URL builder, accessibility (Enter/Space, role=button), default-prevent for nested controls.~~ | ~~v0.9.1~~ |
+| ~~**P2**~~ | ~~Pipeline template canonicalization (#1173 + #1174)~~ ✅ Shipped in PR #1176 | ~~Add two-commit shape (impl+tests / docs+CHANGELOG) as a Stage 9 boundary in `.pipeline-templates/feature-state.json` + `.pipeline-templates/bugfix-state.json`; add "3 clean full-suite runs" verification gate in Stage 6 for pollution-class fixes.~~ | ~~v0.9.2~~ |
+| ~~**P2**~~ | ~~CSP-strict defaults canonicalization (#1175)~~ ✅ Shipped in PR #1178 | ~~CLAUDE.md + `docs/PULL_REQUEST_CHECKLIST.md` + `docs/website/guides/security.md` addition documenting "external static JS module + auto-bind on marker class" as the canonical CSP-friendly pattern for new client-side framework code. v1.0 readiness.~~ | ~~v0.9.2~~ |
+| ~~**P2**~~ | ~~Custom filter bridge polish (#1162)~~ ✅ Shipped in PR #1179 | ~~6 sub-items from PR #1161 Stage 11 review: hot-path Mutex perf via `AtomicBool` short-circuit, hardcoded autoescape consultation, weak negative-case test tightening, drop unused `custom_filter_exists`, fixture isolation, silent async filter handling. All in `crates/djust_templates/`.~~ | ~~v0.9.2~~ |
+| ~~**P3**~~ | ~~Test/dev-env hygiene group (#1160 + #1165)~~ ✅ Shipped in PR #1181 | ~~Tighten `test_redis_serialization_performance` perf bound or soften docstring (#1160). Add `caplog` assertions for #1148 replay rejection logging + descriptor auto-promotion gap doc + `scripts/check-dev-env-imports.py` (#1165).~~ | ~~v0.9.2~~ |
+| ~~**P3**~~ | ~~Tag registry test isolation + sidecar bridge extension (#1167)~~ ✅ Shipped in PR #1182 | ~~Pre-existing test-isolation flake in `tests/unit/test_assign_tag.py` (after `test_tag_registry.py` leaks a `broken` handler) — tighten teardown with autouse fixture. Plus extend `call_handler_with_py_sidecar` pattern to block-tag and assign-tag handlers for symmetry with custom-tag handlers (mechanical follow-up to PR #1166).~~ | ~~v0.9.2~~ |
+| ~~**P3**~~ | ~~Cookie namespace polish (#1169)~~ ✅ Shipped in PR #1183 | ~~4 sub-items from PR #1168 Stage 11 review: empty-namespaced-cookie defeats fallback (`_read('') or None` masks empty case), no validation on namespace value (whitespace/`=`/`;` produces malformed cookies), no JSDOM test for the WRITE side of `theme.js`, legacy unprefixed cookie persists indefinitely after migration.~~ | ~~v0.9.2~~ |
+| ~~**P3**~~ | ~~data_table row navigation polish (#1171)~~ ✅ Shipped in PR #1184 | ~~3 sub-items from PR #1170 Stage 11 review: missing `<details>`/`<summary>`/`<option>` from nested-control selector, refactor `window.__djustRowClickNavigate` test-hook into the namespaced exports, add Python-side allowlist regression test.~~ | ~~v0.9.2~~ |
+| ~~**P1**~~ | ~~happy-dom + undici WebSocket unhandled errors in `tests/js/sw_advanced.test.js` (#1186)~~ ✅ Shipped in PR #1187 | ~~Blocks `/djust-release 0.9.0rc3` pre-flight: `make test` exits non-zero with 3 unhandled `WebSocket.dispatchEvent` errors. CI's vitest config silently swallows these; local `make test` surfaces them. All actual tests pass. Filter in vitest.config OR stub WebSocket constructor in test setup.~~ | ~~v0.9.3~~ |
+| ~~**P2**~~ | ~~Vitest unhandled-rejection in `tests/js/view-transitions.test.js` (#1152)~~ ✅ Shipped in PR #1187 | ~~Sibling issue to #1186: non-deterministic `EnvironmentTeardownError` during the test's own teardown phase. Same class (test-environment WebSocket / async-callback interop). v0.9.0 retro Action Tracker #178.~~ | ~~v0.9.3~~ |
+| ~~**P2**~~ | ~~`asyncio.as_completed._wait_for_one` warning suppression in `tests/integration/test_chunks_overlap.py` (#1153)~~ ✅ Shipped in PR #1187 | ~~Python-side analog to #1186/#1152: `DeprecationWarning: There is no current event loop` under teardown. Filter locally OR fix `_cancel_pending` lifecycle in `arender_chunks`. v0.9.0 retro Action Tracker #179.~~ | ~~v0.9.3~~ |
 
 ---
 
@@ -1394,6 +1440,8 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 
 ### Milestone: v0.9.1 — v0.9.0 follow-up drain (10 issues)
 
+**Status:** ✅ shipped — drain bucket toward release v0.9.1 (under old naming; equivalent to `v0.9.1-1` under the new convention adopted 2026-04-30). All 10 issues closed via PRs #1159, #1161, #1163, #1164, #1166, #1168, #1170. Retro at RETRO.md.
+
 *Goal:* Land the user-reported real bug (#1121), unblock the pre-push hook (#1134), and clear the v0.9.0 retro deferrals (ADR-015 gates + replay defense-in-depth + Rust template parity for `lazy=True`). Bake v0.9.0rc2 → v0.9.0 stable on the back of this drain — no new headline features; the soak window closes the v0.9.0 arc cleanly.
 
 **Status:** v0.9.0rc2 released 2026-04-27. v0.9.1 candidates filed during the v0.9.0 retro + post-rc2 user reports.
@@ -1452,6 +1500,8 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 ---
 
 ### Milestone: v0.9.2 — v0.9.1 retro follow-up drain (~7 PRs + 1 skill update)
+
+**Status:** ✅ shipped — drain bucket toward release v0.9.1 (under old naming; equivalent to `v0.9.1-2` under the new convention). 7 PRs (#1176, #1178, #1179, #1181, #1182, #1183, #1184) plus skill update #1172. Retro at RETRO.md.
 
 *Goal:* Land the 10 follow-up issues filed during v0.9.1 Stage 11 reviews. Mostly polish on top of working implementations — no real bugs, no headline features. Locks in the process canonicalizations from v0.9.1's lessons learned (parallel-agent serialization, two-commit shape, "3 clean runs" gate, CSP-strict defaults). Bake v0.9.0 stable on the back of this drain.
 
@@ -1513,6 +1563,8 @@ v0.9.0 release cuts after all 6 PRs merge. Earlier rc cuts are fine after each f
 
 ### Milestone: v0.9.3 — Test-infra cleanup (release-blocker for v0.9.0rc3)
 
+**Status:** ✅ shipped — drain bucket toward release v0.9.1 (under old naming; equivalent to `v0.9.1-3` under the new convention). Test-infra unblocked v0.9.0rc3 → v0.9.0 GA path.
+
 *Goal:* Get `make test` exiting clean so `/djust-release 0.9.0rc3` can proceed. Three sibling unhandled-error / warning issues from JS + Python test environments — same class (test-runtime cross-pollination between real Web-platform implementations and emulated test environments). All three are pre-existing (not introduced by v0.9.1 or v0.9.2 work) but only surfaced as a release-blocker at v0.9.0rc3 pre-flight when CI's vitest config silently swallows them while `make test` doesn't.
 
 **Status (planning):** 0 of 3 PRs shipped. All 3 issues open. Single drain — small, mechanical, no design work.
@@ -1556,6 +1608,8 @@ All three can ship as ONE PR titled `chore(test-infra): suppress unhandled error
 ---
 
 ### Milestone: v0.9.4 — Debug Panel UI + post-rc3 polish
+
+**Status:** ✅ shipped 2026-04-28 — drain bucket toward release v0.9.1 (under old naming; equivalent to `v0.9.1-4` under the new convention). 5 PRs (#1190, #1191, #1192, #1193, #1194). Retro at RETRO.md.
 
 *Goal:* Build the user-facing **Debug Panel UI** on top of the v0.9.0 time-travel + forward-replay primitives (#1041 + #1042), plus a small batch of test-infra polish and process canon items that have been accumulating in the Action Tracker.
 
@@ -1637,7 +1691,7 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 *Goal:* Ship the small process-improvement issues surfaced by the v0.9.5 milestone retrospective. All quick wins; each unblocks future-PR efficiency or future-investigator clarity. No framework code changes — only CLAUDE.md, pipeline templates, skill files, and test strengthening. The heavier issues from the same retro (#1207 list[Model] shape coverage, #1212 retro-gate audit, #1214 CodeQL sanitizer model) deferred to a later milestone where their design choices warrant their own planning passes.
 
-**Status:** ✅ 5 of 5 PRs shipped (PRs #1216, #1217, #1218, #1219, #1220) — milestone complete 2026-04-30.
+**Status:** ✅ 5 of 5 PRs shipped (PRs #1216, #1217, #1218, #1219, #1220) — milestone complete 2026-04-30. **Final drain bucket toward release v0.9.1** (equivalent to `v0.9.1-5` under the convention adopted post-this-bucket). Release cut tracked at [#1221](https://github.com/djust-org/djust/issues/1221).
 
 #### Process canon (P2 batch)
 
