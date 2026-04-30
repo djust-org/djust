@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode
 
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
-from ..utils import get_template_dirs, is_model_list
+from ..utils import get_template_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,72 @@ except ImportError:
 # registry), but the guard skips the walk on every subsequent
 # ``_initialize_rust_view`` call so steady-state cost is one branch.
 _CUSTOM_FILTERS_BRIDGED = False
+
+
+# Maximum recursion depth for ``_normalize_db_values``. Bounded to keep the
+# normalize pass O(N * depth) instead of unbounded for pathological nesting.
+# Three levels is enough for ``list[list[Model]]`` (depth 2) and any
+# ``list[list[list[Model]]]`` (depth 3) shape that's plausible in practice.
+# Beyond depth 3, nested DB content is most likely an unintentional shape
+# that should hit the existing ``_deep_serialize_dict`` path or the user's
+# own override, not the framework's defensive normalize pass.
+_NORMALIZE_DEPTH_LIMIT = 3
+
+
+def _normalize_db_values(value, depth: int = 0):
+    """Recursively normalize raw Django DB values (Model / QuerySet /
+    list[Model] / list[list[Model]]) into JSON-serializable dicts.
+
+    Used by ``_sync_state_to_rust`` to catch DB values that snuck past the
+    JIT pipeline (e.g., user added them via ``get_context_data`` override
+    AFTER ``super()``). After normalization, change-detection compares
+    ``list[dict]`` element-wise via ``dict.__eq__`` (structural) instead of
+    ``Model.__eq__`` (pk-only), correctly catching field mutations.
+
+    Returns the value unchanged if no DB content found. Idempotent on
+    already-serialized values — calling repeatedly is a no-op once the
+    structure is dict-only.
+
+    Shape coverage:
+    - ``Model``            → dict (#1205)
+    - ``QuerySet``         → list[dict] (#1205)
+    - ``list[Model]``      → list[dict] (any-position-Model; heterogeneous
+                             ``[dict, Model]`` is covered, not just
+                             ``[Model, ...]``) (#1207 expansion)
+    - ``list[list[...]]``  → recursive normalize with depth bound (#1207)
+
+    The depth bound (``_NORMALIZE_DEPTH_LIMIT``) prevents pathological
+    recursion on dict-of-list-of-dict-of-list shapes; beyond that depth,
+    the value is returned unchanged (best-effort).
+    """
+    from django.db.models import Model, QuerySet
+
+    if depth >= _NORMALIZE_DEPTH_LIMIT:
+        return value
+
+    if isinstance(value, Model):
+        return normalize_django_value(value)
+
+    if isinstance(value, QuerySet):
+        return [normalize_django_value(item) for item in value]
+
+    if isinstance(value, list) and len(value) > 0:
+        # Heterogeneous-safe: scan the entire list for any Model, not just
+        # value[0]. ``[dict, Model]`` and ``[Model, dict]`` both trigger.
+        if any(isinstance(item, Model) for item in value):
+            return [
+                normalize_django_value(item)
+                if isinstance(item, Model)
+                else _normalize_db_values(item, depth + 1)
+                for item in value
+            ]
+        # Nested-list recursion: ``[[Model, ...], [Model]]`` reaches here
+        # because the outer list has no Model directly; recurse into each
+        # sublist.
+        if isinstance(value[0], list):
+            return [_normalize_db_values(item, depth + 1) for item in value]
+
+    return value
 
 
 def _ensure_custom_filters_bridged() -> None:
@@ -321,26 +387,30 @@ class RustBridgeMixin:
         if self._rust_view:
             from ..components.base import Component, LiveComponent
             from django import forms
-            from django.db.models import Model, QuerySet
 
             full_context = (
                 preloaded_context if preloaded_context is not None else self.get_context_data()
             )
 
-            # Defensive normalize pass for DB values added after super() (#1205).
-            # When a user overrides ``get_context_data`` and sets
-            # ``ctx["tasks"] = list(qs)`` AFTER calling ``super()``, the JIT
-            # pipeline never sees the list[Model] — and downstream change-
-            # detection would compare list[Model] via Model.__eq__ (pk-only),
-            # missing in-place field mutations. Normalize raw DB values to
-            # dicts here so the comparison below sees field-level changes.
+            # Defensive normalize pass for DB values added after super() (#1205, #1207).
+            # When a user overrides ``get_context_data`` and sets a raw DB
+            # value (Model / QuerySet / list[Model]) AFTER calling ``super()``,
+            # the JIT pipeline never sees it — and downstream change-detection
+            # would compare list[Model] via ``Model.__eq__`` (pk-only),
+            # missing in-place field mutations.
+            #
+            # The recursive helper below covers four shapes:
+            #   1. ``Model``                  → dict (full field extraction)
+            #   2. ``QuerySet``               → list[dict]
+            #   3. ``list[Model]`` (any pos)  → list[dict] (heterogeneous-safe;
+            #                                   #1207 — dict-in-position-0 no
+            #                                   longer escapes)
+            #   4. ``list[list[Model]]``      → recurse with depth bound
+            #                                   (#1207 — nested grouping shape)
             for _key, _val in list(full_context.items()):
-                if isinstance(_val, Model):
-                    full_context[_key] = normalize_django_value(_val)
-                elif isinstance(_val, QuerySet):
-                    full_context[_key] = [normalize_django_value(_item) for _item in _val]
-                elif is_model_list(_val):
-                    full_context[_key] = [normalize_django_value(_item) for _item in _val]
+                _normalized = _normalize_db_values(_val)
+                if _normalized is not _val:
+                    full_context[_key] = _normalized
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
             # Cache it to avoid creating a new string object each call,
