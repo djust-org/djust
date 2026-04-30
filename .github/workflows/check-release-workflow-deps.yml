@@ -1,0 +1,65 @@
+name: Check release-workflow-deps
+
+# Mechanical guard: any PR that modifies release-critical workflow files
+# requires a manual risk review (signaled by the `release-workflow-reviewed`
+# label on the PR). Triggered by PR #1233 (action-gh-release v2 → v3
+# landing in the same window as the v0.9.1 cut); v0.9.1 retro Action
+# Tracker #202 / GitHub #1236.
+#
+# Why a label-based gate (vs CODEOWNERS or auto-merge denylist):
+# - Self-contained — no repo-admin setup needed for branch protection
+#   path rules.
+# - Visible — the label is a clear audit-trail for "yes, a human
+#   reviewed this dep bump".
+# - Mutable — a reviewer can add the label after manual review without
+#   forcing the dependabot author to re-push.
+#
+# To pass the check on a flagged PR:
+#   1. Manually review the dep bump (release-notes, breaking changes,
+#      Node version requirements, etc.).
+#   2. Add the `release-workflow-reviewed` label via the GitHub UI or
+#      `gh pr edit <PR> --add-label release-workflow-reviewed`.
+#   3. The check re-evaluates on label change and turns green.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - '.github/workflows/release.yml'
+      - '.github/workflows/publish.yml'
+      - '.github/workflows/release-drafter.yml'
+      - '.github/workflows/pre-release-security-audit.yml'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify reviewer label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels \
+            --jq '[.labels[].name] | join(",")')
+          echo "PR #$PR_NUMBER labels: $LABELS"
+          if echo ",$LABELS," | grep -q ',release-workflow-reviewed,'; then
+            echo "✅ release-workflow-reviewed label present."
+            exit 0
+          fi
+          cat <<'EOF'
+          ::error::This PR modifies release-critical workflow files but does
+          ::error::not have the `release-workflow-reviewed` label.
+          ::error::
+          ::error::Release-workflow dep bumps need explicit risk review at
+          ::error::refile time (see #1236). After reviewing the dep bump's
+          ::error::release notes, breaking changes, and Node version
+          ::error::requirements, add the label via:
+          ::error::
+          ::error::    gh pr edit $PR_NUMBER --add-label release-workflow-reviewed
+          EOF
+          exit 1

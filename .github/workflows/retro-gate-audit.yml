@@ -1,0 +1,91 @@
+name: Retro Gate Audit
+
+# Runs `scripts/audit-pipeline-bypass.py` daily to flag merged PRs that
+# shipped without a Stage 14 retro comment. Part 2 of #1212 (audit
+# pipeline-bypass merges); part 1 was the audit script itself, shipped
+# in PR #1229. Filed as #1234 / v0.9.1 retro Action Tracker #200.
+#
+# The script is read-only by default — it scans `gh pr list --state merged`
+# and prints a summary table. This workflow runs the script and surfaces
+# any flagged PRs as workflow annotations (visible in the Actions UI)
+# without opening issues, to avoid issue spam during steady-state operation.
+# An operator who wants to investigate a flagged PR can re-run the script
+# locally with `--since N` for more detail.
+
+on:
+  schedule:
+    # 13:00 UTC daily — chosen to be after typical US/EU merge hours so
+    # PRs merged earlier in the day get their 24h retro grace window.
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+    # Manual trigger — useful for smoke-testing and ad-hoc audits.
+    inputs:
+      limit:
+        description: 'Number of recent merged PRs to scan'
+        required: false
+        default: '50'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run pipeline-bypass audit
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LIMIT="${{ github.event.inputs.limit || '50' }}"
+          # `audit-pipeline-bypass.py` exits 1 when it finds flagged PRs.
+          # Capture that exit code without failing the step — the whole
+          # point of this workflow is to *surface* findings as
+          # annotations, not turn the daily cron red. The annotations
+          # themselves are the alert mechanism.
+          set +o pipefail
+          python scripts/audit-pipeline-bypass.py --limit "$LIMIT" \
+            > audit-output.txt 2>&1
+          AUDIT_EXIT=$?
+          set -o pipefail
+          cat audit-output.txt
+          echo "audit_exit=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
+          # If the script printed any "potential bypass" rows, surface
+          # them as annotations.
+          if grep -q "potential bypass" audit-output.txt; then
+            echo "flagged=true" >> "$GITHUB_OUTPUT"
+            grep "potential bypass" audit-output.txt | while IFS= read -r line; do
+              echo "::warning::Retro gate: $line"
+            done
+          else
+            echo "flagged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Append summary
+        if: always()
+        run: |
+          {
+            echo "## Retro Gate Audit"
+            echo ""
+            if [ "${{ steps.audit.outputs.flagged }}" = "true" ]; then
+              echo "⚠️ Found PRs without retro markers. See annotations above."
+              echo ""
+            else
+              echo "✅ No flagged PRs."
+              echo ""
+            fi
+            echo "<details><summary>Full audit output</summary>"
+            echo ""
+            echo '```'
+            cat audit-output.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
