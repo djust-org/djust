@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **JIT serializer silently degrades when context value is `list[Model]`
+  (#1205).** When a view's `get_context_data` override sets
+  `ctx["tasks"] = list(qs)` *after* calling `super().get_context_data()`,
+  the JIT auto-serialization pipeline runs inside `super()` and never sees
+  the user-added value. The raw `list[Model]` then flows through
+  `_sync_state_to_rust`, where change-detection compares list elements via
+  Python `==` — which delegates to `Model.__eq__` (pk-only). In-place field
+  mutations (`is_active` toggle, `completed` flip) don't change `pk`, so
+  the comparison returns equal, the key is never added to the diff-context,
+  Rust never receives the new state, and the rendered HTML is byte-identical
+  on every event despite confirmed DB writes. Symptom from the issue
+  reporter: `patch_count: 0` on every event, `_debug.variables.tasks.value`
+  shows only `__str__` strings. Fix: `_sync_state_to_rust` (in
+  `python/djust/mixins/rust_bridge.py`) now runs a defensive normalize pass
+  over `full_context` immediately after fetching it, converting any
+  `list[Model]` / `Model` / `QuerySet` value to dicts via
+  `normalize_django_value`. After normalization, change-detection compares
+  `list[dict] != list[dict]` element-wise via `dict.__eq__` (structural),
+  correctly catching field mutations. Idempotent on already-serialized
+  values. Also removed dead `_lazy_serialize_context` method from
+  `python/djust/mixins/jit.py` (zero call sites — was misleadingly cited as
+  the bug location in the issue). 7 regression cases in
+  `TestListModelDiff1205` and `TestLazySerializeContextRemoved` lock down
+  the user-override patterns (`list[Model]`, single Model, raw QuerySet)
+  plus idempotency and edge cases (empty list, mixed list).
+
 ## [0.9.0] - 2026-04-29
 
 The "Time Travel" release — the biggest release since 0.3.0, two years of

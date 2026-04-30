@@ -82,7 +82,7 @@ except ImportError:
 
 
 class JITMixin:
-    """JIT serialization: _jit_serialize_queryset, _jit_serialize_model, _lazy_serialize_context, _get_template_content."""
+    """JIT serialization: _jit_serialize_queryset, _jit_serialize_model, _get_template_content."""
 
     def _get_template_content(self) -> Optional[str]:
         """
@@ -324,45 +324,3 @@ class JITMixin:
         except Exception as e:
             logger.debug("JIT serialization failed for %s: %s", variable_name, e)
             return normalize_django_value(obj)
-
-    def _lazy_serialize_context(self, context: dict) -> dict:
-        """
-        Lazy serialization: only serialize values that need conversion.
-        """
-        from ..components.base import Component, LiveComponent
-        from django.db.models import Model
-        from datetime import datetime, date, time
-        from decimal import Decimal
-        from uuid import UUID
-
-        def serialize_value(value):
-            if value is None or isinstance(value, (str, int, float, bool)):
-                return value
-
-            if isinstance(value, (list, tuple)):
-                return [serialize_value(item) for item in value]
-
-            if isinstance(value, dict):
-                return {k: serialize_value(v) for k, v in value.items()}
-
-            if isinstance(value, (Component, LiveComponent)):
-                return {"render": str(value.render())}
-
-            if isinstance(value, Model):
-                return str(value)
-
-            if isinstance(value, (datetime, date)):
-                return value.isoformat()
-
-            if isinstance(value, time):
-                return value.isoformat()
-
-            if isinstance(value, (Decimal, UUID)):
-                return str(value)
-
-            try:
-                return normalize_django_value(value)
-            except (TypeError, ValueError):
-                return str(value)
-
-        return {k: serialize_value(v) for k, v in context.items()}
