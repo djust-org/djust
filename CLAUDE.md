@@ -244,6 +244,141 @@ When investigating an issue with a code-location citation:
   restart and drops view state; djust's HVR is strictly better
   (preserves form input, scroll position, counters).
 
+## Process canonicalizations from v0.6.x–v0.8.x retro arcs (backfill)
+
+Fourteen rules distilled from Action Tracker rows accumulated across the v0.6.1, v0.7.0, v0.7.1, v0.7.2, v0.8.0, v0.8.1, and v0.8.2 retro arcs. Filed as GitHub issues by `/pipeline-retro --reconcile` (2026-04-25 sweep) and v0.8.x retro Stage 4 filings; canonicalized here in PR #TBD as the v0.9.1-7 cleanup batch before cutting release v0.9.1.
+
+### Stage 4 (Planning) additions
+
+- **External-crate doc.rs read for security-surface dependencies (#1050).**
+  Any external crate (Rust or Python) whose API forms part of a security
+  boundary must have its doc.rs / official-docs entry read at Stage 4/5
+  for the specific API surface used. PR #990 surfaced two
+  `pulldown-cmark 0.12` API corrections only because RED tests failed:
+  `Options::ENABLE_HTML` omission does NOT suppress `Event::Html`, and
+  `Options::ENABLE_GFM_AUTOLINK` doesn't exist in 0.12. Luck saved the
+  XSS surface that time. Stage 4 plan template should grow a
+  "linked doc.rs section for each external security-boundary API" row.
+
+- **Engine-path declaration generalized (#1051).** Any feature that
+  touches the template rendering pipeline — filters, tags, context
+  processors, custom blocks, post-processing hooks, registry-style APIs —
+  must declare which engine(s) (Python / Rust) the user templates run
+  through. PR #993 caught a dual-engine bug ONLY because the pre-push
+  full-demo suite ran; targeted Stage 6 subsets miss it. Class of bug:
+  any code path participating in user template rendering can silently
+  work in one engine and 500 in the other. Generalizes Action #129.
+
+- **Multi-PR milestone iter sequencing (#1055).** When bundling a
+  multi-PR milestone, sequence the smallest design-novel iter first.
+  Smaller iters lock in design contracts that later iters can verify
+  against. Generalized from v0.8.0's iter 1 (`dj-form-pending`) → iter 2
+  (`@action`) sequencing.
+
+- **API shape options considered (#1056).** Stage 4 plan template
+  should grow an "API shape options considered" row for greenfield UX/API
+  features (where the API shape isn't dictated by an existing design).
+  Surface 2-3 options with explicit pros/cons before implementation.
+  Pattern proven on PR #1007 (3-option radio API, picked B, 12/12 tests
+  green first authoring pass).
+
+- **Lift-from-downstream FIRST (#1077).** When an issue cites a
+  downstream consumer's working solution (e.g., "docs.djust.org wrote
+  the bridge in its own input.css"), lift the reference impl verbatim
+  FIRST, generalize SECOND. Skips a design-from-scratch phase that risks
+  producing an incompatible variant. Empirical: PR #1074's `prose.css`
+  was lifted ~91 lines verbatim from docs.djust.org's `input.css`,
+  fraction of clean-room time; reference impl was already battle-tested
+  against three theme packs in production.
+
+- **Broader-sweep → follow-up issue scope-discipline (#1079).** When
+  Stage 4 investigation reveals a broader systemic issue beyond what
+  the cited issue asks for, fix EXACTLY what the issue cites and file
+  a follow-up issue for the systemic remainder. Resists scope creep
+  while preserving the systemic finding. Validated 2× in v0.8.x:
+  v0.8.1 PR #1067 (security-leak found during style-only fix; stayed
+  scoped) and v0.8.2 PR #1076 (4 cited stale .md refs, found ~50 more
+  across 17 files; stayed scoped to the 4 cited, filed #1075 for the
+  rest).
+
+### Stage 7 (Self-Review) additions
+
+- **Greenwashing-catcher: grep for stubbed JSDOM API shapes (#1037).**
+  Pre-commit Self-Review should grep for JSDOM API stubs that no
+  source ever assigns. Failure mode: tests stub `globalThis.djust.foo`,
+  no production code populates it, real path is something else
+  (e.g., `window.djust.liveViewInstance.sendMessage`). Tests pass; real
+  surface is broken. Add Stage 7 grep: if a JSDOM test stubs `djust.X`
+  and nothing in source assigns it, flag.
+
+- **Doc-claim-verbatim TDD before implementation (#1046, supersedes
+  #1040).** For every feature with non-trivial semantics (gate rules,
+  error envelopes, state contracts), write doc-claim-verbatim tests
+  BEFORE writing implementation. The test cases ARE the doc claims.
+  Stage 7 checklist should grow a "for each documented rule, point to
+  the asserting test" row. Empirical pattern: 4 consecutive milestones
+  (v0.6.0, v0.6.1, v0.7.0 PRs #986/#988/#989) hit doc-vs-code drift as
+  Stage 11 🔴/🟡 findings before this rule was canon. Subsumes the
+  earlier "trace data-flow before writing docs" rule (#1040), which
+  was aspirational rather than executable.
+
+- **Stage 7 user-flow trace for user-visible features (#1047).** For
+  every user-visible feature, trace the happy-path user story end-to-end:
+  HTTP request → server dispatch → response envelope → browser render /
+  navigation. 3 consecutive pipelines (PRs #986/#988/#989) had Stage 7
+  rubber-stamp diffs that Stage 11 proved were broken end-to-end —
+  same shape (code does a thing; thing doesn't reach the user).
+  Validated across PRs #990, #993, #995, #996, #997 (all 0 🔴 at
+  Stage 11 after this rule was filed informally).
+
+### Stage 9 (Documentation) addition
+
+- **Test-count recount after fix-pass deltas (#1049).** Stage 9 must
+  re-count tests AFTER Stage 7/12 fix-pass deltas and update the
+  CHANGELOG test-count line before the final docs pass. PR #990
+  CHANGELOG claimed "38 total" but actual was 41 (docs author cited
+  Stage 5 count, not post-fix-pass). Stage 11 caught it. Two milestones
+  with small CHANGELOG test-count drift before this rule was canon.
+
+### Stage 11 (Code Review) addition
+
+- **`mark_safe` XSS-trace audit (#1078).** For every new `mark_safe`
+  call, trace inputs to a server-validated source. Reviewer-discretionary
+  practice has worked (PR #1074's reviewer subagent traced cookie
+  inputs through `registry.has_theme/has_preset` validation in
+  `get_state()` and confirmed no XSS surface), but making it a Stage 11
+  checklist item locks the discipline. Bullet also added to
+  `docs/PULL_REQUEST_CHECKLIST.md` Security Review section.
+
+### Cross-stage rules
+
+- **Mutation-after-capture test discipline (#1039).** Every snapshot /
+  capture function needs a test that exercises mutation AFTER the
+  capture call, asserting the captured state is unchanged. The
+  `_capture_snapshot_state` reference-aliasing bug existed unnoticed
+  for two milestones (v0.6.0 `enable_state_snapshot` + v0.6.1
+  time-travel). Generalize: capture shouldn't share refs with the
+  source; test by mutating source post-capture and checking the
+  capture's value.
+
+- **Dogfood pass for new CLI tools (#1060).** Any CLI tool that reports
+  on project state gets a dogfood pass against the demo project before
+  commit. v0.5.1 `djust_typecheck` originally produced 230+ lines of
+  false positives; a dogfood pass against the demo caught it pre-commit.
+  Bullet also added to `docs/PULL_REQUEST_CHECKLIST.md` Code Quality
+  section.
+
+- **Doc-claim TDD extends to prose docs with external citations
+  (#1071).** Action #124 (doc-claim-verbatim TDD) was filed for code
+  claims; PR #1064 surfaced the same failure mode in PROSE docs: the
+  new `docs/internal/codeql-patterns.md` cheat sheet cited 10 PR
+  numbers, of which 7 were plausible-sounding hallucinations. Stage 11
+  reviewer caught all 10. Generalize: any prose doc that names external
+  artifacts (PR numbers, issue numbers, commit hashes, file:line refs)
+  must cross-check each citation at write time, not after. Use
+  `gh pr view <N>` / `gh issue view <N>` / `git log` per citation
+  before commit.
+
 ## Process canonicalizations from PR retros (2026-04-26 View Transitions arc)
 
 Each rule below was a Stage 11 finding or retro-tracker item from the View
