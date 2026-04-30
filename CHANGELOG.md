@@ -62,6 +62,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   short-circuits on `LiveViewSSE` instances since SSE uses `fetch()`
   directly and doesn't need the WS reconnection buffer.
 
+### Developer Experience
+
+- **Pipeline-bypass CI check — daily retro-gate audit (#1234).** New
+  scheduled GHA `.github/workflows/retro-gate-audit.yml` runs
+  `scripts/audit-pipeline-bypass.py` daily at 13:00 UTC against the most
+  recent 50 merged PRs and surfaces any PR missing retro markers as
+  workflow annotations. Part 2 of #1212 (part 1 was the audit script
+  shipped in PR #1229). Manual `workflow_dispatch` trigger included
+  for ad-hoc audits.
+- **Isolated cargo-test target for `filter_registry::tests` (#1235).**
+  The hot-path short-circuit tests for the `ANY_CUSTOM_FILTERS_REGISTERED`
+  AtomicBool now live at
+  `crates/djust_templates/tests/test_filter_registry_isolated.rs` (an
+  integration-test binary). Cargo runs each integration-test file in
+  its own process, so the process-global flag starts clean for every
+  run — the previous `OnceLock` workaround that gated the in-module
+  test on whether a prior test had already registered a filter is no
+  longer needed. Carryover from #1180 item 4.
+- **Release-workflow dep-bump label gate (#1236).** New GHA
+  `.github/workflows/check-release-workflow-deps.yml` runs on PRs
+  modifying release-critical workflow files (`release.yml`, `publish.yml`,
+  `release-drafter.yml`, `pre-release-security-audit.yml`) and fails
+  unless the PR carries the `release-workflow-reviewed` label, forcing
+  explicit human risk-review before merge. Triggered by PR #1233
+  (action-gh-release v2 → v3) landing in the same window as the v0.9.1
+  cut. The `release-workflow-reviewed` label was added to the repo
+  alongside this workflow.
+
 ## [0.9.1] - 2026-04-30
 
 Polish release on top of `0.9.0`. Five drain buckets shipped between the `0.9.0` GA bump and this tag (`0.9.1-1` through `0.9.1-5` under the new SemVer-pre-release-suffix milestone naming convention adopted 2026-04-30; equivalent to historical `v0.9.1`/`v0.9.2`/`v0.9.3`/`v0.9.4`/`v0.9.5` drain buckets under the old naming). Headlined by a real-bug VDOM fix (#1205), a broadcast-recovery fix (#1202), the Debug Panel UI (#1151), and a RichSelect ergonomics expansion (#1204).
