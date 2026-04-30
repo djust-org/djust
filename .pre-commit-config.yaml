@@ -41,15 +41,21 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '\.min\.js(\.map)?$'
+        exclude: '\.min\.js(\.map)?$|\.pxd$'
       - id: end-of-file-fixer
-        exclude: '\.min\.js(\.map)?$'
+        exclude: '\.min\.js(\.map)?$|\.pxd$'
       - id: check-yaml
       - id: check-added-large-files
         args: [--maxkb=1000]
       - id: check-merge-conflict
       - id: check-toml
+      # `.pxd` excluded: Pixelmator logo files in python/djust/ are
+      # actually binary ZIP archives that `identify` (pre-commit's
+      # text-detection lib) misclassifies as text on the `.pxd`
+      # extension. Without this exclude, the hook auto-"fixes" CR
+      # bytes inside the binary payload and corrupts the asset (#1215).
       - id: mixed-line-ending
+        exclude: '\.pxd$'
 
   # Security - Python security linter
   - repo: https://github.com/PyCQA/bandit
