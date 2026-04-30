@@ -107,7 +107,33 @@ Plus a new follow-up filed during the cleanup itself:
 
 - #1227 — pre-commit/CI lint for bare comma-list `Closes #X, #Y` auto-close failure (the comma-list bit PR #1225 + PR #1226 both — file for v0.9.2-1; not blocking v0.9.1).
 
-### Release-cut checklist (#1221)
+### Active drain bucket: v0.9.1-8 — final cleanup (carryover items pulled into v0.9.1)
+
+Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2-1) so the release window closes cleanly. Re-scoping the 3 v0.9.1-7-deferred items + #1227 filed during cleanup confirmed all 4 are bounded and fit in a single drain bucket (~3-4 hours autonomous).
+
+**Scope** (4 work units, closes 4 issues):
+
+| # | Issue | Theme | Sized |
+|---|---|---|---|
+| 1 | #1177 | Programmatic post-stage hook enforcement (skill-level: ~30 LoC bash; local fix per #1080 pattern, no PR) | ~30 min |
+| 2 | #1227 | Pre-commit/CI lint for bare comma-list `Closes #X, #Y` auto-close failure (pre-commit hook + PR-checklist update) | ~1 hr |
+| 3 | #1180 | PR #1179 follow-ups: ~10 LoC Rust tests + ~5 LoC doc/CHANGELOG corrections | ~1-2 hr |
+| 4 | #1212 | Audit pipeline-bypass merges (audit script + run + manual triage; ongoing CI check deferred to v0.9.2-1 if it bloats scope) | ~1 hr |
+
+**Sequencing strategy**:
+
+1. **#1177 first** — local skill edit, no CI cycle. Fast.
+2. **#1227 second** — pre-commit lint catches the comma-list bite that's been recurring; lands the prevention before any further drain bucket commits.
+3. **#1212 third** — audit any pre-v0.9.1 pipeline-bypass merges. If audit surfaces missed retros, backfill them as part of this PR.
+4. **#1180 last** — Rust test work; bounded but the slowest of the four because of cargo-test cycle.
+
+**Acceptance for v0.9.1-8**:
+
+- [ ] All 4 work units shipped (3 PRs + #1177 local fix).
+- [ ] Backlog count goes from 4 → 1 (just #1221 release-cut remaining).
+- [ ] Once bucket complete, proceed to release-cut runbook.
+
+
 
 - [ ] Bump `__version__` and Cargo crate versions: `0.9.0` → `0.9.1` (Python `pyproject.toml`, `python/djust/__init__.py`, 4 Cargo crates, `Cargo.lock`).
 - [ ] Promote `[Unreleased]` block in `CHANGELOG.md` to `## [0.9.1] - <date>` block.
