@@ -41,6 +41,44 @@ Release `v0.9.1` will package 5 drain buckets shipped between `v0.9.0` GA (2026-
 - **Framework correctness**: `_sync_state_to_rust` defensive normalize pass for `list[Model]` change-detection (#1206), `_lazy_serialize_context` dead-code removal (#1206).
 - **Process / tooling**: 19 code-scanning alerts closed (#1201), reproducer-first plan-template discipline (#1218), reviewer-prompt budget guidelines (#1219), Bug-report triage section in CLAUDE.md (#1216), pre-push dead-private-method check (#1220), idempotency test zero-patch assertion + new public test API (#1217).
 
+### Active drain bucket: v0.9.1-6 — release-prep polish (proposed 2026-04-30)
+
+The v0.9.1 release window stays open until the git tag is cut. Work that surfaces between the v0.9.5 bucket close and the release-cut goes into v0.9.1-6 (and potentially -7, -8 if more accumulates). This bucket targets release-prep items: things that should ship BEFORE v0.9.1 is tagged, plus a batch of small canon items that round out the release.
+
+**Scope** (5 work units, closes 10 issues):
+
+| # | Issue(s) | Theme | Sized | Why before v0.9.1 |
+|---|---|---|---|---|
+| 1 | #1080 | djust-release skill Cargo.lock gap | ~30 min | **Release-critical**: fixing this BEFORE the v0.9.1 cut prevents a malformed release. Already cited in #1221's checklist. |
+| 2 | #1215 | `.pxd` line-ending cleanup | ~15 min | Small chore; clears pre-commit-hook friction class. |
+| 3 | #1207 | `list[Model]` heterogeneous + nested shapes in change-detection normalize pass | ~1-2 hrs | Closes the post-PR #1206 framework-correctness gap surfaced during code review. Ships clean alongside the v0.9.1 fix it follows up on. |
+| 4 | #1214 | CodeQL `sanitize_for_log` sanitizer model | ~1-2 hrs | Security FP elimination; compounds across every future security sweep. |
+| 5 | #1195, #1196, #1197, #1198, #1199, #1200 (batch) | v0.9.4 retro process canon — `docs(process): canonicalize 6 v0.9.4 retro patterns` | ~45 min | 6 small CLAUDE.md / PR-checklist / pipeline-template additions. Single PR. Pattern carryover from #1192 (v0.9.4 canon PR shape). |
+
+**Deferred to v0.9.2-1** (after v0.9.1 release tag is cut):
+
+- #1212 — pipeline-bypass audit + retro-gate hardening. Larger effort; the audit window is small while retros are still fresh, but the CI-check piece warrants its own design pass. Scope-fits cleanly in the next release window.
+- All older tech-debt issues from earlier milestones (#1053, #1055-#1085, #1124-#1180) — to be triaged in a separate cleanup pass. Some may be obsolete (canon items addressed in later PRs); needs an audit before scheduling.
+
+**Sequencing strategy** (when this bucket runs):
+
+1. **#1080 first** — release-prep tooling fix. Unblocks the actual v0.9.1 cut. Should land before any other v0.9.1-6 work so the cut isn't blocked on it.
+2. **#1215 + #1207 + #1214 in parallel** — three independent surface areas (chore / framework / security). Can ship as 3 separate PRs in any order.
+3. **Process canon batch last** — single PR closing 6 issues, low risk. Lands after the framework / security work to keep the v0.9.4 retro patterns close to their evidence.
+
+**Acceptance for v0.9.1-6**:
+
+- [ ] All 5 work units shipped as merged PRs.
+- [ ] djust-release skill (#1080) verified to bump 4 files + Cargo.lock cleanly. Test by dry-running on a scratch branch BEFORE the v0.9.1 cut.
+- [ ] All 10 referenced issues closed.
+- [ ] CHANGELOG `[Unreleased]` block accurate.
+- [ ] Once bucket complete, proceed to release-cut runbook (#1221).
+
+**Pipeline runner notes**:
+
+- `/pipeline-drain --milestone v0.9.1-6 --label tech-debt` to triage. Will pick up the 5 work units listed above.
+- Convention recap: this is the 6th drain bucket toward release v0.9.1 (5 already shipped under old naming). After release tag, next bucket is v0.9.2-1.
+
 ### Release-cut checklist (#1221)
 
 - [ ] Bump `__version__` and Cargo crate versions: `0.9.0` → `0.9.1` (Python `pyproject.toml`, `python/djust/__init__.py`, 4 Cargo crates, `Cargo.lock`).
