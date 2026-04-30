@@ -7,17 +7,51 @@ happens, djust automatically falls back to **Server-Sent Events (SSE)**.
 
 ## How it works
 
-SSE is a unidirectional push protocol (HTTP/1.1). djust uses two complementary
-endpoints to achieve full bidirectional communication:
+SSE is a unidirectional push protocol (HTTP/1.1). djust uses three
+complementary endpoints to achieve full bidirectional communication:
 
-| Direction        | Mechanism              | URL pattern                          |
-|------------------|------------------------|--------------------------------------|
-| Server → Client  | `EventSource` (SSE)    | `GET /djust/sse/<session_id>/`       |
-| Client → Server  | HTTP POST              | `POST /djust/sse/<session_id>/event/`|
+| Direction        | Mechanism              | URL pattern                            |
+|------------------|------------------------|----------------------------------------|
+| Server → Client  | `EventSource` (SSE)    | `GET /djust/sse/<session_id>/`         |
+| Client → Server  | HTTP POST (canonical)  | `POST /djust/sse/<session_id>/message/` |
+| Client → Server  | HTTP POST (legacy)     | `POST /djust/sse/<session_id>/event/`  |
 
-The client generates a random UUID session ID, opens an SSE stream with `?view=`
-pointing at the LiveView class, and sends user events as JSON POST bodies to the
-event endpoint.
+The client generates a random UUID session ID, opens an SSE stream, and sends
+user events / mount frames / `url_change` frames as JSON POST bodies to the
+canonical `/message/` endpoint. The legacy `/event/` endpoint is preserved for
+back-compat (it now proxies through the same dispatch path).
+
+## Bidirectional message protocol
+
+The `/message/` endpoint accepts any of the following frame shapes — the same
+envelope the WebSocket transport carries:
+
+```json
+{ "type": "mount", "view": "myapp.views.DetailView", "url": "/items/42/", "params": {"sort": "date"}, "client_timezone": "America/New_York" }
+{ "type": "event", "event": "increment", "params": {} }
+{ "type": "url_change", "params": {"tab": "settings"}, "uri": "/dashboard/?tab=settings" }
+```
+
+The server routes these frames through a transport-agnostic `ViewRuntime`
+(see [ADR-016](adr/016-transport-runtime-interface.md)). The same dispatch
+code path serves both WebSocket and SSE — fixing a long-standing divergence
+where features available on WS would silently no-op or crash under SSE.
+
+### Why not the Referer header?
+
+The page URL travels in `data.url` (sent by the client) rather than being
+inferred server-side from `request.META["HTTP_REFERER"]`. Three reasons:
+
+- **Privacy.** Browsers strip Referer under `Referrer-Policy: no-referrer`
+  (a common security default), or send only the origin (not the path).
+- **Spoofability.** Referer is client-controlled; relying on it to resolve
+  URL kwargs (`pk`, `slug`, etc.) lets a same-origin user mount a view bound
+  to a record they shouldn't have access to.
+- **Correctness.** Referer reflects where the page came from, not the page
+  itself, after `pushState`-driven navigation.
+
+The mount-frame approach is what WebSocket already does — it's first-party
+data over a session-bound transport, validated by `django.urls.resolve()`.
 
 ## Transport negotiation
 
@@ -51,10 +85,11 @@ urlpatterns = [
 ]
 ```
 
-This registers two routes:
+This registers three routes:
 
-- `GET  /djust/sse/<session_id>/`
-- `POST /djust/sse/<session_id>/event/`
+- `GET  /djust/sse/<session_id>/`            — server-push event stream
+- `POST /djust/sse/<session_id>/message/`    — canonical client-to-server frame endpoint (mount, event, url_change, …)
+- `POST /djust/sse/<session_id>/event/`      — legacy alias kept for back-compat; new code should target `/message/`
 
 ### 2. Include the SSE JS bundle
 
@@ -84,9 +119,11 @@ advanced features are **not available** over SSE:
 | Feature                       | WebSocket | SSE        |
 |-------------------------------|-----------|------------|
 | Core event → patch cycle      | ✅        | ✅         |
+| URL kwargs (`pk`, `slug`, …) on mount | ✅ | ✅ (via mount-frame URL — fixed in #1237) |
+| `LiveView.handle_params()` lifecycle hook | ✅ | ✅ (called after `mount` and on every `url_change` — fixed in #1237) |
 | `start_async()` background work | ✅      | ✅         |
 | `push_event()` server push    | ✅        | ✅         |
-| `live_patch` / `live_redirect`| ✅        | ✅         |
+| `live_patch` / `live_redirect` (`dj-patch`) | ✅ | ✅ (the `url_change` frame now works — fixed in #1237) |
 | Accessibility announcements   | ✅        | ✅         |
 | `@cache` decorator            | ✅        | ✅         |
 | Binary file uploads           | ✅        | ❌ (text-only transport) |
