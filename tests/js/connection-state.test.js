@@ -115,6 +115,10 @@ describe('Connection State CSS Classes', () => {
             close() {}
         }
         dom.window.EventSource = MockEventSource;
+        // #1237: onopen now POSTs a mount frame via sendMessage.
+        dom.window.fetch = vi.fn(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+        );
 
         const sse = new dom.window.djust.LiveViewSSE();
         sse.connect('test.View', {});
@@ -143,6 +147,9 @@ describe('Connection State CSS Classes', () => {
             close() {}
         }
         dom.window.EventSource = MockEventSource;
+        dom.window.fetch = vi.fn(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+        );
 
         const sse = new dom.window.djust.LiveViewSSE();
         sse.connect('test.View', {});
@@ -174,6 +181,9 @@ describe('Connection State CSS Classes', () => {
             close() {}
         }
         dom.window.EventSource = MockEventSource;
+        dom.window.fetch = vi.fn(() =>
+            Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
+        );
 
         const sse = new dom.window.djust.LiveViewSSE();
         sse.connect('test.View', {});

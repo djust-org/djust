@@ -139,6 +139,10 @@ describe('LiveViewSSE', () => {
             const sse = new window.djust.LiveViewSSE();
             sse.connect('myapp.views.HomeView');
             sse.viewMounted = true;
+            // sendEvent now delegates to sendMessage (#1237) so it posts to
+            // /message/ not /event/. Clear the fetch mock first because
+            // connect() may have triggered a mount-frame post via onopen.
+            window.fetch.mockClear();
 
             const result = sse.sendEvent('increment', { amount: 1 });
 
@@ -146,10 +150,13 @@ describe('LiveViewSSE', () => {
             expect(window.fetch).toHaveBeenCalledTimes(1);
             const [url, opts] = window.fetch.mock.calls[0];
             expect(url).toContain('/djust/sse/');
-            expect(url.endsWith('/event/')).toBe(true);
+            // #1237: sendEvent now delegates through sendMessage to /message/.
+            expect(url.endsWith('/message/')).toBe(true);
             expect(opts.method).toBe('POST');
             expect(opts.headers['Content-Type']).toBe('application/json');
             const body = JSON.parse(opts.body);
+            // sendMessage shape includes type=event for the legacy verb.
+            expect(body.type).toBe('event');
             expect(body.event).toBe('increment');
             expect(body.params.amount).toBe(1);
         });
@@ -276,6 +283,117 @@ describe('LiveViewSSE', () => {
             expect(sse.enabled).toBe(false);
             expect(document.body.classList.contains('dj-disconnected')).toBe(true);
             expect(document.body.classList.contains('dj-connected')).toBe(false);
+        });
+    });
+
+    // ====================================================================
+    // #1237 — sendMessage parity + mount-frame flow
+    // ====================================================================
+
+    describe('sendMessage (#1237 parity with LiveViewWebSocket)', () => {
+        it('posts to /message/ with JSON body', () => {
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView');
+            // Reset fetch mock — connect() may have triggered onopen which
+            // posts a mount frame. We want a clean slate to assert against.
+            window.fetch.mockClear();
+
+            const result = sse.sendMessage({ type: 'event', event: 'inc', params: {} });
+
+            expect(result).toBe(true);
+            expect(window.fetch).toHaveBeenCalledTimes(1);
+            const [url, opts] = window.fetch.mock.calls[0];
+            expect(url).toContain('/djust/sse/');
+            expect(url.endsWith('/message/')).toBe(true);
+            expect(opts.method).toBe('POST');
+            expect(opts.headers['Content-Type']).toBe('application/json');
+            const body = JSON.parse(opts.body);
+            expect(body.type).toBe('event');
+            expect(body.event).toBe('inc');
+        });
+
+        it('stats parity with WebSocket — increments sent and sentBytes', () => {
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView');
+            const before = { sent: sse.stats.sent, bytes: sse.stats.sentBytes };
+
+            sse.sendMessage({ type: 'event', event: 'a', params: {} });
+            sse.sendMessage({ type: 'url_change', params: { sort: 'name' }, uri: '/x/' });
+
+            expect(sse.stats.sent).toBe(before.sent + 2);
+            expect(sse.stats.sentBytes).toBeGreaterThan(before.bytes);
+        });
+
+        it('sendEvent delegates through sendMessage', () => {
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView');
+            sse.viewMounted = true;
+            window.fetch.mockClear();
+
+            sse.sendEvent('increment', { amount: 1 });
+
+            expect(window.fetch).toHaveBeenCalledTimes(1);
+            const [url, opts] = window.fetch.mock.calls[0];
+            // Routed through sendMessage, so the URL is /message/ NOT /event/
+            expect(url.endsWith('/message/')).toBe(true);
+            const body = JSON.parse(opts.body);
+            expect(body.type).toBe('event');
+            expect(body.event).toBe('increment');
+            expect(body.params.amount).toBe(1);
+        });
+
+        it('_executePatch can sendMessage url_change without TypeError', () => {
+            // Bug 2 reproducer: under SSE, liveViewWS.sendMessage was undefined,
+            // causing 18-navigation.js _executePatch to TypeError on dj-patch
+            // clicks. With sendMessage defined, that call site works.
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView');
+
+            expect(typeof sse.sendMessage).toBe('function');
+            expect(() =>
+                sse.sendMessage({ type: 'url_change', params: { p: '2' }, uri: '/x/?p=2' })
+            ).not.toThrow();
+        });
+
+        it('returns false on disabled transport', () => {
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.enabled = false;
+
+            const result = sse.sendMessage({ type: 'event', event: 'x', params: {} });
+
+            expect(result).toBe(false);
+            expect(window.fetch).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('connect emits mount frame (#1237 bug 1)', () => {
+        it('posts a mount frame with url=window.location.pathname on open', () => {
+            const { window, mockEventSource } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView', { foo: 'bar' });
+            window.fetch.mockClear();
+
+            // Simulate the EventSource opening — connect() registers an
+            // onopen handler that posts the mount frame.
+            mockEventSource.onopen();
+
+            expect(window.fetch).toHaveBeenCalledTimes(1);
+            const [url, opts] = window.fetch.mock.calls[0];
+            expect(url.endsWith('/message/')).toBe(true);
+            const body = JSON.parse(opts.body);
+            expect(body.type).toBe('mount');
+            expect(body.view).toBe('myapp.views.HomeView');
+            expect(body.params).toEqual({ foo: 'bar' });
+            // window.location.pathname under JSDOM with url='http://localhost:8000/'
+            // is '/'. The contract: url is the window pathname, NOT the SSE
+            // endpoint URL.
+            expect(body.url).toBe(window.location.pathname);
+            expect(body.has_prerendered).toBe(false);
         });
     });
 });

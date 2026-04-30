@@ -48,11 +48,21 @@ class LiveViewSSE {
             ? window.djust.sseUrl(`sse/${this.sessionId}/`)
             : `/djust/sse/${this.sessionId}/`;
 
+        // GET-time mount via ?view= is preserved for back-compat: clients
+        // pinned to the pre-#1237 server still mount that way. New clients
+        // ALSO post a mount frame on open (idempotent server-side via the
+        // runtime's early-return when view_instance is already set), which
+        // is the only path that includes ``url`` for URL-kwarg resolution
+        // (fixes #1237 bug 1).
         const urlParams = new URLSearchParams(params);
         urlParams.set('view', viewPath);
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
 
         this.eventSource = new EventSource(streamUrl);
+
+        // Stash these so onopen can post the mount frame.
+        this._pendingViewPath = viewPath;
+        this._pendingMountParams = params;
 
         this.eventSource.onopen = () => {
             // Connection state CSS classes
@@ -64,6 +74,15 @@ class LiveViewSSE {
                 if (window.djust) window.djust._isReconnect = true;
             }
             this._hasConnectedBefore = true;
+
+            // #1237: send a WS-shaped mount frame so the runtime can resolve
+            // URL kwargs from window.location.pathname (the SSE endpoint
+            // path is NOT the page URL). Idempotent server-side.
+            if (this._pendingViewPath) {
+                this._sendMountFrame(this._pendingViewPath, this._pendingMountParams || {});
+                this._pendingViewPath = null;
+                this._pendingMountParams = null;
+            }
         };
 
         this.eventSource.onmessage = (event) => {
@@ -292,6 +311,10 @@ class LiveViewSSE {
      * Returns true if the event was dispatched, false if not (mirrors
      * LiveViewWebSocket.sendEvent so 11-event-handler.js works unchanged).
      *
+     * Since #1237, this delegates to ``sendMessage`` so every existing
+     * ``liveViewWS.sendEvent(...)`` call site flows through the same
+     * one POST per frame path used by mount / url_change / etc.
+     *
      * @param {string}      eventName      Handler name on the LiveView
      * @param {Object}      params         Event parameters
      * @param {Element|null} triggerElement DOM element that triggered the event
@@ -304,11 +327,35 @@ class LiveViewSSE {
         this.lastEventName = eventName;
         this.lastTriggerElement = triggerElement;
 
-        const body = JSON.stringify({ event: eventName, params });
+        return this.sendMessage({ type: 'event', event: eventName, params });
+    }
+
+    /**
+     * Send a wire-shape message to the server via HTTP POST.
+     *
+     * #1237 parity with ``LiveViewWebSocket.sendMessage``. Every call site
+     * in 18-navigation.js / 02-response-handler.js / 13-lazy-hydration.js
+     * / 15-uploads.js that does ``liveViewWS.sendMessage({type, ...})``
+     * works transparently when the SSE transport is active.
+     *
+     * Returns true on accepted dispatch, false if the transport is
+     * disabled. Errors during the underlying ``fetch`` are caught and
+     * reported via ``[SSE]`` console error + loading-manager teardown
+     * (mirrors the legacy sendEvent error-handling).
+     *
+     * @param {Object} data  Wire message; must include ``type``.
+     */
+    sendMessage(data) {
+        if (!this.enabled) return false;
+
+        const body = JSON.stringify(data);
         this.stats.sent++;
         this.stats.sentBytes += body.length;
 
-        fetch(`${this.sseBaseUrl}event/`, {
+        const triggerElement = this.lastTriggerElement;
+        const eventName = (data && data.type === 'event') ? data.event : null;
+
+        fetch(`${this.sseBaseUrl}message/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body,
@@ -318,13 +365,36 @@ class LiveViewSSE {
                 return r.json();
             })
             .catch(err => {
-                console.error('[SSE] Event POST failed:', err);
-                globalLoadingManager.stopLoading(eventName, triggerElement);
-                this.lastEventName = null;
-                this.lastTriggerElement = null;
+                console.error('[SSE] Message POST failed:', err);
+                if (eventName) {
+                    globalLoadingManager.stopLoading(eventName, triggerElement);
+                    this.lastEventName = null;
+                    this.lastTriggerElement = null;
+                }
             });
 
         return true;
+    }
+
+    /**
+     * Send a mount frame to the server.
+     *
+     * #1237: introduces a WS-shaped mount frame containing
+     * ``url: window.location.pathname`` so the runtime resolves URL
+     * kwargs (pk, slug, ...) from the actual page URL — fixing the bug
+     * where SSE-mounted views with path params received empty kwargs.
+     */
+    _sendMountFrame(viewPath, params = {}) {
+        let tz = null;
+        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
+        return this.sendMessage({
+            type: 'mount',
+            view: viewPath,
+            params,
+            url: window.location.pathname,
+            has_prerendered: false,
+            client_timezone: tz,
+        });
     }
 
     /**

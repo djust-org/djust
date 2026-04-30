@@ -3872,54 +3872,39 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+    def _get_runtime(self):
+        """Lazy-construct the shared :class:`ViewRuntime` for this consumer.
+
+        Returns the same runtime instance across calls so per-runtime state
+        (e.g., ``view_instance``) survives. Introduced in #1237 for the
+        ``handle_url_change`` migration; subsequent PRs will route more WS
+        verbs through the runtime.
+        """
+        if getattr(self, "_runtime", None) is None:
+            from .runtime import WSConsumerTransport, ViewRuntime
+
+            self._runtime = ViewRuntime(
+                WSConsumerTransport(self),
+                scope=self.scope,
+                rate_limiter=self._rate_limiter,
+            )
+        return self._runtime
+
     async def handle_url_change(self, data: Dict[str, Any]):
         """
         Handle URL change from browser back/forward (popstate) or dj-patch clicks.
 
-        Calls handle_params() on the view so it can update state based on the
-        new URL params, then re-renders and sends patches.
+        #1237: this is now a thin shim over :meth:`ViewRuntime.dispatch_url_change`
+        so the WS and SSE transports share one code path. The runtime owns the
+        handle_params + re-render + send_update orchestration.
         """
         if not self.view_instance:
             await self.send_error("View not mounted")
             return
 
-        params = data.get("params", {})
-        uri = data.get("uri", "")
-
-        try:
-            # Call handle_params on the view
-            await sync_to_async(self.view_instance.handle_params)(params, uri)
-
-            # Sync state and re-render
-            if hasattr(self.view_instance, "_sync_state_to_rust"):
-                await sync_to_async(self.view_instance._sync_state_to_rust)()
-
-            html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
-
-            # Allow views to force full HTML by setting _force_full_html = True
-            # in handle_params (e.g. when {% for %} loop lengths change, #559).
-            if getattr(self.view_instance, "_force_full_html", False):
-                self.view_instance._force_full_html = False
-                patches = None
-
-            if patches is not None:
-                if isinstance(patches, str):
-                    patches = fast_json_loads(patches)
-                await self._send_update(patches=patches, version=version, event_name="url_change")
-            else:
-                html = await sync_to_async(self.view_instance._strip_comments_and_whitespace)(html)
-                html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
-                await self._send_update(html=html, version=version, event_name="url_change")
-
-        except Exception as e:
-            response = handle_exception(
-                e,
-                error_type="event",
-                event_name="url_change",
-                logger=logger,
-                log_message="Error in handle_params()",
-            )
-            await self.send_json(response)
+        runtime = self._get_runtime()
+        runtime.view_instance = self.view_instance
+        await runtime.dispatch_url_change(data)
 
     async def handle_live_redirect_mount(self, data: Dict[str, Any]):
         """
