@@ -160,3 +160,17 @@ repos:
         files: ^docs/.*\.md$
         pass_filenames: false
         stages: [pre-push]
+
+      # Flag newly-added private methods with zero callers anywhere (#1209).
+      # Prevents the dead-code-misleads-investigator failure mode that
+      # produced `_lazy_serialize_context` (PR #1206 / #1205). Pre-existing
+      # dead methods are intentionally NOT flagged — only methods added
+      # in the current branch (vs origin/main). Escape hatch: annotate
+      # the def line with `# noqa: dead-method-allowed`.
+      - id: check-no-dead-private-methods
+        name: check no dead private methods
+        entry: bash -c '.venv/bin/python scripts/check-no-dead-private-methods.py'
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
