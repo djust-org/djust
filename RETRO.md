@@ -221,6 +221,96 @@ issue or be explicitly closed with a reason.
 | 188 | Commit-or-rollback handler shape | Retro v0.9.4 / PR #1193 | #1198 | Open | Async handlers with both state mutation AND early-return paths must mutate AFTER the commit point. PR #1193's `handle_forward_replay` set `branch_id = new_branch` before awaiting `replay_event`; on `replayed is None`, branch state stayed bumped with no recorded events. View+client diverged silently. |
 | 189 | Edge-case coverage for index/cursor logic | Retro v0.9.4 / PR #1193 | #1199 | Open | When implementing handlers with index/cursor logic, run cases at `index=0`, `len/2`, `len-1`, `len`. PR #1193 had an off-by-one between `_build_time_travel_state` and `handle_forward_replay`'s gate that disagreed at `cursor=len-1`. Mental trace catches it; the four-boundary discipline catches it before Stage 11. |
 | 190 | Tautology test detection | Retro v0.9.4 / PR #1190 | #1200 | Open | When a test asserts "this thing happened", check whether the assertion would pass if the action did nothing. PR #1190's `test_ready_completes_other_setup` asserted `any(isinstance(filters, DjustLogSanitizerFilter))` but every prior test populates the logger; the assertion was tautological. Fix pattern: snapshot count before, assert grew by exactly 1. |
+| 191 | Reproducer-first discipline canonicalized in plan-template Stage 4 | Retro v0.9.5 / PRs #1206 + #1201 | #1210 | Open | Bugfix plans must require a failing reproducer test before lock-in; security plans must require reading actual code at the alert-cited location. ~10 min wasted in PR #1206 chasing reporter-cited dead code; ~2 min saved in PR #1201 by reading alert lines first. Same discipline, different surface. |
+| 192 | Reviewer-prompt budget guidelines for pipeline-run Stage 11 | Retro v0.9.5 / PR #1201 | #1211 | Open | Long-running reviewer-agent prompts hit watchdog stalls; tight short-prompt reviewers find real gaps. Cap security-PR review prompts at 200 words, feature at 350, bugfix at 250. Forbid edge-case spelunking beyond the documented attack-shape list. PR #1201 reviewer stalled at 10-min watchdog mid-tangent on backslash-injection. |
+| 193 | Audit pipeline-bypass merges and harden retro-gate against silent dropout | Retro v0.9.5 / PRs #1203 + #1204 | #1212 | Open | PR #1203 and PR #1204 merged without retro comments — pipeline-run Stage 14 retro-artifact gate didn't fire (likely because the operator merged manually outside the pipeline). Audit recent merged PRs against `.pipeline-state/*.json`; consider scheduled CI check that flags merged PRs without `Quality:`/`Lessons learned:`/`RETRO_COMPLETE` markers. |
+| 194 | "Bug-report triage" section in CLAUDE.md citing PR #1206 as case study | Retro v0.9.5 / PR #1206 | #1213 | Open | Generalizes the "issue-reporter analysis ≠ root cause" lesson from PR #1206. Reporter pointed at `_lazy_serialize_context` — a dead-code method whose `str(model)` fallback exactly matched the reported `__str__` symptom but had zero call sites. Trace from observable symptom to actual code path; don't trust path-down hypotheses. |
+| 195 | Heterogeneous and nested `list[Model]` shapes in change-detection normalize pass | PR #1206 review (post-merge) | #1207 | Open | Defensive normalize pass added in PR #1206 covers homogeneous `list[Model]` only. `[dict, Model]` (Model not first) and `list[list[Model]]` still escape change detection. Fix: scan full list for any Model + recurse into nested lists with depth bound. |
+| 196 | Strengthen idempotency test with explicit zero-patch assertion | PR #1206 review (post-merge) | #1208 | Open | `test_normalize_idempotent_on_already_serialized` asserts no exception. Should also assert `dom_changes` count is 0 on noop event to lock idempotency contract tightly. ~15 min effort. |
+| 197 | Vulture-based pre-push check for unused private methods | PR #1206 retro IDEA | #1209 | Open | `_lazy_serialize_context` was dead code with `str(model)` fallback that misled the issue reporter. A vulture-based linter would catch unused private methods at PR time. Whitelist framework-hook patterns + reflection-called methods. |
+| 198 | CodeQL query model declaring `sanitize_for_log` as sanitizer | Retro v0.9.5 / PR #1201 (carried) | #1214 | Open | Every `dispatch.py` log call trips `py/log-injection` because CodeQL doesn't model `sanitize_for_log` as sanitizer. Ship `.github/codeql/sanitizers.qll` (or equivalent suite-override) declaring `djust.security.sanitize_for_log` as a sink-clearing function. Compounds across every future security sweep. |
+| 199 | Pre-commit `mixed-line-ending` cleanup of two `.pxd` files | Retro v0.9.5 / PR #1201 (carried) | #1215 | Open | Two `.pxd` logo files have pre-existing line-ending issues that bounce the first commit attempt of any PR touching their directory. Single small chore PR to normalize line endings, then they're out of the friction path. |
+
+---
+
+## v0.9.5 — Security cleanup, broadcast recovery, RichSelect variants, list[Model] VDOM (PRs #1201, #1203, #1204, #1206)
+
+**Date**: 2026-04-30
+**Scope**: Four-PR drain post-v0.9.0 GA. Closes 19 code-scanning alerts (#1201) + 1 production-observed broadcast-recovery bug (#1203 / #1202) + 1 framework JIT change-detection blind spot user-reported with detailed diagnostics (#1206 / #1205) + 1 substantial RichSelect ergonomics polish (#1204). Two retro-gate violations surfaced and were backfilled.
+**Tests at close**: 6664 Python + ~1486 JS = ~8150 total (+~14 added this milestone: 7 in test_list_model_diff_1205.py, 3 in test_server_push.py from #1203, plus #1204 internal test additions and assorted security-touch unit coverage).
+
+### What We Learned
+
+**1. Reproducer-first discipline cuts plan-stage waste — applies beyond bugfixes.**
+PR #1206 explicitly burned ~10 min in Stage 4 chasing the issue reporter's claimed bug location (`_lazy_serialize_context` in `jit.py`) before writing a `LiveViewTestClient` reproducer that surfaced the actual code path (`_sync_state_to_rust` change-detection comparing `list[Model]` via `Model.__eq__` pk-only). The dead-code fallback method literally contained a `str(model)` call matching the reported symptom — a near-perfect misdirection. PR #1201 surfaced the same pattern from a different angle: 8 `py/log-injection` alerts in `dispatch.py` looked like real bugs until "two minutes of `sed -n '${line}p'`" before plan-stage revealed they all already used `sanitize_for_log()` and were FPs. **The same discipline applies to bug reports AND security alerts: read the actual code at the cited location BEFORE locking in the plan.** Trust-but-verify is cheaper than trace-and-rollback.
+
+**Action taken**: Open — tracked in Action Tracker #191 (GitHub #1210). Update plan-template Stage 4 checklist to require an artifact (failing test for bugs, alert-line excerpt for security PRs) before plan finalization.
+
+**2. Reviewer-agent reliability is variable — long-running prompts hit watchdog, short-prompt reviewers find real gaps.**
+Two reviewer-agent contrasts in this milestone: PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection edge cases (output stream stopped without a verdict — completed verification was thorough enough to accept as APPROVE in a security-PR context with fixed attack shapes, but in a less-obvious case would have required re-spawn). PR #1206's reviewer ran tight, surfaced a real test gap (no QuerySet-branch test) before merge, and APPROVED with non-blocking suggestions. **Lesson**: explicit prompt timeboxes and "no edge-case spelunking" guards prevent watchdog stalls. Security PRs especially benefit from cap-at-N-attack-shapes phrasing.
+
+**Action taken**: Open — tracked in Action Tracker #192 (GitHub #1211). Add a `reviewer_prompt_budget` guideline to the pipeline-run skill's Stage 11 prompt template, capped at 200 words for security PRs and 350 words for feature PRs. Forbid edge-case enumeration beyond the documented attack-shape list.
+
+**3. Pipeline-run retro-artifact gate failed for two of four milestone PRs (#1203, #1204) — silent dropout.**
+Both PRs merged without their pipeline-run-stage-14 retro posting to GitHub. The gate at `pipeline-run` Stage 14's "MANDATORY retro-artifact gate (before setting `completed_at`)" should have caught this, but evidently didn't fire — possibly because pipeline-run wasn't used for these two PRs at all (operator merged manually or via a branch outside the pipeline-state tracking). This is the v0.9.0 retro arc's "outer-loop integrity" failure mode, surfacing again. **The retro is the source of truth for what was learned; without it, milestone retros must reverse-engineer from PR body + addressed-findings comments. Both backfills below are best-effort, not authoritative.**
+
+**Action taken**: Open — tracked in Action Tracker #193 (GitHub #1212). Audit recent merged PRs against `.pipeline-state/*.json` to detect pipeline-bypass merges; consider a CI check that flags merged PRs without a retro comment on PR body containing `Quality:`/`What went well:`/`Lessons learned:` markers.
+
+**4. The two-commit shape (impl+tests / docs+CHANGELOG) held cleanly under one-implementer-one-checkout discipline (#1206).**
+PR #1206 followed the v0.9.1 retro Action Tracker #181 / GitHub #1173 canonicalization: separate commits for implementation+tests vs CHANGELOG+docs. No CHANGELOG cross-contamination, no duplicate `### Fixed` heading collisions. The pre-commit hook's stash-restore cycle behaved correctly because there was no parallel agent flipping branches. **The serialized-execution guarantee is what makes the two-commit shape safe.**
+
+**Action taken**: Closed — pattern is canonicalized in `.pipeline-templates/feature-state.json` Stage 5/9 and `.pipeline-templates/bugfix-state.json` Stage 5/9 already (since v0.9.1 retro). PR #1206 demonstrated the canon working as intended; no further code change.
+
+**5. "Issue-reporter analysis ≠ root cause" is generalizable — applies to every external bug report.**
+Beyond #1205's specific `_lazy_serialize_context` misdirection, this is the failure mode for any bug report citing a code location: the reporter's diagnostic data may be real (`patch_count: 0`, `__str__` strings, exact error trace) AND their proposed fix location may be wrong. The framework cannot afford to take reporter-cited code paths at face value, especially when removing/modifying code at that location would not change observable behavior (the dead-code trap). **The discipline is: trace from observable symptom to actual code path, not from reporter-claimed code path to symptom.** Symptom-up beats path-down.
+
+**Action taken**: Open — tracked in Action Tracker #194 (GitHub #1213). Promote this principle to `CLAUDE.md` under a new "Bug-report triage" section near the existing "Personality" section, with a concrete cross-reference to PR #1206 as the canonical case study.
+
+**6. Generalizable framework patterns that survive review become tracker rows, not just retro prose.**
+PR #1206's review surfaced three follow-ups already filed as GitHub issues (#1207 heterogeneous/nested list[Model] shapes, #1208 idempotency-test strengthening, #1209 vulture-based dead-code lint) — applying the v0.9.0 retro Stage 4 post-merge follow-up issue creation. The discipline of "non-blocking review suggestions become tracker rows" prevents loss of generalizable patterns surfaced during review.
+
+**Action taken**: Closed — three follow-up issues filed at #1207, #1208, #1209. Action Tracker rows added below.
+
+### Insights
+
+- **Small drain cadence works.** Four PRs over 2 days post-v0.9.0 GA, mix of security cleanup + production fix + framework correctness + ergonomics polish. No giant batches; each PR scoped to a single concern. Wall-clock from issue-report (#1205) to merge (#1206) was ~30 min — that ratio holds when the reproducer arrives early in Stage 4.
+- **CodeQL FP rate stays high in security cleanups.** 15/19 alerts (79%) were FPs. The `sanitize_for_log` sanitizer-declaration gap is the dominant FP source; CodeQL can't model the project's standard sanitizer. Investing in a CodeQL query model file would compound across every future security sweep.
+- **`Model.__eq__` is pk-only is a framework-wide design surface.** Anywhere djust uses Python `==` to detect "did this value change", Models need pre-normalization to dicts. The `_sync_state_to_rust` normalize pass is the Phase 1 fix; Phase 2 should be a code-review checklist item that flags `==` comparisons over context values.
+- **Variant taxonomy alignment matters.** PR #1204's `RichSelect` variants follow the same `info|success|warning|danger|muted|primary|secondary` vocabulary as `Badge`/`Button`/`Tag`/`Alert`. Permissive validation lets downstream projects ship custom variants without framework changes. The cross-component vocabulary alignment is what makes the design feel coherent — worth promoting as an explicit "djust component design rule" in CLAUDE.md or design docs.
+
+### Review Stats
+
+| Metric | PR #1201 | PR #1203 | PR #1204 | PR #1206 | Total |
+|---|---|---|---|---|---|
+| Lines added | +93 | +78 | +625 | +297 | +1093 |
+| Lines deleted | -10 | -0 | -35 | -44 | -89 |
+| Tests added | 0 (suite unchanged) | 3 | (multiple, internal) | 7 | ~10+ |
+| 🔴 Findings | 0 | 0 | unknown (no retro) | 0 | 0 |
+| 🟡 Findings | 0 (reviewer stall pre-verdict) | 3 (CHANGELOG, comment trim, no-patches branch test) | unknown (no retro) | 3 (heterogeneous shape, nested shape, idempotency strength) | 6+ |
+| Findings fixed pre-merge | n/a | 3/3 | unknown | 0/3 (filed as follow-ups) | — |
+| Findings filed as issues | 0 | 0 | 0 | 3 (#1207, #1208, #1209) | 3 |
+| CI failures pre-merge | 0 | 0 | unknown | 0 | 0 |
+| Quality rating | 5/5 | n/a (no retro) | n/a (no retro) | 4/5 | — |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No additions made during this milestone. Action Tracker #199 (GitHub #1213) will add a "Bug-report triage" section as a follow-up.
+**Pipeline template**: No additions made. Action Tracker #196 (GitHub #1210) will add reproducer-first checklist requirement to Stage 4. Action Tracker #197 (GitHub #1211) will add reviewer-prompt budget guidelines.
+**Checklist** (`docs/PULL_REQUEST_CHECKLIST.md`): No additions during milestone. Action Tracker #199 will reference the bug-report triage principle if/when promoted.
+**Skills** (pipeline-run, pipeline-next, pipeline-retro): No additions. Action Tracker #198 (GitHub #1212) will audit pipeline-bypass merges to harden the retro-gate.
+
+### Open Items
+
+- [ ] Reproducer-first discipline canonicalized in plan-template Stage 4 — tracked in Action Tracker #191 (GitHub #1210)
+- [ ] Reviewer-prompt budget guidelines for pipeline-run Stage 11 — tracked in Action Tracker #192 (GitHub #1211)
+- [ ] Audit pipeline-bypass merges + harden retro-gate against silent dropout — tracked in Action Tracker #193 (GitHub #1212)
+- [ ] "Bug-report triage" section in CLAUDE.md citing #1206 as case study — tracked in Action Tracker #194 (GitHub #1213)
+- [ ] Heterogeneous and nested `list[Model]` shapes in change-detection normalize pass — tracked in Action Tracker #195 (GitHub #1207, filed during PR #1206 cleanup)
+- [ ] Strengthen idempotency test with explicit zero-patch assertion — tracked in Action Tracker #196 (GitHub #1208, filed during PR #1206 cleanup)
+- [ ] Vulture-based pre-push check for unused private methods — tracked in Action Tracker #197 (GitHub #1209, filed during PR #1206 cleanup)
+- [ ] (Carried from PR #1201 retro) CodeQL query model declaring `sanitize_for_log` as sanitizer — tracked in Action Tracker #198 (GitHub #1214)
+- [ ] (Carried from PR #1201 retro) Pre-commit `mixed-line-ending` cleanup of two `.pxd` files with lingering line-ending issues — tracked in Action Tracker #199 (GitHub #1215)
+- [ ] (Carried from PR #1206 retro) Stage 4 plan-template requires reproducer FIRST — deduplicated with Action Tracker #191 above
 
 ---
 
