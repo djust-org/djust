@@ -189,7 +189,28 @@ def test_is_safe_filter_output_is_not_re_escaped():
 
 def test_needs_autoescape_filter_receives_kwarg():
     """``needs_autoescape=True`` filters must receive ``autoescape``
-    as a kwarg from the renderer."""
+    as a kwarg from the renderer.
+
+    Limitation (#1180 item 2, acknowledged): this test only confirms
+    the **API surface** — the ``autoescape`` kwarg arrives — not the
+    new **dynamic semantics**. The renderer hardcodes ``autoescape=true``
+    at every call site (``renderer.rs:287, 349, 1602`` per the v0.9.2
+    PR #1179 retro), so the filter receives ``True`` regardless of
+    whether the dispatcher's parameterization at ``filter_registry.rs:290``
+    is wired correctly. A test that genuinely exercises the bool would
+    need either:
+
+    - A renderer where the autoescape supply path can vary (i.e., the
+      future ``{% autoescape %}`` block-tracking work; ~4 sites need
+      plumbing per the corrected CHANGELOG entry for #1162).
+    - A Python-exposed ``apply_custom_filter`` shim that lets a test
+      pass an explicit ``autoescape: bool`` (would need a new PyO3
+      binding; the current ``apply_custom_filter`` is internal Rust).
+
+    Both are larger than #1180's scope. The test is left in this weak
+    form intentionally, with this docstring as the audit trail; the
+    deferred strengthening rides on the next ``{% autoescape %}`` work.
+    """
     out = render_template("{{ name|autoescape_aware }}", {"name": "X"})
     # Default autoescape context is True
     assert html.unescape(out) == "AE:X"

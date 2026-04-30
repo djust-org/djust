@@ -828,12 +828,16 @@ Full migration notes: [`MIGRATION.md`](MIGRATION.md).
      expansion's ``filter_specs.iter().any(...)`` loop, never a Mutex
      acquire. Acquire/Release ordering pairs the load with the store
      in ``register_custom_filter``.
-  2. **Hardcoded ``autoescape=True`` plumbing**: ``apply_custom_filter``
-     now accepts an ``autoescape: bool`` parameter threaded through
-     ``apply_filter_full`` from the renderer call site. Today still
-     always ``true`` (matches prior behaviour) but the call chain is
-     ready for ``{% autoescape %}`` block tracking landing in a future
-     PR without further changes to ``filter_registry.rs``.
+  2. **Hardcoded ``autoescape=True`` plumbing (correction, #1180)**:
+     ``apply_custom_filter`` now accepts an ``autoescape: bool``
+     parameter that's set as a kwarg on the Python callable when the
+     filter declares ``needs_autoescape=True``. The earlier wording
+     here was inaccurate — only ``apply_custom_filter`` was widened;
+     the upstream chain (``apply_filter_full`` in ``filters.rs`` and
+     the renderer's three call sites at ``renderer.rs:287, 349, 1602``)
+     was NOT threaded through. Future ``{% autoescape %}`` block
+     tracking will need to update **~4 sites** to plumb the dynamic
+     value end-to-end, not 1.
   3. **Unknown-filter test tightened**: assert ``RuntimeError`` type
      AND the canonical ``"Unknown filter:"`` message shape, not just
      ``pytest.raises(Exception)`` + substring on filter name only.
