@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Production Deployment guide extended with Tier 1/2/3 patterns
+  (`docs/website/guides/deployment.md`).** Adds 8 new sections to the
+  canonical deployment guide based on patterns surfaced from real-world
+  djust deployments:
+  - Channel Layer (cross-process push) — separate concern from
+    `DJUST_STATE_BACKEND`, required when any view uses `push_to_view`,
+    presence, or cursor tracking.
+  - Database Connection Pooling — three-layer guidance (`CONN_MAX_AGE`,
+    PgBouncer, RDS Proxy), with the LISTEN/NOTIFY caveat for
+    transaction-mode pooling.
+  - Celery Integration — broker choice (Redis vs SQS), pool choice
+    (prefork vs gevent), beat-singleton invariant, gevent monkey-patch
+    gotcha, queue-depth-based worker auto-scaling.
+  - Static and Media Files — cloud-agnostic CDN options, S3 + CloudFront
+    config, `ASGI_SERVE_STATIC=False` opt-out for offloading static-file
+    serving from the ASGI server.
+  - WebSocket stickiness on AWS ALB — the simpler "stick on Django
+    `sessionid`" pattern as an alternative to a custom application-set
+    cookie.
+  - Sizing and Scaling Tiers — concrete vCPU/RAM recommendations indexed
+    to concurrent active users (≤50, 50-500, >500), with explicit
+    "when to escalate" triggers.
+  - "What's Already Production-Ready in djust" — anti-recommendation
+    list (Redis state, `channels_redis`, `sync_to_async`,
+    `transaction.on_commit`, Origin check, HSTS) so users don't
+    re-evaluate canonical patterns on every deployment.
+  - Extended Gunicorn+Uvicorn workers section with concrete production
+    CMD + flag rationale (`-w` sizing, `--timeout 120`, `--keep-alive 5`).
+  Cloud-agnostic where possible; AWS as canonical example with
+  PgBouncer / GCS / Cloudflare R2 noted in parallel.
+
 ### Developer Experience
 
 - **Pipeline-template canon: Stage 7 self-applicability check for canon
