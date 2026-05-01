@@ -537,11 +537,34 @@ fn diff_keyed_children(
         lis_set.insert(new_idx_for_surviving[lis_pos]);
     }
 
+    // Issue #1260 / audit weakness #5/#6: the LIS-skip optimisation is only
+    // sound for FULLY-KEYED sibling lists. With unkeyed siblings interleaved,
+    // the assumption "MoveChild patches for non-LIS keyed children — plus
+    // implicit shifts from inserts/removes — will land in-LIS keyed children
+    // at their new absolute positions" breaks: unkeyed-sibling patches use
+    // RELATIVE-position pairing among unkeyed nodes and don't coordinate with
+    // keyed-sibling positions. A surviving keyed child can be left stranded
+    // (proptest-shrunk reproducer:
+    //   tree_a = section[#text*4, div key=f]
+    //   tree_b = section[div key=f, #text*2]
+    // — with the old algorithm the keyed div_f had a single-element LIS,
+    // was marked "in place", and never received a MoveChild even though its
+    // absolute index changed from 4 to 0.)
+    //
+    // Fix: when the sibling list is mixed (any unkeyed child in either old or
+    // new), emit MoveChild for every surviving keyed child whose old_idx
+    // differs from its new_idx. The LIS optimisation still applies to the
+    // fully-keyed case, where it correctly minimises the patch count.
+    let has_unkeyed_siblings =
+        old.iter().any(|n| n.key.is_none()) || new.iter().any(|n| n.key.is_none());
+
     vdom_trace!(
-        "  LIS optimization: {} surviving keyed nodes, LIS length={}, moves needed={}",
+        "  LIS optimization: {} surviving keyed nodes, LIS length={}, moves needed={}, \
+         has_unkeyed_siblings={}",
         old_indices_in_new_order.len(),
         lis_positions.len(),
-        old_indices_in_new_order.len() - lis_positions.len()
+        old_indices_in_new_order.len() - lis_positions.len(),
+        has_unkeyed_siblings
     );
 
     // Find keyed nodes to add, move, or diff
@@ -568,11 +591,19 @@ fn diff_keyed_children(
                     // order and don't need MoveChild patches. All non-LIS
                     // elements must be moved because other moves may shift
                     // their positions even when old_idx == new_idx.
-                    if lis_set.contains(&new_idx) {
+                    //
+                    // (#1260) The skip is only safe in a FULLY-KEYED list.
+                    // With unkeyed siblings interleaved, the implicit "other
+                    // patches will land me at new_idx" assumption breaks —
+                    // see the comment on `has_unkeyed_siblings` above. In
+                    // that case, fall back to "always emit MoveChild when
+                    // old_idx != new_idx" for surviving keyed children.
+                    let lis_skip_safe = lis_set.contains(&new_idx) && !has_unkeyed_siblings;
+                    if lis_skip_safe {
                         if old_idx != new_idx {
-                            vdom_trace!("  SKIP MOVE key={} (in LIS, stays in place)", key);
+                            vdom_trace!("  SKIP MOVE key={} (in LIS, fully-keyed list)", key);
                         }
-                    } else {
+                    } else if !lis_set.contains(&new_idx) || old_idx != new_idx {
                         vdom_trace!("  MOVE key={} from {} to {}", key, old_idx, new_idx);
                         patches.push(Patch::MoveChild {
                             path: path.to_vec(),

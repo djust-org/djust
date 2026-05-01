@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2381cf497d108e6df2bcba53149e5aeb963962eed6cbd2ffc8d22fc056fda90f # shrinks to tree_a = VNode { tag: "section", attrs: {}, children: [VNode { tag: "#text", attrs: {}, children: [], text: Some("A"), key: None, djust_id: None, cached_html: None }, VNode { tag: "#text", attrs: {}, children: [], text: Some("A"), key: None, djust_id: None, cached_html: None }, VNode { tag: "#text", attrs: {}, children: [], text: Some("A"), key: None, djust_id: None, cached_html: None }, VNode { tag: "#text", attrs: {}, children: [], text: Some("a"), key: None, djust_id: None, cached_html: None }, VNode { tag: "div", attrs: {}, children: [], text: None, key: Some("f"), djust_id: None, cached_html: None }], text: None, key: None, djust_id: None, cached_html: None }, tree_b = VNode { tag: "section", attrs: {}, children: [VNode { tag: "div", attrs: {}, children: [], text: None, key: Some("f"), djust_id: None, cached_html: None }, VNode { tag: "#text", attrs: {}, children: [], text: Some("A"), key: None, djust_id: None, cached_html: None }, VNode { tag: "#text", attrs: {}, children: [], text: Some("a"), key: None, djust_id: None, cached_html: None }], text: None, key: None, djust_id: None, cached_html: None }
