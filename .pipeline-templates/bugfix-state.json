@@ -87,6 +87,11 @@
           "mandatory": true
         },
         {
+          "action": "VERIFY LITERAL API CONTRACTS (#1243, v0.9.2-1 retro Action Tracker #203): for every literal API call in the plan (function names, kwargs, return shapes), grep for the existing convention before locking. Spec snippets in plans can be wrong; convention wins. Pattern from #1240/#1242 — plan said `transport.send_error(..., type='mount_error')`; existing convention (websocket.py:1835/1891/2116/2133/2217) is `error_type=` and `type=` would have collided with the outer `{'type': 'error', ...}` envelope. The implementer correctly followed convention but the spec-vs-convention check should be done at plan-lock time, not implementation time.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "read codebase for current state",
           "done": false
         },
@@ -218,6 +223,11 @@
         },
         {
           "action": "WIRING_CHECK \u2014 for every new public method/attribute/hook added on a framework base class (LiveView, LiveComponent, etc.), grep framework hot paths (consumer.py / websocket.py / dispatch.py / renderer) for a real call site. A test-only caller means the feature is not integrated \u2014 flag it as a WIRING_GAP finding, not a pass. Stage 7-vs-Stage 11 delta PRs #814/#837/#840 all failed here.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "WORKFLOW-HEADER CROSS-REF (#1244, v0.9.2-1 retro Action Tracker #204): when changed files include `.github/workflows/*.yml` or any file with a header docstring describing runtime behavior, list every behavioural claim in the docstring and verify each one matches the implementation. Behavioural claims include: 'silent in normal operation', 'green run', 'no false positives', 'idempotent', 'safe to run repeatedly', etc. Cross-ref against actual step semantics (pipefail, exit codes, conditional triggers). Pattern from PR #1241 \u2014 the retro-gate-audit.yml header said 'annotations not red runs' but the audit script's exit 1 + GHA `set -eo pipefail` produced red runs on every flagged PR. Stage 11 caught it; Stage 7 should have.",
           "done": false,
           "mandatory": true
         },
