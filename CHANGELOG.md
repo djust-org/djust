@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run — the previous `OnceLock` workaround that gated the in-module
   test on whether a prior test had already registered a filter is no
   longer needed. Carryover from #1180 item 4.
+- **Pipeline-run Stage 14 retro-post — Write tool + `gh --body-file`
+  (#1245).** Updates `.pipeline-templates/{feature,bugfix}-state.json`
+  Stage 14 subagent_prompt to use Claude's `Write` tool to create
+  `pr/feedback/retro-<N>.md` and `gh pr comment <N> --body-file <path>`
+  to post — replacing the previous `cat > file <<EOF` + `--body "$(cat
+  file)"` pattern that silently failed under zsh `set -o noclobber`
+  (a common .zshrc safety guard). All 3 v0.9.2-1 implementation PRs
+  (#1239, #1241, #1242) hit this and had their retros backfilled
+  during the milestone retro audit; the new pattern is structural
+  (sidesteps any shell-init quirk, not just noclobber) rather than a
+  per-quirk patch.
 - **Release-workflow dep-bump label gate (#1236).** New GHA
   `.github/workflows/check-release-workflow-deps.yml` runs on PRs
   modifying release-critical workflow files (`release.yml`, `publish.yml`,
