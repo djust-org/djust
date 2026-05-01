@@ -49,8 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the HTML spec's custom-element rule (`tag.includes('-')`) and exposes
   a `window.djustAllowedTags` runtime-configurable hook for
   same-origin allowlist extensions. `<script>` and `<iframe>` remain
-  blocked (neither contains a hyphen). 7 regression tests in
-  `tests/js/vdom_web_components_1255.test.js`.
+  blocked unchanged (`<script>` is not in the allowlist and lacks a
+  hyphen; `<iframe>` is unaffected by this change since it's already
+  in the existing `ALLOWED_HTML_TAGS` whitelist for legitimate use).
+  7 regression tests in `tests/js/vdom_web_components_1255.test.js`.
 
 - **VDOM: extended SVG attribute camelCase normalization (#1256).**
   The Rust parser's `normalize_svg_attribute()` table in
