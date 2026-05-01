@@ -21,9 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that don't match any DataTableMixin handler (#1275 generalized).
   Each audit ships with a 4-phase improvement roadmap, test gaps,
   strategic observations, and a companion canon update for
-  `CLAUDE.md` / `PR-checklist`. Pre-staged issues for each
-  not-yet-filed weakness are listed inline in the audit docs and will
-  be filed during v0.9.3 milestone planning.
+  `CLAUDE.md` / `PR-checklist`. Pre-staged issues filed for each
+  not-yet-tracked weakness (#1283-#1291). Audit-driven Phase 1 fixes
+  blocking v0.9.2 stable will land in the v0.9.2-5 drain bucket;
+  Phase 2/3 fixes targeted for v0.9.3.
 
 - **Production Deployment guide extended with Tier 1/2/3 patterns
   (`docs/website/guides/deployment.md`).** Adds 8 new sections to the

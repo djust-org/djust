@@ -158,8 +158,8 @@ Verdicts: ✓ tested + works, ? unverified, ✗ known broken.
 
 ## 7. Sequencing
 
-- **v0.9.3 opener** (~3 days, 3 PRs): Phase 1 quick wins — drain `_async_tasks` + flush `_pending_push_events` in `handle_mount` (closes #1280). Add 2 regression tests. Ship the audit doc itself in the same PR or one ahead. This bug class disappears for new users.
-- **v0.9.3 mid** (~5 days, 4 PRs): Phase 2 split-foundation — private state re-render gate (foundation PR + capability PR per Action Tracker #163), then AsyncResult envelope, then `_action_state` persistence, then snapshot-truncation warning. These four are independent but should land in the same milestone for a coherent release note.
+- **v0.9.2-5 drain bucket** (~1-2 days, 1-2 PRs): Phase 1 quick wins — drain `_async_tasks` + flush `_pending_push_events` in `handle_mount` (closes #1280, #1283). Add 2 regression tests. **Blocks v0.9.2 stable** because #1280 is 🔴 production-deploy-blocker class; shipping 0.9.2 with a known broken `mount() + assign_async()` would re-burn the same downstream consumers who reported it.
+- **v0.9.3** (~5 days, 4 PRs): Phase 2 split-foundation — private state re-render gate (foundation PR + capability PR per Action Tracker #163; closes #1281, #1286), AsyncResult envelope (#1274), `_action_state` persistence (#1284), snapshot-truncation warning (#1285). Mount-time pre-snapshot (Weakness #7) lands in the same window. These five are independent but should land in the same milestone for a coherent release note.
 - **v0.10 planning**: Phase 3 architectural work. Move change-detection into Rust is ADR-class; benefits from a planning cycle.
 - **Continuous**: Phase 4 documentation. Pick up alongside Phase 1/2 PRs.
 

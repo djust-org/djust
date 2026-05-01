@@ -281,9 +281,9 @@ This would have caught #1275 the day the prefix divergence first landed. ~50 LoC
 
 ## 9. Sequencing
 
-- **v0.9.3 opener** (~3 days, 3 PRs): Phase 1 quick wins. Fix the `on_` prefix in data_table integration (closes #1275 + the new pagination bug). Fix `@action` re-raise (closes #1276). Add auto-refresh to DataTableMixin (closes #1279). Each is a focused PR with regression tests.
-- **v0.9.3 mid** (~2 days, 2 PRs): Phase 2 linter foundation + capability. Lock in the contract; pre-push hook fails on drift.
-- **v0.9.3 late** (~3 days, ~6 PRs): Phase 3 decorator-contract spec tests. One test class per decorator; one test per docstring claim. This is mostly mechanical but high-leverage — catches future drift before it reaches users.
+- **v0.9.2-5 drain bucket** (~3 days, 3 PRs): Phase 1 quick wins. **Blocks v0.9.2 stable** because all four cited bugs (#1275, #1276, #1279, #1291) are 🔴 production-deploy-blocker class. Fix the `on_` prefix in data_table integration (closes #1275). Add the missing pagination handlers (closes #1291). Fix `@action` re-raise contract (closes #1276). Add auto-refresh to DataTableMixin (closes #1279). Each is a focused PR with regression tests.
+- **v0.9.3** (~2 days, 2 PRs): Phase 2 linter foundation + capability (closes #1290). Lock in the contract; pre-push hook fails on drift.
+- **v0.9.3 late** (~3 days, ~6 PRs): Phase 3 decorator-contract spec tests (closes #1287, #1288, #1289). One test class per decorator; one test per docstring claim. This is mostly mechanical but high-leverage — catches future drift before it reaches users.
 - **Continuous**: Phase 4 documentation alongside Phase 1/2/3 PRs.
 
 ---
