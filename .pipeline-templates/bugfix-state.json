@@ -155,6 +155,11 @@
           "done": false
         },
         {
+          "action": "BUNDLING CHECK (#1209 / #1251): after staging files but before `git commit`, run `git diff --cached --stat` and verify the line counts match what you planned to ship. If a staged file shows significantly more lines than expected, the working tree had pre-existing uncommitted modifications that got bundled. Investigate before committing. Pattern from pipeline-skill commit bf1a67f which silently bundled 130 unintended lines.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "git status clean",
           "done": false,
           "mandatory": true
@@ -249,6 +254,11 @@
           "done": false
         },
         {
+          "action": "CANON-PR SELF-APPLICABILITY CHECK (#1247 retro / #1248): if this PR adds a new mandatory checklist item or self-review rule, explicitly answer two questions in the Stage 7 output. (a) Does the new rule false-positive on this PR's own diff? If yes, narrow the scope before merge. (b) Would the new rule have caught the originating bug at the stage it adds? If no, reconsider the stage placement. Skip this item only when the PR doesn't introduce new canon (the typical feature/bugfix case).",
+          "done": false,
+          "mandatory": false
+        },
+        {
           "action": "output REVIEW_PASSED or REVIEW_FAILED",
           "done": false,
           "mandatory": true
@@ -315,6 +325,11 @@
           "mandatory": true
         },
         {
+          "action": "BUNDLING CHECK (#1209 / #1251): after staging files but before `git commit`, run `git diff --cached --stat` and verify the line counts match what you planned to ship. If a staged file shows significantly more lines than expected, the working tree had pre-existing uncommitted modifications that got bundled. Investigate before committing. Pattern from pipeline-skill commit bf1a67f which silently bundled 130 unintended lines.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "this Stage 9 commit must include ONLY docs + CHANGELOG hunks; no implementation code (the two-commit shape gate)",
           "done": false,
           "mandatory": true
@@ -354,6 +369,11 @@
         {
           "action": "git add each file from changes.txt to catch new files",
           "done": false
+        },
+        {
+          "action": "BUNDLING CHECK (#1209 / #1251): after staging files but before `git commit`, run `git diff --cached --stat` and verify the line counts match what you planned to ship. If a staged file shows significantly more lines than expected, the working tree had pre-existing uncommitted modifications that got bundled. Investigate before committing. Pattern from pipeline-skill commit bf1a67f which silently bundled 130 unintended lines.",
+          "done": false,
+          "mandatory": true
         },
         {
           "action": "git diff --check \u2014 no conflict markers",
@@ -487,7 +507,7 @@
       "status": "pending",
       "verdict": null,
       "run_as": "subagent",
-      "subagent_prompt": "Write retrospective for feature: {task_description}. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details (branch deleted after merge). Rate quality 1-5, what went well, lessons learned, improvements. STEP A (MANDATORY): use the Write tool to create pr/feedback/retro-{pr_number}.md with the full retro body — DO NOT use bash heredoc (`cat > file <<EOF`), which fails silently under zsh `set -o noclobber` and leaves stale content (#1245). The Write tool bypasses shell redirection. STEP B (MANDATORY): post via `gh pr comment {pr_number} --body-file pr/feedback/retro-{pr_number}.md` — DO NOT use `--body \"$(cat ...)\"`, which dutifully posts whatever the file currently contains (e.g., a leftover Stage 11 review) when STEP A silently failed. The `--body-file` form passes the file path directly; gh re-reads it at post time. STEP C (MANDATORY): verify with `gh pr view {pr_number} --json comments` that at least one comment matches the audit-script retro-marker regex (`retrospective|quality:\\s*\\d|lessons\\s+learned|retro_complete|what\\s+went\\s+well`). MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
+      "subagent_prompt": "Write retrospective for feature: {task_description}. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details (branch deleted after merge). Rate quality 1-5, what went well, lessons learned, improvements. STEP A (MANDATORY): use the Write tool to create pr/feedback/retro-{pr_number}.md with the full retro body — DO NOT use bash heredoc (`cat > file <<EOF`), which fails silently under zsh `set -o noclobber` and leaves stale content (#1245). The Write tool bypasses shell redirection. STEP B (MANDATORY): post via `gh pr comment {pr_number} --body-file pr/feedback/retro-{pr_number}.md` — DO NOT use `--body \"$(cat ...)\"`, which dutifully posts whatever the file currently contains (e.g., a leftover Stage 11 review) when STEP A silently failed. The `--body-file` form passes the file path directly; gh re-reads it at post time. STEP C (MANDATORY): verify with `gh pr view {pr_number} --json comments` that at least one comment matches the audit-script retro-marker regex — see `scripts/lib/retro_markers.py:RETRO_MARKER_REGEX` for the canonical pattern (single source of truth per #1249). The regex matches headings/sentinels like `Retrospective`, `Quality: <digit>`, `Lessons learned`, `RETRO_COMPLETE`, `What went well` (case-insensitive). MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
       "checklist": [
         {
           "action": "rate quality 1-5",
