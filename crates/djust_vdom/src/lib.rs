@@ -284,10 +284,15 @@ pub fn splice_ignore_subtrees(old: &VNode, new: &mut VNode) {
         return;
     }
     if new.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
-        // Replace the new subtree's children with old's (preserving IDs + cache)
+        // Replace the new subtree's children with old's (preserving IDs).
+        // NOTE (#1252): Do NOT copy `old.cached_html` — that cache may be
+        // stale relative to the spliced children if the surrounding markup
+        // changed (e.g., a wrapping conditional toggled). Clear the cache
+        // so `cache_ignore_subtree_html` (called after splice on the
+        // server's render path) recomputes from current children.
         new.children = old.children.clone();
         new.djust_id = old.djust_id.clone();
-        new.cached_html = old.cached_html.clone();
+        new.cached_html = None;
         return;
     }
     // Recurse into children by position

@@ -19,12 +19,14 @@ html5ever.workspace = true
 markup5ever_rcdom.workspace = true
 thiserror.workspace = true
 regex.workspace = true
+tracing = { workspace = true }
 djust_core = { path = "../djust_core" }
 
 [dev-dependencies]
 criterion = "0.8"
 tempfile = "3.27"
 proptest = "1.11"
+tracing-subscriber = { workspace = true }
 
 [[bench]]
 name = "diff"
