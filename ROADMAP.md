@@ -164,6 +164,40 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
+### Milestone: v0.9.2-4 — pre-stable blocker + tooling carryovers
+
+**Status:** 🚧 open — drained 2026-05-01 immediately after the v0.9.2rc1 cut. Combines the #1260 fuzz-discovered VDOM bug (real correctness, blocks v0.9.2 stable) with 5 carryover canon/tooling items from v0.9.2-2 retro (tracker rows #206–#209) and v0.9.2-3 retro (#210).
+
+*Goal:* Close the one P1 correctness bug surfaced by proptest during v0.9.2rc1 pre-flight, plus 5 P2 tooling/canon carryovers that have been deferring through milestones. After this drain, v0.9.2 stable should be cuttable.
+
+#### Headliner — #1260 (P1, real VDOM correctness bug, design-novel)
+
+- [ ] **#1260 — VDOM fuzz_test::round_trip_correctness fails on mixed-keyed/unkeyed diff** — proptest surfaced a real failure: 4 unkeyed text children + 1 keyed div in `tree_a`, reordered to keyed-first + 2 unkeyed-removed in `tree_b`, produces an incorrect diff/patch round-trip. The audit's weakness #5/#6 (currently rated 🟡 with warnings only) needs an actual fix in `crates/djust_vdom/src/diff.rs` keyed-diff handling. **Solo PR** — design-novel, can't batch with the canon items. Required before v0.9.2 stable.
+
+#### Tooling/canon carryovers (P2, can batch as one grouped PR)
+
+- [ ] **#1248 — Stage 7 self-applicability check for canon PRs** — v0.9.2-2 retro Action Tracker #206. Mandatory checklist item: when a PR adds a new mandatory rule, answer (a) does the rule false-positive on this PR? (b) would it have caught the originating bug? Both should be explicit before merge.
+- [ ] **#1249 — Extract retro-marker regex to shared constants module** — v0.9.2-2 retro Action Tracker #207. Same regex defined in `scripts/audit-pipeline-bypass.py:38-39` and the Stage 14 `subagent_prompt`. Single source of truth via `scripts/lib/retro_markers.py` import.
+- [ ] **#1250 — Direct-to-main audit gap** — v0.9.2-2 retro Action Tracker #208. The daily retro-gate audit GHA scans merged PRs only; direct commits to main bypass it. Two fixes: (a) extend audit script, OR (b) pipeline-drain skill always uses PR-only workflow. Recommend (b) — branch protection + audit consistency.
+- [ ] **#1251 — `git diff --cached --stat` reflex (bundling check)** — v0.9.2-2 retro Action Tracker #209. Pre-commit reflex to catch when `git add <file>` silently bundles pre-existing uncommitted modifications (the failure mode that hit pipeline-skill `CANON.md` commit `bf1a67f`). Ship as Stage 5/9/10 mandatory checklist item.
+- [ ] **#1259 — Audit-as-pre-staged-work-graph recipe in pipeline-drain skill** — v0.9.2-3 retro Action Tracker #210. Document the high-leverage shape (audit → pre-filed issues → grouped PR → single retro) demonstrated by the v0.9.2-3 milestone (75 min audit-merge to fix-merge).
+
+#### Sequencing
+
+1. **#1260 first** — solo PR, real correctness fix in `diff.rs`. Must land before v0.9.2 stable. Has a fuzz reproducer ready (the case proptest already shrunk).
+2. **5-canon batch** — bundle #1248 + #1249 + #1250 + #1251 + #1259 as one grouped PR. All process/template/script changes; touch disjoint files.
+
+`/pipeline-run --milestone v0.9.2-4 --group --all` should produce this shape automatically (pipeline-next will keep #1260 solo since it's a real bugfix and group the 5 P2 tech-debt carryovers).
+
+#### Acceptance for v0.9.2-4
+
+- #1260 closed via merged PR; fuzz seed committed to `crates/djust_vdom/tests/fuzz_test.proptest-regressions`; `cargo test -p djust_vdom --test fuzz_test` green.
+- All 5 carryover issues either closed via merged PR or explicitly deferred to v0.9.2-5 with rationale.
+- Retro: `/pipeline-retro --milestone v0.9.2-4` after merge.
+- Then: `/djust-release 0.9.2` to cut stable.
+
+---
+
 ### Milestone: v0.9.2-3 — VDOM correctness hardening (Phase 1)
 
 **Status:** 🚧 open — drained 2026-04-30 from the [VDOM engine audit](docs/vdom/AUDIT-2026-04-30.md). Five quick-win fixes targeting current correctness and DX weaknesses in the Rust + JS VDOM stack.
