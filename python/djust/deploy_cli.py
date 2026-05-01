@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import subprocess
+import tarfile
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,35 @@ logger = logging.getLogger(__name__)
 DEFAULT_SERVER = "https://djustlive.com"
 _CREDS_DIR_NAME = ".djustlive"
 _CREDS_FILE_NAME = "credentials"
+
+# Default patterns to exclude from tarball
+TARBALL_EXCLUDES = [
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    ".env",
+    "node_modules",
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "*.egg-info",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
+    ".DS_Store",
+    "Thumbs.db",
+    "db.sqlite3",
+    "*.log",
+    "logs",
+    "media",
+    "staticfiles",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +239,70 @@ def status(ctx: click.Context, project: Optional[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tarball helpers
+# ---------------------------------------------------------------------------
+
+
+def _create_tarball(source_dir: Path, output_path: Path) -> None:
+    """
+    Create a tarball of source_dir excluding unwanted patterns.
+
+    Args:
+        source_dir: Directory to tar
+        output_path: Where to write the tarball
+    """
+    with tarfile.open(output_path, "w:gz") as tar:
+        for root, dirs, files in os.walk(source_dir):
+            # Modify dirs in-place to exclude patterns
+            dirs[:] = [
+                d
+                for d in dirs
+                if not any(
+                    pattern in d
+                    for pattern in [
+                        ".git",
+                        ".venv",
+                        "venv",
+                        "node_modules",
+                        "__pycache__",
+                        ".pytest_cache",
+                        ".mypy_cache",
+                        ".ruff_cache",
+                        ".egg-info",
+                        "dist",
+                        "build",
+                        ".idea",
+                        ".vscode",
+                    ]
+                )
+            ]
+
+            for file in files:
+                file_path = Path(root) / file
+                relative = file_path.relative_to(source_dir)
+
+                # Skip excluded files
+                if any(
+                    pattern in str(relative)
+                    for pattern in [
+                        ".pyc",
+                        ".pyo",
+                        ".DS_Store",
+                        "Thumbs.db",
+                        "db.sqlite3",
+                        ".env",
+                        "*.log",
+                    ]
+                ):
+                    continue
+
+                try:
+                    tar.add(file_path, arcname=str(relative))
+                except Exception as e:
+                    logger.debug("Failed to add %s to tarball: %s", file_path, e)
+
+
+# ---------------------------------------------------------------------------
 # deploy
 # ---------------------------------------------------------------------------
 
@@ -242,3 +336,91 @@ def deploy(ctx: click.Context, project_slug: str) -> None:
     for line in resp.iter_lines():
         if line:
             click.echo(line.decode("utf-8", errors="replace"))
+
+
+# ---------------------------------------------------------------------------
+# deploy-dir
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.argument("project_slug")
+@click.option(
+    "--dir",
+    "source_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default=".",
+    help="Directory to deploy (default: current working directory)",
+)
+@click.pass_context
+def deploy_dir(ctx: click.Context, project_slug: str, source_dir: str) -> None:
+    """Deploy from a local directory (no git required)."""
+    creds = load_credentials()
+    server = ctx.obj["server"]
+    token = creds["token"]
+
+    click.echo(f"Creating tarball from {source_dir}...")
+
+    # Create tarball in temp location
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as f:
+        tarball_path = Path(f.name)
+
+    try:
+        _create_tarball(Path(source_dir), tarball_path)
+        click.echo(f"Tarball created: {tarball_path.stat().st_size} bytes")
+
+        url = f"{server}/api/v1/projects/{project_slug}/deploy/directory/"
+
+        click.echo(f"Uploading to {server}...")
+        with open(tarball_path, "rb") as f:
+            resp = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Token {token}",
+                    "Content-Type": "application/octet-stream",
+                },
+                data=f,
+                timeout=300,
+            )
+
+        if resp.status_code not in (200, 201, 202):
+            raise click.ClickException(f"Deploy failed ({resp.status_code}): {resp.text}")
+
+        result = resp.json()
+        deployment_id = result.get("deployment_id")
+        click.echo(f"Deployment triggered: {deployment_id}")
+
+        # Poll for status
+        status_url = f"{server}/api/v1/deployments/{deployment_id}/"
+        for _ in range(60):  # 60 * 5s = 5 minutes max
+            import time
+
+            time.sleep(5)
+
+            try:
+                status_resp = requests.get(
+                    status_url,
+                    headers=_api_headers(token),
+                    timeout=30,
+                )
+                if status_resp.status_code == 200:
+                    data = status_resp.json()
+                    status = data.get("status")
+                    click.echo(f"Status: {status}")
+
+                    if status in ("active", "failed", "cancelled", "superseded"):
+                        if status == "active":
+                            container_url = data.get("container_url")
+                            if container_url:
+                                click.echo(f"Application available at: {container_url}")
+                        return
+            except requests.RequestException:
+                pass
+
+        click.echo("Deployment timed out waiting for completion.")
+
+    finally:
+        if tarball_path.exists():
+            tarball_path.unlink()
