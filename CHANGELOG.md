@@ -90,6 +90,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run — the previous `OnceLock` workaround that gated the in-module
   test on whether a prior test had already registered a filter is no
   longer needed. Carryover from #1180 item 4.
+- **Pipeline-template canon — Stage 4 + Stage 7 additions (#1243 +
+  #1244).** Two mandatory checklist items added symmetrically to
+  `.pipeline-templates/{feature,bugfix}-state.json`:
+  - **Stage 4 VERIFY LITERAL API CONTRACTS** — for every literal API
+    call in the plan (function names, kwargs, return shapes), grep
+    for the existing convention before locking. Pattern from
+    #1240/#1242 where the plan said `type="mount_error"` but
+    convention was `error_type=`.
+  - **Stage 7 WORKFLOW-HEADER CROSS-REF** — when changed files include
+    `.github/workflows/*.yml` or any file with a runtime-behavior
+    docstring, list every behavioural claim and verify each against
+    actual step semantics. Pattern from #1241 where the workflow's
+    header said "annotations not red runs" but `pipefail` made every
+    flagged run red.
 - **Pipeline-run Stage 14 retro-post — Write tool + `gh --body-file`
   (#1245).** Updates `.pipeline-templates/{feature,bugfix}-state.json`
   Stage 14 subagent_prompt to use Claude's `Write` tool to create
