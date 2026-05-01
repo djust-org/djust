@@ -164,6 +164,50 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
+### Milestone: v0.9.2-5 — Lifecycle + Decorator/Tag audit Phase 1 (pre-stable blockers)
+
+**Status:** 🚧 open — drained 2026-05-01 immediately after the v0.9.2-4 retro and the merging of audit PR #1282 (`docs/audits/lifecycle-2026-05.md` + `docs/audits/decorator-contract-2026-05.md`). Six issues drawn from the audit Phase-1 buckets; all 🔴 production-deploy-blocker class except one 🟡.
+
+*Goal:* Close the audit-A and audit-B Phase 1 weaknesses before tagging v0.9.2 stable. Shipping 0.9.2 with #1280 (silent `mount()`-time async failure) or #1275/#1291/#1276/#1279 (entire data_table integration broken over WS) would re-burn the same downstream consumers who reported the bugs.
+
+#### Group 1 — Lifecycle mount drains (1 PR; #1280 🔴 solo + #1283 🟡 bundled)
+
+- [ ] **#1280 — `assign_async()` called from `mount()` never resolves over WebSocket** — `handle_mount` at `websocket.py:2352` doesn't call `_dispatch_async_work()` before the response. Audit A § Weakness #1. One-line fix.
+- [ ] **#1283 — `mount()` doesn't flush `_pending_push_events` queue** — same `websocket.py:2352` site; symmetric one-line fix. Bundle with #1280 since they touch the same line. Audit A § Weakness #3.
+
+#### Group 2 — data_table tag-name + handler completion (1 PR; #1275 🔴 + #1291 🔴 + #1279 🔴)
+
+- [ ] **#1275 — `data_table` tag emits 23 event names that don't match any handler** — DataTableMixin uses `on_table_*` (Phoenix-style); tag defaults are bare `table_*`. Dispatcher at `websocket_utils.py:173` does exact `getattr` lookup, so every default WS interaction returns "no handler found". Recommendation: rename tag-emit defaults to match handler convention (preserves the `on_*` Phoenix-style for explicit-handler-method semantics). Audit B § Weakness #1.
+- [ ] **#1291 — `data_table` pagination handlers entirely missing** — `prev_event="table_prev"` / `next_event="table_next"` in `djust_components.py:512-513` have no matching method under either prefix convention. Add `on_table_prev` / `on_table_next` to DataTableMixin. Bundle with #1275 since both touch `data_table.py` + `djust_components.py` + `table.html`. Audit B § Weakness #2.
+- [ ] **#1279 — DataTableMixin handlers don't call `refresh_table()`** — `on_table_sort`/`filter`/`page` mutate state but never trigger the queryset → search → filter → sort → paginate pipeline. Add `@_auto_refresh` local decorator. Bundle with #1275 + #1291 since same files. Audit B § Weakness #4.
+
+#### Group 3 — `@action` re-raise contract (1 PR; #1276 🔴)
+
+- [ ] **#1276 — `@action` re-raises after recording state, breaking documented contract** — `decorators.py:374-379` re-raises; `websocket.py:2695-2708` catches and emits `{"type":"error"}` frame instead of triggering re-render. Template never sees `{{ name.error }}`. Either (a) catch and don't re-raise (matches docstring), OR (b) update docstring. Recommendation: (a). Audit B § Weakness #3.
+
+#### Sequencing
+
+3 groups → 3 PRs. Each touches disjoint files; can ship in parallel via worktrees OR sequential. Per the single-implementer-per-checkout rule (Action #180), recommend sequential execution.
+
+`/pipeline-run --milestone v0.9.2-5 --group --all` should produce this shape: pipeline-next groups by file overlap (Group 1: `websocket.py` only; Group 2: `mixins/data_table.py` + `templatetags/djust_components.py` + `table.html`; Group 3: `decorators.py` only).
+
+#### Acceptance for v0.9.2-5
+
+- All 6 issues closed via merged PR(s).
+- New regression tests for each group (mount-time async/push delivery, data_table WS round-trip, @action exception → re-render with error visible).
+- Full Python test suite green; no Rust changes expected so `make test-rust` should be no-op clean.
+- Retro: `/pipeline-retro --milestone v0.9.2-5` after merge.
+- Then: `/djust-release 0.9.2` to cut stable.
+
+#### Out of scope (deferred to v0.9.3)
+
+- **Audit A Phase 2 (#1281, #1284, #1285, #1286, #1274)**: private-state re-render gate (split-foundation), `_action_state` persistence, snapshot truncation warning, change-detection unification, AsyncResult envelope.
+- **Audit B Phase 2 (#1290)**: `scripts/check-handler-contracts.py` linter foundation + capability.
+- **Audit B Phase 3 (#1287, #1288, #1289)**: decorator-contract spec tests; `@reactive` / `@background` / `@computed` polish.
+- **Audits C–G**: bidirectional binding (#1267), grammar (#1273), transport contract (#1277), serializer allowlist (#1274 sibling), event ordering (#1278). Commission in v0.9.3 milestone planning.
+
+---
+
 ### Milestone: v0.9.2-4 — pre-stable blocker + tooling carryovers
 
 **Status:** 🚧 open — drained 2026-05-01 immediately after the v0.9.2rc1 cut. Combines the #1260 fuzz-discovered VDOM bug (real correctness, blocks v0.9.2 stable) with 5 carryover canon/tooling items from v0.9.2-2 retro (tracker rows #206–#209) and v0.9.2-3 retro (#210).
