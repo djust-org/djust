@@ -164,9 +164,42 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
+### Milestone: v0.9.2-3 — VDOM correctness hardening (Phase 1)
+
+**Status:** 🚧 open — drained 2026-04-30 from the [VDOM engine audit](docs/vdom/AUDIT-2026-04-30.md). Five quick-win fixes targeting current correctness and DX weaknesses in the Rust + JS VDOM stack.
+
+*Goal:* Close out the 5 Phase-1 quick wins from the audit. All are small (~5-50 LoC + 1 regression test each), low-risk, and target real correctness or compatibility gaps. Phase 2 (correctness hardening: shallow-clone reference aliasing, raw-pointer audit, fast-path parent-context) and Phase 3 (architectural: text-node djust_ids, unified focus state-machine) are tracked separately.
+
+#### Tasks (P2 tech-debt)
+
+- [ ] **#1252 — VDOM: clear `cached_html` in `splice_ignore_subtrees` to prevent stale `dj-update="ignore"` re-renders** — Audit weakness #1 (🔴). `lib.rs:303-313`. ~2 LoC + 1 regression test.
+- [ ] **#1253 — VDOM: validate `dj-id` format in parser (prevent template injection of compact-IDs)** — Audit weakness #10. `parser.rs:377`. ~3 LoC + 1 regression test.
+- [ ] **#1254 — VDOM: promote duplicate-key + mixed-keyed-unkeyed warnings from `vdom_trace!` to `tracing::warn!` with stable error codes** — Audit weaknesses #5 + #6. `diff.rs:411-425, 458-488`. ~10 LoC + update non-existent error-code URL.
+- [ ] **#1255 — VDOM JS: allow Web Components (`tagName.includes('-')`) and add `window.djustAllowedTags` extension hook** — Audit weakness #8. `12-vdom-patch.js:217-244`. ~10 LoC + 1 vitest regression.
+- [ ] **#1256 — VDOM: extend SVG attribute camelCase normalization (or warn on unknown SVG attrs)** — Audit weakness #9. `parser.rs:38-98`. ~50 LoC list extension + debug warning.
+
+#### Sequencing
+
+All 5 issues touch disjoint files in the Rust crate + JS patcher and can ship as one grouped PR (`feat/v0.9.2-3-vdom-phase1`) or split if any one finds unexpected scope. Use `/pipeline-drain --milestone v0.9.2-3 --group --all` to triage and drain in one batch.
+
+#### Acceptance for v0.9.2-3
+
+- All 5 issues closed via merged PR(s).
+- Full Rust test suite (`make test-rust`) green.
+- JS test suite (`npx vitest run`) green.
+- Retro: `/pipeline-retro --milestone v0.9.2-3` after merge.
+
+#### Out of scope (deferred to later milestones)
+
+- **Phase 2 (correctness hardening)**: weaknesses #2 (shallow clone), #3 (fast-path parent context), #4 (raw pointer audit). Each is a split-foundation PR pair (foundation + capability) per Action Tracker #163. Recommend filing as v0.9.2-4 or v0.9.3-1 milestone after Phase 1 lands.
+- **Phase 3 (architectural)**: text-node djust_ids in production (closes weakness #7), per-render djust_id index map, unified focus state-machine, template-compile-time keyed-diff validator. Multi-PR ADR-class work. Recommend v0.10.x planning.
+- **Phase 4 (documentation)**: see audit §5 Phase 4 — pick up opportunistically alongside Phase 1/2 PRs.
+
+---
+
 ### Milestone: v0.9.2-2 — pipeline-template canon batch (Stage 4 + Stage 7 additions)
 
-**Status:** 🚧 open — drained 2026-04-30 from v0.9.2-1 retro tracker rows #203 + #204. Plus opportunistically picks up any further v0.9.2-N-class issues that surface.
+**Status:** ✅ complete — shipped 2026-04-30. Closed 3 issues across 2 PRs (#1246 closes #1245; #1247 closes #1243 + #1244). Retro at `RETRO.md` §v0.9.2-2.
 
 *Goal:* Land the two pipeline-template canon updates that the v0.9.2-1 retro filed (Stage 4 plan-fidelity + Stage 7 workflow-header cross-ref). Both touch the same `.pipeline-templates/{feature,bugfix}-state.json` files in disjoint regions (Stage 4 vs Stage 7 subagent prompts/checklists), so they batch cleanly as one grouped PR.
 
