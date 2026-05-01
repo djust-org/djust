@@ -7,9 +7,12 @@ event handlers, reactive state, and computed properties.
 
 import asyncio
 import functools
+import logging
 import warnings
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional
 
+
+logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -259,13 +262,22 @@ def action(
             "result":  <return_value>,
         }
 
-    On exception (re-raised after recording)::
+    On exception (caught and recorded; **not** re-raised)::
 
         {
             "pending": False,
             "error":   "<str(exc)>",
             "result":  None,
         }
+
+    The exception is **logged** at ERROR level (via ``logger.exception``)
+    so diagnostics aren't lost, but is **not** re-raised. Re-raising
+    would route the dispatcher to its exception path, which sends an
+    ``{"type": "error"}`` frame to the client — and that frame
+    short-circuits the re-render. The template would never see the
+    ``error`` field. See #1276. ``BaseException`` subclasses
+    (``KeyboardInterrupt``, ``SystemExit``, ``GeneratorExit``) still
+    propagate by Python convention.
 
     Templates access this via context injection — each action's name becomes a
     context variable: ``{{ create_todo.pending }}``, ``{{ create_todo.result }}``,
@@ -367,16 +379,28 @@ def action(
                 }
                 return result
             except Exception as exc:
-                # Record the error in the action state, then re-raise. The
-                # caller (event-handler dispatch path) handles the actual
-                # exception logging + envelope; we just record the human-
-                # readable message for the template.
+                # Record the error in the action state and let the dispatcher
+                # re-render normally so the template can show
+                # ``{{ <name>.error }}``. Closes #1276 — the previous
+                # behavior was ``raise`` here, which routed the dispatcher
+                # to its exception-frame path and bypassed re-render.
+                #
+                # The exception is still logged so diagnostics aren't lost.
+                # ``BaseException`` subclasses (KeyboardInterrupt, SystemExit,
+                # GeneratorExit) propagate via the bare ``except Exception``
+                # — by Python convention those should never be caught.
+                logger.exception(
+                    "@action %s raised %s; recorded in _action_state[%r]",
+                    action_name,
+                    type(exc).__name__,
+                    action_name,
+                )
                 self._action_state[action_name] = {
                     "pending": False,
                     "error": str(exc) or exc.__class__.__name__,
                     "result": None,
                 }
-                raise
+                return None
 
         # Apply @event_handler to our wrapper, then tag with the "action"
         # metadata key. event_handler stores its own metadata under

@@ -46,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Subclasses that overrode `table_X_event` class attrs are unaffected
   — only the bare-default path was broken.
 
+- **`@action` no longer re-raises after recording exception state.**
+  Closes #1276. The decorator's docstring promised templates could
+  read `{{ <name>.error }}` after an exception, but the implementation
+  re-raised — the dispatcher's exception-frame path then bypassed the
+  re-render and the template never saw the recorded `error` field.
+  Fix: catch `Exception` (not `BaseException`), record state, log at
+  ERROR level via `logger.exception`, return None. `BaseException`
+  subclasses (`KeyboardInterrupt`, `SystemExit`, `GeneratorExit`)
+  still propagate by Python convention. 8 new regression cases in
+  `TestActionExceptionDoesNotPropagate` + `TestActionSuccessRecordsState`
+  + `TestActionLazyInitializesActionState`
+  (`python/djust/tests/test_action_decorator_contract.py`); 6 existing
+  tests in `test_action_decorator.py` updated to the new contract.
+  Docstring at `decorators.py:262-272` rewritten to match. **Behavior
+  change**: code that wraps `@action` calls in `try/except` to handle
+  the re-raise now sees a clean return. Mirror the old behavior by
+  re-raising explicitly inside the handler.
+
 ### Documentation
 
 - **Lifecycle Coverage Audit + Decorator/Tag Contract Audit
