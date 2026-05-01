@@ -129,6 +129,8 @@ class EventHandlerDecorationTest(TestCase):
         "on_table_filter",
         "on_table_select",
         "on_table_page",
+        "on_table_prev",  # added in #1291 — paired with prev_event default
+        "on_table_next",  # added in #1291 — paired with next_event default
         "on_table_cell_edit",
         "on_table_reorder",
         "on_table_visibility",
@@ -166,7 +168,7 @@ class EventHandlerDecorationTest(TestCase):
         )
 
     def test_handler_count_matches_expected(self):
-        """Sanity: 21 documented handlers; if a future PR adds more, this
+        """Sanity: 23 documented handlers; if a future PR adds more, this
         flags that EXPECTED_HANDLERS needs updating."""
         actual = [
             name
