@@ -5,17 +5,26 @@
 // application (start → active → end) so template authors can drive
 // CSS transitions without writing a dj-hook.
 //
-// Usage:
+// Usage — three-token form (preferred for explicit phase control):
 //   <div dj-transition="opacity-0 transition-opacity-300 opacity-100">
 //     Fades in from 0 to 100 opacity over 300 ms.
 //   </div>
 //
-// The attribute value is three space-separated tokens — start, active,
-// end — each a single class name. Commas, parens, or other separators
-// are NOT supported: `classList.add` would throw InvalidCharacterError
-// on the resulting tokens. (A future enhancement could accept
-// parenthesised multi-class groups; one-class-per-phase is the common
-// case and keeps the parsing trivial.)
+// Usage — single-token short form (matches dj-remove's short form):
+//   <div dj-transition="fade-in">
+//     Applies the "fade-in" class on the next frame and waits for
+//     transitionend. Useful for simple keyframe-driven transitions
+//     where one class drives the animation.
+//   </div>
+//
+// The three-token form is "start active end" — each a single class
+// name. Commas, parens, or other separators are NOT supported:
+// `classList.add` would throw InvalidCharacterError on the resulting
+// tokens. (A future enhancement could accept parenthesised multi-class
+// groups; one-class-per-phase is the common case and keeps the
+// parsing trivial.) Two-token form is rejected as ambiguous (matches
+// dj-remove). Closes #1273 for the `dj-transition-group` short-form
+// docs claim that depended on this 1-token form working.
 //
 // Re-trigger from JS: calling `el.setAttribute('dj-transition', spec)`
 // re-runs the sequence, even when `spec` is identical to the current
@@ -55,7 +64,20 @@ function _parseSpec(raw) {
         return null;
     }
     const parts = input.split(/\s+/).filter(Boolean);
-    if (parts.length < 3) return null;
+    if (parts.length === 0) return null;
+    // 1-token form: apply one class on the next frame, wait for
+    // transitionend. Mirrors dj-remove's 1-token shape so dj-transition-group
+    // short-form (e.g. `dj-transition-group="fade-in | fade-out"`) works
+    // as documented at 43-dj-transition-group.js:22-23. Closes #1273.
+    if (parts.length === 1) return { single: parts[0] };
+    // 2-token: ambiguous — could be (start, active) or (active, end).
+    // Reject up-front (matches dj-remove's behavior at 42-dj-remove.js:55).
+    if (parts.length === 2) {
+        if (globalThis.djustDebug) {
+            console.warn('[djust] dj-transition: 2-token spec is invalid, use 1 or 3 tokens:', raw);
+        }
+        return null;
+    }
     return { start: parts[0], active: parts[1], end: parts[2] };
 }
 
@@ -65,15 +87,44 @@ function _runTransition(el, spec) {
     if (prev && prev.fallback) clearTimeout(prev.fallback);
     if (prev && prev.onEnd) el.removeEventListener('transitionend', prev.onEnd);
 
-    // Phase 1 — start state.
-    el.classList.add(spec.start);
-
+    const _raf = globalThis.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
     const state = {};
     _djTransitionState.set(el, state);
 
+    // 1-token short form: apply the single class on the next frame and
+    // wait for transitionend. No phase-cycling cleanup — the class stays
+    // on the element after the transition (the author can remove it
+    // separately via VDOM patch if desired). Closes #1273.
+    if (spec.single) {
+        _raf(function () {
+            el.classList.add(spec.single);
+
+            function cleanup() {
+                if (!el.isConnected) {
+                    _djTransitionState.delete(el);
+                    return;
+                }
+                if (state.fallback) clearTimeout(state.fallback);
+                el.removeEventListener('transitionend', onEnd);
+                _djTransitionState.delete(el);
+            }
+
+            function onEnd(ev) {
+                if (ev.target !== el) return;
+                cleanup();
+            }
+            state.onEnd = onEnd;
+            el.addEventListener('transitionend', onEnd);
+            state.fallback = setTimeout(cleanup, _FALLBACK_MS);
+        });
+        return;
+    }
+
+    // Phase 1 — start state.
+    el.classList.add(spec.start);
+
     // Phase 2 + 3 — schedule on the next frame so the browser commits
     // the phase-1 layout before the transition classes land.
-    const _raf = globalThis.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
     _raf(function () {
         el.classList.remove(spec.start);
         el.classList.add(spec.active);
