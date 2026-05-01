@@ -87,3 +87,23 @@ class AsyncResult:
         "finished loading successfully".
         """
         return self.ok
+
+    def to_dict(self) -> dict:
+        """Return a JSON-serializable dict representation.
+
+        Used by the JIT serialization path so templates can access
+        ``{{ name.loading }}``, ``{{ name.ok }}``, ``{{ name.failed }}``,
+        ``{{ name.result }}``, and ``{{ name.error }}`` after the dict
+        is injected into template context. ``error`` is stringified
+        (matches the ``@action`` decorator's error-recording shape).
+
+        ``result`` is returned as-is — the surrounding ``normalize_django_value``
+        call recurses into it. Closes #1274.
+        """
+        return {
+            "loading": self.loading,
+            "ok": self.ok,
+            "failed": self.failed,
+            "result": self.result,
+            "error": str(self.error) if self.error is not None else None,
+        }

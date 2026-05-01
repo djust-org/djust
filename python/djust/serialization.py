@@ -65,6 +65,16 @@ class DjangoJSONEncoder(json.JSONEncoder):
             DjangoJSONEncoder._depth -= 1
 
     def _default_impl(self, obj):
+        # AsyncResult — emit dict so templates can read .loading/.ok/.failed/.result/.error.
+        # Closes #1274. Must come before Component check (AsyncResult is a frozen
+        # dataclass; doesn't subclass Component but Component check is duck-typed
+        # against attrs that AsyncResult doesn't have, so order doesn't strictly
+        # matter — kept early for clarity).
+        from .async_result import AsyncResult
+
+        if isinstance(obj, AsyncResult):
+            return obj.to_dict()
+
         # Handle Component and LiveComponent instances (render to HTML)
         # Import from both old and new locations for compatibility
         from .components.base import Component, LiveComponent
@@ -511,6 +521,15 @@ def normalize_django_value(value: Any, _depth: int = 0) -> Any:
     # QuerySet -> list of normalized models
     if hasattr(value, "model") and hasattr(value, "__iter__"):
         return [normalize_django_value(item, _depth) for item in value]
+
+    # AsyncResult -> serializable dict (closes #1274). Must come before Component
+    # check since AsyncResult is its own frozen dataclass. Recurse via
+    # normalize_django_value so the inner ``result`` payload (which may be a
+    # Django Model, dict, list, etc.) is normalized too.
+    from .async_result import AsyncResult
+
+    if isinstance(value, AsyncResult):
+        return normalize_django_value(value.to_dict(), _depth + 1)
 
     # Components -> rendered HTML string
     try:
