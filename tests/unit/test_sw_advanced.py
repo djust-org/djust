@@ -233,7 +233,7 @@ def _make_fake_consumer():
         async def close(self, code=None):  # type: ignore[override]
             return None
 
-        def _flush_push_events(self):
+        async def _flush_push_events(self):
             return None
 
     return _FakeConsumer()
