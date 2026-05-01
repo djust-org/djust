@@ -164,19 +164,19 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
-### Milestone: v0.9.2-6 — Audits C/D/E/F/G originals (pre-stable, MEDIUM scope)
+### Milestone: v0.9.2-6 — Audits C/D/E/F/G originals (pre-stable, MEDIUM scope) ✅ shipped
 
-**Status:** 🚧 open — drained 2026-05-01 after v0.9.2-5 shipped. Five remaining 🔴 originals from the audit (the "downstream consumer surfaced" cohort minus the Phase-1 set already closed in v0.9.2-5 and #1281's split-foundation work which was deferred to v0.9.3). Each issue is a single-PR fix.
+**Status:** ✅ shipped 2026-05-01. Five issues closed via 5 merged PRs (#1301 dj-transition, #1302 AsyncResult, #1303 form submit debounce, #1304 dj-dialog reverse-sync, #1305 SSE cookies). After this drain, v0.9.2 stable is cuttable — only #1281 remains as a documented known issue (split-foundation work targeted for v0.9.3).
 
-*Goal:* Close the user-visible bugs from audits C/D/E/F/G before tagging v0.9.2 stable. v0.9.2-5 closed the audit-A/B Phase 1 issues; this drain closes their cross-audit siblings. After this, v0.9.2 stable ships with one known 🔴 (#1281, private-state re-render — split-foundation work targeted for v0.9.3).
+*Goal:* Close the user-visible bugs from audits C/D/E/F/G before tagging v0.9.2 stable. v0.9.2-5 closed the audit-A/B Phase 1 issues; this drain closed their cross-audit siblings.
 
 #### Tasks (one PR per issue; no bundling — disjoint files)
 
-- [ ] **#1273 — `dj-transition-group` short-form silently rejected by `_parseSpec`** — Audit D § Weakness. `41-dj-transition.js:45-60` requires 3 tokens; docs at `43-dj-transition-group.js:22-23` show 1-token form. Relax parser to accept 1-token form for `dj-remove` and `dj-transition-group`-derived child specs. Smallest fix in this drain (S effort, ~1 day).
-- [ ] **#1274 — `AsyncResult` not in serializer whitelist** — Audit F § Weakness. `serialization.py:532-552` `normalize_django_value` has no `AsyncResult` branch; falls through to `str()`. Templates can't read `{{ users.loading }}`. Fix: add `to_dict` on `AsyncResult` + register in `normalize_django_value` and `DjangoJSONEncoder.default`.
-- [ ] **#1278 — Form submit races with debounced `dj-input` events — last keystroke can be lost** — Audit G § Weakness. `08-event-parsing.js:47-62` defaults text inputs to 300ms debounce; `09-event-binding.js:585-633` form-submit handler doesn't flush pending debounce timers before dispatching. Fix: on submit, flush all pending debounced inputs in this form before calling `handleEvent(submitHandler, ...)`.
-- [ ] **#1267 — `dj-dialog` client-close (ESC/backdrop) doesn't sync back to server `show_dialog`** — Audit C § Weakness. `35-dj-dialog.js:16-72` only watches `dj-dialog` attr changes (server→client); native `<dialog>` `close` event (ESC/backdrop) doesn't dispatch a LiveView event. Fix: add `close`-event listener to `<dialog>` elements that dispatches a server-bound close event when configured via `dj-dialog-close-event="..."`.
-- [ ] **#1277 — SSE: Django session cookie not passed to EventSource GET — auth loop on every mount** — Audit E § Weakness. `03b-sse.js:61` opens `EventSource` without `withCredentials`; `sse.py:712-731` `DjustSSEStreamView.get` runs `check_view_auth` against a request that has no cookies. Fix: pass `withCredentials: true` (same-origin) or appropriate config; verify Daphne ASGI scope parses `Cookie` header into `request.COOKIES`.
+- [x] **#1273 — `dj-transition-group` short-form silently rejected by `_parseSpec`** ✅ — Closed by PR #1301. `_parseSpec` extended to accept 1-token form (`{ single: <class> }`); `_runTransition` handles single by applying class on next frame and waiting for transitionend. Audit D § Weakness.
+- [x] **#1274 — `AsyncResult` not in serializer whitelist** ✅ — Closed by PR #1302. New `AsyncResult.to_dict()` + register in both `normalize_django_value` and `DjangoJSONEncoder._default_impl`; recursion handles non-primitive `result` payloads. Audit F § Weakness.
+- [x] **#1278 — Form submit races with debounced `dj-input` events** ✅ — Closed by PR #1303. `debounce()` now exposes `.flush()`; `_handleDjSubmit` calls `_flushPendingDebouncesInForm(form)` before dispatching. Audit G § Weakness.
+- [x] **#1267 — `dj-dialog` client-close doesn't sync back to server** ✅ — Closed by PR #1304. New `dj-dialog-close-event="..."` attribute opts into a native `close` listener that dispatches via `handleEvent`. Audit C § Weakness.
+- [x] **#1277 — SSE: Django session cookie not passed to EventSource GET** ✅ — Closed by PR #1305. EventSource opens with `{withCredentials: true}`; `sendMessage` POST sets `credentials: 'include'`. Audit E § Weakness.
 
 #### Out of scope (deferred to v0.9.3)
 
