@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SSE transport: EventSource and dispatch POST now send Django
+  session cookie.** Closes #1277. Authenticated views over SSE failed
+  `check_view_auth` on every mount because the EventSource GET (and
+  the message POST) didn't carry credentials. Result: infinite
+  mount→navigate loop on authenticated views. Fix:
+  `03b-sse.js:69` opens EventSource with `{withCredentials: true}`;
+  `03b-sse.js:367` `sendMessage` POST sets `credentials: 'include'`.
+  2 new regression cases in `tests/js/sse-transport.test.js`.
+
 - **`mount()` lifecycle: queued async work and push events are now
   drained after the mount frame.** Closes #1280 (`assign_async()` /
   `start_async()` called from `mount()` never resolved over WebSocket
