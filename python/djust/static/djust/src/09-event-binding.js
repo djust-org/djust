@@ -593,6 +593,16 @@ async function _handleDjSubmit(element, e) {
         return; // User cancelled
     }
 
+    // Closes #1278 — flush pending debounced dj-input handlers in this form
+    // BEFORE dispatching submit. Without this, a user who types a field then
+    // immediately clicks submit (within the 300 ms debounce window) hits a
+    // race: submit fires while per-field dj-input events are still pending,
+    // so the server-side state populated by those handlers is empty when the
+    // submit handler reads it. FormData on the form element captures the
+    // typed values, but views that depend on dj-input updating server state
+    // per-keystroke (e.g., WizardMixin's wizard_step_data) see stale data.
+    _flushPendingDebouncesInForm(element);
+
     // Read attribute at fire time so morphElement attribute updates take effect
     const submitHandler = element.getAttribute('dj-submit');
 
@@ -1298,17 +1308,68 @@ function _applyRateLimitAttrs(element, handler) {
     return handler;
 }
 
-// Helper: Debounce function
+/**
+ * Flush all pending debounced dj-input handlers on inputs inside a form.
+ *
+ * Iterates the form's [dj-input] descendants; for each, looks up the
+ * cached rate-limit state in `_inputRateLimitState` and calls
+ * `wrapped.flush()` if the wrapped handler exposes one (only the
+ * `debounce` rate-limit type does; throttle / passthrough / blur don't
+ * need flushing here).
+ *
+ * Closes #1278 — see `_handleDjSubmit` for context.
+ *
+ * @param {HTMLFormElement} form
+ */
+function _flushPendingDebouncesInForm(form) {
+    const inputs = form.querySelectorAll('[dj-input]');
+    for (let i = 0; i < inputs.length; i++) {
+        const state = _inputRateLimitState.get(inputs[i]);
+        if (state && state.wrapped && typeof state.wrapped.flush === 'function') {
+            state.wrapped.flush();
+        }
+    }
+}
+
+// Helper: Debounce function with .flush() method.
+//
+// flush() fires the pending invocation immediately and clears the timer.
+// No-op if no invocation is pending. Used by _handleDjSubmit to ensure
+// debounced dj-input events fire before form submission, otherwise
+// per-field server-state updates (set by dj-input handlers) would race
+// the submit handler that reads them. Closes #1278.
 function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
+    let timeout = null;
+    let pendingArgs = null;
+    let pendingThis = null;
+
+    function debounced(...args) {
+        pendingArgs = args;
+        pendingThis = this;
         const later = () => {
-            clearTimeout(timeout);
-            func(...args);
+            timeout = null;
+            const a = pendingArgs;
+            const t = pendingThis;
+            pendingArgs = null;
+            pendingThis = null;
+            func.apply(t, a);
         };
         clearTimeout(timeout);
         timeout = setTimeout(later, wait);
+    }
+
+    debounced.flush = function () {
+        if (timeout === null) return;
+        clearTimeout(timeout);
+        timeout = null;
+        const a = pendingArgs;
+        const t = pendingThis;
+        pendingArgs = null;
+        pendingThis = null;
+        func.apply(t, a);
     };
+
+    return debounced;
 }
 
 // Helper: Throttle function

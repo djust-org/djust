@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dj-transition` now accepts 1-token short form, matching documented
+  grammar.** Closes #1273. The `dj-transition-group` docs at
+  `43-dj-transition-group.js:22-23` advertise short form like
+  `dj-transition-group="fade-in | fade-out"` where each half can be a
+  1-token spec — but `_parseSpec` at `41-dj-transition.js:45-60`
+  required 3 tokens, so the ENTER side was silently rejected and no
+  animation fired. Fix: extend `_parseSpec` to accept 1-token form,
+  return `{single: <class>}`; `_runTransition` handles single by
+  applying the class on next frame and waiting for `transitionend`.
+  2-token form remains rejected as ambiguous (matches `dj-remove`).
+  2 new regression cases in `TestParseSpecAcceptsShortForm` +
+  behavioral test (`tests/js/dj_transition.test.js`).
+
+- **`AsyncResult` now serializes to a dict templates can navigate.**
+  Closes #1274. `assign_async()` returns `AsyncResult` instances that
+  templates expect to read as `{{ users.loading }}`,
+  `{{ users.ok }}`, `{{ users.failed }}`, `{{ users.result }}`,
+  `{{ users.error }}`. Before this fix, neither `normalize_django_value`
+  nor `DjangoJSONEncoder.default` had an `AsyncResult` branch — the
+  value fell through to `str()`, producing
+  `"AsyncResult(loading=True, ...)"` which templates couldn't
+  navigate. Result: every `assign_async` demo rendered blank. Fix:
+  new `AsyncResult.to_dict()` method + register in both serializer
+  paths; `normalize_django_value` recurses into the dict so a
+  non-primitive `result` payload (Django Model, datetime, Decimal
+  nested in result) is normalized too. 11 regression cases in
+  `python/djust/tests/test_async_result_serializer.py`.
+
+- **Form submit now flushes pending debounced `dj-input` handlers
+  before dispatching.** Closes #1278. Text/email/password inputs
+  with `dj-input` defaulted to 300ms debounce; a user who typed and
+  immediately clicked submit raced the submit handler past the
+  pending input events. Views that depended on server-side state
+  populated by `dj-input` handlers (e.g., `WizardMixin`'s
+  `wizard_step_data`) saw stale state at submit time. Fix:
+  `debounce()` now exposes a `.flush()` method; new
+  `_flushPendingDebouncesInForm(form)` iterates the form's
+  `[dj-input]` descendants and flushes any pending wrappers;
+  `_handleDjSubmit` calls it before reading FormData / dispatching.
+  4 regression cases in `tests/js/dj_submit_debounce_flush.test.js`.
+
 - **`dj-dialog` client-close (ESC/backdrop/`dialog.close()`) now
   syncs back to server.** Closes #1267. Previously `dj-dialog` was
   one-way (server→client); the user closing a dialog client-side
