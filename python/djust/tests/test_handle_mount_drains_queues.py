@@ -14,12 +14,17 @@ with ``await self.send_json(response)`` and previously did not drain the
 The fix adds ``_flush_push_events()`` and ``_dispatch_async_work()`` calls
 after the mount frame, mirroring the pattern in the event-handler and
 deferred-activity paths.
+
+Test strategy: source-shape assertions over ``inspect.getsource(handle_mount)``.
+The structural tests assert (a) both calls appear, (b) both come after the
+final ``send_json(response)``. They fail loudly if a refactor accidentally
+removes the calls or reverses the order. A behavioral test driving the full
+``handle_mount`` would require ~700 lines of fixture setup (Rust state,
+sticky views, sessions, hooks); the source-shape assertions are sufficient
+for the regression class this PR closes.
 """
 
 import inspect
-from unittest.mock import AsyncMock
-
-import pytest
 
 from djust.websocket import LiveViewConsumer
 
@@ -72,48 +77,3 @@ class TestHandleMountSourceShape:
             "_dispatch_async_work() must come AFTER the final send_json("
             "response); otherwise async-driven patches could race the mount."
         )
-
-
-# ---------------------------------------------------------------------------
-# Behavioral assertion — the consumer's drain methods are called once.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-class TestHandleMountDrainBehavior:
-    """The drain methods must be invoked by ``handle_mount``'s tail.
-
-    Rather than driving the full ``handle_mount`` (which has ~700 lines of
-    setup including Rust state, sticky views, sessions, hooks), we
-    extract and execute the *new* tail block in isolation. That block is
-    the only thing this test cares about; the rest of ``handle_mount``'s
-    behavior is covered by other tests.
-    """
-
-    async def test_tail_drains_both_queues_in_order(self):
-        consumer = LiveViewConsumer()
-        consumer._flush_push_events = AsyncMock()
-        consumer._dispatch_async_work = AsyncMock()
-        consumer.send_json = AsyncMock()
-
-        # Reproduce the new tail of handle_mount: send mount frame, then
-        # drain push events, then dispatch async work.
-        response = {"type": "mount"}
-        await consumer.send_json(response)
-        await consumer._flush_push_events()
-        await consumer._dispatch_async_work()
-
-        consumer.send_json.assert_awaited_once_with(response)
-        consumer._flush_push_events.assert_awaited_once()
-        consumer._dispatch_async_work.assert_awaited_once()
-
-        # send_json must precede both drain calls (call ordering).
-        send_t = consumer.send_json.await_args_list[0]
-        flush_t = consumer._flush_push_events.await_args_list[0]
-        dispatch_t = consumer._dispatch_async_work.await_args_list[0]
-        # AsyncMock doesn't expose timestamps but the manual await order
-        # above is what we asserted; the structural test above pins the
-        # source order.
-        assert send_t is not None
-        assert flush_t is not None
-        assert dispatch_t is not None
