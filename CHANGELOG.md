@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dj-dialog` client-close (ESC/backdrop/`dialog.close()`) now
+  syncs back to server.** Closes #1267. Previously `dj-dialog` was
+  one-way (server→client); the user closing a dialog client-side
+  left server state believing it was still open. Re-opening from
+  the server became a no-op because re-asserting `dj-dialog="open"`
+  wasn't a value change. Fix: new `dj-dialog-close-event="..."`
+  attribute opts into a native `close` event listener that dispatches
+  the configured event name to the server. Idempotent across
+  re-syncs (WeakMap guard); reads attribute at fire time so morph
+  updates take effect. 5 new regression cases in
+  `tests/js/dj_dialog.test.js`.
+
 - **`mount()` lifecycle: queued async work and push events are now
   drained after the mount frame.** Closes #1280 (`assign_async()` /
   `start_async()` called from `mount()` never resolved over WebSocket
