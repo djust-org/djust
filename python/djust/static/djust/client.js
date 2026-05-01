@@ -5595,6 +5595,20 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     // Check if tag is in our whitelists
     const isSvgTag = SVG_TAGS.has(tagLower);
     const isAllowedHtml = ALLOWED_HTML_TAGS.has(tagLower);
+    // (#1255) Web Components: per the HTML spec, custom elements MUST contain
+    // a hyphen in their tag name. The hyphen rule is a safe, spec-grounded
+    // discriminator — `document.createElement` rejects malformed tag names
+    // outright, and the server is the source of truth for emitted markup
+    // (standard LiveView trust model). This unblocks Shoelace, Lit, Stencil,
+    // model-viewer, etc. without weakening the allow-listed core tags.
+    const isCustomElement = tagLower.includes('-');
+    // (#1255) Optional opt-in extension hook for non-hyphenated proprietary
+    // tags (rare). App code can populate `window.djustAllowedTags` with a
+    // Set of additional tag names to allow.
+    const isUserAllowed = typeof window !== 'undefined'
+        && window.djustAllowedTags
+        && typeof window.djustAllowedTags.has === 'function'
+        && window.djustAllowedTags.has(tagLower);
 
     // Determine SVG context for child element creation
     const useSvgNamespace = isSvgTag || inSvgContext;
@@ -5608,6 +5622,20 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     } else if (isAllowedHtml) {
         // HTML tag: use switch for known values only
         elem = createHtmlElement(tagLower);
+    } else if (isCustomElement || isUserAllowed) {
+        // (#1255) Web Component or user-allow-listed tag. The browser's
+        // createElement validates the tag name format — invalid tag names
+        // throw `InvalidCharacterError`, which is a hard failure rather
+        // than a silent bypass. Wrap in try/catch so a malformed tag still
+        // falls back to <span> safely.
+        try {
+            elem = document.createElement(tagLower);
+        } catch (e) {
+            if (globalThis.djustDebug) {
+                console.warn('[LiveView] createElement threw for tag %s; using span placeholder', tagLower);
+            }
+            elem = document.createElement('span');
+        }
     } else {
         // Unknown tag - use safe span placeholder
         if (globalThis.djustDebug) {

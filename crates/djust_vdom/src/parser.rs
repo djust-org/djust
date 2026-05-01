@@ -35,6 +35,13 @@ macro_rules! parser_trace {
 
 /// SVG attributes that require camelCase preservation.
 /// html5ever lowercases all attributes per HTML5 spec, but SVG is case-sensitive.
+///
+/// (#1256) Extended list — html5ever's tree construction "Adjust SVG attributes"
+/// step covers most modern attrs, but a handful of common SVG attrs (e.g.
+/// `pathLength`, `crossOrigin`, `tabIndex`, `externalResourcesRequired`) and
+/// the historical font-face attribute family (`horizAdvX`, `unitsPerEm`,
+/// `xHeight`, etc.) need explicit normalization so `setAttributeNS` on the
+/// client receives the canonical camelCase form.
 fn normalize_svg_attribute(attr_name: &str) -> &str {
     match attr_name {
         "viewbox" => "viewBox",
@@ -93,6 +100,42 @@ fn normalize_svg_attribute(attr_name: &str) -> &str {
         "contentscripttype" => "contentScriptType",
         "contentstyletype" => "contentStyleType",
         "zoomandpan" => "zoomAndPan",
+
+        // --- #1256: gap-fill ---
+        // Modern path/conditional/loading attrs.
+        "pathlength" => "pathLength",
+        "crossorigin" => "crossOrigin",
+        "referrerpolicy" => "referrerPolicy",
+        "tabindex" => "tabIndex",
+        "externalresourcesrequired" => "externalResourcesRequired",
+        // Note: requiredFeatures / requiredExtensions / systemLanguage are
+        // already adjusted by html5ever's tree construction; not listed here.
+
+        // Historical font-face attribute family (deprecated but still in spec
+        // and parsed by browsers). Listed for completeness so user templates
+        // that hand-write font-face inside SVG don't silently break.
+        // NOTE: hyphenated attrs (e.g. `panose-1`, `v-alphabetic`) survive
+        // html5ever's lowercasing intact and don't need entries here.
+        "accentheight" => "accentHeight",
+        "capheight" => "capHeight",
+        "arabicform" => "arabicForm",
+        "horizadvx" => "horizAdvX",
+        "horizoriginx" => "horizOriginX",
+        "horizoriginy" => "horizOriginY",
+        "vertadvy" => "vertAdvY",
+        "vertoriginx" => "vertOriginX",
+        "vertoriginy" => "vertOriginY",
+        "unicoderange" => "unicodeRange",
+        "unitsperem" => "unitsPerEm",
+        "underlineposition" => "underlinePosition",
+        "underlinethickness" => "underlineThickness",
+        "strikethroughposition" => "strikethroughPosition",
+        "strikethroughthickness" => "strikethroughThickness",
+        "overlineposition" => "overlinePosition",
+        "overlinethickness" => "overlineThickness",
+        "xheight" => "xHeight",
+        "glyphname" => "glyphName",
+
         _ => attr_name, // Return original if no mapping
     }
 }
@@ -394,8 +437,24 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                     key = Some(attr_value.clone());
                 }
 
-                // Don't overwrite our generated dj-id
+                // Don't overwrite our generated dj-id (#1253: defense-in-depth).
+                // The server-generated base62 ID always wins. We additionally
+                // validate the user-supplied value against `^[0-9a-zA-Z]+$`
+                // and emit a debug-level trace when malformed, so misuse is
+                // observable without spamming logs in normal operation.
                 if attr_name_lower == "dj-id" {
+                    let valid_base62 = !attr_value.is_empty()
+                        && attr_value.chars().all(|c| c.is_ascii_alphanumeric());
+                    if !valid_base62 {
+                        parser_trace!(
+                            "Ignoring malformed user-supplied dj-id={:?} on <{}> \
+                             (must match ^[0-9a-zA-Z]+$, base62). Server-generated \
+                             id={:?} will be used instead.",
+                            attr_value,
+                            tag,
+                            djust_id
+                        );
+                    }
                     continue;
                 }
 
@@ -991,6 +1050,28 @@ mod tests {
         assert_eq!(normalize_svg_attribute("class"), "class");
         assert_eq!(normalize_svg_attribute("id"), "id");
         assert_eq!(normalize_svg_attribute("fill"), "fill");
+
+        // (#1256) New mappings: modern path/conditional/loading attrs.
+        assert_eq!(normalize_svg_attribute("pathlength"), "pathLength");
+        assert_eq!(normalize_svg_attribute("crossorigin"), "crossOrigin");
+        assert_eq!(normalize_svg_attribute("referrerpolicy"), "referrerPolicy");
+        assert_eq!(normalize_svg_attribute("tabindex"), "tabIndex");
+        assert_eq!(
+            normalize_svg_attribute("externalresourcesrequired"),
+            "externalResourcesRequired"
+        );
+        // (#1256) Historical font-face attrs.
+        assert_eq!(normalize_svg_attribute("horizadvx"), "horizAdvX");
+        assert_eq!(normalize_svg_attribute("unitsperem"), "unitsPerEm");
+        assert_eq!(normalize_svg_attribute("xheight"), "xHeight");
+        assert_eq!(
+            normalize_svg_attribute("underlineposition"),
+            "underlinePosition"
+        );
+        assert_eq!(
+            normalize_svg_attribute("strikethroughthickness"),
+            "strikethroughThickness"
+        );
     }
 
     // --- parse_html_fragment tests ---
