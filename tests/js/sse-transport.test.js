@@ -106,6 +106,19 @@ describe('LiveViewSSE', () => {
             expect(url).toContain('page=2');
             expect(url).toContain('sort=name');
         });
+
+        it('opens EventSource with withCredentials: true (closes #1277)', () => {
+            // Without withCredentials the Django session cookie isn't sent
+            // and authenticated views fail their check_view_auth on every
+            // mount, redirecting to login in an infinite loop.
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView');
+
+            const opts = window.EventSource.mock.calls[0][1];
+            expect(opts).toBeDefined();
+            expect(opts.withCredentials).toBe(true);
+        });
     });
 
     describe('disconnect', () => {
@@ -311,6 +324,21 @@ describe('LiveViewSSE', () => {
             const body = JSON.parse(opts.body);
             expect(body.type).toBe('event');
             expect(body.event).toBe('inc');
+        });
+
+        it('POST includes credentials: include (closes #1277 sibling)', () => {
+            // Mirrors EventSource withCredentials: true. Without explicit
+            // credentials, the Django session cookie may not be sent on
+            // the message POST, breaking auth for dispatch.
+            const { window } = createEnv();
+            const sse = new window.djust.LiveViewSSE();
+            sse.connect('myapp.views.HomeView');
+            window.fetch.mockClear();
+
+            sse.sendMessage({ type: 'event', event: 'inc', params: {} });
+
+            const [, opts] = window.fetch.mock.calls[0];
+            expect(opts.credentials).toBe('include');
         });
 
         it('stats parity with WebSocket — increments sent and sentBytes', () => {
