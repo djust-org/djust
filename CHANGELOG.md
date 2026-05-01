@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM: mixed keyed/unkeyed children diff round-trip correctness
+  (#1260).** Surfaced by proptest during v0.9.2rc1 pre-flight. The
+  LIS optimization in `diff_keyed_children`
+  (`crates/djust_vdom/src/diff.rs`) skipped emitting `MoveChild` patches
+  for keyed children whose trivial-length-1 LIS made them appear
+  "in place" — relying on other patches' implicit position shifts to
+  land them at the correct absolute index. This works for fully-keyed
+  sibling lists (where all moves coordinate via absolute indices) but
+  breaks when unkeyed siblings are interleaved (their patches use
+  positions relative to other unkeyed nodes only). The keyed child
+  ended up stranded at an arbitrary index after all patches applied.
+  Fix detects `has_unkeyed_siblings` upfront; in the mixed case, falls
+  back to "always emit MoveChild when `old_idx != new_idx`" instead of
+  the LIS-implicit-position optimization. The fully-keyed path is
+  unchanged. Audit weakness #5/#6 (rated 🟡 with warnings only)
+  upgraded to 🟠 by this fuzz finding; this is the actual fix.
+  4 deterministic regression tests in
+  `crates/djust_vdom/tests/test_mixed_keyed_unkeyed_reorder_1260.rs`
+  + permanent proptest seed in `fuzz_test.proptest-regressions`.
+
 ## [0.9.2rc1] - 2026-05-01
 
 First release candidate for `0.9.2`. Bundles three drain buckets shipped after `0.9.1` (2026-04-30): `0.9.2-1` (SSE transport DRY refactor — 5 issues, headlined by #1237), `0.9.2-2` (pipeline-template canon batch — 3 issues), `0.9.2-3` (VDOM correctness hardening Phase 1 — 5 issues). Plus the v0.9.2-3 audit doc (`docs/vdom/AUDIT-2026-04-30.md`). 13 issues closed across 5 PRs (#1238, #1239, #1241, #1242, #1246, #1247, #1257, #1258); 1 known issue surfaced during RC pre-flight (#1260 — fuzz-test mixed-keyed/unkeyed diff round-trip; deferred to v0.9.2-4 before stable).
