@@ -58,7 +58,15 @@ class LiveViewSSE {
         urlParams.set('view', viewPath);
         const streamUrl = `${this.sseBaseUrl}?${urlParams.toString()}`;
 
-        this.eventSource = new EventSource(streamUrl);
+        // withCredentials: true ensures the Django session cookie is sent
+        // with the EventSource GET. Without it, authenticated views fail
+        // their `check_view_auth` server-side and the user is redirected
+        // to login on every mount — an infinite mount→navigate loop.
+        // Closes #1277. Same-origin cookies SHOULD be sent by default
+        // per the EventSource spec, but explicit `withCredentials: true`
+        // is the conventional opt-in that avoids any browser-version
+        // ambiguity (some older browsers treat default as "omit").
+        this.eventSource = new EventSource(streamUrl, { withCredentials: true });
 
         // Stash these so onopen can post the mount frame.
         this._pendingViewPath = viewPath;
@@ -358,6 +366,11 @@ class LiveViewSSE {
         fetch(`${this.sseBaseUrl}message/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            // Explicit credentials: 'include' to mirror the EventSource
+            // GET's withCredentials: true. Without this, the Django session
+            // cookie isn't sent on the message POST and dispatch fails
+            // auth. Closes #1277 (sibling — same root cause).
+            credentials: 'include',
             body,
         })
             .then(r => {
