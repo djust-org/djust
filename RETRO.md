@@ -240,6 +240,95 @@ issue or be explicitly closed with a reason.
 | 207 | Single-source-of-truth pattern for multi-consumer regexes (extract to shared module) | Retro v0.9.2-2 / PR #1246 | #1249 | Open | New. The retro-marker regex (`retrospective\|quality:\\s*\\d\|lessons\\s+learned\|retro_complete\|what\\s+went\\s+well`) is currently defined in two places: `scripts/audit-pipeline-bypass.py:38-39` and the Stage 14 `subagent_prompt` text. Same pattern, two consumers — could drift. Extract to a shared constant (e.g., `scripts/lib/retro_markers.py`) that both import. Same shape applies to other multi-consumer regexes (commit-keyword pattern used by comma-list-Closes lint + auto-close GitHub parser). |
 | 208 | Direct-to-main commits bypass the retro-gate audit (audit only scans merged PRs) | Retro v0.9.2-2 / commit 18e5b117 | #1250 | Open | New. The daily retro-gate audit GHA (#1234, shipped v0.9.2-1) scans merged PRs via `gh pr list --state merged`. The v0.9.2-2 milestone-open commit `18e5b117` was a direct push to main (per the pipeline-drain skill's literal instruction to "git commit + git push origin main" in Step 7). It bypassed /pipeline-next, /pipeline-run, and the audit. Two fixes: (a) extend the audit script to also scan direct-to-main commits since the last merged PR, OR (b) update the pipeline-drain skill to always go through a docs PR rather than direct-pushing the ROADMAP update. (b) is more defensible: branch-protection on main with required-PR-review covers it mechanically. |
 | 209 | `git add <file>` bundles pre-existing uncommitted modifications without warning | Retro v0.9.2-2 / pipeline-skill CANON.md attempt (commit `bf1a67f`) | #1251 | Open | New. When the pipeline-skill `CANON.md` work was committed, `git add skills/pipeline-run/SKILL.md` staged both my intended 5-line cross-link AND ~130 lines of pre-existing uncommitted canon work in the same file. Bundling was detected only post-commit via `git log -1 --stat` (the diff was 136+/2− vs my expected 5+). Mitigation options: (a) pre-commit gate that fails when staged content of any file diverges from the line-ranges named in the commit message, (b) reflex of running `git diff --cached --stat` before every `git commit` and verifying the line counts match expectation, (c) `git add -p` interactively when the file has pre-existing uncommitted modifications. (b) is lowest-friction and worth canonicalizing as a Stage 5/Stage 9/Stage 10 mandatory item. |
+| 210 | Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill | Retro v0.9.2-3 / PRs #1257 + #1258 | #1259 | Open | New. v0.9.2-3 demonstrated a high-leverage shape: audit doc PR → 5 pre-filed issues → grouped drain PR → single retro. Wall-clock 75 min audit-merge to fix-merge. Worth canonicalizing as a `pipeline-drain` skill addition for future engine/system audits. Sweet spot N=3-7 issues touching the same subsystem with <1-day effort each. |
+
+---
+
+## v0.9.2-3 — VDOM correctness hardening Phase 1 (PRs #1257, #1258)
+
+**Date**: 2026-05-01
+**Scope**: Third drain bucket toward v0.9.2 release. Audit doc (PR #1257) opened the milestone with file-by-file weakness analysis + 5 GitHub issues filed. Implementation PR (#1258) closed all 5 audit Phase-1 issues in one grouped commit: #1252 (cached_html invalidation), #1253 (dj-id validation), #1254 (DJE-050/051 stable error codes), #1255 (Web Components allowlist), #1256 (SVG attr normalization). Total wall-clock from audit-merge to fix-merge: ~75 minutes.
+
+**Tests at close**: 4863 Python (unchanged; this milestone touched VDOM Rust + JS only) + 190 Rust djust_vdom (was 167, +23 new) + 1499 JS (was 1492, +7 new).
+
+### What We Learned
+
+**1. Canon shipped one milestone ago paid back this milestone.**
+
+Two new mandatory checklist items shipped in v0.9.2-2 (PR #1247 closing #1243 + #1244) caught real issues during v0.9.2-3:
+
+- **Stage 4 VERIFY LITERAL API CONTRACTS (#1243)** — fired on PR #1258's plan stage. The audit doc cited `splice_ignore_subtrees` at `lib.rs:288`; the actual location was `:282`. The grep-before-paste discipline caught the 6-line drift before the implementer wrote any code. Without the rule, the implementer might have wasted minutes searching for a function at the wrong line (or worse, edited the wrong section).
+- **Stage 7 self-applicability check (#1248)** — was reflexively answered on both PRs. Reviewers explicitly asked "would the new rules in this PR have flagged anything in this PR's own diff?" and answered the question rather than handwaving past it.
+
+This is the first concrete cross-milestone validation: canon added in milestone N catches real issues in milestone N+1. The previous v0.9.2-2 canon (#1245 noclobber-safe retro pattern) also paid back across milestones (used in #1257's retro post and #1258's review/retro). Three pieces of canon, three cross-milestone payback events. The pattern is becoming reflexive in agent behavior, not just operator discipline.
+
+**Action taken**: Closed — validated by repeated cross-milestone use. No new tracker row needed; the validation IS the action.
+
+**2. Audit-as-pre-staged-work-graph is a high-leverage recipe worth canonicalizing.**
+
+The audit (PR #1257) didn't just produce analysis — it produced a work-graph: 14-bug history → 10 ranked weaknesses → 5 GitHub issues filed pre-PR → grouped milestone → grouped fix PR → grouped retro. From audit-merge (PR #1257) to fix-merge (PR #1258): ~75 minutes. The audit doc's value isn't the architectural insight (which any sufficiently-careful read of the code would surface); it's the conversion of insight into closeable issues with file:line citations and effort estimates.
+
+This is a recipe other engine/system audits should copy:
+1. File N specific GitHub issues BEFORE the audit-doc PR opens (so the milestone entry can link real numbers, no TBD backfill).
+2. Open the milestone-tracking ROADMAP entry IN the audit-doc PR (one PR, one merge).
+3. Drain the milestone via `/pipeline-drain --milestone X --group --all` (single grouped PR).
+4. Retro covers both PRs (audit + drain) as one coherent unit.
+
+The current pipeline-drain skill doesn't document this audit-driven shape explicitly. Worth a short addition.
+
+**Action taken**: Open — tracked in Action Tracker #210 (GitHub #1259).
+
+**3. Implementer agents now apply VERIFY LITERAL API CONTRACTS reflexively.**
+
+PR #1258's implementer subagent made 6 spec-vs-convention deviations and explicitly justified each per the new rule — `parser_trace!` over `tracing::debug!`, removed broken DJE-050 URL instead of creating `docs/internal/error-codes.md` (Stage 5 hard constraint), filtered out hyphenated SVG font-face attrs that don't actually need normalization, etc. Without the rule, the implementer might have taken the audit spec literally and produced subtly broken code (wrong macro, dead URL, dead code paths).
+
+The Stage 7 reviewer cross-checked all 6 deviations and confirmed each was the right call. Convention beat spec in 6 of 6 cases.
+
+**Action taken**: Closed — same canon (#1243) as Finding 1; this is a separate datapoint of the same canon working.
+
+### Insights
+
+- **Wall-clock per canon-PR is shrinking.** v0.9.2-1 PR #1239 (SSE refactor): ~45 min. v0.9.2-2 PR #1247 (template canon): ~15 min. v0.9.2-3 PR #1258 (5 VDOM fixes, 30 new tests, 1100 LoC delta): ~45 min. The ratio of fix-LoC to wall-clock is improving; the canon-as-tooling investment is amortizing.
+- **High test-to-LoC ratio for canon-class fixes.** PR #1258 added 30 new regression tests for 5 small fixes (~120 LoC of fix code). Test count exceeded fix-line count. Confirms the canon-PR shape: each audit weakness gets a meaningful regression test. Test-to-LoC > 1 is the right ratio when closing audit weaknesses.
+- **Date-stamped audit docs (`AUDIT-2026-04-30.md`) > evergreen architecture docs.** The audit explicitly framed itself as "Snapshot in time" rather than pretending to be an evolving spec. Stage 11 reviewer correctly noted line-drift as "within audit-doc precision norms" rather than blocking. Future audits can be filed alongside without rewriting this one.
+- **No 🔴 findings on either PR's Stage 11.** PR #1257: 0🔴 0🟡 0🟢. PR #1258: 0🔴 1🟡 (CHANGELOG iframe-wording nit, fixed in commit 5f6b7586 before merge). The combination of audit-driven scope + reproducer-tests + grep-before-paste produced very clean review passes.
+- **Three-commit shape (impl + docs + Stage-11-finding-fix) is now the routine shape on PRs with non-trivial review feedback.** Not a violation of Action #181 — the third commit is the reviewer-finding fix, which is allowed. Pattern observed in PR #1241, PR #1239, PR #1258. Cleaner than amend-and-force-push.
+
+### Review Stats
+
+| Metric | PR #1257 | PR #1258 | Total |
+|---|---|---|---|
+| Commits | 1 (single docs commit) | 3 (impl+tests / CHANGELOG / Stage-11-fix) | 4 |
+| LoC added | 243 | 1099 (incl. bundled client.js rebuild) | 1342 |
+| LoC deleted | 1 | 20 | 21 |
+| Tests added | 0 (docs only) | 30 (23 Rust + 7 JS) | 30 |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 1 (CHANGELOG iframe wording) | 1 |
+| 🟢 Findings | 0 | 0 | 0 |
+| Findings fixed in PR | 0 (none to fix) | 1 (commit 5f6b7586) | 1 |
+| CI failures | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no changes this milestone.
+
+**Pipeline templates**: no changes this milestone (canon shipped in v0.9.2-2 was applied here without modification).
+
+**PR-checklist**: no changes this milestone.
+
+**Skills**: no changes this milestone. The audit-as-leverage recipe (Finding 2) will land as a `pipeline-drain` skill addition in a follow-up.
+
+### Open Items
+
+- [ ] Audit-as-pre-staged-work-graph recipe in pipeline-drain skill — Action Tracker #210 (GitHub #1259)
+- [ ] (Carryover from v0.9.2-2) Stage 7 self-applicability check formal item — Action Tracker #206 (GitHub #1248) — still open, would have applied to PR #1257 + #1258 reviews
+- [ ] (Carryover) Single-source-of-truth regex extraction — Action Tracker #207 (GitHub #1249)
+- [ ] (Carryover) Direct-to-main bypass audit gap — Action Tracker #208 (GitHub #1250)
+- [ ] (Carryover) Pre-commit `git diff --cached --stat` reflex — Action Tracker #209 (GitHub #1251)
+
+### v0.9.2 release readiness
+
+After this milestone, four v0.9.2-N drain buckets have shipped: v0.9.2-1 (SSE refactor — 5 issues), v0.9.2-2 (pipeline-template canon — 3 issues), v0.9.2-3 (VDOM Phase-1 — 5 issues). Plus 4 open carryovers from v0.9.2-2 retro. The audit's Phase 2 (VDOM correctness hardening: shallow-clone audit, raw-pointer audit, fast-path parent-context) and Phase 3 (architectural: text-node djust_ids, unified focus state-machine) remain unscheduled — recommend filing as v0.9.2-4 or v0.9.3-1 before cutting v0.9.2 if the appetite is there, or cutting v0.9.2 now and treating Phases 2+3 as v0.9.3 work.
 
 ---
 
