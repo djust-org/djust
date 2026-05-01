@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Form submit now flushes pending debounced `dj-input` handlers
+  before dispatching.** Closes #1278. Text/email/password inputs
+  with `dj-input` defaulted to 300ms debounce; a user who typed and
+  immediately clicked submit raced the submit handler past the
+  pending input events. Views that depended on server-side state
+  populated by `dj-input` handlers (e.g., `WizardMixin`'s
+  `wizard_step_data`) saw stale state at submit time. Fix:
+  `debounce()` now exposes a `.flush()` method; new
+  `_flushPendingDebouncesInForm(form)` iterates the form's
+  `[dj-input]` descendants and flushes any pending wrappers;
+  `_handleDjSubmit` calls it before reading FormData / dispatching.
+  4 regression cases in `tests/js/dj_submit_debounce_flush.test.js`.
+
 - **`mount()` lifecycle: queued async work and push events are now
   drained after the mount frame.** Closes #1280 (`assign_async()` /
   `start_async()` called from `mount()` never resolved over WebSocket
