@@ -230,9 +230,90 @@ issue or be explicitly closed with a reason.
 | 197 | Vulture-based pre-push check for unused private methods | PR #1206 retro IDEA | #1209 | Closed | **Resolved in v0.9.1 release arc** — PR #1220 (v0.9.5 vulture-based pre-push check). `_lazy_serialize_context` was dead code with `str(model)` fallback that misled the issue reporter. A vulture-based linter would catch unused private methods at PR time. Whitelist framework-hook patterns + reflection-called methods. |
 | 198 | CodeQL query model declaring `sanitize_for_log` as sanitizer | Retro v0.9.5 / PR #1201 (carried) | #1214 | Closed | **Resolved in v0.9.1 release arc** — PR #1224 (v0.9.1-6 CodeQL canonical sanitize_for_log path). Every `dispatch.py` log call trips `py/log-injection` because CodeQL doesn't model `sanitize_for_log` as sanitizer. Ship `.github/codeql/sanitizers.qll` (or equivalent suite-override) declaring `djust.security.sanitize_for_log` as a sink-clearing function. Compounds across every future security sweep. |
 | 199 | Pre-commit `mixed-line-ending` cleanup of two `.pxd` files | Retro v0.9.5 / PR #1201 (carried) | #1215 | Closed | **Resolved in v0.9.1-6 via PR #1222** — exclude `.pxd` from `mixed-line-ending`/`trailing-whitespace`/`end-of-file-fixer` in `.pre-commit-config.yaml`. Files are binary ZIP archives misclassified as text by `identify`. |
-| 200 | Pipeline-bypass CI check (ongoing) — flag merged PRs without retro markers within 24h | Retro v0.9.1 release / Carryover from #1212 part 2 | #1234 | Open | New (deferred from PR #1229 audit-script ship). Scheduled GitHub Action that runs `scripts/audit-pipeline-bypass.py` daily/hourly + posts annotations or opens follow-up issues for bypass merges. False-positive tuning (dependabot exclusion, opt-out label, 24h grace window) needed. |
-| 201 | Isolated cargo-test target for `filter_registry::tests` | Retro v0.9.1 release / Carryover from #1180 item 4 | #1235 | Open | New. The `OnceLock`-gated short-circuit test silently no-ops when prior tests register a filter (`ANY_CUSTOM_FILTERS_REGISTERED` is process-global, never resets). Either an isolated `cargo test --test filter_registry_short_circuit` target OR a per-test reset via `#[cfg(test)]` teardown would tighten coverage. |
-| 202 | Watch-list for release-workflow-touching dep bumps | Retro v0.9.1 release / PR #1233 retro | #1236 | Open | New. Any dependabot bump that modifies `.github/workflows/release.yml` (or release-critical files) needs explicit risk-review at refile time. Mechanism: CODEOWNERS entry + auto-labeler workflow + PR-checklist paragraph. |
+| 200 | Pipeline-bypass CI check (ongoing) — flag merged PRs without retro markers within 24h | Retro v0.9.1 release / Carryover from #1212 part 2 | #1234 | Closed | **Resolved in v0.9.2-1 via PR #1241** — `.github/workflows/retro-gate-audit.yml` runs daily at 13:00 UTC, calls `scripts/audit-pipeline-bypass.py --limit 50`, surfaces flagged PRs as workflow annotations. Manual `workflow_dispatch` for ad-hoc runs. |
+| 201 | Isolated cargo-test target for `filter_registry::tests` | Retro v0.9.1 release / Carryover from #1180 item 4 | #1235 | Closed | **Resolved in v0.9.2-1 via PR #1241** — moved to `crates/djust_templates/tests/test_filter_registry_isolated.rs` (Cargo runs each integration-test file in its own process; the `OnceLock` workaround is no longer needed). |
+| 202 | Watch-list for release-workflow-touching dep bumps | Retro v0.9.1 release / PR #1233 retro | #1236 | Closed | **Resolved in v0.9.2-1 via PR #1241** — `.github/workflows/check-release-workflow-deps.yml` requires the `release-workflow-reviewed` label on PRs modifying release-critical workflow files; label was created via `gh label create`. |
+| 203 | Stage 4 plan-template item: verify literal API names/kwargs/return-shapes against actual contracts before locking the plan | Retro v0.9.2-1 / PR #1242 | #1243 | Open | New. The plan for #1240 said `transport.send_error(..., type="mount_error")`; existing convention is `error_type=` (websocket.py uses it 5× and `type=` would collide with the outer `{"type": "error", ...}` envelope). Implementer correctly followed convention but the spec snippet was wrong. Mechanical guard: Stage 4 plan-template should grow a checklist row "for every literal API call in the plan, grep for the contract before locking." |
+| 204 | Stage 7 self-review item: cross-ref new workflow files' header-comment claims against actual step semantics | Retro v0.9.2-1 / PR #1241 | #1244 | Open | New. The retro-gate-audit.yml header said "annotations not red runs" but the audit script's exit 1 + GHA `set -eo pipefail` produced red runs on every flagged PR. Stage 11 caught it; Stage 7 should have. Mechanical addition: when a PR adds a `.github/workflows/*.yml` file, Stage 7 grep the header comment for behavioral claims and verify each one. |
+
+---
+
+## v0.9.2-1 — SSE transport DRY refactor + tracker carryovers (PRs #1238, #1239, #1241, #1242)
+
+**Date**: 2026-04-30
+**Scope**: First drain bucket toward v0.9.2 release. Headlined by #1237 (3 SSE-transport bugs fixed via a transport-agnostic `ViewRuntime` + `Transport` Protocol per ADR-016). Three v0.9.1 retro carryovers (#1234 retro-gate audit GHA, #1235 cargo-test isolation, #1236 release-deps label gate) bundled in one chore PR. One immediate Stage 11 follow-up (#1240 use_actors error envelope) shipped within the same milestone window.
+**Tests at close**: 4842 Python (was 4803 at v0.9.1 close; +39 new across `test_runtime.py`, extended `test_sse.py`, new `test_sse_ws_symmetry.py`, +1 use_actors guard test). 1492 JS (unchanged from v0.9.1 close minus minor adjustments — net +6 new SSE tests). Full suite green pre-merge on every PR.
+**Wall-clock**: ~3.5 hours from milestone open (PR #1238) to last merge (PR #1242).
+
+### What We Learned
+
+**1. 🟡 plan-fidelity findings → separate small follow-up PR (preserves audit trail).**
+
+PR #1239's Stage 11 review classified the missing `use_actors` error envelope as 🟡 not 🔴 — a documented plan promise (ADR-016 §Implementation / plan §Risks #3) that the implementer skipped. We filed #1240, shipped PR #1242 with the 5-line guard + 1 test, and closed it within the same milestone. This is a healthier pattern than amend-and-force-push because: (a) the audit trail stays linear (Stage 11 review → reviewer classification → follow-up issue → follow-up PR); (b) the reviewer's signal is preserved across PRs; (c) the original PR's commit hash stays stable, so rebasing/blaming downstream consumers don't see history rewrites.
+
+**Action taken**: Closed — pattern demonstrated and validated end-to-end in the #1239 → #1240 → #1242 sequence. No skill update needed; the existing pipeline-run flow already supports this shape (the only "rule" being to file the follow-up as its own state file rather than amend the merged PR).
+
+**2. Spec snippets in plans can be wrong; verify literal API contracts before pasting.**
+
+The plan for #1240 (in the state-file `task_description`) literally said `transport.send_error(..., type="mount_error")`. Existing djust convention (`websocket.py:1835/1891/2116/2133/2217`) is `error_type=` — and `type=` would have collided with the outer envelope's `{"type": "error", ...}` shape. The implementer correctly followed convention rather than the spec snippet, and the Stage 11 reviewer flagged this as informational. But it's a class of failure mode that bites silently when the implementer trusts the spec verbatim. The Stage 4 plan-template should grow a "verify literal API contracts" checklist item.
+
+**Action taken**: Open — tracked in Action Tracker #203 (GitHub #1243).
+
+**3. Stage 11 review finds runtime-semantics issues that pre-flight reviews can't.**
+
+PR #1241's Stage 11 reviewer caught a `pipefail` interaction with the audit script's exit code that would have made the daily retro-gate cron go red on every flagged PR — directly contradicting the workflow's own header-comment intent ("annotations not red runs"). This wasn't a syntax issue, an injection issue, a permissions issue, or a missing-test issue — it was a behavioural contract mismatch between the implementation and the header docstring. Stage 7 (self-review) and Stage 8 (security check) wouldn't have caught it because both look at structural properties. Stage 11's "run the implementation through your head end-to-end" is what found it. Validates the rule that **Stage 11 must never be skipped, even on chore-class PRs**.
+
+**Action taken**: Closed — reinforces existing canon (Stage 11 non-skip rule, already in `~/.claude/skills/pipeline-run/SKILL.md`). The new tracker row #204 (Stage 7 cross-ref of workflow header claims) is the proactive guard against this specific shape; Stage 11 stays load-bearing as the safety net.
+
+**4. Workflow header-comment claims are a behavioural contract; cross-ref them in Stage 7.**
+
+The retro-gate-audit.yml's header said "annotations not red runs"; the implementation made the runs red whenever a PR was flagged. The reviewer caught it, and we shipped a follow-up commit (`1cda17f2`) with `set +o pipefail` around the audit-script call. **Pattern**: when a workflow file has a header docstring describing intent, Stage 7 should grep the docstring for behavioural claims and verify each one against the actual step semantics. Not just for workflows — same shape for any file whose docstring describes runtime behavior.
+
+**Action taken**: Open — tracked in Action Tracker #204 (GitHub #1244).
+
+**5. Daily retro-gate audit closes the docs-PR pipeline-bypass gap (meta-validation).**
+
+PR #1238 (the docs PR that opened this milestone) was opened directly via `git checkout -B` + `gh pr create`, NOT via `/pipeline-next` + `/pipeline-run`. No state file, no Stage 14 retro post until this retro's backfill. This is exactly the failure mode the new daily retro-gate audit (PR #1241, #1234) is designed to catch — and it'll catch #1238 on its first run. **The audit shipped in this milestone validates itself** by surfacing a real bypass from the same milestone.
+
+**Action taken**: Closed — the daily retro-gate audit GHA is the answer; #1241 shipped it; the meta-validation here confirms it works.
+
+### Insights
+
+- **Two-commit shape (Action #181) held cleanly across all 4 PRs.** Every PR had a clear `feat:`/`fix:`/`chore:`/`docs:` impl commit followed by a `docs:` CHANGELOG/docs commit. Total of 9 commits (1 docs + 4 PR commits + 4 stage-9 docs commits + 1 stage-11-finding-fix commit on PR #1241), zero CHANGELOG cross-contamination, zero force-pushes to merged branches.
+- **Single-implementer-one-checkout (Action #180) held across 4 sequential PRs.** No parallel implementer agents on the same checkout; PRs #1239 → #1241 → #1242 ran serially, with #1238 (docs) sequenced before #1239 to unblock the relative MD link.
+- **Cross-PR doc-link dependency caused a pre-push lint hit but resolved cleanly.** PR #1239's `docs/sse-transport.md` referenced `docs/adr/016-transport-runtime-interface.md` via relative path; that file existed only on PR #1238's branch. The pre-push `docs stale-MD-ref check` lint correctly flagged the broken reference. Sequencing #1238 first (merge), then push #1239 (with rebase) was the right answer. Worth noting: this is the kind of dependency that future cross-PR docs-link work should plan for.
+- **Wall-clock per PR was ~30-45 minutes for #1239 (the largest)** down to ~10 minutes for #1242 (the smallest). The bulk of the time was the implementer-subagent run for #1239 (~18 minutes for 1100 LOC including tests). Pipeline-next overhead is genuinely small (~2 minutes per pipeline) — most of the time is in the actual code-write stages.
+- **Convergent finding from parallel reviews**: PR #1239's Stage 7 + Stage 8 both independently flagged the same SW-buffering issue (33-sw-registration.js patching `sendMessage` unconditionally on SSE instances). Same finding from different angles → genuine signal. Validates the parallel-stage rule (Stages 6/7/8 run together).
+
+### Review Stats
+
+| Metric | PR #1238 | PR #1239 | PR #1241 | PR #1242 | Total |
+|---|---|---|---|---|---|
+| Commits | 1 | 2 (+1 amend) | 3 (impl+docs+11-fix) | 2 | 9 |
+| LoC added | 277 | 2170 | 251 | 87 | 2785 |
+| LoC deleted | 4 | 57 | 80 | 5 | 146 |
+| Tests added | 0 | 24 | 2 | 1 | 27 |
+| 🔴 Findings | n/a (backfill) | 0 | 0 | 0 | 0 |
+| 🟡 Findings | n/a | 1 | 1 | 0 | 2 |
+| 🟢 Findings | n/a | 2 | 3 | 0 | 5 |
+| Findings fixed in PR | n/a | 0 (deferred to #1242) | 1 (commit 1cda17f2) | n/a | 1 |
+| Findings deferred to follow-up | n/a | 1 (#1240) | 0 | 0 | 1 |
+| CI failures | 0 | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no changes this milestone (the v0.9.1 retro arc canonicalized 5 process rules; this milestone was about applying them).
+
+**Pipeline template**: no changes this milestone. Two-commit shape (#181), single-implementer-per-checkout (#180), 3-clean-runs gate (#182), CSP-strict defaults (#183) all already canonical from v0.9.1.
+
+**Checklist**: no changes this milestone.
+
+**Skills**: no changes this milestone. Tracker rows #203 (Stage 4 plan-template literal-API verification) and #204 (Stage 7 workflow-header-claim cross-ref) are open and will land as skill-template additions in a follow-up.
+
+### Open Items
+
+- [ ] Stage 4 plan-template addition: verify literal API contracts — Action Tracker #203 (GitHub #1243)
+- [ ] Stage 7 self-review addition: cross-ref workflow header claims against step semantics — Action Tracker #204 (GitHub #1244)
 
 ---
 
