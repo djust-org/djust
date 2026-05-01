@@ -134,4 +134,109 @@ describe('dj-dialog', () => {
         dom = createDom('');
         expect(typeof dom.window.djust.djDialog._syncDialogState).toBe('function');
     });
+
+    // -----------------------------------------------------------------
+    // #1267 — reverse sync: native close event dispatches server event
+    // -----------------------------------------------------------------
+
+    it('dispatches dj-dialog-close-event on native close (closes #1267)', async () => {
+        dom = createDom(
+            '<dialog id="d" dj-dialog="open" dj-dialog-close-event="close_settings">hi</dialog>'
+        );
+        const el = dom.window.document.getElementById('d');
+        // Spy on handleEvent (the global function 11-event-handler.js exports).
+        const calls = [];
+        dom.window.eval(`
+            window._origHandleEvent = window.handleEvent;
+            window.handleEvent = function(name, params) {
+                window._handleEventCalls = window._handleEventCalls || [];
+                window._handleEventCalls.push({ name: name, params: params });
+                return Promise.resolve();
+            };
+        `);
+
+        // Fire native close event (simulates ESC / backdrop click /
+        // dialog.close() from JS).
+        el.dispatchEvent(new dom.window.Event('close', { bubbles: false }));
+        await waitForMutation(dom);
+
+        const handleCalls = dom.window._handleEventCalls || [];
+        expect(handleCalls.length).toBe(1);
+        expect(handleCalls[0].name).toBe('close_settings');
+        expect(handleCalls[0].params._targetElement).toBe(el);
+    });
+
+    it('does NOT dispatch when dj-dialog-close-event is absent', async () => {
+        dom = createDom('<dialog id="d" dj-dialog="open">hi</dialog>');
+        const el = dom.window.document.getElementById('d');
+        dom.window.eval(`
+            window.handleEvent = function(name, params) {
+                window._handleEventCalls = window._handleEventCalls || [];
+                window._handleEventCalls.push({ name: name });
+                return Promise.resolve();
+            };
+        `);
+
+        el.dispatchEvent(new dom.window.Event('close', { bubbles: false }));
+        await waitForMutation(dom);
+
+        const handleCalls = dom.window._handleEventCalls || [];
+        expect(handleCalls.length).toBe(0);
+    });
+
+    it('listener is installed only once even after multiple syncs', async () => {
+        dom = createDom(
+            '<dialog id="d" dj-dialog="close" dj-dialog-close-event="closed">hi</dialog>'
+        );
+        const el = dom.window.document.getElementById('d');
+        dom.window.eval(`
+            window.handleEvent = function(name, params) {
+                window._handleEventCalls = window._handleEventCalls || [];
+                window._handleEventCalls.push({ name: name });
+                return Promise.resolve();
+            };
+        `);
+
+        // Trigger multiple sync passes — re-syncing must not stack listeners.
+        dom.window.djust.djDialog._syncDialogState(el);
+        dom.window.djust.djDialog._syncDialogState(el);
+        dom.window.djust.djDialog._syncDialogState(el);
+
+        // Single close event — handler must fire exactly ONCE.
+        el.dispatchEvent(new dom.window.Event('close', { bubbles: false }));
+        await waitForMutation(dom);
+
+        const handleCalls = dom.window._handleEventCalls || [];
+        expect(handleCalls.length).toBe(1);
+    });
+
+    it('reads dj-dialog-close-event at fire time (morph after mount)', async () => {
+        dom = createDom(
+            '<dialog id="d" dj-dialog="open" dj-dialog-close-event="initial_close">hi</dialog>'
+        );
+        const el = dom.window.document.getElementById('d');
+        dom.window.eval(`
+            window.handleEvent = function(name, params) {
+                window._handleEventCalls = window._handleEventCalls || [];
+                window._handleEventCalls.push({ name: name });
+                return Promise.resolve();
+            };
+        `);
+
+        // Server morph swaps the close-event name post-mount.
+        el.setAttribute('dj-dialog-close-event', 'updated_close');
+        await waitForMutation(dom);
+
+        el.dispatchEvent(new dom.window.Event('close', { bubbles: false }));
+        await waitForMutation(dom);
+
+        const handleCalls = dom.window._handleEventCalls || [];
+        expect(handleCalls.length).toBe(1);
+        expect(handleCalls[0].name).toBe('updated_close');
+    });
+
+    it('exposes _installCloseListenerOnce on window.djust.djDialog', () => {
+        dom = createDom('');
+        expect(typeof dom.window.djust.djDialog._installCloseListenerOnce).toBe('function');
+    });
 });
