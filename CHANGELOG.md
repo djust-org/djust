@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2rc1] - 2026-05-01
+
+First release candidate for `0.9.2`. Bundles three drain buckets shipped after `0.9.1` (2026-04-30): `0.9.2-1` (SSE transport DRY refactor — 5 issues, headlined by #1237), `0.9.2-2` (pipeline-template canon batch — 3 issues), `0.9.2-3` (VDOM correctness hardening Phase 1 — 5 issues). Plus the v0.9.2-3 audit doc (`docs/vdom/AUDIT-2026-04-30.md`). 13 issues closed across 5 PRs (#1238, #1239, #1241, #1242, #1246, #1247, #1257, #1258); 1 known issue surfaced during RC pre-flight (#1260 — fuzz-test mixed-keyed/unkeyed diff round-trip; deferred to v0.9.2-4 before stable).
+
 ### Fixed
 
 - **VDOM: stale `cached_html` for `dj-update="ignore"` subtrees (#1252).**
