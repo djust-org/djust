@@ -235,7 +235,101 @@ issue or be explicitly closed with a reason.
 | 202 | Watch-list for release-workflow-touching dep bumps | Retro v0.9.1 release / PR #1233 retro | #1236 | Closed | **Resolved in v0.9.2-1 via PR #1241** — `.github/workflows/check-release-workflow-deps.yml` requires the `release-workflow-reviewed` label on PRs modifying release-critical workflow files; label was created via `gh label create`. |
 | 203 | Stage 4 plan-template item: verify literal API names/kwargs/return-shapes against actual contracts before locking the plan | Retro v0.9.2-1 / PR #1242 | #1243 | Closed | **Resolved in v0.9.2-2 via PR #TBD** — added "VERIFY LITERAL API CONTRACTS" mandatory checklist item to Stage 4 in both `.pipeline-templates/feature-state.json` and `bugfix-state.json`. |
 | 204 | Stage 7 self-review item: cross-ref new workflow files' header-comment claims against actual step semantics | Retro v0.9.2-1 / PR #1241 | #1244 | Closed | **Resolved in v0.9.2-2 via PR #TBD** — added "WORKFLOW-HEADER CROSS-REF" mandatory checklist item to Stage 7 in both `.pipeline-templates/feature-state.json` and `bugfix-state.json`. Triggers when changed files include `.github/workflows/*.yml` or any file with a runtime-behavior docstring. |
-| 205 | Pipeline-run Stage 14 retro-post: use Write tool + `gh --body-file` (not bash heredoc + `--body "$(cat ...)"`) | Retro v0.9.2-1 / PRs #1239 #1241 #1242 (all 3 hit it) | #1245 | Open | New. zsh `set -o noclobber` (user .zshrc:95 — intentional safety guard) silently blocks `cat > existing-file <<EOF` heredocs; the subsequent `gh pr comment --body "$(cat file)"` then posts stale content. All 3 v0.9.2-1 implementation PR retros had to be backfilled. Fix: Stage 14 subagent_prompt instructs Write tool + `--body-file` (structural, not papering — sidesteps any shell-init quirk, not just noclobber). |
+| 205 | Pipeline-run Stage 14 retro-post: use Write tool + `gh --body-file` (not bash heredoc + `--body "$(cat ...)"`) | Retro v0.9.2-1 / PRs #1239 #1241 #1242 (all 3 hit it) | #1245 | Closed | **Resolved in v0.9.2-2 via PR #1246** — Stage 14 subagent_prompt in both `.pipeline-templates/{feature,bugfix}-state.json` instructs Write tool + `--body-file` + retro-marker regex verification. Self-validated: PR #1246's own Stage 14 retro used the new pattern. |
+| 206 | Stage 7 self-review item: "self-applicability check" for canon PRs | Retro v0.9.2-2 / PR #1247 | #1248 | Open | New. PR #1247's Stage 11 reviewer asked "would the new Stage 4/Stage 7 check have flagged anything in this PR's diff?" — answer was no (no workflow files / no docstrings), correctly. Worth elevating as a routine Stage 7 question for all canon-class PRs: would the new rule have caught the originating bug? would it false-positive on the canon PR itself? Both should be explicitly answered. |
+| 207 | Single-source-of-truth pattern for multi-consumer regexes (extract to shared module) | Retro v0.9.2-2 / PR #1246 | #1249 | Open | New. The retro-marker regex (`retrospective\|quality:\\s*\\d\|lessons\\s+learned\|retro_complete\|what\\s+went\\s+well`) is currently defined in two places: `scripts/audit-pipeline-bypass.py:38-39` and the Stage 14 `subagent_prompt` text. Same pattern, two consumers — could drift. Extract to a shared constant (e.g., `scripts/lib/retro_markers.py`) that both import. Same shape applies to other multi-consumer regexes (commit-keyword pattern used by comma-list-Closes lint + auto-close GitHub parser). |
+| 208 | Direct-to-main commits bypass the retro-gate audit (audit only scans merged PRs) | Retro v0.9.2-2 / commit 18e5b117 | #1250 | Open | New. The daily retro-gate audit GHA (#1234, shipped v0.9.2-1) scans merged PRs via `gh pr list --state merged`. The v0.9.2-2 milestone-open commit `18e5b117` was a direct push to main (per the pipeline-drain skill's literal instruction to "git commit + git push origin main" in Step 7). It bypassed /pipeline-next, /pipeline-run, and the audit. Two fixes: (a) extend the audit script to also scan direct-to-main commits since the last merged PR, OR (b) update the pipeline-drain skill to always go through a docs PR rather than direct-pushing the ROADMAP update. (b) is more defensible: branch-protection on main with required-PR-review covers it mechanically. |
+| 209 | `git add <file>` bundles pre-existing uncommitted modifications without warning | Retro v0.9.2-2 / pipeline-skill CANON.md attempt (commit `bf1a67f`) | #1251 | Open | New. When the pipeline-skill `CANON.md` work was committed, `git add skills/pipeline-run/SKILL.md` staged both my intended 5-line cross-link AND ~130 lines of pre-existing uncommitted canon work in the same file. Bundling was detected only post-commit via `git log -1 --stat` (the diff was 136+/2− vs my expected 5+). Mitigation options: (a) pre-commit gate that fails when staged content of any file diverges from the line-ranges named in the commit message, (b) reflex of running `git diff --cached --stat` before every `git commit` and verifying the line counts match expectation, (c) `git add -p` interactively when the file has pre-existing uncommitted modifications. (b) is lowest-friction and worth canonicalizing as a Stage 5/Stage 9/Stage 10 mandatory item. |
+
+---
+
+## v0.9.2-2 — Pipeline-template canon batch (PRs #1246, #1247)
+
+**Date**: 2026-04-30
+**Scope**: Second drain bucket toward v0.9.2 release. Three issues closed across 2 PRs in ~30 minutes wall-clock. All 3 are pipeline-template canon additions (in the new sense documented in pipeline-skill repo's `CANON.md`):
+
+- #1245 (PR #1246) — Stage 14 retro-post pattern: Write tool + `gh --body-file` (replaces bash heredoc + `$(cat ...)` subshell that silently failed under zsh `set -o noclobber`).
+- #1243 (PR #1247) — Stage 4 VERIFY LITERAL API CONTRACTS (pattern from #1240/#1242 spec/convention drift).
+- #1244 (PR #1247) — Stage 7 WORKFLOW-HEADER CROSS-REF (pattern from #1241 `pipefail` vs header-claim mismatch).
+
+Plus a direct-to-main milestone-open commit (`18e5b117`) that bypassed /pipeline-next + /pipeline-run.
+
+**Tests at close**: 4842 Python (unchanged from v0.9.2-1; this milestone touched only `.pipeline-templates/*.json` + docs). 1492 JS (unchanged). Pipeline-template canon doesn't affect the test suite.
+
+### What We Learned
+
+**1. Self-applying canon — eat the dog food on the merge that lands it.**
+
+PR #1246 used Write tool + `gh --body-file` for its own Stage 14 retro post — the very pattern it canonicalizes. PR #1247's Stage 11 review and Stage 14 retro both used the pattern from #1246. This is a healthy invariant: if the new pattern can't be used for the canon PR's own workflow, the pattern isn't ready. A canon PR that fails to self-apply is the strongest signal of an over-engineered or misshapen rule.
+
+**Action taken**: Closed — pattern demonstrated and self-validated end-to-end across both PRs in this milestone. No follow-up needed; the invariant is now visible in two consecutive canon PRs.
+
+**2. Self-applicability as a routine canon-PR question.**
+
+PR #1247's Stage 11 reviewer explicitly asked "would the new Stage 4 / Stage 7 check have flagged anything in this PR's diff?" — answer was no (no workflow files, no docstrings; the templates are JSON not workflows). The check correctly excludes itself. Worth elevating to a Stage 7 self-review item for ALL canon-class PRs: would the new rule have caught the originating bug at the stage it adds? Would the new rule false-positive on the canon PR itself? Both should be explicitly answered before merge.
+
+**Action taken**: Open — tracked in Action Tracker #206 (GitHub #1248).
+
+**3. Single-source-of-truth pattern for multi-consumer regexes.**
+
+The retro-marker regex (`retrospective|quality:\s*\d|lessons\s+learned|retro_complete|what\s+went\s+well`) is now defined in two places: `scripts/audit-pipeline-bypass.py:38-39` and the Stage 14 `subagent_prompt` text in both pipeline templates. Same regex, two consumers — they can drift. The same shape applies to other multi-consumer regexes (e.g., commit-keyword pattern used by the comma-list-Closes lint AND the GitHub auto-close parser). Worth extracting to a shared constants module so updates land atomically.
+
+**Action taken**: Open — tracked in Action Tracker #207 (GitHub #1249).
+
+**4. Direct-to-main commits bypass the retro-gate audit.**
+
+The v0.9.2-2 milestone-open commit (`18e5b117`) was a direct push to main — bypassing /pipeline-next, /pipeline-run, and (importantly) the daily retro-gate audit GHA from #1234. The audit scans merged PRs via `gh pr list --state merged`; direct commits to main aren't surfaced. Per the pipeline-drain skill's literal Step 7 instruction ("git commit + git push origin main"), this bypass is by design — the skill expects ROADMAP updates to ride direct on main. But the new audit infrastructure makes that expectation outdated.
+
+**Action taken**: Open — tracked in Action Tracker #208 (GitHub #1250).
+
+**5. `git add <file>` silently bundles pre-existing uncommitted modifications.**
+
+While shipping the pipeline-skill CANON.md doc (commit `bf1a67f`, separate repo), `git add skills/pipeline-run/SKILL.md` staged both my intended 5-line cross-link AND ~130 lines of pre-existing uncommitted canon work that had been sitting in the working tree. The bundling was invisible until `git log -1 --stat` showed the actual diff (136+/2−) vs my expected (5+). The commit message understated the content. Mitigation: a pre-commit reflex of `git diff --cached --stat` immediately before every `git commit` to verify the line counts match expectation. Cheap, mechanical, would have caught this in 5 seconds.
+
+**Action taken**: Open — tracked in Action Tracker #209 (GitHub #1251).
+
+### Insights
+
+- **Wall-clock per canon PR**: 10 min (#1246) and 15 min (#1247). Canon PRs are the highest LoC-efficiency intervention in the pipeline — small diffs, no test-writing burden (templates aren't tested), instant downstream benefit on every future PR.
+- **Two-commit shape held cleanly across both PRs.** `7d426f9c`+`c2b3f844` for #1246, `e95750e3`+`badf77ec` for #1247. Plus #1246 had a third Stage-11-finding-fix commit (`1cda17f2`) which is the protocol-correct shape, not a violation.
+- **Stage 11 was clean on both PRs** (0 🔴, 0 🟡 on #1246 after the inline `1cda17f2` fix; 0 🔴 0 🟡 on #1247). High signal-to-noise on the first review pass.
+- **The pipeline-skill repo doc work** (`CANON.md` and the canon-venue framing) is in flux — uncommitted on a feature branch in a separate repo, with a bundling issue (Finding 5) that needs resolution. Cross-repo canon work tracking is currently undocumented; the user is the operator-of-record for both repos so coordination is informal.
+- **"Pipeline-template canon" as a recognized category** is now self-aware: the term has a definition (in pipeline-skill repo's draft CANON.md), an enforcement venue (mandatory checklist items + subagent_prompt text), and a small but growing portfolio of examples (#1245, #1243, #1244 are the v0.9.2-2 entries; #181/#180/#1177 are earlier examples).
+
+### Review Stats
+
+| Metric | PR #1246 | PR #1247 | Total |
+|---|---|---|---|
+| Commits | 3 (impl + docs + Stage-11-fix) | 2 (impl + docs) | 5 |
+| LoC added | 30 | 36 | 66 |
+| LoC deleted | 4 | 2 | 6 |
+| Tests added | 0 (template-only) | 0 (template-only) | 0 |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 1 (audit-script exit propagation) | 0 | 1 |
+| 🟢 Findings | 3 | 0 | 3 |
+| Findings fixed in PR | 1 (commit `1cda17f2`) | 0 (none to fix) | 1 |
+| CI failures | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no changes this milestone (canon went into pipeline templates, not project CLAUDE.md).
+
+**Pipeline templates**: 4 changes shipped this milestone in `.pipeline-templates/{feature,bugfix}-state.json` symmetrically:
+- Stage 14 `subagent_prompt`: Write tool + `--body-file` + retro-marker verification (PR #1246, closes #1245).
+- Stage 4 mandatory checklist: VERIFY LITERAL API CONTRACTS (PR #1247, closes #1243).
+- Stage 7 mandatory checklist: WORKFLOW-HEADER CROSS-REF (PR #1247, closes #1244).
+
+**PR-checklist**: no changes this milestone.
+
+**Skills**: no changes to `~/.claude/skills/pipeline-*` directly. However, draft documentation work in the upstream `pipeline-skill` repo (`CANON.md` + cross-links from README/CLAUDE/pipeline-run-SKILL) is in flux on branch `feat/retro-state-file-gate`, commit `bf1a67f`, with a bundling issue noted in Finding 5.
+
+### Open Items
+
+- [ ] Stage 7 self-applicability check for canon PRs — Action Tracker #206 (GitHub #1248)
+- [ ] Extract retro-marker regex to shared constants module — Action Tracker #207 (GitHub #1249)
+- [ ] Extend retro-gate audit to scan direct-to-main commits OR migrate ROADMAP updates to PR-only — Action Tracker #208 (GitHub #1250)
+- [ ] Pre-commit `git diff --cached --stat` reflex to catch silent-bundle commits — Action Tracker #209 (GitHub #1251)
+- [ ] Resolve pipeline-skill `CANON.md` bundling decision (Option A/B/C from session conversation) — separate repo, no tracker row needed
 
 ---
 
