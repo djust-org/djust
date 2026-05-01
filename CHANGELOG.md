@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dj-transition` now accepts 1-token short form, matching documented
+  grammar.** Closes #1273. The `dj-transition-group` docs at
+  `43-dj-transition-group.js:22-23` advertise short form like
+  `dj-transition-group="fade-in | fade-out"` where each half can be a
+  1-token spec — but `_parseSpec` at `41-dj-transition.js:45-60`
+  required 3 tokens, so the ENTER side was silently rejected and no
+  animation fired. Fix: extend `_parseSpec` to accept 1-token form,
+  return `{single: <class>}`; `_runTransition` handles single by
+  applying the class on next frame and waiting for `transitionend`.
+  2-token form remains rejected as ambiguous (matches `dj-remove`).
+  2 new regression cases in `TestParseSpecAcceptsShortForm` +
+  behavioral test (`tests/js/dj_transition.test.js`).
+
 - **`AsyncResult` now serializes to a dict templates can navigate.**
   Closes #1274. `assign_async()` returns `AsyncResult` instances that
   templates expect to read as `{{ users.loading }}`,
