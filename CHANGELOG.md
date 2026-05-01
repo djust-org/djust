@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM: stale `cached_html` for `dj-update="ignore"` subtrees (#1252).**
+  `splice_ignore_subtrees` (`crates/djust_vdom/src/lib.rs`) used to copy the
+  old node's `cached_html` into the new node, which meant a conditional
+  re-render that wraps an ignored subtree would keep serving the OLD
+  cached HTML on subsequent diffs. The cache is now cleared (`= None`)
+  during splice; `cache_ignore_subtree_html` recomputes lazily on the
+  next render. 4 regression tests in
+  `crates/djust_vdom/tests/test_ignore_subtree_invalidation_1252.rs`.
+
+- **VDOM: `dj-id` template-injection defense-in-depth (#1253).** The
+  Rust parser now validates user-supplied `dj-id` attribute values
+  against base62 (`^[0-9a-zA-Z]+$`) before the server-side ID generator
+  overwrites them. Malformed values (whitespace, special chars,
+  Unicode tricks) are dropped with a debug-level `parser_trace!`
+  warning. The server-generated ID always wins; this fix tightens the
+  pre-overwrite read path so any error/log surface that touches the
+  prior value sees a sanitized form. 4 regression tests in
+  `crates/djust_vdom/tests/test_dj_id_validation_1253.rs`.
+
+- **VDOM: duplicate `dj-key` and mixed-keyed-unkeyed warnings now fire
+  at `tracing::warn!` (#1254).** Both warnings in
+  `crates/djust_vdom/src/diff.rs` previously used `vdom_trace!()` (gated
+  behind `DJUST_VDOM_TRACE=1`), so developers in production had no
+  visibility into silent VDOM correctness issues. The mixed-keyed
+  warning now fires with stable error code `DJE-050`; the duplicate-key
+  warning with `DJE-051`. The previously-cited
+  `https://djust.org/errors/DJE-050` URL — which didn't exist — has
+  been removed. Structured logging (key passed via `{}` placeholder)
+  ensures the warnings are not log-injection vulnerable. 4 regression
+  tests in `crates/djust_vdom/tests/test_diff_warnings_1254.rs`.
+
+- **VDOM JS: Web Components and custom elements no longer silently
+  replaced with `<span>` (#1255).** The patcher's element-creation
+  whitelist in `python/djust/static/djust/src/12-vdom-patch.js` was
+  hardcoded to `ALLOWED_HTML_TAGS` + `SVG_TAGS`, rejecting Web Components
+  (`<my-component>`, `<sl-button>`, `<model-viewer>`, etc.) and replacing
+  them with a fallback `<span>`. The patcher now accepts any tag matching
+  the HTML spec's custom-element rule (`tag.includes('-')`) and exposes
+  a `window.djustAllowedTags` runtime-configurable hook for
+  same-origin allowlist extensions. `<script>` and `<iframe>` remain
+  blocked (neither contains a hyphen). 7 regression tests in
+  `tests/js/vdom_web_components_1255.test.js`.
+
+- **VDOM: extended SVG attribute camelCase normalization (#1256).**
+  The Rust parser's `normalize_svg_attribute()` table in
+  `crates/djust_vdom/src/parser.rs` was missing modern SVG attributes
+  (filter primitives, animation timing, gradient transforms, font-face
+  metrics). Browsers' `setAttributeNS` is case-sensitive; without
+  normalization, the unknown camelCase attrs were silently ignored,
+  producing visually-broken SVG. 11 new attrs added; 11 regression
+  tests in `crates/djust_vdom/tests/test_svg_attr_normalization_1256.rs`
+  + 10 new cases on the existing in-module test.
+
 ### Added
 
 - **Transport-agnostic `ViewRuntime` shared between WebSocket and SSE
