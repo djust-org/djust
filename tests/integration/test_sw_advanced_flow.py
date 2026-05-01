@@ -98,7 +98,7 @@ class _FakeConsumer(LiveViewConsumer):
     async def close(self, code=None):  # type: ignore[override]
         return None
 
-    def _flush_push_events(self):
+    async def _flush_push_events(self):
         return None
 
 

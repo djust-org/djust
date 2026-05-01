@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mount()` lifecycle: queued async work and push events are now
+  drained after the mount frame.** Closes #1280 (`assign_async()` /
+  `start_async()` called from `mount()` never resolved over WebSocket
+  — view stayed at initial loading-state HTML forever) and #1283
+  (`push_event()` called from `mount()` or `on_mount` hooks queued
+  events that never reached the client). Both root at the same site:
+  `LiveViewConsumer.handle_mount()` ended with `send_json(response)`
+  without draining `_async_tasks` or `_pending_push_events`. The fix
+  mirrors the established pattern in `handle_event()` /
+  `_flush_deferred_activity_events()`: send the response frame, then
+  drain push events, then dispatch async work. 3 regression cases in
+  `TestHandleMountSourceShape`
+  (`python/djust/tests/test_handle_mount_drains_queues.py`).
+
 - **`@action` no longer re-raises after recording exception state.**
   Closes #1276. The decorator's docstring promised templates could
   read `{{ <name>.error }}` after an exception, but the implementation
@@ -28,6 +42,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-raising explicitly inside the handler.
 
 ### Documentation
+
+- **Lifecycle Coverage Audit + Decorator/Tag Contract Audit
+  (`docs/audits/lifecycle-2026-05.md`, `docs/audits/decorator-contract-2026-05.md`).**
+  Two companion audit docs modeled on the v0.9.2-4 VDOM audit. Document
+  the canonical state-type × lifecycle-hook matrix and the
+  decorator/tag-name dispatch contract, surfaced from 10 downstream
+  consumer bug reports (#1267, #1273-#1281). The lifecycle audit
+  catalogues 8 ranked weaknesses including the central control-flow
+  gaps in `mount()` (#1280, #1281). The decorator/tag audit catalogues
+  8 weaknesses including the `data_table` tag emitting 23 event names
+  that don't match any DataTableMixin handler (#1275 generalized).
+  Each audit ships with a 4-phase improvement roadmap, test gaps,
+  strategic observations, and a companion canon update for
+  `CLAUDE.md` / `PR-checklist`. Pre-staged issues filed for each
+  not-yet-tracked weakness (#1283-#1291). Audit-driven Phase 1 fixes
+  blocking v0.9.2 stable will land in the v0.9.2-5 drain bucket;
+  Phase 2/3 fixes targeted for v0.9.3.
 
 - **Production Deployment guide extended with Tier 1/2/3 patterns
   (`docs/website/guides/deployment.md`).** Adds 8 new sections to the

@@ -2351,6 +2351,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         await self.send_json(response)
 
+        # Mount-time queues: drain push events queued during mount() (or
+        # on_mount hooks) so the client receives them after the mount frame
+        # establishes the view; then dispatch any start_async()/assign_async()
+        # callbacks scheduled in mount() so they run in the background and
+        # send patches once they complete. The send-then-drain ordering
+        # mirrors the established pattern in handle_event /
+        # _flush_deferred_activity_events. Closes #1280 (silent
+        # mount()-time async failure) and #1283 (mount-time push events
+        # never delivered).
+        await self._flush_push_events()
+        await self._dispatch_async_work()
+
     async def _mount_one(self, data_view: Dict[str, Any]):
         """Mount + render a single view and return a payload WITHOUT sending.
 
