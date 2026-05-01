@@ -142,8 +142,11 @@ class TestActionException:
             raise ValueError("Title is required")
 
         view = _FakeView()
-        with pytest.raises(ValueError, match="Title is required"):
-            create_todo(view, title="")
+        # Per #1276 fix: @action records and swallows; does NOT re-raise.
+        # The dispatcher proceeds to re-render with the recorded error
+        # visible to the template via _action_state[name]["error"].
+        result = create_todo(view, title="")
+        assert result is None
 
         state = view._action_state["create_todo"]
         assert state["pending"] is False
@@ -151,38 +154,53 @@ class TestActionException:
         assert state["result"] is None
 
     def test_action_falls_back_to_class_name_for_empty_message(self):
-        """Some exceptions have no message (e.g. `raise StopIteration`).
-        Fall back to the exception class name so the template never
-        sees an empty string."""
+        """Some exceptions have no message. Fall back to the exception
+        class name so the template never sees an empty string."""
 
         @action
         def boom(self, **kwargs):
-            raise StopIteration
+            raise ValueError()
 
         view = _FakeView()
-        with pytest.raises(StopIteration):
-            boom(view)
+        # Per #1276 fix: no propagation; recorded silently.
+        result = boom(view)
+        assert result is None
 
-        assert view._action_state["boom"]["error"] == "StopIteration"
+        assert view._action_state["boom"]["error"] == "ValueError"
 
-    def test_action_re_raises_after_recording(self):
-        """The exception must propagate — record-and-swallow would mask
-        legitimate handler bugs from the dispatch / logging path."""
-
-        captured = {}
+    def test_action_does_NOT_re_raise_after_recording(self):
+        """Closes #1276. The exception must NOT propagate to the
+        dispatcher — re-raising routes the dispatcher to its
+        exception-frame path and bypasses the re-render that would
+        surface ``{{ name.error }}`` to the template.
+        """
 
         @action
         def boom(self, **kwargs):
             raise RuntimeError("kaboom")
 
         view = _FakeView()
-        try:
-            boom(view)
-        except RuntimeError as e:
-            captured["msg"] = str(e)
-
-        assert captured["msg"] == "kaboom"
+        # Must NOT raise.
+        result = boom(view)
+        assert result is None
+        # State recorded so the template's next re-render shows the error.
         assert view._action_state["boom"]["error"] == "kaboom"
+        assert view._action_state["boom"]["result"] is None
+        assert view._action_state["boom"]["pending"] is False
+
+    def test_action_keyboard_interrupt_still_propagates(self):
+        """``BaseException`` subclasses (``KeyboardInterrupt``,
+        ``SystemExit``) propagate by Python convention — @action's
+        ``except Exception`` deliberately doesn't catch them.
+        """
+
+        @action
+        def boom(self, **kwargs):
+            raise KeyboardInterrupt()
+
+        view = _FakeView()
+        with pytest.raises(KeyboardInterrupt):
+            boom(view)
 
 
 # ---------------------------------------------------------------------------
@@ -218,8 +236,8 @@ class TestMultipleActions:
 
         view = _FakeView()
         good(view)
-        with pytest.raises(ValueError):
-            bad(view)
+        # Per #1276 fix: bad() records the error and returns None; no raise.
+        bad(view)
 
         # Good action stays green, bad records error.
         assert view._action_state["good"]["error"] is None
@@ -246,8 +264,8 @@ class TestReRunSemantics:
             return "second call ok"
 
         view = _FakeView()
-        with pytest.raises(ValueError):
-            maybe(view, ok=False)
+        # Per #1276 fix: failed call records and returns None; no raise.
+        maybe(view, ok=False)
         assert view._action_state["maybe"]["error"] == "first call failed"
 
         # Retry — error should clear, result should populate.
@@ -271,8 +289,8 @@ class TestReRunSemantics:
         maybe(view, ok=True)
         assert view._action_state["maybe"]["result"] == "first result"
 
-        with pytest.raises(ValueError):
-            maybe(view, ok=False)
+        # Per #1276 fix: failed call records and returns None; no raise.
+        maybe(view, ok=False)
         assert view._action_state["maybe"]["result"] is None
         assert view._action_state["maybe"]["error"] == "second call failed"
 
