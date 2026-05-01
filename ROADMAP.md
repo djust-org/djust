@@ -164,9 +164,32 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
+### Milestone: v0.9.2-2 — pipeline-template canon batch (Stage 4 + Stage 7 additions)
+
+**Status:** 🚧 open — drained 2026-04-30 from v0.9.2-1 retro tracker rows #203 + #204. Plus opportunistically picks up any further v0.9.2-N-class issues that surface.
+
+*Goal:* Land the two pipeline-template canon updates that the v0.9.2-1 retro filed (Stage 4 plan-fidelity + Stage 7 workflow-header cross-ref). Both touch the same `.pipeline-templates/{feature,bugfix}-state.json` files in disjoint regions (Stage 4 vs Stage 7 subagent prompts/checklists), so they batch cleanly as one grouped PR.
+
+#### Tasks (P2 tech-debt)
+
+- [ ] **#1243 — Stage 4 plan-template item: verify literal API contracts before locking the plan** — v0.9.2-1 retro Action Tracker #203. The plan for #1240 said `transport.send_error(..., type="mount_error")`; existing convention is `error_type=`. Implementer correctly followed convention but the spec was wrong. Add a mandatory Stage 4 checklist item: "for every literal API call in the plan, grep for the contract before locking."
+- [ ] **#1244 — Stage 7 self-review item: cross-ref new workflow files' header-comment claims against actual step semantics** — v0.9.2-1 retro Action Tracker #204. The retro-gate-audit.yml header claimed "annotations not red runs" but the audit script's exit 1 + `pipefail` produced red runs. Stage 11 caught it; Stage 7 should have. Add a Stage 7 checklist item that fires when changed files include `.github/workflows/*.yml`: list every behavioral claim in the header docstring and verify each against the actual step semantics.
+
+#### Sequencing
+
+Single grouped PR (`feat/v0.9.2-2-template-canon` or similar). Both items edit `.pipeline-templates/feature-state.json` + `.pipeline-templates/bugfix-state.json` (same files as PR #1246's #1245 fix), at disjoint stages. Order doesn't matter; bundle for one review cycle and one CI run.
+
+#### Acceptance for v0.9.2-2
+
+- Both #1243 and #1244 closed via merged PR.
+- Both templates have new mandatory checklist items at Stage 4 / Stage 7.
+- Retro: `/pipeline-retro --milestone v0.9.2-2` after merge.
+
+---
+
 ### Milestone: v0.9.2-1 — SSE transport DRY refactor + tracker carryovers
 
-**Status:** 🚧 in progress — opened 2026-04-30 immediately after the v0.9.1 release-cut.
+**Status:** ✅ complete — shipped 2026-04-30. 5 issues closed across 4 PRs (#1238 ADR + #1239 SSE refactor + #1241 carryover bundle + #1242 use_actors follow-up). Retro at RETRO.md §v0.9.2-1.
 
 *Goal:* Fix the 3 SSE-transport bugs reported in #1237 by establishing a transport-agnostic dispatch layer (`ViewRuntime` + `Transport` Protocol) that both WebSocket and SSE share. The 3 bugs are fixed as a side-effect of routing SSE through the shared path, not as 3 separate one-off patches. Decision captured in [ADR-016](docs/adr/016-transport-runtime-interface.md).
 
