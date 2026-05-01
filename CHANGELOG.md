@@ -90,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run — the previous `OnceLock` workaround that gated the in-module
   test on whether a prior test had already registered a filter is no
   longer needed. Carryover from #1180 item 4.
+- **VDOM engine audit and v0.9.2-3 milestone (`docs/vdom/AUDIT-2026-04-30.md`).**
+  Synthesizes architecture map, bug archaeology (14 historical bugs across
+  7 themes), 10 ranked current-code weaknesses (3 🔴 / 7 🟡), test gaps,
+  and a 4-phase improvement roadmap. Phase 1 (5 quick wins, #1252-#1256)
+  opens as the v0.9.2-3 drain bucket; Phase 2 (correctness hardening)
+  and Phase 3 (architectural — text-node djust_ids, unified focus state-
+  machine) are deferred to later milestones.
 - **Pipeline-template canon — Stage 4 + Stage 7 additions (#1243 +
   #1244).** Two mandatory checklist items added symmetrically to
   `.pipeline-templates/{feature,bugfix}-state.json`:
