@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- **Lifecycle Coverage Audit + Decorator/Tag Contract Audit
+  (`docs/audits/lifecycle-2026-05.md`, `docs/audits/decorator-contract-2026-05.md`).**
+  Two companion audit docs modeled on the v0.9.2-4 VDOM audit. Document
+  the canonical state-type × lifecycle-hook matrix and the
+  decorator/tag-name dispatch contract, surfaced from 10 downstream
+  consumer bug reports (#1267, #1273-#1281). The lifecycle audit
+  catalogues 8 ranked weaknesses including the central control-flow
+  gaps in `mount()` (#1280, #1281). The decorator/tag audit catalogues
+  8 weaknesses including the `data_table` tag emitting 23 event names
+  that don't match any DataTableMixin handler (#1275 generalized).
+  Each audit ships with a 4-phase improvement roadmap, test gaps,
+  strategic observations, and a companion canon update for
+  `CLAUDE.md` / `PR-checklist`. Pre-staged issues filed for each
+  not-yet-tracked weakness (#1283-#1291). Audit-driven Phase 1 fixes
+  blocking v0.9.2 stable will land in the v0.9.2-5 drain bucket;
+  Phase 2/3 fixes targeted for v0.9.3.
+
 - **Production Deployment guide extended with Tier 1/2/3 patterns
   (`docs/website/guides/deployment.md`).** Adds 8 new sections to the
   canonical deployment guide based on patterns surfaced from real-world
