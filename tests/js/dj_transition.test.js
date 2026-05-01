@@ -64,11 +64,32 @@ describe('dj-transition', () => {
         expect(spec).toEqual({ start: 'opacity-0', active: 'transition', end: 'opacity-100' });
     });
 
-    it('parseSpec returns null for specs with fewer than three tokens', () => {
+    it('parseSpec returns null for empty / null / 2-token specs', () => {
         dom = createDom('');
+        // 2-token: ambiguous (could be start+active or active+end); reject.
         expect(dom.window.djust.djTransition._parseSpec('a b')).toBeNull();
         expect(dom.window.djust.djTransition._parseSpec('')).toBeNull();
         expect(dom.window.djust.djTransition._parseSpec(null)).toBeNull();
+    });
+
+    it('parseSpec accepts 1-token short form (closes #1273)', () => {
+        // dj-transition-group's documented short form
+        // `dj-transition-group="fade-in | fade-out"` translates to
+        // dj-transition="fade-in" on each child. Before #1273, the
+        // 1-token form was silently rejected and no animation fired.
+        dom = createDom('');
+        expect(dom.window.djust.djTransition._parseSpec('fade-in')).toEqual({ single: 'fade-in' });
+        expect(dom.window.djust.djTransition._parseSpec('  fade-in  ')).toEqual({ single: 'fade-in' });
+    });
+
+    it('1-token form applies the class on next frame', async () => {
+        // Behavioral lock-in: the 1-token form must actually apply the
+        // class (not just parse). Parser-only fix would still be silent
+        // failure at runtime.
+        dom = createDom('<div id="t" dj-transition="fade-in"></div>');
+        const el = dom.window.document.getElementById('t');
+        await waitForClass(el, 'fade-in');
+        expect(el.classList.contains('fade-in')).toBe(true);
     });
 
     it('parseSpec rejects comma, paren, and bracket separators', () => {
