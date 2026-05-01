@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`AsyncResult` now serializes to a dict templates can navigate.**
+  Closes #1274. `assign_async()` returns `AsyncResult` instances that
+  templates expect to read as `{{ users.loading }}`,
+  `{{ users.ok }}`, `{{ users.failed }}`, `{{ users.result }}`,
+  `{{ users.error }}`. Before this fix, neither `normalize_django_value`
+  nor `DjangoJSONEncoder.default` had an `AsyncResult` branch — the
+  value fell through to `str()`, producing
+  `"AsyncResult(loading=True, ...)"` which templates couldn't
+  navigate. Result: every `assign_async` demo rendered blank. Fix:
+  new `AsyncResult.to_dict()` method + register in both serializer
+  paths; `normalize_django_value` recurses into the dict so a
+  non-primitive `result` payload (Django Model, datetime, Decimal
+  nested in result) is normalized too. 11 regression cases in
+  `python/djust/tests/test_async_result_serializer.py`.
+
 - **`mount()` lifecycle: queued async work and push events are now
   drained after the mount frame.** Closes #1280 (`assign_async()` /
   `start_async()` called from `mount()` never resolved over WebSocket
