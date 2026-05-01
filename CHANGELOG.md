@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Developer Experience
+
+- **Pipeline-template canon: Stage 7 self-applicability check for canon
+  PRs (#1248).** New optional checklist item in
+  `.pipeline-templates/{feature,bugfix}-state.json` Stage 7 fires when
+  a PR adds new mandatory rules. Asks: (a) does the new rule
+  false-positive on this PR's own diff? (b) would the new rule have
+  caught the originating bug at the stage it adds? Both must be
+  explicitly answered. v0.9.2-2 retro Action Tracker #206.
+- **Pipeline-template canon: Stage 5/9/10 bundling check (#1251).**
+  New mandatory checklist item runs `git diff --cached --stat`
+  immediately before `git commit` and verifies the staged line counts
+  match the planned scope. Catches the failure mode where
+  `git add <file>` silently bundles pre-existing uncommitted
+  modifications (the pattern that hit pipeline-skill commit `bf1a67f`,
+  silently bundling 130 unintended lines). v0.9.2-2 retro Action
+  Tracker #209.
+- **Audit script: extract retro-marker regex to shared constants
+  module (#1249).** Created `scripts/lib/retro_markers.py` with
+  `RETRO_MARKER_REGEX`. The audit script
+  (`scripts/audit-pipeline-bypass.py`) now imports the canonical
+  constant rather than embedding the literal. Stage 14 `subagent_prompt`
+  text in both pipeline templates references the script-canonical file
+  rather than re-defining the regex. Single source of truth across
+  consumers. v0.9.2-2 retro Action Tracker #207. 4 unit tests at
+  `scripts/lib/test_retro_markers.py`.
+- **Audit script: scan direct-to-main commits + `Audit-bypass-reason:`
+  trailer support (#1250).** The retro-gate audit GHA previously
+  scanned merged PRs only; direct commits to main bypassed it (e.g.,
+  the v0.9.2-2 milestone-open commit `18e5b117`). The audit now also
+  lists direct-to-main commits since the lookback window, filters out
+  PR-squash commits via `(#NNN)` subject suffix, and honors an
+  `Audit-bypass-reason: <text>` commit-message trailer for
+  legitimate exemptions (e.g., docs-only ROADMAP updates per the
+  pipeline-drain skill). v0.9.2-2 retro Action Tracker #208.
+
 ### Fixed
 
 - **VDOM: mixed keyed/unkeyed children diff round-trip correctness
