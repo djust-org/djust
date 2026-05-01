@@ -194,17 +194,17 @@ _PRE_MOUNT_TABLE_CONTEXT = {
     "columns": [],
     "sort_by": "",
     "sort_desc": False,
-    "sort_event": "table_sort",
+    "sort_event": "on_table_sort",
     "selectable": False,
     "selected_rows": [],
-    "select_event": "table_select",
+    "select_event": "on_table_select",
     "row_key": "id",
     "search": False,
     "search_query": "",
-    "search_event": "table_search",
+    "search_event": "on_table_search",
     "search_debounce": 300,
     "filters": {},
-    "filter_event": "table_filter",
+    "filter_event": "on_table_filter",
     "loading": False,
     "empty_title": "No data",
     "empty_description": "",
@@ -212,40 +212,40 @@ _PRE_MOUNT_TABLE_CONTEXT = {
     "paginate": False,
     "page": 1,
     "total_pages": 1,
-    "page_event": "table_page",
+    "page_event": "on_table_page",
     "striped": False,
     "compact": False,
     # Phase 2-5 keys default to falsy/empty so the template tag's
     # ``{% if %}`` guards short-circuit and no event handlers wire up.
     "editable_columns": [],
-    "edit_event": "table_cell_edit",
+    "edit_event": "on_table_cell_edit",
     "resizable": False,
     "reorderable": False,
-    "reorder_event": "table_reorder",
+    "reorder_event": "on_table_reorder",
     "frozen_left": 0,
     "frozen_right": 0,
     "column_visibility": False,
-    "visibility_event": "table_visibility",
+    "visibility_event": "on_table_visibility",
     "density": "comfortable",
     "density_toggle": False,
-    "density_event": "table_density",
+    "density_event": "on_table_density",
     "responsive_cards": False,
     "editable_rows": False,
-    "edit_row_event": "table_row_edit",
-    "save_row_event": "table_row_save",
-    "cancel_row_event": "table_row_cancel",
+    "edit_row_event": "on_table_row_edit",
+    "save_row_event": "on_table_row_save",
+    "cancel_row_event": "on_table_row_cancel",
     "editing_rows": [],
     "expandable": False,
-    "expand_event": "table_expand",
+    "expand_event": "on_table_expand",
     "expanded_rows": [],
     "bulk_actions": [],
-    "bulk_action_event": "table_bulk_action",
+    "bulk_action_event": "on_table_bulk_action",
     "exportable": False,
-    "export_event": "table_export",
+    "export_event": "on_table_export",
     "export_formats": ["csv", "json"],
     "group_by": "",
-    "group_event": "table_group",
-    "group_toggle_event": "table_group_toggle",
+    "group_event": "on_table_group",
+    "group_toggle_event": "on_table_group_toggle",
     "collapsible_groups": True,
     "collapsed_groups": [],
     "keyboard_nav": False,
@@ -263,12 +263,12 @@ _PRE_MOUNT_TABLE_CONTEXT = {
     "row_class_map": {},
     "column_groups": [],
     "row_drag": False,
-    "row_drag_event": "table_row_drag",
+    "row_drag_event": "on_table_row_drag",
     "copyable": False,
-    "copy_event": "table_copy",
+    "copy_event": "on_table_copy",
     "copy_format": "csv",
     "importable": False,
-    "import_event": "table_import",
+    "import_event": "on_table_import",
     "import_formats": ["csv", "json"],
     "import_preview": True,
     "import_preview_data": [],
@@ -277,7 +277,7 @@ _PRE_MOUNT_TABLE_CONTEXT = {
     "computed_columns": [],
     "cell_merge_key": "_merge",
     "column_expressions": {},
-    "expression_event": "table_expression",
+    "expression_event": "on_table_expression",
     "active_expressions": {},
     "conditional_formatting": [],
     "row_order": [],
@@ -337,42 +337,42 @@ class DataTableMixin:
     table_selectable = False
 
     # Event name configuration (overridable)
-    table_sort_event = "table_sort"
-    table_search_event = "table_search"
-    table_filter_event = "table_filter"
-    table_select_event = "table_select"
-    table_page_event = "table_page"
+    table_sort_event = "on_table_sort"
+    table_search_event = "on_table_search"
+    table_filter_event = "on_table_filter"
+    table_select_event = "on_table_select"
+    table_page_event = "on_table_page"
 
     # Phase 2 class-level configuration
     table_editable_columns = None
-    table_edit_event = "table_cell_edit"
+    table_edit_event = "on_table_cell_edit"
     table_resizable = False
     table_reorderable = False
-    table_reorder_event = "table_reorder"
+    table_reorder_event = "on_table_reorder"
     table_frozen_left = 0
     table_frozen_right = 0
     table_column_visibility = False
-    table_visibility_event = "table_visibility"
+    table_visibility_event = "on_table_visibility"
     table_density = "comfortable"
     table_density_toggle = False
-    table_density_event = "table_density"
+    table_density_event = "on_table_density"
     table_responsive_cards = False
     table_editable_rows = False
-    table_edit_row_event = "table_row_edit"
-    table_save_row_event = "table_row_save"
-    table_cancel_row_event = "table_row_cancel"
+    table_edit_row_event = "on_table_row_edit"
+    table_save_row_event = "on_table_row_save"
+    table_cancel_row_event = "on_table_row_cancel"
 
     # Phase 3 class-level configuration
     table_expandable = False
-    table_expand_event = "table_expand"
+    table_expand_event = "on_table_expand"
     table_bulk_actions = None
-    table_bulk_action_event = "table_bulk_action"
+    table_bulk_action_event = "on_table_bulk_action"
     table_exportable = False
-    table_export_event = "table_export"
+    table_export_event = "on_table_export"
     table_export_formats = None  # defaults to ["csv", "json"]
     table_group_by = ""
-    table_group_event = "table_group"
-    table_group_toggle_event = "table_group_toggle"
+    table_group_event = "on_table_group"
+    table_group_toggle_event = "on_table_group_toggle"
     table_collapsible_groups = True
     table_keyboard_nav = False
     table_virtual_scroll = False
@@ -389,20 +389,20 @@ class DataTableMixin:
     table_row_class_map = None  # {col_key: {value: css_class}} or callable(row) -> css_class
     table_column_groups = None  # list of {"label": "Q1", "columns": ["jan","feb","mar"]}
     table_row_drag = False
-    table_row_drag_event = "table_row_drag"
+    table_row_drag_event = "on_table_row_drag"
     table_copyable = False
-    table_copy_event = "table_copy"
+    table_copy_event = "on_table_copy"
     table_copy_format = "csv"  # "csv" or "tsv"
 
     # Phase 5 class-level configuration
     table_importable = False
-    table_import_event = "table_import"
+    table_import_event = "on_table_import"
     table_import_formats = None  # defaults to ["csv", "json"]
     table_import_preview = True  # preview before confirming
     table_computed_columns = None  # list of {"key": ..., "label": ..., "expression": ...}
     table_cell_merge_key = "_merge"  # row data key for colspan info
     table_column_expressions = None  # {col_key: expression_string} for advanced filtering
-    table_expression_event = "table_expression"
+    table_expression_event = "on_table_expression"
     table_conditional_formatting = None  # list of formatting preset dicts
 
     # Phase 6 class-level configuration (#1111: row-level navigation)
@@ -474,23 +474,25 @@ class DataTableMixin:
 
     @event_handler()
     def on_table_sort(self, value, **kwargs):
-        """Handle sort event: toggle direction or switch column."""
+        """Handle sort event: toggle direction or switch column, then refresh rows."""
         column = str(value)
         if self.table_sort_by == column:
             self.table_sort_desc = not self.table_sort_desc
         else:
             self.table_sort_by = column
             self.table_sort_desc = False
+        self.refresh_table()
 
     @event_handler()
     def on_table_search(self, value, **kwargs):
-        """Handle search event: update query, reset to page 1."""
+        """Handle search event: update query, reset to page 1, refresh rows."""
         self.table_search_query = str(value)
         self.table_page = 1
+        self.refresh_table()
 
     @event_handler()
     def on_table_filter(self, value, column=None, **kwargs):
-        """Handle filter event: set or clear per-column filter, reset to page 1."""
+        """Handle filter event: set or clear filter, reset to page 1, refresh rows."""
         if column is None:
             column = kwargs.get("data-column", kwargs.get("data_column", ""))
         column = str(column)
@@ -500,10 +502,15 @@ class DataTableMixin:
         else:
             self.table_filters.pop(column, None)
         self.table_page = 1
+        self.refresh_table()
 
     @event_handler()
     def on_table_select(self, value, **kwargs):
-        """Handle selection event: toggle row or select/deselect all."""
+        """Handle selection event: toggle row or select/deselect all.
+
+        Selection state is UI-local — does NOT call ``refresh_table()``
+        because the visible row set doesn't change.
+        """
         value = str(value)
         if value == "__all__":
             # Toggle all visible rows
@@ -521,12 +528,36 @@ class DataTableMixin:
 
     @event_handler()
     def on_table_page(self, value, **kwargs):
-        """Handle page event: navigate to page number."""
+        """Handle page event: navigate to page number, refresh rows."""
         try:
             self.table_page = int(value)
         except (ValueError, TypeError):
             # Ignore non-integer page values; keep current page.
-            pass
+            return
+        self.refresh_table()
+
+    @event_handler()
+    def on_table_prev(self, **kwargs):
+        """Handle prev-page event from {% data_table %} legacy pagination block.
+
+        Decrements ``table_page`` (clamped at 1) and refreshes rows.
+        Closes #1291 — paired with ``prev_event`` default ``"on_table_prev"``.
+        """
+        if self.table_page > 1:
+            self.table_page -= 1
+            self.refresh_table()
+
+    @event_handler()
+    def on_table_next(self, **kwargs):
+        """Handle next-page event from {% data_table %} legacy pagination block.
+
+        Increments ``table_page`` (clamped at ``table_total_pages``) and
+        refreshes rows. Closes #1291 — paired with ``next_event`` default
+        ``"on_table_next"``.
+        """
+        if self.table_page < self.table_total_pages:
+            self.table_page += 1
+            self.refresh_table()
 
     # ── Phase 2 Event Handlers ──
 

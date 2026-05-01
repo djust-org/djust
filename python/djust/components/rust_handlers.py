@@ -819,22 +819,22 @@ class DataTableHandler:
         columns = kw.get("columns") or context.get("columns", [])
         sort_by = conditional_escape(str(kw.get("sort_by", "")))
         sort_desc = kw.get("sort_desc", False)
-        sort_event = conditional_escape(kw.get("sort_event", "table_sort"))
+        sort_event = conditional_escape(kw.get("sort_event", "on_table_sort"))
 
         # Phase 1 parameters (all opt-in)
         selectable = kw.get("selectable", False)
         selected_rows = kw.get("selected_rows") or []
-        select_event = conditional_escape(kw.get("select_event", "table_select"))
+        select_event = conditional_escape(kw.get("select_event", "on_table_select"))
         row_key = str(kw.get("row_key", "id"))
         search = kw.get("search", False)
         search_query = conditional_escape(str(kw.get("search_query", "")))
-        search_event = conditional_escape(kw.get("search_event", "table_search"))
+        search_event = conditional_escape(kw.get("search_event", "on_table_search"))
         try:
             search_debounce = int(kw.get("search_debounce", 300))
         except (ValueError, TypeError):
             search_debounce = 300
         filters = kw.get("filters") or {}
-        filter_event = conditional_escape(kw.get("filter_event", "table_filter"))
+        filter_event = conditional_escape(kw.get("filter_event", "on_table_filter"))
         loading = kw.get("loading", False)
         empty_title = conditional_escape(str(kw.get("empty_title", "No data")))
         empty_description = conditional_escape(str(kw.get("empty_description", "")))
@@ -845,16 +845,16 @@ class DataTableHandler:
             total_pages = int(kw.get("total_pages", 1))
         except (ValueError, TypeError):
             page, total_pages = 1, 1
-        page_event = conditional_escape(kw.get("page_event", "table_page"))
+        page_event = conditional_escape(kw.get("page_event", "on_table_page"))
         striped = kw.get("striped", False)
         compact = kw.get("compact", False)
 
         # Phase 2 parameters (all opt-in)
         editable_columns = kw.get("editable_columns") or []
-        edit_event = conditional_escape(kw.get("edit_event", "table_cell_edit"))
+        edit_event = conditional_escape(kw.get("edit_event", "on_table_cell_edit"))
         resizable = kw.get("resizable", False)
         reorderable = kw.get("reorderable", False)
-        reorder_event = conditional_escape(kw.get("reorder_event", "table_reorder"))
+        reorder_event = conditional_escape(kw.get("reorder_event", "on_table_reorder"))
         try:
             frozen_left = int(kw.get("frozen_left", 0))
         except (ValueError, TypeError):
@@ -864,28 +864,30 @@ class DataTableHandler:
         except (ValueError, TypeError):
             frozen_right = 0
         column_visibility = kw.get("column_visibility", False)
-        visibility_event = conditional_escape(kw.get("visibility_event", "table_visibility"))
+        visibility_event = conditional_escape(kw.get("visibility_event", "on_table_visibility"))
         density = conditional_escape(str(kw.get("density", "comfortable")))
         density_toggle = kw.get("density_toggle", False)
-        density_event = conditional_escape(kw.get("density_event", "table_density"))
+        density_event = conditional_escape(kw.get("density_event", "on_table_density"))
         responsive_cards = kw.get("responsive_cards", False)
         editable_rows = kw.get("editable_rows", False)
-        edit_row_event = conditional_escape(kw.get("edit_row_event", "table_row_edit"))
-        save_row_event = conditional_escape(kw.get("save_row_event", "table_row_save"))
-        cancel_row_event = conditional_escape(kw.get("cancel_row_event", "table_row_cancel"))
+        edit_row_event = conditional_escape(kw.get("edit_row_event", "on_table_row_edit"))
+        save_row_event = conditional_escape(kw.get("save_row_event", "on_table_row_save"))
+        cancel_row_event = conditional_escape(kw.get("cancel_row_event", "on_table_row_cancel"))
         editing_rows = kw.get("editing_rows") or []
 
         # Phase 3 parameters (all opt-in)
         expandable = kw.get("expandable", False)
-        expand_event = conditional_escape(kw.get("expand_event", "table_expand"))
+        expand_event = conditional_escape(kw.get("expand_event", "on_table_expand"))
         expanded_rows = kw.get("expanded_rows") or []
         bulk_actions = kw.get("bulk_actions") or []
-        bulk_action_event = conditional_escape(kw.get("bulk_action_event", "table_bulk_action"))
+        bulk_action_event = conditional_escape(kw.get("bulk_action_event", "on_table_bulk_action"))
         exportable = kw.get("exportable", False)
-        export_event = conditional_escape(kw.get("export_event", "table_export"))
+        export_event = conditional_escape(kw.get("export_event", "on_table_export"))
         export_formats = kw.get("export_formats") or ["csv", "json"]
         group_by = str(kw.get("group_by", ""))
-        group_toggle_event = conditional_escape(kw.get("group_toggle_event", "table_group_toggle"))
+        group_toggle_event = conditional_escape(
+            kw.get("group_toggle_event", "on_table_group_toggle")
+        )
         collapsible_groups = kw.get("collapsible_groups", True)
         collapsed_groups = kw.get("collapsed_groups") or []
         keyboard_nav = kw.get("keyboard_nav", False)
@@ -910,14 +912,14 @@ class DataTableHandler:
         row_class_map = kw.get("row_class_map") or {}
         column_groups = kw.get("column_groups") or []
         row_drag = kw.get("row_drag", False)
-        row_drag_event = conditional_escape(kw.get("row_drag_event", "table_row_drag"))
+        row_drag_event = conditional_escape(kw.get("row_drag_event", "on_table_row_drag"))
         copyable = kw.get("copyable", False)
-        copy_event = conditional_escape(kw.get("copy_event", "table_copy"))
+        copy_event = conditional_escape(kw.get("copy_event", "on_table_copy"))
         copy_format = conditional_escape(str(kw.get("copy_format", "csv")))
 
         # Phase 5 parameters (all opt-in)
         importable = kw.get("importable", False)
-        import_event = conditional_escape(kw.get("import_event", "table_import"))
+        import_event = conditional_escape(kw.get("import_event", "on_table_import"))
         import_formats = kw.get("import_formats") or ["csv", "json"]
         import_preview_data = kw.get("import_preview_data") or []
         import_errors = kw.get("import_errors") or []
@@ -925,7 +927,7 @@ class DataTableHandler:
         computed_columns = kw.get("computed_columns") or []
         cell_merge_key = str(kw.get("cell_merge_key", "_merge"))
         column_expressions = kw.get("column_expressions") or {}
-        expression_event = conditional_escape(kw.get("expression_event", "table_expression"))
+        expression_event = conditional_escape(kw.get("expression_event", "on_table_expression"))
         active_expressions = kw.get("active_expressions") or {}
         conditional_formatting = kw.get("conditional_formatting") or []
 
