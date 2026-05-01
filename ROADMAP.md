@@ -164,26 +164,63 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
-### Milestone: v0.9.2-5 — Lifecycle + Decorator/Tag audit Phase 1 (pre-stable blockers)
+### Milestone: v0.9.2-6 — Audits C/D/E/F/G originals (pre-stable, MEDIUM scope)
 
-**Status:** 🚧 open — drained 2026-05-01 immediately after the v0.9.2-4 retro and the merging of audit PR #1282 (`docs/audits/lifecycle-2026-05.md` + `docs/audits/decorator-contract-2026-05.md`). Six issues drawn from the audit Phase-1 buckets; all 🔴 production-deploy-blocker class except one 🟡.
+**Status:** 🚧 open — drained 2026-05-01 after v0.9.2-5 shipped. Five remaining 🔴 originals from the audit (the "downstream consumer surfaced" cohort minus the Phase-1 set already closed in v0.9.2-5 and #1281's split-foundation work which was deferred to v0.9.3). Each issue is a single-PR fix.
+
+*Goal:* Close the user-visible bugs from audits C/D/E/F/G before tagging v0.9.2 stable. v0.9.2-5 closed the audit-A/B Phase 1 issues; this drain closes their cross-audit siblings. After this, v0.9.2 stable ships with one known 🔴 (#1281, private-state re-render — split-foundation work targeted for v0.9.3).
+
+#### Tasks (one PR per issue; no bundling — disjoint files)
+
+- [ ] **#1273 — `dj-transition-group` short-form silently rejected by `_parseSpec`** — Audit D § Weakness. `41-dj-transition.js:45-60` requires 3 tokens; docs at `43-dj-transition-group.js:22-23` show 1-token form. Relax parser to accept 1-token form for `dj-remove` and `dj-transition-group`-derived child specs. Smallest fix in this drain (S effort, ~1 day).
+- [ ] **#1274 — `AsyncResult` not in serializer whitelist** — Audit F § Weakness. `serialization.py:532-552` `normalize_django_value` has no `AsyncResult` branch; falls through to `str()`. Templates can't read `{{ users.loading }}`. Fix: add `to_dict` on `AsyncResult` + register in `normalize_django_value` and `DjangoJSONEncoder.default`.
+- [ ] **#1278 — Form submit races with debounced `dj-input` events — last keystroke can be lost** — Audit G § Weakness. `08-event-parsing.js:47-62` defaults text inputs to 300ms debounce; `09-event-binding.js:585-633` form-submit handler doesn't flush pending debounce timers before dispatching. Fix: on submit, flush all pending debounced inputs in this form before calling `handleEvent(submitHandler, ...)`.
+- [ ] **#1267 — `dj-dialog` client-close (ESC/backdrop) doesn't sync back to server `show_dialog`** — Audit C § Weakness. `35-dj-dialog.js:16-72` only watches `dj-dialog` attr changes (server→client); native `<dialog>` `close` event (ESC/backdrop) doesn't dispatch a LiveView event. Fix: add `close`-event listener to `<dialog>` elements that dispatches a server-bound close event when configured via `dj-dialog-close-event="..."`.
+- [ ] **#1277 — SSE: Django session cookie not passed to EventSource GET — auth loop on every mount** — Audit E § Weakness. `03b-sse.js:61` opens `EventSource` without `withCredentials`; `sse.py:712-731` `DjustSSEStreamView.get` runs `check_view_auth` against a request that has no cookies. Fix: pass `withCredentials: true` (same-origin) or appropriate config; verify Daphne ASGI scope parses `Cookie` header into `request.COOKIES`.
+
+#### Out of scope (deferred to v0.9.3)
+
+- **#1281 — Private state changes don't trigger Rust diff re-render** — Audit A § Weakness #2 (🔴 but split-foundation effort; multi-PR per Action #163). Targeted for v0.9.3. v0.9.2 stable will ship with this as a documented known issue in release notes.
+- **Audit A Phase 2 carryovers (#1284, #1285, #1286)** — `_action_state` reconnect, snapshot-truncation warning, change-detection unification.
+- **Audit B Phase 2/3 (#1287, #1288, #1289, #1290)** — decorator-contract spec tests + linter.
+- **v0.9.2-5 follow-ups (#1295, #1296, #1297, #1298, #1299)** — `_mount_one` collector gap, standalone `DataTable` Component, stale fixtures, WS smoke test, `@background+@action` combo docs.
+- **Cross-repo / general tech-debt (#1259, #1264, #1266)** — pipeline-skill repo work + minor anchor fix.
+
+#### Sequencing
+
+5 issues → 5 PRs. All touch disjoint file regions; no bundling. Per single-implementer-per-checkout rule (Action #180), execute sequentially. Suggested order (smallest to largest): #1273 → #1274 → #1278 → #1267 → #1277.
+
+`/pipeline-run --milestone v0.9.2-6 --all` should pick each task solo via pipeline-next (no `--group` since file overlap is zero).
+
+#### Acceptance for v0.9.2-6
+
+- All 5 issues closed via merged PRs.
+- New regression test per issue.
+- Retro: `/pipeline-retro --milestone v0.9.2-6` after merge.
+- Then: `/djust-release 0.9.2` (with #1281 documented in release notes as known issue).
+
+---
+
+### Milestone: v0.9.2-5 — Lifecycle + Decorator/Tag audit Phase 1 (pre-stable blockers) ✅ shipped
+
+**Status:** ✅ shipped 2026-05-01. Six issues closed via 4 merged PRs (#1282 audit docs, #1292 mount drains, #1293 data_table fixes, #1294 @action contract). Stage 11 reviews delivered: 0 🔴 / 5 🟡 follow-ups (filed as #1295-#1299 for v0.9.3).
 
 *Goal:* Close the audit-A and audit-B Phase 1 weaknesses before tagging v0.9.2 stable. Shipping 0.9.2 with #1280 (silent `mount()`-time async failure) or #1275/#1291/#1276/#1279 (entire data_table integration broken over WS) would re-burn the same downstream consumers who reported the bugs.
 
-#### Group 1 — Lifecycle mount drains (1 PR; #1280 🔴 solo + #1283 🟡 bundled)
+#### Group 1 — Lifecycle mount drains (PR #1292; #1280 🔴 + #1283 🟡)
 
-- [ ] **#1280 — `assign_async()` called from `mount()` never resolves over WebSocket** — `handle_mount` at `websocket.py:2352` doesn't call `_dispatch_async_work()` before the response. Audit A § Weakness #1. One-line fix.
-- [ ] **#1283 — `mount()` doesn't flush `_pending_push_events` queue** — same `websocket.py:2352` site; symmetric one-line fix. Bundle with #1280 since they touch the same line. Audit A § Weakness #3.
+- [x] **#1280 — `assign_async()` called from `mount()` never resolves over WebSocket** ✅ — `handle_mount` at `websocket.py:2352` now drains `_async_tasks` after the mount frame. Closed by PR #1292.
+- [x] **#1283 — `mount()` doesn't flush `_pending_push_events` queue** ✅ — same site; symmetric drain added. Closed by PR #1292.
 
-#### Group 2 — data_table tag-name + handler completion (1 PR; #1275 🔴 + #1291 🔴 + #1279 🔴)
+#### Group 2 — data_table tag-name + handler completion (PR #1293; #1275 🔴 + #1291 🔴 + #1279 🔴)
 
-- [ ] **#1275 — `data_table` tag emits 23 event names that don't match any handler** — DataTableMixin uses `on_table_*` (Phoenix-style); tag defaults are bare `table_*`. Dispatcher at `websocket_utils.py:173` does exact `getattr` lookup, so every default WS interaction returns "no handler found". Recommendation: rename tag-emit defaults to match handler convention (preserves the `on_*` Phoenix-style for explicit-handler-method semantics). Audit B § Weakness #1.
-- [ ] **#1291 — `data_table` pagination handlers entirely missing** — `prev_event="table_prev"` / `next_event="table_next"` in `djust_components.py:512-513` have no matching method under either prefix convention. Add `on_table_prev` / `on_table_next` to DataTableMixin. Bundle with #1275 since both touch `data_table.py` + `djust_components.py` + `table.html`. Audit B § Weakness #2.
-- [ ] **#1279 — DataTableMixin handlers don't call `refresh_table()`** — `on_table_sort`/`filter`/`page` mutate state but never trigger the queryset → search → filter → sort → paginate pipeline. Add `@_auto_refresh` local decorator. Bundle with #1275 + #1291 since same files. Audit B § Weakness #4.
+- [x] **#1275 — `data_table` tag emits 23 event names that don't match any handler** ✅ — Bulk rename across 4 files (92 lines): tag-emit defaults `table_*` → `on_table_*` matching the DataTableMixin convention. Closed by PR #1293.
+- [x] **#1291 — `data_table` pagination handlers entirely missing** ✅ — Added `on_table_prev` / `on_table_next` to DataTableMixin (clamped to `[1, table_total_pages]`). Closed by PR #1293.
+- [x] **#1279 — DataTableMixin handlers don't call `refresh_table()`** ✅ — Added `refresh_table()` to sort/search/filter/page/prev/next handlers; `on_table_select` deliberately exempt (UI state). Closed by PR #1293.
 
-#### Group 3 — `@action` re-raise contract (1 PR; #1276 🔴)
+#### Group 3 — `@action` re-raise contract (PR #1294; #1276 🔴)
 
-- [ ] **#1276 — `@action` re-raises after recording state, breaking documented contract** — `decorators.py:374-379` re-raises; `websocket.py:2695-2708` catches and emits `{"type":"error"}` frame instead of triggering re-render. Template never sees `{{ name.error }}`. Either (a) catch and don't re-raise (matches docstring), OR (b) update docstring. Recommendation: (a). Audit B § Weakness #3.
+- [x] **#1276 — `@action` re-raises after recording state, breaking documented contract** ✅ — Catches `Exception` (not `BaseException`), records state, logs via `logger.exception`, returns None. `BaseException` subclasses still propagate. Closed by PR #1294.
 
 #### Sequencing
 
