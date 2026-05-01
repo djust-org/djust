@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mount()` lifecycle: queued async work and push events are now
+  drained after the mount frame.** Closes #1280 (`assign_async()` /
+  `start_async()` called from `mount()` never resolved over WebSocket
+  — view stayed at initial loading-state HTML forever) and #1283
+  (`push_event()` called from `mount()` or `on_mount` hooks queued
+  events that never reached the client). Both root at the same site:
+  `LiveViewConsumer.handle_mount()` ended with `send_json(response)`
+  without draining `_async_tasks` or `_pending_push_events`. The fix
+  mirrors the established pattern in `handle_event()` /
+  `_flush_deferred_activity_events()`: send the response frame, then
+  drain push events, then dispatch async work. 4 regression cases in
+  `TestHandleMountSourceShape` and `TestHandleMountDrainBehavior`
+  (`python/djust/tests/test_handle_mount_drains_queues.py`).
+
 ### Documentation
 
 - **Production Deployment guide extended with Tier 1/2/3 patterns
