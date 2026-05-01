@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`data_table` integration restored over WebSocket — emit defaults
+  renamed to match `on_table_*` mixin handler convention.** Closes
+  #1275 (tag emitted 23 event names that didn't match any handler),
+  #1291 (pagination handlers entirely missing from the mixin),
+  #1279 (handlers mutate state but never refresh rows). Single root
+  cause: the WS dispatcher does exact-match `getattr(view, event_name,
+  None)` (`websocket_utils.py:173`), but the tag-emit defaults
+  previously used bare `table_*` strings while DataTableMixin uses
+  `on_*` Phoenix-style handler names — so every default WS interaction
+  returned "no handler found". Fix: rename tag-emit defaults across 4
+  files (92 lines: `templatetags/djust_components.py`,
+  `mixins/data_table.py` class-level attrs + `_PRE_MOUNT_TABLE_CONTEXT`,
+  `components/rust_handlers.py`, `templatetags/_forms.py`); add
+  `on_table_prev` / `on_table_next` handlers (clamped to
+  `[1, table_total_pages]`); call `refresh_table()` from
+  sort/search/filter/page/prev/next handlers (selection handler
+  deliberately exempt — UI state). 15 regression cases in
+  `TestDataTableEmitToHandlerCrossReference`,
+  `TestPaginationHandlersExist`, `TestRowAffectingHandlersCallRefresh`
+  (`python/djust/tests/test_data_table_handler_contracts.py`).
+  Subclasses that overrode `table_X_event` class attrs are unaffected
+  — only the bare-default path was broken.
+
 ### Documentation
 
 - **Production Deployment guide extended with Tier 1/2/3 patterns
