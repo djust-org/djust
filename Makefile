@@ -171,12 +171,12 @@ test-rust: ## Run Rust tests
 .PHONY: test-python
 test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/
 
 .PHONY: test-python-parallel
 test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -n auto
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -n auto
 
 .PHONY: test-js
 test-js: ## Run JavaScript tests
@@ -201,6 +201,10 @@ test-playwright: ## Run Playwright browser automation tests (manual, requires se
 	@.venv/bin/python tests/playwright/test_cache_decorator.py
 	@.venv/bin/python tests/playwright/test_draft_mode.py
 	@echo "$(GREEN)Playwright tests completed$(NC)"
+
+.PHONY: check-test-coverage
+check-test-coverage: ## Verify all test directories are collected by CI
+	@PYTHONPATH=. .venv/bin/python scripts/check-test-coverage.py
 
 .PHONY: lint
 lint: ## Run linters
@@ -247,7 +251,7 @@ ci-mirror: ## Mirror exact CI pytest invocations locally — catches coverage/xd
 	@.venv/bin/python -c "import xdist, pytest_cov" 2>/dev/null || uv pip install pytest-xdist pytest-cov
 	@echo ""
 	@echo "$(YELLOW)Step 1/2: full parallel Python suite (pytest-xdist)$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -v -n auto
+	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
 	@echo ""
 	@echo "$(YELLOW)Step 2/2: security-tests with coverage (--cov-fail-under=75)$(NC)"
 	@PYTHONPATH=. .venv/bin/python -m pytest \
