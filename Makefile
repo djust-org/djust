@@ -127,6 +127,10 @@ dev-build: ## Build Rust extensions in development mode
 roadmap-lint: ## Mechanical ROADMAP-vs-codebase drift check (use pipeline-roadmap-audit skill for semantic audit)
 	@.venv/bin/python scripts/roadmap-lint.py $(if $(VERBOSE),--verbose,)
 
+.PHONY: check-handler-contracts
+check-handler-contracts: ## Cross-reference tag-emit _event defaults against handler methods (closes #1290)
+	@.venv/bin/python scripts/check-handler-contracts.py
+
 .PHONY: docs-lint
 docs-lint: ## Sweep docs/**/*.md for stale .md cross-references (closes #1075)
 	@.venv/bin/python scripts/docs-lint.py $(if $(VERBOSE),--verbose,)

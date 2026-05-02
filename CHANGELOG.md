@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-then-act cache mutation. 3 regression cases in
   ``test_decorator_computed_thread_safety.py``.
 
+- **New ``make check-handler-contracts`` linter (#1290).**
+  ``scripts/check-handler-contracts.py`` cross-references template-tag
+  ``_event`` emit defaults against component/mixin handler method names,
+  catching #1275-class (stale/typo'd emit default) bugs at pre-push
+  time. 44 emit defaults (26 framework, 18 app-level) validated clean.
+  Added to pre-push hook. 7 test cases in
+  ``test_check_handler_contracts.py``.
 ## [0.9.3rc1] - 2026-05-02
 
 ### Fixed

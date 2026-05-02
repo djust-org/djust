@@ -192,3 +192,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [pre-push]
+
+      # Cross-reference tag-emit _event defaults against component/mixin
+      # handler methods. Catches #1275-class (stale/typo'd emit default)
+      # bugs before they reach CI (#1290).
+      - id: check-handler-contracts
+        name: check handler contracts
+        entry: bash -c '.venv/bin/python scripts/check-handler-contracts.py'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
