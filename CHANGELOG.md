@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`python/djust/tests/` now included in `make test-python` + `check-test-coverage` target (#1339).**
+  The Makefile's test targets used explicit pytest paths (`tests/ python/tests/`)
+  which override pyproject.toml's testpaths, silently excluding `python/djust/tests/`
+  (2,734 tests across 100+ files). Added the missing directory to test-python,
+  test-python-parallel, and the background test target. New `make check-test-coverage`
+  target prevents recurrence by verifying every test directory is collected by CI.
+  Verified by `make check-test-coverage` and the 2,734 newly-collected existing tests.
+
 - **@reactive now fails at class-definition time on classes missing ``update()`` (#1287).**
   The ``@reactive`` decorator previously guarded ``self.update()`` with
   ``hasattr(self, 'update')``, silently no-opping when the host class lacked
