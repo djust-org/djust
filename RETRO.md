@@ -236,13 +236,15 @@ issue or be explicitly closed with a reason.
 | 203 | Stage 4 plan-template item: verify literal API names/kwargs/return-shapes against actual contracts before locking the plan | Retro v0.9.2-1 / PR #1242 | #1243 | Closed | **Resolved in v0.9.2-2 via PR #TBD** — added "VERIFY LITERAL API CONTRACTS" mandatory checklist item to Stage 4 in both `.pipeline-templates/feature-state.json` and `bugfix-state.json`. |
 | 204 | Stage 7 self-review item: cross-ref new workflow files' header-comment claims against actual step semantics | Retro v0.9.2-1 / PR #1241 | #1244 | Closed | **Resolved in v0.9.2-2 via PR #TBD** — added "WORKFLOW-HEADER CROSS-REF" mandatory checklist item to Stage 7 in both `.pipeline-templates/feature-state.json` and `bugfix-state.json`. Triggers when changed files include `.github/workflows/*.yml` or any file with a runtime-behavior docstring. |
 | 205 | Pipeline-run Stage 14 retro-post: use Write tool + `gh --body-file` (not bash heredoc + `--body "$(cat ...)"`) | Retro v0.9.2-1 / PRs #1239 #1241 #1242 (all 3 hit it) | #1245 | Closed | **Resolved in v0.9.2-2 via PR #1246** — Stage 14 subagent_prompt in both `.pipeline-templates/{feature,bugfix}-state.json` instructs Write tool + `--body-file` + retro-marker regex verification. Self-validated: PR #1246's own Stage 14 retro used the new pattern. |
-| 206 | Stage 7 self-review item: "self-applicability check" for canon PRs | Retro v0.9.2-2 / PR #1247 | #1248 | Open | New. PR #1247's Stage 11 reviewer asked "would the new Stage 4/Stage 7 check have flagged anything in this PR's diff?" — answer was no (no workflow files / no docstrings), correctly. Worth elevating as a routine Stage 7 question for all canon-class PRs: would the new rule have caught the originating bug? would it false-positive on the canon PR itself? Both should be explicitly answered. |
-| 207 | Single-source-of-truth pattern for multi-consumer regexes (extract to shared module) | Retro v0.9.2-2 / PR #1246 | #1249 | Open | New. The retro-marker regex (`retrospective\|quality:\\s*\\d\|lessons\\s+learned\|retro_complete\|what\\s+went\\s+well`) is currently defined in two places: `scripts/audit-pipeline-bypass.py:38-39` and the Stage 14 `subagent_prompt` text. Same pattern, two consumers — could drift. Extract to a shared constant (e.g., `scripts/lib/retro_markers.py`) that both import. Same shape applies to other multi-consumer regexes (commit-keyword pattern used by comma-list-Closes lint + auto-close GitHub parser). |
-| 208 | Direct-to-main commits bypass the retro-gate audit (audit only scans merged PRs) | Retro v0.9.2-2 / commit 18e5b117 | #1250 | Open | New. The daily retro-gate audit GHA (#1234, shipped v0.9.2-1) scans merged PRs via `gh pr list --state merged`. The v0.9.2-2 milestone-open commit `18e5b117` was a direct push to main (per the pipeline-drain skill's literal instruction to "git commit + git push origin main" in Step 7). It bypassed /pipeline-next, /pipeline-run, and the audit. Two fixes: (a) extend the audit script to also scan direct-to-main commits since the last merged PR, OR (b) update the pipeline-drain skill to always go through a docs PR rather than direct-pushing the ROADMAP update. (b) is more defensible: branch-protection on main with required-PR-review covers it mechanically. |
-| 209 | `git add <file>` bundles pre-existing uncommitted modifications without warning | Retro v0.9.2-2 / pipeline-skill CANON.md attempt (commit `bf1a67f`) | #1251 | Open | New. When the pipeline-skill `CANON.md` work was committed, `git add skills/pipeline-run/SKILL.md` staged both my intended 5-line cross-link AND ~130 lines of pre-existing uncommitted canon work in the same file. Bundling was detected only post-commit via `git log -1 --stat` (the diff was 136+/2− vs my expected 5+). Mitigation options: (a) pre-commit gate that fails when staged content of any file diverges from the line-ranges named in the commit message, (b) reflex of running `git diff --cached --stat` before every `git commit` and verifying the line counts match expectation, (c) `git add -p` interactively when the file has pre-existing uncommitted modifications. (b) is lowest-friction and worth canonicalizing as a Stage 5/Stage 9/Stage 10 mandatory item. |
-| 210 | Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill | Retro v0.9.2-3 / PRs #1257 + #1258 | #1259 | Open | New. v0.9.2-3 demonstrated a high-leverage shape: audit doc PR → 5 pre-filed issues → grouped drain PR → single retro. Wall-clock 75 min audit-merge to fix-merge. Worth canonicalizing as a `pipeline-drain` skill addition for future engine/system audits. Sweet spot N=3-7 issues touching the same subsystem with <1-day effort each. |
+| 206 | Stage 7 self-review item: "self-applicability check" for canon PRs | Retro v0.9.2-2 / PR #1247 | #1248 | Closed | **Resolved in v0.9.2-4 via PR #1263** — Stage 7 self-applicability check added to `.pipeline-templates/{feature,bugfix}-state.json` as an optional checklist item that fires when the PR adds new mandatory rules. Asks (a) would the new rule false-positive on this PR's own diff? (b) would the new rule have caught the originating bug at the stage it adds? Both must be explicit before merge. PR #1263's own Stage 7 self-applied the new rule. |
+| 207 | Single-source-of-truth pattern for multi-consumer regexes (extract to shared module) | Retro v0.9.2-2 / PR #1246 | #1249 | Closed | **Resolved in v0.9.2-4 via PR #1263** — Created `scripts/lib/retro_markers.py` shared module with the canonical `RETRO_MARKER_REGEX`. `scripts/audit-pipeline-bypass.py` and the Stage 14 subagent_prompt now import the same constant. |
+| 208 | Direct-to-main commits bypass the retro-gate audit (audit only scans merged PRs) | Retro v0.9.2-2 / commit 18e5b117 | #1250 | Closed | **Resolved in v0.9.2-4 via PR #1263** — Extended `scripts/audit-pipeline-bypass.py` to also scan direct-to-main commits since the last merged PR, with an `Audit-bypass-reason:` trailer escape hatch for legitimate skill-driven docs commits (pipeline-drain ROADMAP updates, pipeline-retro RETRO.md updates). The trailer is the canonical exemption mechanism. |
+| 209 | `git add <file>` bundles pre-existing uncommitted modifications without warning | Retro v0.9.2-2 / pipeline-skill CANON.md attempt (commit `bf1a67f`) | #1251 | Closed | **Resolved in v0.9.2-4 via PR #1263** — Bundling-check (Stage 5/9/10 mandatory item) added to `.pipeline-templates/{feature,bugfix}-state.json`: `git diff --cached --stat` before every `git commit`, verify the line counts match expected scope. PR #1263 self-applied the rule on its own commit (326+/17− matched expected scope). |
+| 210 | Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill | Retro v0.9.2-3 / PRs #1257 + #1258 | #1259 | OUT-OF-REPO | Awaiting work in `pipeline-skill` repo. The recipe (audit doc PR → N pre-filed issues → grouped drain PR → single retro) is documented in djust-side artifacts (audit docs at `docs/audits/*.md`, RETRO.md entries) but the canonical-skill update lives in `~/.claude/skills/pipeline-drain/SKILL.md`. Cross-repo dependency tracked separately per Action #214. |
 | 211 | Canonicalize opt-in framework-design pattern (to_dict / .flush() / -event attrs) | Retro v0.9.2-6 / PRs #1302 + #1303 + #1304 | #1307 | Open | New. Three v0.9.2-6 PRs introduced the same opt-in shape: AsyncResult.to_dict() (data opt-in), debounce.flush() (capability opt-in), dj-dialog-close-event="..." attribute (event opt-in). Each adds capability without changing default behavior. Worth documenting in docs/STATE_MANAGEMENT_API.md or a new docs/conventions/opt-in-extensions.md so Audit C Phase 2, Audit F serializer-allowlist, and similar future work have a reference convention. |
 | 212 | Audit C Phase 2 — bidirectional-binding inventory across HTML5 elements | Retro v0.9.2-6 / PR #1304 | #1308 | Open | New. PR #1304 fixed `<dialog>` reverse-sync via the new `dj-dialog-close-event` opt-in attribute. Sibling HTML5 elements with built-in user-driven state are still one-way: `<details>` (toggle), `<form>` (reset), `<video>`/`<audio>` (play/pause/ended), `<input type="file">` (drag-drop). Each needs `dj-{element}-{event}-event="..."` + native listener + handleEvent dispatch. Recommend audit doc + N pre-filed issues + Phase 1 PR series in v0.9.3 / v0.9.4. |
+| 213 | Audit findings should include "review-when" trigger annotation | Retro v0.9.2-4 / PR #1262 | #1309 | Open | New. v0.9.2-3 audit rated VDOM weaknesses #5/#6 as 🟡 (warnings-only); proptest then surfaced a real failing case during v0.9.2rc1 pre-flight, requiring an actual fix in PR #1262. The 🟡 → 🔴 promotion happened because the audit had no mechanism to be re-rated when new evidence (fuzz, downstream usage, telemetry) arrived. Update audit-doc shape: every 🟡 row gets a "review-when" trigger column ("Re-rate if fuzz finds matching shape", "Re-rate if downstream consumer reports auth failure", etc.). When a follow-up PR ships warnings/observability instead of a real fix, the audit row must be annotated "warnings-shipped, real-fix-pending" — avoids "we already shipped that — ✅" misclassification. |
+| 214 | Introduce "OUT-OF-REPO" Action Tracker status for cross-repo items | Retro v0.9.2-4 / PR #1263 | #1310 | Open | New. Action Tracker row #210 (#1259) needs work in the `pipeline-skill` repo, not the djust-repo. It will stay Open across multiple djust milestones until the upstream PR lands — pollutes the open-tracker count. New status `OUT-OF-REPO` distinguishes "open in this repo" from "open but blocked on different repo". Update RETRO.md convention + pipeline-retro skill `--actions` and `--reconcile` modes to count OUT-OF-REPO rows separately. Retroactively applied to Row #210 in this milestone. |
 
 ---
 
@@ -311,6 +313,72 @@ PR #1303 caught the FormData-vs-server-state distinction (form params unaffected
 - [ ] Audit A Phase 2 (#1284, #1285, #1286) — `_action_state` reconnect, snapshot truncation warning, change-detection unification; targets v0.9.3
 - [ ] Audit B Phase 2/3 (#1287, #1288, #1289, #1290) — decorator-contract spec tests + linter; targets v0.9.3
 - [ ] Audit C Phase 2 (Item 212 / #1308) — bidirectional-binding inventory; targets v0.9.3 / v0.9.4
+
+---
+
+## v0.9.2-4 — pre-stable blocker + tooling carryovers (PRs #1261, #1262, #1263)
+
+**Date**: 2026-05-01
+**Scope**: Fourth drain bucket toward v0.9.2 release. Combines 1 P1 correctness fix (#1260 VDOM mixed keyed/unkeyed diff round-trip — surfaced by proptest during v0.9.2rc1 pre-flight) with 4 P2 canon/tooling carryovers from the v0.9.2-2 retro Action Tracker rows #206-#209. PR #1261 opened the milestone (ROADMAP); PR #1262 shipped #1260 solo; PR #1263 batched the 4 carryovers (#1248, #1249, #1250, #1251) plus a fifth row #1259 (cross-repo, marked OUT-OF-REPO).
+
+**Tests at close**: 4863 Python (was 4859; +4 unit tests in #1263) + 194 Rust djust_vdom (was 190; +4 deterministic regression tests for #1260 in #1262, plus 1 fuzz reproducer committed to `crates/djust_vdom/tests/fuzz_test.proptest-regressions`) + 1499 JS (unchanged).
+
+### What We Learned
+
+**1. Audit weakness severity is dynamic, not static — 🟡 → 🔴 promotion needs an explicit re-rate trigger.**
+The v0.9.2-3 audit rated VDOM weaknesses #5 (mixed keyed/unkeyed mid-list reorder) and #6 (DJE-050/051 stable error codes) as 🟡 ("warnings only — should-fix"). PR #1258 shipped warnings + stable error codes per that severity. Six hours later, proptest surfaced a real failing case during v0.9.2rc1 pre-flight: 4 unkeyed text children + 1 keyed div, reordered to keyed-first + 2 unkeyed-removed, produced an incorrect diff/patch round-trip. The 🟡 → 🔴 promotion happened because the audit had no mechanism for evidence-driven re-rating. Audits should require a "review-when" trigger column on every 🟡 row — and when a follow-up PR ships warnings/observability instead of a real fix, the audit row needs a "warnings-shipped, real-fix-pending" annotation that's visible to future audits.
+
+**Action taken**: Open — tracked in Action Tracker #213 (GitHub #1309).
+
+**2. Cross-repo Action Tracker hygiene needs an explicit OUT-OF-REPO status.**
+Action Tracker row #210 (carryover #1259 — "Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill") is pipeline-skill-repo work; this djust-repo PR can't close it. The row would have stayed Open across multiple djust milestones until the upstream PR lands, polluting the open-tracker count. Worth introducing an OUT-OF-REPO status (or BLOCKED-EXTERNAL) so retros distinguish "open in this repo" from "open but blocked on different repo". Retroactively applied to row #210 in this milestone's update.
+
+**Action taken**: Open — tracked in Action Tracker #214 (GitHub #1310).
+
+**3. Self-applying canon PRs is now reflexive across three consecutive milestones.**
+PR #1263 added the bundling-check (Stage 5/9/10 mandatory item, action #1251); the implementer self-applied the rule on PR #1263's own commit (`git diff --cached --stat` showed 326+/17− matching expected scope, no surprise bundling). PR #1246 did the same with Stage 14 retro-post canon (action #1245). PR #1247 did the same with Stage 7 self-applicability check (action #1248). Three consecutive milestones means the pattern is canon: any PR that lands a new mandatory rule must self-test the rule on its own diff before merge.
+
+**Action taken**: Closed — pattern is now reflexive across PRs #1246, #1247, #1263. Validates existing Stage 7 self-applicability check (action #1248, closed in this milestone). No new action required.
+
+**4. The audit → fuzz → fix tight feedback loop is the proven shape for correctness bugs.**
+v0.9.2-3 audit (PR #1257) → 6 hours later proptest finding → fix (PR #1262) merged ~90 min after the finding. The implementer subagent diagnosed the LIS-skip optimization correctly on first pass, applied the smallest viable fix (single boolean gate on `has_unkeyed_siblings`), and shipped 4 deterministic regression tests + a permanent fuzz reproducer seed. The fully-keyed hot path is byte-identical pre/post — no perf regression for the common case.
+
+**Action taken**: Closed — validates existing audit-as-pre-staged-work-graph recipe (action #210, OUT-OF-REPO). No new action required; recipe extends naturally to "audit + fuzz" as well as "audit + targeted fix".
+
+### Insights
+
+- **3-PR drain shape worked smoothly**: ROADMAP-open (solo) + 1 correctness fix (solo, design-novel — couldn't bundle) + 5-canon batch (1 grouped PR, 4 carryovers + 1 cross-repo). Each of the three groups had a different shape and shipped clean. Pipeline-next correctly grouped the canon items + kept the design-novel #1260 solo.
+- **The `Audit-bypass-reason:` trailer mechanism is a healthy escape hatch.** Action #1250 / PR #1263 made the audit script strict (flag every direct-to-main commit) while preserving legitimate exemption paths (skill-driven docs commits — pipeline-drain ROADMAP updates, pipeline-retro RETRO.md updates). The trailer is the canonical exemption mechanism going forward; it's used in this very retro commit.
+- **Stage 11 reviewer's follow-up filing is now reflexive.** PR #1263's Stage 11 found one 🟡 ("teach pipeline-drain skill the trailer") which is real but pipeline-skill-repo work — properly filed as #1264 rather than scope-creeping into #1263. Three consecutive milestones (v0.9.2-1 #1240, v0.9.2-3 audit weakness #5/#6 → PR #1262 sibling, this milestone's #1264) demonstrate the canon: 🟡 plan-fidelity findings get a separate small PR/issue, not amend-and-force-push.
+
+### Review Stats
+
+| Metric | #1261 | #1262 | #1263 | Total |
+|--------|-------|-------|-------|-------|
+| Tests added | 0 | 4 (Rust) + 1 fuzz seed | 4 (Python) | 8 + 1 fuzz seed |
+| 🔴 Findings | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 0 | 1 (filed as #1264) | 1 |
+| Findings fixed | 0 | 0 | 0 (filed separately) | 0 |
+| CI failures | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No changes this milestone (canon updates flowed through pipeline-template edits in PR #1263).
+**Pipeline template**: PR #1263 added Stage 7 self-applicability check (action #1248) and Stage 5/9/10 bundling-check (action #1251) to both `.pipeline-templates/feature-state.json` and `bugfix-state.json`.
+**Audit script**: PR #1263 extended `scripts/audit-pipeline-bypass.py` to scan direct-to-main commits since last merged PR, with `Audit-bypass-reason:` trailer escape hatch (action #1250).
+**Shared module**: PR #1263 created `scripts/lib/retro_markers.py` shared module for the canonical retro-marker regex (action #1249).
+**Skills**: No changes.
+
+### Open Items
+
+- [x] Item 206 — Stage 7 self-applicability check (resolved this milestone via PR #1263)
+- [x] Item 207 — Single-source-of-truth retro-marker regex (resolved this milestone via PR #1263)
+- [x] Item 208 — Direct-to-main audit gap (resolved this milestone via PR #1263)
+- [x] Item 209 — `git add` bundling check (resolved this milestone via PR #1263)
+- [ ] Item 210 / #1259 — OUT-OF-REPO (pipeline-skill canon update)
+- [ ] Item 213 / #1309 — audit "review-when" trigger annotation
+- [ ] Item 214 / #1310 — OUT-OF-REPO Action Tracker status canonicalization
+- [ ] #1264 — pipeline-drain skill should emit `Audit-bypass-reason:` trailer (Stage 11 🟡 from PR #1263, OUT-OF-REPO since pipeline-skill-repo work)
 
 ---
 
