@@ -231,7 +231,7 @@ short-circuit so `render_with_diff()` always runs when
 
 ### Milestone: v0.9.3-4 — audit & process drain (pre-stable soak)
 
-**Status:** 🔄 in progress.
+**Status:** ✅ shipped 2026-05-02. All 10 items closed (7 PRs + 2 skill commits + 1 test move).
 
 *Goal:* Keep v0.9.3rc1 in field longer for soak while closing out remaining audit/process items. Fix 2 decorator bugs + 5 process canon tech-debt + 2 pipeline-skill carryovers + test cleanup. No new features — drain bucket only.
 
@@ -239,25 +239,25 @@ short-circuit so `render_with_diff()` always runs when
 
 **Bugs (P1):**
 
-- [ ] **#1315 — `dj-form-pending` flips on then immediately off on WebSocket path** (🟡). UX bug: form-pending class appears briefly but never visibly renders, so user never sees pending indicator on WS form submits.
-- [ ] **#1316 — `@server_function` hard-codes auth, should defer to `login_required` + `@permission_required`** (🟡). Design bug: auth override in `@server_function` prevents composability with Django's standard auth decorators.
+- [x] **#1315 — `dj-form-pending` flips on then immediately off on WebSocket path** (🟡). UX bug: form-pending class appears briefly but never visibly renders, so user never sees pending indicator on WS form submits.
+- [x] **#1316 — `@server_function` hard-codes auth, should defer to `login_required` + `@permission_required`** (🟡). Design bug: auth override in `@server_function` prevents composability with Django's standard auth decorators.
 
 **Tech-debt — process canon (P2):**
 
-- [ ] **#1309 — Audit findings should include "review-when" trigger annotation**
-- [ ] **#1310 — Introduce "OUT-OF-REPO" Action Tracker status for cross-repo items**
-- [ ] **#1311 — Elevate Action #1200 tautology check to Stage 7 self-review**
-- [ ] **#1312 — Elevate single-script-transformation pattern to canon for bulk renames**
-- [ ] **#1313 — Behavior-change CHANGELOG migration block as Stage 9 checklist item**
+- [x] **#1309 — Audit findings should include "review-when" trigger annotation**
+- [x] **#1310 — Introduce "OUT-OF-REPO" Action Tracker status for cross-repo items**
+- [x] **#1311 — Elevate Action #1200 tautology check to Stage 7 self-review**
+- [x] **#1312 — Elevate single-script-transformation pattern to canon for bulk renames**
+- [x] **#1313 — Behavior-change CHANGELOG migration block as Stage 9 checklist item**
 
 **Tech-debt — pipeline skills (P2):**
 
-- [ ] **#1259 — Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill**
-- [ ] **#1264 — pipeline-drain skill should emit `Audit-bypass-reason:` trailer**
+- [x] **#1259 — Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill**
+- [x] **#1264 — pipeline-drain skill should emit `Audit-bypass-reason:` trailer**
 
 **Test cleanup:**
 
-- [ ] **#1325 — Move `test_skip_render_private_state.py` to `python/tests/` for CI coverage**
+- [x] **#1325 — Move `test_skip_render_private_state.py` to `python/tests/` for CI coverage**
 
 #### Acceptance
 
@@ -389,7 +389,7 @@ All other open issues defer to v0.9.3 (post-stable):
 - [ ] **#1249 — Extract retro-marker regex to shared constants module** — v0.9.2-2 retro Action Tracker #207. Same regex defined in `scripts/audit-pipeline-bypass.py:38-39` and the Stage 14 `subagent_prompt`. Single source of truth via `scripts/lib/retro_markers.py` import.
 - [ ] **#1250 — Direct-to-main audit gap** — v0.9.2-2 retro Action Tracker #208. The daily retro-gate audit GHA scans merged PRs only; direct commits to main bypass it. Two fixes: (a) extend audit script, OR (b) pipeline-drain skill always uses PR-only workflow. Recommend (b) — branch protection + audit consistency.
 - [ ] **#1251 — `git diff --cached --stat` reflex (bundling check)** — v0.9.2-2 retro Action Tracker #209. Pre-commit reflex to catch when `git add <file>` silently bundles pre-existing uncommitted modifications (the failure mode that hit pipeline-skill `CANON.md` commit `bf1a67f`). Ship as Stage 5/9/10 mandatory checklist item.
-- [ ] **#1259 — Audit-as-pre-staged-work-graph recipe in pipeline-drain skill** — v0.9.2-3 retro Action Tracker #210. Document the high-leverage shape (audit → pre-filed issues → grouped PR → single retro) demonstrated by the v0.9.2-3 milestone (75 min audit-merge to fix-merge).
+- [x] **#1259 — Audit-as-pre-staged-work-graph recipe in pipeline-drain skill** — v0.9.2-3 retro Action Tracker #210. Document the high-leverage shape (audit → pre-filed issues → grouped PR → single retro) demonstrated by the v0.9.2-3 milestone (75 min audit-merge to fix-merge).
 
 #### Sequencing
 
