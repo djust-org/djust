@@ -974,6 +974,23 @@ def background(func: F) -> F:
         def auto_save(self, **kwargs):
             # Debounced and runs in background
             self.save_draft()
+
+    Combining ``@background`` and ``@action``:
+        @event_handler
+        @background
+        @action
+        def slow_op(self, **kwargs):
+            ...
+
+    When combined, ``@action`` catches ``Exception`` and records it in
+    ``self._action_state[name]["error"]`` (does **not** re-raise — see
+    @action docs).  Because ``@action`` never re-raises, ``@background``'s
+    ``start_async`` never sees the exception — ``handle_async_result`` is
+    called with ``error=None`` even when the handler body raised.  The
+    error signal is ``_action_state[name]["error"]``, NOT
+    ``handle_async_result``'s ``error`` parameter.  Checks that only
+    inspect ``handle_async_result`` for errors will miss ``@action``
+    failures.
     """
 
     if asyncio.iscoroutinefunction(func):
