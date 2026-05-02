@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3rc1] - 2026-05-02
+
 ### Fixed
 
 - **Private state mutations no longer cause false noop (#1281).**
