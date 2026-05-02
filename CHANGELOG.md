@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the standard user-private save/restore cycle handles it automatically.
   6 regression cases in ``test_action_state_reconnect.py``.
 
+- **Snapshot truncation warning for large lists/dicts (#1285).**
+  ``_snapshot_assigns()`` now emits a one-shot ``logger.warning`` per view
+  class when a list has ≥100 items or a dict has ≥50 keys. These containers
+  have truncated content fingerprints (list: only ``(id, length)``; dict:
+  only ``len(v)`` instead of a key tuple), so in-place mutations inside them
+  are not detected by auto-diff. The warning tells developers to use
+  ``set_changed_keys()`` or assign a new reference. 10 regression cases in
+  ``test_snapshot_truncation_warning.py``.
+
 ## [0.9.2] - 2026-05-02
 
 ### Fixed
