@@ -8,6 +8,15 @@ at the top is the single source of truth for all outstanding items.
 Items from retrospectives that need resolution. Every item must have a GitHub
 issue or be explicitly closed with a reason.
 
+**Status values:**
+- **Open** — actionable in THIS repo; has a GitHub issue
+- **Closed** — resolved, with a reason (PR reference, commit, test coverage)
+- **OUT-OF-REPO** — blocked on work in a different repository. The Notes column
+  must point at the upstream repo + issue number (e.g., "Awaiting
+  djust-org/pipeline-skill#NN"). These rows do NOT count against the
+  djust-repo's open-tracker total. They advance to Closed when the
+  cross-repo work is completed.
+
 | # | Action | Source | GitHub | Status | Notes |
 |---|--------|--------|--------|--------|-------|
 | 1 | HTML-escape CSRF token value in renderer.rs | PR #708 | #715 | Closed | Fixed in PR #721 (manual escape chain) |
