@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``set_changed_keys()`` or assign a new reference. 10 regression cases in
   ``test_snapshot_truncation_warning.py``.
 
+- **Change-detection unified: identity snapshots now use ``_framework_attrs`` (#1286).**
+  The push_commands-only auto-skip path (``#700``) had identity snapshots
+  at lines 3001 and 3102 that still used ``k.startswith("_")`` to filter
+  attrs, while ``_snapshot_assigns()`` was updated in #1281 to use
+  ``_framework_attrs`` membership. This meant the two detection paths could
+  disagree on whether private state changed. Both identity snapshots now
+  use ``_framework_attrs``, closing the dual-path discrepancy (weakness #8
+  from the lifecycle audit). 8 regression cases in
+  ``test_change_detection_unified.py``.
+
 ## [0.9.2] - 2026-05-02
 
 ### Fixed
