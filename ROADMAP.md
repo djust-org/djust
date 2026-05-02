@@ -262,7 +262,26 @@ short-circuit so `render_with_diff()` always runs when
 #### Acceptance
 
 - All 10 items closed.
-- Then: evaluate whether v0.9.3 is ready to cut, or commission v0.9.3-5.
+- Then: commission v0.9.3-5 drain (retro-filed process items).
+
+### Milestone: v0.9.3-5 — retro-filed process items (pre-stable soak)
+
+**Status:** 🚀 commissioned 2026-05-02. 2 items from v0.9.3-4 retro.
+
+*Goal:* Close out the two actionable findings from the v0.9.3-4 milestone retro. Both are process improvements — one CI coverage guard, one CodeQL infra investigation. Smallest possible drain: 2 items, 1 or 2 PRs.
+
+#### Tasks
+
+**Tech-debt — process (P2):**
+
+- [ ] **#1339 — Add `make check-test-coverage` target** to verify all test files are collected by CI. PR #1338 surfaced that `python/djust/tests/` was excluded from `make test-python`'s explicit paths — tests in that directory were silently never collected. The check target greps for `class Test` / `def test_` across all test files and verifies each is collected.
+- [ ] **#1340 — Investigate workaround for stale CodeQL check-run blocking PR merges.** 7+ PRs in the v0.9.3 series required `--admin` merge because stale CodeQL check-runs weren't cleaned up after re-run. Investigate whether auto-cleanup is possible, whether branch protection can be configured to only look at the latest check-run, or whether this is a GitHub bug to report.
+
+#### Acceptance
+
+- Both items closed.
+- Then: evaluate whether v0.9.3 is ready to cut stable, or commission v0.9.3-6.
+
 
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
