@@ -186,7 +186,7 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 ### Milestone: v0.9.3-2 — #1281 private-state re-render (split-foundation)
 
-**Status:** 🔄 in progress — #1281 + #1284 + #1285 merged; #1286 in PR #1327.
+**Status:** ✅ shipped 2026-05-02. All 4 issues closed via 4 PRs (#1323, #1324, #1326, #1327).
 
 *Goal:* Fix the private-state re-render gap: handlers that mutate only
 `self._*` private state get `noop` from the Rust diff because the
@@ -202,8 +202,8 @@ short-circuit so `render_with_diff()` always runs when
 #### Related audit items (deferred)
 
 - [x] #1284 — `_action_state` persistence across reconnects (PR #1324 merged)
-- [x] #1285 — snapshot truncation warning (PR #1326 open)
-- #1286 — change-detection unification (Python vs Rust) (PR #1327 open)
+- [x] #1285 — snapshot truncation warning (PR #1326 merged)
+- [x] #1286 — change-detection unification (Python vs Rust) (PR #1327 merged)
 
 #### Acceptance
 
