@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from user-defined private attrs set in ``mount()`` or event handlers.
   9 regression cases in ``test_skip_render_private_state.py``.
 
+- **``_action_state`` now persists across WebSocket reconnects (#1284).**
+  The ``@action`` decorator populates ``_action_state[action_name]`` with
+  ``{pending, error, result}`` so templates can reference
+  ``{{ action_name.error }}``. Previously ``_action_state`` was initialized
+  before ``_framework_attrs`` capture in ``__init__``, putting it in the
+  framework-internal set that ``_snapshot_user_private_attrs`` and
+  ``_restore_private_state`` exclude. It now initializes after the capture,
+  so the standard user-private save/restore cycle handles it automatically.
+  6 regression cases in ``test_action_state_reconnect.py``.
+
 ## [0.9.2] - 2026-05-02
 
 ### Fixed
