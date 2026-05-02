@@ -23,7 +23,7 @@ class DataTable(Component):
         rows: list = None,
         sort_by: str = "",
         sort_desc: bool = False,
-        sort_event: str = "table_sort",
+        sort_event: str = "on_table_sort",
         striped: bool = False,
         compact: bool = False,
         custom_class: str = "",
