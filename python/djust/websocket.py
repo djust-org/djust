@@ -178,9 +178,10 @@ def _snapshot_assigns(view_instance):
     from .live_view import _FRAMEWORK_INTERNAL_ATTRS
 
     _static_skip = set(getattr(view_instance, "static_assigns", []))
+    _fw_attrs = getattr(view_instance, "_framework_attrs", frozenset())
     snapshot = {}
     for k, v in view_instance.__dict__.items():
-        if k.startswith("_") or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
+        if k in _fw_attrs or k in _static_skip or k in _FRAMEWORK_INTERNAL_ATTRS:
             continue
         # Identity + shallow fingerprint for mutable containers
         vid = id(v)
