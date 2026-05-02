@@ -105,13 +105,14 @@ class TestTickAutoSkip:
         assert post["count"] == 1
 
     @pytest.mark.django_db
-    def test_snapshot_excludes_private_attrs(self, get_request):
-        """Private attrs (starting with _) should not affect snapshot comparison."""
+    def test_user_private_attrs_detected_in_snapshot(self, get_request):
+        """Private attrs set by the user are detected in snapshot (#1281)."""
         view = TickView()
         view.get(get_request)
 
         pre = _snapshot_assigns(view)
-        view._internal_counter = 999  # Private attr — should be ignored
+        view._internal_counter = 999  # User private attr — should be detected
         post = _snapshot_assigns(view)
 
-        assert pre == post, "Private attr changes should not affect snapshot"
+        assert "_internal_counter" in post, "#1281: user private attrs must be in snapshot"
+        assert pre != post, "#1281: user private attr changes must be detected"

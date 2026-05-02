@@ -276,8 +276,12 @@ class TestSnapshotAssigns:
         snap2 = _snapshot_assigns(view)
         assert snap1 != snap2
 
-    def test_private_attrs_excluded(self):
-        """Underscore-prefixed attrs should not appear in snapshot."""
+    def test_framework_private_attrs_excluded_but_user_private_included(self):
+        """Framework ``_``-prefixed attrs (set at __init__) are excluded from
+        the snapshot via ``_framework_attrs`` membership. User ``_``-prefixed
+        attrs set AFTER __init__ (in mount() or event handlers) ARE included
+        so that a handler mutating only private state triggers a render rather
+        than a false noop (#1281)."""
         from djust.live_view import LiveView
         from djust.websocket import _snapshot_assigns
 
@@ -287,7 +291,10 @@ class TestSnapshotAssigns:
 
         snap = _snapshot_assigns(view)
         assert "count" in snap
-        assert "_private" not in snap
+        # User _-prefixed attrs are now included (#1281)
+        assert "_private" in snap
+        # Framework _-prefixed attrs (set at __init__) are still excluded
+        assert "_changed_keys" not in snap
 
     def test_list_reassign_detected_by_identity(self):
         """Reassigning a list (even to identical content) changes identity and

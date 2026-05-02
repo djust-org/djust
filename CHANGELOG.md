@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Private state mutations no longer cause false noop (#1281).**
+  ``_snapshot_assigns()`` previously skipped all ``_``-prefixed attrs via
+  ``k.startswith("_")``, so a handler that mutated only private state
+  (e.g. ``self._orders``) produced identical pre/post snapshots → the
+  render was skipped → the client received a noop frame. The filter now
+  uses ``view_instance._framework_attrs`` membership (captured at
+  ``__init__``) to distinguish framework-internal ``_``-prefixed attrs
+  from user-defined private attrs set in ``mount()`` or event handlers.
+  9 regression cases in ``test_skip_render_private_state.py``.
+
 ## [0.9.2] - 2026-05-02
 
 ### Fixed

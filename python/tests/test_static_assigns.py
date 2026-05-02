@@ -186,15 +186,16 @@ class TestSnapshotAssigns:
         assert "count" in snapshot
         assert snapshot["count"] == 7
 
-    def test_snapshot_still_excludes_private(self):
-        """Private keys (underscore prefix) should still be excluded."""
+    def test_user_private_attrs_in_snapshot(self):
+        """User-defined ``_``-prefixed attrs ARE in the snapshot (#1281).
+        Only ``static_assigns`` and framework-internal attrs are excluded."""
         view = StaticView()
         view.demos = "html"
         view.count = 1
         view._private = "secret"
 
         snapshot = _snapshot_assigns(view)
-        assert "_private" not in snapshot
+        assert "_private" in snapshot, "#1281: user private attrs must be in snapshot"
         assert "demos" not in snapshot
         assert "count" in snapshot
 

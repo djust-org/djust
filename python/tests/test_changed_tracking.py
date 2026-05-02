@@ -135,13 +135,15 @@ class TestSnapshotAssigns:
         assert "count" in snapshot
         assert snapshot["count"] == 42
 
-    def test_excludes_private_attrs(self):
-        """Underscore-prefixed attributes are excluded."""
+    def test_user_private_attrs_included(self):
+        """User-defined ``_``-prefixed attrs are included (#1281).
+        Framework ``_``-prefixed attrs set at __init__ are excluded."""
         view = CounterView()
         view.count = 1
         view._private = "secret"
         snapshot = _snapshot_assigns(view)
-        assert "_private" not in snapshot
+        assert "_private" in snapshot, "#1281: user private attrs must be in snapshot"
+        assert "_changed_keys" not in snapshot
         assert "count" in snapshot
 
     def test_immutable_types_not_deepcopied(self):
