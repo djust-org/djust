@@ -23,6 +23,7 @@ This module locks in:
 import inspect
 
 
+from djust.decorators import event_handler
 from djust.components.mixins.data_table import (
     DataTableMixin,
     _PRE_MOUNT_TABLE_CONTEXT,
@@ -238,4 +239,90 @@ class TestRowAffectingHandlersCallRefresh:
         assert v.refresh_called_count == 0, (
             "on_table_select changes selection only; rows are unchanged "
             "so refresh_table should NOT be called"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 4. WS-level dispatch smoke test. Closes #1298.
+# ---------------------------------------------------------------------------
+
+
+class _DispatchSmokeView(DataTableMixin):
+    """View that tracks whether the handler was dispatched."""
+
+    def __init__(self):
+        self.handler_called = False
+        self.table_page = 1
+        self.table_total_pages = 5
+        self.table_sort_by = ""
+        self.table_sort_desc = False
+        self.table_rows = []
+        self.refresh_called = False
+
+    def refresh_table(self):
+        self.refresh_called = True
+
+    @event_handler()
+    def on_table_sort(self, value: str = "", **kwargs):
+        self.handler_called = True
+        self.table_sort_by = value
+        self.refresh_table()
+
+
+class TestDataTableWSDispatchSmoke:
+    """#1298: WS frame with event=on_table_sort dispatches through
+    _validate_event_security → getattr(view, "on_table_sort") → handler.
+    """
+
+    @staticmethod
+    async def _resolve(view, event_name):
+        from djust.rate_limit import ConnectionRateLimiter
+        from djust.websocket_utils import _validate_event_security
+
+        class _MockWS:
+            async def send_error(self, msg, **kw):
+                pass
+
+            async def close(self, code=None):
+                pass
+
+        return await _validate_event_security(_MockWS(), event_name, view, ConnectionRateLimiter())
+
+    def test_on_table_sort_resolved_by_dispatcher(self):
+        """The dispatcher's getattr(view, event_name, None) resolves
+        on_table_sort to a callable handler."""
+        import asyncio
+
+        view = _DispatchSmokeView()
+        handler = asyncio.run(self._resolve(view, "on_table_sort"))
+        assert handler is not None, (
+            "Dispatcher must resolve 'on_table_sort' to a callable handler "
+            "via getattr(view, 'on_table_sort', None). See #1298."
+        )
+        assert callable(handler)
+
+    def test_on_table_sort_dispatches_and_mutates_state(self):
+        """Full dispatch: resolve + call handler with **params → state mutated."""
+        import asyncio
+
+        view = _DispatchSmokeView()
+        handler = asyncio.run(self._resolve(view, "on_table_sort"))
+        assert handler is not None
+
+        # Mirror the dispatcher's call convention: unpack params as kwargs.
+        # The dispatcher pops _args for positional args, then calls:
+        #   handler(**params)
+        handler(**{"value": "name"})
+        assert view.handler_called, "handler must have been called"
+        assert view.table_sort_by == "name", "state must reflect the dispatched value"
+        assert view.refresh_called, "handler must call refresh_table"
+
+    def test_unsafe_event_name_rejected_by_dispatcher(self):
+        """Events with unsafe characters must be rejected."""
+        import asyncio
+
+        view = _DispatchSmokeView()
+        handler = asyncio.run(self._resolve(view, "on_table_sort; rm -rf"))
+        assert handler is None, (
+            "Dispatcher must reject unsafe event names via is_safe_event_name. See #1298."
         )
