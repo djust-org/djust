@@ -330,6 +330,11 @@
           "mandatory": true
         },
         {
+          "action": "If this PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the CHANGELOG entry MUST include a 'Behavior change' block with: (a) what changed, (b) who's affected, (c) migration path. PR #1294 is the canonical reference example.",
+          "done": false,
+          "mandatory": false
+        },
+        {
           "action": "BUNDLING CHECK (#1209 / #1251): after staging files but before `git commit`, run `git diff --cached --stat` and verify the line counts match what you planned to ship. If a staged file shows significantly more lines than expected, the working tree had pre-existing uncommitted modifications that got bundled. Investigate before committing. Pattern from pipeline-skill commit bf1a67f which silently bundled 130 unintended lines.",
           "done": false,
           "mandatory": true
