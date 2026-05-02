@@ -8,6 +8,7 @@ event handlers, reactive state, and computed properties.
 import asyncio
 import functools
 import logging
+import threading
 import warnings
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional
 
@@ -716,13 +717,17 @@ def computed(*deps):
 
         @functools.wraps(func)
         def _inner(self):
-            cache = self.__dict__.setdefault("_djust_computed_cache", {})
-            deps_seen = self.__dict__.setdefault("_djust_computed_deps", {})
-            current = _fingerprint(self)
-            if deps_seen.get(attr_name) != current or attr_name not in cache:
-                cache[attr_name] = func(self)
-                deps_seen[attr_name] = current
-            return cache[attr_name]
+            lock = self.__dict__.get("_djust_computed_lock")
+            if lock is None:
+                lock = self.__dict__.setdefault("_djust_computed_lock", threading.Lock())
+            with lock:
+                cache = self.__dict__.setdefault("_djust_computed_cache", {})
+                deps_seen = self.__dict__.setdefault("_djust_computed_deps", {})
+                current = _fingerprint(self)
+                if deps_seen.get(attr_name) != current or attr_name not in cache:
+                    cache[attr_name] = func(self)
+                    deps_seen[attr_name] = current
+                return cache[attr_name]
 
         prop = _ComputedProperty(_inner)
         prop._is_computed = True
