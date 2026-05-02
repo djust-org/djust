@@ -61,29 +61,40 @@ no *independent client-side state* the server needs to stay in sync with:
 ## Recommended follow-ups
 
 Each gap follows the opt-in attribute pattern canonized in #1307
-(`docs/conventions/opt-in-extensions.md`):
+(`docs/conventions/opt-in-extensions.md`). Per the review-when convention
+(#1309), each deferral includes the trigger condition for re-rating.
 
 1. **`<form reset>` reverse-sync** (P2). Add `dj-form-reset-event="event_name"`
    attribute. JS: `form.addEventListener('reset', () => handleEvent(eventName))`.
    Closes the most likely real-world gap — reset buttons are common in filter
    forms and data-entry UIs.
+   **Review-when**: Re-rate to 🔴 if a downstream consumer reports form-reset
+   data-loss in production (user clicks reset, server state unchanged).
 
 2. **`<details>` toggle reverse-sync** (P3). Add `dj-details-toggle-event="event_name"`
    attribute. JS: `details.addEventListener('toggle', () => handleEvent(eventName))`.
    Straightforward — one native event, one boolean state (`open`).
+   **Review-when**: Re-rate to P2 if a downstream consumer requests
+   server-synced `<details>` state.
 
 3. **`<video>`/`<audio>` play-state reverse-sync** (P3). Add
    `dj-media-play-event`, `dj-media-pause-event`, `dj-media-ended-event`
    attributes. Likely scoped to play/pause/ended (the three most useful);
    volumechange/timeupdate would overwhelm the server.
+   **Review-when**: Re-rate to P2 if a downstream consumer builds a
+   media-heavy djust app and reports play-state desync.
 
 4. **Standalone file input reverse-sync** (P3). Extend existing
    `dj-upload` / `dj-upload-drop` patterns to handle standalone file inputs
    (non-upload-zone) with a `dj-file-change-event` attribute.
+   **Review-when**: Re-rate to P2 if a downstream consumer reports
+   standalone file input UX gap (files selected but server unaware).
 
 5. **Fullscreen / PiP** (P4). Deferred indefinitely — these APIs are rarely
    used in djust apps and the server doesn't typically need to stay in sync
    with visibility state.
+   **Review-when**: Re-rate if a downstream consumer requests fullscreen/PiP
+   state sync. No action expected in current planning horizon.
 
 ## Related
 
