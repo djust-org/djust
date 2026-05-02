@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`markdown` and `nh3` moved from optional extras to core dependencies.**
+  `djust.components.templatetags.djust_components` eagerly imports both
+  packages at Django template engine startup, making them hard requirements
+  for any project with djust in `INSTALLED_APPS`. Previously they were only
+  in the `[components]` extra, causing `ModuleNotFoundError` when the extra
+  wasn't explicitly installed. Caught during djustlive scaffold deployment
+  to k8s.
+
 ## [0.9.2rc2] - 2026-05-01
 
 ### Fixed
