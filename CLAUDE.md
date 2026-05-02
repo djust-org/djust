@@ -706,6 +706,21 @@ Six rules distilled from v0.9.4 retro tracker rows #185–#190 (PRs #1190, #1192
   count grew by exactly 1. Rule: for any "action happened" assertion,
   ask "would this pass if the action didn't run?"
 
+## Process canonicalizations from v0.9.3-4 retro arc
+
+Rules distilled from the v0.9.3-4 audit and process drain bucket.
+
+- **Bulk renames use single-script transformation** (#1312). When a PR
+  renames a symbol/string across >5 sites or multiple files, use a single
+  Python (or shell) script that does the entire transformation in one pass
+  + immediately stages the changes. Do NOT use incremental Edit-tool calls
+  for bulk renames — they leave intermediate states where pre-commit hooks
+  may see inconsistent code, increase reviewer cognitive load, and burn
+  agent context. The script doubles as documentation of what was changed.
+  Action #180 (v0.9.1) already lists the single-script-transformation
+  pattern as a safe alternative for parallel-agent safety; this rule
+  extends it to single-agent bulk operations regardless of agent count.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
