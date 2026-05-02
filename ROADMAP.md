@@ -170,19 +170,19 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 ### Milestone: v0.9.3-1 — v0.9.2 deferred items (initial drain)
 
-**Status:** ⬜ planning — 8 open issues carried over from v0.9.2-6/retro.
+**Status:** 🟢 in review — all 7 issues have PRs (1 merged, 4 open).
 
 *Goal:* Close the smaller deferred items first (#1295-#1299, #1307, #1308) to clear the deck before tackling the split-foundation #1281 work.
 
 #### Tasks
 
-- [ ] **#1299 — `@background + @action` combo: `handle_async_result` won't see error** (P2, doc+test). `@action` swallows exceptions; `@background`'s `handle_async_result` gets `error=None`. Fix: doc the contract + add spec test.
-- [ ] **#1295 — `_mount_one` collector swallows mount-time push events** (P2, bug). Batch-mounted views lose push events queued during mount. Fix: drain collector before returning.
-- [ ] **#1296 — standalone `DataTable` Component carries same emit-name bug as #1275** (P2, bug). Same root cause as the already-fixed #1275.
-- [ ] **#1297 — stale fixture defaults in `test_data_table_link_row_nav.py`** (P3, test). Fixtures carry old defaults from before emit-name rename.
-- [ ] **#1298 — WS-level integration smoke test for renamed `on_table_*` handlers** (P3, test). Coverage gap from #1275/#1293 rename.
-- [ ] **#1307 — canonicalize opt-in framework-design pattern** (P3, docs). Document the `to_dict`/`.flush()`/`-event` attrs pattern from v0.9.2-6 PRs.
-- [ ] **#1308 — Audit C Phase 2: bidirectional-binding inventory** (P3, audit). Inventory HTML5 elements with user-driven state that need reverse-sync.
+- [x] **#1299 — `@background + @action` combo: `handle_async_result` won't see error** (P2, doc+test). ✅ PR #1318 merged.
+- [x] **#1295 — `_mount_one` collector swallows mount-time push events** (P2, bug). PR #1319 open (CI green, awaiting review).
+- [x] **#1296 — standalone `DataTable` Component carries same emit-name bug as #1275** (P2, bug). PR #1320 open (bundled with #1297, #1298).
+- [x] **#1297 — stale fixture defaults in `test_data_table_link_row_nav.py`** (P3, test). PR #1320 open.
+- [x] **#1298 — WS-level integration smoke test for renamed `on_table_*` handlers** (P3, test). PR #1320 open.
+- [x] **#1307 — canonicalize opt-in framework-design pattern** (P3, docs). PR #1321 open.
+- [x] **#1308 — Audit C Phase 2: bidirectional-binding inventory** (P3, audit). PR #1322 open.
 
 #### Out of scope (v0.9.3-2+)
 
