@@ -160,9 +160,39 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 ---
 
-## Pending release: v0.9.2
+## Released: v0.9.2 — 2026-05-02
 
-Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
+All 7 drain buckets shipped. 11 of 12 audit-original bugs closed; #1281 deferred to v0.9.3.
+
+## Current: v0.9.3 — Post-stable drain (split-foundation #1281 + follow-ups)
+
+Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` collects all v0.9.2-6 deferred items.
+
+### Milestone: v0.9.3-1 — v0.9.2 deferred items (initial drain)
+
+**Status:** ⬜ planning — 8 open issues carried over from v0.9.2-6/retro.
+
+*Goal:* Close the smaller deferred items first (#1295-#1299, #1307, #1308) to clear the deck before tackling the split-foundation #1281 work.
+
+#### Tasks
+
+- [ ] **#1299 — `@background + @action` combo: `handle_async_result` won't see error** (P2, doc+test). `@action` swallows exceptions; `@background`'s `handle_async_result` gets `error=None`. Fix: doc the contract + add spec test.
+- [ ] **#1295 — `_mount_one` collector swallows mount-time push events** (P2, bug). Batch-mounted views lose push events queued during mount. Fix: drain collector before returning.
+- [ ] **#1296 — standalone `DataTable` Component carries same emit-name bug as #1275** (P2, bug). Same root cause as the already-fixed #1275.
+- [ ] **#1297 — stale fixture defaults in `test_data_table_link_row_nav.py`** (P3, test). Fixtures carry old defaults from before emit-name rename.
+- [ ] **#1298 — WS-level integration smoke test for renamed `on_table_*` handlers** (P3, test). Coverage gap from #1275/#1293 rename.
+- [ ] **#1307 — canonicalize opt-in framework-design pattern** (P3, docs). Document the `to_dict`/`.flush()`/`-event` attrs pattern from v0.9.2-6 PRs.
+- [ ] **#1308 — Audit C Phase 2: bidirectional-binding inventory** (P3, audit). Inventory HTML5 elements with user-driven state that need reverse-sync.
+
+#### Out of scope (v0.9.3-2+)
+
+- **#1281 — Private state changes don't trigger Rust diff re-render** (🔴 split-foundation; multi-PR). Targeted for v0.9.3-2 after follow-ups clear.
+
+#### Acceptance
+
+- All 7 non-#1281 issues closed.
+- #1281 planning docs ready for v0.9.3-2.
+- Then: commission v0.9.3-2 with #1281 as headliner.
 
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
