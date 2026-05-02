@@ -457,12 +457,6 @@ class LiveView(
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
-        # v0.8.0 — @action server-action state. Each entry is keyed by the
-        # action's method name and holds {"pending": bool, "error": str|None,
-        # "result": Any}. Populated by the @action decorator's wrapper at
-        # handler entry/exit; exposed to templates by ContextMixin's
-        # get_context_data() for `{{ <action_name>.pending }}` access.
-        self._action_state: Dict[str, Dict[str, Any]] = {}
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
 
@@ -512,6 +506,11 @@ class LiveView(
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
+
+        # v0.8.0 — @action server-action state. Initialized AFTER
+        # _framework_attrs capture so it is treated as user-private
+        # state and persisted across reconnects (#1284).
+        self._action_state: Dict[str, Dict[str, Any]] = {}
 
     # ============================================================================
     # DIRTY TRACKING — cumulative since mount or last mark_clean() (v0.5.1)
