@@ -205,7 +205,7 @@ config.get("websocket_compression")  # True by default
 DJUST_WS_COMPRESSION = False  # disable permessage-deflate negotiation
 ```
 
-Note that disabling compression in djust's config is **advisory** — the actual wire-level compression is negotiated by the ASGI server. To enforce the no-compression decision at the server level, pass the appropriate flag to Uvicorn / Daphne (e.g. Uvicorn's `--ws-per-message-deflate=false` when using `websockets`). See the [deployment runbook](#production-checklist) for the full set of ASGI-server flags.
+Note that disabling compression in djust's config is **advisory** — the actual wire-level compression is negotiated by the ASGI server. To enforce the no-compression decision at the server level, pass the appropriate flag to Uvicorn / Daphne (e.g. Uvicorn's `--ws-per-message-deflate=false` when using `websockets`). See the [Deployment Checklist](#deployment-checklist) for the full set of ASGI-server flags.
 
 **Do not combine with a compressing CDN.** Cloudflare, AWS CloudFront, and similar CDNs will double-compress and burn CPU on both sides. Either turn off compression at the CDN for the `/ws/` path, or disable it in djust.
 
