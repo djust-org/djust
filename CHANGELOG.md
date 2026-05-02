@@ -51,6 +51,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tracking. All clear sites resolve pending resolvers on disconnect.
   2 regression cases in ``dj-form-pending.test.js`` (WebSocket path block).
 
+- **@server_function no longer hard-codes auth check (#1316).**
+  ``dispatch_server_function`` previously had an inline anonymous-user check
+  that rejected all unauthenticated callers regardless of the view's
+  ``login_required`` setting. The check is removed — ``check_view_auth``
+  (view-level ``login_required`` / ``permission_required``) and
+  ``check_handler_permission`` (handler-level ``@permission_required``) now
+  govern auth, matching the ADR-008 contract. ``@server_function`` no longer
+  requires authentication by default. 4 regression cases in
+  ``test_server_functions.py``.
+
 ## [0.9.3rc1] - 2026-05-02
 
 ### Fixed
