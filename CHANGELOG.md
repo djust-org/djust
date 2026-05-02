@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time. 44 emit defaults (26 framework, 18 app-level) validated clean.
   Added to pre-push hook. 7 test cases in
   ``test_check_handler_contracts.py``.
+
+- **dj-form-pending now visible on WebSocket path (#1315).**
+  ``sendEvent()`` was fire-and-forget — it returned ``true`` synchronously,
+  causing ``handleEvent()`` to resolve immediately on the WebSocket path.
+  ``_setFormPending(false)`` fired before any browser repaint, so the
+  pending state (spinner, disabled inputs, hidden labels) was never visible.
+  ``sendEvent()`` now returns a ``Promise`` that resolves when the server's
+  response (patch/noop/error with matching ref) arrives, via a new
+  ``_pendingEventResolvers`` Map alongside the existing pending-event
+  tracking. All clear sites resolve pending resolvers on disconnect.
+  2 regression cases in ``dj-form-pending.test.js`` (WebSocket path block).
+
 ## [0.9.3rc1] - 2026-05-02
 
 ### Fixed

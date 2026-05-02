@@ -161,7 +161,12 @@ async function handleEvent(eventName, params = {}) {
     }
 
     // Try WebSocket first
-    if (liveViewWS && liveViewWS.sendEvent(eventName, paramsToSend, triggerElement)) {
+    // #1315: sendEvent now returns a Promise that resolves when the server
+    // responds (patch, noop, or error with matching ref). Await it so callers
+    // can run post-response logic (e.g. _setFormPending(false) in finally).
+    const wsPromise = liveViewWS && liveViewWS.sendEvent(eventName, paramsToSend, triggerElement);
+    if (wsPromise) {
+        await wsPromise;
         return;
     }
 

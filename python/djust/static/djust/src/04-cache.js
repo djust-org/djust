@@ -11,6 +11,7 @@ let _eventRefCounter = 0;
 let _pendingEventRefs = new Set();     // refs of events awaiting server response
 let _pendingEventNames = new Map();    // ref -> event name for pending events
 let _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
+let _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 let _tickBuffer = [];                  // buffered server-initiated patches during pending events
 
 // State management for decorators
