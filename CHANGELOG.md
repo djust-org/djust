@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requires authentication by default. 4 regression cases in
   ``test_server_functions.py``.
 
+- **#1281 regression tests moved to ``python/tests/`` for CI coverage (#1325).**
+  ``test_skip_render_private_state.py`` (9 tests) was in
+  ``python/djust/tests/`` which is excluded from the explicit paths
+  in ``make test-python`` and the CI workflow. Moved to ``python/tests/``
+  so CI collects the tests on every run.
+
 ## [0.9.3rc1] - 2026-05-02
 
 ### Fixed
