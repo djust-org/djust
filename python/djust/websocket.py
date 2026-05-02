@@ -2995,10 +2995,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Identity snapshot: {attr: id(value)} for the
                         # push_commands-only auto-skip (#700). Immune to
                         # deep-copy sentinel issues on non-copyable objects.
+                        _fw_attrs = getattr(self.view_instance, "_framework_attrs", frozenset())
                         pre_identity = {
                             k: id(v)
                             for k, v in self.view_instance.__dict__.items()
-                            if not k.startswith("_")
+                            if k not in _fw_attrs
                         }
 
                         # Call handler with tracking (supports both sync and async handlers)
@@ -3099,7 +3100,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 post_identity = {
                                     k: id(v)
                                     for k, v in self.view_instance.__dict__.items()
-                                    if not k.startswith("_")
+                                    if k not in _fw_attrs
                                 }
                                 if pre_identity == post_identity:
                                     skip_render = True
