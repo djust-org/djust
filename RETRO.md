@@ -245,6 +245,9 @@ issue or be explicitly closed with a reason.
 | 212 | Audit C Phase 2 — bidirectional-binding inventory across HTML5 elements | Retro v0.9.2-6 / PR #1304 | #1308 | Open | New. PR #1304 fixed `<dialog>` reverse-sync via the new `dj-dialog-close-event` opt-in attribute. Sibling HTML5 elements with built-in user-driven state are still one-way: `<details>` (toggle), `<form>` (reset), `<video>`/`<audio>` (play/pause/ended), `<input type="file">` (drag-drop). Each needs `dj-{element}-{event}-event="..."` + native listener + handleEvent dispatch. Recommend audit doc + N pre-filed issues + Phase 1 PR series in v0.9.3 / v0.9.4. |
 | 213 | Audit findings should include "review-when" trigger annotation | Retro v0.9.2-4 / PR #1262 | #1309 | Open | New. v0.9.2-3 audit rated VDOM weaknesses #5/#6 as 🟡 (warnings-only); proptest then surfaced a real failing case during v0.9.2rc1 pre-flight, requiring an actual fix in PR #1262. The 🟡 → 🔴 promotion happened because the audit had no mechanism to be re-rated when new evidence (fuzz, downstream usage, telemetry) arrived. Update audit-doc shape: every 🟡 row gets a "review-when" trigger column ("Re-rate if fuzz finds matching shape", "Re-rate if downstream consumer reports auth failure", etc.). When a follow-up PR ships warnings/observability instead of a real fix, the audit row must be annotated "warnings-shipped, real-fix-pending" — avoids "we already shipped that — ✅" misclassification. |
 | 214 | Introduce "OUT-OF-REPO" Action Tracker status for cross-repo items | Retro v0.9.2-4 / PR #1263 | #1310 | Open | New. Action Tracker row #210 (#1259) needs work in the `pipeline-skill` repo, not the djust-repo. It will stay Open across multiple djust milestones until the upstream PR lands — pollutes the open-tracker count. New status `OUT-OF-REPO` distinguishes "open in this repo" from "open but blocked on different repo". Update RETRO.md convention + pipeline-retro skill `--actions` and `--reconcile` modes to count OUT-OF-REPO rows separately. Retroactively applied to Row #210 in this milestone. |
+| 215 | Elevate Action #1200 tautology check to Stage 7 self-review | Retro v0.9.2-5 / PR #1292 Stage 11 review | #1311 | Open | New. PR #1292's Stage 11 reviewer caught a tautology test (`TestHandleMountDrainBehavior::test_tail_drains_both_queues_in_order`) that would have passed even if `handle_mount` was deleted. Action #1200 caught it correctly at Stage 11, but Stage 11 is late — the question "would this pass if the action didn't run?" is mechanical, applies to every new test, and should fire at Stage 7 self-review so authors catch it before review. Update `.pipeline-templates/{feature,bugfix,ship}-state.json` Stage 7 checklist to add the tautology check as a mandatory item. Self-applies via Stage 7 self-applicability check (#1248). |
+| 216 | Elevate single-script-transformation pattern to canon for bulk renames | Retro v0.9.2-5 / PR #1293 (23-site rename) | #1312 | Open | New. PR #1293 used a single Python script to rename 23 emit-name strings across 4 files in one atomic pass — zero regressions, no partial-state windows. Action #180 lists the pattern as a "safe alternative" to incremental Edit calls when working in parallel agents; v0.9.2-5 demonstrated it's the right shape for sequential single-implementer bulk operations too. Failure modes of incremental Edit-tool calls for bulk renames: partial-state intermediate trips pre-commit hooks, ~23 Edit calls vs 1 script + 1 invocation burns agent context, 23 hunks vs 1 script raise reviewer cognitive load. Worth elevating in CLAUDE.md "Process canonicalizations" Stage 5 (Implementation) section. |
+| 217 | Behavior-change CHANGELOG migration block as Stage 9 checklist item | Retro v0.9.2-5 / PR #1294 (`@action` re-raise contract change) | #1313 | Open | New. PR #1294 changed `@action`'s re-raise contract — a behavior change for any code that wrapped `@action` calls in try/except. The CHANGELOG entry included an explicit "Behavior change" block: (a) what changed, (b) who's affected, (c) migration path ("re-raise explicitly inside the handler"). Stage 11 reviewer confirmed this was the right level of detail. Worth canonicalizing as a Stage 9 (Documentation) checklist item: when a PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the CHANGELOG entry MUST include a "Behavior change" block with these 3 fields. PR #1294 is the canonical reference example. |
 
 ---
 
@@ -313,6 +316,77 @@ PR #1303 caught the FormData-vs-server-state distinction (form params unaffected
 - [ ] Audit A Phase 2 (#1284, #1285, #1286) — `_action_state` reconnect, snapshot truncation warning, change-detection unification; targets v0.9.3
 - [ ] Audit B Phase 2/3 (#1287, #1288, #1289, #1290) — decorator-contract spec tests + linter; targets v0.9.3
 - [ ] Audit C Phase 2 (Item 212 / #1308) — bidirectional-binding inventory; targets v0.9.3 / v0.9.4
+
+---
+
+## v0.9.2-5 — Lifecycle + Decorator/Tag audit Phase 1 (pre-stable blockers) (PRs #1282, #1292, #1293, #1294)
+
+**Date**: 2026-05-01
+**Scope**: Fifth drain bucket toward v0.9.2 release. Audit-driven cohort: PR #1282 shipped two companion audits (`docs/audits/lifecycle-2026-05.md` + `docs/audits/decorator-contract-2026-05.md`, 482 total lines) plus 8 pre-staged GitHub issues (#1283-#1290). Implementation PRs #1292 (lifecycle mount drains, closing #1280 + #1283), #1293 (data_table tag-name + handler completion, closing #1275 + #1279 + #1291), #1294 (`@action` re-raise contract, closing #1276) closed 7 of the 10 audit-cohort 🔴 originals in one session. After this milestone, only #1281 (split-foundation work) remained as a known issue blocking stable.
+
+**Tests at close**: 4863 Python (was ~4810; +53 across 4 new test files: handle_mount_drains_queues, data_table_handler_contracts, action_decorator_contract, plus updates to test_action_decorator + test_data_table_mixin_liveview + 2 fixture-fix files) + 190 Rust djust_vdom (unchanged) + 1499 JS (unchanged).
+
+### What We Learned
+
+**1. Stage 11 reviewer + Action #1200 tautology check produced a real save — but Stage 11 is late.**
+PR #1292's Stage 11 reviewer flagged `TestHandleMountDrainBehavior::test_tail_drains_both_queues_in_order` as a tautology — the test never invoked `handle_mount`, just awaited 3 AsyncMocks in the desired order and asserted that order. Action #1200 (canonicalized in v0.9.4 retro) caught it correctly. But the question — "would this pass if the action didn't run?" — is mechanical and applies to every new test. Catching it at Stage 7 self-review would save a Stage-11-driven follow-up commit and frees Stage 11 reviewer cycles for higher-value structural review.
+
+**Action taken**: Open — tracked in Action Tracker #215 (GitHub #1311).
+
+**2. Single-script-transformation pattern proven again for bulk renames.**
+PR #1293 used a single Python script (`/tmp/fix-data-table-event-names.py`) to rename 23 emit-name strings across 4 files in one atomic pass. Zero regressions, all tests passed first try, no partial-state windows. Action #180 lists the pattern as a "safe alternative" to incremental Edit calls when working in parallel agents; v0.9.2-5 demonstrated it's the right shape for sequential single-implementer bulk operations too. Worth elevating from "safe alternative" to canon for any rename touching >5 sites or multiple files.
+
+**Action taken**: Open — tracked in Action Tracker #216 (GitHub #1312).
+
+**3. Behavior-change PRs need an explicit CHANGELOG migration block.**
+PR #1294 changed `@action`'s re-raise contract — a behavior change for any code that wrapped `@action` calls in try/except. The CHANGELOG entry included a "Behavior change" block with (a) what changed, (b) who's affected, (c) migration path. Stage 11 confirmed this was the right level of detail. Without the block, downstream consumers find out at upgrade time when their code/tests break and have to re-derive the migration path from the diff. The 30-second cost during the originating PR saves much more across all downstream consumers. Worth canonicalizing as a Stage 9 checklist item.
+
+**Action taken**: Open — tracked in Action Tracker #217 (GitHub #1313).
+
+**4. Audit-as-pre-staged-work-graph recipe scaled to a 4-PR + 8-issue wave.**
+v0.9.2-3 demonstrated the recipe at 5 issues / 1 grouped PR / ~75 min wall-clock. v0.9.2-5 ran it at 8 pre-staged issues / 4 PRs / ~few hours: PR #1282 audit + 8 issues filed → PR #1292/#1293/#1294 closed 7 of the 8 (one deferred to v0.9.3) + 5 🟡 follow-up issues filed as Stage 11 byproducts (#1295-#1299). Closed 7 of 10 audit-cohort 🔴 originals in single session. Recipe works at 8x scale, not just 5x.
+
+**Action taken**: Closed — validates existing audit-as-pre-staged-work-graph recipe (action #210, OUT-OF-REPO). 4 consecutive milestones now using this pattern.
+
+**5. Stage 11 🟡 follow-ups filed reflexively — never amend-and-force-push.**
+PR #1292 had 1 🟡 (`_mount_one` collector seam). PR #1293 had 3 🟡 (standalone `DataTable` Component, stale fixture defaults, missing WS smoke test). PR #1294 had 1 🟡 (`@background + @action` combo docs). All 5 filed as separate issues (#1295-#1299) rather than scope-creeping the originating PR. 4 consecutive milestones (v0.9.2-1 #1240, v0.9.2-3 audit weakness, v0.9.2-4 #1264, this milestone's 5 follow-ups) demonstrate the canon: 🟡 plan-fidelity findings get a separate small PR/issue.
+
+**Action taken**: Closed — validates existing canon. No new action required.
+
+### Insights
+
+- **Doc-claim-verbatim TDD pattern (#1046) is now reflexive across 4 consecutive milestones.** PR #1294's `TestActionExceptionDoesNotPropagate` directly asserted each docstring claim. The pattern continues to deliver clean Stage 11 outcomes.
+- **The `Exception` vs `BaseException` distinction was tested explicitly** (PR #1294's `test_action_keyboard_interrupt_still_propagates` + `test_baseexception_still_propagates`). Stops a future reviewer from "helpfully" widening the catch and breaking Ctrl-C semantics.
+- **Test-fixture compatibility fixes stayed scoped to the originating PR** (PR #1292's `_FakeConsumer._flush_push_events` sync→async stub fix in two fixture files). Action #1079 (broader-sweep scope-discipline) was honored: the scope-creep alternative would've been to rewrite the fake-consumer landscape; the canon-respecting alternative was to fix only the 2 cited fixtures.
+- **Three reviewer agents in parallel for v0.9.2-5 vs zero for v0.9.2-6 was the right calibration.** v0.9.2-5's audit-driven specs were proven novel (mount drain + 23-site rename + contract change); reviewers caught 5 real follow-ups. v0.9.2-6's audit-driven specs were tighter (1-line parser change + 1-method add + 1-line credentials flag); the reviewer-cycle ROI was lower. Skipping reviews on subsequent identical-shape PRs is reasonable when Stage 11 has previously validated the approach on the same audit cohort.
+
+### Review Stats
+
+| Metric | #1282 | #1292 | #1293 | #1294 | Total |
+|--------|-------|-------|-------|-------|-------|
+| Tests added | 0 (docs PR) | 4 (3 + 1 ordering — tautology dropped) | 15 + 1 canary update | 8 + 6 updated | 33 + 1 fuzz seed |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 2 | 3 | 1 | 6 |
+| Findings fixed in PR | 0 | 1 (tautology dropped at Stage 11) | 0 (filed separately) | 0 (filed separately) | 1 |
+| Findings filed as follow-up | 0 | 1 (#1295) | 3 (#1296, #1297, #1298) | 1 (#1299) | 5 |
+| CI failures | 0 | 1 (test fixture, fixed in PR) | 0 | 0 | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No changes this milestone.
+**Pipeline template**: No changes this milestone.
+**Checklist**: No changes this milestone.
+**Audits** (NEW): added `docs/audits/lifecycle-2026-05.md` (177 lines) + `docs/audits/decorator-contract-2026-05.md` (305 lines). Modeled on `docs/vdom/AUDIT-2026-04-30.md` shape. Drove the 4-PR Phase-1 wave via 8 pre-staged issues.
+**Skills**: No changes.
+
+### Open Items
+
+- [ ] Item 215 / #1311 — Stage 7 tautology check elevation
+- [ ] Item 216 / #1312 — single-script-transformation canon
+- [ ] Item 217 / #1313 — behavior-change CHANGELOG migration block
+- [ ] #1281 — private-state re-render (deferred to v0.9.3 per ROADMAP scoping decision)
+- [ ] #1295, #1296, #1297, #1298, #1299 — Stage 11 🟡 follow-ups (5 total: `_mount_one` collector gap, standalone DataTable Component, stale fixture defaults, missing WS smoke test, `@background+@action` docs); targets v0.9.3
+- [ ] Audit A Phase 2 (#1284, #1285, #1286), Audit B Phase 2/3 (#1287-#1290) — split-foundation + linter + spec tests; targets v0.9.3
 
 ---
 
