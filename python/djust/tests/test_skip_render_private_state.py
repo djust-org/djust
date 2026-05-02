@@ -3,7 +3,7 @@
 ``_snapshot_assigns()`` previously used ``k.startswith("_")`` to skip
 ALL underscore-prefixed attrs from change detection. This meant a handler
 that mutated only private state (e.g. ``self._orders``) would produce
-identical pre/post snapshots → ``skip_render = True`` → client received
+identical pre/post snapshots -> ``skip_render = True`` -> client received
 a noop frame instead of a render.
 
 The fix replaces the blanket prefix check with membership in
@@ -18,9 +18,10 @@ from djust.websocket import _snapshot_assigns
 
 
 class _PrivateStateView(LiveView):
-    """Minimal view that sets private state in mount()."""
+    """Minimal view that sets private state post-init."""
 
-    def mount(self, request, **kwargs):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.title = "Home"
         self._orders = []
         self._cache = {}
@@ -34,7 +35,6 @@ class TestFrameworkPrivateAttrsExcluded:
         view.count = 0
         view.name = "test"
         snap = _snapshot_assigns(view)
-        # Framework _-prefixed set at init time are excluded
         assert "_changed_keys" not in snap
         assert "_skip_render" not in snap
 
@@ -50,10 +50,8 @@ class TestFrameworkPrivateAttrsExcluded:
 class TestUserPrivateAttrsIncluded:
     """User ``_``-prefixed attrs set after __init__ ARE in the snapshot."""
 
-    def test_user_private_attrs_in_snapshot_after_mount(self):
+    def test_user_private_attrs_in_snapshot(self):
         view = _PrivateStateView()
-        view.init_table_state()  # simulate mount lifecycle
-        view.mount(request={})
         snap = _snapshot_assigns(view)
         assert "_orders" in snap
         assert "_cache" in snap
@@ -62,16 +60,20 @@ class TestUserPrivateAttrsIncluded:
         """User-set private attrs are NOT in _framework_attrs (proving
         they're not accidentally excluded by membership check)."""
         view = _PrivateStateView()
-        view.init_table_state()
-        view.mount(request={})
         assert "_orders" not in view._framework_attrs
         assert "_cache" not in view._framework_attrs
 
     def test_framework_private_attrs_are_in_framework_attrs(self):
-        """Sanity: framework _-prefixed attrs ARE in _framework_attrs."""
+        """Sanity: framework _-prefixed attrs ARE in _framework_attrs.
+
+        Note: _framework_attrs itself, _skip_render, and _changed_keys
+        are assigned AFTER the frozenset capture, so they're
+        self-referentially absent. But other framework attrs set during
+        __init__ (before the capture) are present.
+        """
         view = LiveView()
-        assert "_changed_keys" in view._framework_attrs
-        assert "_skip_render" in view._framework_attrs
+        assert "_ws_consumer" in view._framework_attrs
+        assert "_session_id" in view._framework_attrs
 
 
 class TestChangeDetectionWithPrivateState:
@@ -79,8 +81,6 @@ class TestChangeDetectionWithPrivateState:
 
     def test_mutating_only_private_state_changes_snapshot(self):
         view = _PrivateStateView()
-        view.init_table_state()
-        view.mount(request={})
         view.title = "Before"
 
         pre = _snapshot_assigns(view)
@@ -88,25 +88,20 @@ class TestChangeDetectionWithPrivateState:
         view._cache["key"] = "value"
         post = _snapshot_assigns(view)
 
-        # pre/post must differ — without this, skip_render would be True.
         assert pre != post, (
             "#1281: mutating only _-prefixed user state must change the "
             "snapshot so skip_render is NOT triggered"
         )
 
     def test_mutating_nothing_keeps_snapshot_equal(self):
-        """Existing optimization: no mutation → no render."""
         view = _PrivateStateView()
-        view.init_table_state()
-        view.mount(request={})
 
         pre = _snapshot_assigns(view)
         post = _snapshot_assigns(view)
 
-        assert pre == post, "no mutation → snapshots should be equal → noop"
+        assert pre == post, "no mutation -> snapshots should be equal -> noop"
 
     def test_mutating_public_state_changes_snapshot(self):
-        """Existing behavior preserved: public attr changes trigger render."""
         view = LiveView()
         view.count = 0
 
@@ -118,8 +113,6 @@ class TestChangeDetectionWithPrivateState:
 
     def test_mutating_both_public_and_private_changes_snapshot(self):
         view = _PrivateStateView()
-        view.init_table_state()
-        view.mount(request={})
         view.title = "Before"
 
         pre = _snapshot_assigns(view)
@@ -132,8 +125,6 @@ class TestChangeDetectionWithPrivateState:
     def test_reassign_private_state_changes_snapshot(self):
         """Reassigning a _private attr (new id()) is detected."""
         view = _PrivateStateView()
-        view.init_table_state()
-        view.mount(request={})
 
         pre = _snapshot_assigns(view)
         view._orders = [{"id": 1}]  # reassign, not in-place mutate
