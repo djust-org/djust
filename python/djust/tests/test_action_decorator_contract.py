@@ -162,3 +162,119 @@ class TestActionLazyInitializesActionState:
         v.lazy_handler()
         assert hasattr(v, "_action_state")
         assert v._action_state["lazy_handler"]["result"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# #1299: @action + @background combo — error in _action_state, not callback.
+# ---------------------------------------------------------------------------
+
+
+class _ActionBackgroundHost:
+    """Minimal host that provides both @action's _action_state and
+    @background's start_async + handle_async_result."""
+
+    def __init__(self):
+        self._action_state = {}
+        self._async_tasks = {}
+        self.handle_async_result_calls = []
+        self._task_counter = 0
+
+    def start_async(self, callback, *args, name=None, **kw):
+        if name is None:
+            self._task_counter += 1
+            name = f"_async_{self._task_counter}"
+        self._async_tasks[name] = (callback, args, kw)
+
+    def handle_async_result(self, name, result=None, error=None):
+        self.handle_async_result_calls.append((name, result, error))
+
+
+class TestActionBackgroundCombo:
+    """#1299: @action + @background contract.
+
+    When combined, @action swallows exceptions → @background never sees them.
+    The error signal is _action_state[name]["error"], NOT handle_async_result's
+    error parameter.
+    """
+
+    def test_action_background_raises_error_in_action_state_not_re_raised(self):
+        from djust.decorators import action, background, event_handler
+
+        class TestView(_ActionBackgroundHost):
+            @event_handler
+            @background
+            @action
+            def slow_op(self, **kwargs):
+                raise ValueError("boom")
+
+        view = TestView()
+        view.slow_op()
+
+        # The callback should be scheduled via start_async.
+        assert len(view._async_tasks) == 1
+        _, (cb, args, kwargs) = list(view._async_tasks.items())[0]
+
+        # Run the callback.  It must NOT re-raise — @action swallows.
+        result = cb(*args, **kwargs)
+        assert result is None, "@action swallowed the exception; callback returns None"
+
+        # Error is recorded in _action_state.
+        state = view._action_state["slow_op"]
+        assert state["error"] == "boom"
+        assert state["pending"] is False
+        assert state["result"] is None
+
+    def test_action_background_handle_async_result_receives_error_none(self):
+        """When @action swallows the exception, the callback returns normally,
+        so _run_async_work would call handle_async_result with error=None.
+        """
+        from djust.decorators import action, background, event_handler
+
+        class TestView(_ActionBackgroundHost):
+            @event_handler
+            @background
+            @action
+            def slow_op(self, **kwargs):
+                raise ValueError("boom")
+
+        view = TestView()
+        view.slow_op()
+        _, (cb, args, kwargs) = list(view._async_tasks.items())[0]
+
+        # Simulate what _run_async_work does on success.
+        result = cb(*args, **kwargs)
+        view.handle_async_result("slow_op", result=result, error=None)
+
+        assert len(view.handle_async_result_calls) == 1
+        assert view.handle_async_result_calls[0] == ("slow_op", None, None), (
+            "handle_async_result receives error=None because @action "
+            "swallowed the exception — the error is in _action_state"
+        )
+
+        # _action_state still has the real error.
+        assert view._action_state["slow_op"]["error"] == "boom"
+
+    def test_action_background_success_populates_result(self):
+        """Happy path: @action + @background success still works."""
+        from djust.decorators import action, background, event_handler
+
+        class TestView(_ActionBackgroundHost):
+            @event_handler
+            @background
+            @action
+            def slow_op(self, **kwargs):
+                return {"ok": True}
+
+        view = TestView()
+        view.slow_op()
+        _, (cb, args, kwargs) = list(view._async_tasks.items())[0]
+
+        result = cb(*args, **kwargs)
+        assert result == {"ok": True}
+
+        view.handle_async_result("slow_op", result=result, error=None)
+        assert view.handle_async_result_calls[0] == ("slow_op", {"ok": True}, None)
+
+        state = view._action_state["slow_op"]
+        assert state["error"] is None
+        assert state["result"] == {"ok": True}
