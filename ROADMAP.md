@@ -186,7 +186,7 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 ### Milestone: v0.9.3-2 — #1281 private-state re-render (split-foundation)
 
-**Status:** ⬜ planning — #1281 is the headliner.
+**Status:** 🔄 in progress — #1281 + #1284 merged; #1285 in PR #1326.
 
 *Goal:* Fix the private-state re-render gap: handlers that mutate only
 `self._*` private state get `noop` from the Rust diff because the
@@ -197,12 +197,12 @@ short-circuit so `render_with_diff()` always runs when
 
 #### Tasks
 
-- [ ] **#1281 — Private state changes don't trigger Rust diff re-render** (🔴 split-foundation). Handler mutates `self._x`; diff sees no public change → `noop`; template depends on `self._x` via `get_context_data()`.
+- [x] **#1281 — Private state changes don't trigger Rust diff re-render** (🔴 split-foundation). Fixed in PR #1323: `_snapshot_assigns()` now uses `_framework_attrs` membership instead of `k.startswith("_")`. 9 regression cases.
 
 #### Related audit items (deferred)
 
-- #1284 — `_action_state` persistence across reconnects
-- #1285 — snapshot truncation warning
+- [x] #1284 — `_action_state` persistence across reconnects (PR #1324 merged)
+- [x] #1285 — snapshot truncation warning (PR #1326 open)
 - #1286 — change-detection unification (Python vs Rust)
 
 #### Acceptance
