@@ -164,6 +164,34 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 Drain buckets accumulating toward release `v0.9.2`. First bucket `v0.9.2-1` is open; further buckets (`-2`, `-3`, …) will be added as work surfaces.
 
+### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
+
+**Status:** ✅ shipped 2026-05-02. 1 issue closed via 1 PR. Smallest pre-stable drain bucket: a 1-line broken-anchor fix that's been carried since the deployment guide was written. Pre-existing on main (flagged as 🟡 in PR #1265 Stage 11 review and filed as #1266 rather than scope-creeping the deployment-guide PR — three consecutive milestones now use the canon "🟡 plan-fidelity findings get a separate small PR").
+
+*Goal:* Tidy up the one trivial known issue before tagging v0.9.2 stable. After this drain, v0.9.2 stable is cuttable with zero outstanding 🟡 docs issues from prior milestones.
+
+#### Tasks (one PR)
+
+- [x] **#1266 — `docs(deployment): fix broken anchor #production-checklist`** ✅ — `docs/website/guides/deployment.md:208` referenced `[deployment runbook](#production-checklist)` but the actual heading was `## Deployment Checklist` (auto-anchor `#deployment-checklist`). Closed by PR #TBD via 1-line replacement.
+
+#### Out of scope (deferred)
+
+All other open issues defer to v0.9.3 (post-stable):
+- Audit A Phase 2 (#1281, #1284, #1285, #1286)
+- Audit B Phase 2/3 (#1287-#1290)
+- v0.9.2-5 Stage 11 follow-ups (#1295-#1299)
+- Retro tracker rows from this session (#1307-#1313)
+- Cross-repo carryovers (#1259, #1264 — OUT-OF-REPO)
+
+#### Acceptance for v0.9.2-7
+
+- #1266 closed via merged PR.
+- Anchor resolves correctly in GitHub Markdown preview.
+- No new broken anchors introduced (other anchor refs verified intact).
+- Then: `/djust-release 0.9.2` to cut stable.
+
+---
+
 ### Milestone: v0.9.2-6 — Audits C/D/E/F/G originals (pre-stable, MEDIUM scope) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-01. Five issues closed via 5 merged PRs (#1301 dj-transition, #1302 AsyncResult, #1303 form submit debounce, #1304 dj-dialog reverse-sync, #1305 SSE cookies). After this drain, v0.9.2 stable is cuttable — only #1281 remains as a documented known issue (split-foundation work targeted for v0.9.3).
