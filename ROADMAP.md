@@ -213,7 +213,7 @@ short-circuit so `render_with_diff()` always runs when
 
 ### Milestone: v0.9.3-3 — audit B decorator contracts (#1287-#1290)
 
-**Status:** 🔄 in progress — #1287 + #1288 done, #1289 + #1290 remaining.
+**Status:** 🔄 in progress — #1287 + #1288 done, #1289 in PR, #1290 remaining.
 
 *Goal:* Close all 4 audit B findings: `@reactive` silent no-op, `@background` return-value docs, `@computed` thread-safety, handler-contracts linter.
 
@@ -221,7 +221,7 @@ short-circuit so `render_with_diff()` always runs when
 
 - [x] **#1287 — `@reactive` silent no-op when subclass missing `update()`** (🟡). Replace `hasattr` guard with `__set_name__` assertion. ✅
 - [x] **#1288 — `@background` return value contract is undocumented** (🟡). Doc-only: update docstring. ✅
-- [ ] **#1289 — `@computed` cache-dict mutation not thread-safe** (🟡). Add per-instance `threading.Lock`.
+- [x] **#1289 — `@computed` cache-dict mutation not thread-safe** (🟡). Add per-instance `threading.Lock`. ✅
 - [ ] **#1290 — `scripts/check-handler-contracts.py` linter** (🟡). New AST-based static checker.
 
 #### Acceptance

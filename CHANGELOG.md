@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   result tracking. 2 regression cases in
   ``test_background_return_value_docs.py``.
 
+- **@computed memoized cache is now thread-safe (#1289).**
+  The ``@computed`` decorator's memoized form previously mutated the
+  per-instance cache dict without synchronization, creating a race
+  window between threads (e.g. a ``@background`` callback and template
+  rendering). A per-instance ``threading.Lock`` now protects the
+  check-then-act cache mutation. 3 regression cases in
+  ``test_decorator_computed_thread_safety.py``.
+
 ## [0.9.3rc1] - 2026-05-02
 
 ### Fixed
