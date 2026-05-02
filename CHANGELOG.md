@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2rc2] - 2026-05-01
+
 ### Fixed
 
 - **`dj-transition` now accepts 1-token short form, matching documented
