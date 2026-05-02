@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **@reactive now fails at class-definition time on classes missing ``update()`` (#1287).**
+  The ``@reactive`` decorator previously guarded ``self.update()`` with
+  ``hasattr(self, 'update')``, silently no-opping when the host class lacked
+  the method. It now uses ``__set_name__`` to validate at class-definition
+  time, raising ``TypeError`` with a clear message. The ``_ReactiveProperty``
+  descriptor also calls ``update()`` automatically for both default and
+  custom setters. 6 regression cases in
+  ``test_decorator_reactive_requires_update.py``.
+
+- **@background docstring now documents return-value contract (#1288).**
+  The decorator's docstring mentions that handler return values are
+  discarded and points users to ``@action`` + ``_action_state`` for
+  result tracking. 2 regression cases in
+  ``test_background_return_value_docs.py``.
+
 ## [0.9.3rc1] - 2026-05-02
 
 ### Fixed

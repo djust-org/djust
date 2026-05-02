@@ -211,6 +211,24 @@ short-circuit so `render_with_diff()` always runs when
 - [x] Audit A Phase 2 (#1284, #1285, #1286) all addressed — #1286 in PR #1327.
 - Then: commission v0.9.3-3 or cut v0.9.3 release.
 
+### Milestone: v0.9.3-3 — audit B decorator contracts (#1287-#1290)
+
+**Status:** 🔄 in progress — #1287 + #1288 done, #1289 + #1290 remaining.
+
+*Goal:* Close all 4 audit B findings: `@reactive` silent no-op, `@background` return-value docs, `@computed` thread-safety, handler-contracts linter.
+
+#### Tasks
+
+- [x] **#1287 — `@reactive` silent no-op when subclass missing `update()`** (🟡). Replace `hasattr` guard with `__set_name__` assertion. ✅
+- [x] **#1288 — `@background` return value contract is undocumented** (🟡). Doc-only: update docstring. ✅
+- [ ] **#1289 — `@computed` cache-dict mutation not thread-safe** (🟡). Add per-instance `threading.Lock`.
+- [ ] **#1290 — `scripts/check-handler-contracts.py` linter** (🟡). New AST-based static checker.
+
+#### Acceptance
+
+- All 4 audit B issues closed.
+- Then: commission v0.9.3-4 or cut v0.9.3 release.
+
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-02. 1 issue closed via 1 PR. Smallest pre-stable drain bucket: a 1-line broken-anchor fix that's been carried since the deployment guide was written. Pre-existing on main (flagged as 🟡 in PR #1265 Stage 11 review and filed as #1266 rather than scope-creeping the deployment-guide PR — three consecutive milestones now use the canon "🟡 plan-fidelity findings get a separate small PR").
