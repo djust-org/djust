@@ -227,7 +227,42 @@ short-circuit so `render_with_diff()` always runs when
 #### Acceptance
 
 - All 4 audit B issues closed.
-- Then: commission v0.9.3-4 or cut v0.9.3 release.
+- Then: commission v0.9.3-4 drain.
+
+### Milestone: v0.9.3-4 — audit & process drain (pre-stable soak)
+
+**Status:** 🔄 in progress.
+
+*Goal:* Keep v0.9.3rc1 in field longer for soak while closing out remaining audit/process items. Fix 2 decorator bugs + 5 process canon tech-debt + 2 pipeline-skill carryovers + test cleanup. No new features — drain bucket only.
+
+#### Tasks
+
+**Bugs (P1):**
+
+- [ ] **#1315 — `dj-form-pending` flips on then immediately off on WebSocket path** (🟡). UX bug: form-pending class appears briefly but never visibly renders, so user never sees pending indicator on WS form submits.
+- [ ] **#1316 — `@server_function` hard-codes auth, should defer to `login_required` + `@permission_required`** (🟡). Design bug: auth override in `@server_function` prevents composability with Django's standard auth decorators.
+
+**Tech-debt — process canon (P2):**
+
+- [ ] **#1309 — Audit findings should include "review-when" trigger annotation**
+- [ ] **#1310 — Introduce "OUT-OF-REPO" Action Tracker status for cross-repo items**
+- [ ] **#1311 — Elevate Action #1200 tautology check to Stage 7 self-review**
+- [ ] **#1312 — Elevate single-script-transformation pattern to canon for bulk renames**
+- [ ] **#1313 — Behavior-change CHANGELOG migration block as Stage 9 checklist item**
+
+**Tech-debt — pipeline skills (P2):**
+
+- [ ] **#1259 — Document audit-as-pre-staged-work-graph recipe in pipeline-drain skill**
+- [ ] **#1264 — pipeline-drain skill should emit `Audit-bypass-reason:` trailer**
+
+**Test cleanup:**
+
+- [ ] **#1325 — Move `test_skip_render_private_state.py` to `python/tests/` for CI coverage**
+
+#### Acceptance
+
+- All 10 items closed.
+- Then: evaluate whether v0.9.3 is ready to cut, or commission v0.9.3-5.
 
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
