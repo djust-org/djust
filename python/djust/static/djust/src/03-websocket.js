@@ -82,9 +82,11 @@ class LiveViewWebSocket {
         this._removeReconnectBanner();
 
         // Event sequencing (#560): clear pending event state
+        _pendingEventResolvers.forEach(resolve => resolve(null));
         _pendingEventRefs.clear();
         _pendingEventNames.clear();
         _pendingTriggerEls.clear();
+        _pendingEventResolvers.clear();
         _tickBuffer.length = 0;
     }
 
@@ -168,9 +170,11 @@ class LiveViewWebSocket {
             pendingEvents.clear();
 
             // Event sequencing (#560): clear pending event state
+            _pendingEventResolvers.forEach(resolve => resolve(null));
             _pendingEventRefs.clear();
             _pendingEventNames.clear();
             _pendingTriggerEls.clear();
+            _pendingEventResolvers.clear();
             _tickBuffer.length = 0;
 
             // Remove loading indicators from DOM
@@ -586,6 +590,13 @@ class LiveViewWebSocket {
                     _pendingEventRefs.delete(data.ref);
                     _pendingEventNames.delete(data.ref);
                     _pendingTriggerEls.delete(data.ref);
+                    // #1315: Resolve the sendEvent Promise so callers awaiting
+                    // the server response (e.g. _handleDjSubmit) can proceed.
+                    const resolver = _pendingEventResolvers.get(data.ref);
+                    if (resolver) {
+                        _pendingEventResolvers.delete(data.ref);
+                        resolver(data);
+                    }
                 } else if (isServerInitiated) {
                     // Server-initiated patch with no pending events — apply
                     // without consuming event loading state.
@@ -675,9 +686,11 @@ class LiveViewWebSocket {
                 }));
 
                 // Clear pending event refs (#560)
+                _pendingEventResolvers.forEach(resolve => resolve(null));
                 _pendingEventRefs.clear();
                 _pendingEventNames.clear();
                 _pendingTriggerEls.clear();
+                _pendingEventResolvers.clear();
                 _tickBuffer.length = 0;
 
                 // Phase 5: Stop loading state on error
@@ -734,6 +747,12 @@ class LiveViewWebSocket {
                     _pendingEventRefs.delete(data.ref);
                     _pendingEventNames.delete(data.ref);
                     _pendingTriggerEls.delete(data.ref);
+                    // #1315: Resolve the sendEvent Promise on noop too.
+                    const resolver = _pendingEventResolvers.get(data.ref);
+                    if (resolver) {
+                        _pendingEventResolvers.delete(data.ref);
+                        resolver(data);
+                    }
                 }
 
                 if (noopEvName) {
@@ -1063,13 +1082,20 @@ class LiveViewWebSocket {
         _pendingEventNames.set(ref, eventName);
         _pendingTriggerEls.set(ref, triggerElement);
 
-        this.sendMessage({
-            type: 'event',
-            event: eventName,
-            params: params,
-            ref: ref
+        // #1315: Return a Promise so callers can await the server response
+        // before running post-response logic (e.g. _setFormPending(false)).
+        // Without this, fire-and-forget WS dispatch causes handleEvent to
+        // resolve synchronously, and form-pending toggles off before any
+        // browser repaint.
+        return new Promise((resolve) => {
+            _pendingEventResolvers.set(ref, resolve);
+            this.sendMessage({
+                type: 'event',
+                event: eventName,
+                params: params,
+                ref: ref
+            });
         });
-        return true;
     }
 
     // Removed duplicate applyPatches and patch helper methods

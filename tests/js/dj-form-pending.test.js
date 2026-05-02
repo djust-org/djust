@@ -296,6 +296,98 @@ describe('dj-form-pending', () => {
         expect(label.hasAttribute('hidden')).toBe(false);
     });
 
+    describe('WebSocket path (#1315)', () => {
+        /**
+         * On the WebSocket path, sendEvent returns a Promise that resolves
+         * when the server's response (patch/noop/error) arrives. This keeps
+         * the dj-form-pending state visible for the full network round-trip.
+         *
+         * Before #1315, sendEvent returned true synchronously, so
+         * handleEvent resolved immediately and _setFormPending(false)
+         * fired before any browser repaint — the user never saw it.
+         */
+
+        function createWSEnv(bodyHtml) {
+            const dom = new JSDOM(
+                `<!DOCTYPE html><html><body data-dj-view="app.FormView">${bodyHtml}</body></html>`,
+                { runScripts: 'dangerously', url: 'http://localhost/' },
+            );
+
+            const sentMessages = [];
+            dom.window.eval(`
+                window.DJUST_USE_WEBSOCKET = true;
+                window.WebSocket = class {
+                    static get CONNECTING() { return 0; }
+                    static get OPEN() { return 1; }
+                    static get CLOSING() { return 2; }
+                    static get CLOSED() { return 3; }
+                    constructor() {
+                        this.readyState = WebSocket.OPEN;
+                        this.onopen = null;
+                        this.onclose = null;
+                        this.onmessage = null;
+                        this.onerror = null;
+                    }
+                    send(data) {
+                        window._testSentMessages.push(JSON.parse(data));
+                    }
+                    close() {}
+                };
+                window._testSentMessages = [];
+                Object.defineProperty(document, 'hidden', {
+                    value: false, writable: true, configurable: true
+                });
+            `);
+
+            return dom;
+        }
+
+        it('sendEvent returns a Promise that resolves on server response', async () => {
+            // Unit test: verify sendEvent returns a Promise (not true) and
+            // that it resolves when handleMessage receives a matching ref.
+            const dom = createWSEnv(
+                `<form dj-submit="save"><input name="x"/></form>`,
+            );
+            dom.window.eval(clientCode);
+
+            const ws = new dom.window.djust.LiveViewWebSocket();
+            ws.enabled = true;
+            ws.ws = new dom.window.WebSocket();
+            ws.ws.readyState = dom.window.WebSocket.OPEN;
+            ws.viewMounted = true;
+
+            // #1315: sendEvent must return a Promise, not boolean
+            const result = ws.sendEvent('save', { x: '1' });
+            expect(result).toBeInstanceOf(dom.window.Promise);
+
+            // The Promise should not resolve synchronously
+            let resolved = false;
+            result.then(() => { resolved = true; });
+            await nativeSleep(10);
+            expect(resolved).toBe(false);
+
+            // Simulate server response with matching ref
+            await ws.handleMessage({ type: 'noop', ref: 1 });
+
+            // Now the Promise should be resolved
+            await nativeSleep(10);
+            expect(resolved).toBe(true);
+        });
+
+        it('sendEvent returns false when WS is down (backward compat)', () => {
+            const dom = createWSEnv('<form dj-submit="save"><input name="x"/></form>');
+            dom.window.eval(clientCode);
+
+            const ws = new dom.window.djust.LiveViewWebSocket();
+            ws.enabled = false;  // simulate WS disabled
+
+            // When WS is down, sendEvent returns false (not a Promise),
+            // so callers can fall back to HTTP.
+            const result = ws.sendEvent('save', {});
+            expect(result).toBe(false);
+        });
+    });
+
     it('ignores unknown dj-form-pending modes (forward-compat)', async () => {
         // Future-proof: an unrecognized mode like "future-mode" must be
         // silently ignored, not crash the submit handler.
