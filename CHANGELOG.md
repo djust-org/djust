@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-05-02
+
 ### Fixed
 
 - **`markdown` and `nh3` moved from optional extras to core dependencies.**
@@ -16,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the `[components]` extra, causing `ModuleNotFoundError` when the extra
   wasn't explicitly installed. Caught during djustlive scaffold deployment
   to k8s.
+
+This stable release rolls up all v0.9.2rc1 + rc2 fixes (audit-driven
+Phase 1 work across audits A-G; 11 of 12 🔴 originals from the
+"downstream consumer surfaced" cohort closed; #1281 deferred to v0.9.3
+as documented known issue). See [0.9.2rc2] below for the full
+audit-cohort delta.
 
 ## [0.9.2rc2] - 2026-05-01
 
