@@ -168,31 +168,48 @@ All 7 drain buckets shipped. 11 of 12 audit-original bugs closed; #1281 deferred
 
 Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` collects all v0.9.2-6 deferred items.
 
-### Milestone: v0.9.3-1 — v0.9.2 deferred items (initial drain)
+### Milestone: v0.9.3-1 — v0.9.2 deferred items (initial drain) ✅ shipped
 
-**Status:** 🟢 in review — all 7 issues have PRs (1 merged, 4 open).
+**Status:** ✅ shipped 2026-05-02. All 7 issues closed via 5 PRs (#1318, #1319, #1320, #1321, #1322).
 
 *Goal:* Close the smaller deferred items first (#1295-#1299, #1307, #1308) to clear the deck before tackling the split-foundation #1281 work.
 
 #### Tasks
 
-- [x] **#1299 — `@background + @action` combo: `handle_async_result` won't see error** (P2, doc+test). ✅ PR #1318 merged.
-- [x] **#1295 — `_mount_one` collector swallows mount-time push events** (P2, bug). PR #1319 open (CI green, awaiting review).
-- [x] **#1296 — standalone `DataTable` Component carries same emit-name bug as #1275** (P2, bug). PR #1320 open (bundled with #1297, #1298).
-- [x] **#1297 — stale fixture defaults in `test_data_table_link_row_nav.py`** (P3, test). PR #1320 open.
-- [x] **#1298 — WS-level integration smoke test for renamed `on_table_*` handlers** (P3, test). PR #1320 open.
-- [x] **#1307 — canonicalize opt-in framework-design pattern** (P3, docs). PR #1321 open.
-- [x] **#1308 — Audit C Phase 2: bidirectional-binding inventory** (P3, audit). PR #1322 open.
+- [x] **#1299** ✅ PR #1318 merged (doc+test: `@background` + `@action` contract).
+- [x] **#1295** ✅ PR #1319 merged (bug: mount-batch push events).
+- [x] **#1296** ✅ PR #1320 merged (bug: Component emit-name default).
+- [x] **#1297** ✅ PR #1320 merged (test: stale fixture defaults).
+- [x] **#1298** ✅ PR #1320 merged (test: WS dispatch smoke test).
+- [x] **#1307** ✅ PR #1321 merged (docs: opt-in extensions canon).
+- [x] **#1308** ✅ PR #1322 merged (audit: bidirectional binding inventory).
 
-#### Out of scope (v0.9.3-2+)
+### Milestone: v0.9.3-2 — #1281 private-state re-render (split-foundation)
 
-- **#1281 — Private state changes don't trigger Rust diff re-render** (🔴 split-foundation; multi-PR). Targeted for v0.9.3-2 after follow-ups clear.
+**Status:** ⬜ planning — #1281 is the headliner.
+
+*Goal:* Fix the private-state re-render gap: handlers that mutate only
+`self._*` private state get `noop` from the Rust diff because the
+change-tracker only compares public (non-underscore) attributes.
+Suggested fix direction: remove the "no public change → skip render"
+short-circuit so `render_with_diff()` always runs when
+`get_context_data()` would produce different output.
+
+#### Tasks
+
+- [ ] **#1281 — Private state changes don't trigger Rust diff re-render** (🔴 split-foundation). Handler mutates `self._x`; diff sees no public change → `noop`; template depends on `self._x` via `get_context_data()`.
+
+#### Related audit items (deferred)
+
+- #1284 — `_action_state` persistence across reconnects
+- #1285 — snapshot truncation warning
+- #1286 — change-detection unification (Python vs Rust)
 
 #### Acceptance
 
-- All 7 non-#1281 issues closed.
-- #1281 planning docs ready for v0.9.3-2.
-- Then: commission v0.9.3-2 with #1281 as headliner.
+- #1281 fixed with regression test.
+- Audit A Phase 2 (#1284, #1285, #1286) either addressed or deferred to v0.9.3-3.
+- Then: commission v0.9.3-3 or cut v0.9.3 release.
 
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
