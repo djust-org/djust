@@ -5,7 +5,6 @@ Exit 0: all directories covered. Exit 1: gap found (missing directory).
 """
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
