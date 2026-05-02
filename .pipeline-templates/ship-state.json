@@ -14,21 +14,21 @@
       "verdict": null,
       "checklist": [
         {
-          "action": "git status \u2014 list all modified, added, deleted, and untracked files",
+          "action": "git status — list all modified, added, deleted, and untracked files",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "git diff --stat \u2014 summarize scope of changes",
+          "action": "git diff --stat — summarize scope of changes",
           "done": false
         },
         {
-          "action": "git diff \u2014 read the full diff to understand what changed",
+          "action": "git diff — read the full diff to understand what changed",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "git log --oneline -5 \u2014 recent commits for context",
+          "action": "git log --oneline -5 — recent commits for context",
           "done": false
         },
         {
@@ -64,7 +64,7 @@
           "done": false
         },
         {
-          "action": "if tests fail: stop \u2014 output TESTS_FAILED with details",
+          "action": "if tests fail: stop — output TESTS_FAILED with details",
           "done": false
         },
         {
@@ -99,17 +99,22 @@
           "mandatory": true
         },
         {
-          "action": "scrutinize every code example in new/changed docs with the same security rigor as production code \u2014 doc examples are copy-pasted by users and inherit the production trust boundary",
+          "action": "scrutinize every code example in new/changed docs with the same security rigor as production code — doc examples are copy-pasted by users and inherit the production trust boundary",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "trace every contract boundary where server/backend data reaches the client \u2014 does ANY exception message, error string, or internal path leak identifying info (ARNs, bucket names, endpoints, file paths)? Raw exceptions surfaced via response bodies, WebSocket error frames, or template context are the main leak vectors",
+          "action": "trace every contract boundary where server/backend data reaches the client — does ANY exception message, error string, or internal path leak identifying info (ARNs, bucket names, endpoints, file paths)? Raw exceptions surfaced via response bodies, WebSocket error frames, or template context are the main leak vectors",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) \u2014 djust sits alongside multiple private downstream apps (the downstream apps listed in .customer-names, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines \u2014 they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
+          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) — djust sits alongside multiple private downstream apps (the downstream apps listed in .customer-names, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines — they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "Tautology check (Action #1200): for every new 'action happened' test assertion, ask 'would this pass if the action didn't run?' Tests that mock-and-call without invoking the SUT fail this check.",
           "done": false,
           "mandatory": true
         },
@@ -167,7 +172,7 @@
           "done": false
         },
         {
-          "action": "update CHANGELOG.md if one exists (CANONICAL CHANGELOG COMMIT BOUNDARY for ship-pipelines \u2014 defer all [Unreleased] hunks to this Stage 5 docs commit per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
+          "action": "update CHANGELOG.md if one exists (CANONICAL CHANGELOG COMMIT BOUNDARY for ship-pipelines — defer all [Unreleased] hunks to this Stage 5 docs commit per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
           "done": false,
           "mandatory": true
         },
@@ -176,7 +181,7 @@
           "done": false
         },
         {
-          "action": "this Stage 5 docs commit must include ONLY docs + CHANGELOG hunks; no implementation code (the two-commit shape gate \u2014 applies even when ship-pipelines start from pre-existing implementation, so the new commit at this stage is docs-only)",
+          "action": "this Stage 5 docs commit must include ONLY docs + CHANGELOG hunks; no implementation code (the two-commit shape gate — applies even when ship-pipelines start from pre-existing implementation, so the new commit at this stage is docs-only)",
           "done": false,
           "mandatory": true
         },
@@ -197,7 +202,7 @@
           "done": false
         },
         {
-          "action": "git remote -v \u2014 verify github remote exists",
+          "action": "git remote -v — verify github remote exists",
           "done": false
         },
         {
@@ -209,7 +214,7 @@
           "done": false
         },
         {
-          "action": "git diff --check \u2014 no conflict markers",
+          "action": "git diff --check — no conflict markers",
           "done": false
         },
         {
@@ -226,7 +231,7 @@
           "done": false
         },
         {
-          "action": "verify PR body against actual diff \u2014 no phantom features",
+          "action": "verify PR body against actual diff — no phantom features",
           "done": false,
           "mandatory": true
         },
@@ -297,7 +302,7 @@
       "status": "pending",
       "verdict": null,
       "run_as": "subagent",
-      "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' \u2014 verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
+      "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
       "checklist": [
         {
           "action": "verify CI green: gh pr checks",

@@ -142,7 +142,7 @@
           "done": false
         },
         {
-          "action": "DO NOT modify CHANGELOG.md in this stage \u2014 defer all [Unreleased] hunks to the Stage 9 docs commit (two-commit shape per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
+          "action": "DO NOT modify CHANGELOG.md in this stage — defer all [Unreleased] hunks to the Stage 9 docs commit (two-commit shape per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
           "done": false,
           "mandatory": true
         },
@@ -208,7 +208,7 @@
           "done": false
         },
         {
-          "action": "cross-ref plan vs implementation \u2014 mark each deliverable DONE/MISSING",
+          "action": "cross-ref plan vs implementation — mark each deliverable DONE/MISSING",
           "done": false
         },
         {
@@ -217,32 +217,32 @@
           "mandatory": true
         },
         {
-          "action": "scrutinize every code example in new/changed docs with the same security rigor as production code \u2014 doc examples are copy-pasted by users and inherit the production trust boundary",
+          "action": "scrutinize every code example in new/changed docs with the same security rigor as production code — doc examples are copy-pasted by users and inherit the production trust boundary",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "trace every contract boundary where server/backend data reaches the client \u2014 does ANY exception message, error string, or internal path leak identifying info (ARNs, bucket names, endpoints, file paths)? Raw exceptions surfaced via response bodies, WebSocket error frames, or template context are the main leak vectors",
+          "action": "trace every contract boundary where server/backend data reaches the client — does ANY exception message, error string, or internal path leak identifying info (ARNs, bucket names, endpoints, file paths)? Raw exceptions surfaced via response bodies, WebSocket error frames, or template context are the main leak vectors",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "WIRING_CHECK \u2014 for every new public method/attribute/hook added on a framework base class (LiveView, LiveComponent, etc.), grep framework hot paths (consumer.py / websocket.py / dispatch.py / renderer) for a real call site. A test-only caller means the feature is not integrated \u2014 flag it as a WIRING_GAP finding, not a pass. Stage 7-vs-Stage 11 delta PRs #814/#837/#840 all failed here.",
+          "action": "WIRING_CHECK — for every new public method/attribute/hook added on a framework base class (LiveView, LiveComponent, etc.), grep framework hot paths (consumer.py / websocket.py / dispatch.py / renderer) for a real call site. A test-only caller means the feature is not integrated — flag it as a WIRING_GAP finding, not a pass. Stage 7-vs-Stage 11 delta PRs #814/#837/#840 all failed here.",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "WORKFLOW-HEADER CROSS-REF (#1244, v0.9.2-1 retro Action Tracker #204): when changed files include `.github/workflows/*.yml` or any file with a header docstring describing runtime behavior, list every behavioural claim in the docstring and verify each one matches the implementation. Behavioural claims include: 'silent in normal operation', 'green run', 'no false positives', 'idempotent', 'safe to run repeatedly', etc. Cross-ref against actual step semantics (pipefail, exit codes, conditional triggers). Pattern from PR #1241 \u2014 the retro-gate-audit.yml header said 'annotations not red runs' but the audit script's exit 1 + GHA `set -eo pipefail` produced red runs on every flagged PR. Stage 11 caught it; Stage 7 should have.",
+          "action": "WORKFLOW-HEADER CROSS-REF (#1244, v0.9.2-1 retro Action Tracker #204): when changed files include `.github/workflows/*.yml` or any file with a header docstring describing runtime behavior, list every behavioural claim in the docstring and verify each one matches the implementation. Behavioural claims include: 'silent in normal operation', 'green run', 'no false positives', 'idempotent', 'safe to run repeatedly', etc. Cross-ref against actual step semantics (pipefail, exit codes, conditional triggers). Pattern from PR #1241 — the retro-gate-audit.yml header said 'annotations not red runs' but the audit script's exit 1 + GHA `set -eo pipefail` produced red runs on every flagged PR. Stage 11 caught it; Stage 7 should have.",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) \u2014 djust sits alongside multiple private downstream apps (the downstream apps listed in .customer-names, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines \u2014 they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
+          "action": "DOWNSTREAM-APP NAME LEAK SCAN (djust-specific) — djust sits alongside multiple private downstream apps (the downstream apps listed in .customer-names, etc.). Patterns extracted upstream into the public framework repo MUST NOT ship with private-project identifiers in commit metadata OR file contents. Recipe: `CN=$(grep -v '^#' .customer-names | grep -v '^$')` then check `gh pr view $PR --json title,body | grep -iF \"$CN\"` AND `git log main..HEAD --format='%B' | grep -iF \"$CN\"` AND `git diff main..HEAD | grep -iF \"$CN\"`. Any match = REVIEW_FAILED; fix with `git commit --amend` + `gh pr edit` before proceeding. IMPORTANT: .customer-names uses `#` for comment lines — they MUST be stripped before feeding to grep or every `#NNN` PR reference will false-positive. Caught by PR #836 retro.",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "test coverage gaps \u2014 if code generates output, do tests assert on content correctness (not just 'no error')?",
+          "action": "test coverage gaps — if code generates output, do tests assert on content correctness (not just 'no error')?",
           "done": false
         },
         {
@@ -252,6 +252,11 @@
         {
           "action": "code quality (broad except, missing raise-from, unused params, lazy imports)",
           "done": false
+        },
+        {
+          "action": "Tautology check (Action #1200): for every new 'action happened' test assertion, ask 'would this pass if the action didn't run?' Tests that mock-and-call without invoking the SUT fail this check.",
+          "done": false,
+          "mandatory": true
         },
         {
           "action": "CANON-PR SELF-APPLICABILITY CHECK (#1247 retro / #1248): if this PR adds a new mandatory checklist item or self-review rule, explicitly answer two questions in the Stage 7 output. (a) Does the new rule false-positive on this PR's own diff? If yes, narrow the scope before merge. (b) Would the new rule have caught the originating bug at the stage it adds? If no, reconsider the stage placement. Skip this item only when the PR doesn't introduce new canon (the typical feature/bugfix case).",
@@ -280,7 +285,7 @@
           "done": false
         },
         {
-          "action": "broad codebase scan \u2014 pre-existing issues as IMPROVEMENT: lines only",
+          "action": "broad codebase scan — pre-existing issues as IMPROVEMENT: lines only",
           "done": false
         },
         {
@@ -320,7 +325,7 @@
           "done": false
         },
         {
-          "action": "update CHANGELOG.md for feat/fix changes (CANONICAL CHANGELOG COMMIT BOUNDARY \u2014 Stage 5 deferred all [Unreleased] hunks here per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
+          "action": "update CHANGELOG.md for feat/fix changes (CANONICAL CHANGELOG COMMIT BOUNDARY — Stage 5 deferred all [Unreleased] hunks here per v0.9.1 retro / Action Tracker #181 / GitHub #1173)",
           "done": false,
           "mandatory": true
         },
@@ -355,7 +360,7 @@
           "done": false
         },
         {
-          "action": "git remote -v \u2014 verify github remote exists",
+          "action": "git remote -v — verify github remote exists",
           "done": false
         },
         {
@@ -376,7 +381,7 @@
           "mandatory": true
         },
         {
-          "action": "git diff --check \u2014 no conflict markers",
+          "action": "git diff --check — no conflict markers",
           "done": false
         },
         {
@@ -392,7 +397,7 @@
           "done": false
         },
         {
-          "action": "verify PR body against actual diff \u2014 no phantom features, wrong counts, or incorrect terminology; fix with gh pr edit if needed",
+          "action": "verify PR body against actual diff — no phantom features, wrong counts, or incorrect terminology; fix with gh pr edit if needed",
           "done": false,
           "mandatory": true
         },
@@ -408,7 +413,7 @@
       "status": "pending",
       "verdict": null,
       "run_as": "subagent",
-      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 250 words. For security-related changes, enumerate at most the attack shapes the plan documented \u2014 do NOT spelunk for additional edge cases beyond that list. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists \u2014 use as review framework. Step 2: Cross-ref plan vs implementation \u2014 verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files \u2014 every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure \u2014 only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 4: Run project test suite, report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 250 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
+      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 250 words. For security-related changes, enumerate at most the attack shapes the plan documented — do NOT spelunk for additional edge cases beyond that list. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists — use as review framework. Step 2: Cross-ref plan vs implementation — verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files — every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure — only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 4: Run project test suite, report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 250 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
       "checklist": [
         {
           "action": "read .pipeline-state/<branch>-plan.md for plan compliance check",
@@ -423,12 +428,12 @@
           "done": false
         },
         {
-          "action": "cross-ref plan vs implementation \u2014 every deliverable accounted for",
+          "action": "cross-ref plan vs implementation — every deliverable accounted for",
           "done": false,
           "mandatory": true
         },
         {
-          "action": "cross-ref plan's test list against actual tests \u2014 every test the plan called for must exist",
+          "action": "cross-ref plan's test list against actual tests — every test the plan called for must exist",
           "done": false,
           "mandatory": true
         },
@@ -483,10 +488,10 @@
       "status": "pending",
       "verdict": null,
       "run_as": "subagent",
-      "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' \u2014 verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
+      "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
       "checklist": [
         {
-          "action": "verify CI green: gh pr checks \u2014 if failing for pre-existing reasons, document in PR comment before merging",
+          "action": "verify CI green: gh pr checks — if failing for pre-existing reasons, document in PR comment before merging",
           "done": false,
           "mandatory": true
         },
