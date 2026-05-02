@@ -213,7 +213,7 @@ short-circuit so `render_with_diff()` always runs when
 
 ### Milestone: v0.9.3-3 — audit B decorator contracts (#1287-#1290)
 
-**Status:** 🔄 in progress — #1287 + #1288 done, #1289 in PR, #1290 remaining.
+**Status:** ✅ shipped 2026-05-02. All 4 audit B issues closed via 3 merged PRs (#1328 `@reactive` + `@background`, #1329 `@computed` thread-safety, #1330 handler-contracts linter).
 
 *Goal:* Close all 4 audit B findings: `@reactive` silent no-op, `@background` return-value docs, `@computed` thread-safety, handler-contracts linter.
 
@@ -221,8 +221,8 @@ short-circuit so `render_with_diff()` always runs when
 
 - [x] **#1287 — `@reactive` silent no-op when subclass missing `update()`** (🟡). Replace `hasattr` guard with `__set_name__` assertion. ✅
 - [x] **#1288 — `@background` return value contract is undocumented** (🟡). Doc-only: update docstring. ✅
-- [x] **#1289 — `@computed` cache-dict mutation not thread-safe** (🟡). Add per-instance `threading.Lock`. ✅
-- [ ] **#1290 — `scripts/check-handler-contracts.py` linter** (🟡). New AST-based static checker.
+- [x] **#1289 — `@computed` cache-dict mutation not thread-safe** (🟡). Per-instance `threading.Lock` protects cache mutation check-then-act block. ✅
+- [x] **#1290 — `scripts/check-handler-contracts.py` linter** (🟡). AST-based static checker cross-references tag-emit defaults against mixin handler names. 44 emit defaults (26 framework, 18 app-level) validated clean. ✅
 
 #### Acceptance
 
