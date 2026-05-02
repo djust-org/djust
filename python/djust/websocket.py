@@ -2373,7 +2373,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         frame.
 
         Returns a ``(success: bool, payload: dict, error: Optional[str],
-        navigate_frame: Optional[dict])`` tuple:
+        navigate_frame: Optional[dict], push_events: list)`` tuple:
 
         - ``success=True`` and ``payload`` is the captured ``mount`` frame
           merged with the caller-supplied ``target_id``.
@@ -2387,6 +2387,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
           ``handle_mount_batch`` can forward the redirect to the client
           in the batch response — without this, the frame was silently
           dropped and the user was never redirected.
+        - ``push_events`` (Fix #1295): ``push_event`` frames captured
+          during mount. When ``mount()`` calls ``push_event()``,
+          ``_flush_push_events`` fires with ``send_json`` swapped for the
+          collector, so push events land in ``captured[]``.  The caller
+          flushes them after the batch response so they reach the client.
 
         Isolation: errors in one view MUST NOT propagate and kill the
         batch (see plan §2.3 "atomicity relaxed").
@@ -2437,9 +2442,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Fix #4: capture "navigate" frames too — those are emitted when
         # auth or on_mount hooks redirect instead of mounting, and were
         # previously silently dropped.
+        # Fix #1295: also capture "push_event" frames. When mount() calls
+        # push_event(), _flush_push_events runs with send_json swapped for
+        # _collect — so push events land in captured[]. Extract them and
+        # return them so handle_mount_batch can flush them after the batch
+        # response (they'd otherwise be silently dropped).
         mount_frame = None
         error_frame = None
         navigate_frame = None
+        push_events: list = []
         for frame in captured:
             ftype = frame.get("type")
             if ftype == "mount":
@@ -2448,6 +2459,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 error_frame = frame
             elif ftype == "navigate":
                 navigate_frame = frame
+            elif ftype == "push_event":
+                push_events.append(frame)
 
         if navigate_frame is not None:
             # Redirect — surface through the batch response so the
@@ -2457,11 +2470,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             nav_payload = dict(navigate_frame)
             nav_payload["target_id"] = target_id
             nav_payload["view"] = view_path
-            return False, {"target_id": target_id, "view": view_path}, None, nav_payload
+            return (
+                False,
+                {"target_id": target_id, "view": view_path},
+                None,
+                nav_payload,
+                push_events,
+            )
 
         if error_frame is not None:
             err_msg = error_frame.get("message", "mount failed")
-            return False, {"target_id": target_id, "view": view_path}, err_msg, None
+            return False, {"target_id": target_id, "view": view_path}, err_msg, None, push_events
 
         if mount_frame is None:
             return (
@@ -2469,11 +2488,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 {"target_id": target_id, "view": view_path},
                 "mount produced no frame",
                 None,
+                push_events,
             )
 
         # Inject target_id for client-side per-view DOM targeting.
         mount_frame["target_id"] = target_id
-        return True, mount_frame, None, None
+        return True, mount_frame, None, None, push_events
 
     async def handle_mount_batch(self, data: Dict[str, Any]):
         """Mount multiple views in one frame and reply with one batch frame.
@@ -2503,6 +2523,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         successes: list = []
         failures: list = []
         navigates: list = []
+        all_push_events: list = []
         for view_data in views_list:
             if not isinstance(view_data, dict):
                 failures.append(
@@ -2517,7 +2538,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if client_timezone and "client_timezone" not in view_data:
                 view_data = dict(view_data)
                 view_data["client_timezone"] = client_timezone
-            ok, payload, err, nav = await self._mount_one(view_data)
+            ok, payload, err, nav, push_events = await self._mount_one(view_data)
+            if push_events:
+                all_push_events.extend(push_events)
             if ok:
                 successes.append(payload)
                 continue
@@ -2537,6 +2560,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if navigates:
             response["navigate"] = navigates
         await self.send_json(response)
+
+        # Fix #1295: flush push events that were captured during mount.
+        # When mount() calls push_event(), _flush_push_events fires with
+        # send_json swapped for _collect in _mount_one — so push events
+        # land in captured[] instead of being sent. We extract them in
+        # _mount_one and flush them here after the batch response.
+        for frame in all_push_events:
+            await self.send_json(frame)
 
     async def handle_event(self, data: Dict[str, Any]):
         """Handle client events"""

@@ -108,6 +108,18 @@ class _NonSnapshot(LiveView):
         return {"count": self.count}
 
 
+class _PushEventOnMount(LiveView):
+    """View that calls push_event() during mount() — exercises #1295."""
+
+    template = "<div dj-root><span>Hello</span></div>"
+
+    def mount(self, request, **kwargs):
+        self.push_event("greeting", {"msg": "Welcome"})
+
+    def get_context_data(self, **kwargs):
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # 4-8. State snapshot unit tests — LiveView API surface only.
 # ---------------------------------------------------------------------------
@@ -237,6 +249,24 @@ def _make_fake_consumer():
             return None
 
     return _FakeConsumer()
+
+
+def _make_fake_consumer_with_push_events():
+    """Same as _make_fake_consumer but preserves the real _flush_push_events.
+
+    The default fake consumer overrides _flush_push_events to a no-op so
+    that tests that don't use push_event() don't accidentally trip over
+    missing view_instance setup.  When we DO want to test push_event
+    capture (mount_batch + push_event in mount()), we need the real
+    implementation so the queued events flow into the collector.
+    """
+    consumer = _make_fake_consumer()
+    # Remove the no-op override — LiveViewConsumer's real _flush_push_events
+    # calls self.send_json for each queued event, which in this fake
+    # consumer appends to sent_frames (or captured[] when send_json is
+    # swapped by _mount_one's collector).
+    del type(consumer)._flush_push_events
+    return consumer
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +498,47 @@ class TestMountBatch:
         assert "span" in tags, (
             "mount_batch view html should contain rendered <span>, got tags: %s" % tags
         )
+
+    def test_mount_batch_preserves_push_events_from_mount(self):
+        """#1295: push_event() during mount() is not silently dropped.
+
+        When a batch-mounted view calls push_event() in its mount() method,
+        the push event must reach the client — not be swallowed by the
+        _mount_one capture extractor (which previously only pulled mount,
+        error, and navigate frames).
+        """
+        consumer = _make_fake_consumer_with_push_events()
+        data = {
+            "type": "mount_batch",
+            "views": [
+                {
+                    "view": "tests.unit.test_sw_advanced._PushEventOnMount",
+                    "params": {},
+                    "url": "/",
+                    "target_id": "greeter",
+                },
+            ],
+        }
+        asyncio.run(consumer.handle_mount_batch(data))
+
+        # The mount_batch frame must still be present.
+        batch_frames = [f for f in consumer.sent_frames if f.get("type") == "mount_batch"]
+        assert len(batch_frames) == 1
+        assert len(batch_frames[0]["views"]) == 1
+
+        # The push_event frame must arrive AFTER the batch frame.
+        push_frames = [f for f in consumer.sent_frames if f.get("type") == "push_event"]
+        assert len(push_frames) == 1, (
+            "push_event() from mount() must survive the _mount_one collector; "
+            "got 0 push_event frames (all frames: %s)" % consumer.sent_frames
+        )
+        assert push_frames[0]["event"] == "greeting"
+        assert push_frames[0]["payload"] == {"msg": "Welcome"}
+
+        # Verify ordering: push_event after mount_batch.
+        batch_idx = consumer.sent_frames.index(batch_frames[0])
+        push_idx = consumer.sent_frames.index(push_frames[0])
+        assert push_idx > batch_idx, "push_event must flush after mount_batch, not before"
 
 
 # ---------------------------------------------------------------------------
