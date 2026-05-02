@@ -186,7 +186,7 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 ### Milestone: v0.9.3-2 — #1281 private-state re-render (split-foundation)
 
-**Status:** 🔄 in progress — #1281 + #1284 merged; #1285 in PR #1326.
+**Status:** 🔄 in progress — #1281 + #1284 + #1285 merged; #1286 in PR #1327.
 
 *Goal:* Fix the private-state re-render gap: handlers that mutate only
 `self._*` private state get `noop` from the Rust diff because the
@@ -203,12 +203,12 @@ short-circuit so `render_with_diff()` always runs when
 
 - [x] #1284 — `_action_state` persistence across reconnects (PR #1324 merged)
 - [x] #1285 — snapshot truncation warning (PR #1326 open)
-- #1286 — change-detection unification (Python vs Rust)
+- #1286 — change-detection unification (Python vs Rust) (PR #1327 open)
 
 #### Acceptance
 
-- #1281 fixed with regression test.
-- Audit A Phase 2 (#1284, #1285, #1286) either addressed or deferred to v0.9.3-3.
+- [x] #1281 fixed with regression test (PR #1323 merged).
+- [x] Audit A Phase 2 (#1284, #1285, #1286) all addressed — #1286 in PR #1327.
 - Then: commission v0.9.3-3 or cut v0.9.3 release.
 
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
