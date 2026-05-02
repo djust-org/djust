@@ -283,26 +283,87 @@ def test_dual_decoration_raises_at_decoration_time():
                 return None
 
 
-def test_unauthenticated_returns_401():
+def test_unauthenticated_returns_401_when_login_required():
+    """Anonymous callers are blocked when login_required=True (default-secure)."""
+
     class V(LiveView):
-        api_name = "sf.auth"
+        api_name = "sf.auth.lr"
+        login_required = True
 
         @server_function
         def h(self, **kwargs):
             return "ok"
 
-    register_api_view("sf.auth", V)
+    register_api_view("sf.auth.lr", V)
     rf = RequestFactory(enforce_csrf_checks=False)
     request = rf.post(
-        "/djust/api/call/sf.auth/h/",
+        "/djust/api/call/sf.auth.lr/h/",
         data=b"{}",
         content_type="application/json",
     )
     request._dont_enforce_csrf_checks = True
-    # No request.user attached → anonymous → 401.
-    resp = dispatch_server_function(request, "sf.auth", "h")
+    # No request.user attached → anonymous → check_view_auth returns redirect_url.
+    resp = dispatch_server_function(request, "sf.auth.lr", "h")
     assert resp.status_code == 401
-    assert json.loads(resp.content)["error"] == "unauthenticated"
+    assert json.loads(resp.content)["error"] == "login_required"
+
+
+def test_anonymous_allowed_when_no_login_required():
+    """With the hard-coded auth check removed (#1316), anonymous callers
+    can invoke @server_function when the view doesn't set login_required."""
+
+    class V(LiveView):
+        api_name = "sf.anon"
+
+        @server_function
+        def greet(self, name: str = "world", **kwargs):
+            return f"hello {name}"
+
+    register_api_view("sf.anon", V)
+    rf = RequestFactory(enforce_csrf_checks=False)
+    request = rf.post(
+        "/djust/api/call/sf.anon/greet/",
+        data=json.dumps({"params": {"name": "anon"}}).encode("utf-8"),
+        content_type="application/json",
+    )
+    request._dont_enforce_csrf_checks = True
+    # No request.user — but that's OK, login_required is not set.
+    resp = dispatch_server_function(request, "sf.anon", "greet")
+    assert resp.status_code == 200, resp.content
+    body = json.loads(resp.content)
+    assert body["result"] == "hello anon"
+
+
+def test_handler_permission_required_still_enforced():
+    """@permission_required on the handler is still checked by
+    check_handler_permission (#1316)."""
+
+    class V(LiveView):
+        api_name = "sf.handlerperm"
+
+        @server_function
+        @permission_required("auth.can_invoke")
+        def secure(self, **kwargs):
+            return "secret"
+
+    register_api_view("sf.handlerperm", V)
+    rf = RequestFactory(enforce_csrf_checks=False)
+    User = get_user_model()
+    user = User.objects.create_user(username="bob", password="pw")
+    request = rf.post(
+        "/djust/api/call/sf.handlerperm/secure/",
+        data=b"{}",
+        content_type="application/json",
+    )
+    SessionMiddleware(lambda r: None).process_request(request)
+    request.session.save()
+    request.user = user
+    request._dont_enforce_csrf_checks = True
+
+    # Bob doesn't have the permission → 403.
+    resp = dispatch_server_function(request, "sf.handlerperm", "secure")
+    assert resp.status_code == 403
+    assert json.loads(resp.content)["error"] == "permission_denied"
 
 
 def test_rate_limit_exceeded_returns_429(authed_request):
