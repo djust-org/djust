@@ -258,7 +258,7 @@ issue or be explicitly closed with a reason.
 | 216 | Elevate single-script-transformation pattern to canon for bulk renames | Retro v0.9.2-5 / PR #1293 (23-site rename) | #1312 | Closed | Resolved in v0.9.3-4 via PR #1336 (rule canonicalized in CLAUDE.md "Process canonicalizations from v0.9.3-4 retro arc"). New. PR #1293 used a single Python script to rename 23 emit-name strings across 4 files in one atomic pass — zero regressions, no partial-state windows. Action #180 lists the pattern as a "safe alternative" to incremental Edit calls when working in parallel agents; v0.9.2-5 demonstrated it's the right shape for sequential single-implementer bulk operations too. Failure modes of incremental Edit-tool calls for bulk renames: partial-state intermediate trips pre-commit hooks, ~23 Edit calls vs 1 script + 1 invocation burns agent context, 23 hunks vs 1 script raise reviewer cognitive load. Worth elevating in CLAUDE.md "Process canonicalizations" Stage 5 (Implementation) section. |
 | 217 | Behavior-change CHANGELOG migration block as Stage 9 checklist item | Retro v0.9.2-5 / PR #1294 (`@action` re-raise contract change) | #1313 | Closed | Resolved in v0.9.3-4 via PR #1337 (behavior-change migration block added to Stage 9 in feature + bugfix templates). New. PR #1294 changed `@action`'s re-raise contract — a behavior change for any code that wrapped `@action` calls in try/except. The CHANGELOG entry included an explicit "Behavior change" block: (a) what changed, (b) who's affected, (c) migration path ("re-raise explicitly inside the handler"). Stage 11 reviewer confirmed this was the right level of detail. Worth canonicalizing as a Stage 9 (Documentation) checklist item: when a PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the CHANGELOG entry MUST include a "Behavior change" block with these 3 fields. PR #1294 is the canonical reference example. |
 | 218 | Add `make check-test-coverage` target (grep test files, verify CI collects them) | Retro v0.9.3-4 / PR #1338 | #1339 | Open | |
-| 219 | Investigate workaround for stale CodeQL check-run blocking PR merges | Retro v0.9.3-4 / PRs #1331, #1332 | #1340 | Open | GitHub-side issue — may be a platform bug. 7+ PRs in v0.9.3 series required --admin merge. |
+| 219 | Investigate workaround for stale CodeQL check-run blocking PR merges | Retro v0.9.3-4 / PRs #1331, #1332 | #1340 | Closed | Closed via #1340 closing PR. Investigation surfaced misdiagnosis: branch protection has zero `required_status_checks`, so CodeQL never blocked merges per protection rules; `--admin` is needed because of the 1-approving-review rule (solo maintainer can't self-approve). The "CodeQL fail 3s" was GitHub Advanced Security's *real alert-summary* check (PR #1331's was a real high-severity alert at `client.js:1132`, now open on main). codeql.yml gained a `concurrency:` block to reduce noise; real alerts triage tracked in #1343. |
 
 ## v0.9.3-4 — Process drain bucket: pipeline template canon, audit convention, RETRO convention (PRs #1331–#1338)
 
@@ -277,7 +277,9 @@ PR #1338 moved `test_skip_render_private_state.py` from `python/djust/tests/` to
 **2. CodeQL stale check-run is the dominant CI pain point across this drain.**
 PRs #1331, #1332 (and likely others in the v0.9.3 drain series) required `--admin` merge because a prior CodeQL check-run was not cleaned up after re-run. The check-run stays in a stale "pending" or "failure" state while the re-run passes. GitHub-side issue with no repo-level fix currently known.
 
-**Action taken**: Open — tracked in Action Tracker #219 (GitHub #1340).
+> **[2026-05-02 correction — see #1340 closing PR]**: This finding misdiagnosed cause as correlation. Verified facts: (a) branch protection has zero `required_status_checks`, so CodeQL was never a protection-rule blocker; (b) the actual `--admin` blocker is the 1-approving-review rule (solo maintainer can't self-approve); (c) the "CodeQL fail 3s" check-run is GitHub Advanced Security's *alert-summary* check — it fails when a real new alert is introduced, not because the check is stale. PR #1331's CodeQL "fail" was a real high-severity alert (`js/unvalidated-dynamic-method-call` at `client.js:1132`), now open on main and tracked in #1343 alongside 7 other unrated alerts. The codeql.yml `concurrency:` block landed in the #1340 closing PR reduces noise but is not the merge fix.
+
+**Action taken**: Closed via #1340. Concurrency block landed; misdiagnosis corrected here. Real CodeQL alerts triage tracked in #1343.
 
 **3. Pre-commit hook commit-swallow pattern continues but mitigation is proven.**
 PRs #1331, #1332 both hit the pre-commit stash-restore cycle: ruff/ruff-format modified staged files, stash-pop restored originals, commit silently didn't register. The `&& git log -1 --oneline` post-commit verification (Action #122) caught both immediately. The underlying hook behavior hasn't changed, but the mitigation works reliably — 0 commits lost this drain.
@@ -321,7 +323,7 @@ PRs #1331, #1332 both hit the pre-commit stash-restore cycle: ruff/ruff-format m
 ### Open Items
 
 - [ ] CI test-collection gap — tracked in Action Tracker #218 (GitHub #1339)
-- [ ] CodeQL stale check-run workaround — tracked in Action Tracker #219 (GitHub #1340)
+- [x] ~~CodeQL stale check-run workaround~~ — closed via #1340 closing PR. Misdiagnosis corrected; concurrency block added to codeql.yml; real alerts (1 high-severity) tracked separately in #1343.
 
 ---
 
