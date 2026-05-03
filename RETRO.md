@@ -257,8 +257,84 @@ issue or be explicitly closed with a reason.
 | 215 | Elevate Action #1200 tautology check to Stage 7 self-review | Retro v0.9.2-5 / PR #1292 Stage 11 review | #1311 | Closed | Resolved in v0.9.3-4 via PR #1335 (tautology check added to Stage 7 in all three pipeline templates). New. PR #1292's Stage 11 reviewer caught a tautology test (`TestHandleMountDrainBehavior::test_tail_drains_both_queues_in_order`) that would have passed even if `handle_mount` was deleted. Action #1200 caught it correctly at Stage 11, but Stage 11 is late — the question "would this pass if the action didn't run?" is mechanical, applies to every new test, and should fire at Stage 7 self-review so authors catch it before review. Update `.pipeline-templates/{feature,bugfix,ship}-state.json` Stage 7 checklist to add the tautology check as a mandatory item. Self-applies via Stage 7 self-applicability check (#1248). |
 | 216 | Elevate single-script-transformation pattern to canon for bulk renames | Retro v0.9.2-5 / PR #1293 (23-site rename) | #1312 | Closed | Resolved in v0.9.3-4 via PR #1336 (rule canonicalized in CLAUDE.md "Process canonicalizations from v0.9.3-4 retro arc"). New. PR #1293 used a single Python script to rename 23 emit-name strings across 4 files in one atomic pass — zero regressions, no partial-state windows. Action #180 lists the pattern as a "safe alternative" to incremental Edit calls when working in parallel agents; v0.9.2-5 demonstrated it's the right shape for sequential single-implementer bulk operations too. Failure modes of incremental Edit-tool calls for bulk renames: partial-state intermediate trips pre-commit hooks, ~23 Edit calls vs 1 script + 1 invocation burns agent context, 23 hunks vs 1 script raise reviewer cognitive load. Worth elevating in CLAUDE.md "Process canonicalizations" Stage 5 (Implementation) section. |
 | 217 | Behavior-change CHANGELOG migration block as Stage 9 checklist item | Retro v0.9.2-5 / PR #1294 (`@action` re-raise contract change) | #1313 | Closed | Resolved in v0.9.3-4 via PR #1337 (behavior-change migration block added to Stage 9 in feature + bugfix templates). New. PR #1294 changed `@action`'s re-raise contract — a behavior change for any code that wrapped `@action` calls in try/except. The CHANGELOG entry included an explicit "Behavior change" block: (a) what changed, (b) who's affected, (c) migration path ("re-raise explicitly inside the handler"). Stage 11 reviewer confirmed this was the right level of detail. Worth canonicalizing as a Stage 9 (Documentation) checklist item: when a PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the CHANGELOG entry MUST include a "Behavior change" block with these 3 fields. PR #1294 is the canonical reference example. |
-| 218 | Add `make check-test-coverage` target (grep test files, verify CI collects them) | Retro v0.9.3-4 / PR #1338 | #1339 | Open | |
+| 218 | Add `make check-test-coverage` target (grep test files, verify CI collects them) | Retro v0.9.3-4 / PR #1338 | #1339 | Closed | Resolved in v0.9.3-5 via PR #1341 (`scripts/check-test-coverage.py` + Makefile target + pre-push hook). Test-coverage gap in #1339 framing turned out to be a Makefile-vs-pyproject testpath override (Makefile's explicit pytest paths silently overrode pyproject's testpaths, excluding 2,734 tests for months). Two-direction sync verification deferred to #1346. |
 | 219 | Investigate workaround for stale CodeQL check-run blocking PR merges | Retro v0.9.3-4 / PRs #1331, #1332 | #1340 | Closed | Closed via #1340 closing PR. Investigation surfaced misdiagnosis: branch protection has zero `required_status_checks`, so CodeQL never blocked merges per protection rules; `--admin` is needed because of the 1-approving-review rule (solo maintainer can't self-approve). The "CodeQL fail 3s" was GitHub Advanced Security's *real alert-summary* check (PR #1331's was a real high-severity alert at `client.js:1132`, now open on main). codeql.yml gained a `concurrency:` block to reduce noise; real alerts triage tracked in #1343. |
+| 220 | Triage 8 open CodeQL alerts on main (1 high-severity at `client.js:1132`) | Retro v0.9.3-5 / PR #1344 (#1340 investigation) | #1343 | Open | Surfaced by the #1340 investigation: the v0.9.3 drain misattributed real GHAS alerts to "stale check-runs" and bypassed them via `--admin`. 1 high-severity (`js/unvalidated-dynamic-method-call`), 7 unrated. Real security debt from PR #1331 onward. |
+| 221 | Refresh stale `(file new)` placeholders in May 2026 audits to reference closed follow-up issues | Retro v0.9.3-5 / `/djust-dev audit-status` run | #1342 | Open | All 9 follow-up issues (`#1283`, `#1284`, `#1285`, `#1286`, `#1287`, `#1288`, `#1289`, `#1290`, `#1291`) cited as "(file new)" in the audits are filed AND closed; audits give false impression of unfiled work. Small docs PR. |
+| 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Open | Both v0.9.3-5 tasks needed corrections to the v0.9.3-4 retro framing. Pattern: tech-debt issue titles that encode the retro author's hypothesis cause executors to inherit the hypothesis. Stage 4 must verify cited cause before locking fix scope. |
+
+## v0.9.3-5 — Retro-filed process drain (pre-stable soak) (PRs #1341, #1344)
+
+**Date**: 2026-05-02
+**Scope**: Two retro-filed items from v0.9.3-4 (#1339 CI test-collection gap, #1340 CodeQL infra). Smallest possible drain bucket — 2 items, 2 PRs.
+**Tests at close**: 6,883 passing, 20 skipped (verified via PR #1341)
+
+### What We Learned
+
+**1. Both retro-filed tasks needed corrections to the v0.9.3-4 retro's framing.**
+Two of two items in this drain turned out more nuanced than the prior milestone retro framed them.
+
+- **#1339 (test-coverage gap)**: framed as "missing CI path" — actual root cause was Makefile explicit pytest paths silently overriding pyproject.toml testpaths, excluding 2,734 tests for months. PR #1341 fixed it and added `make check-test-coverage` to prevent recurrence.
+- **#1340 (CodeQL)**: framed as "stale CodeQL check-runs blocking PR merges" — branch protection has zero `required_status_checks` per `gh api .../branches/main/protection`; the actual `--admin` driver is the 1-approving-review rule on a solo-maintainer repo. The "CodeQL fail 3s" check-runs were real GitHub Advanced Security alerts (PR #1331's was a real high-severity finding still open on main). PR #1344 added a `concurrency:` block (noise reduction) + corrected the misdiagnosis in RETRO.md / ROADMAP.md / CHANGELOG.md.
+
+**Action taken**: Open — tracked in Action Tracker #222 (GitHub #1345). Stage 4 plan template addition to verify cited cause against fresh evidence for retro-filed issues.
+
+**2. The #1340 investigation surfaced real security debt that had been bypassed.**
+8 open CodeQL alerts on main (1 high-severity: `js/unvalidated-dynamic-method-call` at `python/djust/static/djust/client.js:1132`). PR #1331 introduced the high-severity finding; the retro misattributed it to "stale check-run" noise and `--admin`-bypassed it. 7 lower-severity alerts had been accumulating without triage.
+
+**Action taken**: Open — tracked in Action Tracker #220 (GitHub #1343).
+
+**3. The audit "(file new)" placeholders are stale.**
+`/djust-dev audit-status` run during this drain surfaced that all 9 audit follow-up issues marked as "(file new)" / "(file as new issue)" in the May 2026 audits (`#1283`–`#1291`) were filed AND closed weeks ago. The audits give the false impression of unaddressed 🟡 work.
+
+**Action taken**: Open — tracked in Action Tracker #221 (GitHub #1342). Small docs PR.
+
+**4. Investigation-class pipelines can ship code, not just close-without-code.**
+The `/pipeline-run` skill's "Close-without-code path" guidance suggests investigation issues skip Implementation/Test/Self-Review/Security/Commit/Merge stages. PR #1344 demonstrates an alternative: the investigation outcome was meaningful enough to ship a small CI tweak (concurrency block) + canon corrections (RETRO/ROADMAP/CHANGELOG). The two-commit shape gates fired correctly. **The pattern is: investigation can short-circuit the pure code path, but the canon path (RETRO/ROADMAP/CHANGELOG corrections) is non-optional when the canon was wrong.**
+
+**Action taken**: Closed — demonstrated by PR #1344 itself (two-commit shape: impl `fdf391c1` + docs `05922b28`; codeql.yml lines 13-22 carry the `see #1340 for the investigation that surfaced this` reference; RETRO.md `[2026-05-02 correction]` callout demonstrates the canon-correction shape). Future investigation pipelines reference PR #1344 as the worked example.
+
+### Insights
+
+- **Two-task drain buckets are the right shape for retro-filed items.** Both PRs landed cleanly, both ran the full pipeline (no shortcuts), and both surfaced meta-findings. Larger drain buckets in v0.9.3-4 (8 PRs) ran efficiently but didn't leave room for the kind of investigation-time PR #1344 needed.
+- **Two-commit shape gates are battle-tested (#1173 / #1174).** Both PRs in this drain used Gate 1 (no CHANGELOG in impl commit) and Gate 2 (only docs in docs commit) without retry. PR #1344's first Gate 2 invocation false-positived because `git show --name-only` includes commit-message lines; fixed inline with `git diff-tree --no-commit-id --name-only -r HEAD`. Worth canonicalizing the diff-tree form.
+- **`/djust-dev audit-status` surfaced the audit-doc staleness that pure pipeline work would have missed.** Running the skill mid-drain (when sidetracked from #1340) caught a doc rot that's been silently accumulating since the May 2026 audits. Generalize: skill-driven audits surface what the per-PR pipeline doesn't.
+- **The retro misdiagnosis pattern (Action #222) is generalizable.** It applies beyond CodeQL — any retro entry whose title encodes the author's hypothesis is a vector for downstream misdiagnosis. The Stage 4 plan-template addition is the procedural fix.
+
+### Review Stats
+
+| Metric | PR #1341 | PR #1344 | Total |
+|--------|----------|----------|-------|
+| Tests added | 0 (preventive script) | 0 (CI YAML) | 0 |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 1 (unused subprocess import; fixed pre-merge) | 0 | 1 |
+| Findings fixed | 1 | 0 | 1 |
+| CI failures | 0 | 0 | 0 |
+| Quality (PR retro) | 4/5 | 4/5 | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker rows #220–#222 added. Row #218 (#1339) and #219 (#1340) marked Closed with closure references. v0.9.3-4 finding #2 ("CodeQL stale check-run") got an in-place `[2026-05-02 correction]` callout in PR #1344's docs commit — preserves both the misdiagnosis and the corrected diagnosis for transparency.
+
+**ROADMAP.md**: v0.9.3-5 milestone tasks (#1339, #1340) struck through with closure notes.
+
+**CHANGELOG.md**: `### Changed` entry under `[Unreleased]` for the codeql.yml concurrency block (#1340).
+
+**`.github/workflows/codeql.yml`**: `concurrency:` block added (cancels superseded analyses on rapid PR pushes).
+
+### Open Items
+
+- [ ] Triage 8 open CodeQL alerts (1 high-severity) — tracked in Action Tracker #220 (GitHub #1343)
+- [ ] Refresh stale audit "(file new)" placeholders — tracked in Action Tracker #221 (GitHub #1342)
+- [ ] Stage 4 plan-template: verify cited cause for retro-filed issues — tracked in Action Tracker #222 (GitHub #1345)
+- [ ] Two-direction Makefile↔pyproject testpath sync — tracked in #1346 (deferred from PR #1341 retro)
+
+### Acceptance check
+
+- ✅ Both v0.9.3-5 ROADMAP tasks closed.
+- ⏳ Next: evaluate whether v0.9.3 is ready to cut stable, or commission v0.9.3-6 (e.g., to address #1343's high-severity alert before stable).
+
+---
 
 ## v0.9.3-4 — Process drain bucket: pipeline template canon, audit convention, RETRO convention (PRs #1331–#1338)
 
