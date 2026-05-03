@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CodeQL workflow now cancels superseded analyses on rapid PR pushes (#1340).**
+  Added `concurrency: { group: ${{ github.workflow }}-${{ github.ref }},
+  cancel-in-progress: true }` to `.github/workflows/codeql.yml`. The latest
+  commit's analysis is what matters; older runs are obsolete and only add
+  noise to the PR check list. Investigation in #1340 surfaced that the
+  v0.9.3 drain's "stale CodeQL check-run" framing was a misdiagnosis — most
+  "stale CodeQL fail" check-runs were real GitHub Advanced Security alerts,
+  not stale leftovers. The `--admin` merge requirement comes from the
+  1-approving-review rule (solo maintainer can't self-approve), not from
+  CodeQL. This concurrency block reduces the run-list noise that fueled
+  the misdiagnosis without changing merge behavior. Triage of the 8 real
+  open CodeQL alerts (1 high-severity) tracked in #1343.
+
 ### Fixed
 
 - **`python/djust/tests/` now included in `make test-python` + `check-test-coverage` target (#1339).**

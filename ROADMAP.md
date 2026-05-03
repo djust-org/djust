@@ -274,8 +274,8 @@ short-circuit so `render_with_diff()` always runs when
 
 **Tech-debt — process (P2):**
 
-- [ ] **#1339 — Add `make check-test-coverage` target** to verify all test files are collected by CI. PR #1338 surfaced that `python/djust/tests/` was excluded from `make test-python`'s explicit paths — tests in that directory were silently never collected. The check target greps for `class Test` / `def test_` across all test files and verifies each is collected.
-- [ ] **#1340 — Investigate workaround for stale CodeQL check-run blocking PR merges.** 7+ PRs in the v0.9.3 series required `--admin` merge because stale CodeQL check-runs weren't cleaned up after re-run. Investigate whether auto-cleanup is possible, whether branch protection can be configured to only look at the latest check-run, or whether this is a GitHub bug to report.
+- [x] ~~**#1339 — Add `make check-test-coverage` target** to verify all test files are collected by CI.~~ ✅ — Closed via PR #1341 (commit b989b0ae). `make check-test-coverage` greps test files and verifies CI collection; pre-push hook gates on it.
+- [x] ~~**#1340 — Investigate workaround for stale CodeQL check-run blocking PR merges.** 7+ PRs in the v0.9.3 series required `--admin` merge because stale CodeQL check-runs weren't cleaned up after re-run. Investigate whether auto-cleanup is possible, whether branch protection can be configured to only look at the latest check-run, or whether this is a GitHub bug to report.~~ ✅ — Investigation surfaced misdiagnosis: branch protection has zero `required_status_checks`; the actual `--admin` driver is the 1-approving-review rule on a solo-maintainer repo. The "CodeQL fail" check-runs were real GitHub Advanced Security alerts, not stale leftovers. Closed via PR adding `concurrency:` to codeql.yml (reduces run-list noise) + RETRO/ROADMAP misdiagnosis correction; real-alerts triage filed as #1343.
 
 #### Acceptance
 
