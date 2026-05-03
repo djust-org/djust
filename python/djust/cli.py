@@ -9,6 +9,9 @@ Usage:
 
     python -m djust mcp install            Write .mcp.json for Claude Code / Cursor
 
+    djust deploy <slug>                    Deploy current directory to djustlive.com
+    djust deploy login                     Log in to djustlive.com
+
     python -m djust.cli stats             Show state backend statistics
     python -m djust.cli health            Run health checks on backends
     python -m djust.cli profile           Show profiling statistics
@@ -870,7 +873,82 @@ def cmd_clear(args):
         sys.exit(1)
 
 
+DEPLOY_HELP = """\
+Usage: djust deploy [<slug>] [--from-git] [--dir DIR]
+       djust deploy login | logout
+       djust deploy status [<slug>]
+
+Deploy the current directory to djustlive.com.
+
+Commands:
+  djust deploy login          Log in to djustlive.com (stores token in ~/.djustlive/credentials)
+  djust deploy logout         Remove stored credentials
+  djust deploy status [slug]  Show deployment status (optionally for one project)
+  djust deploy <slug>         Deploy current directory to project <slug> (default action)
+  djust deploy <slug> --from-git
+                              Deploy the latest pushed commit instead of the local working tree
+
+Environment:
+  DJUST_SERVER                Override the djustlive server URL (default: https://djustlive.com)
+
+Note:
+  The project must already exist on djustlive.com. Sign up and create one
+  at https://djustlive.com before your first deploy.
+"""
+
+
+def cmd_deploy(rest):
+    """Delegate to the Click-based deploy CLI in djust.deploy_cli."""
+    try:
+        from djust.deploy_cli import cli as deploy_cli
+    except ImportError as e:
+        print(f"Error: deploy CLI requires the 'deploy' extra: pip install 'djust[deploy]'\n  {e}")
+        return 1
+
+    if not rest or rest[0] in ("-h", "--help"):
+        print(DEPLOY_HELP)
+        return 0
+
+    first = rest[0]
+
+    # Pass-through subcommands that already exist on the Click group.
+    if first in ("login", "logout", "status"):
+        argv = rest
+    elif first == "--from-git":
+        # `djust deploy --from-git <slug>` — delegate to the git-based deploy.
+        argv = ["deploy", *rest[1:]]
+    elif first.startswith("-"):
+        # Unknown flag at the top level — show help.
+        print(DEPLOY_HELP)
+        return 1
+    else:
+        # `djust deploy <slug> [...]` — default to the directory flow,
+        # which works against the prebuilt-image pipeline (no git required).
+        argv = ["deploy-dir", *rest]
+
+    try:
+        deploy_cli.main(args=argv, prog_name="djust deploy", standalone_mode=False)
+    except Exception as e:  # ClickException, etc.
+        # Click's exceptions render themselves; everything else falls through.
+        try:
+            import click
+
+            if isinstance(e, click.ClickException):
+                e.show()
+                return e.exit_code
+        except ImportError:
+            pass
+        print(f"Error: {e}")
+        return 1
+    return 0
+
+
 def main():
+    # `deploy` is detected before argparse so the Click subcommand owns its
+    # own argv (flags, prompts, streaming output) without argparse interference.
+    if len(sys.argv) >= 2 and sys.argv[1] == "deploy":
+        sys.exit(cmd_deploy(sys.argv[2:]) or 0)
+
     parser = argparse.ArgumentParser(
         description="djust CLI - Developer tools for djust framework",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -949,6 +1027,13 @@ def main():
     mcp_parser = subparsers.add_parser("mcp", help="MCP server management")
     mcp_sub = mcp_parser.add_subparsers(dest="mcp_command")
     mcp_sub.add_parser("install", help="Write .mcp.json for Claude Code / Cursor")
+
+    # deploy command (intercepted before argparse — listed here for --help discovery)
+    subparsers.add_parser(
+        "deploy",
+        help="Deploy current directory to djustlive.com (run `djust deploy --help`)",
+        add_help=False,
+    )
 
     # clear command
     clear_parser = subparsers.add_parser("clear", help="Clear state backend caches")

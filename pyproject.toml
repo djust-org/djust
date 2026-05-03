@@ -45,6 +45,12 @@ dependencies = [
     "msgpack>=1.0.0,<2",
     "markdown>=3.0,<4",
     "nh3>=0.2,<1",
+    # `djust deploy` is a first-class CLI command, so click + requests are
+    # base deps rather than gated behind a `[deploy]` extra. Both are tiny
+    # and ubiquitous; the `deploy` extra below is kept as a no-op alias for
+    # back-compat with installers that already pin `djust[deploy]`.
+    "click>=8.0,<9",
+    "requests>=2.28,<3",
 ]
 
 [project.optional-dependencies]
@@ -72,10 +78,7 @@ tenants-postgres = [
 ]
 theming = []  # No extra deps beyond djust core
 admin = []  # No extra deps beyond djust core
-deploy = [
-    "click>=8.0,<9",
-    "requests>=2.28,<3",
-]
+deploy = []  # Back-compat alias; click + requests now ship as base deps for `djust deploy`
 components = [
     "markdown>=3.0,<4",
     "nh3>=0.2,<1",
