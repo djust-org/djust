@@ -9,6 +9,15 @@ on:
     # Run weekly on Sunday at midnight
     - cron: '0 0 * * 0'
 
+# Cancel superseded analyses when commits push rapidly to a PR. The latest
+# commit's analysis is what matters; older runs are obsolete and only add
+# noise to the PR check list. See #1340 for the investigation that surfaced
+# this — the v0.9.3 drain misattributed real CodeQL alerts to "stale
+# check-runs"; this block reduces the noise that fueled that misdiagnosis.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   security-events: write
