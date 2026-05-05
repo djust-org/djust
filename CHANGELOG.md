@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **In-memory state backend no longer panics on concurrent same-session
+  HTTP renders (#1353).** When two HTTP requests for the same
+  ``(session, view_path)`` pair share a cached ``RustLiveView`` (the
+  in-memory backend returns the same Python reference on cache hits),
+  concurrent calls to ``_sync_state_to_rust`` would race inside Rust's
+  ``RefCell::borrow_mut`` and surface as ``RuntimeError: Already
+  borrowed`` (NYC Claims observed 17.5% 500-rate at concurrency 2).
+  Fixed by wrapping the unsafe window in
+  ``python/djust/mixins/rust_bridge.py:_sync_state_to_rust`` with a
+  per-``RustLiveView`` ``threading.Lock`` (option 1 of three suggested
+  in the issue body — chosen for being cheapest, requiring no cache
+  contract change, and mirroring the existing ``_render_lock`` pattern
+  on the WS path). Lock keyed by ``id(rust_view)`` in a module-level
+  dict because ``RustLiveView`` rejects both ``setattr`` and
+  ``weakref``. New regression cases in
+  ``TestConcurrentSyncStateToRust`` in
+  ``python/tests/test_rust_bridge_concurrent.py``.
+
+- **State backend honours top-level ``DJUST_STATE_BACKEND`` /
+  ``DJUST_REDIS_URL`` settings (#1354).** Previously
+  ``BackendRegistry`` only consulted ``DJUST_CONFIG["STATE_BACKEND"]``,
+  so projects configuring via top-level Django settings (e.g.
+  ``DJUST_STATE_BACKEND = "redis://localhost:6379/0"``) were silently
+  downgraded to in-memory with no warning. Now the registry layers
+  top-level aliases on top of ``DJUST_CONFIG`` (``DJUST_CONFIG`` still
+  wins when both are set — backwards-compatible). URL-shaped values
+  (``redis://``, ``rediss://``) are auto-translated to
+  ``backend_type="redis"`` plus ``REDIS_URL=<url>``. When
+  ``DEBUG=False`` and the resolved backend is the default (in-memory),
+  ``djust.utils.BackendRegistry.get`` now emits a ``logger.warning``
+  flagging the production misconfig — multi-process deployments lose
+  state across replicas. New regression cases in
+  ``TestTopLevelStateBackendSetting`` and
+  ``TestDjustConfigRegression`` in
+  ``python/tests/test_state_backend_config.py``.
+
 ## [0.9.3rc2] - 2026-05-04
 
 ### Changed
