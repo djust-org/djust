@@ -260,6 +260,26 @@ class PostgresNotifyListener:
         while not self._stopping:
             try:
                 conn = await self._connect()
+            except DatabaseNotificationNotSupported as exc:
+                # Permanent failures: missing psycopg dependency, non-postgres
+                # backend, etc. Retrying every second forever doesn't help and
+                # leaks asyncio Task state per attempt — see incident
+                # 2026-05-05 where a 3.5-day-old deploy with psycopg2-instead-
+                # of-psycopg3 accumulated 15 GiB of orphaned Task closures.
+                # Log once at WARNING and exit. Re-raises happen via
+                # ``ensure_listening`` callers; the singleton stays present
+                # so a fixed deploy can re-trigger startup naturally.
+                logger.warning(
+                    "pg listener disabled (permanent failure): %s — "
+                    "fix the cause and restart the process to re-enable",
+                    exc,
+                )
+                if self._ready_event is not None:
+                    # Unblock any caller awaiting the ready event so they
+                    # don't hang forever on a process that won't ever listen.
+                    self._ready_event.set()
+                self._stopping = True
+                return
             except Exception as exc:  # noqa: BLE001
                 logger.warning("pg listener connect failed: %s — retrying in 1s", exc)
                 await asyncio.sleep(1.0)
