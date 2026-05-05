@@ -204,15 +204,8 @@
 
     // --- variable-mode geometry helpers --------------------------------------
 
-    function avgMeasuredHeight(state) {
-        const n = state.heights.size;
-        if (!n) return state.estimatedHeight;
-        let total = 0;
-        for (const h of state.heights.values()) total += h;
-        return total / n;
-    }
-
     function heightFor(state, idx) {
+        // eslint-disable-next-line security/detect-object-injection
         const node = state.items[idx];
         const cacheKey = itemKey(state, node, idx);
         const cached = state.heights.get(cacheKey);
@@ -228,9 +221,11 @@
         const offsets = new Float64Array(total + 1);
         let acc = 0;
         for (let i = 0; i < total; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             offsets[i] = acc;
             acc += heightFor(state, i);
         }
+        // eslint-disable-next-line security/detect-object-injection
         offsets[total] = acc;
         state.offsets = offsets;
         return offsets;
@@ -292,6 +287,7 @@
         shell.textContent = '';
         const frag = document.createDocumentFragment();
         for (let i = start; i < end; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const node = items[i];
             node.style.height = itemHeight + 'px';
             node.style.boxSizing = 'border-box';
@@ -318,6 +314,7 @@
         }
 
         const offsets = ensureOffsets(state);
+        // eslint-disable-next-line security/detect-object-injection
         spacer.style.height = offsets[total] + 'px';
 
         const viewportHeight = container.clientHeight || 0;
@@ -326,7 +323,6 @@
         const firstVisible = firstVisibleIndex(offsets, scrollTop, total);
 
         // Walk forward from firstVisible until we've covered viewportHeight.
-        const avg = avgMeasuredHeight(state) || state.estimatedHeight;
         let end = firstVisible;
         let covered = 0;
         while (end < total && covered < viewportHeight) {
@@ -350,6 +346,7 @@
             // resolve node -> current index.
         }
         for (let i = start; i < end; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const node = items[i];
             node.style.boxSizing = 'border-box';
             // DO NOT set a fixed height — variable mode lets content size
@@ -383,6 +380,7 @@
             }
         }
         shell.appendChild(frag);
+        // eslint-disable-next-line security/detect-object-injection
         shell.style.transform = 'translateY(' + offsets[start] + 'px)';
 
         state.visibleStart = start;

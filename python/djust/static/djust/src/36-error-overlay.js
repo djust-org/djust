@@ -108,7 +108,7 @@
         const debugDetail = detail.debug_detail || null;
         const validation = detail.validation_details || null;
 
-        let existing = document.getElementById(OVERLAY_ID);
+        const existing = document.getElementById(OVERLAY_ID);
         if (existing) existing.remove();
 
         const overlay = document.createElement('div');

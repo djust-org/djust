@@ -49,7 +49,7 @@
 // enforce.
 
 (function () {
-    "use strict";
+
 
     const _FLIP_ATTR = "dj-flip";
     const _DURATION_ATTR = "dj-flip-duration";
@@ -112,6 +112,7 @@
         // rects for the NEXT reorder are fresh.
         const children = Array.prototype.slice.call(parent.children);
         for (let i = 0; i < children.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const c = children[i];
             if (c.nodeType !== 1) continue;
             try {
@@ -150,6 +151,7 @@
         // prior rect. Doing all reads before any writes avoids layout
         // thrashing (read-read-read, then write-write-write).
         for (let i = 0; i < children.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const c = children[i];
             if (c.nodeType !== 1) continue;
             const prev = _rectCache.get(c);
@@ -171,6 +173,7 @@
         // user. We preserve any pre-existing transition style so we can
         // restore it at cleanup time.
         for (let i = 0; i < movers.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const m = movers[i];
             m.prevTransition = m.el.style.transition;
             m.prevTransform = m.el.style.transform;
@@ -185,6 +188,7 @@
         // matches the DOM's actual new position.
         _requestAnimationFrame(function () {
             for (let i = 0; i < movers.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 const m = movers[i];
                 m.el.style.transition = "transform " + duration + "ms " + easing;
                 m.el.style.transform = "";
@@ -198,6 +202,7 @@
         const cleanupDelay = duration + 50;
         setTimeout(function () {
             for (let i = 0; i < movers.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 const m = movers[i];
                 // Only clear if our values are still there — a subsequent
                 // reorder might already have overwritten them. We restore
@@ -239,6 +244,7 @@
         const observer = new MutationObserver(function (mutations) {
             let sawChild = false;
             for (let i = 0; i < mutations.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 if (mutations[i].type === "childList") {
                     sawChild = true;
                     break;
@@ -273,6 +279,7 @@
         if (typeof MutationObserver === "undefined") return;
         const rootObserver = new MutationObserver(function (mutations) {
             for (let i = 0; i < mutations.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 const m = mutations[i];
                 if (m.type === "attributes" && m.attributeName === _FLIP_ATTR) {
                     if (m.target.hasAttribute(_FLIP_ATTR)) {

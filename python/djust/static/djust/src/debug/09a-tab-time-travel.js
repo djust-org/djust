@@ -53,11 +53,13 @@
                 const stateAfter = entry.state_after || {};
                 const componentsAfter = stateAfter.__components__ || null;
                 const hasComponents = componentsAfter && typeof componentsAfter === 'object' && Object.keys(componentsAfter).length > 0;
+                // eslint-disable-next-line security/detect-object-injection
                 const isExpanded = !!expanded[idx];
 
                 let componentBlock = '';
                 if (hasComponents && isExpanded) {
                     const compRows = Object.keys(componentsAfter).map((compId) => {
+                        // eslint-disable-next-line security/detect-object-injection
                         const compState = componentsAfter[compId] || {};
                         const compPreview = this.escapeHtml(JSON.stringify(compState).slice(0, 80));
                         return `
@@ -227,6 +229,7 @@
             // component sub-scrubber section. Stored on the panel
             // instance so it survives tab re-renders.
             if (!this.timeTravelExpandedRows) this.timeTravelExpandedRows = {};
+            // eslint-disable-next-line security/detect-object-injection
             this.timeTravelExpandedRows[index] = !this.timeTravelExpandedRows[index];
             if (this.state && this.state.activeTab === 'timeTravel') {
                 try {

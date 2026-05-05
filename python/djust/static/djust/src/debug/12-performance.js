@@ -138,7 +138,7 @@
 
             let sentBytes = 0;
             let receivedBytes = 0;
-            let totalMessages = this.networkHistory.length;
+            const totalMessages = this.networkHistory.length;
 
             this.networkHistory.forEach(msg => {
                 if (msg.direction === 'sent') {

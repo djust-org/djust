@@ -90,7 +90,7 @@ repos:
 
       - id: eslint
         name: eslint
-        entry: npx eslint
+        entry: npx eslint --max-warnings 0 --no-warn-ignored
         language: system
         files: ^python/djust/static/djust/[^/]*\.js$
         pass_filenames: true

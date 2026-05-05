@@ -109,6 +109,7 @@
         copyNetworkPayload(btnElement, index) {
             const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
             const messages = stats ? stats.messages : this.networkHistory;
+            // eslint-disable-next-line security/detect-object-injection
             const msg = messages[index];
             if (!msg) return;
 

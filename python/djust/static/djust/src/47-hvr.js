@@ -15,7 +15,7 @@
  * ``DEBUG=True`` + ``LIVEVIEW_CONFIG["hvr_enabled"]``.
  */
 (function () {
-    "use strict";
+
     const djust = (globalThis.djust = globalThis.djust || {});
 
     /**

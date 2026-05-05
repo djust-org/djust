@@ -61,13 +61,13 @@
     function initInstantShell() {
         if (!_swAvailable()) return;
         // Only swap when the page we're viewing is the SW-served shell.
-        var placeholder = document.querySelector(
+        const placeholder = document.querySelector(
             'main[data-djust-shell-placeholder="1"]'
         );
         if (!placeholder) {
             return;
         }
-        var url = window.location.href;
+        const url = window.location.href;
         fetch(url, {
             method: 'GET',
             credentials: 'same-origin',
@@ -127,7 +127,7 @@
 
     function _waitForWs(callback, attempts) {
         attempts = attempts == null ? 50 : attempts;
-        var ws = globalThis.djust && globalThis.djust.ws;
+        const ws = globalThis.djust && globalThis.djust.ws;
         if (ws) {
             callback(ws);
             return;
@@ -140,8 +140,8 @@
 
     function initReconnectionBridge() {
         if (!_swAvailable()) return;
-        var connectionId = _genConnectionId();
-        var bridge = {
+        const connectionId = _genConnectionId();
+        const bridge = {
             connectionId: connectionId,
             bufferedCount: 0,
         };
@@ -159,12 +159,12 @@
                 && ws instanceof globalThis.djust.LiveViewSSE) return;
             ws._djustBridgePatched = true;
 
-            var originalSend = ws.sendMessage.bind(ws);
+            const originalSend = ws.sendMessage.bind(ws);
             ws.sendMessage = function (data) {
-                var OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
-                var state = ws.ws && ws.ws.readyState;
+                const OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
+                const state = ws.ws && ws.ws.readyState;
                 if (state !== OPEN) {
-                    var payload;
+                    let payload;
                     try {
                         payload = JSON.stringify(data);
                     } catch (e) {
@@ -193,16 +193,17 @@
         // Listen for drain replies from the SW.
         if (navigator.serviceWorker) {
             navigator.serviceWorker.addEventListener('message', function (event) {
-                var msg = event.data;
+                const msg = event.data;
                 if (!msg || msg.type !== 'DJUST_DRAIN_REPLY') return;
                 if (msg.connectionId !== connectionId) return;
-                var ws = globalThis.djust && globalThis.djust.ws;
+                const ws = globalThis.djust && globalThis.djust.ws;
                 if (!ws || !ws.ws) return;
-                var OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
+                const OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
                 if (ws.ws.readyState !== OPEN) return;
-                var messages = msg.messages || [];
-                for (var i = 0; i < messages.length; i++) {
+                const messages = msg.messages || [];
+                for (let i = 0; i < messages.length; i++) {
                     try {
+                        // eslint-disable-next-line security/detect-object-injection
                         ws.ws.send(messages[i]);
                     } catch (e) {
                         if (globalThis.djustDebug) {
@@ -235,8 +236,8 @@
 
     // Map requestId -> resolve() function. Populated by lookupVdom /
     // lookupState; drained by the SW-message listener below.
-    var _pendingLookups = {};
-    var _requestIdCounter = 0;
+    const _pendingLookups = {};
+    let _requestIdCounter = 0;
 
     function _nextRequestId(prefix) {
         _requestIdCounter += 1;
@@ -252,17 +253,20 @@
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
         navigator.serviceWorker.addEventListener('message', function (event) {
-            var data = event.data;
+            const data = event.data;
             if (!data || data.type !== 'VDOM_CACHE_REPLY') return;
-            var rid = data.requestId;
+            const rid = data.requestId;
+            // eslint-disable-next-line security/detect-object-injection
             if (rid && _pendingLookups[rid]) {
                 try {
+                    // eslint-disable-next-line security/detect-object-injection
                     _pendingLookups[rid](data);
                 } catch (e) {
                     if (globalThis.djustDebug) {
                         console.warn('[sw] VDOM_CACHE_REPLY handler threw', e);
                     }
                 }
+                // eslint-disable-next-line security/detect-object-injection
                 delete _pendingLookups[rid];
             }
         });
@@ -272,24 +276,27 @@
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
         navigator.serviceWorker.addEventListener('message', function (event) {
-            var data = event.data;
+            const data = event.data;
             if (!data || data.type !== 'STATE_SNAPSHOT_REPLY') return;
-            var rid = data.requestId;
+            const rid = data.requestId;
+            // eslint-disable-next-line security/detect-object-injection
             if (rid && _pendingLookups[rid]) {
                 try {
+                    // eslint-disable-next-line security/detect-object-injection
                     _pendingLookups[rid](data);
                 } catch (e) {
                     if (globalThis.djustDebug) {
                         console.warn('[sw] STATE_SNAPSHOT_REPLY handler threw', e);
                     }
                 }
+                // eslint-disable-next-line security/detect-object-injection
                 delete _pendingLookups[rid];
             }
         });
     }
 
     function cacheVdom(url, html, version) {
-        var ctrl = _swController();
+        const ctrl = _swController();
         if (!ctrl) return;
         ctrl.postMessage({
             type: 'VDOM_CACHE',
@@ -302,12 +309,13 @@
 
     function lookupVdom(url) {
         return new Promise(function (resolve) {
-            var ctrl = _swController();
+            const ctrl = _swController();
             if (!ctrl) {
                 resolve({ hit: false, stale: false, html: null });
                 return;
             }
-            var rid = _nextRequestId('vdom');
+            const rid = _nextRequestId('vdom');
+            // eslint-disable-next-line security/detect-object-injection
             _pendingLookups[rid] = function (reply) { resolve(reply); };
             ctrl.postMessage({
                 type: 'VDOM_CACHE_LOOKUP',
@@ -316,7 +324,9 @@
             });
             // Safety timeout so callers are never stuck if the SW goes away.
             setTimeout(function () {
+                // eslint-disable-next-line security/detect-object-injection
                 if (_pendingLookups[rid]) {
+                    // eslint-disable-next-line security/detect-object-injection
                     delete _pendingLookups[rid];
                     resolve({ hit: false, stale: false, html: null });
                 }
@@ -325,7 +335,7 @@
     }
 
     function captureState(url, viewSlug, stateJson) {
-        var ctrl = _swController();
+        const ctrl = _swController();
         if (!ctrl) return;
         // Clamp payload at 64 KB — defense-in-depth against accidental
         // dumps of large collections. SW also enforces 256 KB.
@@ -347,12 +357,13 @@
 
     function lookupState(url) {
         return new Promise(function (resolve) {
-            var ctrl = _swController();
+            const ctrl = _swController();
             if (!ctrl) {
                 resolve({ hit: false, view_slug: null, state_json: null });
                 return;
             }
-            var rid = _nextRequestId('state');
+            const rid = _nextRequestId('state');
+            // eslint-disable-next-line security/detect-object-injection
             _pendingLookups[rid] = function (reply) { resolve(reply); };
             ctrl.postMessage({
                 type: 'STATE_SNAPSHOT_LOOKUP',
@@ -360,7 +371,9 @@
                 url: url,
             });
             setTimeout(function () {
+                // eslint-disable-next-line security/detect-object-injection
                 if (_pendingLookups[rid]) {
+                    // eslint-disable-next-line security/detect-object-injection
                     delete _pendingLookups[rid];
                     resolve({ hit: false, view_slug: null, state_json: null });
                 }
@@ -376,11 +389,11 @@
     // common init pattern (theme switch, settings toggle, dev-mode reload)
     // and without this guard each call adds another drain listener and
     // another sendMessage wrapper, causing buffered replays to double.
-    var _registerPromise = null;
-    var _bridgeInitialized = false;
-    var _shellInitialized = false;
-    var _vdomCacheInitialized = false;
-    var _stateSnapshotInitialized = false;
+    let _registerPromise = null;
+    let _bridgeInitialized = false;
+    let _shellInitialized = false;
+    let _vdomCacheInitialized = false;
+    let _stateSnapshotInitialized = false;
 
     globalThis.djust.registerServiceWorker = function (options) {
         options = options || {};
@@ -398,10 +411,10 @@
             // support (e.g. polyfill) to still try.
             return Promise.resolve(null);
         }
-        var swUrl = options.swUrl || '/static/djust/service-worker.js';
-        var scope = options.scope || '/';
+        const swUrl = options.swUrl || '/static/djust/service-worker.js';
+        const scope = options.scope || '/';
         _registerPromise = (async function () {
-            var registration = null;
+            let registration = null;
             try {
                 registration = await navigator.serviceWorker.register(swUrl, { scope: scope });
             } catch (err) {

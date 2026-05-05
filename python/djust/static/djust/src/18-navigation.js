@@ -50,6 +50,7 @@
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';
+        // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
 
         if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
@@ -76,13 +77,14 @@
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';
+        // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
         // Scroll to top on navigation (or to anchor if present)
-        var hash = newUrl.hash;
+        const hash = newUrl.hash;
         if (hash) {
             try {
-                var target = document.querySelector(hash);
+                const target = document.querySelector(hash);
                 if (target) {
                     target.scrollIntoView({ behavior: 'instant' });
                 }
@@ -158,7 +160,9 @@
         const routeMap = window.djust._routeMap || {};
 
         // Try exact match first
+        // eslint-disable-next-line security/detect-object-injection
         if (routeMap[pathname]) {
+            // eslint-disable-next-line security/detect-object-injection
             return routeMap[pathname];
         }
 
@@ -167,7 +171,14 @@
             if (pattern.includes(':')) {
                 // Convert Django-style pattern to regex
                 // e.g., "/items/:id/" → /^\/items\/([^\/]+)\/$/
+                // Pattern source is the route map populated server-side by
+                // `live_session()` (developer-authored URL config), not
+                // user input. The transformation always replaces `:name`
+                // with the literal `([^/]+)` group — no nested
+                // quantifiers, no user-supplied alternation, no ReDoS
+                // surface. Safe to construct.
                 const regexStr = pattern.replace(/:([^/]+)/g, '([^/]+)');
+                // eslint-disable-next-line security/detect-non-literal-regexp
                 const regex = new RegExp('^' + regexStr + '$');
                 if (regex.test(pathname)) {
                     return viewPath;
@@ -324,12 +335,12 @@
     // Delegated change handler for dj-patch on select/input elements.
     // Bound once on document so it survives DOM replacement by morphdom.
     (function () {
-        var _djPatchChangeHandlerInstalled = false;
+        let _djPatchChangeHandlerInstalled = false;
         function installDjPatchChangeHandler() {
             if (_djPatchChangeHandlerInstalled) return;
             _djPatchChangeHandlerInstalled = true;
             document.addEventListener('change', function (e) {
-                var el = e.target.closest('[dj-patch]');
+                const el = e.target.closest('[dj-patch]');
                 if (!el) return;
                 if (el.tagName === 'SELECT' || el.tagName === 'INPUT') {
                     _executePatch(el, el.getAttribute('dj-patch'), el.value);
@@ -354,7 +365,7 @@
                     // (e.g. <a href="?tab=docs" dj-patch>), the attribute value
                     // is "" and the navigation target is the href.  Fall back to
                     // href so the link destination is respected.
-                    var patchValue = el.getAttribute('dj-patch');
+                    let patchValue = el.getAttribute('dj-patch');
                     if (!patchValue && el.tagName === 'A') {
                         patchValue = el.getAttribute('href') || '';
                     }

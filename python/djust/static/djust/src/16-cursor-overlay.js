@@ -25,7 +25,7 @@ window.djust.hooks = window.djust.hooks || {};
 
 window.djust.hooks.CursorOverlay = {
     mounted: function() {
-        var self = this;
+        const self = this;
 
         // Discover textarea
         this.textarea = this.el.querySelector('textarea');
@@ -39,7 +39,7 @@ window.djust.hooks.CursorOverlay = {
         this.overlay.setAttribute('dj-update', 'ignore');
         this.overlay.style.cssText = 'position:absolute; inset:0; pointer-events:none; overflow:hidden;';
         // Copy textarea padding so carets align with text
-        var cs = window.getComputedStyle(this.textarea);
+        const cs = window.getComputedStyle(this.textarea);
         this.overlay.style.padding = cs.paddingTop + ' ' + cs.paddingRight + ' ' + cs.paddingBottom + ' ' + cs.paddingLeft;
         this.overlay.style.fontFamily = cs.fontFamily;
         this.overlay.style.fontSize = cs.fontSize;
@@ -63,7 +63,7 @@ window.djust.hooks.CursorOverlay = {
         this._sendCursorPosition = function() {
             clearTimeout(self._debounceTimer);
             self._debounceTimer = setTimeout(function() {
-                var pos = self.textarea.selectionStart;
+                const pos = self.textarea.selectionStart;
                 self.pushEvent('update_cursor', { position: pos });
             }, 100);
         };
@@ -110,36 +110,37 @@ window.djust.hooks.CursorOverlay = {
     },
 
     _syncMirrorStyles: function() {
-        var cs = window.getComputedStyle(this.textarea);
-        var props = [
+        const cs = window.getComputedStyle(this.textarea);
+        const props = [
             'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
             'wordSpacing', 'textIndent', 'wordWrap', 'overflowWrap', 'whiteSpace',
             'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
             'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'
         ];
-        for (var i = 0; i < props.length; i++) {
+        for (let i = 0; i < props.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             this.mirror.style[props[i]] = cs[props[i]];
         }
         // Use content-box width matching the textarea's actual text area
         // (clientWidth excludes scrollbar and border; subtract padding for content)
-        var padL = parseFloat(cs.paddingLeft) || 0;
-        var padR = parseFloat(cs.paddingRight) || 0;
+        const padL = parseFloat(cs.paddingLeft) || 0;
+        const padR = parseFloat(cs.paddingRight) || 0;
         this.mirror.style.boxSizing = 'content-box';
         this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
     },
 
     _measureCursorPosition: function(charIndex) {
         // Mirror-div technique: fill mirror with text up to cursor, measure marker offset
-        var text = this.textarea.value.substring(0, charIndex);
+        const text = this.textarea.value.substring(0, charIndex);
         this.mirror.textContent = '';
-        var textNode = document.createTextNode(text);
-        var marker = document.createElement('span');
+        const textNode = document.createTextNode(text);
+        const marker = document.createElement('span');
         marker.textContent = '\u200b';  // zero-width space
         this.mirror.appendChild(textNode);
         this.mirror.appendChild(marker);
 
-        var mirrorRect = this.mirror.getBoundingClientRect();
-        var markerRect = marker.getBoundingClientRect();
+        const mirrorRect = this.mirror.getBoundingClientRect();
+        const markerRect = marker.getBoundingClientRect();
 
         return {
             left: markerRect.left - mirrorRect.left,
@@ -148,32 +149,36 @@ window.djust.hooks.CursorOverlay = {
     },
 
     _renderCursors: function(cursors) {
-        var activeIds = {};
+        const activeIds = {};
 
-        for (var uid in cursors) {
+        for (const uid in cursors) {
+            // eslint-disable-next-line security/detect-object-injection
             activeIds[uid] = true;
-            var data = cursors[uid];
-            var pos = this._measureCursorPosition(data.position);
+            // eslint-disable-next-line security/detect-object-injection
+            const data = cursors[uid];
+            const pos = this._measureCursorPosition(data.position);
 
-            var caret = this._carets[uid];
+            // eslint-disable-next-line security/detect-object-injection
+            let caret = this._carets[uid];
             if (!caret) {
                 // Create new caret element
                 caret = document.createElement('div');
                 caret.className = 'remote-cursor';
                 caret.style.cssText = 'position:absolute; transition:left 0.15s ease, top 0.15s ease; pointer-events:none;';
 
-                var line = document.createElement('div');
+                const line = document.createElement('div');
                 line.style.cssText = 'width:2px; height:1.2em; border-radius:1px;';
                 line.style.backgroundColor = data.color;
                 caret.appendChild(line);
 
-                var label = document.createElement('div');
+                const label = document.createElement('div');
                 label.style.cssText = 'position:absolute; bottom:100%; left:0; color:#fff; font-size:10px; padding:1px 4px; border-radius:3px; white-space:nowrap; font-family:system-ui,sans-serif;';
                 label.style.backgroundColor = data.color;
                 label.textContent = (data.emoji || '') + ' ' + (data.name || '');
                 caret.appendChild(label);
 
                 this.overlay.appendChild(caret);
+                // eslint-disable-next-line security/detect-object-injection
                 this._carets[uid] = caret;
             }
 
@@ -182,9 +187,12 @@ window.djust.hooks.CursorOverlay = {
         }
 
         // Remove carets for users who are no longer present
-        for (var id in this._carets) {
+        for (const id in this._carets) {
+            // eslint-disable-next-line security/detect-object-injection
             if (!activeIds[id]) {
+                // eslint-disable-next-line security/detect-object-injection
                 this._carets[id].parentNode.removeChild(this._carets[id]);
+                // eslint-disable-next-line security/detect-object-injection
                 delete this._carets[id];
             }
         }
@@ -192,9 +200,9 @@ window.djust.hooks.CursorOverlay = {
 
     _repositionAll: function() {
         // Re-sync mirror width in case textarea resized or scrollbar appeared
-        var cs = window.getComputedStyle(this.textarea);
-        var padL = parseFloat(cs.paddingLeft) || 0;
-        var padR = parseFloat(cs.paddingRight) || 0;
+        const cs = window.getComputedStyle(this.textarea);
+        const padL = parseFloat(cs.paddingLeft) || 0;
+        const padR = parseFloat(cs.paddingRight) || 0;
         this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
 
         // Reposition using cached cursor data

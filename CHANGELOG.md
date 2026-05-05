@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
+  The 393 pre-existing eslint warnings in `client.js` (and 32 in
+  `debug-panel.js`) have been resolved across the ~70 source modules in
+  `python/djust/static/djust/src/` and `src/debug/`. Breakdown of the
+  fixes:
+  * Auto-fixed: 222 (`prefer-const`, `no-var`) via
+    `eslint --fix python/djust/static/djust/src/`.
+  * Targeted disables: 116 in `client.js` sources + 25 in `debug-panel.js`
+    sources (`security/detect-object-injection`, all on internal data
+    structures — typed for-loop indices, controlled object-literal
+    lookups, DOM-controlled keys like `field.name`. djust already
+    validates against `UNSAFE_KEYS` for the real prototype-pollution
+    attack surface).
+  * Refactored: 16 `no-unused-vars` (mostly catch-error parameters
+    `_`-prefixed; 2 functions inlined as dead code, 1 redundant
+    parameter renamed). 1 `security/detect-non-literal-regexp` for
+    server-controlled route patterns in `18-navigation.js`.
+  * Cross-module guards: 4 `prefer-const` reverted to `let` for
+    cross-file reassigned globals (`liveViewWS`, `clientVdomVersion`,
+    `_eventRefCounter`, `_isBroadcastUpdate`) that ESLint's per-file
+    scope incorrectly suggests as const — auto-fix had broken the
+    transport-switch + broadcast paths until reverted.
+  * ESLint config: catch-error parameters now respect
+    `caughtErrorsIgnorePattern: "^_"`; concat-fragment source modules
+    (`00-namespace.js`, `21-guard-close.js`, `src/debug/*.js`) are
+    correctly identified as bundle inputs that don't parse standalone.
+  The `--max-warnings 0` flag is now enforced on the eslint pre-commit
+  hook (`.pre-commit-config.yaml`) — contributors no longer need
+  `SKIP=build-js,eslint` to commit JS source changes. Unblocks the
+  bundle rebuild deferred from PR #1357 (dj-transition fix #1348).
+
 ### Fixed
 
 - **`dj-transition` now respects CSS `transition-duration` instead of a hard-coded 600ms fallback (#1348).**

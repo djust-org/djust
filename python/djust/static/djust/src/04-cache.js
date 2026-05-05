@@ -1,18 +1,24 @@
 
 // === HTTP Fallback LiveView Client ===
 
-// Track VDOM version for synchronization
+// Track VDOM version for synchronization.
+// `let` (NOT const) — reassigned across multiple src/ modules (websocket
+// handlers, response handler). ESLint's per-file scope misses cross-file
+// mutation; auto-fix would break runtime (#1351).
+// eslint-disable-next-line prefer-const
 let clientVdomVersion = null;
 
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
+// `let` (NOT const) — `++_eventRefCounter` in 03-websocket.js reassigns.
+// eslint-disable-next-line prefer-const
 let _eventRefCounter = 0;
-let _pendingEventRefs = new Set();     // refs of events awaiting server response
-let _pendingEventNames = new Map();    // ref -> event name for pending events
-let _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
-let _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
-let _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _pendingEventRefs = new Set();     // refs of events awaiting server response
+const _pendingEventNames = new Map();    // ref -> event name for pending events
+const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
+const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
+const _tickBuffer = [];                  // buffered server-initiated patches during pending events
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>

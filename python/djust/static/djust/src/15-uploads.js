@@ -11,7 +11,7 @@
 //   dj-upload-progress="name"— container for progress bars
 
 (function() {
-    'use strict';
+
 
     // Frame types matching server protocol
     const FRAME_CHUNK    = 0x01;
@@ -68,7 +68,7 @@
             let req;
             try {
                 req = indexedDB.open(RESUMABLE_DB_NAME, RESUMABLE_DB_VERSION);
-            } catch (err) {
+            } catch (_err) {
                 resolve(null);
                 return;
             }
@@ -228,6 +228,7 @@
         if (hex.length !== 32) return null;
         const bytes = new Uint8Array(16);
         for (let i = 0; i < 16; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
         }
         return bytes;
@@ -392,7 +393,7 @@
             });
             try {
                 ws.sendMessage({ type: 'upload_resume', ref });
-            } catch (err) {
+            } catch (_err) {
                 if (!done) {
                     done = true;
                     clearTimeout(timer);
@@ -450,6 +451,7 @@
             // MUST match what was passed at presign time or S3 returns 403.
             const fields = (spec && spec.fields) || {};
             for (const name of Object.keys(fields)) {
+                // eslint-disable-next-line security/detect-object-injection
                 try { xhr.setRequestHeader(name, fields[name]); } catch (_) { /* ignore */ }
             }
 
@@ -598,7 +600,7 @@
                         img.alt = file.name;
                         img.className = 'upload-preview-image';
                         wrapper.appendChild(img);
-                    } catch (e) {
+                    } catch (_e) {
                         // Fall through to filename display
                     }
                 }
@@ -631,6 +633,7 @@
         const files = Array.from(input.files);
         if (files.length === 0) return;
 
+        // eslint-disable-next-line security/detect-object-injection
         const config = uploadConfigs[uploadName];
 
         // Show previews
@@ -678,6 +681,7 @@
             const uploadName = input.getAttribute('dj-upload');
 
             // Set accept attribute from config
+            // eslint-disable-next-line security/detect-object-injection
             const config = uploadConfigs[uploadName];
             if (config && config.accept && !input.getAttribute('accept')) {
                 input.setAttribute('accept', config.accept);
@@ -716,6 +720,7 @@
                 const files = Array.from(e.dataTransfer.files);
                 if (files.length === 0) return;
 
+                // eslint-disable-next-line security/detect-object-injection
                 const config = uploadConfigs[uploadName];
                 await showPreviews(uploadName, files);
 
@@ -761,6 +766,7 @@
         const uploadName = element && element.getAttribute && element.getAttribute('dj-upload');
         if (!uploadName) return;
 
+        // eslint-disable-next-line security/detect-object-injection
         const config = uploadConfigs[uploadName];
         const files = Array.from(fileList);
 
@@ -807,6 +813,7 @@
         fileHintKey,
         uuidStringToBytes,
         uploadFile: (file, uploadName, opts) => {
+            // eslint-disable-next-line security/detect-object-injection
             const cfg = uploadConfigs[uploadName];
             return uploadFile(liveViewWS, uploadName, file, cfg, opts || {});
         },

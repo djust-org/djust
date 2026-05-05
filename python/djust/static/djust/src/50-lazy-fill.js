@@ -22,7 +22,7 @@
 // aria-live="polite">` for screen-reader announcement.
 
 (function () {
-  'use strict';
+
 
   if (!window.djust) window.djust = {};
 
@@ -47,7 +47,7 @@
       // error / timeout — wrap in <dj-error aria-live="polite"> so
       // screen readers announce. Custom element name is treated as
       // HTMLUnknownElement which is fine for layout-only purposes.
-      var err = document.createElement('dj-error');
+      const err = document.createElement('dj-error');
       err.setAttribute('aria-live', 'polite');
       err.appendChild(tpl.content.cloneNode(true));
       slot.replaceWith(err);
@@ -66,14 +66,14 @@
    * that arrived before this module loaded.
    */
   window.djust.lazyFill = function lazyFill(slotId) {
-    var tpl = document.getElementById('djl-fill-' + slotId);
+    const tpl = document.getElementById('djl-fill-' + slotId);
     if (!tpl || tpl.tagName !== 'TEMPLATE') {
       // Already filled (template removed) OR the template arrived
       // before this module loaded — auto-scan will retry.
       return;
     }
 
-    var slot = document.querySelector(
+    const slot = document.querySelector(
       'dj-lazy-slot[data-id="' + (window.CSS && window.CSS.escape ? window.CSS.escape(slotId) : slotId) + '"]'
     );
     if (!slot) {
@@ -87,13 +87,14 @@
       return;
     }
 
-    var status = (tpl.dataset && tpl.dataset.status) || 'ok';
-    var trigger = (slot.dataset && slot.dataset.trigger) || 'flush';
+    const status = (tpl.dataset && tpl.dataset.status) || 'ok';
+    const trigger = (slot.dataset && slot.dataset.trigger) || 'flush';
 
     if (trigger === 'visible' && 'IntersectionObserver' in window) {
-      var io = new IntersectionObserver(
+      const io = new IntersectionObserver(
         function (entries) {
-          for (var i = 0; i < entries.length; i++) {
+          for (let i = 0; i < entries.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             if (entries[i].isIntersecting) {
               _replaceSlot(slot, tpl, status);
               io.disconnect();
@@ -118,9 +119,10 @@
   // window.djust.lazyFill is defined when the bundle loads
   // asynchronously.
   function _autoFillOnDOMReady() {
-    var tpls = document.querySelectorAll('template[id^="djl-fill-"]');
-    for (var i = 0; i < tpls.length; i++) {
-      var slotId = tpls[i].id.slice('djl-fill-'.length);
+    const tpls = document.querySelectorAll('template[id^="djl-fill-"]');
+    for (let i = 0; i < tpls.length; i++) {
+      // eslint-disable-next-line security/detect-object-injection
+      const slotId = tpls[i].id.slice('djl-fill-'.length);
       window.djust.lazyFill(slotId);
     }
   }

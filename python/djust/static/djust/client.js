@@ -1032,6 +1032,7 @@ class LiveViewWebSocket {
                         container.innerHTML = entry.html;
                     }
                     if (typeof entry.version === 'number') {
+                        // eslint-disable-next-line security/detect-object-injection
                         window.djust._clientVdomVersions[targetId] = entry.version;
                     }
                 }
@@ -1767,7 +1768,12 @@ window.djust.LiveViewWebSocket = LiveViewWebSocket;
 // Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 
-// Global WebSocket instance
+// Global WebSocket instance.
+// `let` (NOT const) — 14-init.js reassigns this when switching transports
+// (HTTP/WS/SSE) and on TurboNav reconnect. Auto-fix to const broke the
+// transport-switch path; tests relied on this rebinding (#1351). ESLint
+// can't see the cross-file reassignment from per-file analysis.
+// eslint-disable-next-line prefer-const
 let liveViewWS = null;
 
 // ============================================================================
@@ -2217,18 +2223,24 @@ window.djust.LiveViewSSE = LiveViewSSE;
 
 // === HTTP Fallback LiveView Client ===
 
-// Track VDOM version for synchronization
+// Track VDOM version for synchronization.
+// `let` (NOT const) — reassigned across multiple src/ modules (websocket
+// handlers, response handler). ESLint's per-file scope misses cross-file
+// mutation; auto-fix would break runtime (#1351).
+// eslint-disable-next-line prefer-const
 let clientVdomVersion = null;
 
 // Event sequencing (#560): monotonic ref counter for matching event
 // responses to requests, and buffering server-initiated pushes during
 // pending events. Uses a Set to track multiple concurrent pending refs.
+// `let` (NOT const) — `++_eventRefCounter` in 03-websocket.js reassigns.
+// eslint-disable-next-line prefer-const
 let _eventRefCounter = 0;
-let _pendingEventRefs = new Set();     // refs of events awaiting server response
-let _pendingEventNames = new Map();    // ref -> event name for pending events
-let _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
-let _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
-let _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _pendingEventRefs = new Set();     // refs of events awaiting server response
+const _pendingEventNames = new Map();    // ref -> event name for pending events
+const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
+const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
+const _tickBuffer = [];                  // buffered server-initiated patches during pending events
 
 // State management for decorators
 const debounceTimers = new Map(); // Map<handlerName, {timerId, firstCallTime}>
@@ -2608,8 +2620,10 @@ function initDraftMode() {
             const field = document.querySelector(`[name="${fieldName}"]`);
             if (field) {
                 if (field.type === 'checkbox') {
+                    // eslint-disable-next-line security/detect-object-injection
                     field.checked = savedDraft[fieldName];
                 } else {
+                    // eslint-disable-next-line security/detect-object-injection
                     field.value = savedDraft[fieldName];
                 }
             }
@@ -2671,6 +2685,7 @@ function _collectFormData(container) {
         const name = editable.getAttribute('name') || editable.id;
         // Prevent prototype pollution attacks
         if (name && !UNSAFE_KEYS.includes(name)) {
+            // eslint-disable-next-line security/detect-object-injection
             data[name] = editable.innerHTML;
         }
     });
@@ -3064,6 +3079,7 @@ function extractTypedParams(element) {
             }
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         params[key] = value;
     }
 
@@ -3087,6 +3103,7 @@ function extractTypedParams(element) {
                         if (UNSAFE_KEYS.includes(k)) continue;
                         // data-* attributes win; only fill in missing keys
                         if (!(k in params)) {
+                            // eslint-disable-next-line security/detect-object-injection
                             params[k] = v;
                         }
                     }
@@ -3101,6 +3118,7 @@ function extractTypedParams(element) {
     // and dj-params, matching Phoenix's phx-value-* semantics.
     const djValues = collectDjValues(element);
     for (const [k, v] of Object.entries(djValues)) {
+        // eslint-disable-next-line security/detect-object-injection
         params[k] = v;
     }
 
@@ -3190,6 +3208,7 @@ function collectDjValues(element) {
             }
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         values[key] = value;
     }
 
@@ -3307,6 +3326,7 @@ function _normalizeKeyName(name) {
         'arrowleft': 'ArrowLeft',
         'arrowright': 'ArrowRight',
     };
+    // eslint-disable-next-line security/detect-object-injection
     return keyMap[lower] || name;
 }
 
@@ -3319,20 +3339,20 @@ function _normalizeKeyName(name) {
 // when bindLiveViewEvents() is called after DOM changes.
 
 // Registry: Map<"prefix:evtType", Set<{element, attrName, handler, requiredKey}>>
-var _scopedRegistry = new Map();
-var _scopedDelegationInstalled = false;
+const _scopedRegistry = new Map();
+let _scopedDelegationInstalled = false;
 
 /**
  * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
  * and register them in the scoped registry for delegated dispatch.
  */
 function _scanScopedElements() {
-    var scopedPrefixes = ['dj-window-', 'dj-document-'];
-    var scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
-    var root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
+    const scopedPrefixes = ['dj-window-', 'dj-document-'];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
 
     // Clear stale entries (elements removed from DOM)
-    _scopedRegistry.forEach(function(entries, key) {
+    _scopedRegistry.forEach(function(entries, _key) {
         entries.forEach(function(entry) {
             if (!document.contains(entry.element)) {
                 entries.delete(entry);
@@ -3342,37 +3362,42 @@ function _scanScopedElements() {
 
     // Scan ALL elements in the LiveView root (only way to find dotted attr names).
     // This runs once at mount and on TurboNav — NOT after every patch.
-    var allElements = root.querySelectorAll('*');
+    const allElements = root.querySelectorAll('*');
     allElements.forEach(function(element) {
-        for (var ai = 0; ai < element.attributes.length; ai++) {
-            var attrName = element.attributes[ai].name;
-            for (var pi = 0; pi < scopedPrefixes.length; pi++) {
-                var prefix = scopedPrefixes[pi];
+        for (let ai = 0; ai < element.attributes.length; ai++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const attrName = element.attributes[ai].name;
+            for (let pi = 0; pi < scopedPrefixes.length; pi++) {
+                // eslint-disable-next-line security/detect-object-injection
+                const prefix = scopedPrefixes[pi];
                 if (!attrName.startsWith(prefix)) continue;
 
                 // Find which event type this is (e.g. 'keydown' from 'dj-window-keydown.escape')
-                var rest = attrName.slice(prefix.length); // 'keydown' or 'keydown.escape'
-                var evtType = null;
-                for (var ei = 0; ei < scopedEventTypes.length; ei++) {
+                const rest = attrName.slice(prefix.length); // 'keydown' or 'keydown.escape'
+                let evtType = null;
+                for (let ei = 0; ei < scopedEventTypes.length; ei++) {
+                    // eslint-disable-next-line security/detect-object-injection
                     if (rest === scopedEventTypes[ei] || rest.startsWith(scopedEventTypes[ei] + '.')) {
+                        // eslint-disable-next-line security/detect-object-injection
                         evtType = scopedEventTypes[ei];
                         break;
                     }
                 }
                 if (!evtType) continue;
 
-                var registryKey = prefix + evtType;
+                const registryKey = prefix + evtType;
                 if (!_scopedRegistry.has(registryKey)) {
                     _scopedRegistry.set(registryKey, new Set());
                 }
 
-                var suffix = rest.slice(evtType.length); // '' or '.escape'
-                var requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
-                var parsed = parseEventHandler(element.attributes[ai].value);
+                const suffix = rest.slice(evtType.length); // '' or '.escape'
+                const requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
+                // eslint-disable-next-line security/detect-object-injection
+                const parsed = parseEventHandler(element.attributes[ai].value);
 
                 // Check if already registered (prevent duplicates)
-                var entries = _scopedRegistry.get(registryKey);
-                var alreadyRegistered = false;
+                const entries = _scopedRegistry.get(registryKey);
+                let alreadyRegistered = false;
                 entries.forEach(function(entry) {
                     if (entry.element === element && entry.attrName === attrName) {
                         alreadyRegistered = true;
@@ -3402,25 +3427,28 @@ function _installScopedDelegation() {
     // Scan DOM once at install time to populate the registry
     _scanScopedElements();
 
-    var scopedTargets = [
+    const scopedTargets = [
         { prefix: 'dj-window-', target: window },
         { prefix: 'dj-document-', target: document },
     ];
-    var scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
 
-    for (var ti = 0; ti < scopedTargets.length; ti++) {
-        var prefix = scopedTargets[ti].prefix;
-        var target = scopedTargets[ti].target;
+    for (let ti = 0; ti < scopedTargets.length; ti++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const prefix = scopedTargets[ti].prefix;
+        // eslint-disable-next-line security/detect-object-injection
+        const target = scopedTargets[ti].target;
 
-        for (var ei = 0; ei < scopedEventTypes.length; ei++) {
-            var evtType = scopedEventTypes[ei];
+        for (let ei = 0; ei < scopedEventTypes.length; ei++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const evtType = scopedEventTypes[ei];
             if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
 
             (function(prefix, target, evtType) {
-                var registryKey = prefix + evtType;
+                const registryKey = prefix + evtType;
 
                 target.addEventListener(evtType, function(e) {
-                    var entries = _scopedRegistry.get(registryKey);
+                    const entries = _scopedRegistry.get(registryKey);
                     if (!entries || entries.size === 0) return;
 
                     entries.forEach(function(entry) {
@@ -3430,7 +3458,7 @@ function _installScopedDelegation() {
                         // Key filtering
                         if (entry.requiredKey && e.key !== entry.requiredKey) return;
 
-                        var params = extractTypedParams(entry.element);
+                        const params = extractTypedParams(entry.element);
                         addEventContext(params, entry.element);
 
                         if (evtType === 'keydown' || evtType === 'keyup') {
@@ -3654,7 +3682,7 @@ function buildFormEventParams(element, value) {
  * @returns {Function} - Rate-limited wrapper or raw handler
  */
 function _getOrCreateRateLimitedHandler(stateMap, element, eventType, rawHandler) {
-    let state = stateMap.get(element);
+    const state = stateMap.get(element);
     if (state) return state.wrapped;
 
     // Create rate-limited wrapper for this element
@@ -3743,36 +3771,36 @@ async function _handleDjClick(element, e) {
 function _handleDjCopy(element, e) {
     e.preventDefault();
     // Read attribute at click time (not bind time) so morph updates take effect
-    var currentValue = element.getAttribute('dj-copy');
+    const currentValue = element.getAttribute('dj-copy');
     if (!currentValue) return;
 
     // Selector-based copy: if value starts with #, . or [, try querySelector
-    var textToCopy = currentValue;
+    let textToCopy = currentValue;
     if (currentValue.charAt(0) === '#' || currentValue.charAt(0) === '.' || currentValue.charAt(0) === '[') {
         try {
-            var target = document.querySelector(currentValue);
+            const target = document.querySelector(currentValue);
             if (target) {
                 textToCopy = target.textContent;
             }
-        } catch (err) {
+        } catch (_err) {
             // Invalid selector — fall back to literal copy
         }
     }
 
     navigator.clipboard.writeText(textToCopy).then(function() {
         // CSS class feedback: add class and remove after 2s
-        var cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
+        const cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
         element.classList.add(cssClass);
         setTimeout(function() { element.classList.remove(cssClass); }, 2000);
 
         // Text feedback: custom or default "Copied!"
-        var feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
-        var original = element.textContent;
+        const feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
+        const original = element.textContent;
         element.textContent = feedbackText;
         setTimeout(function() { element.textContent = original; }, 1500);
 
         // Optional server event for analytics
-        var copyEvent = element.getAttribute('dj-copy-event');
+        const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
             handleEvent(copyEvent, { text: textToCopy });
         }
@@ -4004,12 +4032,13 @@ async function _handleDjPaste(element, e) {
     const files = [];
     try {
         text = clipboardData.getData('text/plain') || '';
-    } catch (err) { /* older browsers */ }
+    } catch (_err) { /* older browsers */ }
     try {
         html = clipboardData.getData('text/html') || '';
-    } catch (err) { /* older browsers */ }
+    } catch (_err) { /* older browsers */ }
     if (clipboardData.files) {
         for (let i = 0; i < clipboardData.files.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const f = clipboardData.files[i];
             files.push({
                 name: f.name || 'clipboard-paste',
@@ -4121,9 +4150,9 @@ function installDelegatedListeners(root) {
     if (root._djustDelegateAbort) {
         root._djustDelegateAbort.abort();
     }
-    var controller = new AbortController();
+    const controller = new AbortController();
     root._djustDelegateAbort = controller;
-    var opts = { signal: controller.signal };
+    const opts = { signal: controller.signal };
 
     // Helper: addEventListener with abort signal for clean teardown
     function on(event, handler) {
@@ -4132,23 +4161,23 @@ function installDelegatedListeners(root) {
 
     // click → dj-copy (client-only) first, then dj-click
     on('click', function(e) {
-        var copyEl = e.target.closest('[dj-copy]');
+        const copyEl = e.target.closest('[dj-copy]');
         if (copyEl) {
             _handleDjCopy(copyEl, e);
             return;
         }
-        var clickEl = e.target.closest('[dj-click]');
+        const clickEl = e.target.closest('[dj-click]');
         if (clickEl) {
             // Rate-limit per element using WeakMap
-            var rawHandler = function(ev) { return _handleDjClick(clickEl, ev); };
-            var wrapped = _getOrCreateRateLimitedHandler(_clickRateLimitState, clickEl, 'click', rawHandler);
+            const rawHandler = function(ev) { return _handleDjClick(clickEl, ev); };
+            const wrapped = _getOrCreateRateLimitedHandler(_clickRateLimitState, clickEl, 'click', rawHandler);
             wrapped(e);
         }
     });
 
     // submit → dj-submit
     on('submit', function(e) {
-        var submitEl = e.target.closest('[dj-submit]');
+        const submitEl = e.target.closest('[dj-submit]');
         if (submitEl) {
             _handleDjSubmit(submitEl, e);
         }
@@ -4156,38 +4185,39 @@ function installDelegatedListeners(root) {
 
     // change → dj-change
     on('change', function(e) {
-        var changeEl = e.target.closest('[dj-change]');
+        const changeEl = e.target.closest('[dj-change]');
         if (changeEl) {
             // Rate-limit per element using WeakMap
-            var rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
-            var wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
+            const rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
+            const wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
             wrapped(e);
         }
     });
 
     // input → dj-input (with smart rate limiting)
     on('input', function(e) {
-        var inputEl = e.target.closest('[dj-input]');
+        const inputEl = e.target.closest('[dj-input]');
         if (inputEl) {
             // Get or create rate-limited wrapper for this element
-            var state = _inputRateLimitState.get(inputEl);
+            let state = _inputRateLimitState.get(inputEl);
             if (!state) {
                 // Build the raw handler
-                var rawHandler = function(ev) { return _handleDjInput(inputEl, ev); };
+                const rawHandler = function(ev) { return _handleDjInput(inputEl, ev); };
 
                 // Determine rate limit strategy.
                 // Clone the default before letting dj-* overrides mutate it,
                 // otherwise the shared const entry in DEFAULT_RATE_LIMITS gets
                 // permanently flipped and pollutes every subsequently-bound
                 // element of the same type.
-                var inputType = inputEl.type || inputEl.tagName.toLowerCase();
-                var rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType)
+                const inputType = inputEl.type || inputEl.tagName.toLowerCase();
+                const rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType)
+                    // eslint-disable-next-line security/detect-object-injection
                     ? Object.assign({}, DEFAULT_RATE_LIMITS[inputType])
                     : { type: 'debounce', ms: 300 };
 
                 // Check for explicit overrides: dj-* attributes take precedence
                 if (inputEl.hasAttribute('dj-debounce')) {
-                    var djVal = inputEl.getAttribute('dj-debounce');
+                    const djVal = inputEl.getAttribute('dj-debounce');
                     if (djVal === 'blur') {
                         rateLimit.type = 'blur';
                         rateLimit.ms = 0;
@@ -4207,7 +4237,7 @@ function installDelegatedListeners(root) {
                 }
 
                 // Apply rate limiting wrapper
-                var wrapped;
+                let wrapped;
                 if (rateLimit.type === 'passthrough') {
                     // Click-fired widgets (radio/checkbox/select) — one value
                     // per interaction, no rate-limiting needed. Fire the
@@ -4216,7 +4246,7 @@ function installDelegatedListeners(root) {
                     wrapped = rawHandler;
                 } else if (rateLimit.type === 'blur') {
                     // dj-debounce="blur": defer until element loses focus
-                    var latestArgs = null;
+                    let latestArgs = null;
                     wrapped = function() {
                         latestArgs = arguments;
                     };
@@ -4241,27 +4271,27 @@ function installDelegatedListeners(root) {
 
     // keydown → dj-keydown
     on('keydown', function(e) {
-        var keyEl = e.target.closest('[dj-keydown]');
+        const keyEl = e.target.closest('[dj-keydown]');
         if (keyEl) {
-            var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
-            var wrapped = _getOrCreateRateLimitedHandler(_keydownRateLimitState, keyEl, 'keydown', rawHandler);
+            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
+            const wrapped = _getOrCreateRateLimitedHandler(_keydownRateLimitState, keyEl, 'keydown', rawHandler);
             wrapped(e);
         }
     });
 
     // keyup → dj-keyup (separate WeakMap from keydown to avoid handler collision)
     on('keyup', function(e) {
-        var keyEl = e.target.closest('[dj-keyup]');
+        const keyEl = e.target.closest('[dj-keyup]');
         if (keyEl) {
-            var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
-            var wrapped = _getOrCreateRateLimitedHandler(_keyupRateLimitState, keyEl, 'keyup', rawHandler);
+            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
+            const wrapped = _getOrCreateRateLimitedHandler(_keyupRateLimitState, keyEl, 'keyup', rawHandler);
             wrapped(e);
         }
     });
 
     // paste → dj-paste
     on('paste', function(e) {
-        var pasteEl = e.target.closest('[dj-paste]');
+        const pasteEl = e.target.closest('[dj-paste]');
         if (pasteEl) {
             _handleDjPaste(pasteEl, e);
         }
@@ -4269,7 +4299,7 @@ function installDelegatedListeners(root) {
 
     // focusin → dj-focus (focusin bubbles, focus doesn't)
     on('focusin', function(e) {
-        var focusEl = e.target.closest('[dj-focus]');
+        const focusEl = e.target.closest('[dj-focus]');
         if (focusEl) {
             _handleDjFocus(focusEl, e);
         }
@@ -4277,7 +4307,7 @@ function installDelegatedListeners(root) {
 
     // focusout → dj-blur (focusout bubbles, blur doesn't)
     on('focusout', function(e) {
-        var blurEl = e.target.closest('[dj-blur]');
+        const blurEl = e.target.closest('[dj-blur]');
         if (blurEl) {
             _handleDjBlur(blurEl, e);
         }
@@ -4394,6 +4424,7 @@ function bindLiveViewEvents(scope) {
             const key = _normalizeKeyName(comboParts[comboParts.length - 1]);
             const modifiers = new Set();
             for (let i = 0; i < comboParts.length - 1; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 modifiers.add(comboParts[i].toLowerCase());
             }
 
@@ -4526,6 +4557,7 @@ function _applyRateLimitAttrs(element, handler) {
 function _flushPendingDebouncesInForm(form) {
     const inputs = form.querySelectorAll('[dj-input]');
     for (let i = 0; i < inputs.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const state = _inputRateLimitState.get(inputs[i]);
         if (state && state.wrapped && typeof state.wrapped.flush === 'function') {
             state.wrapped.flush();
@@ -4696,34 +4728,39 @@ function _processAutoRecover() {
     window.djust._isReconnect = false;
 
     document.querySelectorAll('[dj-auto-recover]').forEach(function(container) {
-        var handlerName = container.getAttribute('dj-auto-recover');
+        const handlerName = container.getAttribute('dj-auto-recover');
         if (!handlerName) return;
 
         // Serialize form field values within the container
-        var formValues = {};
+        const formValues = {};
         container.querySelectorAll('input, textarea, select').forEach(function(field) {
-            var name = field.name;
+            const name = field.name;
             if (!name) return;
             if (field.type === 'checkbox') {
+                // eslint-disable-next-line security/detect-object-injection
                 formValues[name] = field.checked;
             } else if (field.type === 'radio') {
+                // eslint-disable-next-line security/detect-object-injection
                 if (field.checked) formValues[name] = field.value;
             } else {
+                // eslint-disable-next-line security/detect-object-injection
                 formValues[name] = field.value;
             }
         });
 
         // Collect data-* attributes from the container element
-        var dataAttrs = {};
-        for (var i = 0; i < container.attributes.length; i++) {
-            var attr = container.attributes[i];
+        const dataAttrs = {};
+        for (let i = 0; i < container.attributes.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const attr = container.attributes[i];
             if (attr.name.startsWith('data-')) {
-                var key = attr.name.slice(5); // Strip 'data-' prefix
+                const key = attr.name.slice(5); // Strip 'data-' prefix
+                // eslint-disable-next-line security/detect-object-injection
                 dataAttrs[key] = attr.value;
             }
         }
 
-        var params = {
+        const params = {
             _form_values: formValues,
             _data_attrs: dataAttrs
         };
@@ -4747,16 +4784,17 @@ function _processAutoRecover() {
 function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
-    var root = document.querySelector('[dj-view]');
+    let root = document.querySelector('[dj-view]');
     if (!root) root = document.querySelector('[dj-root]');
     if (!root) return;
 
     // Collect fields to recover
-    var fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
-    var pendingEvents = [];
+    const fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    const pendingEvents = [];
 
-    for (var i = 0; i < fields.length; i++) {
-        var field = fields[i];
+    for (let i = 0; i < fields.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const field = fields[i];
 
         // Skip fields with dj-no-recover
         if (field.hasAttribute('dj-no-recover')) continue;
@@ -4765,19 +4803,19 @@ function _processFormRecovery() {
         if (field.closest('[dj-auto-recover]')) continue;
 
         // Determine handler name — prefer dj-change, fall back to dj-input
-        var handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
-        var handlerString = field.getAttribute(handlerAttr);
+        const handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
+        const handlerString = field.getAttribute(handlerAttr);
         if (!handlerString) continue;
 
         // Parse handler string to extract function name
-        var parsed = parseEventHandler(handlerString);
-        var handlerName = parsed.name;
+        const parsed = parseEventHandler(handlerString);
+        const handlerName = parsed.name;
 
         // Determine current DOM value and server default
-        var tagName = field.tagName.toLowerCase();
-        var fieldType = (field.type || '').toLowerCase();
-        var domValue;
-        var serverDefault;
+        const tagName = field.tagName.toLowerCase();
+        const fieldType = (field.type || '').toLowerCase();
+        let domValue;
+        let serverDefault;
 
         if (fieldType === 'checkbox') {
             domValue = field.checked;
@@ -4788,7 +4826,7 @@ function _processFormRecovery() {
         } else if (tagName === 'select') {
             domValue = field.value;
             // Server default: the option with 'selected' attribute, or the first option
-            var selectedOption = field.querySelector('option[selected]');
+            const selectedOption = field.querySelector('option[selected]');
             serverDefault = selectedOption ? selectedOption.value : (field.options.length > 0 ? field.options[0].value : '');
         } else {
             // text, textarea, number, email, etc.
@@ -4800,9 +4838,9 @@ function _processFormRecovery() {
         if (domValue === serverDefault) continue;
 
         // Build event params matching dj-change param structure
-        var value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
-        var fieldName = field.name || field.id || null;
-        var params = { value: value, field: fieldName };
+        const value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        const fieldName = field.name || field.id || null;
+        const params = { value: value, field: fieldName };
 
         // Add positional arguments from handler syntax if present
         if (parsed.args.length > 0) {
@@ -4818,9 +4856,10 @@ function _processFormRecovery() {
     // Fire events sequentially to avoid server race conditions
     if (pendingEvents.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
-        var fireSequentially = function(index) {
+        const fireSequentially = function(index) {
             if (index >= pendingEvents.length) return;
-            var evt = pendingEvents[index];
+            // eslint-disable-next-line security/detect-object-injection
+            const evt = pendingEvents[index];
             void handleEvent(evt.handlerName, evt.params).then(function() { fireSequentially(index + 1); });
         };
         fireSequentially(0);
@@ -5107,6 +5146,7 @@ async function handleEvent(eventName, params = {}) {
         if (key === '_targetElement' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
             continue;
         }
+        // eslint-disable-next-line security/detect-object-injection
         serverParams[key] = params[key];
     }
     // Preserve the resolved activity name so the server can route / defer
@@ -5118,6 +5158,7 @@ async function handleEvent(eventName, params = {}) {
 
     // DEP-002: Apply optimistic UI rule if one exists for this event
     const optimisticRules = window.djust._optimisticRules || {};
+    // eslint-disable-next-line security/detect-object-injection
     const optimisticRule = optimisticRules[eventName];
     if (optimisticRule && triggerElement) {
         try {
@@ -5368,7 +5409,7 @@ function restoreFocusState(state, rootEl = null) {
     if (state.selStart !== undefined && typeof el.setSelectionRange === 'function') {
         try {
             el.setSelectionRange(state.selStart, state.selEnd);
-        } catch (e) {
+        } catch (_e) {
             // setSelectionRange throws on some input types (email, number)
         }
     }
@@ -5450,6 +5491,7 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
             return null;
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         node = children[index];
     }
 
@@ -5550,6 +5592,7 @@ const SVG_ELEMENT_FACTORIES = {
 };
 
 function createSvgElement(tagLower) {
+    // eslint-disable-next-line security/detect-object-injection
     const factory = SVG_ELEMENT_FACTORIES[tagLower];
     return factory ? factory() : document.createElement('span');
 }
@@ -5674,6 +5717,7 @@ const HTML_ELEMENT_FACTORIES = {
 };
 
 function createHtmlElement(tagLower) {
+    // eslint-disable-next-line security/detect-object-injection
     const factory = HTML_ELEMENT_FACTORIES[tagLower];
     return factory ? factory() : document.createElement('span');
 }
@@ -5736,7 +5780,7 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
         // falls back to <span> safely.
         try {
             elem = document.createElement(tagLower);
-        } catch (e) {
+        } catch (_e) {
             if (globalThis.djustDebug) {
                 console.warn('[LiveView] createElement threw for tag %s; using span placeholder', tagLower);
             }
@@ -5813,7 +5857,12 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * Flag set by handleServerResponse when applying broadcast patches.
  * When true, preserveFormValues skips saving/restoring the focused
  * element so remote content (from other users) takes effect.
+ *
+ * `let` (NOT const) — 02-response-handler.js reassigns on broadcast
+ * frames; ESLint's per-file analysis can't see the cross-module
+ * reassignment (#1351).
  */
+// eslint-disable-next-line prefer-const
 let _isBroadcastUpdate = false;
 
 /**
@@ -5890,7 +5939,7 @@ function preserveFormValues(container, updateFn) {
         if (el) {
             if (saved.tag === 'textarea') {
                 el.value = saved.value;
-                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (e) { /* */ }
+                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (_e) { /* */ }
                 el.focus();
             } else if (el.type === 'checkbox' || el.type === 'radio') {
                 el.checked = saved.checked;
@@ -5932,9 +5981,11 @@ function morphChildren(existing, desired) {
 
     for (const dNode of desiredNodes) {
         // Advance past already-matched existing nodes
+        // eslint-disable-next-line security/detect-object-injection
         while (eIdx < existingNodes.length && matched.has(existingNodes[eIdx])) {
             eIdx++;
         }
+        // eslint-disable-next-line security/detect-object-injection
         const eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
 
         // --- Text node ---
@@ -6076,6 +6127,7 @@ function morphElement(existing, desired) {
         ? globalThis.djust.isIgnoredAttr
         : null;
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
+        // eslint-disable-next-line security/detect-object-injection
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
             if (isCanvas && (name === 'width' || name === 'height')) continue;
@@ -6316,6 +6368,7 @@ function _stampDjIds(serverHtml, container) {
         const serverChildren = Array.from(serverNode.children);
         const len = Math.min(domChildren.length, serverChildren.length);
         for (let i = 0; i < len; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             stampRecursive(domChildren[i], serverChildren[i]);
         }
     }
@@ -6325,6 +6378,7 @@ function _stampDjIds(serverHtml, container) {
     const serverChildren = Array.from(serverRoot.children);
     const len = Math.min(domChildren.length, serverChildren.length);
     for (let i = 0; i < len; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         stampRecursive(domChildren[i], serverChildren[i]);
     }
 }
@@ -6425,11 +6479,14 @@ function groupConsecutiveInserts(inserts) {
 
     for (let i = 1; i < inserts.length; i++) {
         // Check if this insert is consecutive with the previous one AND targets same parent
+        // eslint-disable-next-line security/detect-object-injection
         if (inserts[i].index === inserts[i - 1].index + 1 && inserts[i].d === inserts[i - 1].d) {
+            // eslint-disable-next-line security/detect-object-injection
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
             groups.push(currentGroup);
+            // eslint-disable-next-line security/detect-object-injection
             currentGroup = [inserts[i]];
         }
     }
@@ -6882,6 +6939,7 @@ function _applyPatchesInner(patches, rootEl = null) {
         let failedCount = 0;
         const failedIndices = [];
         for (let _pi = 0; _pi < patches.length; _pi++) {
+            // eslint-disable-next-line security/detect-object-injection
             if (!applySinglePatch(patches[_pi], rootEl)) {
                 failedCount++;
                 failedIndices.push(_pi);
@@ -6984,6 +7042,7 @@ function _applyPatchesInner(patches, rootEl = null) {
 
                         const children = getSignificantChildren(parentNode);
                         const firstIndex = consecutiveGroup[0].index;
+                        // eslint-disable-next-line security/detect-object-injection
                         const refChild = children[firstIndex];
 
                         if (refChild) {
@@ -7513,7 +7572,7 @@ if (document.readyState === 'loading') {
 //   dj-upload-progress="name"— container for progress bars
 
 (function() {
-    'use strict';
+
 
     // Frame types matching server protocol
     const FRAME_CHUNK    = 0x01;
@@ -7570,7 +7629,7 @@ if (document.readyState === 'loading') {
             let req;
             try {
                 req = indexedDB.open(RESUMABLE_DB_NAME, RESUMABLE_DB_VERSION);
-            } catch (err) {
+            } catch (_err) {
                 resolve(null);
                 return;
             }
@@ -7730,6 +7789,7 @@ if (document.readyState === 'loading') {
         if (hex.length !== 32) return null;
         const bytes = new Uint8Array(16);
         for (let i = 0; i < 16; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
         }
         return bytes;
@@ -7894,7 +7954,7 @@ if (document.readyState === 'loading') {
             });
             try {
                 ws.sendMessage({ type: 'upload_resume', ref });
-            } catch (err) {
+            } catch (_err) {
                 if (!done) {
                     done = true;
                     clearTimeout(timer);
@@ -7952,6 +8012,7 @@ if (document.readyState === 'loading') {
             // MUST match what was passed at presign time or S3 returns 403.
             const fields = (spec && spec.fields) || {};
             for (const name of Object.keys(fields)) {
+                // eslint-disable-next-line security/detect-object-injection
                 try { xhr.setRequestHeader(name, fields[name]); } catch (_) { /* ignore */ }
             }
 
@@ -8100,7 +8161,7 @@ if (document.readyState === 'loading') {
                         img.alt = file.name;
                         img.className = 'upload-preview-image';
                         wrapper.appendChild(img);
-                    } catch (e) {
+                    } catch (_e) {
                         // Fall through to filename display
                     }
                 }
@@ -8133,6 +8194,7 @@ if (document.readyState === 'loading') {
         const files = Array.from(input.files);
         if (files.length === 0) return;
 
+        // eslint-disable-next-line security/detect-object-injection
         const config = uploadConfigs[uploadName];
 
         // Show previews
@@ -8180,6 +8242,7 @@ if (document.readyState === 'loading') {
             const uploadName = input.getAttribute('dj-upload');
 
             // Set accept attribute from config
+            // eslint-disable-next-line security/detect-object-injection
             const config = uploadConfigs[uploadName];
             if (config && config.accept && !input.getAttribute('accept')) {
                 input.setAttribute('accept', config.accept);
@@ -8218,6 +8281,7 @@ if (document.readyState === 'loading') {
                 const files = Array.from(e.dataTransfer.files);
                 if (files.length === 0) return;
 
+                // eslint-disable-next-line security/detect-object-injection
                 const config = uploadConfigs[uploadName];
                 await showPreviews(uploadName, files);
 
@@ -8263,6 +8327,7 @@ if (document.readyState === 'loading') {
         const uploadName = element && element.getAttribute && element.getAttribute('dj-upload');
         if (!uploadName) return;
 
+        // eslint-disable-next-line security/detect-object-injection
         const config = uploadConfigs[uploadName];
         const files = Array.from(fileList);
 
@@ -8309,6 +8374,7 @@ if (document.readyState === 'loading') {
         fileHintKey,
         uuidStringToBytes,
         uploadFile: (file, uploadName, opts) => {
+            // eslint-disable-next-line security/detect-object-injection
             const cfg = uploadConfigs[uploadName];
             return uploadFile(liveViewWS, uploadName, file, cfg, opts || {});
         },
@@ -8342,7 +8408,7 @@ window.djust.hooks = window.djust.hooks || {};
 
 window.djust.hooks.CursorOverlay = {
     mounted: function() {
-        var self = this;
+        const self = this;
 
         // Discover textarea
         this.textarea = this.el.querySelector('textarea');
@@ -8356,7 +8422,7 @@ window.djust.hooks.CursorOverlay = {
         this.overlay.setAttribute('dj-update', 'ignore');
         this.overlay.style.cssText = 'position:absolute; inset:0; pointer-events:none; overflow:hidden;';
         // Copy textarea padding so carets align with text
-        var cs = window.getComputedStyle(this.textarea);
+        const cs = window.getComputedStyle(this.textarea);
         this.overlay.style.padding = cs.paddingTop + ' ' + cs.paddingRight + ' ' + cs.paddingBottom + ' ' + cs.paddingLeft;
         this.overlay.style.fontFamily = cs.fontFamily;
         this.overlay.style.fontSize = cs.fontSize;
@@ -8380,7 +8446,7 @@ window.djust.hooks.CursorOverlay = {
         this._sendCursorPosition = function() {
             clearTimeout(self._debounceTimer);
             self._debounceTimer = setTimeout(function() {
-                var pos = self.textarea.selectionStart;
+                const pos = self.textarea.selectionStart;
                 self.pushEvent('update_cursor', { position: pos });
             }, 100);
         };
@@ -8427,36 +8493,37 @@ window.djust.hooks.CursorOverlay = {
     },
 
     _syncMirrorStyles: function() {
-        var cs = window.getComputedStyle(this.textarea);
-        var props = [
+        const cs = window.getComputedStyle(this.textarea);
+        const props = [
             'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing',
             'wordSpacing', 'textIndent', 'wordWrap', 'overflowWrap', 'whiteSpace',
             'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
             'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth'
         ];
-        for (var i = 0; i < props.length; i++) {
+        for (let i = 0; i < props.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             this.mirror.style[props[i]] = cs[props[i]];
         }
         // Use content-box width matching the textarea's actual text area
         // (clientWidth excludes scrollbar and border; subtract padding for content)
-        var padL = parseFloat(cs.paddingLeft) || 0;
-        var padR = parseFloat(cs.paddingRight) || 0;
+        const padL = parseFloat(cs.paddingLeft) || 0;
+        const padR = parseFloat(cs.paddingRight) || 0;
         this.mirror.style.boxSizing = 'content-box';
         this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
     },
 
     _measureCursorPosition: function(charIndex) {
         // Mirror-div technique: fill mirror with text up to cursor, measure marker offset
-        var text = this.textarea.value.substring(0, charIndex);
+        const text = this.textarea.value.substring(0, charIndex);
         this.mirror.textContent = '';
-        var textNode = document.createTextNode(text);
-        var marker = document.createElement('span');
+        const textNode = document.createTextNode(text);
+        const marker = document.createElement('span');
         marker.textContent = '\u200b';  // zero-width space
         this.mirror.appendChild(textNode);
         this.mirror.appendChild(marker);
 
-        var mirrorRect = this.mirror.getBoundingClientRect();
-        var markerRect = marker.getBoundingClientRect();
+        const mirrorRect = this.mirror.getBoundingClientRect();
+        const markerRect = marker.getBoundingClientRect();
 
         return {
             left: markerRect.left - mirrorRect.left,
@@ -8465,32 +8532,36 @@ window.djust.hooks.CursorOverlay = {
     },
 
     _renderCursors: function(cursors) {
-        var activeIds = {};
+        const activeIds = {};
 
-        for (var uid in cursors) {
+        for (const uid in cursors) {
+            // eslint-disable-next-line security/detect-object-injection
             activeIds[uid] = true;
-            var data = cursors[uid];
-            var pos = this._measureCursorPosition(data.position);
+            // eslint-disable-next-line security/detect-object-injection
+            const data = cursors[uid];
+            const pos = this._measureCursorPosition(data.position);
 
-            var caret = this._carets[uid];
+            // eslint-disable-next-line security/detect-object-injection
+            let caret = this._carets[uid];
             if (!caret) {
                 // Create new caret element
                 caret = document.createElement('div');
                 caret.className = 'remote-cursor';
                 caret.style.cssText = 'position:absolute; transition:left 0.15s ease, top 0.15s ease; pointer-events:none;';
 
-                var line = document.createElement('div');
+                const line = document.createElement('div');
                 line.style.cssText = 'width:2px; height:1.2em; border-radius:1px;';
                 line.style.backgroundColor = data.color;
                 caret.appendChild(line);
 
-                var label = document.createElement('div');
+                const label = document.createElement('div');
                 label.style.cssText = 'position:absolute; bottom:100%; left:0; color:#fff; font-size:10px; padding:1px 4px; border-radius:3px; white-space:nowrap; font-family:system-ui,sans-serif;';
                 label.style.backgroundColor = data.color;
                 label.textContent = (data.emoji || '') + ' ' + (data.name || '');
                 caret.appendChild(label);
 
                 this.overlay.appendChild(caret);
+                // eslint-disable-next-line security/detect-object-injection
                 this._carets[uid] = caret;
             }
 
@@ -8499,9 +8570,12 @@ window.djust.hooks.CursorOverlay = {
         }
 
         // Remove carets for users who are no longer present
-        for (var id in this._carets) {
+        for (const id in this._carets) {
+            // eslint-disable-next-line security/detect-object-injection
             if (!activeIds[id]) {
+                // eslint-disable-next-line security/detect-object-injection
                 this._carets[id].parentNode.removeChild(this._carets[id]);
+                // eslint-disable-next-line security/detect-object-injection
                 delete this._carets[id];
             }
         }
@@ -8509,9 +8583,9 @@ window.djust.hooks.CursorOverlay = {
 
     _repositionAll: function() {
         // Re-sync mirror width in case textarea resized or scrollbar appeared
-        var cs = window.getComputedStyle(this.textarea);
-        var padL = parseFloat(cs.paddingLeft) || 0;
-        var padR = parseFloat(cs.paddingRight) || 0;
+        const cs = window.getComputedStyle(this.textarea);
+        const padL = parseFloat(cs.paddingLeft) || 0;
+        const padR = parseFloat(cs.paddingRight) || 0;
         this.mirror.style.width = (this.textarea.clientWidth - padL - padR) + 'px';
 
         // Reposition using cached cursor data
@@ -8625,7 +8699,7 @@ function _applyStreamOp(op, streamName) {
             const edge = op.edge === 'bottom' ? 'bottom' : 'top';
             // `.children` is an HTMLCollection — always element-only, no
             // nodeType filter needed (was redundant per review #801).
-            let kids = Array.from(el.children);
+            const kids = Array.from(el.children);
             while (kids.length > limit) {
                 const victim = edge === 'top' ? kids.shift() : kids.pop();
                 if (!victim) break;
@@ -8761,6 +8835,7 @@ function _autoScroll(el) {
 function getActiveStreams() {
     const result = {};
     for (const [name, info] of _activeStreams) {
+        // eslint-disable-next-line security/detect-object-injection
         result[name] = { ...info };
     }
     return result;
@@ -8822,6 +8897,7 @@ window.djust.getActiveStreams = getActiveStreams;
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';
+        // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
 
         if (globalThis.djustDebug) console.log(`[LiveView] live_patch: ${method} → ${newUrl.toString()}`);
@@ -8848,13 +8924,14 @@ window.djust.getActiveStreams = getActiveStreams;
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';
+        // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
         // Scroll to top on navigation (or to anchor if present)
-        var hash = newUrl.hash;
+        const hash = newUrl.hash;
         if (hash) {
             try {
-                var target = document.querySelector(hash);
+                const target = document.querySelector(hash);
                 if (target) {
                     target.scrollIntoView({ behavior: 'instant' });
                 }
@@ -8930,7 +9007,9 @@ window.djust.getActiveStreams = getActiveStreams;
         const routeMap = window.djust._routeMap || {};
 
         // Try exact match first
+        // eslint-disable-next-line security/detect-object-injection
         if (routeMap[pathname]) {
+            // eslint-disable-next-line security/detect-object-injection
             return routeMap[pathname];
         }
 
@@ -8939,7 +9018,14 @@ window.djust.getActiveStreams = getActiveStreams;
             if (pattern.includes(':')) {
                 // Convert Django-style pattern to regex
                 // e.g., "/items/:id/" → /^\/items\/([^\/]+)\/$/
+                // Pattern source is the route map populated server-side by
+                // `live_session()` (developer-authored URL config), not
+                // user input. The transformation always replaces `:name`
+                // with the literal `([^/]+)` group — no nested
+                // quantifiers, no user-supplied alternation, no ReDoS
+                // surface. Safe to construct.
                 const regexStr = pattern.replace(/:([^/]+)/g, '([^/]+)');
+                // eslint-disable-next-line security/detect-non-literal-regexp
                 const regex = new RegExp('^' + regexStr + '$');
                 if (regex.test(pathname)) {
                     return viewPath;
@@ -9096,12 +9182,12 @@ window.djust.getActiveStreams = getActiveStreams;
     // Delegated change handler for dj-patch on select/input elements.
     // Bound once on document so it survives DOM replacement by morphdom.
     (function () {
-        var _djPatchChangeHandlerInstalled = false;
+        let _djPatchChangeHandlerInstalled = false;
         function installDjPatchChangeHandler() {
             if (_djPatchChangeHandlerInstalled) return;
             _djPatchChangeHandlerInstalled = true;
             document.addEventListener('change', function (e) {
-                var el = e.target.closest('[dj-patch]');
+                const el = e.target.closest('[dj-patch]');
                 if (!el) return;
                 if (el.tagName === 'SELECT' || el.tagName === 'INPUT') {
                     _executePatch(el, el.getAttribute('dj-patch'), el.value);
@@ -9126,7 +9212,7 @@ window.djust.getActiveStreams = getActiveStreams;
                     // (e.g. <a href="?tab=docs" dj-patch>), the attribute value
                     // is "" and the navigation target is the href.  Fall back to
                     // href so the link destination is respected.
-                    var patchValue = el.getAttribute('dj-patch');
+                    let patchValue = el.getAttribute('dj-patch');
                     if (!patchValue && el.tagName === 'A') {
                         patchValue = el.getAttribute('href') || '';
                     }
@@ -9215,8 +9301,8 @@ function _getHookDefs() {
 // djustInit() → mountHooks() before this file executes.
 // Initializations are deferred to _ensureHooksInit() since var hoists
 // the name but not the `= new Map()` assignment.
-var _activeHooks;
-var _hookIdCounter;
+let _activeHooks;
+let _hookIdCounter;
 
 /**
  * Lazy-initialize hook state.  Called at the top of every public function
@@ -9265,9 +9351,12 @@ function _createHookInstance(hookDef, el) {
     // handleEvent: register a callback for server-pushed events
     instance._eventHandlers = {};
     instance.handleEvent = function(eventName, callback) {
+        // eslint-disable-next-line security/detect-object-injection
         if (!instance._eventHandlers[eventName]) {
+            // eslint-disable-next-line security/detect-object-injection
             instance._eventHandlers[eventName] = [];
         }
+        // eslint-disable-next-line security/detect-object-injection
         instance._eventHandlers[eventName].push(callback);
     };
 
@@ -9338,6 +9427,7 @@ function mountHooks(root) {
             return;
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         const hookDef = hooks[hookName];
         if (!hookDef) {
             console.warn(`[dj-hook] No hook registered for "${hookName}"`);
@@ -9401,6 +9491,7 @@ function updateHooks(root) {
             }
         } else {
             // New element — mount it
+            // eslint-disable-next-line security/detect-object-injection
             const hookDef = hooks[hookName];
             if (!hookDef) {
                 console.warn(`[dj-hook] No hook registered for "${hookName}"`);
@@ -9464,6 +9555,7 @@ function notifyHooksReconnected() {
 function dispatchPushEventToHooks(eventName, payload) {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
+        // eslint-disable-next-line security/detect-object-injection
         const handlers = entry.instance._eventHandlers[eventName];
         if (handlers) {
             handlers.forEach((cb) => {
@@ -9542,13 +9634,17 @@ function _parseModelAttr(el) {
     let debounce = 0;
 
     for (let i = 0; i < attrs.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const name = attrs[i].name;
         if (name === 'dj-model') {
+            // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
         } else if (name === 'dj-model.lazy') {
+            // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
             lazy = true;
         } else if (name.startsWith('dj-model.debounce')) {
+            // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
             const match = name.match(/debounce-?(\d+)/);
             debounce = match ? parseInt(match[1], 10) : 300;
@@ -9640,6 +9736,7 @@ function bindModelElements(root) {
     // Also check for dj-model with modifiers via attribute prefix
     root.querySelectorAll('input, textarea, select').forEach(el => {
         for (let i = 0; i < el.attributes.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             if (el.attributes[i].name.startsWith('dj-model')) {
                 _bindModel(el);
                 break;
@@ -9683,7 +9780,7 @@ window.djust.bindModelElements = bindModelElements;
             if (url.origin !== location.origin) {
                 return false;
             }
-        } catch (e) {
+        } catch (_e) {
             return false;
         }
         // Already prefetched
@@ -9835,9 +9932,9 @@ window.djust.bindModelElements = bindModelElements;
 
 (function () {
 
-    var CONTAINER_ID = 'dj-flash-container';
-    var DEFAULT_AUTO_DISMISS = 5000;
-    var REMOVE_TRANSITION_MS = 300;
+    const CONTAINER_ID = 'dj-flash-container';
+    const DEFAULT_AUTO_DISMISS = 5000;
+    const REMOVE_TRANSITION_MS = 300;
 
     /**
      * Get or create the flash container element.
@@ -9870,13 +9967,13 @@ window.djust.bindModelElements = bindModelElements;
      * Render a flash message into the container.
      */
     function showFlash(level, message) {
-        var container = getContainer();
+        const container = getContainer();
         if (!container) {
             if (globalThis.djustDebug) console.log('[LiveView] flash: no #dj-flash-container found, skipping');
             return;
         }
 
-        var el = document.createElement('div');
+        const el = document.createElement('div');
         el.className = 'dj-flash dj-flash-' + level;
         el.setAttribute('role', 'alert');
         el.setAttribute('data-dj-flash-level', level);
@@ -9885,7 +9982,7 @@ window.djust.bindModelElements = bindModelElements;
         container.appendChild(el);
 
         // Auto-dismiss
-        var timeout = parseInt(container.getAttribute('data-dj-auto-dismiss'), 10);
+        let timeout = parseInt(container.getAttribute('data-dj-auto-dismiss'), 10);
         if (isNaN(timeout)) {
             timeout = DEFAULT_AUTO_DISMISS;
         }
@@ -9914,14 +10011,15 @@ window.djust.bindModelElements = bindModelElements;
      * If level is provided, only clear messages with that level.
      */
     function clearFlash(level) {
-        var container = getContainer();
+        const container = getContainer();
         if (!container) return;
 
-        var selector = level
+        const selector = level
             ? '.dj-flash[data-dj-flash-level="' + level + '"]'
             : '.dj-flash';
-        var elements = container.querySelectorAll(selector);
-        for (var i = 0; i < elements.length; i++) {
+        const elements = container.querySelectorAll(selector);
+        for (let i = 0; i < elements.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             dismissFlash(elements[i]);
         }
     }
@@ -10063,7 +10161,7 @@ window.djust.bindModelElements = bindModelElements;
 (function () {
 
     // CSS.escape fallback for environments that don't support it (e.g., older browsers)
-    var cssEscape = (typeof CSS !== 'undefined' && CSS.escape)
+    const cssEscape = (typeof CSS !== 'undefined' && CSS.escape)
         ? CSS.escape
         : function (s) { return s.replace(/([^\w-])/g, '\\$1'); };
 
@@ -10079,12 +10177,12 @@ window.djust.bindModelElements = bindModelElements;
         if (data.action === 'title') {
             document.title = data.value;
         } else if (data.action === 'meta') {
-            var name = data.name;
+            const name = data.name;
             // Support both name= and property= attributes (og: and twitter: use property)
-            var isOg = name.indexOf('og:') === 0 || name.indexOf('twitter:') === 0;
-            var attr = isOg ? 'property' : 'name';
-            var selector = 'meta[' + attr + '="' + cssEscape(name) + '"]';
-            var el = document.querySelector(selector);
+            const isOg = name.indexOf('og:') === 0 || name.indexOf('twitter:') === 0;
+            const attr = isOg ? 'property' : 'name';
+            const selector = 'meta[' + attr + '="' + cssEscape(name) + '"]';
+            let el = document.querySelector(selector);
             if (el) {
                 el.setAttribute('content', data.content);
             } else {
@@ -10252,7 +10350,7 @@ window.djust.bindModelElements = bindModelElements;
         if (targets.length) {
             try {
                 targets[0].focus();
-            } catch (err) { /* focus can throw on non-focusable elements */ }
+            } catch (_err) { /* focus can throw on non-focusable elements */ }
         }
     }
 
@@ -10266,7 +10364,7 @@ window.djust.bindModelElements = bindModelElements;
         });
     }
 
-    async function execPush(args, originEl) {
+    async function execPush(args, _originEl) {
         // push op: bridge a chain to a server event. Uses the existing
         // handleEvent() pipeline so debouncing, rate limiting, and the
         // HTTP/WebSocket fallback path all work identically.
@@ -10319,6 +10417,7 @@ window.djust.bindModelElements = bindModelElements;
         for (const entry of ops) {
             if (!Array.isArray(entry) || entry.length < 1) continue;
             const [opName, args] = entry;
+            // eslint-disable-next-line security/detect-object-injection
             const fn = COMMAND_TABLE[opName];
             if (!fn) {
                 if (globalThis.djustDebug) console.log('[js-commands] unknown op', opName);
@@ -10573,10 +10672,10 @@ window.djust.bindModelElements = bindModelElements;
 // ============================================================================
 
 (function() {
-    var BUBBLE_ID = 'dj-tutorial-bubble';
-    var BACKDROP_ID = 'dj-tutorial-backdrop';
-    var ARROW_CLASS = 'dj-tutorial-bubble__arrow';
-    var GAP = 14; // px between target and bubble
+    const BUBBLE_ID = 'dj-tutorial-bubble';
+    const BACKDROP_ID = 'dj-tutorial-backdrop';
+    const ARROW_CLASS = 'dj-tutorial-bubble__arrow';
+    const GAP = 14; // px between target and bubble
 
     function getBubble() {
         return document.getElementById(BUBBLE_ID);
@@ -10585,9 +10684,9 @@ window.djust.bindModelElements = bindModelElements;
     // --- Backdrop overlay (dims everything except the target) ---
 
     function ensureBackdrop() {
-        var existing = document.getElementById(BACKDROP_ID);
+        const existing = document.getElementById(BACKDROP_ID);
         if (existing) return existing;
-        var el = document.createElement('div');
+        const el = document.createElement('div');
         el.id = BACKDROP_ID;
         el.style.cssText = 'position:fixed;inset:0;z-index:9998;pointer-events:none;' +
             'background:rgba(0,0,0,0.4);opacity:0;transition:opacity 0.3s ease;';
@@ -10596,15 +10695,15 @@ window.djust.bindModelElements = bindModelElements;
     }
 
     function showBackdrop(targetEl) {
-        var backdrop = ensureBackdrop();
+        const backdrop = ensureBackdrop();
         backdrop.style.opacity = '1';
 
         // Cut out the target element with a box-shadow trick:
         // The backdrop is transparent, and we use a massive box-shadow
         // on a highlight overlay to dim everything else.
         if (targetEl) {
-            var rect = targetEl.getBoundingClientRect();
-            var pad = 6;
+            const rect = targetEl.getBoundingClientRect();
+            const pad = 6;
             backdrop.style.clipPath = 'polygon(' +
                 '0% 0%, 0% 100%, ' +
                 (rect.left - pad) + 'px 100%, ' +
@@ -10618,7 +10717,7 @@ window.djust.bindModelElements = bindModelElements;
     }
 
     function hideBackdrop() {
-        var backdrop = document.getElementById(BACKDROP_ID);
+        const backdrop = document.getElementById(BACKDROP_ID);
         if (backdrop) {
             backdrop.style.opacity = '0';
             backdrop.style.clipPath = '';
@@ -10628,9 +10727,9 @@ window.djust.bindModelElements = bindModelElements;
     // --- Arrow element ---
 
     function ensureArrow(bubble) {
-        var existing = bubble.querySelector('.' + ARROW_CLASS);
+        const existing = bubble.querySelector('.' + ARROW_CLASS);
         if (existing) return existing;
-        var arrow = document.createElement('div');
+        const arrow = document.createElement('div');
         arrow.className = ARROW_CLASS;
         arrow.style.cssText = 'position:absolute;width:12px;height:12px;' +
             'background:inherit;transform:rotate(45deg);z-index:-1;';
@@ -10672,16 +10771,16 @@ window.djust.bindModelElements = bindModelElements;
     // --- Content update ---
 
     function updateBubbleContent(bubble, detail) {
-        var text = (detail && detail.text) || '';
-        var textEl = bubble.querySelector('.dj-tutorial-bubble__text');
+        const text = (detail && detail.text) || '';
+        const textEl = bubble.querySelector('.dj-tutorial-bubble__text');
         if (textEl) {
             textEl.textContent = text;
         }
 
-        var stepEl = bubble.querySelector('.dj-tutorial-bubble__step');
+        const stepEl = bubble.querySelector('.dj-tutorial-bubble__step');
         if (stepEl) {
-            var step = detail && detail.step;
-            var total = detail && detail.total;
+            const step = detail && detail.step;
+            const total = detail && detail.total;
             if (typeof step === 'number' && typeof total === 'number' && total > 0) {
                 stepEl.textContent = 'Step ' + String(step + 1) + ' of ' + String(total);
             } else {
@@ -10693,8 +10792,8 @@ window.djust.bindModelElements = bindModelElements;
     // --- Smart positioning ---
 
     function positionBubble(bubble, detail) {
-        var targetSelector = detail && detail.target;
-        var preferredPosition = (detail && detail.position) ||
+        const targetSelector = detail && detail.target;
+        const preferredPosition = (detail && detail.position) ||
             bubble.getAttribute('data-default-position') ||
             'bottom';
 
@@ -10710,10 +10809,10 @@ window.djust.bindModelElements = bindModelElements;
             return;
         }
 
-        var target = null;
+        let target = null;
         try {
             target = document.querySelector(targetSelector);
-        } catch (err) {
+        } catch (_err) {
             if (globalThis.djustDebug) console.log('[tutorial-bubble] bad selector', targetSelector);
         }
 
@@ -10733,11 +10832,11 @@ window.djust.bindModelElements = bindModelElements;
 
         // Wait a tick for scroll to settle before positioning
         requestAnimationFrame(function() {
-            var rect = target.getBoundingClientRect();
-            var bubbleRect = bubble.getBoundingClientRect();
-            var viewW = window.innerWidth;
-            var viewH = window.innerHeight;
-            var position = preferredPosition;
+            const rect = target.getBoundingClientRect();
+            const bubbleRect = bubble.getBoundingClientRect();
+            const viewW = window.innerWidth;
+            const viewH = window.innerHeight;
+            let position = preferredPosition;
 
             // Auto-flip if bubble would go off-screen
             if (position === 'bottom' && rect.bottom + GAP + bubbleRect.height > viewH) {
@@ -10753,7 +10852,7 @@ window.djust.bindModelElements = bindModelElements;
             bubble.style.right = '';
 
             // Center bubble horizontally on the target, clamp to viewport
-            var bubbleLeft = rect.left + rect.width / 2 - bubbleRect.width / 2;
+            let bubbleLeft = rect.left + rect.width / 2 - bubbleRect.width / 2;
             bubbleLeft = Math.max(12, Math.min(bubbleLeft, viewW - bubbleRect.width - 12));
 
             switch (position) {
@@ -10779,7 +10878,7 @@ window.djust.bindModelElements = bindModelElements;
             bubble.setAttribute('data-position', position);
 
             // Position arrow
-            var arrow = ensureArrow(bubble);
+            const arrow = ensureArrow(bubble);
             positionArrow(arrow, position);
 
             // Show backdrop with cutout around target
@@ -10801,13 +10900,13 @@ window.djust.bindModelElements = bindModelElements;
     // --- Event handler ---
 
     function handleNarrate(event) {
-        var bubble = getBubble();
+        const bubble = getBubble();
         if (!bubble) return;
 
-        var expectedEvent = bubble.getAttribute('data-event') || 'tour:narrate';
+        const expectedEvent = bubble.getAttribute('data-event') || 'tour:narrate';
         if (event.type !== expectedEvent) return;
 
-        var detail = event.detail || {};
+        const detail = event.detail || {};
 
         // Empty message is a signal to hide the bubble
         if (!detail.text) {
@@ -10825,7 +10924,7 @@ window.djust.bindModelElements = bindModelElements;
     document.addEventListener('tour:narrate', handleNarrate);
 
     document.addEventListener('tour:hide', function() {
-        var bubble = getBubble();
+        const bubble = getBubble();
         if (bubble) hideBubble(bubble);
     });
 
@@ -11044,15 +11143,8 @@ window.djust.bindModelElements = bindModelElements;
 
     // --- variable-mode geometry helpers --------------------------------------
 
-    function avgMeasuredHeight(state) {
-        const n = state.heights.size;
-        if (!n) return state.estimatedHeight;
-        let total = 0;
-        for (const h of state.heights.values()) total += h;
-        return total / n;
-    }
-
     function heightFor(state, idx) {
+        // eslint-disable-next-line security/detect-object-injection
         const node = state.items[idx];
         const cacheKey = itemKey(state, node, idx);
         const cached = state.heights.get(cacheKey);
@@ -11068,9 +11160,11 @@ window.djust.bindModelElements = bindModelElements;
         const offsets = new Float64Array(total + 1);
         let acc = 0;
         for (let i = 0; i < total; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             offsets[i] = acc;
             acc += heightFor(state, i);
         }
+        // eslint-disable-next-line security/detect-object-injection
         offsets[total] = acc;
         state.offsets = offsets;
         return offsets;
@@ -11132,6 +11226,7 @@ window.djust.bindModelElements = bindModelElements;
         shell.textContent = '';
         const frag = document.createDocumentFragment();
         for (let i = start; i < end; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const node = items[i];
             node.style.height = itemHeight + 'px';
             node.style.boxSizing = 'border-box';
@@ -11158,6 +11253,7 @@ window.djust.bindModelElements = bindModelElements;
         }
 
         const offsets = ensureOffsets(state);
+        // eslint-disable-next-line security/detect-object-injection
         spacer.style.height = offsets[total] + 'px';
 
         const viewportHeight = container.clientHeight || 0;
@@ -11166,7 +11262,6 @@ window.djust.bindModelElements = bindModelElements;
         const firstVisible = firstVisibleIndex(offsets, scrollTop, total);
 
         // Walk forward from firstVisible until we've covered viewportHeight.
-        const avg = avgMeasuredHeight(state) || state.estimatedHeight;
         let end = firstVisible;
         let covered = 0;
         while (end < total && covered < viewportHeight) {
@@ -11190,6 +11285,7 @@ window.djust.bindModelElements = bindModelElements;
             // resolve node -> current index.
         }
         for (let i = start; i < end; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const node = items[i];
             node.style.boxSizing = 'border-box';
             // DO NOT set a fixed height — variable mode lets content size
@@ -11223,6 +11319,7 @@ window.djust.bindModelElements = bindModelElements;
             }
         }
         shell.appendChild(frag);
+        // eslint-disable-next-line security/detect-object-injection
         shell.style.transform = 'translateY(' + offsets[start] + 'px)';
 
         state.visibleStart = start;
@@ -11605,6 +11702,7 @@ window.djust.bindModelElements = bindModelElements;
                 );
                 const definition = factory();
                 globalThis.djust.hooks = globalThis.djust.hooks || {};
+                // eslint-disable-next-line security/detect-object-injection
                 globalThis.djust.hooks[hookName] = definition;
                 scriptEl.dataset.djustHookRegistered = '1';
                 if (globalThis.djustDebug) {
@@ -11688,13 +11786,13 @@ window.djust.bindModelElements = bindModelElements;
     function initInstantShell() {
         if (!_swAvailable()) return;
         // Only swap when the page we're viewing is the SW-served shell.
-        var placeholder = document.querySelector(
+        const placeholder = document.querySelector(
             'main[data-djust-shell-placeholder="1"]'
         );
         if (!placeholder) {
             return;
         }
-        var url = window.location.href;
+        const url = window.location.href;
         fetch(url, {
             method: 'GET',
             credentials: 'same-origin',
@@ -11754,7 +11852,7 @@ window.djust.bindModelElements = bindModelElements;
 
     function _waitForWs(callback, attempts) {
         attempts = attempts == null ? 50 : attempts;
-        var ws = globalThis.djust && globalThis.djust.ws;
+        const ws = globalThis.djust && globalThis.djust.ws;
         if (ws) {
             callback(ws);
             return;
@@ -11767,8 +11865,8 @@ window.djust.bindModelElements = bindModelElements;
 
     function initReconnectionBridge() {
         if (!_swAvailable()) return;
-        var connectionId = _genConnectionId();
-        var bridge = {
+        const connectionId = _genConnectionId();
+        const bridge = {
             connectionId: connectionId,
             bufferedCount: 0,
         };
@@ -11786,12 +11884,12 @@ window.djust.bindModelElements = bindModelElements;
                 && ws instanceof globalThis.djust.LiveViewSSE) return;
             ws._djustBridgePatched = true;
 
-            var originalSend = ws.sendMessage.bind(ws);
+            const originalSend = ws.sendMessage.bind(ws);
             ws.sendMessage = function (data) {
-                var OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
-                var state = ws.ws && ws.ws.readyState;
+                const OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
+                const state = ws.ws && ws.ws.readyState;
                 if (state !== OPEN) {
-                    var payload;
+                    let payload;
                     try {
                         payload = JSON.stringify(data);
                     } catch (e) {
@@ -11820,16 +11918,17 @@ window.djust.bindModelElements = bindModelElements;
         // Listen for drain replies from the SW.
         if (navigator.serviceWorker) {
             navigator.serviceWorker.addEventListener('message', function (event) {
-                var msg = event.data;
+                const msg = event.data;
                 if (!msg || msg.type !== 'DJUST_DRAIN_REPLY') return;
                 if (msg.connectionId !== connectionId) return;
-                var ws = globalThis.djust && globalThis.djust.ws;
+                const ws = globalThis.djust && globalThis.djust.ws;
                 if (!ws || !ws.ws) return;
-                var OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
+                const OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
                 if (ws.ws.readyState !== OPEN) return;
-                var messages = msg.messages || [];
-                for (var i = 0; i < messages.length; i++) {
+                const messages = msg.messages || [];
+                for (let i = 0; i < messages.length; i++) {
                     try {
+                        // eslint-disable-next-line security/detect-object-injection
                         ws.ws.send(messages[i]);
                     } catch (e) {
                         if (globalThis.djustDebug) {
@@ -11862,8 +11961,8 @@ window.djust.bindModelElements = bindModelElements;
 
     // Map requestId -> resolve() function. Populated by lookupVdom /
     // lookupState; drained by the SW-message listener below.
-    var _pendingLookups = {};
-    var _requestIdCounter = 0;
+    const _pendingLookups = {};
+    let _requestIdCounter = 0;
 
     function _nextRequestId(prefix) {
         _requestIdCounter += 1;
@@ -11879,17 +11978,20 @@ window.djust.bindModelElements = bindModelElements;
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
         navigator.serviceWorker.addEventListener('message', function (event) {
-            var data = event.data;
+            const data = event.data;
             if (!data || data.type !== 'VDOM_CACHE_REPLY') return;
-            var rid = data.requestId;
+            const rid = data.requestId;
+            // eslint-disable-next-line security/detect-object-injection
             if (rid && _pendingLookups[rid]) {
                 try {
+                    // eslint-disable-next-line security/detect-object-injection
                     _pendingLookups[rid](data);
                 } catch (e) {
                     if (globalThis.djustDebug) {
                         console.warn('[sw] VDOM_CACHE_REPLY handler threw', e);
                     }
                 }
+                // eslint-disable-next-line security/detect-object-injection
                 delete _pendingLookups[rid];
             }
         });
@@ -11899,24 +12001,27 @@ window.djust.bindModelElements = bindModelElements;
         if (!_swAvailable()) return;
         if (!navigator.serviceWorker) return;
         navigator.serviceWorker.addEventListener('message', function (event) {
-            var data = event.data;
+            const data = event.data;
             if (!data || data.type !== 'STATE_SNAPSHOT_REPLY') return;
-            var rid = data.requestId;
+            const rid = data.requestId;
+            // eslint-disable-next-line security/detect-object-injection
             if (rid && _pendingLookups[rid]) {
                 try {
+                    // eslint-disable-next-line security/detect-object-injection
                     _pendingLookups[rid](data);
                 } catch (e) {
                     if (globalThis.djustDebug) {
                         console.warn('[sw] STATE_SNAPSHOT_REPLY handler threw', e);
                     }
                 }
+                // eslint-disable-next-line security/detect-object-injection
                 delete _pendingLookups[rid];
             }
         });
     }
 
     function cacheVdom(url, html, version) {
-        var ctrl = _swController();
+        const ctrl = _swController();
         if (!ctrl) return;
         ctrl.postMessage({
             type: 'VDOM_CACHE',
@@ -11929,12 +12034,13 @@ window.djust.bindModelElements = bindModelElements;
 
     function lookupVdom(url) {
         return new Promise(function (resolve) {
-            var ctrl = _swController();
+            const ctrl = _swController();
             if (!ctrl) {
                 resolve({ hit: false, stale: false, html: null });
                 return;
             }
-            var rid = _nextRequestId('vdom');
+            const rid = _nextRequestId('vdom');
+            // eslint-disable-next-line security/detect-object-injection
             _pendingLookups[rid] = function (reply) { resolve(reply); };
             ctrl.postMessage({
                 type: 'VDOM_CACHE_LOOKUP',
@@ -11943,7 +12049,9 @@ window.djust.bindModelElements = bindModelElements;
             });
             // Safety timeout so callers are never stuck if the SW goes away.
             setTimeout(function () {
+                // eslint-disable-next-line security/detect-object-injection
                 if (_pendingLookups[rid]) {
+                    // eslint-disable-next-line security/detect-object-injection
                     delete _pendingLookups[rid];
                     resolve({ hit: false, stale: false, html: null });
                 }
@@ -11952,7 +12060,7 @@ window.djust.bindModelElements = bindModelElements;
     }
 
     function captureState(url, viewSlug, stateJson) {
-        var ctrl = _swController();
+        const ctrl = _swController();
         if (!ctrl) return;
         // Clamp payload at 64 KB — defense-in-depth against accidental
         // dumps of large collections. SW also enforces 256 KB.
@@ -11974,12 +12082,13 @@ window.djust.bindModelElements = bindModelElements;
 
     function lookupState(url) {
         return new Promise(function (resolve) {
-            var ctrl = _swController();
+            const ctrl = _swController();
             if (!ctrl) {
                 resolve({ hit: false, view_slug: null, state_json: null });
                 return;
             }
-            var rid = _nextRequestId('state');
+            const rid = _nextRequestId('state');
+            // eslint-disable-next-line security/detect-object-injection
             _pendingLookups[rid] = function (reply) { resolve(reply); };
             ctrl.postMessage({
                 type: 'STATE_SNAPSHOT_LOOKUP',
@@ -11987,7 +12096,9 @@ window.djust.bindModelElements = bindModelElements;
                 url: url,
             });
             setTimeout(function () {
+                // eslint-disable-next-line security/detect-object-injection
                 if (_pendingLookups[rid]) {
+                    // eslint-disable-next-line security/detect-object-injection
                     delete _pendingLookups[rid];
                     resolve({ hit: false, view_slug: null, state_json: null });
                 }
@@ -12003,11 +12114,11 @@ window.djust.bindModelElements = bindModelElements;
     // common init pattern (theme switch, settings toggle, dev-mode reload)
     // and without this guard each call adds another drain listener and
     // another sendMessage wrapper, causing buffered replays to double.
-    var _registerPromise = null;
-    var _bridgeInitialized = false;
-    var _shellInitialized = false;
-    var _vdomCacheInitialized = false;
-    var _stateSnapshotInitialized = false;
+    let _registerPromise = null;
+    let _bridgeInitialized = false;
+    let _shellInitialized = false;
+    let _vdomCacheInitialized = false;
+    let _stateSnapshotInitialized = false;
 
     globalThis.djust.registerServiceWorker = function (options) {
         options = options || {};
@@ -12025,10 +12136,10 @@ window.djust.bindModelElements = bindModelElements;
             // support (e.g. polyfill) to still try.
             return Promise.resolve(null);
         }
-        var swUrl = options.swUrl || '/static/djust/service-worker.js';
-        var scope = options.scope || '/';
+        const swUrl = options.swUrl || '/static/djust/service-worker.js';
+        const scope = options.scope || '/';
         _registerPromise = (async function () {
-            var registration = null;
+            let registration = null;
             try {
                 registration = await navigator.serviceWorker.register(swUrl, { scope: scope });
             } catch (err) {
@@ -12431,7 +12542,7 @@ globalThis.djust.djDialog = {
         const debugDetail = detail.debug_detail || null;
         const validation = detail.validation_details || null;
 
-        let existing = document.getElementById(OVERLAY_ID);
+        const existing = document.getElementById(OVERLAY_ID);
         if (existing) existing.remove();
 
         const overlay = document.createElement('div');
@@ -13031,12 +13142,55 @@ globalThis.djust.djLayout = {
 //
 // On `transitionend`, phase-2 classes are removed (they typically
 // carry the `transition-*` helper and are not needed once the animation
-// has completed). A 600 ms fallback timeout cleans up phase-2 classes if
-// `transitionend` never fires (e.g. zero-duration transitions or
+// has completed). A computed fallback timeout cleans up phase-2 classes
+// if `transitionend` never fires (e.g. zero-duration transitions or
 // display: none).
+//
+// The fallback duration is auto-derived from the element's computed
+// `transition-duration` + `transition-delay` (longest pair across all
+// transitioning properties) plus a 50ms grace window. For multi-property
+// transitions, we count expected `transitionend` events from
+// `transition-property` and only run cleanup after all have fired —
+// otherwise the first-finishing property would cut off slower ones.
+//
+// `_FALLBACK_MS_DEFAULT` is the fallback used only when computed-style
+// reading fails or yields zero (e.g. element has no transition rule yet).
 
 const _djTransitionState = new WeakMap();
-const _FALLBACK_MS = 600;
+const _FALLBACK_MS_DEFAULT = 600;
+
+function _parseTimeMs(s) {
+    // CSS time tokens: "550ms", "0.55s", "0s". Returns 0 on parse failure.
+    const t = (s || '').trim();
+    if (!t) return 0;
+    if (t.endsWith('ms')) return parseFloat(t) || 0;
+    if (t.endsWith('s')) return (parseFloat(t) || 0) * 1000;
+    return 0;
+}
+
+function _computeTransitionTiming(el) {
+    // Inspect `transition-property`, `transition-duration`, `transition-delay`
+    // and return {maxMs, propsCount}. CSS spec: when *-duration / *-delay
+    // have fewer comma-separated values than -property, they cycle. When
+    // they have more, extras are ignored.
+    const cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
+    if (!cs) return { maxMs: 0, propsCount: 0 };
+    const props = (cs.transitionProperty || '')
+        .split(',').map(s => s.trim()).filter(s => s && s !== 'none');
+    const durations = (cs.transitionDuration || '')
+        .split(',').map(s => _parseTimeMs(s));
+    const delays = (cs.transitionDelay || '')
+        .split(',').map(s => _parseTimeMs(s));
+    if (props.length === 0) return { maxMs: 0, propsCount: 0 };
+    let maxMs = 0;
+    for (let i = 0; i < props.length; i++) {
+        const dur = durations[i % durations.length] || 0;
+        const del = delays[i % delays.length] || 0;
+        const total = dur + del;
+        if (total > maxMs) maxMs = total;
+    }
+    return { maxMs: maxMs, propsCount: props.length };
+}
 
 function _parseSpec(raw) {
     const input = (raw || '').trim();
@@ -13086,6 +13240,12 @@ function _runTransition(el, spec) {
         _raf(function () {
             el.classList.add(spec.single);
 
+            // Compute timing AFTER the class is applied so the new
+            // transition rule is reflected in getComputedStyle.
+            const timing = _computeTransitionTiming(el);
+            const fallbackMs = timing.maxMs > 0 ? timing.maxMs + 50 : _FALLBACK_MS_DEFAULT;
+            let remainingEvents = timing.propsCount || 1;
+
             function cleanup() {
                 if (!el.isConnected) {
                     _djTransitionState.delete(el);
@@ -13098,11 +13258,12 @@ function _runTransition(el, spec) {
 
             function onEnd(ev) {
                 if (ev.target !== el) return;
-                cleanup();
+                remainingEvents--;
+                if (remainingEvents <= 0) cleanup();
             }
             state.onEnd = onEnd;
             el.addEventListener('transitionend', onEnd);
-            state.fallback = setTimeout(cleanup, _FALLBACK_MS);
+            state.fallback = setTimeout(cleanup, fallbackMs);
         });
         return;
     }
@@ -13117,9 +13278,15 @@ function _runTransition(el, spec) {
         el.classList.add(spec.active);
         el.classList.add(spec.end);
 
+        // Compute timing AFTER active+end land so getComputedStyle picks
+        // up the transition rule from the active class.
+        const timing = _computeTransitionTiming(el);
+        const fallbackMs = timing.maxMs > 0 ? timing.maxMs + 50 : _FALLBACK_MS_DEFAULT;
+        let remainingEvents = timing.propsCount || 1;
+
         function cleanup() {
             // Guard against detached elements — if the node has been
-            // removed from the DOM before this fires (typically the 600 ms
+            // removed from the DOM before this fires (typically the
             // fallback path), skip classList/listener work. classList on
             // a detached node is technically safe but any parentNode
             // access downstream would NPE.
@@ -13135,15 +13302,20 @@ function _runTransition(el, spec) {
 
         function onEnd(ev) {
             // Only react to transitions on THIS element, not bubbled
-            // transitions from children.
+            // transitions from children. Decrement the expected event
+            // count and only cleanup once all properties have finished —
+            // otherwise the fastest property would cut off slower ones.
             if (ev.target !== el) return;
-            cleanup();
+            remainingEvents--;
+            if (remainingEvents <= 0) cleanup();
         }
         state.onEnd = onEnd;
         el.addEventListener('transitionend', onEnd);
 
-        // Fallback in case transitionend never fires.
-        state.fallback = setTimeout(cleanup, _FALLBACK_MS);
+        // Fallback in case transitionend never fires (zero-duration
+        // transitions or detached/hidden elements). Sized from the
+        // computed transition duration + 50ms grace.
+        state.fallback = setTimeout(cleanup, fallbackMs);
     });
 }
 
@@ -13245,6 +13417,39 @@ globalThis.djust.djTransition = {
 const _pendingRemovals = new WeakMap();   // Element -> { fallback, onEnd, observer, spec }
 const _REMOVE_FALLBACK_MS = 600;
 
+function _parseTimeMs(s) {
+    // CSS time tokens: "550ms", "0.55s", "0s". Returns 0 on parse failure.
+    const t = (s || '').trim();
+    if (!t) return 0;
+    if (t.endsWith('ms')) return parseFloat(t) || 0;
+    if (t.endsWith('s')) return (parseFloat(t) || 0) * 1000;
+    return 0;
+}
+
+function _computeTransitionTiming(el) {
+    // Returns {maxMs, propsCount} from the element's computed transition
+    // styles. Same logic as 41-dj-transition.js — duplicated here rather
+    // than shared because the source files are concatenated as separate
+    // modules (no cross-file imports).
+    const cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
+    if (!cs) return { maxMs: 0, propsCount: 0 };
+    const props = (cs.transitionProperty || '')
+        .split(',').map(s => s.trim()).filter(s => s && s !== 'none');
+    const durations = (cs.transitionDuration || '')
+        .split(',').map(s => _parseTimeMs(s));
+    const delays = (cs.transitionDelay || '')
+        .split(',').map(s => _parseTimeMs(s));
+    if (props.length === 0) return { maxMs: 0, propsCount: 0 };
+    let maxMs = 0;
+    for (let i = 0; i < props.length; i++) {
+        const dur = durations[i % durations.length] || 0;
+        const del = delays[i % delays.length] || 0;
+        const total = dur + del;
+        if (total > maxMs) maxMs = total;
+    }
+    return { maxMs: maxMs, propsCount: props.length };
+}
+
 function _parseRemoveSpec(raw) {
     if (raw === null || raw === undefined) return null;
     const parts = String(raw).trim().split(/\s+/).filter(Boolean);
@@ -13262,15 +13467,21 @@ function _parseRemoveSpec(raw) {
 }
 
 function _durationFor(el) {
+    // Explicit dj-remove-duration attribute wins (clamped to 0–30s).
     const raw = el.getAttribute && el.getAttribute('dj-remove-duration');
-    if (raw === null || raw === undefined || raw === '') return _REMOVE_FALLBACK_MS;
-    const n = parseInt(raw, 10);
-    if (!Number.isFinite(n)) return _REMOVE_FALLBACK_MS;
-    // Clamp to a sane range so a malformed attribute can't leak a pending
-    // removal indefinitely or fire before the frame has had a chance to paint.
-    if (n < 0) return 0;
-    if (n > 30000) return 30000;
-    return n;
+    if (raw !== null && raw !== undefined && raw !== '') {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n)) {
+            if (n < 0) return 0;
+            if (n > 30000) return 30000;
+            return n;
+        }
+    }
+    // No author override — read from computed style. Falls back to the
+    // hardcoded default only if no transition is declared.
+    const timing = _computeTransitionTiming(el);
+    if (timing.maxMs > 0) return timing.maxMs + 50;
+    return _REMOVE_FALLBACK_MS;
 }
 
 function _teardownState(el, state) {
@@ -13325,9 +13536,19 @@ function _runRemove(el, spec) {
     const state = { spec: spec };
     _pendingRemovals.set(el, state);
 
+    // Count expected transitionend events (one per transitioning property)
+    // so the first-finishing property doesn't cut off slower ones. The
+    // count is read AFTER the active class has had a chance to apply —
+    // for the 3-token form, that's after the next frame; for the 1-token
+    // form, the class is added synchronously in maybeDeferRemoval before
+    // _runRemove is called.
+    const timing = _computeTransitionTiming(el);
+    let remainingEvents = timing.propsCount || 1;
+
     function onEnd(ev) {
         if (ev.target !== el) return;
-        _finalizeRemoval(el);
+        remainingEvents--;
+        if (remainingEvents <= 0) _finalizeRemoval(el);
     }
     state.onEnd = onEnd;
     el.addEventListener('transitionend', onEnd);
@@ -13639,7 +13860,7 @@ globalThis.djust.djTransitionGroup = {
 // enforce.
 
 (function () {
-    "use strict";
+
 
     const _FLIP_ATTR = "dj-flip";
     const _DURATION_ATTR = "dj-flip-duration";
@@ -13702,6 +13923,7 @@ globalThis.djust.djTransitionGroup = {
         // rects for the NEXT reorder are fresh.
         const children = Array.prototype.slice.call(parent.children);
         for (let i = 0; i < children.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const c = children[i];
             if (c.nodeType !== 1) continue;
             try {
@@ -13740,6 +13962,7 @@ globalThis.djust.djTransitionGroup = {
         // prior rect. Doing all reads before any writes avoids layout
         // thrashing (read-read-read, then write-write-write).
         for (let i = 0; i < children.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const c = children[i];
             if (c.nodeType !== 1) continue;
             const prev = _rectCache.get(c);
@@ -13761,6 +13984,7 @@ globalThis.djust.djTransitionGroup = {
         // user. We preserve any pre-existing transition style so we can
         // restore it at cleanup time.
         for (let i = 0; i < movers.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const m = movers[i];
             m.prevTransition = m.el.style.transition;
             m.prevTransform = m.el.style.transform;
@@ -13775,6 +13999,7 @@ globalThis.djust.djTransitionGroup = {
         // matches the DOM's actual new position.
         _requestAnimationFrame(function () {
             for (let i = 0; i < movers.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 const m = movers[i];
                 m.el.style.transition = "transform " + duration + "ms " + easing;
                 m.el.style.transform = "";
@@ -13788,6 +14013,7 @@ globalThis.djust.djTransitionGroup = {
         const cleanupDelay = duration + 50;
         setTimeout(function () {
             for (let i = 0; i < movers.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 const m = movers[i];
                 // Only clear if our values are still there — a subsequent
                 // reorder might already have overwritten them. We restore
@@ -13829,6 +14055,7 @@ globalThis.djust.djTransitionGroup = {
         const observer = new MutationObserver(function (mutations) {
             let sawChild = false;
             for (let i = 0; i < mutations.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 if (mutations[i].type === "childList") {
                     sawChild = true;
                     break;
@@ -13863,6 +14090,7 @@ globalThis.djust.djTransitionGroup = {
         if (typeof MutationObserver === "undefined") return;
         const rootObserver = new MutationObserver(function (mutations) {
             for (let i = 0; i < mutations.length; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 const m = mutations[i];
                 if (m.type === "attributes" && m.attributeName === _FLIP_ATTR) {
                     if (m.target.hasAttribute(_FLIP_ATTR)) {
@@ -13952,7 +14180,7 @@ globalThis.djust.djTransitionGroup = {
 // CustomEvents to react to lifecycle transitions.
 
 (function () {
-    "use strict";
+
 
     const djust = globalThis.djust = globalThis.djust || {};
 
@@ -14287,14 +14515,15 @@ globalThis.djust.djTransitionGroup = {
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        var pathname = fromUrl
+        const pathname = fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
                 : '/');
-        var routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
+        const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
+        // eslint-disable-next-line security/detect-object-injection
         if (routeMap[pathname]) return routeMap[pathname];
         if (typeof document !== 'undefined') {
-            var container = document.querySelector('[dj-view]');
+            const container = document.querySelector('[dj-view]');
             if (container) return container.getAttribute('dj-view') || '';
         }
         return '';
@@ -14309,8 +14538,9 @@ globalThis.djust.djTransitionGroup = {
         // (emitted only when ``enable_state_snapshot = True`` on the
         // view class — see Fix #1).
         if (!slug) return null;
-        var bag = (globalThis.djust && globalThis.djust._clientState) || {};
-        var state = bag[slug];
+        const bag = (globalThis.djust && globalThis.djust._clientState) || {};
+        // eslint-disable-next-line security/detect-object-injection
+        const state = bag[slug];
         if (!state) return null;
         try {
             return JSON.stringify(state);
@@ -14323,18 +14553,18 @@ globalThis.djust.djTransitionGroup = {
     }
 
     function _captureBeforeNavigate(event) {
-        var bridge = _swBridge();
+        const bridge = _swBridge();
         if (!bridge || typeof bridge.captureState !== 'function') return;
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
-        var fromUrl = (event && event.detail && event.detail.fromUrl)
+        const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
                 : '/');
-        var slug = _currentViewSlug(fromUrl);
+        const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
-        var json = _serializeCurrentState(slug);
+        const json = _serializeCurrentState(slug);
         if (!json) return;
         try {
             bridge.captureState(fromUrl, slug, json);
@@ -14349,9 +14579,9 @@ globalThis.djust.djTransitionGroup = {
     // an async lookup. Does NOT gate popstate send (the popstate handler
     // in 18-navigation.js now awaits ``lookupStateForUrl`` directly).
     function _popstateLookup(_popstateEvent) {
-        var bridge = _swBridge();
+        const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') return;
-        var url = (typeof window !== 'undefined' && window.location)
+        const url = (typeof window !== 'undefined' && window.location)
             ? window.location.pathname
             : '/';
         bridge.lookupState(url).then(function (reply) {
@@ -14377,7 +14607,7 @@ globalThis.djust.djTransitionGroup = {
     // ``null`` on miss / unavailable bridge. Does NOT mutate
     // ``_pendingStateSnapshot`` — the caller owns that slot.
     function lookupStateForUrl(url) {
-        var bridge = _swBridge();
+        const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') {
             return Promise.resolve(null);
         }
@@ -14426,7 +14656,7 @@ globalThis.djust.djTransitionGroup = {
  * ``DEBUG=True`` + ``LIVEVIEW_CONFIG["hvr_enabled"]``.
  */
 (function () {
-    "use strict";
+
     const djust = (globalThis.djust = globalThis.djust || {});
 
     /**
@@ -14715,7 +14945,7 @@ globalThis.djust.djTransitionGroup = {
 // aria-live="polite">` for screen-reader announcement.
 
 (function () {
-  'use strict';
+
 
   if (!window.djust) window.djust = {};
 
@@ -14740,7 +14970,7 @@ globalThis.djust.djTransitionGroup = {
       // error / timeout — wrap in <dj-error aria-live="polite"> so
       // screen readers announce. Custom element name is treated as
       // HTMLUnknownElement which is fine for layout-only purposes.
-      var err = document.createElement('dj-error');
+      const err = document.createElement('dj-error');
       err.setAttribute('aria-live', 'polite');
       err.appendChild(tpl.content.cloneNode(true));
       slot.replaceWith(err);
@@ -14759,14 +14989,14 @@ globalThis.djust.djTransitionGroup = {
    * that arrived before this module loaded.
    */
   window.djust.lazyFill = function lazyFill(slotId) {
-    var tpl = document.getElementById('djl-fill-' + slotId);
+    const tpl = document.getElementById('djl-fill-' + slotId);
     if (!tpl || tpl.tagName !== 'TEMPLATE') {
       // Already filled (template removed) OR the template arrived
       // before this module loaded — auto-scan will retry.
       return;
     }
 
-    var slot = document.querySelector(
+    const slot = document.querySelector(
       'dj-lazy-slot[data-id="' + (window.CSS && window.CSS.escape ? window.CSS.escape(slotId) : slotId) + '"]'
     );
     if (!slot) {
@@ -14780,13 +15010,14 @@ globalThis.djust.djTransitionGroup = {
       return;
     }
 
-    var status = (tpl.dataset && tpl.dataset.status) || 'ok';
-    var trigger = (slot.dataset && slot.dataset.trigger) || 'flush';
+    const status = (tpl.dataset && tpl.dataset.status) || 'ok';
+    const trigger = (slot.dataset && slot.dataset.trigger) || 'flush';
 
     if (trigger === 'visible' && 'IntersectionObserver' in window) {
-      var io = new IntersectionObserver(
+      const io = new IntersectionObserver(
         function (entries) {
-          for (var i = 0; i < entries.length; i++) {
+          for (let i = 0; i < entries.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             if (entries[i].isIntersecting) {
               _replaceSlot(slot, tpl, status);
               io.disconnect();
@@ -14811,9 +15042,10 @@ globalThis.djust.djTransitionGroup = {
   // window.djust.lazyFill is defined when the bundle loads
   // asynchronously.
   function _autoFillOnDOMReady() {
-    var tpls = document.querySelectorAll('template[id^="djl-fill-"]');
-    for (var i = 0; i < tpls.length; i++) {
-      var slotId = tpls[i].id.slice('djl-fill-'.length);
+    const tpls = document.querySelectorAll('template[id^="djl-fill-"]');
+    for (let i = 0; i < tpls.length; i++) {
+      // eslint-disable-next-line security/detect-object-injection
+      const slotId = tpls[i].id.slice('djl-fill-'.length);
       window.djust.lazyFill(slotId);
     }
   }

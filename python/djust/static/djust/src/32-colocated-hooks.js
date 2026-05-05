@@ -72,6 +72,7 @@
                 );
                 const definition = factory();
                 globalThis.djust.hooks = globalThis.djust.hooks || {};
+                // eslint-disable-next-line security/detect-object-injection
                 globalThis.djust.hooks[hookName] = definition;
                 scriptEl.dataset.djustHookRegistered = '1';
                 if (globalThis.djustDebug) {

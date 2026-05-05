@@ -105,6 +105,7 @@ function _normalizeKeyName(name) {
         'arrowleft': 'ArrowLeft',
         'arrowright': 'ArrowRight',
     };
+    // eslint-disable-next-line security/detect-object-injection
     return keyMap[lower] || name;
 }
 
@@ -117,20 +118,20 @@ function _normalizeKeyName(name) {
 // when bindLiveViewEvents() is called after DOM changes.
 
 // Registry: Map<"prefix:evtType", Set<{element, attrName, handler, requiredKey}>>
-var _scopedRegistry = new Map();
-var _scopedDelegationInstalled = false;
+const _scopedRegistry = new Map();
+let _scopedDelegationInstalled = false;
 
 /**
  * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
  * and register them in the scoped registry for delegated dispatch.
  */
 function _scanScopedElements() {
-    var scopedPrefixes = ['dj-window-', 'dj-document-'];
-    var scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
-    var root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
+    const scopedPrefixes = ['dj-window-', 'dj-document-'];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const root = document.querySelector('[dj-view]') || document.querySelector('[dj-root]') || document;
 
     // Clear stale entries (elements removed from DOM)
-    _scopedRegistry.forEach(function(entries, key) {
+    _scopedRegistry.forEach(function(entries, _key) {
         entries.forEach(function(entry) {
             if (!document.contains(entry.element)) {
                 entries.delete(entry);
@@ -140,37 +141,42 @@ function _scanScopedElements() {
 
     // Scan ALL elements in the LiveView root (only way to find dotted attr names).
     // This runs once at mount and on TurboNav — NOT after every patch.
-    var allElements = root.querySelectorAll('*');
+    const allElements = root.querySelectorAll('*');
     allElements.forEach(function(element) {
-        for (var ai = 0; ai < element.attributes.length; ai++) {
-            var attrName = element.attributes[ai].name;
-            for (var pi = 0; pi < scopedPrefixes.length; pi++) {
-                var prefix = scopedPrefixes[pi];
+        for (let ai = 0; ai < element.attributes.length; ai++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const attrName = element.attributes[ai].name;
+            for (let pi = 0; pi < scopedPrefixes.length; pi++) {
+                // eslint-disable-next-line security/detect-object-injection
+                const prefix = scopedPrefixes[pi];
                 if (!attrName.startsWith(prefix)) continue;
 
                 // Find which event type this is (e.g. 'keydown' from 'dj-window-keydown.escape')
-                var rest = attrName.slice(prefix.length); // 'keydown' or 'keydown.escape'
-                var evtType = null;
-                for (var ei = 0; ei < scopedEventTypes.length; ei++) {
+                const rest = attrName.slice(prefix.length); // 'keydown' or 'keydown.escape'
+                let evtType = null;
+                for (let ei = 0; ei < scopedEventTypes.length; ei++) {
+                    // eslint-disable-next-line security/detect-object-injection
                     if (rest === scopedEventTypes[ei] || rest.startsWith(scopedEventTypes[ei] + '.')) {
+                        // eslint-disable-next-line security/detect-object-injection
                         evtType = scopedEventTypes[ei];
                         break;
                     }
                 }
                 if (!evtType) continue;
 
-                var registryKey = prefix + evtType;
+                const registryKey = prefix + evtType;
                 if (!_scopedRegistry.has(registryKey)) {
                     _scopedRegistry.set(registryKey, new Set());
                 }
 
-                var suffix = rest.slice(evtType.length); // '' or '.escape'
-                var requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
-                var parsed = parseEventHandler(element.attributes[ai].value);
+                const suffix = rest.slice(evtType.length); // '' or '.escape'
+                const requiredKey = suffix.startsWith('.') ? _normalizeKeyName(suffix.slice(1)) : null;
+                // eslint-disable-next-line security/detect-object-injection
+                const parsed = parseEventHandler(element.attributes[ai].value);
 
                 // Check if already registered (prevent duplicates)
-                var entries = _scopedRegistry.get(registryKey);
-                var alreadyRegistered = false;
+                const entries = _scopedRegistry.get(registryKey);
+                let alreadyRegistered = false;
                 entries.forEach(function(entry) {
                     if (entry.element === element && entry.attrName === attrName) {
                         alreadyRegistered = true;
@@ -200,25 +206,28 @@ function _installScopedDelegation() {
     // Scan DOM once at install time to populate the registry
     _scanScopedElements();
 
-    var scopedTargets = [
+    const scopedTargets = [
         { prefix: 'dj-window-', target: window },
         { prefix: 'dj-document-', target: document },
     ];
-    var scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
 
-    for (var ti = 0; ti < scopedTargets.length; ti++) {
-        var prefix = scopedTargets[ti].prefix;
-        var target = scopedTargets[ti].target;
+    for (let ti = 0; ti < scopedTargets.length; ti++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const prefix = scopedTargets[ti].prefix;
+        // eslint-disable-next-line security/detect-object-injection
+        const target = scopedTargets[ti].target;
 
-        for (var ei = 0; ei < scopedEventTypes.length; ei++) {
-            var evtType = scopedEventTypes[ei];
+        for (let ei = 0; ei < scopedEventTypes.length; ei++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const evtType = scopedEventTypes[ei];
             if (target === document && (evtType === 'scroll' || evtType === 'resize')) continue;
 
             (function(prefix, target, evtType) {
-                var registryKey = prefix + evtType;
+                const registryKey = prefix + evtType;
 
                 target.addEventListener(evtType, function(e) {
-                    var entries = _scopedRegistry.get(registryKey);
+                    const entries = _scopedRegistry.get(registryKey);
                     if (!entries || entries.size === 0) return;
 
                     entries.forEach(function(entry) {
@@ -228,7 +237,7 @@ function _installScopedDelegation() {
                         // Key filtering
                         if (entry.requiredKey && e.key !== entry.requiredKey) return;
 
-                        var params = extractTypedParams(entry.element);
+                        const params = extractTypedParams(entry.element);
                         addEventContext(params, entry.element);
 
                         if (evtType === 'keydown' || evtType === 'keyup') {
@@ -452,7 +461,7 @@ function buildFormEventParams(element, value) {
  * @returns {Function} - Rate-limited wrapper or raw handler
  */
 function _getOrCreateRateLimitedHandler(stateMap, element, eventType, rawHandler) {
-    let state = stateMap.get(element);
+    const state = stateMap.get(element);
     if (state) return state.wrapped;
 
     // Create rate-limited wrapper for this element
@@ -541,36 +550,36 @@ async function _handleDjClick(element, e) {
 function _handleDjCopy(element, e) {
     e.preventDefault();
     // Read attribute at click time (not bind time) so morph updates take effect
-    var currentValue = element.getAttribute('dj-copy');
+    const currentValue = element.getAttribute('dj-copy');
     if (!currentValue) return;
 
     // Selector-based copy: if value starts with #, . or [, try querySelector
-    var textToCopy = currentValue;
+    let textToCopy = currentValue;
     if (currentValue.charAt(0) === '#' || currentValue.charAt(0) === '.' || currentValue.charAt(0) === '[') {
         try {
-            var target = document.querySelector(currentValue);
+            const target = document.querySelector(currentValue);
             if (target) {
                 textToCopy = target.textContent;
             }
-        } catch (err) {
+        } catch (_err) {
             // Invalid selector — fall back to literal copy
         }
     }
 
     navigator.clipboard.writeText(textToCopy).then(function() {
         // CSS class feedback: add class and remove after 2s
-        var cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
+        const cssClass = element.getAttribute('dj-copy-class') || 'dj-copied';
         element.classList.add(cssClass);
         setTimeout(function() { element.classList.remove(cssClass); }, 2000);
 
         // Text feedback: custom or default "Copied!"
-        var feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
-        var original = element.textContent;
+        const feedbackText = element.getAttribute('dj-copy-feedback') || 'Copied!';
+        const original = element.textContent;
         element.textContent = feedbackText;
         setTimeout(function() { element.textContent = original; }, 1500);
 
         // Optional server event for analytics
-        var copyEvent = element.getAttribute('dj-copy-event');
+        const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
             handleEvent(copyEvent, { text: textToCopy });
         }
@@ -802,12 +811,13 @@ async function _handleDjPaste(element, e) {
     const files = [];
     try {
         text = clipboardData.getData('text/plain') || '';
-    } catch (err) { /* older browsers */ }
+    } catch (_err) { /* older browsers */ }
     try {
         html = clipboardData.getData('text/html') || '';
-    } catch (err) { /* older browsers */ }
+    } catch (_err) { /* older browsers */ }
     if (clipboardData.files) {
         for (let i = 0; i < clipboardData.files.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             const f = clipboardData.files[i];
             files.push({
                 name: f.name || 'clipboard-paste',
@@ -919,9 +929,9 @@ function installDelegatedListeners(root) {
     if (root._djustDelegateAbort) {
         root._djustDelegateAbort.abort();
     }
-    var controller = new AbortController();
+    const controller = new AbortController();
     root._djustDelegateAbort = controller;
-    var opts = { signal: controller.signal };
+    const opts = { signal: controller.signal };
 
     // Helper: addEventListener with abort signal for clean teardown
     function on(event, handler) {
@@ -930,23 +940,23 @@ function installDelegatedListeners(root) {
 
     // click → dj-copy (client-only) first, then dj-click
     on('click', function(e) {
-        var copyEl = e.target.closest('[dj-copy]');
+        const copyEl = e.target.closest('[dj-copy]');
         if (copyEl) {
             _handleDjCopy(copyEl, e);
             return;
         }
-        var clickEl = e.target.closest('[dj-click]');
+        const clickEl = e.target.closest('[dj-click]');
         if (clickEl) {
             // Rate-limit per element using WeakMap
-            var rawHandler = function(ev) { return _handleDjClick(clickEl, ev); };
-            var wrapped = _getOrCreateRateLimitedHandler(_clickRateLimitState, clickEl, 'click', rawHandler);
+            const rawHandler = function(ev) { return _handleDjClick(clickEl, ev); };
+            const wrapped = _getOrCreateRateLimitedHandler(_clickRateLimitState, clickEl, 'click', rawHandler);
             wrapped(e);
         }
     });
 
     // submit → dj-submit
     on('submit', function(e) {
-        var submitEl = e.target.closest('[dj-submit]');
+        const submitEl = e.target.closest('[dj-submit]');
         if (submitEl) {
             _handleDjSubmit(submitEl, e);
         }
@@ -954,38 +964,39 @@ function installDelegatedListeners(root) {
 
     // change → dj-change
     on('change', function(e) {
-        var changeEl = e.target.closest('[dj-change]');
+        const changeEl = e.target.closest('[dj-change]');
         if (changeEl) {
             // Rate-limit per element using WeakMap
-            var rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
-            var wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
+            const rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
+            const wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
             wrapped(e);
         }
     });
 
     // input → dj-input (with smart rate limiting)
     on('input', function(e) {
-        var inputEl = e.target.closest('[dj-input]');
+        const inputEl = e.target.closest('[dj-input]');
         if (inputEl) {
             // Get or create rate-limited wrapper for this element
-            var state = _inputRateLimitState.get(inputEl);
+            let state = _inputRateLimitState.get(inputEl);
             if (!state) {
                 // Build the raw handler
-                var rawHandler = function(ev) { return _handleDjInput(inputEl, ev); };
+                const rawHandler = function(ev) { return _handleDjInput(inputEl, ev); };
 
                 // Determine rate limit strategy.
                 // Clone the default before letting dj-* overrides mutate it,
                 // otherwise the shared const entry in DEFAULT_RATE_LIMITS gets
                 // permanently flipped and pollutes every subsequently-bound
                 // element of the same type.
-                var inputType = inputEl.type || inputEl.tagName.toLowerCase();
-                var rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType)
+                const inputType = inputEl.type || inputEl.tagName.toLowerCase();
+                const rateLimit = Object.prototype.hasOwnProperty.call(DEFAULT_RATE_LIMITS, inputType)
+                    // eslint-disable-next-line security/detect-object-injection
                     ? Object.assign({}, DEFAULT_RATE_LIMITS[inputType])
                     : { type: 'debounce', ms: 300 };
 
                 // Check for explicit overrides: dj-* attributes take precedence
                 if (inputEl.hasAttribute('dj-debounce')) {
-                    var djVal = inputEl.getAttribute('dj-debounce');
+                    const djVal = inputEl.getAttribute('dj-debounce');
                     if (djVal === 'blur') {
                         rateLimit.type = 'blur';
                         rateLimit.ms = 0;
@@ -1005,7 +1016,7 @@ function installDelegatedListeners(root) {
                 }
 
                 // Apply rate limiting wrapper
-                var wrapped;
+                let wrapped;
                 if (rateLimit.type === 'passthrough') {
                     // Click-fired widgets (radio/checkbox/select) — one value
                     // per interaction, no rate-limiting needed. Fire the
@@ -1014,7 +1025,7 @@ function installDelegatedListeners(root) {
                     wrapped = rawHandler;
                 } else if (rateLimit.type === 'blur') {
                     // dj-debounce="blur": defer until element loses focus
-                    var latestArgs = null;
+                    let latestArgs = null;
                     wrapped = function() {
                         latestArgs = arguments;
                     };
@@ -1039,27 +1050,27 @@ function installDelegatedListeners(root) {
 
     // keydown → dj-keydown
     on('keydown', function(e) {
-        var keyEl = e.target.closest('[dj-keydown]');
+        const keyEl = e.target.closest('[dj-keydown]');
         if (keyEl) {
-            var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
-            var wrapped = _getOrCreateRateLimitedHandler(_keydownRateLimitState, keyEl, 'keydown', rawHandler);
+            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keydown'); };
+            const wrapped = _getOrCreateRateLimitedHandler(_keydownRateLimitState, keyEl, 'keydown', rawHandler);
             wrapped(e);
         }
     });
 
     // keyup → dj-keyup (separate WeakMap from keydown to avoid handler collision)
     on('keyup', function(e) {
-        var keyEl = e.target.closest('[dj-keyup]');
+        const keyEl = e.target.closest('[dj-keyup]');
         if (keyEl) {
-            var rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
-            var wrapped = _getOrCreateRateLimitedHandler(_keyupRateLimitState, keyEl, 'keyup', rawHandler);
+            const rawHandler = function(ev) { return _handleDjKeyboard(keyEl, ev, 'keyup'); };
+            const wrapped = _getOrCreateRateLimitedHandler(_keyupRateLimitState, keyEl, 'keyup', rawHandler);
             wrapped(e);
         }
     });
 
     // paste → dj-paste
     on('paste', function(e) {
-        var pasteEl = e.target.closest('[dj-paste]');
+        const pasteEl = e.target.closest('[dj-paste]');
         if (pasteEl) {
             _handleDjPaste(pasteEl, e);
         }
@@ -1067,7 +1078,7 @@ function installDelegatedListeners(root) {
 
     // focusin → dj-focus (focusin bubbles, focus doesn't)
     on('focusin', function(e) {
-        var focusEl = e.target.closest('[dj-focus]');
+        const focusEl = e.target.closest('[dj-focus]');
         if (focusEl) {
             _handleDjFocus(focusEl, e);
         }
@@ -1075,7 +1086,7 @@ function installDelegatedListeners(root) {
 
     // focusout → dj-blur (focusout bubbles, blur doesn't)
     on('focusout', function(e) {
-        var blurEl = e.target.closest('[dj-blur]');
+        const blurEl = e.target.closest('[dj-blur]');
         if (blurEl) {
             _handleDjBlur(blurEl, e);
         }
@@ -1192,6 +1203,7 @@ function bindLiveViewEvents(scope) {
             const key = _normalizeKeyName(comboParts[comboParts.length - 1]);
             const modifiers = new Set();
             for (let i = 0; i < comboParts.length - 1; i++) {
+                // eslint-disable-next-line security/detect-object-injection
                 modifiers.add(comboParts[i].toLowerCase());
             }
 
@@ -1324,6 +1336,7 @@ function _applyRateLimitAttrs(element, handler) {
 function _flushPendingDebouncesInForm(form) {
     const inputs = form.querySelectorAll('[dj-input]');
     for (let i = 0; i < inputs.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const state = _inputRateLimitState.get(inputs[i]);
         if (state && state.wrapped && typeof state.wrapped.flush === 'function') {
             state.wrapped.flush();
@@ -1494,34 +1507,39 @@ function _processAutoRecover() {
     window.djust._isReconnect = false;
 
     document.querySelectorAll('[dj-auto-recover]').forEach(function(container) {
-        var handlerName = container.getAttribute('dj-auto-recover');
+        const handlerName = container.getAttribute('dj-auto-recover');
         if (!handlerName) return;
 
         // Serialize form field values within the container
-        var formValues = {};
+        const formValues = {};
         container.querySelectorAll('input, textarea, select').forEach(function(field) {
-            var name = field.name;
+            const name = field.name;
             if (!name) return;
             if (field.type === 'checkbox') {
+                // eslint-disable-next-line security/detect-object-injection
                 formValues[name] = field.checked;
             } else if (field.type === 'radio') {
+                // eslint-disable-next-line security/detect-object-injection
                 if (field.checked) formValues[name] = field.value;
             } else {
+                // eslint-disable-next-line security/detect-object-injection
                 formValues[name] = field.value;
             }
         });
 
         // Collect data-* attributes from the container element
-        var dataAttrs = {};
-        for (var i = 0; i < container.attributes.length; i++) {
-            var attr = container.attributes[i];
+        const dataAttrs = {};
+        for (let i = 0; i < container.attributes.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
+            const attr = container.attributes[i];
             if (attr.name.startsWith('data-')) {
-                var key = attr.name.slice(5); // Strip 'data-' prefix
+                const key = attr.name.slice(5); // Strip 'data-' prefix
+                // eslint-disable-next-line security/detect-object-injection
                 dataAttrs[key] = attr.value;
             }
         }
 
-        var params = {
+        const params = {
             _form_values: formValues,
             _data_attrs: dataAttrs
         };
@@ -1545,16 +1563,17 @@ function _processAutoRecover() {
 function _processFormRecovery() {
     if (!window.djust._isReconnect) return;
 
-    var root = document.querySelector('[dj-view]');
+    let root = document.querySelector('[dj-view]');
     if (!root) root = document.querySelector('[dj-root]');
     if (!root) return;
 
     // Collect fields to recover
-    var fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
-    var pendingEvents = [];
+    const fields = root.querySelectorAll('input[dj-change], textarea[dj-change], select[dj-change], input[dj-input], textarea[dj-input], select[dj-input]');
+    const pendingEvents = [];
 
-    for (var i = 0; i < fields.length; i++) {
-        var field = fields[i];
+    for (let i = 0; i < fields.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        const field = fields[i];
 
         // Skip fields with dj-no-recover
         if (field.hasAttribute('dj-no-recover')) continue;
@@ -1563,19 +1582,19 @@ function _processFormRecovery() {
         if (field.closest('[dj-auto-recover]')) continue;
 
         // Determine handler name — prefer dj-change, fall back to dj-input
-        var handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
-        var handlerString = field.getAttribute(handlerAttr);
+        const handlerAttr = field.hasAttribute('dj-change') ? 'dj-change' : 'dj-input';
+        const handlerString = field.getAttribute(handlerAttr);
         if (!handlerString) continue;
 
         // Parse handler string to extract function name
-        var parsed = parseEventHandler(handlerString);
-        var handlerName = parsed.name;
+        const parsed = parseEventHandler(handlerString);
+        const handlerName = parsed.name;
 
         // Determine current DOM value and server default
-        var tagName = field.tagName.toLowerCase();
-        var fieldType = (field.type || '').toLowerCase();
-        var domValue;
-        var serverDefault;
+        const tagName = field.tagName.toLowerCase();
+        const fieldType = (field.type || '').toLowerCase();
+        let domValue;
+        let serverDefault;
 
         if (fieldType === 'checkbox') {
             domValue = field.checked;
@@ -1586,7 +1605,7 @@ function _processFormRecovery() {
         } else if (tagName === 'select') {
             domValue = field.value;
             // Server default: the option with 'selected' attribute, or the first option
-            var selectedOption = field.querySelector('option[selected]');
+            const selectedOption = field.querySelector('option[selected]');
             serverDefault = selectedOption ? selectedOption.value : (field.options.length > 0 ? field.options[0].value : '');
         } else {
             // text, textarea, number, email, etc.
@@ -1598,9 +1617,9 @@ function _processFormRecovery() {
         if (domValue === serverDefault) continue;
 
         // Build event params matching dj-change param structure
-        var value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
-        var fieldName = field.name || field.id || null;
-        var params = { value: value, field: fieldName };
+        const value = (fieldType === 'checkbox' || fieldType === 'radio') ? domValue : domValue;
+        const fieldName = field.name || field.id || null;
+        const params = { value: value, field: fieldName };
 
         // Add positional arguments from handler syntax if present
         if (parsed.args.length > 0) {
@@ -1616,9 +1635,10 @@ function _processFormRecovery() {
     // Fire events sequentially to avoid server race conditions
     if (pendingEvents.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Form recovery: restoring ' + pendingEvents.length + ' field(s)');
-        var fireSequentially = function(index) {
+        const fireSequentially = function(index) {
             if (index >= pendingEvents.length) return;
-            var evt = pendingEvents[index];
+            // eslint-disable-next-line security/detect-object-injection
+            const evt = pendingEvents[index];
             void handleEvent(evt.handlerName, evt.params).then(function() { fireSequentially(index + 1); });
         };
         fireSequentially(0);

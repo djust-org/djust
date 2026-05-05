@@ -6,7 +6,7 @@
 (function () {
 
     // CSS.escape fallback for environments that don't support it (e.g., older browsers)
-    var cssEscape = (typeof CSS !== 'undefined' && CSS.escape)
+    const cssEscape = (typeof CSS !== 'undefined' && CSS.escape)
         ? CSS.escape
         : function (s) { return s.replace(/([^\w-])/g, '\\$1'); };
 
@@ -22,12 +22,12 @@
         if (data.action === 'title') {
             document.title = data.value;
         } else if (data.action === 'meta') {
-            var name = data.name;
+            const name = data.name;
             // Support both name= and property= attributes (og: and twitter: use property)
-            var isOg = name.indexOf('og:') === 0 || name.indexOf('twitter:') === 0;
-            var attr = isOg ? 'property' : 'name';
-            var selector = 'meta[' + attr + '="' + cssEscape(name) + '"]';
-            var el = document.querySelector(selector);
+            const isOg = name.indexOf('og:') === 0 || name.indexOf('twitter:') === 0;
+            const attr = isOg ? 'property' : 'name';
+            const selector = 'meta[' + attr + '="' + cssEscape(name) + '"]';
+            let el = document.querySelector(selector);
             if (el) {
                 el.setAttribute('content', data.content);
             } else {

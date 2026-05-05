@@ -120,6 +120,7 @@
         }
 
         replayEvent(index, btnElement) {
+            // eslint-disable-next-line security/detect-object-injection
             const event = this.eventHistory[index];
             if (!event) return;
 

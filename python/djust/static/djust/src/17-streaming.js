@@ -103,7 +103,7 @@ function _applyStreamOp(op, streamName) {
             const edge = op.edge === 'bottom' ? 'bottom' : 'top';
             // `.children` is an HTMLCollection — always element-only, no
             // nodeType filter needed (was redundant per review #801).
-            let kids = Array.from(el.children);
+            const kids = Array.from(el.children);
             while (kids.length > limit) {
                 const victim = edge === 'top' ? kids.shift() : kids.pop();
                 if (!victim) break;
@@ -239,6 +239,7 @@ function _autoScroll(el) {
 function getActiveStreams() {
     const result = {};
     for (const [name, info] of _activeStreams) {
+        // eslint-disable-next-line security/detect-object-injection
         result[name] = { ...info };
     }
     return result;
