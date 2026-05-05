@@ -324,6 +324,33 @@ short-circuit so `render_with_diff()` always runs when
 - Next: `/djust-release 0.9.3` — RC2 first if pre-flight requires it; stable otherwise.
 
 
+### Milestone: v0.9.3-8 — eslint warnings cleanup (#1351)
+
+**Status:** 🚀 commissioned 2026-05-05. Single-issue chore: clear the 392 pre-existing eslint warnings in the bundled `client.js` so contributors no longer need `SKIP=build-js,eslint` to commit JS source changes. Unblocks the deferred bundle rebuild from PR #1357 (dj-transition fix won't reach end-users until this lands).
+
+*Goal:* Bring `npx eslint client.js` to 0 warnings while keeping `--max-warnings 0` enforcement. Fixes go on the SOURCE modules (`python/djust/static/djust/src/*.js`); bundle is auto-regenerated from source.
+
+#### Tasks
+
+- [ ] **#1351 — Fix 392 pre-existing ESLint warnings in bundled client.js.** Approach (per issue body):
+  1. `npx eslint --fix python/djust/static/djust/src/*.js` for the 222 auto-fixable warnings (mostly `prefer-const`, `no-var`).
+  2. Audit `security/detect-object-injection` warnings; add targeted `// eslint-disable-next-line` where bracket access is provably safe (typed indices, controlled keys), or refactor to `Object.hasOwn(obj, key)` patterns.
+  3. Fix or `_`-prefix remaining `no-unused-vars`.
+  4. Audit `security/detect-non-literal-regexp` (a few cases of `new RegExp(dynamic)`).
+  5. Rebuild bundle (`make build-js`); verify `npx eslint client.js` returns 0 warnings.
+  6. Re-enable `--max-warnings 0` enforcement (already configured; this just becomes meaningful again).
+
+  Files: `python/djust/static/djust/src/*.js` (~52 source modules), `python/djust/static/djust/client.js` (auto-built).
+
+#### Acceptance
+
+- `npx eslint python/djust/static/djust/client.js` returns 0 warnings (was 392 / 0 errors).
+- Source modules (`src/*.js`) are eslint-clean too.
+- Pre-commit hook passes without `SKIP=build-js,eslint`.
+- Bundle rebuild deferred from PR #1357 unblocks — follow-up PR can rebuild + commit `client.js` cleanly so the dj-transition fix reaches end-users.
+- Then: `/djust-release 0.9.3rc3` — substantive fixes (state-backend safety pair + dj-transition + db.notifications + eslint cleanup) warrant another RC soak before stable.
+
+
 ### Milestone: v0.9.3-7 — state-backend safety pair (#1353 + #1354) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-05. PR #1355 (4 commits, 2 must-fix Stage 11 findings address-fixed via Stage 12 redesign). Two coupled production bugs from NYC Claims (filed against v0.9.2rc1, still affect v0.9.3rc2). Processed as a single batch — they're the two halves of one downstream-consumer pain point.
