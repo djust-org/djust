@@ -259,9 +259,61 @@ issue or be explicitly closed with a reason.
 | 217 | Behavior-change CHANGELOG migration block as Stage 9 checklist item | Retro v0.9.2-5 / PR #1294 (`@action` re-raise contract change) | #1313 | Closed | Resolved in v0.9.3-4 via PR #1337 (behavior-change migration block added to Stage 9 in feature + bugfix templates). New. PR #1294 changed `@action`'s re-raise contract — a behavior change for any code that wrapped `@action` calls in try/except. The CHANGELOG entry included an explicit "Behavior change" block: (a) what changed, (b) who's affected, (c) migration path ("re-raise explicitly inside the handler"). Stage 11 reviewer confirmed this was the right level of detail. Worth canonicalizing as a Stage 9 (Documentation) checklist item: when a PR changes a documented API contract (decorator semantics, function signature, attribute behavior, error envelope), the CHANGELOG entry MUST include a "Behavior change" block with these 3 fields. PR #1294 is the canonical reference example. |
 | 218 | Add `make check-test-coverage` target (grep test files, verify CI collects them) | Retro v0.9.3-4 / PR #1338 | #1339 | Closed | Resolved in v0.9.3-5 via PR #1341 (`scripts/check-test-coverage.py` + Makefile target + pre-push hook). Test-coverage gap in #1339 framing turned out to be a Makefile-vs-pyproject testpath override (Makefile's explicit pytest paths silently overrode pyproject's testpaths, excluding 2,734 tests for months). Two-direction sync verification deferred to #1346. |
 | 219 | Investigate workaround for stale CodeQL check-run blocking PR merges | Retro v0.9.3-4 / PRs #1331, #1332 | #1340 | Closed | Closed via #1340 closing PR. Investigation surfaced misdiagnosis: branch protection has zero `required_status_checks`, so CodeQL never blocked merges per protection rules; `--admin` is needed because of the 1-approving-review rule (solo maintainer can't self-approve). The "CodeQL fail 3s" was GitHub Advanced Security's *real alert-summary* check (PR #1331's was a real high-severity alert at `client.js:1132`, now open on main). codeql.yml gained a `concurrency:` block to reduce noise; real alerts triage tracked in #1343. |
-| 220 | Triage 8 open CodeQL alerts on main (1 high-severity at `client.js:1132`) | Retro v0.9.3-5 / PR #1344 (#1340 investigation) | #1343 | Open | Surfaced by the #1340 investigation: the v0.9.3 drain misattributed real GHAS alerts to "stale check-runs" and bypassed them via `--admin`. 1 high-severity (`js/unvalidated-dynamic-method-call`), 7 unrated. Real security debt from PR #1331 onward. |
+| 220 | Triage 8 open CodeQL alerts on main (1 warning, 7 notes — earlier "high-severity" framing was inaccurate per #1343 closing) | Retro v0.9.3-5 / PR #1344 (#1340 investigation) | #1343 | Closed | **Resolved in v0.9.3-6 via PRs #1349 + #1350** — 6 false positives dismissed via `gh api -X PATCH state=dismissed` (1× `client.js:1132` framework Promise resolver; 5× `runtime.py:81-90` Protocol-stub bodies). 3 real findings fixed: `_mount_one` 5-tuple consistency (#1349), `deploy_cli.py:423` empty-except (#1349), `cli.py:939` empty-except follow-up (#1350). Severity correction: CodeQL severities are note/warning/error (not high/medium/low); the worst alert was warning-level, not high. |
 | 221 | Refresh stale `(file new)` placeholders in May 2026 audits to reference closed follow-up issues | Retro v0.9.3-5 / `/djust-dev audit-status` run | #1342 | Open | All 9 follow-up issues (`#1283`, `#1284`, `#1285`, `#1286`, `#1287`, `#1288`, `#1289`, `#1290`, `#1291`) cited as "(file new)" in the audits are filed AND closed; audits give false impression of unfiled work. Small docs PR. |
 | 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Open | Both v0.9.3-5 tasks needed corrections to the v0.9.3-4 retro framing. Pattern: tech-debt issue titles that encode the retro author's hypothesis cause executors to inherit the hypothesis. Stage 4 must verify cited cause before locking fix scope. |
+
+## v0.9.3-6 — Pre-stable hygiene drain (CodeQL + dependabot + djust deploy CLI) (PRs #1268-#1272, #1347, #1349, #1350)
+
+**Date**: 2026-05-04
+**Scope**: Final pre-stable drain. 5 dependabot bumps + 1 small feature PR (#1347 djust deploy CLI) + 2 CodeQL fix PRs (#1349 mixed-tuple-returns + empty-except; #1350 cli.py empty-except follow-up). 8 PRs, ~1 hour wall-clock.
+**Tests at close**: ~6,884 passing (PR #1349 added 1 regression test in `test_sw_advanced.py`; PR #1350 was comment-only).
+
+### What We Learned
+
+**1. The "high-severity" CodeQL framing inherited from the v0.9.3-5 retro was inaccurate.**
+v0.9.3-5 retro called the `client.js:1132` finding "high-severity"; the #1343 issue body inherited that framing; the v0.9.3-6 drain initial briefing repeated it. The actual CodeQL severity is `warning` (CodeQL severities are note/warning/error). Three retros/issues in a row carried the misframing. This is the same Action #222 misdiagnosis-chain pattern, applied to severity rather than cause.
+
+**Action taken**: Closed — corrected in this retro and in Action Tracker row #220's title (`1 warning, 7 notes — earlier "high-severity" framing was inaccurate`). Future investigation findings should cite `gh api .../alerts/<n> --jq '.rule.severity'` rather than re-quoting prior retro language. Subsumed by Action #222.
+
+### Insights
+
+- **CodeQL alerts can surface AFTER an unrelated PR merges.** PR #1347 merged with all 13 CI checks green including CodeQL; a few minutes later alert 2304 (`py/empty-except` at `cli.py:939`) appeared in `gh api .../alerts?state=open`. Pre-merge CI alone is insufficient because GitHub Advanced Security re-scans branch heads, not just PR diffs. PR #1350 demonstrated the closing pattern (3-line comment, 1 follow-up PR). Discipline note: when running a drain bucket, re-query `gh api .../alerts?state=open` after each main-merging PR; fold any new alert into the same drain.
+- **#1349's fix had real substance despite being labeled CodeQL hygiene.** The 4-tuple `_mount_one` exception path returned a different shape than every other path; the caller's 5-value unpack would raise `ValueError: not enough values to unpack`, masking per-view error plumbing in `handle_mount_batch`'s `failed[]` array. Existing tests passed because the ValueError was caught somewhere up-stack, but the typing inconsistency was real. The regression test now locks the 5-tuple shape across all paths.
+- **Mechanical drain buckets (5-8 PRs, <1 hour wall-clock) work well as pre-stable soak.** Half-day wall-clock for 8 PRs of mostly dependabot + 2 small fixes is the right shape — no ROADMAP carryover, no CHANGELOG cross-edits, no scope creep. The shape complements the heavier audit-driven drains (v0.9.3-1 through -3) — keep the sequence (heavy → light → light → release).
+- **The newly-built `/djust-dev` skill (built 2026-05-02, refined 2026-05-03) shaped this drain's framing.** The audit-status framing came from the skill's mode (run during planning to know the bug-class matrix). The principles mode was not invoked because this drain was bug-fix not feature-write. The skill's existence-on-disk shaped how the work was framed even without an explicit invocation.
+
+### Review Stats
+
+| Metric | PRs #1268-#1272 (dependabot ×5) | PR #1347 (feature) | PR #1349 (fix) | PR #1350 (follow-up fix) | Total |
+|---|---|---|---|---|---|
+| Tests added | 0 | 0 | 1 | 0 | 1 |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 0 | 0 | 0 | 0 |
+| CI failures | 0 | 0 | 0 | 0 | 0 |
+| Quality | n/a (dependabot) | n/a (small green) | 5/5 | 4/5 | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker row #220 (#1343 CodeQL triage) marked Closed via PRs #1349 + #1350 + 6 dismissals; severity framing corrected ("1 warning, 7 notes" — not "1 high-severity").
+
+**ROADMAP.md**: v0.9.3-6 milestone tasks all struck through with closure notes (commit 3cba080e).
+
+### Open Items
+
+- ✅ Action Tracker #220 (#1343) — Closed via this drain.
+- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
+- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+
+### Acceptance check
+
+- ✅ All 8 PRs merged (#1268, #1269, #1270, #1271, #1272, #1347, #1349, #1350).
+- ✅ 6 CodeQL false positives dismissed via `gh api -X PATCH`.
+- ✅ 3 CodeQL real findings fixed (2 in PR #1349, 1 in PR #1350).
+- ⏳ CodeQL re-scan of main expected to close alerts 2298, 2301, 2304; verify before tagging stable.
+- ⏳ Next: `/djust-release 0.9.3` — RC2 first if pre-flight requires it; stable otherwise.
+
+---
 
 ## v0.9.3-5 — Retro-filed process drain (pre-stable soak) (PRs #1341, #1344)
 
