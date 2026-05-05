@@ -120,11 +120,13 @@ impl InheritanceChain {
                 true_nodes,
                 false_nodes,
                 in_tag_context,
+                marker_id,
             } => Node::If {
                 condition: condition.clone(),
                 true_nodes: self.apply_block_overrides(true_nodes),
                 false_nodes: self.apply_block_overrides(false_nodes),
                 in_tag_context: *in_tag_context,
+                marker_id: marker_id.clone(),
             },
             Node::For {
                 var_names,
@@ -739,6 +741,7 @@ mod tests {
             true_nodes: vec![Node::Text("Welcome!".to_string())],
             false_nodes: vec![Node::Text("Please login".to_string())],
             in_tag_context: false,
+            marker_id: None,
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -848,6 +851,7 @@ mod tests {
                 }],
                 false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
                 in_tag_context: false,
+                marker_id: None,
             }],
         }];
 
@@ -1110,6 +1114,7 @@ mod tests {
             }],
             false_nodes: vec![Node::Text("hidden".to_string())],
             in_tag_context: false,
+            marker_id: None,
         }];
 
         let child_nodes = vec![

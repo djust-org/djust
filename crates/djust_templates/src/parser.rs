@@ -22,6 +22,15 @@ pub enum Node {
         true_nodes: Vec<Node>,
         false_nodes: Vec<Node>,
         in_tag_context: bool,
+        /// Stable per-template marker ID for `<!--dj-if id="if-N"-->`
+        /// boundary comments. Assigned at parse time via
+        /// [`assign_if_marker_ids`] in document order. `None` when
+        /// the `If` node was constructed manually (tests) and not
+        /// passed through the parser's ID-assignment pass — in that
+        /// case the renderer falls back to no marker emission for
+        /// that branch (defensive default; production templates
+        /// always go through `parse()` which assigns IDs).
+        marker_id: Option<String>,
     },
     For {
         var_names: Vec<String>, // Supports tuple unpacking: {% for a, b in items %}
@@ -230,7 +239,73 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
         i += 1;
     }
 
+    // Assign stable per-template marker IDs to every `Node::If` in
+    // document order — `if-0`, `if-1`, ... — so the renderer can
+    // emit `<!--dj-if id="if-N"-->...<!--/dj-if-->` boundary markers
+    // around element-bearing conditional branches. IDs are stable
+    // across re-renders because `parse()` is deterministic.
+    // Foundation 1 of 3 toward issue #1358 (keyed VDOM diff for
+    // conditional subtrees, re-open of #256 Option A). Iter 2
+    // (client patch applier) and Iter 3 (Rust VDOM differ) follow.
+    let mut counter = 0usize;
+    assign_if_marker_ids(&mut nodes, &mut counter);
+
     Ok(nodes)
+}
+
+/// Walk the AST in document order and assign stable
+/// `marker_id = Some("if-N")` to every `Node::If`. The counter
+/// increments once per `If` (including elif chains, nested ifs,
+/// and ifs inside loops/blocks). Idempotent only if called once
+/// per `parse()` — re-running on already-assigned trees would
+/// overwrite IDs. The current call site in `pub fn parse()` is
+/// the single source of truth.
+///
+/// Recurses into all Node variants that can hold child nodes:
+/// `If`, `For`, `Block`, `With`, `Spaceless`, and the BlockCustomTag /
+/// ReactComponent children. Variants that can't hold child Nodes
+/// (Text, Variable, Static, etc.) are leaves and don't recurse.
+pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], counter: &mut usize) {
+    for node in nodes.iter_mut() {
+        match node {
+            Node::If {
+                marker_id,
+                true_nodes,
+                false_nodes,
+                ..
+            } => {
+                *marker_id = Some(format!("if-{}", *counter));
+                *counter += 1;
+                assign_if_marker_ids(true_nodes, counter);
+                assign_if_marker_ids(false_nodes, counter);
+            }
+            Node::For {
+                nodes: body,
+                empty_nodes,
+                ..
+            } => {
+                assign_if_marker_ids(body, counter);
+                assign_if_marker_ids(empty_nodes, counter);
+            }
+            Node::Block { nodes: body, .. } => {
+                assign_if_marker_ids(body, counter);
+            }
+            Node::With { nodes: body, .. } => {
+                assign_if_marker_ids(body, counter);
+            }
+            Node::Spaceless { nodes: body, .. } => {
+                assign_if_marker_ids(body, counter);
+            }
+            Node::BlockCustomTag { children, .. } => {
+                assign_if_marker_ids(children, counter);
+            }
+            Node::ReactComponent { children, .. } => {
+                assign_if_marker_ids(children, counter);
+            }
+            // Leaf or non-AST-bearing variants — no recursion needed.
+            _ => {}
+        }
+    }
 }
 
 fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
@@ -291,6 +366,10 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         true_nodes,
                         false_nodes,
                         in_tag_context,
+                        // Assigned later by `assign_if_marker_ids`
+                        // in `pub fn parse()` after the full AST is
+                        // built, so IDs are stable in document order.
+                        marker_id: None,
                     }))
                 }
 
@@ -726,6 +805,8 @@ fn parse_if_block(
                     true_nodes: elif_true,
                     false_nodes: elif_false,
                     in_tag_context,
+                    // Assigned later by `assign_if_marker_ids`.
+                    marker_id: None,
                 });
                 return Ok((true_nodes, false_nodes, end_pos));
             }
@@ -2426,6 +2507,7 @@ mod dep_tests {
                 true_nodes: vec![],
                 false_nodes: vec![],
                 in_tag_context: false,
+                marker_id: None,
             },
             Node::For {
                 var_names: vec!["item".into()],

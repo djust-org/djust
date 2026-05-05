@@ -270,14 +270,33 @@ impl Template {
     }
 }
 
+/// Strip all `dj-if` VDOM markers from a rendered string.
+///
+/// Removes:
+///   - Legacy single-comment placeholder: `<!--dj-if-->` (issue #295)
+///   - Boundary marker pair (Iter 1 of #1358):
+///     `<!--dj-if id="if-N"-->` and `<!--/dj-if-->`
+///
+/// Used by the public Python `render_template` and
+/// `render_template_with_dirs` entries (in djust_live) to preserve
+/// the contract that standalone rendering yields clean HTML — the
+/// markers are framework-internal metadata for VDOM diffing, not
+/// user-visible content.
+pub fn strip_dj_if_markers(html: &str) -> String {
+    static MARKER_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"<!--/?dj-if(?:\s[^>]*)?-->").unwrap());
+    MARKER_RE.replace_all(html, "").into_owned()
+}
+
 /// Fast template rendering function for Python
 #[pyfunction]
 fn render_template(source: String, context: HashMap<String, Value>) -> PyResult<String> {
     let template = Template::new(&source)?;
     let ctx = Context::from_dict(context);
     let result = template.render(&ctx)?;
-    // Strip VDOM placeholder comments in standalone rendering
-    Ok(result.replace("<!--dj-if-->", ""))
+    // Strip VDOM placeholder + boundary markers in standalone rendering
+    // — these are framework-internal metadata, not user-visible HTML.
+    Ok(strip_dj_if_markers(&result))
 }
 
 /// Python module for template functionality

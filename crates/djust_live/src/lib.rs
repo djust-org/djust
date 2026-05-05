@@ -914,8 +914,11 @@ fn render_template(template_source: String, context: HashMap<String, Value>) -> 
 
     let ctx = Context::from_dict(context);
     let result = template_arc.render(&ctx)?;
-    // Strip VDOM placeholder comments in standalone rendering
-    Ok(result.replace("<!--dj-if-->", ""))
+    // Strip VDOM placeholder + boundary markers in standalone rendering.
+    // Legacy `<!--dj-if-->` placeholder (issue #295) and Iter-1 boundary
+    // markers `<!--dj-if id="if-N"-->...<!--/dj-if-->` (issue #1358) are
+    // framework-internal metadata, not user-visible HTML.
+    Ok(djust_templates::strip_dj_if_markers(&result))
 }
 
 /// Fast template rendering with template directories for {% include %} support
