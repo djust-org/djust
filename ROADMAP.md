@@ -324,15 +324,15 @@ short-circuit so `render_with_diff()` always runs when
 - Next: `/djust-release 0.9.3` — RC2 first if pre-flight requires it; stable otherwise.
 
 
-### Milestone: v0.9.3-8 — eslint warnings cleanup (#1351)
+### Milestone: v0.9.3-8 — eslint warnings cleanup (#1351) ✅ shipped
 
-**Status:** 🚀 commissioned 2026-05-05. Single-issue chore: clear the 392 pre-existing eslint warnings in the bundled `client.js` so contributors no longer need `SKIP=build-js,eslint` to commit JS source changes. Unblocks the deferred bundle rebuild from PR #1357 (dj-transition fix won't reach end-users until this lands).
+**Status:** ✅ shipped 2026-05-05. PR #1359 merged. Implementer over-delivered: 425 → 0 warnings (393 on client.js + 32 on debug-panel.js). Stage 11 APPROVE with 0 must-fix; 2 should-fix deferred as follow-ups (#1360 dj-transition/dj-remove duplicate helpers, #1361 routeMap tightening).
 
 *Goal:* Bring `npx eslint client.js` to 0 warnings while keeping `--max-warnings 0` enforcement. Fixes go on the SOURCE modules (`python/djust/static/djust/src/*.js`); bundle is auto-regenerated from source.
 
 #### Tasks
 
-- [ ] **#1351 — Fix 392 pre-existing ESLint warnings in bundled client.js.** Approach (per issue body):
+- [x] ~~**#1351 — Fix 392 pre-existing ESLint warnings in bundled client.js.**~~ ✅ — Closed via PR #1359. 425 → 0 warnings: 222 auto-fixed (`prefer-const`, `no-var`), 141 disabled with rationale (`security/detect-object-injection`: 116 client + 25 debug-panel; all spot-checked credible by Stage 11), 17 refactored (16 `no-unused-vars` via `_`-prefix or dead-code removal; 1 `security/detect-non-literal-regexp` documented ReDoS-safe), 4 cross-module guard reverts (`liveViewWS`, `clientVdomVersion`, `_eventRefCounter`, `_isBroadcastUpdate` need `let` for cross-file reassignment). Implementer also fixed a real ESLint v9 flat-config bug: `**/*.min.js` ignores were scoped to a single config block via shared `files:`/`ignores:` semantics; promoted to standalone-ignores block. Added `--max-warnings 0 --no-warn-ignored` to the pre-commit hook (was running plain `npx eslint` despite the issue body's claim). 1514/1514 npm tests pass. Stage 11 deferred-finding follow-ups: #1360 (dj-transition/dj-remove duplicate helpers — surfaced by bundle rebuild from PR #1357), #1361 (routeMap[pathname] tightening). Approach (per issue body):
   1. `npx eslint --fix python/djust/static/djust/src/*.js` for the 222 auto-fixable warnings (mostly `prefer-const`, `no-var`).
   2. Audit `security/detect-object-injection` warnings; add targeted `// eslint-disable-next-line` where bracket access is provably safe (typed indices, controlled keys), or refactor to `Object.hasOwn(obj, key)` patterns.
   3. Fix or `_`-prefix remaining `no-unused-vars`.
@@ -344,11 +344,11 @@ short-circuit so `render_with_diff()` always runs when
 
 #### Acceptance
 
-- `npx eslint python/djust/static/djust/client.js` returns 0 warnings (was 392 / 0 errors).
-- Source modules (`src/*.js`) are eslint-clean too.
-- Pre-commit hook passes without `SKIP=build-js,eslint`.
-- Bundle rebuild deferred from PR #1357 unblocks — follow-up PR can rebuild + commit `client.js` cleanly so the dj-transition fix reaches end-users.
-- Then: `/djust-release 0.9.3rc3` — substantive fixes (state-backend safety pair + dj-transition + db.notifications + eslint cleanup) warrant another RC soak before stable.
+- ✅ `npx eslint python/djust/static/djust/client.js` returns 0 warnings (was 393).
+- ✅ Source modules (`src/*.js`) eslint-clean.
+- ✅ Pre-commit hook passes without `SKIP=build-js,eslint` (and now actually enforces `--max-warnings 0`).
+- ✅ Bundle rebuilt + committed; dj-transition fix from PR #1357 reaches end-users via #1359's bundle.
+- ⏳ Next: `/djust-release 0.9.3rc3` — 4 substantive drains shipped since rc2 (state-backend safety pair, dj-transition + db.notifications combined, eslint cleanup) warrant another RC soak before stable.
 
 
 ### Milestone: v0.9.3-7 — state-backend safety pair (#1353 + #1354) ✅ shipped

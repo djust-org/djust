@@ -263,6 +263,69 @@ issue or be explicitly closed with a reason.
 | 221 | Refresh stale `(file new)` placeholders in May 2026 audits to reference closed follow-up issues | Retro v0.9.3-5 / `/djust-dev audit-status` run | #1342 | Open | All 9 follow-up issues (`#1283`, `#1284`, `#1285`, `#1286`, `#1287`, `#1288`, `#1289`, `#1290`, `#1291`) cited as "(file new)" in the audits are filed AND closed; audits give false impression of unfiled work. Small docs PR. |
 | 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Open | Both v0.9.3-5 tasks needed corrections to the v0.9.3-4 retro framing. Pattern: tech-debt issue titles that encode the retro author's hypothesis cause executors to inherit the hypothesis. Stage 4 must verify cited cause before locking fix scope. |
 | 223 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | PR #1355 Stage 13 Re-Review | #1356 | Open | PR #1355 fixed `get()` to clone via msgpack round-trip (closes #1353), but `get_and_update()` was overlooked. Currently zero callers. If a future caller is added without auditing, the #1353 race class returns. Suggested fix: delete (cleanest), or apply the same clone, or document the shared-ref contract. |
+| 224 | Deduplicate `_parseTimeMs` / `_computeTransitionTiming` between dj-transition and dj-remove modules | PR #1359 Stage 11 Review (CodeQL) | #1360 | Open | PR #1357 introduced both helpers in `41-dj-transition.js` AND `42-dj-remove.js`. The bundle (concatenation of source modules) has duplicate top-level function declarations. CodeQL flagged it once PR #1359 rebuilt the bundle. JS allows duplicate fn decls in non-strict mode (second wins) — bundle works because both copies are functionally identical, but the duplication is fragile. Fix: move helpers to a shared earlier-loaded module. |
+| 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Open | `pathname` is user-controllable; current safety relies on downstream server validation rejecting invalid routes. Defensive tightening recommended: own-property guard or `Map` (prototype-pollution-immune by design). PR #1359 added eslint-disable-next-line with rationale; this issue tracks tightening the actual access. |
+
+## v0.9.3-8 — ESLint warnings cleanup (#1351) (PR #1359)
+
+**Date**: 2026-05-05
+**Scope**: Single-issue chore: clear 393 pre-existing eslint warnings in bundled `client.js`. Implementer over-delivered to also clean `debug-panel.js` (32 warnings); 425 → 0 total.
+**Tests at close**: 1514/1514 npm + 4167 pytest. `--max-warnings 0` now meaningful (was running plain `npx eslint` despite the issue body's claim).
+
+### What We Learned
+
+**1. Issue-body claims about config state should be empirically verified.**
+The #1351 body claimed `--max-warnings 0` was "implicitly via `npx eslint`'s default exit-1-on-warning behavior" — but that's false. `npx eslint`'s default is `--max-warnings 0` only when `eslintrc` enables it explicitly OR when stdin reports it. The actual hook was running plain `npx eslint` with no flag, so warnings were warnings (exit 0). 393 warnings accumulated unchecked. The implementer added `--max-warnings 0 --no-warn-ignored` and only NOW is the gate meaningful. Generalizable: every issue body that asserts a hook/setting/flag is in place should have an executor-side `grep` that confirms it before the fix is scoped.
+
+**Action taken**: Closed by this milestone — the scope expansion happened during Stage 5 implementation (the implementer surfaced the claim mismatch when running the hook). Future Stage 4 plan templates should include a "verify cited config state" step alongside the existing "verify cited cause" item from Action #222.
+
+### Insights
+
+- **Bundle-rebuild surfacing is a real failure mode pattern.** The CodeQL "duplicate function declarations" alert (`_parseTimeMs`, `_computeTransitionTiming`) is technically pre-existing — the source modules diverged in PR #1357. The bundle was deliberately deferred there per #1351. PR #1359 rebuilt the bundle for the first time and CodeQL flagged it. Pattern: deferred bundle rebuilds accumulate latent problems; the eventual rebuild surfaces them all at once. Filed as #1360 follow-up. Generalizable: when deferring bundle rebuilds, plan for the eventual rebuild to surface a class of issues, not just the single warning the deferral was protecting.
+- **Cross-module reassignment is invisible to per-file ESLint analysis.** The `prefer-const` auto-fix broke 97 vitest tests by converting 4 vars (`liveViewWS`, `clientVdomVersion`, `_eventRefCounter`, `_isBroadcastUpdate`) declared in one source module but reassigned in a different source module. ESLint v9 sees one file at a time; concatenated bundles have implicit cross-file scope. Implementer detected via test failures and reverted with explanatory disables. Now documented in `eslint.config.js`. Pattern: any auto-fix on bundle-style codebases should run tests after applying — the tests are the cross-module validator ESLint can't be.
+- **141 disable-with-rationale comments is borderline scope-creep.** The Stage 11 reviewer spot-checked 17 randomly-selected sites and all credible. But the breadth is large enough that one bad disable could slip through (real injection sink rationalized as safe). Reviewer judgment + spot-check cap is the practical defense. Generalizable: when a fix creates >100 disable comments, the review should mandatorily spot-check a percentage (here 12% caught nothing; that's a clean signal).
+- **Implementer over-delivery on `debug-panel.js` (32 warnings)** was scope-creep relative to #1351's literal text but defensible: same hook, same patterns, same fix shape. Per Action #1079 ("fix EXACTLY what the issue cites + file follow-up for systemic remainder"), a strict reading would split into separate PRs. Pragmatic reading allows the inclusion. Reviewer flagged but didn't block; merged.
+
+### Review Stats
+
+| Metric | PR #1359 | Total |
+|---|---|---|
+| Commits | 2 (impl + CHANGELOG, two-commit shape per Action #181) | 2 |
+| Files changed | 47 (impl) + 1 (CHANGELOG) | 48 |
+| 🔴 Stage 11 findings | 0 | 0 |
+| 🟡 Stage 11 findings | 2 (navigation tightening + CodeQL out-of-scope) | 2 |
+| Findings deferred | 2 (filed as #1360, #1361) | 2 |
+| CI failures | CodeQL (pre-existing per #1357 → #1360); playwright (`continue-on-error: true`, unrelated to this PR) | — |
+| Stage 11 verdict | APPROVE | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker rows #224 (#1360 dj-transition/dj-remove duplicates) + #225 (#1361 routeMap tightening) added.
+
+**ROADMAP.md**: v0.9.3-8 milestone tasks struck through with closure notes.
+
+**`eslint.config.js`**: real flat-config bug fix (standalone-ignores block) + architectural rationale for cross-module `let` exceptions. Future reviewers see the constraint upfront.
+
+**`.pre-commit-config.yaml`**: `--max-warnings 0 --no-warn-ignored` actually enforced now.
+
+### Open Items
+
+- ✅ #1351 closed via this drain.
+- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
+- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
+- [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers.
+- [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access.
+
+### Acceptance check
+
+- ✅ `npx eslint client.js` → 0 warnings (was 393).
+- ✅ Pre-commit hook passes without `SKIP=build-js,eslint`.
+- ✅ Bundle rebuilt + committed (unblocks dj-transition fix from PR #1357 reaching end-users in browsers).
+- ✅ Two-commit shape preserved (Action #181).
+- ⏳ Next: `/djust-release 0.9.3rc3` — 4 substantive drains since rc2 warrant another RC soak before stable.
+
+---
 
 ## v0.9.3-7 — State-backend safety pair (#1353 + #1354) (PR #1355)
 
