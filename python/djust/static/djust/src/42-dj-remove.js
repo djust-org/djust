@@ -45,6 +45,39 @@
 const _pendingRemovals = new WeakMap();   // Element -> { fallback, onEnd, observer, spec }
 const _REMOVE_FALLBACK_MS = 600;
 
+function _parseTimeMs(s) {
+    // CSS time tokens: "550ms", "0.55s", "0s". Returns 0 on parse failure.
+    const t = (s || '').trim();
+    if (!t) return 0;
+    if (t.endsWith('ms')) return parseFloat(t) || 0;
+    if (t.endsWith('s')) return (parseFloat(t) || 0) * 1000;
+    return 0;
+}
+
+function _computeTransitionTiming(el) {
+    // Returns {maxMs, propsCount} from the element's computed transition
+    // styles. Same logic as 41-dj-transition.js — duplicated here rather
+    // than shared because the source files are concatenated as separate
+    // modules (no cross-file imports).
+    const cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
+    if (!cs) return { maxMs: 0, propsCount: 0 };
+    const props = (cs.transitionProperty || '')
+        .split(',').map(s => s.trim()).filter(s => s && s !== 'none');
+    const durations = (cs.transitionDuration || '')
+        .split(',').map(s => _parseTimeMs(s));
+    const delays = (cs.transitionDelay || '')
+        .split(',').map(s => _parseTimeMs(s));
+    if (props.length === 0) return { maxMs: 0, propsCount: 0 };
+    let maxMs = 0;
+    for (let i = 0; i < props.length; i++) {
+        const dur = durations[i % durations.length] || 0;
+        const del = delays[i % delays.length] || 0;
+        const total = dur + del;
+        if (total > maxMs) maxMs = total;
+    }
+    return { maxMs: maxMs, propsCount: props.length };
+}
+
 function _parseRemoveSpec(raw) {
     if (raw === null || raw === undefined) return null;
     const parts = String(raw).trim().split(/\s+/).filter(Boolean);
@@ -62,15 +95,21 @@ function _parseRemoveSpec(raw) {
 }
 
 function _durationFor(el) {
+    // Explicit dj-remove-duration attribute wins (clamped to 0–30s).
     const raw = el.getAttribute && el.getAttribute('dj-remove-duration');
-    if (raw === null || raw === undefined || raw === '') return _REMOVE_FALLBACK_MS;
-    const n = parseInt(raw, 10);
-    if (!Number.isFinite(n)) return _REMOVE_FALLBACK_MS;
-    // Clamp to a sane range so a malformed attribute can't leak a pending
-    // removal indefinitely or fire before the frame has had a chance to paint.
-    if (n < 0) return 0;
-    if (n > 30000) return 30000;
-    return n;
+    if (raw !== null && raw !== undefined && raw !== '') {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n)) {
+            if (n < 0) return 0;
+            if (n > 30000) return 30000;
+            return n;
+        }
+    }
+    // No author override — read from computed style. Falls back to the
+    // hardcoded default only if no transition is declared.
+    const timing = _computeTransitionTiming(el);
+    if (timing.maxMs > 0) return timing.maxMs + 50;
+    return _REMOVE_FALLBACK_MS;
 }
 
 function _teardownState(el, state) {
@@ -125,9 +164,19 @@ function _runRemove(el, spec) {
     const state = { spec: spec };
     _pendingRemovals.set(el, state);
 
+    // Count expected transitionend events (one per transitioning property)
+    // so the first-finishing property doesn't cut off slower ones. The
+    // count is read AFTER the active class has had a chance to apply —
+    // for the 3-token form, that's after the next frame; for the 1-token
+    // form, the class is added synchronously in maybeDeferRemoval before
+    // _runRemove is called.
+    const timing = _computeTransitionTiming(el);
+    let remainingEvents = timing.propsCount || 1;
+
     function onEnd(ev) {
         if (ev.target !== el) return;
-        _finalizeRemoval(el);
+        remainingEvents--;
+        if (remainingEvents <= 0) _finalizeRemoval(el);
     }
     state.onEnd = onEnd;
     el.addEventListener('transitionend', onEnd);
