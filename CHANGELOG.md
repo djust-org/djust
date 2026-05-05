@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`dj-transition` now respects CSS `transition-duration` instead of a hard-coded 600ms fallback (#1348).**
+  The fallback timeout is auto-derived from the element's computed
+  `transition-duration` + `transition-delay` (longest pair across all
+  transitioning properties) plus a 50ms grace window. For multi-property
+  transitions, expected `transitionend` events are counted from
+  `transition-property` and cleanup runs only after all have fired —
+  otherwise the first-finishing property would cut off slower ones.
+  `_FALLBACK_MS_DEFAULT` (600ms) is used only when computed-style
+  reading fails or yields zero. Same auto-derivation extended to
+  `dj-remove`. Source-only commit; bundle (`client.js`) rebuild
+  deferred per #1351 (392 pre-existing eslint warnings block
+  `--max-warnings 0`).
+
+- **`db.notifications` exits cleanly on permanent failures instead of
+  retrying forever.** Background — incident 2026-05-05: a 3.5-day-old
+  djust deploy missing the optional `psycopg[binary]>=3.2` dependency
+  had `_run()` retrying `_connect()` every 1 second forever (~302,000
+  attempts), accumulating 15.4 GiB of anonymous heap from un-reaped
+  asyncio Task / coroutine closure state. The kubelet hit memory
+  pressure, transitioned to NodeNotReady for ~7 seconds, which was
+  enough for cnpg to fail over the postgres-cluster primary →
+  3-minute platform outage. Fix: when `_connect()` raises
+  `DatabaseNotificationNotSupported` (missing psycopg or non-postgres
+  engine), treat as PERMANENT — log once at WARNING with
+  operator-actionable wording, set `_stopping = True`, fire
+  `_ready_event`, return from the loop. Process restart re-enables
+  once the cause is fixed. Transient failures
+  (`ConnectionRefusedError`, `OSError`, timeout, etc.) retain their
+  1-second-backoff retry behaviour. 2 regression tests in
+  `python/djust/tests/test_notifications_permanent_failure.py`
+  (`test_run_exits_immediately_on_permanent_failure`,
+  `test_run_retries_transient_connect_failures`).
+
 - **In-memory state backend no longer panics on concurrent same-session
   HTTP renders (#1353).** When two HTTP requests for the same
   ``(session, view_path)`` pair shared a cached ``RustLiveView`` (the
