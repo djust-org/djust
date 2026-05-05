@@ -267,6 +267,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Redis state-backend cache keys now include the template-source hash for automatic deploy-time invalidation (#1362).**
+  Previously operators had to set `REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"`
+  (or otherwise rotate the prefix on every deploy) to ensure cached
+  `RustLiveView` state from a prior deploy didn't act as a stale diff
+  baseline for the new render. Easy to forget; production failure mode
+  was patches failing on WS reconnect post-deploy → recovery HTML
+  unavailable → forced page reload. The framework now reuses the 8-hex
+  template-source hash from `parse_with_source` (PR #1363, Foundation 1
+  of #1358) as part of the cache key:
+  ```
+  djust:state:<session>_liveview_<view_path>[_<query_hash>]_t<template_8hex>
+  ```
+  When ANY operator edits a template (whitespace, attribute, structural
+  change), the per-template hash flips → cache key flips → next reconnect
+  misses the cache → fresh state is constructed cleanly, no stale baseline.
+  Zero operator config; no env var to set, no setting to flip.
+  Backwards compat: existing cached entries with the old key shape
+  become unreachable on the deploy that ships this — bounded by TTL
+  (default 1 hour). Multi-template caveat: the cache key uses the
+  PRIMARY template's hash; sub-template-only changes via `{% include %}`
+  / `{% extends %}` parents that don't alter the primary's source bytes
+  won't invalidate by themselves (operators can `djust clear --all` for
+  immediate invalidation in that edge case). Both consumers of the
+  template hash (parser-side `<!--dj-if id="if-<prefix>-N"-->` markers
+  and the new cache-key slot) flow through the single
+  `djust_templates::parser::template_hash_hex` Rust helper, so they
+  cannot drift.
+  10 new regression tests in
+  `python/tests/test_template_hash_redis_cache.py` (cache HIT/MISS
+  behavior, multi-session isolation, cross-deploy reproducer, PyO3
+  boundary equality, multi-template caveat). 3 new Rust unit tests in
+  `crates/djust_templates/src/parser.rs` (hash consistency,
+  distinguishability, marker-ID prefix equality). Existing
+  `test_vdom_cache_key.py` updated for the new key shape.
+
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
   The 393 pre-existing eslint warnings in `client.js` (and 32 in
   `debug-panel.js`) have been resolved across the ~70 source modules in
