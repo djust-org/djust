@@ -283,6 +283,45 @@ short-circuit so `render_with_diff()` always runs when
 - Then: evaluate whether v0.9.3 is ready to cut stable, or commission v0.9.3-6.
 
 
+### Milestone: v0.9.3-6 — pre-stable hygiene drain (CodeQL + dependabot + djust deploy CLI)
+
+**Status:** 🚀 commissioned 2026-05-04. Final pre-stable drain before v0.9.3 stable cut. Bundles 3 categories of cleanup that accumulated during the v0.9.3 series.
+
+*Goal:* Clear the open-PR queue + the open CodeQL alerts surfaced by #1340's misdiagnosis correction (filed as #1343). After this drain, v0.9.3 stable is cuttable with a clean working tree, no open dependabot PRs, and zero unhandled CodeQL alerts.
+
+#### Tasks
+
+**Dependabot routine bumps (mechanical, all CI green):**
+
+- [ ] **#1268** — bump `actions/setup-python` from 5 to 6
+- [ ] **#1269** — bump `actions/checkout` from 4 to 6
+- [ ] **#1270** — bump `pulldown-cmark` from 0.12.2 to 0.13.3
+- [ ] **#1271** — bump `jsdom` from 29.0.2 to 29.1.1
+- [ ] **#1272** — update `redis` requirement from `<7,>=5.0.0` to `>=5.0.0,<8`
+
+**Feature PR (small, ready):**
+
+- [ ] **#1347** — `feat(cli): promote 'djust deploy' to a first-class subcommand` (+99/-7 across 3 files; all CI green)
+
+**CodeQL triage (#1343):**
+
+- [ ] **Bulk-dismiss 6 false positives** via `gh api repos/djust-org/djust/code-scanning/alerts/<n> -X PATCH`:
+  - Alert **2302** — `client.js:1132` `js/unvalidated-dynamic-method-call`. The `resolver(data)` call retrieves a Promise resolver function from a framework-managed map (`_pendingEventResolvers`), populated only by the framework's own `sendEvent` (line 1127–1132). Not a user-controlled method dispatch.
+  - Alerts **2288, 2289, 2290, 2291, 2292** — `runtime.py:81-90` `py/ineffectual-statement`. These are `Protocol` member declarations of the canonical form `def x(self) -> str: ...`. The `...` IS the body for a Protocol stub — not an ineffectual statement.
+
+- [ ] **Fix 2 real findings** (1 PR, both small):
+  - Alert **2298** — `deploy_cli.py:419` `py/empty-except`. CLAUDE.md security rule #5 forbids bare `except: pass`; replace with proper handling or `# noqa` + explanatory comment.
+  - Alert **2301** — `websocket.py:2400` `py/mixed-tuple-returns`. `_mount_one` returns tuples of size 4 vs 5; tighten return-type for consistency.
+
+#### Acceptance
+
+- All 6 PRs merged (5 dependabot + #1347).
+- 6 CodeQL false positives dismissed with explanatory comments.
+- 2 CodeQL real findings fixed via 1 PR.
+- `gh api 'repos/djust-org/djust/code-scanning/alerts?state=open&tool_name=CodeQL'` returns 0 open alerts.
+- Then: `/djust-release 0.9.3` — RC2 first if pre-flight requires it; stable otherwise.
+
+
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-02. 1 issue closed via 1 PR. Smallest pre-stable drain bucket: a 1-line broken-anchor fix that's been carried since the deployment guide was written. Pre-existing on main (flagged as 🟡 in PR #1265 Stage 11 review and filed as #1266 rather than scope-creeping the deployment-guide PR — three consecutive milestones now use the canon "🟡 plan-fidelity findings get a separate small PR").
