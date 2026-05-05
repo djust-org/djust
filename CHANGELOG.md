@@ -126,6 +126,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   VDOM differ recognizes `dj-if` boundaries from Iter 1; emits these
   patch types when conditionals flip.
 
+- **Keyed VDOM diff for `{% if %}` conditional subtrees (#1358; closes
+  #256 Option A; capability of v0.9.4-1).** Iter 3 of 3 — the iter that
+  actually fixes the bug. After this PR, the long-standing class of
+  `{% if %}`-breaks-VDOM-patching bugs that has plagued djust for over
+  3 months is **eliminated**. The Rust VDOM differ now recognizes
+  `<!--dj-if id="if-<prefix>-N"-->...<!--/dj-if-->` boundary markers
+  (emitted by Iter 1 template renderer, PR #1363) as KEYED units in the
+  diff algorithm.
+
+  When conditionals flip, the differ emits the new patch types from
+  Iter 2 (PR #1364):
+  - **OLD has boundary id=X, NEW does not** → `RemoveSubtree { id: X }`.
+    Client locates the marker pair by id (NOT by position) and removes
+    the bracketed range.
+  - **NEW has boundary id=Y, OLD does not** → `InsertSubtree { id: Y,
+    path, d, index, html }`. Client parses the full marker-pair HTML
+    (Shape A) via inert `<template>.innerHTML` and inserts at the
+    parent / index resolved via the same path/d resolution other
+    child-targeting patches use.
+  - **Both have boundary id=Z** → recurse into the inner body element-
+    by-element (markers themselves are static comments — text matches
+    by construction). Standard intra-subtree diff fires for the inner
+    content (SetText, SetAttr, InsertChild, etc.); NO subtree-replace.
+
+  Position-based path tracking is BYPASSED within boundaries: the id
+  normalizes positions, so adding or removing a boundary no longer
+  cascades into mis-targeted patches in surrounding siblings. Non-
+  boundary siblings are paired by relative position AMONG non-boundary
+  siblings — the conditional's presence/absence doesn't shift their
+  relative order.
+
+  The 17.5%-error-rate tab-switch regression in NYC Claims (cited in
+  #1358's body) no longer reproduces. The recovery-HTML / page-reload
+  fallback path is no longer triggered by `{% if %}` flips.
+
+  **Backwards-compatible:** Apps using the `d-none` workaround
+  documented in CLAUDE.md and downstream repos continue to work
+  identically — the workaround sidesteps `{% if %}` entirely. Apps
+  using the legacy bare `<!--dj-if-->` placeholder for false-no-else
+  conditionals (issue #295) take the existing diff path unchanged
+  (those placeholders have NO id and don't trigger the new keyed
+  pre-pass). The pre-pass only fires when at least one sibling list
+  contains an id-bearing boundary marker.
+
+  **Implementation in `crates/djust_vdom/src/diff.rs`:**
+  - New helpers: `dj_if_open_id`, `is_dj_if_close`, `find_dj_if_pairs`
+    (depth-counter for nested boundaries), `render_dj_if_boundary_html`
+    (serializes boundary slice for `InsertSubtree.html`),
+    `build_excluded_mask`.
+  - New `dj_if_pre_pass` runs at `diff_children` entry; returns
+    `Some(patches)` when boundaries are present (caller short-circuits
+    its keyed/indexed diff), `None` otherwise (caller proceeds
+    unchanged).
+  - Predicates mirror parser-side at
+    `crates/djust_vdom/src/parser.rs:494-499` and JS-side at
+    `python/djust/static/djust/src/12-vdom-patch.js:38-43`.
+
+  **Wire format** (locked by Iter 2):
+  - `{type: "RemoveSubtree", id: "if-<prefix>-N"}`
+  - `{type: "InsertSubtree", id: "...", path: [...], d: "<parent dj-id?>",
+    index: N, html: "<!--dj-if id=...-->...<!--/dj-if-->"}`
+
+  Limitation noted in code: when non-boundary siblings carry `dj-key`
+  attributes AND reorder within their relative slot, the position-based
+  pairing of non-boundary children can produce suboptimal patches.
+  Production templates don't typically reorder elements across
+  `{% if %}` boundaries; if a regression surfaces, the pre-pass can be
+  extended to delegate non-boundary children to `diff_keyed_children`
+  when any of them have keys.
+
+  Out of scope (deferred to v0.10): wholesale-replace heuristic for
+  same-id matched boundaries (e.g., when inner content differs by >X%);
+  LIS within boundary bodies; relaxing `d-none` workaround
+  documentation in CLAUDE.md / downstream repos.
+
+  Regression suite: 14 new cases in
+  `crates/djust_vdom/tests/test_dj_if_keyed_diff_1358.rs` covering
+  the #1358 reproducer (tab-switch with different conditional
+  branches), conditional flip-off, conditional flip-on, same-id inner
+  text change (recurses, NOT subtree replace), same-id identical inner
+  (0 patches), nested boundaries (inner flip leaves outer alone),
+  sibling-shift regression (the original failure mode), empty boundary
+  same id (0 patches), empty boundary different ids (Remove + Insert),
+  JSON wire-format checks for `RemoveSubtree` / `InsertSubtree` /
+  `d` omission when None, backward compat with legacy bare `<!--dj-if-->`
+  placeholder, and end-to-end via `parse_html` (proves parser-side and
+  differ-side predicates agree). All 219 djust_vdom tests pass (14 new +
+  205 existing). All 4723 Python tests pass. All 1559 JS tests pass.
+
+  Closes the capability half of v0.9.4-1 milestone (Iter 3 of 3).
+  Foundation 1: PR #1363 (template markers). Foundation 2: PR #1364
+  (client patch types).
+
 ### Changed
 
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
