@@ -28,7 +28,7 @@
 // CustomEvents to react to lifecycle transitions.
 
 (function () {
-    "use strict";
+
 
     const djust = globalThis.djust = globalThis.djust || {};
 

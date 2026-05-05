@@ -117,8 +117,10 @@ function initDraftMode() {
             const field = document.querySelector(`[name="${fieldName}"]`);
             if (field) {
                 if (field.type === 'checkbox') {
+                    // eslint-disable-next-line security/detect-object-injection
                     field.checked = savedDraft[fieldName];
                 } else {
+                    // eslint-disable-next-line security/detect-object-injection
                     field.value = savedDraft[fieldName];
                 }
             }

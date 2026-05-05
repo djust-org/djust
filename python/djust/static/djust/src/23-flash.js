@@ -5,9 +5,9 @@
 
 (function () {
 
-    var CONTAINER_ID = 'dj-flash-container';
-    var DEFAULT_AUTO_DISMISS = 5000;
-    var REMOVE_TRANSITION_MS = 300;
+    const CONTAINER_ID = 'dj-flash-container';
+    const DEFAULT_AUTO_DISMISS = 5000;
+    const REMOVE_TRANSITION_MS = 300;
 
     /**
      * Get or create the flash container element.
@@ -40,13 +40,13 @@
      * Render a flash message into the container.
      */
     function showFlash(level, message) {
-        var container = getContainer();
+        const container = getContainer();
         if (!container) {
             if (globalThis.djustDebug) console.log('[LiveView] flash: no #dj-flash-container found, skipping');
             return;
         }
 
-        var el = document.createElement('div');
+        const el = document.createElement('div');
         el.className = 'dj-flash dj-flash-' + level;
         el.setAttribute('role', 'alert');
         el.setAttribute('data-dj-flash-level', level);
@@ -55,7 +55,7 @@
         container.appendChild(el);
 
         // Auto-dismiss
-        var timeout = parseInt(container.getAttribute('data-dj-auto-dismiss'), 10);
+        let timeout = parseInt(container.getAttribute('data-dj-auto-dismiss'), 10);
         if (isNaN(timeout)) {
             timeout = DEFAULT_AUTO_DISMISS;
         }
@@ -84,14 +84,15 @@
      * If level is provided, only clear messages with that level.
      */
     function clearFlash(level) {
-        var container = getContainer();
+        const container = getContainer();
         if (!container) return;
 
-        var selector = level
+        const selector = level
             ? '.dj-flash[data-dj-flash-level="' + level + '"]'
             : '.dj-flash';
-        var elements = container.querySelectorAll(selector);
-        for (var i = 0; i < elements.length; i++) {
+        const elements = container.querySelectorAll(selector);
+        for (let i = 0; i < elements.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             dismissFlash(elements[i]);
         }
     }

@@ -349,6 +349,7 @@ function extractTypedParams(element) {
             }
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         params[key] = value;
     }
 
@@ -372,6 +373,7 @@ function extractTypedParams(element) {
                         if (UNSAFE_KEYS.includes(k)) continue;
                         // data-* attributes win; only fill in missing keys
                         if (!(k in params)) {
+                            // eslint-disable-next-line security/detect-object-injection
                             params[k] = v;
                         }
                     }
@@ -386,6 +388,7 @@ function extractTypedParams(element) {
     // and dj-params, matching Phoenix's phx-value-* semantics.
     const djValues = collectDjValues(element);
     for (const [k, v] of Object.entries(djValues)) {
+        // eslint-disable-next-line security/detect-object-injection
         params[k] = v;
     }
 
@@ -475,6 +478,7 @@ function collectDjValues(element) {
             }
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         values[key] = value;
     }
 

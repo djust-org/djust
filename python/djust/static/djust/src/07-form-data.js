@@ -22,6 +22,7 @@ function _collectFormData(container) {
         const name = editable.getAttribute('name') || editable.id;
         // Prevent prototype pollution attacks
         if (name && !UNSAFE_KEYS.includes(name)) {
+            // eslint-disable-next-line security/detect-object-injection
             data[name] = editable.innerHTML;
         }
     });

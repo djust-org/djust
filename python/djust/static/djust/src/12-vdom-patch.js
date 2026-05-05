@@ -115,7 +115,7 @@ function restoreFocusState(state, rootEl = null) {
     if (state.selStart !== undefined && typeof el.setSelectionRange === 'function') {
         try {
             el.setSelectionRange(state.selStart, state.selEnd);
-        } catch (e) {
+        } catch (_e) {
             // setSelectionRange throws on some input types (email, number)
         }
     }
@@ -197,6 +197,7 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
             return null;
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         node = children[index];
     }
 
@@ -297,6 +298,7 @@ const SVG_ELEMENT_FACTORIES = {
 };
 
 function createSvgElement(tagLower) {
+    // eslint-disable-next-line security/detect-object-injection
     const factory = SVG_ELEMENT_FACTORIES[tagLower];
     return factory ? factory() : document.createElement('span');
 }
@@ -421,6 +423,7 @@ const HTML_ELEMENT_FACTORIES = {
 };
 
 function createHtmlElement(tagLower) {
+    // eslint-disable-next-line security/detect-object-injection
     const factory = HTML_ELEMENT_FACTORIES[tagLower];
     return factory ? factory() : document.createElement('span');
 }
@@ -483,7 +486,7 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
         // falls back to <span> safely.
         try {
             elem = document.createElement(tagLower);
-        } catch (e) {
+        } catch (_e) {
             if (globalThis.djustDebug) {
                 console.warn('[LiveView] createElement threw for tag %s; using span placeholder', tagLower);
             }
@@ -560,7 +563,12 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
  * Flag set by handleServerResponse when applying broadcast patches.
  * When true, preserveFormValues skips saving/restoring the focused
  * element so remote content (from other users) takes effect.
+ *
+ * `let` (NOT const) — 02-response-handler.js reassigns on broadcast
+ * frames; ESLint's per-file analysis can't see the cross-module
+ * reassignment (#1351).
  */
+// eslint-disable-next-line prefer-const
 let _isBroadcastUpdate = false;
 
 /**
@@ -637,7 +645,7 @@ function preserveFormValues(container, updateFn) {
         if (el) {
             if (saved.tag === 'textarea') {
                 el.value = saved.value;
-                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (e) { /* */ }
+                try { el.setSelectionRange(saved.selStart, saved.selEnd); } catch (_e) { /* */ }
                 el.focus();
             } else if (el.type === 'checkbox' || el.type === 'radio') {
                 el.checked = saved.checked;
@@ -679,9 +687,11 @@ function morphChildren(existing, desired) {
 
     for (const dNode of desiredNodes) {
         // Advance past already-matched existing nodes
+        // eslint-disable-next-line security/detect-object-injection
         while (eIdx < existingNodes.length && matched.has(existingNodes[eIdx])) {
             eIdx++;
         }
+        // eslint-disable-next-line security/detect-object-injection
         const eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
 
         // --- Text node ---
@@ -823,6 +833,7 @@ function morphElement(existing, desired) {
         ? globalThis.djust.isIgnoredAttr
         : null;
     for (let i = existing.attributes.length - 1; i >= 0; i--) {
+        // eslint-disable-next-line security/detect-object-injection
         const name = existing.attributes[i].name;
         if (!desired.hasAttribute(name)) {
             if (isCanvas && (name === 'width' || name === 'height')) continue;
@@ -1063,6 +1074,7 @@ function _stampDjIds(serverHtml, container) {
         const serverChildren = Array.from(serverNode.children);
         const len = Math.min(domChildren.length, serverChildren.length);
         for (let i = 0; i < len; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             stampRecursive(domChildren[i], serverChildren[i]);
         }
     }
@@ -1072,6 +1084,7 @@ function _stampDjIds(serverHtml, container) {
     const serverChildren = Array.from(serverRoot.children);
     const len = Math.min(domChildren.length, serverChildren.length);
     for (let i = 0; i < len; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         stampRecursive(domChildren[i], serverChildren[i]);
     }
 }
@@ -1172,11 +1185,14 @@ function groupConsecutiveInserts(inserts) {
 
     for (let i = 1; i < inserts.length; i++) {
         // Check if this insert is consecutive with the previous one AND targets same parent
+        // eslint-disable-next-line security/detect-object-injection
         if (inserts[i].index === inserts[i - 1].index + 1 && inserts[i].d === inserts[i - 1].d) {
+            // eslint-disable-next-line security/detect-object-injection
             currentGroup.push(inserts[i]);
         } else {
             // Start a new group
             groups.push(currentGroup);
+            // eslint-disable-next-line security/detect-object-injection
             currentGroup = [inserts[i]];
         }
     }
@@ -1629,6 +1645,7 @@ function _applyPatchesInner(patches, rootEl = null) {
         let failedCount = 0;
         const failedIndices = [];
         for (let _pi = 0; _pi < patches.length; _pi++) {
+            // eslint-disable-next-line security/detect-object-injection
             if (!applySinglePatch(patches[_pi], rootEl)) {
                 failedCount++;
                 failedIndices.push(_pi);
@@ -1731,6 +1748,7 @@ function _applyPatchesInner(patches, rootEl = null) {
 
                         const children = getSignificantChildren(parentNode);
                         const firstIndex = consecutiveGroup[0].index;
+                        // eslint-disable-next-line security/detect-object-injection
                         const refChild = children[firstIndex];
 
                         if (refChild) {

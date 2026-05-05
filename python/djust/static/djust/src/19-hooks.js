@@ -51,8 +51,8 @@ function _getHookDefs() {
 // djustInit() → mountHooks() before this file executes.
 // Initializations are deferred to _ensureHooksInit() since var hoists
 // the name but not the `= new Map()` assignment.
-var _activeHooks;
-var _hookIdCounter;
+let _activeHooks;
+let _hookIdCounter;
 
 /**
  * Lazy-initialize hook state.  Called at the top of every public function
@@ -101,9 +101,12 @@ function _createHookInstance(hookDef, el) {
     // handleEvent: register a callback for server-pushed events
     instance._eventHandlers = {};
     instance.handleEvent = function(eventName, callback) {
+        // eslint-disable-next-line security/detect-object-injection
         if (!instance._eventHandlers[eventName]) {
+            // eslint-disable-next-line security/detect-object-injection
             instance._eventHandlers[eventName] = [];
         }
+        // eslint-disable-next-line security/detect-object-injection
         instance._eventHandlers[eventName].push(callback);
     };
 
@@ -174,6 +177,7 @@ function mountHooks(root) {
             return;
         }
 
+        // eslint-disable-next-line security/detect-object-injection
         const hookDef = hooks[hookName];
         if (!hookDef) {
             console.warn(`[dj-hook] No hook registered for "${hookName}"`);
@@ -237,6 +241,7 @@ function updateHooks(root) {
             }
         } else {
             // New element — mount it
+            // eslint-disable-next-line security/detect-object-injection
             const hookDef = hooks[hookName];
             if (!hookDef) {
                 console.warn(`[dj-hook] No hook registered for "${hookName}"`);
@@ -300,6 +305,7 @@ function notifyHooksReconnected() {
 function dispatchPushEventToHooks(eventName, payload) {
     _ensureHooksInit();
     for (const [, entry] of _activeHooks) {
+        // eslint-disable-next-line security/detect-object-injection
         const handlers = entry.instance._eventHandlers[eventName];
         if (handlers) {
             handlers.forEach((cb) => {

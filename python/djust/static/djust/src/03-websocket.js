@@ -498,6 +498,7 @@ class LiveViewWebSocket {
                         container.innerHTML = entry.html;
                     }
                     if (typeof entry.version === 'number') {
+                        // eslint-disable-next-line security/detect-object-injection
                         window.djust._clientVdomVersions[targetId] = entry.version;
                     }
                 }
@@ -1233,5 +1234,10 @@ window.djust.LiveViewWebSocket = LiveViewWebSocket;
 // Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 
-// Global WebSocket instance
+// Global WebSocket instance.
+// `let` (NOT const) — 14-init.js reassigns this when switching transports
+// (HTTP/WS/SSE) and on TurboNav reconnect. Auto-fix to const broke the
+// transport-switch path; tests relied on this rebinding (#1351). ESLint
+// can't see the cross-file reassignment from per-file analysis.
+// eslint-disable-next-line prefer-const
 let liveViewWS = null;

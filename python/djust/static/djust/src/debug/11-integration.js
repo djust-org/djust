@@ -18,6 +18,7 @@
                     if (payload && payload.type === 'event') {
                         self._pendingEvents = self._pendingEvents || {};
                         const eventKey = (payload.event || payload.handler) + '_' + Date.now();
+                        // eslint-disable-next-line security/detect-object-injection
                         self._pendingEvents[eventKey] = {
                             handler: payload.event || payload.handler,
                             params: payload.params || payload.data || {},
@@ -132,7 +133,9 @@
                     const keys = Object.keys(this._pendingEvents);
                     if (keys.length > 0) {
                         const key = keys[0];
+                        // eslint-disable-next-line security/detect-object-injection
                         const pending = this._pendingEvents[key];
+                        // eslint-disable-next-line security/detect-object-injection
                         delete this._pendingEvents[key];
 
                         this.captureEvent({

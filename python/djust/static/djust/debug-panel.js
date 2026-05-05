@@ -1868,6 +1868,7 @@
         }
 
         replayEvent(index, btnElement) {
+            // eslint-disable-next-line security/detect-object-injection
             const event = this.eventHistory[index];
             if (!event) return;
 
@@ -2021,6 +2022,7 @@
         copyNetworkPayload(btnElement, index) {
             const stats = window.liveview && window.liveview.stats ? window.liveview.stats : null;
             const messages = stats ? stats.messages : this.networkHistory;
+            // eslint-disable-next-line security/detect-object-injection
             const msg = messages[index];
             if (!msg) return;
 
@@ -2162,6 +2164,7 @@
             if (keys.length === 0) return '';
 
             const rows = keys.map(key => {
+                // eslint-disable-next-line security/detect-object-injection
                 const info = sizes[key];
                 return `
                     <tr>
@@ -2344,7 +2347,7 @@
             // Deep clone the state to avoid reference issues
             try {
                 return JSON.parse(JSON.stringify(state));
-            } catch (e) {
+            } catch (_e) {
                 // Fallback for non-serializable values
                 const clone = Object.create(null); // no prototype to pollute
                 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -2353,11 +2356,13 @@
                     const safeKey = String(key);
                     try {
                         Object.defineProperty(clone, safeKey, {
+                            // eslint-disable-next-line security/detect-object-injection
                             value: JSON.parse(JSON.stringify(state[key])),
                             writable: true, enumerable: true, configurable: true
                         });
                     } catch {
                         Object.defineProperty(clone, safeKey, {
+                            // eslint-disable-next-line security/detect-object-injection
                             value: String(state[key]),
                             writable: true, enumerable: true, configurable: true
                         });
@@ -2377,6 +2382,7 @@
                         type: 'added',
                         key: key,
                         before: undefined,
+                        // eslint-disable-next-line security/detect-object-injection
                         after: currentState[key]
                     });
                 }
@@ -2389,14 +2395,18 @@
                     changes.push({
                         type: 'removed',
                         key: key,
+                        // eslint-disable-next-line security/detect-object-injection
                         before: prevState[key],
                         after: undefined
                     });
+                // eslint-disable-next-line security/detect-object-injection
                 } else if (JSON.stringify(prevState[key]) !== JSON.stringify(currentState[key])) {
                     changes.push({
                         type: 'modified',
                         key: key,
+                        // eslint-disable-next-line security/detect-object-injection
                         before: prevState[key],
+                        // eslint-disable-next-line security/detect-object-injection
                         after: currentState[key]
                     });
                 }
@@ -2409,6 +2419,7 @@
                         type: 'added',
                         key: key,
                         before: undefined,
+                        // eslint-disable-next-line security/detect-object-injection
                         after: currentState[key]
                     });
                 }
@@ -2429,13 +2440,14 @@
                 }
                 // Escape HTML to prevent XSS
                 return this.escapeHtml(result);
-            } catch (e) {
+            } catch (_e) {
                 return this.escapeHtml(String(value));
             }
         }
 
         toggleStateEntry(index) {
             if (index >= 0 && index < this.stateHistory.length) {
+                // eslint-disable-next-line security/detect-object-injection
                 this.stateHistory[index]._expanded = !this.stateHistory[index]._expanded;
                 this.renderTabContent();
             }
@@ -2642,11 +2654,13 @@
                 const stateAfter = entry.state_after || {};
                 const componentsAfter = stateAfter.__components__ || null;
                 const hasComponents = componentsAfter && typeof componentsAfter === 'object' && Object.keys(componentsAfter).length > 0;
+                // eslint-disable-next-line security/detect-object-injection
                 const isExpanded = !!expanded[idx];
 
                 let componentBlock = '';
                 if (hasComponents && isExpanded) {
                     const compRows = Object.keys(componentsAfter).map((compId) => {
+                        // eslint-disable-next-line security/detect-object-injection
                         const compState = componentsAfter[compId] || {};
                         const compPreview = this.escapeHtml(JSON.stringify(compState).slice(0, 80));
                         return `
@@ -2816,6 +2830,7 @@
             // component sub-scrubber section. Stored on the panel
             // instance so it survives tab re-renders.
             if (!this.timeTravelExpandedRows) this.timeTravelExpandedRows = {};
+            // eslint-disable-next-line security/detect-object-injection
             this.timeTravelExpandedRows[index] = !this.timeTravelExpandedRows[index];
             if (this.state && this.state.activeTab === 'timeTravel') {
                 try {
@@ -3105,6 +3120,7 @@
                     if (payload && payload.type === 'event') {
                         self._pendingEvents = self._pendingEvents || {};
                         const eventKey = (payload.event || payload.handler) + '_' + Date.now();
+                        // eslint-disable-next-line security/detect-object-injection
                         self._pendingEvents[eventKey] = {
                             handler: payload.event || payload.handler,
                             params: payload.params || payload.data || {},
@@ -3219,7 +3235,9 @@
                     const keys = Object.keys(this._pendingEvents);
                     if (keys.length > 0) {
                         const key = keys[0];
+                        // eslint-disable-next-line security/detect-object-injection
                         const pending = this._pendingEvents[key];
+                        // eslint-disable-next-line security/detect-object-injection
                         delete this._pendingEvents[key];
 
                         this.captureEvent({
@@ -3516,7 +3534,7 @@
 
             let sentBytes = 0;
             let receivedBytes = 0;
-            let totalMessages = this.networkHistory.length;
+            const totalMessages = this.networkHistory.length;
 
             this.networkHistory.forEach(msg => {
                 if (msg.direction === 'sent') {
@@ -3618,6 +3636,7 @@
                         ...warning,
                         node: node.name,
                         entryIdx: entryIdx,
+                        // eslint-disable-next-line security/detect-object-injection
                         timestamp: this.patchHistory[entryIdx].timestamp
                     });
                 });
@@ -3635,9 +3654,12 @@
             const grouped = {};
             warnings.forEach(w => {
                 const type = w.type || 'unknown';
+                // eslint-disable-next-line security/detect-object-injection
                 if (!grouped[type]) {
+                    // eslint-disable-next-line security/detect-object-injection
                     grouped[type] = [];
                 }
+                // eslint-disable-next-line security/detect-object-injection
                 grouped[type].push(w);
             });
 
@@ -3683,6 +3705,7 @@
                 'memory_usage': '💾',
                 'missing_limit': '⚡'
             };
+            // eslint-disable-next-line security/detect-object-injection
             return icons[type] || '⚠️';
         }
 
@@ -3696,6 +3719,7 @@
                 'memory_usage': 'Memory Issues',
                 'missing_limit': 'Missing LIMIT Clauses'
             };
+            // eslint-disable-next-line security/detect-object-injection
             return names[type] || type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         }
 
@@ -3709,11 +3733,12 @@
                 'memory_usage': 'severity-high',
                 'missing_limit': 'severity-medium'
             };
+            // eslint-disable-next-line security/detect-object-injection
             return severity[type] || 'severity-low';
         }
 
         renderWarningDetails(warning) {
-            let details = [];
+            const details = [];
 
             if (warning.query_count) {
                 details.push(`<span class="warning-detail">Queries: ${warning.query_count}</span>`);

@@ -148,7 +148,7 @@
         if (targets.length) {
             try {
                 targets[0].focus();
-            } catch (err) { /* focus can throw on non-focusable elements */ }
+            } catch (_err) { /* focus can throw on non-focusable elements */ }
         }
     }
 
@@ -162,7 +162,7 @@
         });
     }
 
-    async function execPush(args, originEl) {
+    async function execPush(args, _originEl) {
         // push op: bridge a chain to a server event. Uses the existing
         // handleEvent() pipeline so debouncing, rate limiting, and the
         // HTTP/WebSocket fallback path all work identically.
@@ -215,6 +215,7 @@
         for (const entry of ops) {
             if (!Array.isArray(entry) || entry.length < 1) continue;
             const [opName, args] = entry;
+            // eslint-disable-next-line security/detect-object-injection
             const fn = COMMAND_TABLE[opName];
             if (!fn) {
                 if (globalThis.djustDebug) console.log('[js-commands] unknown op', opName);

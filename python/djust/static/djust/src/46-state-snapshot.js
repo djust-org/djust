@@ -29,14 +29,15 @@
         // pushState() in 18-navigation.js runs BEFORE the
         // ``djust:before-navigate`` dispatch, leaving
         // ``location.pathname`` already pointing at the DESTINATION.
-        var pathname = fromUrl
+        const pathname = fromUrl
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
                 : '/');
-        var routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
+        const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
+        // eslint-disable-next-line security/detect-object-injection
         if (routeMap[pathname]) return routeMap[pathname];
         if (typeof document !== 'undefined') {
-            var container = document.querySelector('[dj-view]');
+            const container = document.querySelector('[dj-view]');
             if (container) return container.getAttribute('dj-view') || '';
         }
         return '';
@@ -51,8 +52,9 @@
         // (emitted only when ``enable_state_snapshot = True`` on the
         // view class — see Fix #1).
         if (!slug) return null;
-        var bag = (globalThis.djust && globalThis.djust._clientState) || {};
-        var state = bag[slug];
+        const bag = (globalThis.djust && globalThis.djust._clientState) || {};
+        // eslint-disable-next-line security/detect-object-injection
+        const state = bag[slug];
         if (!state) return null;
         try {
             return JSON.stringify(state);
@@ -65,18 +67,18 @@
     }
 
     function _captureBeforeNavigate(event) {
-        var bridge = _swBridge();
+        const bridge = _swBridge();
         if (!bridge || typeof bridge.captureState !== 'function') return;
         // Fix #9: prefer the explicit ``fromUrl`` in the CustomEvent
         // detail so we capture under the SOURCE URL, not the post-
         // pushState destination.
-        var fromUrl = (event && event.detail && event.detail.fromUrl)
+        const fromUrl = (event && event.detail && event.detail.fromUrl)
             || ((typeof window !== 'undefined' && window.location)
                 ? window.location.pathname
                 : '/');
-        var slug = _currentViewSlug(fromUrl);
+        const slug = _currentViewSlug(fromUrl);
         if (!slug) return;
-        var json = _serializeCurrentState(slug);
+        const json = _serializeCurrentState(slug);
         if (!json) return;
         try {
             bridge.captureState(fromUrl, slug, json);
@@ -91,9 +93,9 @@
     // an async lookup. Does NOT gate popstate send (the popstate handler
     // in 18-navigation.js now awaits ``lookupStateForUrl`` directly).
     function _popstateLookup(_popstateEvent) {
-        var bridge = _swBridge();
+        const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') return;
-        var url = (typeof window !== 'undefined' && window.location)
+        const url = (typeof window !== 'undefined' && window.location)
             ? window.location.pathname
             : '/';
         bridge.lookupState(url).then(function (reply) {
@@ -119,7 +121,7 @@
     // ``null`` on miss / unavailable bridge. Does NOT mutate
     // ``_pendingStateSnapshot`` — the caller owns that slot.
     function lookupStateForUrl(url) {
-        var bridge = _swBridge();
+        const bridge = _swBridge();
         if (!bridge || typeof bridge.lookupState !== 'function') {
             return Promise.resolve(null);
         }

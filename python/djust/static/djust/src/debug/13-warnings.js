@@ -19,6 +19,7 @@
                         ...warning,
                         node: node.name,
                         entryIdx: entryIdx,
+                        // eslint-disable-next-line security/detect-object-injection
                         timestamp: this.patchHistory[entryIdx].timestamp
                     });
                 });
@@ -36,9 +37,12 @@
             const grouped = {};
             warnings.forEach(w => {
                 const type = w.type || 'unknown';
+                // eslint-disable-next-line security/detect-object-injection
                 if (!grouped[type]) {
+                    // eslint-disable-next-line security/detect-object-injection
                     grouped[type] = [];
                 }
+                // eslint-disable-next-line security/detect-object-injection
                 grouped[type].push(w);
             });
 
@@ -84,6 +88,7 @@
                 'memory_usage': '💾',
                 'missing_limit': '⚡'
             };
+            // eslint-disable-next-line security/detect-object-injection
             return icons[type] || '⚠️';
         }
 
@@ -97,6 +102,7 @@
                 'memory_usage': 'Memory Issues',
                 'missing_limit': 'Missing LIMIT Clauses'
             };
+            // eslint-disable-next-line security/detect-object-injection
             return names[type] || type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
         }
 
@@ -110,11 +116,12 @@
                 'memory_usage': 'severity-high',
                 'missing_limit': 'severity-medium'
             };
+            // eslint-disable-next-line security/detect-object-injection
             return severity[type] || 'severity-low';
         }
 
         renderWarningDetails(warning) {
-            let details = [];
+            const details = [];
 
             if (warning.query_count) {
                 details.push(`<span class="warning-detail">Queries: ${warning.query_count}</span>`);

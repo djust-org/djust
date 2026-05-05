@@ -30,7 +30,7 @@
             if (url.origin !== location.origin) {
                 return false;
             }
-        } catch (e) {
+        } catch (_e) {
             return false;
         }
         // Already prefetched

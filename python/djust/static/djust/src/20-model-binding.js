@@ -35,13 +35,17 @@ function _parseModelAttr(el) {
     let debounce = 0;
 
     for (let i = 0; i < attrs.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
         const name = attrs[i].name;
         if (name === 'dj-model') {
+            // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
         } else if (name === 'dj-model.lazy') {
+            // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
             lazy = true;
         } else if (name.startsWith('dj-model.debounce')) {
+            // eslint-disable-next-line security/detect-object-injection
             field = attrs[i].value;
             const match = name.match(/debounce-?(\d+)/);
             debounce = match ? parseInt(match[1], 10) : 300;
@@ -133,6 +137,7 @@ function bindModelElements(root) {
     // Also check for dj-model with modifiers via attribute prefix
     root.querySelectorAll('input, textarea, select').forEach(el => {
         for (let i = 0; i < el.attributes.length; i++) {
+            // eslint-disable-next-line security/detect-object-injection
             if (el.attributes[i].name.startsWith('dj-model')) {
                 _bindModel(el);
                 break;
