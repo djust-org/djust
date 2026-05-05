@@ -5306,6 +5306,38 @@ function sanitizeIdForLog(id) {
 }
 
 /**
+ * Returns true if a comment node's text content matches the dj-if family
+ * preserved by the server's VDOM parser. Mirrors
+ * `crates/djust_vdom/src/parser.rs:494-499` so client-side path-fallback
+ * traversal counts the same comments the server emits.
+ *
+ * Accepts:
+ *   - exact `dj-if` (legacy single-comment placeholder for false-no-else
+ *     pure-text conditionals — issue #295)
+ *   - `dj-if<space-or-tab>...` (boundary-marker opening, e.g.
+ *     `dj-if id="if-0"` or `dj-if id="if-a3b1c2d4-0"` after the Stage 11
+ *     prefix fix on PR #1363)
+ *   - `/dj-if` (boundary-marker closing)
+ *
+ * Rejects lookalikes like `dj-iffy`, `dj-if-extra`, `dj-ifid="x"`, etc.
+ *
+ * @param {string} text - The comment's textContent (may contain leading/
+ *   trailing whitespace; trim() is applied internally to match the
+ *   server's `.trim()`).
+ * @returns {boolean}
+ */
+function isDjIfComment(text) {
+    if (typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    if (trimmed === 'dj-if') return true;
+    if (trimmed === '/dj-if') return true;
+    // Boundary-open marker: `dj-if<space-or-tab>...`. Crucially must
+    // NOT match `dj-iffy`, `dj-if-extra`, `dj-ifid=...` — only a literal
+    // space or tab after `dj-if` qualifies, mirroring the server predicate.
+    return trimmed.startsWith('dj-if ') || trimmed.startsWith('dj-if\t');
+}
+
+/**
  * Save the current focus state (active element, selection, scroll position).
  * Call before DOM mutations that may destroy focus. Pairs with restoreFocusState().
  *
@@ -5468,12 +5500,14 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
                 // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
                 return (/[^ \t\n\r\f]/.test(child.textContent));
             }
-            // Only include <!--dj-if--> placeholder comments — the Rust VDOM
-            // parser preserves these for diffing stability (#559) but drops
-            // all other HTML comments. Regular comments (<!-- Hero Section -->
-            // etc.) must be excluded to keep path indices aligned.
+            // Only include `dj-if`-family comments — the Rust VDOM
+            // parser preserves these for diffing stability (#559) and for
+            // boundary markers (#1358 Iter 1) but drops all other HTML
+            // comments. Regular comments (<!-- Hero Section --> etc.) must
+            // be excluded to keep path indices aligned. The predicate
+            // mirrors `crates/djust_vdom/src/parser.rs:494-499`.
             if (child.nodeType === Node.COMMENT_NODE) {
-                return child.textContent.trim() === 'dj-if';
+                return isDjIfComment(child.textContent);
             }
             return false;
         });
@@ -6428,6 +6462,7 @@ window.djust.getSignificantChildren = getSignificantChildren;
 window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;
+window.djust._isDjIfComment = isDjIfComment;
 window.djust.createNodeFromVNode = createNodeFromVNode;
 window.djust.preserveFormValues = preserveFormValues;
 window.djust.saveFocusState = saveFocusState;

@@ -62,11 +62,21 @@ fn node_is_element_bearing(node: &Node) -> bool {
         Node::InlineIf { .. } => false,
         // Comments never contribute elements.
         Node::Comment => false,
-        // Static text-emitting tags — none can produce elements
+        // `{% csrf_token %}` renders an `<input type="hidden" ...>`
+        // element when a token is present (`renderer.rs` line ~750).
+        // It MUST be classified as element-bearing so
+        // `{% if request.method == "POST" %}{% csrf_token %}{% endif %}`
+        // emits boundary markers (Stage 11 MUST-FIX on PR #1363).
+        // It can render as the empty string when the context has no
+        // token (LiveView re-renders without request context — see
+        // #696), but the classifier is conservative: emitting an
+        // unused marker pair is harmless (browsers ignore comments)
+        // while a missed marker breaks Iter 3's differ.
+        Node::CsrfToken => true,
+        // Other static text-emitting tags — none produce elements
         // unless the user template itself surrounds them with HTML
         // (which would appear in adjacent Text nodes).
-        Node::CsrfToken
-        | Node::Now(_)
+        Node::Now(_)
         | Node::WidthRatio { .. }
         | Node::FirstOf { .. }
         | Node::TemplateTag(_)

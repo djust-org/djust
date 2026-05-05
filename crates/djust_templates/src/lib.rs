@@ -89,7 +89,13 @@ pub struct Template {
 impl Template {
     pub fn new(source: &str) -> Result<Self> {
         let tokens = lexer::tokenize(source)?;
-        let nodes = parser::parse(&tokens)?;
+        // Use `parse_with_source` so the boundary-marker ID prefix
+        // (`<!--dj-if id="if-<prefix>-N"-->`) is derived from this
+        // template's own source. Prevents ID collisions when a
+        // parent template via `{% extends %}` or a child template
+        // via `{% include %}` is parsed independently with its own
+        // counter (Stage 11 finding on PR #1363, #1358 Iter 1).
+        let nodes = parser::parse_with_source(&tokens, source)?;
         let node_deps = parser::extract_per_node_deps(&nodes);
 
         Ok(Self {
@@ -351,7 +357,11 @@ mod tests {
         fn load_template(&self, name: &str) -> Result<Vec<Node>> {
             if let Some(source) = self.templates.get(name) {
                 let tokens = lexer::tokenize(source)?;
-                parser::parse(&tokens)
+                // Match the production loader: use `parse_with_source`
+                // so each template's `Node::If` boundary-marker IDs
+                // get a per-source prefix and don't collide across
+                // parent/child/included templates (#1358 Iter 1).
+                parser::parse_with_source(&tokens, source)
             } else {
                 Err(DjangoRustError::TemplateError(format!(
                     "Template not found: {name}"
