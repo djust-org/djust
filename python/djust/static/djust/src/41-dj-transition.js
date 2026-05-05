@@ -44,12 +44,55 @@
 //
 // On `transitionend`, phase-2 classes are removed (they typically
 // carry the `transition-*` helper and are not needed once the animation
-// has completed). A 600 ms fallback timeout cleans up phase-2 classes if
-// `transitionend` never fires (e.g. zero-duration transitions or
+// has completed). A computed fallback timeout cleans up phase-2 classes
+// if `transitionend` never fires (e.g. zero-duration transitions or
 // display: none).
+//
+// The fallback duration is auto-derived from the element's computed
+// `transition-duration` + `transition-delay` (longest pair across all
+// transitioning properties) plus a 50ms grace window. For multi-property
+// transitions, we count expected `transitionend` events from
+// `transition-property` and only run cleanup after all have fired —
+// otherwise the first-finishing property would cut off slower ones.
+//
+// `_FALLBACK_MS_DEFAULT` is the fallback used only when computed-style
+// reading fails or yields zero (e.g. element has no transition rule yet).
 
 const _djTransitionState = new WeakMap();
-const _FALLBACK_MS = 600;
+const _FALLBACK_MS_DEFAULT = 600;
+
+function _parseTimeMs(s) {
+    // CSS time tokens: "550ms", "0.55s", "0s". Returns 0 on parse failure.
+    const t = (s || '').trim();
+    if (!t) return 0;
+    if (t.endsWith('ms')) return parseFloat(t) || 0;
+    if (t.endsWith('s')) return (parseFloat(t) || 0) * 1000;
+    return 0;
+}
+
+function _computeTransitionTiming(el) {
+    // Inspect `transition-property`, `transition-duration`, `transition-delay`
+    // and return {maxMs, propsCount}. CSS spec: when *-duration / *-delay
+    // have fewer comma-separated values than -property, they cycle. When
+    // they have more, extras are ignored.
+    const cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
+    if (!cs) return { maxMs: 0, propsCount: 0 };
+    const props = (cs.transitionProperty || '')
+        .split(',').map(s => s.trim()).filter(s => s && s !== 'none');
+    const durations = (cs.transitionDuration || '')
+        .split(',').map(s => _parseTimeMs(s));
+    const delays = (cs.transitionDelay || '')
+        .split(',').map(s => _parseTimeMs(s));
+    if (props.length === 0) return { maxMs: 0, propsCount: 0 };
+    let maxMs = 0;
+    for (let i = 0; i < props.length; i++) {
+        const dur = durations[i % durations.length] || 0;
+        const del = delays[i % delays.length] || 0;
+        const total = dur + del;
+        if (total > maxMs) maxMs = total;
+    }
+    return { maxMs: maxMs, propsCount: props.length };
+}
 
 function _parseSpec(raw) {
     const input = (raw || '').trim();
@@ -99,6 +142,12 @@ function _runTransition(el, spec) {
         _raf(function () {
             el.classList.add(spec.single);
 
+            // Compute timing AFTER the class is applied so the new
+            // transition rule is reflected in getComputedStyle.
+            const timing = _computeTransitionTiming(el);
+            const fallbackMs = timing.maxMs > 0 ? timing.maxMs + 50 : _FALLBACK_MS_DEFAULT;
+            let remainingEvents = timing.propsCount || 1;
+
             function cleanup() {
                 if (!el.isConnected) {
                     _djTransitionState.delete(el);
@@ -111,11 +160,12 @@ function _runTransition(el, spec) {
 
             function onEnd(ev) {
                 if (ev.target !== el) return;
-                cleanup();
+                remainingEvents--;
+                if (remainingEvents <= 0) cleanup();
             }
             state.onEnd = onEnd;
             el.addEventListener('transitionend', onEnd);
-            state.fallback = setTimeout(cleanup, _FALLBACK_MS);
+            state.fallback = setTimeout(cleanup, fallbackMs);
         });
         return;
     }
@@ -130,9 +180,15 @@ function _runTransition(el, spec) {
         el.classList.add(spec.active);
         el.classList.add(spec.end);
 
+        // Compute timing AFTER active+end land so getComputedStyle picks
+        // up the transition rule from the active class.
+        const timing = _computeTransitionTiming(el);
+        const fallbackMs = timing.maxMs > 0 ? timing.maxMs + 50 : _FALLBACK_MS_DEFAULT;
+        let remainingEvents = timing.propsCount || 1;
+
         function cleanup() {
             // Guard against detached elements — if the node has been
-            // removed from the DOM before this fires (typically the 600 ms
+            // removed from the DOM before this fires (typically the
             // fallback path), skip classList/listener work. classList on
             // a detached node is technically safe but any parentNode
             // access downstream would NPE.
@@ -148,15 +204,20 @@ function _runTransition(el, spec) {
 
         function onEnd(ev) {
             // Only react to transitions on THIS element, not bubbled
-            // transitions from children.
+            // transitions from children. Decrement the expected event
+            // count and only cleanup once all properties have finished —
+            // otherwise the fastest property would cut off slower ones.
             if (ev.target !== el) return;
-            cleanup();
+            remainingEvents--;
+            if (remainingEvents <= 0) cleanup();
         }
         state.onEnd = onEnd;
         el.addEventListener('transitionend', onEnd);
 
-        // Fallback in case transitionend never fires.
-        state.fallback = setTimeout(cleanup, _FALLBACK_MS);
+        // Fallback in case transitionend never fires (zero-duration
+        // transitions or detached/hidden elements). Sized from the
+        // computed transition duration + 50ms grace.
+        state.fallback = setTimeout(cleanup, fallbackMs);
     });
 }
 
