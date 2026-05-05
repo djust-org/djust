@@ -23,6 +23,92 @@ fn is_quoted_arg(arg: &str) -> bool {
             || (arg.starts_with('\'') && arg.ends_with('\'')))
 }
 
+/// Returns ``true`` if any node in `nodes` may contribute element-level
+/// HTML output (as opposed to text-only output). Used by the `Node::If`
+/// renderer to decide whether to emit `<!--dj-if id="if-N"-->`/
+/// `<!--/dj-if-->` boundary markers (Iter 1 of issue #1358).
+///
+/// Pure-text conditionals — branches that emit only `Node::Text`
+/// fragments without HTML tags, `Node::Variable` (escaped output),
+/// or `Node::InlineIf` (text expression) — don't need keyed
+/// boundaries because text positions are inherently sibling-stable
+/// in the rendered DOM. Element-bearing branches do, because the
+/// VDOM differ in Iter 3 will key off these markers when
+/// conditionals flip and subtree shapes change.
+///
+/// Conservative classification: any AST node that can possibly
+/// produce a `<` character in its output (Custom tags, Components,
+/// Block, Include, Static, etc.) is treated as element-bearing.
+/// Misclassifying an exotic text-only path as element-bearing only
+/// emits redundant comments (which browsers ignore) — the safe
+/// direction.
+fn nodes_contain_elements(nodes: &[Node]) -> bool {
+    nodes.iter().any(node_is_element_bearing)
+}
+
+fn node_is_element_bearing(node: &Node) -> bool {
+    match node {
+        // Text nodes only contribute elements when their literal
+        // content includes a `<`. A `<` strongly implies an HTML
+        // tag; a `<` inside textual prose like "if 3 < 4" would
+        // still be classified as element-bearing here, which is
+        // safe (extra comment — no observable effect).
+        Node::Text(s) => s.contains('<'),
+        // Variable substitution is HTML-escaped at render time —
+        // never produces raw element content.
+        Node::Variable(_, _, _) => false,
+        // Inline-if produces a single text expression (escaped or
+        // not, but no structural HTML).
+        Node::InlineIf { .. } => false,
+        // Comments never contribute elements.
+        Node::Comment => false,
+        // `{% csrf_token %}` renders an `<input type="hidden" ...>`
+        // element when a token is present (`renderer.rs` line ~750).
+        // It MUST be classified as element-bearing so
+        // `{% if request.method == "POST" %}{% csrf_token %}{% endif %}`
+        // emits boundary markers (Stage 11 MUST-FIX on PR #1363).
+        // It can render as the empty string when the context has no
+        // token (LiveView re-renders without request context — see
+        // #696), but the classifier is conservative: emitting an
+        // unused marker pair is harmless (browsers ignore comments)
+        // while a missed marker breaks Iter 3's differ.
+        Node::CsrfToken => true,
+        // Other static text-emitting tags — none produce elements
+        // unless the user template itself surrounds them with HTML
+        // (which would appear in adjacent Text nodes).
+        Node::Now(_)
+        | Node::WidthRatio { .. }
+        | Node::FirstOf { .. }
+        | Node::TemplateTag(_)
+        | Node::Cycle { .. }
+        | Node::Load(_)
+        | Node::Extends(_)
+        | Node::AssignTag { .. } => false,
+        // Recurse into branches.
+        Node::If {
+            true_nodes,
+            false_nodes,
+            ..
+        } => nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes),
+        Node::For {
+            nodes, empty_nodes, ..
+        } => nodes_contain_elements(nodes) || nodes_contain_elements(empty_nodes),
+        Node::Block { nodes, .. } => nodes_contain_elements(nodes),
+        Node::With { nodes, .. } => nodes_contain_elements(nodes),
+        Node::Spaceless { nodes, .. } => nodes_contain_elements(nodes),
+        // Conservative: tags that may or do produce HTML are treated
+        // as element-bearing. Includes templates, components, and
+        // any custom-rendered output the framework can't introspect.
+        Node::Static(_)
+        | Node::Include { .. }
+        | Node::ReactComponent { .. }
+        | Node::RustComponent { .. }
+        | Node::CustomTag { .. }
+        | Node::BlockCustomTag { .. }
+        | Node::UnsupportedTag { .. } => true,
+    }
+}
+
 pub fn render_nodes(nodes: &[Node], context: &Context) -> Result<String> {
     render_nodes_with_loader(nodes, context, None::<&NoOpLoader>)
 }
@@ -395,25 +481,63 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             true_nodes,
             false_nodes,
             in_tag_context,
+            marker_id,
         } => {
             let condition_result = evaluate_condition(condition, context)?;
 
-            if condition_result {
-                render_nodes_with_loader(true_nodes, context, loader)
+            // Render the body that fires (truthy/falsy branch).
+            let body = if condition_result {
+                render_nodes_with_loader(true_nodes, context, loader)?
             } else if false_nodes.is_empty() {
                 if *in_tag_context {
                     // Inside an HTML attribute value: a comment node would produce
                     // malformed HTML (e.g. class="btn <!--dj-if-->"). Emit empty
                     // string instead. Fix for issue #380.
-                    Ok(String::new())
+                    String::new()
+                } else if !nodes_contain_elements(true_nodes)
+                    && !nodes_contain_elements(false_nodes)
+                {
+                    // Pure-text conditional with no else: keep the legacy
+                    // single-comment placeholder (issue #295 / DJE-053).
+                    // Element-bearing branches drop into the dj-if pair
+                    // path below, which serves the same sibling-stability
+                    // role (closing tag adjacent to opening).
+                    "<!--dj-if-->".to_string()
                 } else {
-                    // Fix for DJE-053: emit a placeholder comment so VDOM diffing
-                    // has a stable DOM node to target when the condition becomes true.
-                    Ok("<!--dj-if-->".to_string())
+                    // Element-bearing if with no else and false condition:
+                    // emit empty body inside the wrapping pair below.
+                    String::new()
                 }
             } else {
-                render_nodes_with_loader(false_nodes, context, loader)
+                render_nodes_with_loader(false_nodes, context, loader)?
+            };
+
+            // Decide whether to wrap in `<!--dj-if id="if-N"-->` /
+            // `<!--/dj-if-->` boundary markers. Wrap iff:
+            //   - NOT in an HTML attribute context (comments would
+            //     break attribute strings, issue #380).
+            //   - At least one branch is element-bearing (text-only
+            //     conditionals don't need keyed boundaries — text
+            //     positions are sibling-stable already).
+            //   - The parser assigned a marker_id (production
+            //     templates always go through `parser::parse()`
+            //     which assigns IDs in document order).
+            //
+            // Foundation 1 of 3 toward issue #1358 (keyed VDOM diff
+            // for conditional subtrees, re-open of #256 Option A).
+            // Iter 2 (client patch applier) and Iter 3 (Rust VDOM
+            // differ) follow in subsequent PRs. The markers are
+            // metadata only — browsers ignore HTML comments — so
+            // this iter is zero-observable-behavior.
+            if !*in_tag_context
+                && (nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes))
+            {
+                if let Some(id) = marker_id {
+                    return Ok(format!("<!--dj-if id=\"{id}\"-->{body}<!--/dj-if-->"));
+                }
             }
+
+            Ok(body)
         }
 
         Node::For {

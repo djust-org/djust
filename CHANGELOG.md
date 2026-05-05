@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`{% if %}` blocks now emit `dj-if` boundary markers — Foundation 1 of #1358.**
+  Iter 1 of 3 toward the keyed VDOM diff for conditional subtrees
+  (re-open of #256 Option A). At template-render time, every `{% if %}`
+  block whose body contains element nodes is wrapped in HTML-comment
+  boundary markers:
+  ```html
+  <!--dj-if id="if-<prefix>-N"-->...rendered body...<!--/dj-if-->
+  ```
+  Browsers ignore HTML comments, so this is **zero-observable-behavior**
+  — markers are framework-internal metadata for the upcoming Iter 3
+  (Rust VDOM differ) which uses them as keyed boundaries when
+  conditionals flip.
+
+  Marker shape: **Option B (pair per `Node::If`)**. Nested elif chains
+  produce nested marker pairs (the parser already nests an inner
+  `If(B)` inside the outer's `false_nodes`). Pure-text conditionals
+  (text-only true/false bodies) skip emission — text positions are
+  sibling-stable already; the legacy `<!--dj-if-->` placeholder for
+  false-no-else (issue #295) is preserved unchanged. HTML attribute
+  context (issue #380) skips emission. The `cond=` attribute is
+  intentionally OMITTED for safety (condition strings could contain
+  `--` or `>` that would close the comment early; Iter 3's differ
+  keys off the `id` alone). `{% csrf_token %}` is treated as
+  element-bearing (renders `<input type="hidden">`), so
+  `{% if request.method == "POST" %}{% csrf_token %}{% endif %}`
+  correctly emits the wrapping pair.
+
+  ID generation: stable per-template counter `if-<prefix>-N` assigned
+  at parse time via `parser::assign_if_marker_ids` walking the AST in
+  document order. The `<prefix>` is an 8-hex-character source-derived
+  hash (`parser::parse_with_source(tokens, source)`), so independently-
+  parsed templates (`{% extends %}` parents, `{% include %}` partials,
+  separately-loaded macros) get distinct prefixes and don't collide
+  when their rendered HTML is composed in a single output buffer.
+  Same source → same prefix → IDs are stable across re-renders. The
+  `{% for %}{% if %}` pattern reuses the same id across loop iterations
+  because the parser only sees one `Node::If`.
+
+  VDOM parser (`crates/djust_vdom/src/parser.rs`) extended to preserve
+  the new opening/closing markers as comment vnodes alongside the
+  legacy `<!--dj-if-->` placeholder. The parser predicate accepts
+  `dj-if`, `dj-if<space-or-tab>...`, and `/dj-if`; it rejects
+  lookalikes like `dj-iffy`, `dj-if-extra`, `dj-ifid="..."`. Client-
+  side `getNodeByPath` path-fallback (`12-vdom-patch.js`) now mirrors
+  this predicate via the new `isDjIfComment` helper, keeping client
+  and server in lock-step. Public `render_template` /
+  `render_template_with_dirs` strip ALL `dj-if`-family markers via
+  `strip_dj_if_markers` helper — preserves the existing contract that
+  public rendering yields clean HTML.
+
+  **What this enables (NOT in this PR):**
+  - Iter 2 (Foundation 2): client patch applier learns `RemoveSubtree`
+    / `InsertSubtree` patch types.
+  - Iter 3 (Capability): Rust VDOM differ recognizes `dj-if`
+    boundaries; emits subtree-level patches when conditionals flip.
+
+  Regression suite (post Stage 11 fix), totals across 5 files:
+  - 30 cases in `crates/djust_templates/tests/test_if_markers.rs`
+    (15 element-bearing / elif / nested / for-if / attribute-context
+    cases + 4 cross-template uniqueness cases under
+    `cross_template_ids` + 3 csrf_token / variable / raw-input
+    classifier cases + 8 stability/ordering cases).
+  - 11 cases in `djust_vdom::parser::tests` (legacy placeholder +
+    boundary markers + 7 lookalike-rejection / whitespace-tolerance /
+    prefixed-id / close-marker boundary cases).
+  - 4 cases in `parser::tests` for prefix-deriving functions
+    (`parse_with_source` shape / source-distinctness /
+    source-stability / token-fallback).
+  - 25 cases in `python/tests/test_template_if_markers.py`
+    across `TestElementBearingIfMarkers` / `TestPureTextSkip` /
+    `TestPublicRenderTemplateStrips` / `TestIdStability` /
+    `TestIdAssignment` / `TestAttributeContext` /
+    `TestSiblingStability` / `TestIdPrefixUniqueness` /
+    `TestCsrfTokenElementBearing`.
+  - 20 cases in `tests/js/dj_if_comment_predicate.test.js`
+    (predicate matrix + path-fallback integration).
+
 ### Changed
 
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**

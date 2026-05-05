@@ -120,11 +120,13 @@ impl InheritanceChain {
                 true_nodes,
                 false_nodes,
                 in_tag_context,
+                marker_id,
             } => Node::If {
                 condition: condition.clone(),
                 true_nodes: self.apply_block_overrides(true_nodes),
                 false_nodes: self.apply_block_overrides(false_nodes),
                 in_tag_context: *in_tag_context,
+                marker_id: marker_id.clone(),
             },
             Node::For {
                 var_names,
@@ -284,9 +286,14 @@ impl TemplateLoader for FilesystemTemplateLoader {
             ))
         })?;
 
-        // Parse template
+        // Parse template. Use `parse_with_source` so each loaded
+        // template gets its own boundary-marker ID prefix derived
+        // from its own source — prevents `if-<prefix>-N` collisions
+        // when a parent + child + included templates are composed
+        // in a single rendered output (Stage 11 finding on PR #1363,
+        // #1358 Iter 1).
         let tokens = lexer::tokenize(&source)?;
-        parser::parse(&tokens)
+        parser::parse_with_source(&tokens, &source)
     }
 }
 
@@ -535,9 +542,12 @@ pub fn resolve_template_inheritance(
         ))
     })?;
 
-    // Parse initial template
+    // Parse initial template (use `parse_with_source` so the
+    // boundary-marker ID prefix is derived from this template's
+    // own source — matches the production loader, see #1358 Iter 1
+    // Stage 11 fix).
     let tokens = crate::lexer::tokenize(&source)?;
-    let nodes = crate::parser::parse(&tokens)?;
+    let nodes = crate::parser::parse_with_source(&tokens, &source)?;
 
     // Check if template uses inheritance
     let uses_extends = nodes.iter().any(|node| matches!(node, Node::Extends(_)));
@@ -739,6 +749,7 @@ mod tests {
             true_nodes: vec![Node::Text("Welcome!".to_string())],
             false_nodes: vec![Node::Text("Please login".to_string())],
             in_tag_context: false,
+            marker_id: None,
         }];
 
         let result = nodes_to_template_string(&nodes);
@@ -848,6 +859,7 @@ mod tests {
                 }],
                 false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
                 in_tag_context: false,
+                marker_id: None,
             }],
         }];
 
@@ -1110,6 +1122,7 @@ mod tests {
             }],
             false_nodes: vec![Node::Text("hidden".to_string())],
             in_tag_context: false,
+            marker_id: None,
         }];
 
         let child_nodes = vec![

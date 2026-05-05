@@ -475,11 +475,29 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 matches!(tag_ref, "pre" | "code" | "textarea" | "script" | "style");
 
             for child in handle.children.borrow().iter() {
-                // Check for special placeholder comments (e.g., <!--dj-if-->)
-                // These are preserved for VDOM diffing stability (issue #295)
+                // Check for special placeholder comments preserved for
+                // VDOM diffing stability:
+                //   - `<!--dj-if-->` legacy single-marker placeholder
+                //     (issue #295) for false-no-else conditionals.
+                //   - `<!--dj-if id="if-N"-->` boundary marker opening
+                //     and `<!--/dj-if-->` boundary marker closing
+                //     (Iter 1 of issue #1358) wrapping `{% if %}` blocks
+                //     whose body contains element nodes.
+                //
+                // Preserving the new pair on the parser side keeps
+                // server-side VDOM in lock-step with the client's
+                // DOM structure (the client's `getSignificantChildren`
+                // counts all comments). Iter 3's differ extends this
+                // to recognize the `id=` attribute as a keyed boundary
+                // and emit subtree-level patches.
                 if let NodeData::Comment { ref contents } = child.data {
                     let comment_text = contents.to_string();
-                    if comment_text == "dj-if" {
+                    let trimmed = comment_text.trim();
+                    let is_legacy_placeholder = trimmed == "dj-if";
+                    let is_boundary_open =
+                        trimmed.starts_with("dj-if ") || trimmed.starts_with("dj-if\t");
+                    let is_boundary_close = trimmed == "/dj-if";
+                    if is_legacy_placeholder || is_boundary_open || is_boundary_close {
                         // Preserve this as a comment node for VDOM diffing
                         let comment_vnode = VNode {
                             tag: "#comment".to_string(),
@@ -801,6 +819,192 @@ mod tests {
         assert_eq!(vnode.key, Some("item-123".to_string()));
         // data-key should still be in attrs for DOM rendering
         assert_eq!(vnode.attrs.get("data-key"), Some(&"item-123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_preserves_dj_if_legacy_placeholder() {
+        // Issue #295 / DJE-053: legacy single-comment placeholder for
+        // false-no-else conditionals must be preserved as a comment
+        // vnode for VDOM diffing stability.
+        let html = "<div><!--dj-if--><span>after</span></div>";
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.children.len(), 2);
+        assert!(vnode.children[0].is_comment());
+        assert_eq!(vnode.children[0].text, Some("dj-if".to_string()));
+        assert_eq!(vnode.children[1].tag, "span");
+    }
+
+    #[test]
+    fn test_parse_preserves_dj_if_boundary_markers() {
+        // Iter 1 of #1358: opening `<!--dj-if id="if-N"-->` and closing
+        // `<!--/dj-if-->` boundary markers must be preserved as comment
+        // vnodes so server-side VDOM and client-side DOM stay in sync.
+        // The client's `getSignificantChildren` counts all comments;
+        // the server-side parser must too, otherwise patch indices
+        // would drift.
+        let html = r#"<div><!--dj-if id="if-0"--><span>x</span><!--/dj-if--><i>after</i></div>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.children.len(), 4);
+        assert!(vnode.children[0].is_comment());
+        assert_eq!(
+            vnode.children[0].text.as_deref(),
+            Some(r#"dj-if id="if-0""#)
+        );
+        assert_eq!(vnode.children[1].tag, "span");
+        assert!(vnode.children[2].is_comment());
+        assert_eq!(vnode.children[2].text.as_deref(), Some("/dj-if"));
+        assert_eq!(vnode.children[3].tag, "i");
+    }
+
+    #[test]
+    fn test_parse_dj_if_boundary_markers_with_empty_body() {
+        // Element-bearing if with false condition and no else: the
+        // pair contains an empty body. Both markers preserved.
+        let html = r#"<div><!--dj-if id="if-0"--><!--/dj-if--><span>after</span></div>"#;
+        let vnode = parse_html(html).unwrap();
+        assert_eq!(vnode.children.len(), 3);
+        assert!(vnode.children[0].is_comment());
+        assert!(vnode.children[1].is_comment());
+        assert_eq!(vnode.children[2].tag, "span");
+    }
+
+    #[test]
+    fn test_parse_filters_unrelated_comments_when_dj_if_present() {
+        // Make sure the broadened predicate doesn't accidentally include
+        // unrelated comments. Only comments matching the `dj-if`
+        // family are preserved.
+        let html = r#"<div>
+            <!-- regular comment -->
+            <!--dj-if id="if-0"-->
+            <span>x</span>
+            <!--/dj-if-->
+            <!-- another regular -->
+        </div>"#;
+        let vnode = parse_html(html).unwrap();
+        // Children: opening marker, span, closing marker.
+        // Regular comments and whitespace text filtered out.
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(comments.len(), 2);
+        let texts: Vec<&str> = comments
+            .iter()
+            .map(|c| c.text.as_deref().unwrap_or(""))
+            .collect();
+        assert!(texts.iter().any(|t| t.contains("dj-if id=\"if-0\"")));
+        assert!(texts.contains(&"/dj-if"));
+        // No "regular comment" text should appear.
+        assert!(!texts.iter().any(|t| t.contains("regular")));
+    }
+
+    // -----------------------------------------------------------------
+    // Boundary tests for the broadened `dj-if` predicate (Stage 11
+    // SHOULD-FIX #4 on PR #1363). The predicate accepts the exact
+    // legacy placeholder, the new opening boundary
+    // (`dj-if<space-or-tab>...`), and the closing boundary (`/dj-if`).
+    // It must NOT match strings that merely START with `dj-if` but
+    // are not part of the dj-if family — `dj-iffy`, `dj-if-extra`,
+    // etc.  Implementation note: with `starts_with("dj-if ")` the
+    // boundary requires whitespace; here we lock that contract in.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_parse_rejects_dj_if_lookalike_dj_iffy() {
+        // `dj-iffy` looks like a `dj-if` extension but isn't — must
+        // not be preserved as a marker comment.
+        let html = "<div><!--dj-iffy--><span>x</span></div>";
+        let vnode = parse_html(html).unwrap();
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(
+            comments.len(),
+            0,
+            "dj-iffy must not be preserved as a marker"
+        );
+        // Span survives.
+        assert_eq!(vnode.children.iter().filter(|c| !c.is_comment()).count(), 1);
+    }
+
+    #[test]
+    fn test_parse_rejects_dj_if_lookalike_dj_if_extra() {
+        // `dj-if-extra` is a different identifier — must not match.
+        let html = "<div><!--dj-if-extra--><span>x</span></div>";
+        let vnode = parse_html(html).unwrap();
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(
+            comments.len(),
+            0,
+            "dj-if-extra must not be preserved as a marker"
+        );
+    }
+
+    #[test]
+    fn test_parse_accepts_dj_if_with_leading_whitespace() {
+        // Renderers / minifiers may add leading whitespace inside the
+        // comment body. The trim() in the predicate handles this.
+        let html = r#"<div><!-- dj-if id="if-0" --><span>x</span><!-- /dj-if --></div>"#;
+        let vnode = parse_html(html).unwrap();
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(
+            comments.len(),
+            2,
+            "leading/trailing whitespace must be tolerated"
+        );
+    }
+
+    #[test]
+    fn test_parse_accepts_dj_if_with_tab_separator() {
+        // Tab between `dj-if` and the id attribute — the predicate
+        // explicitly accepts `\t` alongside space.
+        let html = "<div><!--dj-if\tid=\"if-0\"--><span>x</span><!--/dj-if--></div>";
+        let vnode = parse_html(html).unwrap();
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(comments.len(), 2);
+        assert!(comments[0]
+            .text
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("dj-if\tid="));
+    }
+
+    #[test]
+    fn test_parse_rejects_dj_if_with_no_separator() {
+        // `dj-ifid="if-0"` — no whitespace between `if` and the id.
+        // Treated as a different identifier; must not be preserved.
+        let html = r#"<div><!--dj-ifid="if-0"--><span>x</span></div>"#;
+        let vnode = parse_html(html).unwrap();
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(comments.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_accepts_prefixed_id_in_marker() {
+        // The Stage 11 fix on PR #1363 changes IDs from `if-N` to
+        // `if-<8-hex>-N`. The predicate keys off the leading
+        // `dj-if<space>` shape, so the longer ID is accepted
+        // unchanged.
+        let html = r#"<div><!--dj-if id="if-a3b1c2d4-0"--><span>x</span><!--/dj-if--></div>"#;
+        let vnode = parse_html(html).unwrap();
+        let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+        assert_eq!(comments.len(), 2);
+        assert!(comments[0]
+            .text
+            .as_deref()
+            .unwrap_or("")
+            .contains("if-a3b1c2d4-0"));
+    }
+
+    #[test]
+    fn test_parse_rejects_close_marker_lookalikes() {
+        // `/dj-iffy`, `/dj-if-extra`, `/dj-if-stuff` — close-marker
+        // family lookalikes. Predicate uses exact match for `/dj-if`.
+        for body in &["/dj-iffy", "/dj-if-extra", "/dj-if-stuff"] {
+            let html = format!("<div><!--{body}--><span>x</span></div>");
+            let vnode = parse_html(&html).unwrap();
+            let comments: Vec<&VNode> = vnode.children.iter().filter(|c| c.is_comment()).collect();
+            assert_eq!(
+                comments.len(),
+                0,
+                "'{body}' must not be preserved as a close-marker"
+            );
+        }
     }
 
     #[test]

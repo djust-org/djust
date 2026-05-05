@@ -89,7 +89,13 @@ pub struct Template {
 impl Template {
     pub fn new(source: &str) -> Result<Self> {
         let tokens = lexer::tokenize(source)?;
-        let nodes = parser::parse(&tokens)?;
+        // Use `parse_with_source` so the boundary-marker ID prefix
+        // (`<!--dj-if id="if-<prefix>-N"-->`) is derived from this
+        // template's own source. Prevents ID collisions when a
+        // parent template via `{% extends %}` or a child template
+        // via `{% include %}` is parsed independently with its own
+        // counter (Stage 11 finding on PR #1363, #1358 Iter 1).
+        let nodes = parser::parse_with_source(&tokens, source)?;
         let node_deps = parser::extract_per_node_deps(&nodes);
 
         Ok(Self {
@@ -270,14 +276,33 @@ impl Template {
     }
 }
 
+/// Strip all `dj-if` VDOM markers from a rendered string.
+///
+/// Removes:
+///   - Legacy single-comment placeholder: `<!--dj-if-->` (issue #295)
+///   - Boundary marker pair (Iter 1 of #1358):
+///     `<!--dj-if id="if-N"-->` and `<!--/dj-if-->`
+///
+/// Used by the public Python `render_template` and
+/// `render_template_with_dirs` entries (in djust_live) to preserve
+/// the contract that standalone rendering yields clean HTML — the
+/// markers are framework-internal metadata for VDOM diffing, not
+/// user-visible content.
+pub fn strip_dj_if_markers(html: &str) -> String {
+    static MARKER_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"<!--/?dj-if(?:\s[^>]*)?-->").unwrap());
+    MARKER_RE.replace_all(html, "").into_owned()
+}
+
 /// Fast template rendering function for Python
 #[pyfunction]
 fn render_template(source: String, context: HashMap<String, Value>) -> PyResult<String> {
     let template = Template::new(&source)?;
     let ctx = Context::from_dict(context);
     let result = template.render(&ctx)?;
-    // Strip VDOM placeholder comments in standalone rendering
-    Ok(result.replace("<!--dj-if-->", ""))
+    // Strip VDOM placeholder + boundary markers in standalone rendering
+    // — these are framework-internal metadata, not user-visible HTML.
+    Ok(strip_dj_if_markers(&result))
 }
 
 /// Python module for template functionality
@@ -332,7 +357,11 @@ mod tests {
         fn load_template(&self, name: &str) -> Result<Vec<Node>> {
             if let Some(source) = self.templates.get(name) {
                 let tokens = lexer::tokenize(source)?;
-                parser::parse(&tokens)
+                // Match the production loader: use `parse_with_source`
+                // so each template's `Node::If` boundary-marker IDs
+                // get a per-source prefix and don't collide across
+                // parent/child/included templates (#1358 Iter 1).
+                parser::parse_with_source(&tokens, source)
             } else {
                 Err(DjangoRustError::TemplateError(format!(
                     "Template not found: {name}"

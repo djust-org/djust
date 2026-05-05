@@ -2,7 +2,9 @@
 
 use crate::lexer::Token;
 use djust_core::{DjangoRustError, Result};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
 pub enum Node {
@@ -22,6 +24,15 @@ pub enum Node {
         true_nodes: Vec<Node>,
         false_nodes: Vec<Node>,
         in_tag_context: bool,
+        /// Stable per-template marker ID for `<!--dj-if id="if-N"-->`
+        /// boundary comments. Assigned at parse time via
+        /// [`assign_if_marker_ids`] in document order. `None` when
+        /// the `If` node was constructed manually (tests) and not
+        /// passed through the parser's ID-assignment pass — in that
+        /// case the renderer falls back to no marker emission for
+        /// that branch (defensive default; production templates
+        /// always go through `parse()` which assigns IDs).
+        marker_id: Option<String>,
     },
     For {
         var_names: Vec<String>, // Supports tuple unpacking: {% for a, b in items %}
@@ -218,7 +229,42 @@ fn is_inside_html_tag_at(tokens: &[Token], pos: usize) -> bool {
     is_inside_html_tag(&combined)
 }
 
+/// Parse a token stream into an AST.
+///
+/// IDs assigned to `Node::If` boundary markers (#1358 Iter 1) are
+/// derived from a hash of the token stream, so independently-parsed
+/// templates (e.g. via `{% extends %}` parents and `{% include %}`
+/// children, each parsed via separate `parse()` calls) get distinct
+/// ID prefixes and don't collide when their rendered HTML is
+/// composed in a single output buffer.
+///
+/// Prefer [`parse_with_source`] when the original template source
+/// is available — it yields a more reproducible prefix derived from
+/// the source string itself, which keeps IDs stable across cosmetic
+/// token-stream representation changes (e.g. lexer refactors).
 pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
+    parse_internal(tokens, hash_tokens(tokens))
+}
+
+/// Parse a token stream into an AST, deriving the boundary-marker
+/// ID prefix from the original template source.
+///
+/// Foundation 1 of #1358 — addressed under Stage 11 review of
+/// PR #1363. Each independently-parsed template (parent template
+/// loaded by `{% extends %}`, child template, `{% include %}`'d
+/// template, macro/snippet) MUST get a distinct ID prefix; otherwise
+/// the rendered HTML can contain duplicate `<!--dj-if id="if-0"-->`
+/// markers and the differ in Iter 3 cannot key off `id` alone.
+///
+/// The prefix is `if-<8-hex-chars>-` derived from a stable hash of
+/// `source`. Same source → same prefix → IDs are stable across
+/// re-parses. Different sources → different prefix (with extremely
+/// high probability — collision rate is ~1/4 billion).
+pub fn parse_with_source(tokens: &[Token], source: &str) -> Result<Vec<Node>> {
+    parse_internal(tokens, hash_source(source))
+}
+
+fn parse_internal(tokens: &[Token], identity_hash: u64) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
     let mut i = 0;
 
@@ -230,7 +276,121 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<Node>> {
         i += 1;
     }
 
+    // Assign stable per-template marker IDs to every `Node::If` in
+    // document order. IDs are formatted as
+    // `if-<8-hex-chars>-<counter>` where the hex chars are derived
+    // from a hash of the template source (or the token stream when
+    // source is not available). This disambiguates independently-
+    // parsed templates (`{% extends %}`, `{% include %}`) which
+    // would otherwise each emit `if-0`, `if-1`, ... causing
+    // collisions when their rendered HTML is composed in a single
+    // output buffer. IDs are stable across re-renders because
+    // `parse()` is deterministic and the hash is stable for the
+    // same source.
+    //
+    // Foundation 1 of 3 toward issue #1358 (keyed VDOM diff for
+    // conditional subtrees, re-open of #256 Option A). Iter 2
+    // (client patch applier) and Iter 3 (Rust VDOM differ) follow.
+    let prefix = format_id_prefix(identity_hash);
+    let mut counter = 0usize;
+    assign_if_marker_ids(&mut nodes, &prefix, &mut counter);
+
     Ok(nodes)
+}
+
+/// Compute a stable identity hash from a template source string.
+fn hash_source(source: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Compute a stable identity hash from a token stream — fallback
+/// for callers that don't have the source string. Two different
+/// sources that lex to the same tokens will share a prefix; this
+/// is acceptable because the only observable difference would be
+/// whitespace / comment positions, neither of which alters the
+/// emitted `Node::If` structure.
+fn hash_tokens(tokens: &[Token]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for tok in tokens {
+        // Hash a tag/discriminant + payload representation. We use
+        // the Debug repr because Token doesn't impl Hash directly
+        // and we don't want to enforce that constraint just for ID
+        // disambiguation. The Debug repr is stable across runs.
+        format!("{tok:?}").hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Format an identity hash into the per-template prefix used in
+/// `if-<prefix>-<counter>` marker IDs. Truncates to 8 hex chars to
+/// keep IDs short — collision rate at 8 hex chars (32 bits) is
+/// ~1/4 billion which is fine for the boundary-marker disambiguation
+/// use case (a project would need >65k templates before the
+/// birthday-paradox collision probability hits 1%).
+fn format_id_prefix(hash: u64) -> String {
+    // Take the low 32 bits → 8 hex chars.
+    format!("{:08x}", hash as u32)
+}
+
+/// Walk the AST in document order and assign stable
+/// `marker_id = Some("if-<prefix>-N")` to every `Node::If`. The
+/// counter increments once per `If` (including elif chains, nested
+/// ifs, and ifs inside loops/blocks). Idempotent only if called
+/// once per `parse()` — re-running on already-assigned trees would
+/// overwrite IDs. The current call site in `parse_internal()` is
+/// the single source of truth.
+///
+/// The `prefix` is a per-template short hash (e.g. `"a3b1c2d4"`) so
+/// IDs across templates composed via `{% extends %}` / `{% include %}`
+/// don't collide — see `parse_with_source` for the rationale.
+///
+/// Recurses into all Node variants that can hold child nodes:
+/// `If`, `For`, `Block`, `With`, `Spaceless`, and the BlockCustomTag /
+/// ReactComponent children. Variants that can't hold child Nodes
+/// (Text, Variable, Static, etc.) are leaves and don't recurse.
+pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &mut usize) {
+    for node in nodes.iter_mut() {
+        match node {
+            Node::If {
+                marker_id,
+                true_nodes,
+                false_nodes,
+                ..
+            } => {
+                *marker_id = Some(format!("if-{}-{}", prefix, *counter));
+                *counter += 1;
+                assign_if_marker_ids(true_nodes, prefix, counter);
+                assign_if_marker_ids(false_nodes, prefix, counter);
+            }
+            Node::For {
+                nodes: body,
+                empty_nodes,
+                ..
+            } => {
+                assign_if_marker_ids(body, prefix, counter);
+                assign_if_marker_ids(empty_nodes, prefix, counter);
+            }
+            Node::Block { nodes: body, .. } => {
+                assign_if_marker_ids(body, prefix, counter);
+            }
+            Node::With { nodes: body, .. } => {
+                assign_if_marker_ids(body, prefix, counter);
+            }
+            Node::Spaceless { nodes: body, .. } => {
+                assign_if_marker_ids(body, prefix, counter);
+            }
+            Node::BlockCustomTag { children, .. } => {
+                assign_if_marker_ids(children, prefix, counter);
+            }
+            Node::ReactComponent { children, .. } => {
+                assign_if_marker_ids(children, prefix, counter);
+            }
+            // Leaf or non-AST-bearing variants — no recursion needed.
+            _ => {}
+        }
+    }
 }
 
 fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
@@ -291,6 +451,10 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                         true_nodes,
                         false_nodes,
                         in_tag_context,
+                        // Assigned later by `assign_if_marker_ids`
+                        // in `pub fn parse()` after the full AST is
+                        // built, so IDs are stable in document order.
+                        marker_id: None,
                     }))
                 }
 
@@ -726,6 +890,8 @@ fn parse_if_block(
                     true_nodes: elif_true,
                     false_nodes: elif_false,
                     in_tag_context,
+                    // Assigned later by `assign_if_marker_ids`.
+                    marker_id: None,
                 });
                 return Ok((true_nodes, false_nodes, end_pos));
             }
@@ -1425,6 +1591,73 @@ mod tests {
             Node::If { .. } => (),
             _ => panic!("Expected If node"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Tests for the per-template ID-prefix scheme — Stage 11 fix on
+    // PR #1363 (#1358 Iter 1). The boundary-marker IDs must be
+    // `if-<8-hex-chars>-<counter>` and the prefix must derive from
+    // the source (or token-stream fallback) so independently-parsed
+    // templates don't collide.
+    // -----------------------------------------------------------------
+
+    fn marker_id_of(node: &Node) -> Option<String> {
+        match node {
+            Node::If { marker_id, .. } => marker_id.clone(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_parse_with_source_assigns_prefixed_id() {
+        let source = "{% if a %}<div>X</div>{% endif %}";
+        let tokens = tokenize(source).unwrap();
+        let nodes = parse_with_source(&tokens, source).unwrap();
+        let id = marker_id_of(&nodes[0]).expect("if must have marker_id");
+        // Format: `if-<8 hex>-<counter>`
+        let re = regex::Regex::new(r"^if-[0-9a-f]{8}-\d+$").unwrap();
+        assert!(re.is_match(&id), "id should match shape: {id}");
+    }
+
+    #[test]
+    fn test_parse_with_source_distinct_sources_distinct_prefixes() {
+        let s1 = "{% if a %}<div>X</div>{% endif %}";
+        let s2 = "{% if b %}<span>Y</span>{% endif %}";
+        let n1 = parse_with_source(&tokenize(s1).unwrap(), s1).unwrap();
+        let n2 = parse_with_source(&tokenize(s2).unwrap(), s2).unwrap();
+        let id1 = marker_id_of(&n1[0]).unwrap();
+        let id2 = marker_id_of(&n2[0]).unwrap();
+        assert_ne!(id1, id2, "different sources must produce different IDs");
+        // The counter portion is `0` for both — only the prefix differs.
+        assert!(id1.ends_with("-0"));
+        assert!(id2.ends_with("-0"));
+    }
+
+    #[test]
+    fn test_parse_with_source_same_source_same_prefix() {
+        let source = "{% if a %}<div>X</div>{% endif %}{% if b %}<span>Y</span>{% endif %}";
+        let n1 = parse_with_source(&tokenize(source).unwrap(), source).unwrap();
+        let n2 = parse_with_source(&tokenize(source).unwrap(), source).unwrap();
+        assert_eq!(marker_id_of(&n1[0]), marker_id_of(&n2[0]));
+        assert_eq!(marker_id_of(&n1[1]), marker_id_of(&n2[1]));
+    }
+
+    #[test]
+    fn test_parse_legacy_uses_token_hash_prefix() {
+        // The legacy `parse(tokens)` (no source) should still produce
+        // a deterministic prefix from the token stream. Same tokens
+        // → same prefix. Different tokens → almost certainly different
+        // prefix.
+        let tokens_a = tokenize("{% if a %}<div>X</div>{% endif %}").unwrap();
+        let tokens_b = tokenize("{% if b %}<span>Y</span>{% endif %}").unwrap();
+        let na1 = parse(&tokens_a).unwrap();
+        let na2 = parse(&tokens_a).unwrap();
+        let nb = parse(&tokens_b).unwrap();
+        let id_a1 = marker_id_of(&na1[0]).unwrap();
+        let id_a2 = marker_id_of(&na2[0]).unwrap();
+        let id_b = marker_id_of(&nb[0]).unwrap();
+        assert_eq!(id_a1, id_a2);
+        assert_ne!(id_a1, id_b);
     }
 
     #[test]
@@ -2426,6 +2659,7 @@ mod dep_tests {
                 true_nodes: vec![],
                 false_nodes: vec![],
                 in_tag_context: false,
+                marker_id: None,
             },
             Node::For {
                 var_names: vec!["item".into()],
