@@ -185,10 +185,7 @@ Single focused minor cycle: the structural fix for `{% if %}` blocks that has be
   Files: `crates/djust_templates/src/` (parser) + `python/djust/templatetags/` (Django integration). Tests: `crates/djust_templates/src/tests/` + `python/djust/tests/test_template_if_markers.py`.
   Verdict: design contract locks in here. Foundation 2 + Capability depend on the marker shape this iter establishes.
 
-- [ ] **Iter 2 — Foundation 2: client patch applier learns `RemoveSubtree` + `InsertSubtree` patch types.**
-  JS-side: extend the patch dispatcher in `12-vdom-patch.js` (or wherever patch types are handled) to recognize the new types. Server doesn't emit them yet — still ZERO runtime behavior change. Tests inject the new patch types directly and verify the client correctly removes/inserts the subtree by `dj-if` ID.
-  Files: `python/djust/static/djust/src/12-vdom-patch.js` (dispatcher) + new tests in `tests/js/`.
-  Per Action #181 / Action #1113: any test stubbing async-callback shapes must yield a microtask before invoking the callback (mirrors `startViewTransition` pattern).
+- [x] ~~**Iter 2 — Foundation 2: client patch applier learns `RemoveSubtree` + `InsertSubtree` patch types.**~~ ✅ — Closed via PR #1364 (commit da92e637). Shape A chosen: server emits full marker pair (`<!--dj-if id=...-->...<!--/dj-if-->`) inside `InsertSubtree.html`; client inserts the whole fragment at `parent[index]`. `RemoveSubtree(id)` walks via TreeWalker (reusing Iter 1's `isDjIfComment` helper), depth-counts nested markers, removes the bracketed range. Inert HTML parsing via `<template>.innerHTML` (script tags don't execute). 25 new tests in `tests/js/dj_if_subtree_patches.test.js`. Stage 11 APPROVED with 0 🔴 / 0 🟡 (2 non-blocking observations parked for Iter 3: same-parent invariant guard, rootEl-scope optimization).
 
 - [ ] **Iter 3 — Capability: Rust VDOM differ recognizes `dj-if` boundaries; emits subtree-level patches.**
   The actual algorithm change. `crates/djust_vdom/src/diff.rs` (or equivalent) walks both old + new VDOM trees, identifies `dj-if` boundary comments as keyed units, treats inner subtree as opaque. Emits `RemoveSubtree(id)` / `InsertSubtree(id, html)` / standard intra-subtree diff (when both have it + inner content changed). Position-based path tracking inside conditionals is bypassed — the boundary normalizes positions.
