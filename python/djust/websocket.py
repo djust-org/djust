@@ -2466,7 +2466,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             safe_err = "mount failed"
             if getattr(_settings, "DEBUG", False):
                 safe_err = str(exc)[:200]
-            return False, {"target_id": target_id, "view": view_path}, safe_err, None
+            return False, {"target_id": target_id, "view": view_path}, safe_err, None, []
         finally:
             # Only restore if the try-block didn't already restore (else
             # we'd double-restore harmlessly). Idempotent.

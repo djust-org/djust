@@ -421,7 +421,9 @@ def deploy_dir(ctx: click.Context, project_slug: str, source_dir: str) -> None:
                                 click.echo(f"Application available at: {container_url}")
                         return
             except requests.RequestException:
-                pass
+                # Transient network error during status poll; the loop's
+                # next iteration will retry. Logged at debug to avoid noise.
+                logger.debug("status poll failed; retrying", exc_info=True)
 
         click.echo("Deployment timed out waiting for completion.")
 
