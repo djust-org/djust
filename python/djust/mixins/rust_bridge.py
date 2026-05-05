@@ -13,6 +13,28 @@ from ..utils import get_template_dirs
 
 logger = logging.getLogger(__name__)
 
+
+# #1353: Concurrent same-session HTTP renders previously panicked with
+# ``RuntimeError: Already borrowed`` because the in-memory state backend
+# returned the SAME Python object on cache hits, so two threads both
+# called ``&mut self`` Rust methods (``update_state``, ``render``,
+# ``set_template_dirs``, etc.) on the shared ``RustLiveView`` and
+# collided inside Rust's ``RefCell::borrow_mut``. The race window
+# spanned more than the ``_sync_state_to_rust`` mutation calls:
+# ``render()`` itself holds ``&mut self`` across template evaluation
+# that yields the GIL via ``Context::resolve_dotted_via_getattr``
+# (``crates/djust_core/src/context.rs``), so a peer thread entering any
+# ``&mut self`` method during that window panicked.
+#
+# Resolution: ``InMemoryStateBackend.get()`` now returns an isolated
+# clone of the cached view (``serialize_msgpack`` →
+# ``deserialize_msgpack``) — mirroring how ``RedisStateBackend.get``
+# already behaves. With each caller holding its own ``RustLiveView``
+# instance, no two threads can share a Rust ``&mut self`` borrow and
+# the race class is eliminated at the source. No Python-side lock is
+# needed anymore.
+
+
 # Keys excluded from set_changed_keys — these are framework-internal values
 # that change id() every render but don't affect template output.
 _FRAMEWORK_KEYS = frozenset(
@@ -636,16 +658,16 @@ class RustBridgeMixin:
             else:
                 json_compatible_context = rendered_context
 
-            self._rust_view.update_state(json_compatible_context)
-            if safe_keys:
-                self._rust_view.mark_safe_keys(safe_keys)
+            # No Python-side lock needed (#1353): each HTTP/WebSocket
+            # caller now holds its own ``RustLiveView`` instance because
+            # ``InMemoryStateBackend.get`` returns a fresh
+            # ``serialize_msgpack`` / ``deserialize_msgpack`` clone on
+            # cache hits, mirroring the ``RedisStateBackend`` contract.
+            # See the module-level docstring above for context.
 
-            # Build a sidecar of raw Python objects (e.g. Django model
-            # instances) so the Rust template engine can fall back to
-            # `getattr` for attributes that are not in the JSON-
-            # serialized state. Only send values that are genuinely
-            # non-JSON-friendly — primitives, dicts, lists, Components
-            # and Forms are already handled via normalize_django_value.
+            # Build the sidecar of raw Python objects — reads
+            # ``full_context`` only, never touches Rust state.
+            sidecar = None
             if hasattr(self._rust_view, "set_raw_py_values"):
                 _JSON_FRIENDLY = (
                     int,
@@ -671,15 +693,6 @@ class RustBridgeMixin:
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
-                # Always call (even when empty) so stale objects from
-                # a previous render are cleared.
-                try:
-                    self._rust_view.set_raw_py_values(sidecar)
-                except Exception:
-                    logging.getLogger("djust.rust_bridge").warning(
-                        "set_raw_py_values failed; template getattr fallback disabled this cycle",
-                        exc_info=True,
-                    )
 
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a
@@ -696,15 +709,33 @@ class RustBridgeMixin:
                     _auto_count_keys.add(f"{k}_count")
             _skip_keys |= _auto_count_keys
 
-            # Tell Rust which keys changed so the partial renderer knows
-            # which nodes to re-render. When _force_full_html cleared
-            # prev_refs, context == full_context, so we must still call
-            # set_changed_keys or Rust won't do a partial render (#783).
+            # When _force_full_html cleared prev_refs, context == full_context,
+            # so we must still call set_changed_keys or Rust won't do a
+            # partial render (#783).
             force_full = getattr(self, "_force_full_html", False)
+            user_changed: Optional[List[str]] = None
             if context and (prev_refs or force_full):
-                user_changed = [k for k in context if k not in _skip_keys]
-                if user_changed:
-                    self._rust_view.set_changed_keys(user_changed)
+                _candidate = [k for k in context if k not in _skip_keys]
+                if _candidate:
+                    user_changed = _candidate
+
+            self._rust_view.update_state(json_compatible_context)
+            if safe_keys:
+                self._rust_view.mark_safe_keys(safe_keys)
+
+            # Always call set_raw_py_values (even when empty) so stale
+            # objects from a previous render are cleared.
+            if sidecar is not None:
+                try:
+                    self._rust_view.set_raw_py_values(sidecar)
+                except Exception:
+                    logging.getLogger("djust.rust_bridge").warning(
+                        "set_raw_py_values failed; template getattr fallback disabled this cycle",
+                        exc_info=True,
+                    )
+
+            if user_changed is not None:
+                self._rust_view.set_changed_keys(user_changed)
 
             # Mark static assigns as sent — subsequent syncs will skip them
             if getattr(self, "static_assigns", None) and not getattr(

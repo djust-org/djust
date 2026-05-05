@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **In-memory state backend no longer panics on concurrent same-session
+  HTTP renders (#1353).** When two HTTP requests for the same
+  ``(session, view_path)`` pair shared a cached ``RustLiveView`` (the
+  in-memory backend returned the same Python reference on cache hits),
+  concurrent ``&mut self`` Rust methods on the shared view would
+  collide inside Rust's ``RefCell::borrow_mut`` and surface as
+  ``RuntimeError: Already borrowed`` (NYC Claims observed 17.5%
+  500-rate at concurrency 2). The race spanned more than the
+  ``_sync_state_to_rust`` mutation calls — ``render()`` itself holds
+  ``&mut self`` across template evaluation, and
+  ``Context::resolve_dotted_via_getattr``
+  (``crates/djust_core/src/context.rs``) wraps ``Python::with_gil`` so
+  the embedded ``getattr`` can yield the GIL inside an active mutable
+  borrow. Any peer thread entering an ``&mut self`` method during that
+  window panicked. Fixed by switching ``InMemoryStateBackend.get()`` to
+  return an isolated ``serialize_msgpack`` / ``deserialize_msgpack``
+  clone of the cached view (option 2 of three suggested in the issue
+  body), mirroring the ``RedisStateBackend`` contract — which already
+  deserialized fresh on every read. With each caller holding its own
+  ``RustLiveView`` instance, no two threads can share a Rust ``&mut
+  self`` borrow and the race class is eliminated at the source. No
+  Python-side lock is needed. New regression cases in
+  ``TestInMemoryGetReturnsIsolatedView`` (4 cases — clone identity,
+  state preservation, mutation isolation, concurrent get) and
+  ``TestConcurrentRenderNoBorrowError`` (2 cases — concurrent render
+  with GIL-yielding sidecar, concurrent update_state) in
+  ``python/tests/test_rust_bridge_concurrent.py``.
+
+- **State backend honours top-level ``DJUST_STATE_BACKEND`` /
+  ``DJUST_REDIS_URL`` settings (#1354).** Previously
+  ``BackendRegistry`` only consulted ``DJUST_CONFIG["STATE_BACKEND"]``,
+  so projects configuring via top-level Django settings (e.g.
+  ``DJUST_STATE_BACKEND = "redis://localhost:6379/0"``) were silently
+  downgraded to in-memory with no warning. Now the registry layers
+  top-level aliases on top of ``DJUST_CONFIG`` (``DJUST_CONFIG`` still
+  wins when both are set — backwards-compatible). URL-shaped values
+  (``redis://``, ``rediss://``, ``redis+sentinel://``) are
+  auto-translated to ``backend_type="redis"`` plus ``REDIS_URL=<url>``;
+  the prefix list lives in ``BackendRegistry._REDIS_URL_PREFIXES``.
+  When ``DEBUG=False`` and the resolved backend is the default
+  (in-memory), ``djust.utils.BackendRegistry.get`` now emits a
+  ``logger.warning`` flagging the production misconfig — multi-process
+  deployments lose state across replicas. ``unix://`` URLs are left as
+  a TODO follow-up because the underlying ``redis-py`` client takes
+  Unix sockets via a different parameter name. New regression cases in
+  ``TestTopLevelStateBackendSetting`` (6 cases) and
+  ``TestDjustConfigRegression`` (3 cases) in
+  ``python/tests/test_state_backend_config.py``.
+
 ## [0.9.3rc2] - 2026-05-04
 
 ### Changed
