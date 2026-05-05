@@ -269,6 +269,42 @@ class RustBridgeMixin:
         _ensure_custom_filters_bridged()
 
         if self._rust_view is None:
+            # Resolve the template source ONCE so we can:
+            #   1) derive the per-template 8-hex hash for the cache key
+            #      (#1362 section 1) — operators no longer need to set
+            #      ``REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"`` to avoid
+            #      stale state acting as a diff baseline post-deploy;
+            #      the framework now invalidates the cache automatically
+            #      whenever the primary template's bytes change.
+            #   2) hand the same source to ``RustLiveView(...)`` later
+            #      below without re-loading + re-resolving inheritance.
+            #
+            # Multi-template caveat: the cache key uses the PRIMARY
+            # template's source hash. Sub-template changes via
+            # ``{% include %}`` / ``{% extends %}`` parents that don't
+            # alter the primary's source bytes won't invalidate by
+            # themselves. In practice the primary nearly always shifts
+            # when included templates change downstream (block content
+            # moves, include filenames change, etc.), so this is
+            # acceptable for v0.9.4-2; if a deploy ever ships a pure
+            # sub-template-only edit, operators can clear the backend
+            # explicitly via ``djust clear --all``.
+            template_source = self.get_template()
+            try:
+                from .._rust import compute_template_hash
+
+                template_hash_slot = f"_t{compute_template_hash(template_source)}"
+            except Exception:
+                # Defensive: if the Rust extension is unavailable for
+                # any reason, fall back to the legacy un-hashed key
+                # shape rather than raising. Cache invalidation falls
+                # back to TTL — same behavior as v0.9.4-1 and earlier.
+                logger.exception(
+                    "[LiveView] compute_template_hash failed; cache key will not "
+                    "include template hash slot (fallback to TTL-based invalidation)"
+                )
+                template_hash_slot = ""
+
             # Try to get from cache if we have a session
             if hasattr(self, "_websocket_session_id") and self._websocket_session_id:
                 ws_path = getattr(self, "_websocket_path", "/")
@@ -301,7 +337,7 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                self._cache_key = f"{session_key}_{view_key}"
+                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
                 # codeql[py/log-injection] — cache_key may contain request.path; sanitize
                 logger.debug(
                     "[LiveView] Cache lookup (WebSocket): cache_key=%s",
@@ -332,7 +368,7 @@ class RustBridgeMixin:
                 from ..state_backend import get_backend
 
                 backend = get_backend()
-                self._cache_key = f"{session_key}_{view_key}"
+                self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
                 logger.debug("[LiveView] Cache lookup (HTTP): cache_key=%s", self._cache_key)
 
                 cached = backend.get(self._cache_key)
@@ -346,8 +382,6 @@ class RustBridgeMixin:
                     return
                 else:
                     logger.debug("[LiveView] Cache MISS! Will create new RustLiveView")
-
-            template_source = self.get_template()
 
             # codeql[py/log-injection] — cache_key may contain request.path; sanitize
             logger.debug(

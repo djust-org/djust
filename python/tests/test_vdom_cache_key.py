@@ -78,7 +78,15 @@ def add_session_to_request(request):
 @pytest.mark.django_db
 def test_cache_key_includes_class_name_and_path():
     """
-    Test that the cache key includes both class name and path.
+    Test that the cache key includes both path and the per-template
+    8-hex hash slot (#1362 section 1).
+
+    Cache key shape (post-#1362):
+        ``<session>_liveview_<path>[_<query_hash>]_t<template_8hex>``
+
+    The trailing ``_t<8hex>`` slot is what guarantees cache invalidation
+    when any deploy ships new template bytes; see CHANGELOG and
+    ``docs/website/guides/deployment.md`` (#1362 iter 2) for context.
     """
     factory = RequestFactory()
 
@@ -100,9 +108,14 @@ def test_cache_key_includes_class_name_and_path():
 
     # Cache key should include path (aligned with HTTP format for cache sharing)
     assert "/emails/" in cache_key, f"Cache key should include path: {cache_key}"
-    assert (
-        cache_key == "test-session-123_liveview_/emails/"
-    ), f"Unexpected cache key format: {cache_key}"
+    # New per-template slot from #1362 — exactly 8 lowercase hex chars
+    # following an underscore-t prefix immediately after the path or
+    # query-hash.
+    import re
+
+    assert re.match(r"^test-session-123_liveview_/emails/_t[0-9a-f]{8}$", cache_key), (
+        f"Unexpected cache key format: {cache_key}"
+    )
 
 
 @pytest.mark.django_db
@@ -152,12 +165,12 @@ def test_cache_key_differs_for_different_query_params():
     cache_key3 = view3._cache_key
 
     # All three should have different cache keys
-    assert (
-        cache_key1 != cache_key2
-    ), f"Grouped and flat views should have different cache keys: {cache_key1} vs {cache_key2}"
-    assert (
-        cache_key2 != cache_key3
-    ), f"Different sender filters should have different cache keys: {cache_key2} vs {cache_key3}"
+    assert cache_key1 != cache_key2, (
+        f"Grouped and flat views should have different cache keys: {cache_key1} vs {cache_key2}"
+    )
+    assert cache_key2 != cache_key3, (
+        f"Different sender filters should have different cache keys: {cache_key2} vs {cache_key3}"
+    )
 
 
 @pytest.mark.django_db
@@ -194,9 +207,9 @@ def test_cache_key_query_param_order_independent():
     cache_key2 = view2._cache_key
 
     # Same params in different order should produce same cache key
-    assert (
-        cache_key1 == cache_key2
-    ), f"Query param order should not affect cache key: {cache_key1} vs {cache_key2}"
+    assert cache_key1 == cache_key2, (
+        f"Query param order should not affect cache key: {cache_key1} vs {cache_key2}"
+    )
 
 
 @pytest.mark.django_db
