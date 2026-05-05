@@ -145,10 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (Shape A) via inert `<template>.innerHTML` and inserts at the
     parent / index resolved via the same path/d resolution other
     child-targeting patches use.
-  - **Both have boundary id=Z** → recurse into the inner body element-
-    by-element (markers themselves are static comments — text matches
-    by construction). Standard intra-subtree diff fires for the inner
-    content (SetText, SetAttr, InsertChild, etc.); NO subtree-replace.
+  - **Both have boundary id=Z** → recurse into the inner body via
+    `dj_if_pre_pass_inner`. The recursion handles arbitrary nesting
+    cleanly, including `{% if %}/{% elif %}/{% else %}` cascades where
+    the outer marker is matched in both OLD and NEW but the body
+    introduces (or removes) an inner boundary marker. Standard intra-
+    subtree diff fires for the inner content (SetText, SetAttr, etc.)
+    only when the body has NO nested boundaries.
 
   Position-based path tracking is BYPASSED within boundaries: the id
   normalizes positions, so adding or removing a boundary no longer
@@ -161,6 +164,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   #1358's body) no longer reproduces. The recovery-HTML / page-reload
   fallback path is no longer triggered by `{% if %}` flips.
 
+  **Recursive pre-pass for `{% if %}/{% elif %}/{% else %}` cascades
+  (Stage 11 finding on PR #1365 — capability iter).** The first
+  iteration of this fix iterated matched-id body children element-
+  by-element via `diff_nodes`, treating any nested boundary markers
+  as ordinary VNodes. That produced overlapping patches when a
+  cascade introduced or removed nested boundaries:
+  - Top-level step 2 emitted `InsertSubtree(B)` correctly.
+  - Top-level step 3 ALSO emitted `Replace` + `InsertChild` patches
+    for the same content (because element-by-element pairing saw B's
+    markers as ordinary comment nodes and B's content as new sibling).
+  - Both applied = corrupt DOM with duplicated content and mismatched
+    markers.
+
+  The recursive pre-pass closes this gap: when matched-id A's body
+  has nested boundaries, `dj_if_pre_pass_inner` recursively runs on
+  the body slice. Each recursion level handles only its OWN top-level
+  pairs (via the new `find_top_level_dj_if_pairs` helper), so nested
+  pairs are discovered at the recursion level that descends into
+  their containing boundary. No more overlap; no more duplicate
+  patches; arbitrary nesting (3+ levels) handled coherently.
+
   **Backwards-compatible:** Apps using the `d-none` workaround
   documented in CLAUDE.md and downstream repos continue to work
   identically — the workaround sidesteps `{% if %}` entirely. Apps
@@ -171,14 +195,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contains an id-bearing boundary marker.
 
   **Implementation in `crates/djust_vdom/src/diff.rs`:**
-  - New helpers: `dj_if_open_id`, `is_dj_if_close`, `find_dj_if_pairs`
-    (depth-counter for nested boundaries), `render_dj_if_boundary_html`
-    (serializes boundary slice for `InsertSubtree.html`),
-    `build_excluded_mask`.
-  - New `dj_if_pre_pass` runs at `diff_children` entry; returns
-    `Some(patches)` when boundaries are present (caller short-circuits
-    its keyed/indexed diff), `None` otherwise (caller proceeds
-    unchanged).
+  - New helpers: `dj_if_open_id`, `is_dj_if_close`,
+    `find_top_level_dj_if_pairs` (depth-counter that returns ONLY
+    outermost pairs at the current slice level — nested pairs are
+    discovered when the recursion descends),
+    `render_dj_if_boundary_html` (serializes boundary slice for
+    `InsertSubtree.html`), `build_excluded_mask`.
+  - New `dj_if_pre_pass` runs at `diff_children` entry; delegates to
+    `dj_if_pre_pass_inner` which carries old/new offsets so absolute
+    parent-children indices propagate correctly across recursion
+    levels (DOM parent stays the same — markers don't create
+    container elements).
+  - Returns `Some(patches)` when boundaries are present (caller
+    short-circuits its keyed/indexed diff), `None` otherwise (caller
+    proceeds unchanged or, in the recursive case, falls back to
+    element-by-element pairing of the body slice).
   - Predicates mirror parser-side at
     `crates/djust_vdom/src/parser.rs:494-499` and JS-side at
     `python/djust/static/djust/src/12-vdom-patch.js:38-43`.
@@ -201,23 +232,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LIS within boundary bodies; relaxing `d-none` workaround
   documentation in CLAUDE.md / downstream repos.
 
-  Regression suite: 14 new cases in
-  `crates/djust_vdom/tests/test_dj_if_keyed_diff_1358.rs` covering
-  the #1358 reproducer (tab-switch with different conditional
-  branches), conditional flip-off, conditional flip-on, same-id inner
-  text change (recurses, NOT subtree replace), same-id identical inner
-  (0 patches), nested boundaries (inner flip leaves outer alone),
-  sibling-shift regression (the original failure mode), empty boundary
-  same id (0 patches), empty boundary different ids (Remove + Insert),
-  JSON wire-format checks for `RemoveSubtree` / `InsertSubtree` /
-  `d` omission when None, backward compat with legacy bare `<!--dj-if-->`
-  placeholder, and end-to-end via `parse_html` (proves parser-side and
-  differ-side predicates agree). All 219 djust_vdom tests pass (14 new +
-  205 existing). All 4723 Python tests pass. All 1559 JS tests pass.
+  Regression suite: 19 cases in
+  `crates/djust_vdom/tests/test_dj_if_keyed_diff_1358.rs` covering:
+  two separate `{% if %}` blocks flipping (the renamed Case 1),
+  conditional flip-off, conditional flip-on, same-id inner text
+  change (recurses, NOT subtree replace), same-id identical inner
+  (0 patches), nested boundaries inside DOM elements (inner flip
+  leaves outer alone), sibling-shift regression with DIFFERENT
+  boundary span lengths (3 vs 1 inner children — exercises the
+  position-cascade class explicitly), empty boundary same id
+  (0 patches), empty boundary different ids (Remove + Insert),
+  JSON wire-format shape comparisons via `serde_json::Value` for
+  `RemoveSubtree` / `InsertSubtree` / `d` omission when None
+  (tightened from substring `contains` per Stage 11 finding),
+  backward compat with legacy bare `<!--dj-if-->` placeholder,
+  end-to-end via `parse_html` (proves parser-side and differ-side
+  predicates agree), and 5 NEW elif-cascade cases (Stage 11
+  finding on this PR): A → elif-B flip (cascade introduces nested
+  marker), elif-B → A flip (cascade collapses nested marker —
+  symmetric direction, SHOULD-FIX #4), A → else with double-nested
+  matched ids (no subtree-flip patches when both outer+inner ids
+  match), cascade with extra static siblings (footer SetText path
+  must use NEW tree's absolute index, not OLD's), 3-level cascade
+  (A → B → C nesting introduced atomically — proves recursive
+  pre-pass handles arbitrary depth).
+
+  All 19 dj-if keyed-diff tests pass. All Rust tests pass. All
+  Python tests pass. All 1559 JS tests pass.
 
   Closes the capability half of v0.9.4-1 milestone (Iter 3 of 3).
   Foundation 1: PR #1363 (template markers). Foundation 2: PR #1364
-  (client patch types).
+  (client patch types). Stage 11 must-fix and should-fix findings
+  from this PR's review addressed in commit on this same PR.
 
 ### Changed
 
