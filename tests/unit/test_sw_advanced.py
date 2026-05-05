@@ -433,6 +433,37 @@ class TestMountBatch:
         assert len(batch_frames[0]["views"]) == 1
         assert batch_frames[0]["views"][0]["target_id"] == "only"
 
+    def test_mount_one_returns_5_tuple_on_unhandled_exception(self):
+        """#1343 (CodeQL py/mixed-tuple-returns at websocket.py:2400):
+        ``_mount_one`` previously returned a 4-tuple in the
+        ``except Exception`` branch but a 5-tuple on every other path.
+        The caller in ``handle_mount_batch`` unpacks 5 values; the
+        mismatch raised ``ValueError: not enough values to unpack``,
+        which masked the per-view error in the batch ``failed[]``
+        plumbing. All return paths must now yield a 5-tuple
+        ``(ok, payload, err, nav, push_events)``.
+        """
+        consumer = _make_fake_consumer()
+        result = asyncio.run(
+            consumer._mount_one(
+                {
+                    "target_id": "regress",
+                    "view": "tests.unit.test_sw_advanced._DoesNotExist",
+                    "params": {},
+                    "url": "/",
+                }
+            )
+        )
+        assert len(result) == 5, (
+            "_mount_one must return a 5-tuple on every path; got %d-tuple" % len(result)
+        )
+        ok, payload, err, nav, push_events = result
+        assert ok is False
+        assert payload["target_id"] == "regress"
+        assert err is not None
+        assert nav is None
+        assert push_events == []
+
     def test_mount_batch_failure_isolated_in_failed_array(self):
         """One invalid view_path → failed[] entry, others succeed."""
         consumer = _make_fake_consumer()

@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`_mount_one` now returns a consistent 5-tuple from every path (#1343).**
+  The `except Exception` branch in `LiveViewConsumer._mount_one`
+  (`websocket.py:2469`) returned a 4-tuple while every other path
+  returned a 5-tuple `(ok, payload, err, nav, push_events)`. The single
+  caller in `handle_mount_batch` unpacks 5 values; the mismatch raised
+  `ValueError: not enough values to unpack`, masking the per-view error
+  in the batch `failed[]` plumbing. Surfaced by CodeQL `py/mixed-tuple-returns`
+  alert. Returns `[]` for `push_events` from the exception path. 1 regression
+  test in `test_sw_advanced.py::TestMountBatch::test_mount_one_returns_5_tuple_on_unhandled_exception`.
+
+- **`deploy_cli.py` no longer has a bare `except: pass` for transient
+  status-poll errors (#1343).** Surfaced by CodeQL `py/empty-except` alert.
+  Replaced with `logger.debug("status poll failed; retrying", exc_info=True)`
+  + an explanatory comment. CLAUDE.md security rule #5 forbids bare
+  `except: pass` framework-wide.
+
 - **`python/djust/tests/` now included in `make test-python` + `check-test-coverage` target (#1339).**
   The Makefile's test targets used explicit pytest paths (`tests/ python/tests/`)
   which override pyproject.toml's testpaths, silently excluding `python/djust/tests/`
