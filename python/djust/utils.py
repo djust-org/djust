@@ -73,6 +73,15 @@ class BackendRegistry:
         factory: A callable ``(backend_type: str, config: dict) -> backend``
             responsible for instantiating the concrete backend.
         name: Human-readable name for log messages (e.g. ``"state"``).
+        top_level_aliases: Mapping of top-level Django setting names
+            (e.g. ``"DJUST_STATE_BACKEND"``) to the ``DJUST_CONFIG`` key
+            they alias (e.g. ``"STATE_BACKEND"``). When the
+            ``DJUST_CONFIG`` key is absent and the top-level setting is
+            present, the top-level value is merged into the config dict
+            before the factory runs (#1354). URL-shaped values for the
+            primary ``config_key`` (``redis://``, ``rediss://``) are
+            translated to ``backend_type="redis"`` and the URL is also
+            stored under the ``REDIS_URL`` config key.
     """
 
     def __init__(
@@ -81,12 +90,53 @@ class BackendRegistry:
         default_type: str,
         factory: Callable[[str, dict], Any],
         name: str = "backend",
+        top_level_aliases: Optional[dict] = None,
     ):
         self._config_key = config_key
         self._default_type = default_type
         self._factory = factory
         self._name = name
+        self._top_level_aliases = top_level_aliases or {}
         self._backend: Optional[Any] = None
+
+    def _merge_top_level_aliases(self, cfg: dict) -> dict:
+        """Layer top-level Django settings on top of the cfg dict (#1354).
+
+        Top-level settings only fill in keys that are NOT already in
+        ``DJUST_CONFIG`` — backwards-compatible. URL-shaped values for the
+        primary ``config_key`` are split into ``(backend_type="redis",
+        REDIS_URL=<url>)``.
+        """
+        if not self._top_level_aliases:
+            return cfg
+
+        try:
+            from django.conf import settings
+        except Exception:
+            return cfg
+
+        # Copy so we don't mutate the dict returned by get_djust_config.
+        merged = dict(cfg)
+        for setting_name, config_key in self._top_level_aliases.items():
+            if config_key in merged:
+                continue  # DJUST_CONFIG wins
+            if not hasattr(settings, setting_name):
+                continue
+            value = getattr(settings, setting_name)
+            if value is None:
+                continue
+            # URL-shaped value for the primary backend-selector key:
+            # translate to (type="redis", REDIS_URL=<value>).
+            if (
+                config_key == self._config_key
+                and isinstance(value, str)
+                and (value.startswith("redis://") or value.startswith("rediss://"))
+            ):
+                merged[self._config_key] = "redis"
+                merged.setdefault("REDIS_URL", value)
+            else:
+                merged[config_key] = value
+        return merged
 
     def get(self) -> Any:
         """Return the cached backend, creating it on first call."""
@@ -96,7 +146,33 @@ class BackendRegistry:
         from .config import get_djust_config
 
         cfg = get_djust_config()
+        cfg = self._merge_top_level_aliases(cfg)
         backend_type = cfg.get(self._config_key, self._default_type)
+
+        # Warn when production deploy silently falls back to the default
+        # (typically in-memory) — common misconfig surfaced by #1354 where
+        # NYC Claims set ``DJUST_STATE_BACKEND`` as a top-level setting but
+        # the registry only honoured ``DJUST_CONFIG["STATE_BACKEND"]``,
+        # silently downgrading to in-memory in production. Now both forms
+        # are honoured (above), but if neither is set we still want a
+        # production-mode warning.
+        try:
+            from django.conf import settings as _dj_settings
+
+            _debug = getattr(_dj_settings, "DEBUG", True)
+        except Exception:
+            _debug = True
+        if not _debug and backend_type == self._default_type:
+            logger.warning(
+                "Falling back to in-memory %s backend in production "
+                "(DEBUG=False) — multi-process deployments will lose %s "
+                "across replicas. Set DJUST_CONFIG[%r] or top-level "
+                "settings.DJUST_%s to configure a shared backend.",
+                self._name,
+                self._name,
+                self._config_key,
+                self._config_key,
+            )
 
         self._backend = self._factory(backend_type, cfg)
         logger.info("Initialized %s backend: %s", self._name, backend_type)

@@ -4,6 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
+import threading
 from typing import Any, List, Optional, Set
 from urllib.parse import parse_qs, urlencode
 
@@ -12,6 +13,45 @@ from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
 
 logger = logging.getLogger(__name__)
+
+
+# Per-RustLiveView mutation locks (#1353). The in-memory state backend
+# returns the same Python object reference on cache hits, so two
+# concurrent HTTP renders for the same (session, view_path) pair both
+# land on the same ``RustLiveView`` and race inside Rust's ``RefCell::
+# borrow_mut`` — surfacing as ``RuntimeError: Already borrowed``. Wrapping
+# the ``update_state`` / ``mark_safe_keys`` / ``set_raw_py_values`` /
+# ``set_changed_keys`` window in a Python ``threading.Lock`` serializes
+# the unsafe window without changing the cache contract.
+#
+# Implementation note: ``RustLiveView`` is a Rust-extension type that
+# rejects ``setattr`` and weak references, so we can't attach the lock
+# to the view directly. We key the lock dict by ``id(rust_view)`` —
+# stable for the lifetime of the cached object, and the same id for both
+# colliding threads (cache hit returns the same ref). ``id()`` reuse
+# after GC is harmless: two unrelated views temporarily sharing a lock
+# is just an irrelevant tiny serialization, never a correctness bug.
+# Memory: ~56 bytes per cached view, bounded by backend cache size.
+_RUST_VIEW_LOCKS: "dict[int, threading.Lock]" = {}
+_RUST_VIEW_LOCKS_GUARD = threading.Lock()
+
+
+def _get_rust_view_lock(rust_view) -> threading.Lock:
+    """Return (creating if needed) the per-``RustLiveView`` mutation lock.
+
+    Used to serialize concurrent ``_sync_state_to_rust`` calls against a
+    shared cached ``RustLiveView`` (#1353). The dict guard is held only
+    long enough to read/insert the lock entry; the per-view lock itself
+    is acquired separately by callers.
+    """
+    rid = id(rust_view)
+    with _RUST_VIEW_LOCKS_GUARD:
+        lock = _RUST_VIEW_LOCKS.get(rid)
+        if lock is None:
+            lock = threading.Lock()
+            _RUST_VIEW_LOCKS[rid] = lock
+    return lock
+
 
 # Keys excluded from set_changed_keys — these are framework-internal values
 # that change id() every render but don't affect template output.
@@ -636,16 +676,18 @@ class RustBridgeMixin:
             else:
                 json_compatible_context = rendered_context
 
-            self._rust_view.update_state(json_compatible_context)
-            if safe_keys:
-                self._rust_view.mark_safe_keys(safe_keys)
+            # Serialize the Rust mutation window (#1353). Concurrent HTTP
+            # renders that share a cached ``RustLiveView`` (in-memory backend
+            # returns the same Python ref) would otherwise race inside
+            # ``RefCell::borrow_mut`` and raise ``RuntimeError: Already
+            # borrowed``. The lock is per-``RustLiveView`` and held only
+            # around the ``borrow_mut`` calls below — never around context
+            # computation, normalization, or template rendering.
+            _rust_lock = _get_rust_view_lock(self._rust_view)
 
-            # Build a sidecar of raw Python objects (e.g. Django model
-            # instances) so the Rust template engine can fall back to
-            # `getattr` for attributes that are not in the JSON-
-            # serialized state. Only send values that are genuinely
-            # non-JSON-friendly — primitives, dicts, lists, Components
-            # and Forms are already handled via normalize_django_value.
+            # Build the sidecar OUTSIDE the lock — it only reads
+            # ``full_context``, never touches Rust state.
+            sidecar = None
             if hasattr(self._rust_view, "set_raw_py_values"):
                 _JSON_FRIENDLY = (
                     int,
@@ -671,15 +713,6 @@ class RustBridgeMixin:
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
-                # Always call (even when empty) so stale objects from
-                # a previous render are cleared.
-                try:
-                    self._rust_view.set_raw_py_values(sidecar)
-                except Exception:
-                    logging.getLogger("djust.rust_bridge").warning(
-                        "set_raw_py_values failed; template getattr fallback disabled this cycle",
-                        exc_info=True,
-                    )
 
             # Tell Rust which context keys changed for partial rendering.
             # Only call when there are actual changes — avoids overriding a
@@ -696,14 +729,33 @@ class RustBridgeMixin:
                     _auto_count_keys.add(f"{k}_count")
             _skip_keys |= _auto_count_keys
 
-            # Tell Rust which keys changed so the partial renderer knows
-            # which nodes to re-render. When _force_full_html cleared
-            # prev_refs, context == full_context, so we must still call
-            # set_changed_keys or Rust won't do a partial render (#783).
+            # When _force_full_html cleared prev_refs, context == full_context,
+            # so we must still call set_changed_keys or Rust won't do a
+            # partial render (#783).
             force_full = getattr(self, "_force_full_html", False)
+            user_changed: Optional[List[str]] = None
             if context and (prev_refs or force_full):
-                user_changed = [k for k in context if k not in _skip_keys]
-                if user_changed:
+                _candidate = [k for k in context if k not in _skip_keys]
+                if _candidate:
+                    user_changed = _candidate
+
+            with _rust_lock:
+                self._rust_view.update_state(json_compatible_context)
+                if safe_keys:
+                    self._rust_view.mark_safe_keys(safe_keys)
+
+                # Always call set_raw_py_values (even when empty) so stale
+                # objects from a previous render are cleared.
+                if sidecar is not None:
+                    try:
+                        self._rust_view.set_raw_py_values(sidecar)
+                    except Exception:
+                        logging.getLogger("djust.rust_bridge").warning(
+                            "set_raw_py_values failed; template getattr fallback disabled this cycle",
+                            exc_info=True,
+                        )
+
+                if user_changed is not None:
                     self._rust_view.set_changed_keys(user_changed)
 
             # Mark static assigns as sent — subsequent syncs will skip them
