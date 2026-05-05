@@ -49,7 +49,7 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = [
-    "redis>=5.0.0,<7",
+    "redis>=5.0.0,<8",
 ]
 compression = [
     "zstandard>=0.22.0,<1",  # zstd compression for state backend
@@ -65,7 +65,7 @@ performance = [
 auth = []  # No extra deps beyond djust core
 tenants = []  # No extra deps beyond djust core; use [tenants-redis] / [tenants-postgres] for backend-specific
 tenants-redis = [
-    "redis>=5.0.0,<7",
+    "redis>=5.0.0,<8",
 ]
 tenants-postgres = [
     "psycopg[binary]>=3.1,<4",
@@ -106,7 +106,7 @@ dev = [
     "ruff>=0.1,<1",
     "mypy>=1.0,<2",
     "uvicorn[standard]>=0.30.0,<1",
-    "redis>=5.0.0,<7",
+    "redis>=5.0.0,<8",
     "watchdog>=3.0.0,<7",  # File system monitoring for hot reload
     "zstandard>=0.22.0,<1",  # Compression support
     "orjson>=3.11.6,<4",
