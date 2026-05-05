@@ -62,7 +62,7 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         if: steps.filter.outputs.run == 'true'
 
       - name: Set up Python
