@@ -86,16 +86,29 @@ fn is_dj_if_close(node: &VNode) -> bool {
         .unwrap_or(false)
 }
 
-/// Find all dj-if boundary pairs in a sibling list.
+/// Find TOP-LEVEL (depth-0) dj-if boundary pairs in a sibling list.
 ///
-/// Returns a vector of `(open_idx, close_idx, id)` tuples in document order.
-/// Uses a depth counter so nested boundaries are paired correctly:
-/// `[open_A, open_B, close_B, close_A]` → `[(0, 3, "A"), (1, 2, "B")]`.
+/// Returns a vector of `(open_idx, close_idx, id)` tuples in document order
+/// — but ONLY the OUTERMOST pairs (depth 0). Nested pairs are intentionally
+/// excluded; they are handled by the recursive pre-pass when it descends
+/// into a matched-id boundary's body.
+///
+/// Example: `[open_A, open_B, close_B, close_A]` → `[(0, 3, "A")]` (B is
+/// nested inside A and is NOT returned at this level — it will be discovered
+/// when the recursive pre-pass descends into A's body slice).
 ///
 /// Unbalanced markers (open without matching close, close without preceding
 /// open) are returned as the empty vector — the caller should fall through
 /// to the existing diff in that case (defensive against malformed input).
-fn find_dj_if_pairs(children: &[VNode]) -> Vec<(usize, usize, String)> {
+///
+/// This function replaces the original `find_dj_if_pairs` (which returned
+/// nested pairs too). The change is the foundation of the recursive pre-pass
+/// for the elif-cascade fix: each recursion level handles only its OWN
+/// top-level pairs, eliminating the duplicate-patch / overlap-patch class
+/// of bugs that surfaced when boundaries nested (Stage 11 finding on PR
+/// #1365 — "if/elif/else cascade emits overlapping Replace +
+/// InsertSubtree patches that produce corrupt DOM").
+fn find_top_level_dj_if_pairs(children: &[VNode]) -> Vec<(usize, usize, String)> {
     let mut pairs: Vec<(usize, usize, String)> = Vec::new();
     // Stack of (open_idx, id) for unmatched open markers seen so far.
     let mut stack: Vec<(usize, String)> = Vec::new();
@@ -104,7 +117,13 @@ fn find_dj_if_pairs(children: &[VNode]) -> Vec<(usize, usize, String)> {
             stack.push((i, id));
         } else if is_dj_if_close(child) {
             if let Some((open_idx, id)) = stack.pop() {
-                pairs.push((open_idx, i, id));
+                if stack.is_empty() {
+                    // Top-level pair: closing brought depth back to 0.
+                    pairs.push((open_idx, i, id));
+                }
+                // Otherwise the just-closed pair is nested inside an
+                // outer open — the recursive pre-pass will discover it
+                // when it descends into the outer body.
             } else {
                 // Unbalanced close — bail to no pairs; existing diff handles it.
                 return Vec::new();
@@ -145,11 +164,12 @@ fn render_dj_if_boundary_html(children: &[VNode], open_idx: usize, close_idx: us
 /// `<!--dj-if-->` placeholder + `data-djust-replace` paths unchanged).
 ///
 /// Patch emission rules:
-///   - id in OLD only → `RemoveSubtree { id }`
-///   - id in NEW only → `InsertSubtree { id, path: parent_path, d: parent_id,
-///     index: open_idx_in_new, html: full marker pair + body }`
-///   - id in BOTH → recurse into the inner body element-by-element (markers
-///     themselves are static comment nodes — text matches by construction).
+///   - id in OLD only (top-level) → `RemoveSubtree { id }`
+///   - id in NEW only (top-level) → `InsertSubtree { id, path: parent_path,
+///     d: parent_id, index: open_idx_in_new, html: full marker pair + body }`
+///   - id in BOTH (top-level) → recurse into the inner body via
+///     `dj_if_pre_pass_inner` (handles arbitrary nesting including
+///     `{% if %}/{% elif %}/{% else %}` cascades).
 ///   - non-boundary children → paired by relative order among non-boundary
 ///     siblings. Patch absolute indices are taken from the NEW tree (target).
 ///
@@ -162,17 +182,63 @@ fn dj_if_pre_pass(
     path: &[usize],
     parent_id: &Option<String>,
 ) -> Option<Vec<Patch>> {
-    let old_pairs = find_dj_if_pairs(old);
-    let new_pairs = find_dj_if_pairs(new);
+    dj_if_pre_pass_inner(old, new, 0, 0, path, parent_id)
+}
+
+/// Recursive worker for `dj_if_pre_pass`. Operates on a slice of children
+/// (`old`, `new`) representing either a parent's full children list (top-
+/// level call) or the body slice of a matched-id boundary (recursive call).
+///
+/// The `*_offset` parameters carry absolute indices into the original parent's
+/// children list — needed because `InsertSubtree.index`, `InsertChild.index`,
+/// `RemoveChild.index`, and child `path` segments must use absolute positions
+/// in the parent's child list (the DOM parent is the SAME for all recursion
+/// levels — dj-if markers are sibling comments, not container elements).
+///
+/// `path` and `parent_id` reference the DOM parent and DO NOT change across
+/// recursion levels. They are the path/id of the actual DOM element whose
+/// children include all the boundary markers (no matter how deeply nested).
+///
+/// ## Why recursion is the right shape (Stage 11 finding on PR #1365)
+///
+/// The first iteration of this pre-pass iterated matched-id body children
+/// element-by-element via `diff_nodes`, treating any nested boundary markers
+/// as ordinary comment-nodes/element-nodes. That produced overlapping
+/// patches when an `if/elif/else` cascade nested boundaries:
+///
+/// - Top-level step 2 emits `InsertSubtree(B, ...)` (B in NEW only).
+/// - Top-level step 3 ALSO emits `Replace` + `InsertChild` patches for B's
+///   markers and content, because `diff_nodes` saw them as ordinary nodes.
+/// - Both patches together produce corrupt DOM with duplicated content.
+///
+/// The fix: when matched-id A's body has nested boundaries, recursively run
+/// `dj_if_pre_pass_inner` on the body slice. The recursion identifies any
+/// nested top-level boundaries WITHIN A's body and emits the appropriate
+/// keyed patches (NOT element-by-element pairing for the markers).
+///
+/// When neither side of A's body has nested boundaries, the recursion falls
+/// through to element-by-element pairing — same as the original behavior.
+fn dj_if_pre_pass_inner(
+    old: &[VNode],
+    new: &[VNode],
+    old_offset: usize,
+    new_offset: usize,
+    path: &[usize],
+    parent_id: &Option<String>,
+) -> Option<Vec<Patch>> {
+    let old_pairs = find_top_level_dj_if_pairs(old);
+    let new_pairs = find_top_level_dj_if_pairs(new);
     if old_pairs.is_empty() && new_pairs.is_empty() {
-        // Common fast path: no id-bearing boundaries on either side. Caller
-        // proceeds with the existing diff unchanged.
+        // Slice has no top-level boundaries on either side. For the
+        // top-level call: caller falls through to keyed/indexed diff.
+        // For the recursive (body) call: caller falls through to
+        // element-by-element pairing of the body.
         return None;
     }
 
     let mut patches: Vec<Patch> = Vec::new();
 
-    // Build id → (open_idx, close_idx) maps for both lists.
+    // Build id → (open_idx, close_idx) maps (slice-relative indices).
     let mut old_by_id: HashMap<String, (usize, usize)> = HashMap::new();
     for (open, close, id) in &old_pairs {
         old_by_id.insert(id.clone(), (*open, *close));
@@ -186,7 +252,7 @@ fn dj_if_pre_pass(
     for (open, close, id) in &old_pairs {
         if !new_by_id.contains_key(id) {
             vdom_trace!(
-                "dj_if_pre_pass: REMOVE_SUBTREE id={} (old open={}, close={})",
+                "dj_if_pre_pass: REMOVE_SUBTREE id={} (slice old open={}, close={})",
                 id,
                 open,
                 close
@@ -196,40 +262,43 @@ fn dj_if_pre_pass(
     }
 
     // 2. InsertSubtree for id-only-in-new. The `index` is the open marker's
-    //    absolute position within the new parent's children array — same
-    //    semantics as `InsertChild.index` (Iter 2 client uses
+    //    ABSOLUTE position within the new parent's children array (same
+    //    semantics as `InsertChild.index`; Iter 2 client uses
     //    `getSignificantChildren(parent)[index]` as the ref-child).
     for (open, close, id) in &new_pairs {
         if !old_by_id.contains_key(id) {
             let html = render_dj_if_boundary_html(new, *open, *close);
+            let abs_index = new_offset + *open;
             vdom_trace!(
-                "dj_if_pre_pass: INSERT_SUBTREE id={} index={} html_len={}",
+                "dj_if_pre_pass: INSERT_SUBTREE id={} abs_index={} html_len={}",
                 id,
-                open,
+                abs_index,
                 html.len()
             );
             patches.push(Patch::InsertSubtree {
                 id: id.clone(),
                 path: path.to_vec(),
                 d: parent_id.clone(),
-                index: *open,
+                index: abs_index,
                 html,
             });
         }
     }
 
-    // 3. Recurse into matched boundaries (id present in BOTH). Pair inner
-    //    body children element-by-element. The markers themselves are
-    //    static comments — diffing them returns 0 patches when text matches.
+    // 3. Matched boundaries (id present in BOTH at this level). Recursively
+    //    handle the inner body — this is what fixes the if/elif/else cascade
+    //    case where A's body contains a nested B boundary.
     //
-    //    The boundary id normalizes positions: even if the boundary's open
-    //    marker is at different absolute indices in old vs new (e.g. a
-    //    sibling was added before it), the inner-body pairing is by relative
-    //    position WITHIN the boundary. Outer-sibling shifts no longer
-    //    cascade into the body's patches.
+    //    The recursion's path/parent_id are UNCHANGED (DOM parent is the
+    //    same). The recursion's offsets advance into the body slice so
+    //    InsertSubtree.index / InsertChild.index / RemoveChild.index land
+    //    at correct ABSOLUTE positions in the parent's children array.
     //
-    //    Iterate through old_pairs in document order so the resulting
-    //    patches are deterministic.
+    //    If the recursion returns None (no nested boundaries in the body),
+    //    we fall through to element-by-element pairing for that body slice
+    //    — preserving the original behavior for non-cascade cases.
+    //
+    //    Iterate old_pairs in document order so output is deterministic.
     for (old_open, old_close, id) in &old_pairs {
         let Some(&(new_open, new_close)) = new_by_id.get(id) else {
             continue;
@@ -242,62 +311,82 @@ fn dj_if_pre_pass(
             new_open,
             new_close
         );
-        // Inner body slices (exclusive of markers).
+        // Inner body slices (exclusive of the markers themselves).
         let old_body = &old[*old_open + 1..*old_close];
         let new_body = &new[new_open + 1..new_close];
-        let common = old_body.len().min(new_body.len());
-        for i in 0..common {
-            let mut child_path = path.to_vec();
-            // Path uses absolute index in the NEW tree's children array
-            // (target shape). Inside-body patches resolve via the `d` field
-            // (id-based) on the client; the path is a fallback.
-            child_path.push(new_open + 1 + i);
-            patches.extend(diff_nodes(&old_body[i], &new_body[i], &child_path));
-        }
-        // Extra old body children → RemoveChild on the parent (using OLD
-        // absolute indices, descending order so removes don't shift indices
-        // for subsequent removes within this batch — handled by the client
-        // patch sorter regardless).
-        if old_body.len() > new_body.len() {
-            for i in (new_body.len()..old_body.len()).rev() {
-                let abs_old_idx = old_open + 1 + i;
-                vdom_trace!(
-                    "dj_if_pre_pass: RemoveChild inside boundary id={} abs_old={}",
-                    id,
-                    abs_old_idx
-                );
-                patches.push(Patch::RemoveChild {
-                    path: path.to_vec(),
-                    d: parent_id.clone(),
-                    index: abs_old_idx,
-                    child_d: old[abs_old_idx].djust_id.clone(),
-                });
+
+        // Recursive pre-pass on the body. Offsets advance to the body's
+        // absolute position in the original parent's children array.
+        let body_old_offset = old_offset + old_open + 1;
+        let body_new_offset = new_offset + new_open + 1;
+
+        if let Some(body_patches) = dj_if_pre_pass_inner(
+            old_body,
+            new_body,
+            body_old_offset,
+            body_new_offset,
+            path,
+            parent_id,
+        ) {
+            // Recursion handled the body (it had nested boundaries).
+            patches.extend(body_patches);
+        } else {
+            // No nested boundaries: pair body children element-by-element.
+            // This is the original behavior — correct for the simple case
+            // of "matched-id boundary with non-boundary content inside".
+            let common = old_body.len().min(new_body.len());
+            for i in 0..common {
+                let mut child_path = path.to_vec();
+                // Path uses absolute index in the NEW tree's children array
+                // (target shape). Inside-body patches resolve via the `d`
+                // field (id-based) on the client; the path is a fallback.
+                child_path.push(body_new_offset + i);
+                patches.extend(diff_nodes(&old_body[i], &new_body[i], &child_path));
             }
-        }
-        // Extra new body children → InsertChild on the parent.
-        if new_body.len() > old_body.len() {
-            for i in old_body.len()..new_body.len() {
-                let abs_new_idx = new_open + 1 + i;
-                vdom_trace!(
-                    "dj_if_pre_pass: InsertChild inside boundary id={} abs_new={}",
-                    id,
-                    abs_new_idx
-                );
-                patches.push(Patch::InsertChild {
-                    path: path.to_vec(),
-                    d: parent_id.clone(),
-                    index: abs_new_idx,
-                    node: new[abs_new_idx].clone(),
-                    ref_d: None,
-                });
+            // Extra old body children → RemoveChild on the parent (using
+            // OLD absolute indices, descending order so removes don't shift
+            // indices for subsequent removes within this batch).
+            if old_body.len() > new_body.len() {
+                for i in (new_body.len()..old_body.len()).rev() {
+                    let abs_old_idx = body_old_offset + i;
+                    vdom_trace!(
+                        "dj_if_pre_pass: RemoveChild inside boundary id={} abs_old={}",
+                        id,
+                        abs_old_idx
+                    );
+                    patches.push(Patch::RemoveChild {
+                        path: path.to_vec(),
+                        d: parent_id.clone(),
+                        index: abs_old_idx,
+                        child_d: old_body[i].djust_id.clone(),
+                    });
+                }
+            }
+            // Extra new body children → InsertChild on the parent.
+            if new_body.len() > old_body.len() {
+                for (offset, child) in new_body.iter().enumerate().skip(old_body.len()) {
+                    let abs_new_idx = body_new_offset + offset;
+                    vdom_trace!(
+                        "dj_if_pre_pass: InsertChild inside boundary id={} abs_new={}",
+                        id,
+                        abs_new_idx
+                    );
+                    patches.push(Patch::InsertChild {
+                        path: path.to_vec(),
+                        d: parent_id.clone(),
+                        index: abs_new_idx,
+                        node: child.clone(),
+                        ref_d: None,
+                    });
+                }
             }
         }
     }
 
-    // 4. Diff non-boundary children (entries outside ALL boundary pair
-    //    ranges). Pair them by RELATIVE position among non-boundary
-    //    siblings — adding/removing a boundary doesn't shift these
-    //    positions. Patch indices are absolute in the NEW tree.
+    // 4. Diff non-boundary children (entries outside ALL TOP-LEVEL boundary
+    //    pair ranges in this slice). Pair them by RELATIVE position among
+    //    non-boundary siblings — adding/removing a boundary doesn't shift
+    //    these positions. Patch indices are absolute (apply offsets).
     //
     //    Limitation (acceptable for v0.9.4-1): when non-boundary siblings
     //    carry `dj-key` attributes AND reorder within their relative slot,
@@ -306,9 +395,6 @@ fn dj_if_pre_pass(
     //    optimally, but layering keyed-alignment on top of boundary-keyed
     //    siblings is out of scope for this iter — production templates
     //    don't typically reorder elements across `{% if %}` boundaries.
-    //    If a regression surfaces, consider extending the pre-pass to
-    //    delegate non-boundary children to `diff_keyed_children` when any
-    //    of them have keys.
     let old_excluded: Vec<bool> = build_excluded_mask(old.len(), &old_pairs);
     let new_excluded: Vec<bool> = build_excluded_mask(new.len(), &new_pairs);
     let old_kept: Vec<usize> = (0..old.len()).filter(|&i| !old_excluded[i]).collect();
@@ -316,37 +402,40 @@ fn dj_if_pre_pass(
 
     let common = old_kept.len().min(new_kept.len());
     for i in 0..common {
-        let old_abs = old_kept[i];
-        let new_abs = new_kept[i];
+        let old_idx = old_kept[i];
+        let new_idx = new_kept[i];
         let mut child_path = path.to_vec();
-        child_path.push(new_abs);
-        patches.extend(diff_nodes(&old[old_abs], &new[new_abs], &child_path));
+        // Absolute path index in the parent's children array.
+        child_path.push(new_offset + new_idx);
+        patches.extend(diff_nodes(&old[old_idx], &new[new_idx], &child_path));
     }
-    // Extra old non-boundary children → RemoveChild (descending).
+    // Extra old non-boundary children → RemoveChild (descending order).
     if old_kept.len() > new_kept.len() {
-        for &old_abs in old_kept[new_kept.len()..].iter().rev() {
-            // Skip removing text nodes (no djust_id) — apply_patches on the
-            // client uses path-based fallback for text nodes, but emitting a
-            // RemoveChild for a text whose absolute position has shifted
-            // could mis-target. Production text nodes don't carry djust_id;
-            // the existing diff path has the same caveat, so we mirror it.
+        for &old_idx in old_kept[new_kept.len()..].iter().rev() {
+            let abs_old_idx = old_offset + old_idx;
             patches.push(Patch::RemoveChild {
                 path: path.to_vec(),
                 d: parent_id.clone(),
-                index: old_abs,
-                child_d: old[old_abs].djust_id.clone(),
+                index: abs_old_idx,
+                child_d: old[old_idx].djust_id.clone(),
             });
         }
     }
     // Extra new non-boundary children → InsertChild.
     if new_kept.len() > old_kept.len() {
-        for &new_abs in new_kept[old_kept.len()..].iter() {
-            let ref_d = old.get(new_abs).and_then(|n| n.djust_id.clone());
+        for &new_idx in new_kept[old_kept.len()..].iter() {
+            let abs_new_idx = new_offset + new_idx;
+            // ref_d: best-effort ID-based reference for client-side
+            // insertBefore. Looks up the OLD slice's node at the same
+            // slice-relative index (mirrors the original semantics —
+            // works uniformly at top level and inside recursion since
+            // both `old` and `new_idx` are slice-relative).
+            let ref_d = old.get(new_idx).and_then(|n| n.djust_id.clone());
             patches.push(Patch::InsertChild {
                 path: path.to_vec(),
                 d: parent_id.clone(),
-                index: new_abs,
-                node: new[new_abs].clone(),
+                index: abs_new_idx,
+                node: new[new_idx].clone(),
                 ref_d,
             });
         }

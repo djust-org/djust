@@ -71,16 +71,18 @@ fn count<F: Fn(&Patch) -> bool>(patches: &[Patch], pred: F) -> usize {
 }
 
 // =============================================================================
-// Case 1: #1358 reproducer — tab-switch with different conditional branches
+// Case 1: Two SEPARATE `{% if %}` blocks — one disappears, another appears
 // =============================================================================
 
-/// End-to-end #1358 reproducer:
+/// Two separate `{% if %}` blocks at the same nesting level: the first
+/// (id=if-deadbeef-0) is rendered in OLD only, the second (id=if-deadbeef-1)
+/// is rendered in NEW only. This corresponds to e.g. two distinct top-level
+/// `{% if %}` blocks where one toggles off and an unrelated one toggles on.
 ///
-/// Tab-switch via `dj-patch` on a view with `{% if active_tab == "overview" %}
-/// ... {% elif active_tab == "details" %} ... {% endif %}`. Iter 1 emits a
-/// distinct boundary id per branch (the marker_id is assigned in document
-/// order at parse time, and the renderer emits the id of the branch whose
-/// condition fired).
+/// (Note: this fixture is NOT an `{% elif %}` cascade. An elif cascade
+/// produces NESTED markers with the OUTER id present in both OLD and NEW
+/// — see `test_elif_cascade_a_to_b_flip` and friends below for that
+/// scenario, addressed by the recursive pre-pass in PR #1365's fix.)
 ///
 /// Pre-fix: the differ would emit Replace / SetAttr patches whose paths
 /// reflected the OLD tree, mis-targeting siblings after the flip.
@@ -91,7 +93,7 @@ fn count<F: Fn(&Patch) -> bool>(patches: &[Patch], pred: F) -> usize {
 /// removes the bracketed range, then parses + inserts the new marker
 /// pair's HTML.
 #[test]
-fn test_1358_reproducer_tab_switch_different_branches() {
+fn test_two_separate_ifs_flip() {
     let old = VNode::element("div")
         .with_djust_id("root")
         .with_children(vec![
@@ -450,25 +452,34 @@ fn test_nested_boundaries_inner_flip_only() {
 // =============================================================================
 // Case 7: Sibling-shift regression — patches BEFORE/AFTER a flipping
 // conditional aren't disrupted (the original #1358 failure mode).
+//
+// The boundary content length DIFFERS between OLD and NEW (3 children inside
+// OLD's boundary, 1 inside NEW's), so the absolute index of the post-
+// boundary footer SHIFTS: position 6 in OLD vs position 4 in NEW. This is
+// the exact class of position-cascade that pre-Iter-3 broke on.
 // =============================================================================
 
 #[test]
 fn test_sibling_shift_does_not_cascade() {
-    // Layout: <div>
-    //   <header>...</header>          ← static sibling BEFORE conditional
-    //   <!--dj-if id="X"-->...<!--/dj-if-->
-    //   <footer>...</footer>          ← static sibling AFTER conditional
+    // Layout — DIFFERENT lengths inside the boundary force the post-
+    // boundary footer's absolute index to shift between OLD (idx=6) and
+    // NEW (idx=4). Pre-fix, the footer SetText would mis-target.
+    //
+    // OLD: <div>
+    //   children[0] <header>...                      ← static sibling
+    //   children[1] <!--dj-if id="X-0"-->            ← open marker
+    //   children[2..=4] <p>, <p>, <p>                ← 3 inner items
+    //   children[5] <!--/dj-if-->                    ← close marker
+    //   children[6] <footer>...                      ← static sibling
     // </div>
     //
-    // The conditional flips id (X-0 → X-1), changing the inner content
-    // shape AND boundary count count (in either case the boundaries
-    // are both length-3 marker-content-marker — but when content shapes
-    // differ, position-based diff cascades into mis-targeted patches on
-    // the static siblings).
-    //
-    // With the keyed diff, the boundary's id normalizes positions so
-    // header/footer SetText patches (if any) target their actual
-    // siblings — not phantom positions.
+    // NEW: <div>
+    //   children[0] <header>...                      ← static sibling
+    //   children[1] <!--dj-if id="X-1"-->            ← open marker
+    //   children[2] <section>...                     ← 1 inner item
+    //   children[3] <!--/dj-if-->                    ← close marker
+    //   children[4] <footer>...                      ← static sibling, idx SHIFTED
+    // </div>
     let old = VNode::element("div")
         .with_djust_id("root")
         .with_children(vec![
@@ -477,8 +488,14 @@ fn test_sibling_shift_does_not_cascade() {
                 .with_child(VNode::text("Header v1")),
             dj_if_open("if-X-0"),
             VNode::element("p")
-                .with_djust_id("inner-old")
+                .with_djust_id("inner-old-1")
                 .with_child(VNode::text("alpha")),
+            VNode::element("p")
+                .with_djust_id("inner-old-2")
+                .with_child(VNode::text("beta")),
+            VNode::element("p")
+                .with_djust_id("inner-old-3")
+                .with_child(VNode::text("gamma")),
             dj_if_close(),
             VNode::element("footer")
                 .with_djust_id("ftr")
@@ -492,11 +509,11 @@ fn test_sibling_shift_does_not_cascade() {
                 .with_djust_id("hdr")
                 .with_child(VNode::text("Header v2")),
             dj_if_open("if-X-1"),
-            VNode::element("section") // DIFFERENT tag in the conditional
+            VNode::element("section") // DIFFERENT tag and shape in the conditional
                 .with_djust_id("inner-new")
                 .with_children(vec![VNode::element("h1")
                     .with_djust_id("h1")
-                    .with_child(VNode::text("beta"))]),
+                    .with_child(VNode::text("delta"))]),
             dj_if_close(),
             VNode::element("footer")
                 .with_djust_id("ftr")
@@ -525,27 +542,19 @@ fn test_sibling_shift_does_not_cascade() {
         patches
     );
 
-    // CRITICAL: header + footer SetText patches must target the right text
-    // nodes via paths that point at the NEW tree's actual positions —
-    // even though the boundary content shape differs (3 markers vs 5
-    // elements would be the position-cascading scenario).
-    //
-    // Production text nodes don't carry djust_id (only elements do), so
-    // SetText patches use `d: None` and rely on path-based resolution.
-    // Path = [parent_child_idx, text_child_idx_within_parent].
+    // CRITICAL: the boundary span has DIFFERENT lengths in OLD vs NEW (5
+    // children vs 3 children inside the marker pair). This means the
+    // post-boundary footer's absolute index shifts: idx=6 in OLD → idx=4
+    // in NEW. The keyed-boundary pre-pass MUST pair non-boundary siblings
+    // by RELATIVE position (header→header, footer→footer) so SetText
+    // patches target the NEW tree's actual positions.
     //
     // In the NEW tree:
-    //   children[0] = <header>, header's children[0] = text "Header v2"
+    //   children[0] = <header>, children[0].children[0] = text "Header v2"
     //     → path = [0, 0]
-    //   children[1] = open marker, [2] = <section>, [3] = close marker
-    //   children[4] = <footer>, footer's children[0] = text "Footer v2"
-    //     → path = [4, 0]
-    //
-    // Pre-Iter-3, the boundary's content shape difference would have
-    // caused mis-aligned position pairing for the footer (and the
-    // existing legacy-placeholder special-case at `diff_nodes:165-241`
-    // would have emitted the WRONG patches because the boundary spans
-    // 3 children, not 1).
+    //   children[1] = open, [2] = <section>, [3] = close
+    //   children[4] = <footer>, children[4].children[0] = text "Footer v2"
+    //     → path = [4, 0]   ← NOT [6, 0] (OLD index)
     let header_text_patch = patches.iter().find(|p| {
         matches!(p,
             Patch::SetText { path, text, .. }
@@ -567,8 +576,20 @@ fn test_sibling_shift_does_not_cascade() {
     });
     assert!(
         footer_text_patch.is_some(),
-        "Footer SetText must target path=[4, 0] (NEW tree's footer text, \
-         after boundary), got patches: {:?}",
+        "Footer SetText must target path=[4, 0] (NEW tree's footer text \
+         after boundary content shrunk from 3 children to 1), got patches: {:?}",
+        patches
+    );
+
+    // Defensive: must NOT have a patch targeting OLD's footer absolute
+    // index [6, 0] — that would prove the position-shift cascade.
+    let phantom_footer = patches
+        .iter()
+        .find(|p| matches!(p, Patch::SetText { path, .. } if path.as_slice() == [6, 0]));
+    assert!(
+        phantom_footer.is_none(),
+        "No patch should target the OLD tree's footer absolute idx [6, 0] \
+         — that would be the position-shift cascade bug, got: {:?}",
         patches
     );
 }
@@ -625,26 +646,27 @@ fn test_empty_boundary_different_ids_replace() {
 
 #[test]
 fn test_remove_subtree_json_wire_format() {
+    use serde_json::json;
     let patch = Patch::RemoveSubtree {
         id: "if-abc-0".to_string(),
     };
-    let json = serde_json::to_string(&patch).unwrap();
-    // Must match the wire shape Iter 2 client expects:
-    //   {"type": "RemoveSubtree", "id": "if-abc-0"}
-    assert!(
-        json.contains("\"type\":\"RemoveSubtree\""),
-        "Wire format missing type discriminator: {}",
-        json
-    );
-    assert!(
-        json.contains("\"id\":\"if-abc-0\""),
-        "Wire format missing id field: {}",
-        json
+    let serialized = serde_json::to_value(&patch).unwrap();
+    // Compare via parsed `Value` shape (Action #1199) — substring matching
+    // is brittle against field-order changes and incidental escaping.
+    let expected = json!({
+        "type": "RemoveSubtree",
+        "id": "if-abc-0",
+    });
+    assert_eq!(
+        serialized, expected,
+        "RemoveSubtree wire shape mismatch: got {}, expected {}",
+        serialized, expected
     );
 }
 
 #[test]
 fn test_insert_subtree_json_wire_format() {
+    use serde_json::json;
     let patch = Patch::InsertSubtree {
         id: "if-xyz-1".to_string(),
         path: vec![0, 1],
@@ -652,24 +674,25 @@ fn test_insert_subtree_json_wire_format() {
         index: 3,
         html: "<!--dj-if id=\"if-xyz-1\"--><span>hi</span><!--/dj-if-->".to_string(),
     };
-    let json = serde_json::to_string(&patch).unwrap();
-    // Must match Iter 2's expected fields:
-    //   {"type": "InsertSubtree", "id": "...", "path": [...],
-    //    "d": "...", "index": N, "html": "..."}
-    assert!(json.contains("\"type\":\"InsertSubtree\""), "{}", json);
-    assert!(json.contains("\"id\":\"if-xyz-1\""), "{}", json);
-    assert!(json.contains("\"path\":[0,1]"), "{}", json);
-    assert!(json.contains("\"d\":\"parent-id\""), "{}", json);
-    assert!(json.contains("\"index\":3"), "{}", json);
-    assert!(
-        json.contains("\"html\":\"<!--dj-if id="),
-        "html field missing or malformed: {}",
-        json
+    let serialized = serde_json::to_value(&patch).unwrap();
+    let expected = json!({
+        "type": "InsertSubtree",
+        "id": "if-xyz-1",
+        "path": [0, 1],
+        "d": "parent-id",
+        "index": 3,
+        "html": "<!--dj-if id=\"if-xyz-1\"--><span>hi</span><!--/dj-if-->",
+    });
+    assert_eq!(
+        serialized, expected,
+        "InsertSubtree wire shape mismatch: got {}, expected {}",
+        serialized, expected
     );
 }
 
 #[test]
 fn test_insert_subtree_omits_d_when_none() {
+    use serde_json::json;
     // d is `Option<String>`; when None, the wire format should omit it
     // entirely (matching the existing pattern for InsertChild.d, which
     // uses `#[serde(skip_serializing_if = "Option::is_none")]`).
@@ -680,11 +703,24 @@ fn test_insert_subtree_omits_d_when_none() {
         index: 0,
         html: "<!--dj-if id=\"if-q-0\"--><!--/dj-if-->".to_string(),
     };
-    let json = serde_json::to_string(&patch).unwrap();
+    let serialized = serde_json::to_value(&patch).unwrap();
+    let expected = json!({
+        "type": "InsertSubtree",
+        "id": "if-q-0",
+        "path": [],
+        "index": 0,
+        "html": "<!--dj-if id=\"if-q-0\"--><!--/dj-if-->",
+        // No "d" key — omitted when None.
+    });
+    assert_eq!(
+        serialized, expected,
+        "InsertSubtree should omit `d` field when None: got {}, expected {}",
+        serialized, expected
+    );
+    // Defensive: parsed shape has no `d` key.
     assert!(
-        !json.contains("\"d\":"),
-        "d should be omitted when None, got: {}",
-        json
+        serialized.get("d").is_none(),
+        "Serialized InsertSubtree must not contain a `d` key when d is None"
     );
 }
 
@@ -786,5 +822,524 @@ fn test_end_to_end_via_parse_html_tab_switch() {
         0,
         "End-to-end: differ should NOT fall back to Replace for keyed flip, got: {:?}",
         patches
+    );
+}
+
+// =============================================================================
+// Cases 12–16: `{% if %}/{% elif %}/{% else %}` CASCADE — the canonical
+// failure mode that PR #1365 Stage 11 found in the first iter.
+//
+// Iter 1's parser desugars `{% if A %}...{% elif B %}...{% endif %}` as
+// `Node::If { condition: A, true_nodes: ..., false_nodes: [Node::If { B }] }`.
+// Each If gets its own `marker_id` in document order. When A is true, the
+// outer If's true branch renders → `<!--dj-if id="if-X-0"-->...<!--/dj-if-->`.
+// When A is false, the outer If's `false_nodes` (which contains the nested
+// If(B)) renders → `<!--dj-if id="if-X-0"--><!--dj-if id="if-X-1"-->...
+// <!--/dj-if--><!--/dj-if-->` (NESTED markers with the OUTER id present in
+// BOTH OLD and NEW).
+//
+// Pre-fix (Stage 11 reproducer): the matched-id A's body was iterated
+// element-by-element via `diff_nodes`, treating the inner B markers as
+// ordinary VNodes. Result: step 2 emits InsertSubtree(B) AND step 3 emits
+// overlapping Replace + InsertChild patches for the same content. Both
+// applied = corrupt DOM.
+//
+// Post-fix: `dj_if_pre_pass_inner` recurses into A's body. The recursion
+// finds B as a top-level pair within the body slice and emits exactly one
+// InsertSubtree(B) — no overlapping element-by-element patches. The body's
+// non-boundary content (if any) is paired by relative position and removed
+// via RemoveChild.
+// =============================================================================
+
+#[test]
+fn test_elif_cascade_a_to_b_flip() {
+    // Scenario: `{% if A %}<div>A-content</div>{% elif B %}<div>B-content
+    // </div>{% endif %}` flips from A=true to (A=false, B=true).
+    //
+    // OLD (A true): outer wraps just A's content.
+    //   <!--dj-if id="A"--><div>A-content</div><!--/dj-if-->
+    //
+    // NEW (A false, B true): outer wraps the nested If(B), which wraps
+    // B's content.
+    //   <!--dj-if id="A"--><!--dj-if id="B"--><div>B-content</div><!--/dj-if--><!--/dj-if-->
+    //
+    // Expected post-fix:
+    //   - Outer A is matched in BOTH (recurse into body).
+    //   - Recursion finds B as a top-level pair in NEW's body, NOT in
+    //     OLD's body → emits InsertSubtree(B).
+    //   - OLD's body's non-boundary <div>A-content</div> is paired against
+    //     NEW's body's empty non-boundary set → RemoveChild for A-content.
+    //   - NO Replace or bare InsertChild for B's markers/content.
+    let old = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            VNode::element("div")
+                .with_djust_id("a-content")
+                .with_child(VNode::text("A-content")),
+            dj_if_close(),
+        ]);
+
+    let new = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            dj_if_open("B"),
+            VNode::element("div")
+                .with_djust_id("b-content")
+                .with_child(VNode::text("B-content")),
+            dj_if_close(),
+            dj_if_close(),
+        ]);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Critical anti-overlap assertions:
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::Replace { .. })),
+        0,
+        "elif cascade must NOT emit Replace patches (would overlap with \
+         InsertSubtree). Got: {:?}",
+        patches
+    );
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::InsertChild { .. })),
+        0,
+        "elif cascade must NOT emit bare InsertChild patches (would overlap \
+         with InsertSubtree(B)). Got: {:?}",
+        patches
+    );
+
+    // Exactly one InsertSubtree, targeting B.
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::InsertSubtree { .. })),
+        1,
+        "Expected exactly 1 InsertSubtree(B). Got: {:?}",
+        patches
+    );
+    let insert = patches
+        .iter()
+        .find_map(|p| match p {
+            Patch::InsertSubtree {
+                id, html, index, ..
+            } => Some((id, html, *index)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(insert.0, "B", "InsertSubtree should target nested B id");
+    assert!(
+        insert.1.starts_with("<!--dj-if id=\"B\"-->"),
+        "InsertSubtree.html should start with B's open marker, got: {}",
+        insert.1
+    );
+    assert!(
+        insert.1.ends_with("<!--/dj-if-->"),
+        "InsertSubtree.html should end with close marker, got: {}",
+        insert.1
+    );
+    // index = absolute position of B's open marker in the FULL parent's
+    // children array. NEW children = [open(A), open(B), <div>, close, close],
+    // so B's open is at index 1 (absolute, in the parent's children list).
+    assert_eq!(
+        insert.2, 1,
+        "InsertSubtree.index must be B's absolute index in parent's children"
+    );
+
+    // No RemoveSubtree (A still present in both).
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::RemoveSubtree { .. })),
+        0,
+        "Outer A is matched in both — must not emit RemoveSubtree. Got: {:?}",
+        patches
+    );
+
+    // Exactly one RemoveChild for the old <div>A-content</div>.
+    let remove_a = patches.iter().find_map(|p| match p {
+        Patch::RemoveChild { child_d, .. } => Some(child_d.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        remove_a,
+        Some(Some("a-content".to_string())),
+        "Expected RemoveChild for the old A-content div. Got: {:?}",
+        patches
+    );
+}
+
+#[test]
+fn test_elif_cascade_b_to_a_flip() {
+    // Symmetric direction (SHOULD-FIX #4 in PR #1365 Stage 11):
+    // OLD has nested A→B, NEW collapses to A only.
+    //
+    // OLD: <!--dj-if id="A"--><!--dj-if id="B"--><div>B-content</div><!--/dj-if--><!--/dj-if-->
+    // NEW: <!--dj-if id="A"--><div>A-content</div><!--/dj-if-->
+    //
+    // Expected: A matches → recurse into body. B is a top-level pair in
+    // OLD's body, NOT in NEW's body → RemoveSubtree(B). OLD's body has
+    // no non-boundary children; NEW's body has <div>A-content</div> as
+    // non-boundary → InsertChild(A-content) at the right absolute index.
+    let old = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            dj_if_open("B"),
+            VNode::element("div")
+                .with_djust_id("b-content")
+                .with_child(VNode::text("B-content")),
+            dj_if_close(),
+            dj_if_close(),
+        ]);
+
+    let new = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            VNode::element("div")
+                .with_djust_id("a-content")
+                .with_child(VNode::text("A-content")),
+            dj_if_close(),
+        ]);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Critical anti-overlap assertions: no Replace and no InsertSubtree
+    // for A (A still present).
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::Replace { .. })),
+        0,
+        "Symmetric cascade must NOT emit Replace patches. Got: {:?}",
+        patches
+    );
+    let outer_a_subtree_patches = patches
+        .iter()
+        .filter(|p| {
+            matches!(p, Patch::InsertSubtree { id, .. } if id == "A")
+                || matches!(p, Patch::RemoveSubtree { id } if id == "A")
+        })
+        .count();
+    assert_eq!(
+        outer_a_subtree_patches, 0,
+        "Outer A is matched in both — must not subtree-flip. Got: {:?}",
+        patches
+    );
+
+    // Exactly one RemoveSubtree, targeting B.
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::RemoveSubtree { .. })),
+        1,
+        "Expected exactly 1 RemoveSubtree(B). Got: {:?}",
+        patches
+    );
+    let remove_id = patches
+        .iter()
+        .find_map(|p| match p {
+            Patch::RemoveSubtree { id } => Some(id.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(remove_id, "B", "RemoveSubtree should target nested B id");
+
+    // Exactly one InsertChild for the new <div>A-content</div> at the
+    // right absolute position. NEW children = [open(A), <div>A-content</div>,
+    // close], so A-content's absolute index is 1.
+    let insert_a = patches.iter().find_map(|p| match p {
+        Patch::InsertChild { index, node, .. } => {
+            if node.djust_id.as_deref() == Some("a-content") {
+                Some(*index)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    });
+    assert_eq!(
+        insert_a,
+        Some(1),
+        "Expected InsertChild for A-content at abs index 1. Got: {:?}",
+        patches
+    );
+}
+
+#[test]
+fn test_elif_cascade_a_to_else_via_inner_change() {
+    // Scenario: `{% if A %}X{% elif B %}Y{% else %}Z{% endif %}` flips from
+    // (A=false, B=true) to (A=false, B=false → else fires).
+    //
+    // BOTH render the outer A marker AND the nested B marker — the only
+    // difference is the innermost CONTENT. So matched ids cascade: A
+    // matches in both, recurse; B matches in both, recurse; innermost
+    // content differs → SetText (or similar inner-element patch).
+    //
+    // Tests that the recursion descends through TWO nesting levels without
+    // emitting subtree-flip patches.
+    //
+    // OLD: <!--dj-if A--><!--dj-if B--><span>Y</span><!--/dj-if--><!--/dj-if-->
+    // NEW: <!--dj-if A--><!--dj-if B--><span>Z</span><!--/dj-if--><!--/dj-if-->
+    let old = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            dj_if_open("B"),
+            VNode::element("span")
+                .with_djust_id("inner-span")
+                .with_child(VNode::text("Y")),
+            dj_if_close(),
+            dj_if_close(),
+        ]);
+
+    let new = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            dj_if_open("B"),
+            VNode::element("span")
+                .with_djust_id("inner-span")
+                .with_child(VNode::text("Z")),
+            dj_if_close(),
+            dj_if_close(),
+        ]);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // Both A and B match in both trees → no subtree-flip patches.
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::RemoveSubtree { .. })),
+        0,
+        "Matched outer+inner ids: must not emit RemoveSubtree. Got: {:?}",
+        patches
+    );
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::InsertSubtree { .. })),
+        0,
+        "Matched outer+inner ids: must not emit InsertSubtree. Got: {:?}",
+        patches
+    );
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::Replace { .. })),
+        0,
+        "Matched outer+inner: must not fall back to Replace. Got: {:?}",
+        patches
+    );
+
+    // The innermost text change should produce a SetText patch.
+    assert!(
+        patches
+            .iter()
+            .any(|p| matches!(p, Patch::SetText { text, .. } if text == "Z")),
+        "Expected SetText('Z') for innermost text change, got: {:?}",
+        patches
+    );
+}
+
+#[test]
+fn test_elif_cascade_with_extra_siblings() {
+    // Cascade + sibling content that shifts relative position. The static
+    // <header>/<footer> siblings sit OUTSIDE the outer A boundary. When
+    // A's body changes shape (cascade flip A → A+B), the boundary's total
+    // span grows from 3 children to 5 children, shifting the footer's
+    // absolute index. The keyed pre-pass must pair siblings by RELATIVE
+    // position so footer's SetText still targets the correct path.
+    //
+    // OLD (A true):
+    //   children[0] = <header>v1</header>
+    //   children[1..3] = <!--dj-if A--><div>A</div><!--/dj-if-->
+    //   children[4] = <footer>v1</footer>
+    //
+    // NEW (A false, B true):
+    //   children[0] = <header>v2</header>
+    //   children[1..5] = <!--dj-if A--><!--dj-if B--><div>B</div><!--/dj-if--><!--/dj-if-->
+    //   children[6] = <footer>v2</footer>
+    //   ^^ footer abs index shifted from 4 → 6
+    let old = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            VNode::element("header")
+                .with_djust_id("hdr")
+                .with_child(VNode::text("Header v1")),
+            dj_if_open("A"),
+            VNode::element("div")
+                .with_djust_id("a-content")
+                .with_child(VNode::text("A")),
+            dj_if_close(),
+            VNode::element("footer")
+                .with_djust_id("ftr")
+                .with_child(VNode::text("Footer v1")),
+        ]);
+
+    let new = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            VNode::element("header")
+                .with_djust_id("hdr")
+                .with_child(VNode::text("Header v2")),
+            dj_if_open("A"),
+            dj_if_open("B"),
+            VNode::element("div")
+                .with_djust_id("b-content")
+                .with_child(VNode::text("B")),
+            dj_if_close(),
+            dj_if_close(),
+            VNode::element("footer")
+                .with_djust_id("ftr")
+                .with_child(VNode::text("Footer v2")),
+        ]);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // No Replace / no overlap patches.
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::Replace { .. })),
+        0,
+        "Cascade-with-siblings must NOT emit Replace patches. Got: {:?}",
+        patches
+    );
+
+    // A is matched (no subtree-flip on A); B is new (InsertSubtree(B)).
+    let outer_a = patches
+        .iter()
+        .filter(|p| {
+            matches!(p, Patch::RemoveSubtree { id } if id == "A")
+                || matches!(p, Patch::InsertSubtree { id, .. } if id == "A")
+        })
+        .count();
+    assert_eq!(outer_a, 0, "Outer A must not subtree-flip");
+
+    let insert_b = patches
+        .iter()
+        .find_map(|p| match p {
+            Patch::InsertSubtree { id, index, .. } if id == "B" => Some(*index),
+            _ => None,
+        })
+        .expect("Expected InsertSubtree(B)");
+    // B's open marker is at absolute index 2 in NEW (after header + outer-A-open).
+    assert_eq!(
+        insert_b, 2,
+        "InsertSubtree(B).index must be B's abs index in parent's children"
+    );
+
+    // CRITICAL: header/footer SetText paths must reflect NEW tree's
+    // actual absolute positions. Pre-fix, footer SetText would target
+    // OLD's index [4, 0] instead of NEW's [6, 0].
+    assert!(
+        patches
+            .iter()
+            .any(|p| matches!(p, Patch::SetText { path, text, .. }
+                              if path.as_slice() == [0, 0] && text == "Header v2")),
+        "Header SetText must target NEW tree's path [0, 0], got: {:?}",
+        patches
+    );
+    assert!(
+        patches
+            .iter()
+            .any(|p| matches!(p, Patch::SetText { path, text, .. }
+                              if path.as_slice() == [6, 0] && text == "Footer v2")),
+        "Footer SetText must target NEW tree's path [6, 0] (after cascade \
+         expansion), got: {:?}",
+        patches
+    );
+
+    // Defensive: no patch targets OLD's footer abs index [4, 0].
+    assert!(
+        !patches
+            .iter()
+            .any(|p| matches!(p, Patch::SetText { path, text, .. }
+                                         if path.as_slice() == [4, 0] && text == "Footer v2")),
+        "No patch should target OLD tree's footer path [4, 0] — that would \
+         be the position-shift cascade bug. Got: {:?}",
+        patches
+    );
+}
+
+#[test]
+fn test_elif_cascade_three_branches_a_to_c() {
+    // Three-branch cascade: `{% if A %}{% elif B %}{% elif C %}{% endif %}`.
+    // Iter 1's parser desugars into nested If(A → If(B → If(C))).
+    // marker_ids (in document order): A=if-X-0, B=if-X-1, C=if-X-2.
+    //
+    // Flip from A=true to (A=false, B=false, C=true). OLD has just A's
+    // marker; NEW has A wrapping B wrapping C (three nesting levels).
+    //
+    // Tests that the recursive pre-pass correctly handles MORE THAN ONE
+    // level of nesting introduced in a single flip.
+    let old = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            VNode::element("p")
+                .with_djust_id("a-content")
+                .with_child(VNode::text("A")),
+            dj_if_close(),
+        ]);
+
+    let new = VNode::element("div")
+        .with_djust_id("root")
+        .with_children(vec![
+            dj_if_open("A"),
+            dj_if_open("B"),
+            dj_if_open("C"),
+            VNode::element("p")
+                .with_djust_id("c-content")
+                .with_child(VNode::text("C")),
+            dj_if_close(),
+            dj_if_close(),
+            dj_if_close(),
+        ]);
+
+    let patches = diff_nodes(&old, &new, &[]);
+
+    // No Replace patches (would indicate the recursion fell through to
+    // element-by-element pairing and treated B's markers as ordinary VNodes).
+    assert_eq!(
+        count(&patches, |p| matches!(p, Patch::Replace { .. })),
+        0,
+        "Three-level cascade must NOT emit Replace patches. Got: {:?}",
+        patches
+    );
+
+    // The recursion should emit a single InsertSubtree(B) — the OUTERMOST
+    // newly-introduced boundary at A's body level. The C boundary is INSIDE
+    // B's HTML (which is rendered into InsertSubtree.html as a single string),
+    // so we don't expect a separate InsertSubtree(C). Only one keyed insert.
+    let insert_subtree_ids: Vec<String> = patches
+        .iter()
+        .filter_map(|p| match p {
+            Patch::InsertSubtree { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        insert_subtree_ids,
+        vec!["B".to_string()],
+        "Expected exactly InsertSubtree(B) — C is contained in B's HTML. \
+         Got InsertSubtree ids: {:?}, full patches: {:?}",
+        insert_subtree_ids,
+        patches
+    );
+
+    // The InsertSubtree(B).html must contain BOTH B's and C's markers,
+    // proving C is bundled inside B's rendered HTML (the wire-protocol
+    // shape that the client expects — one parse + insert per top-level
+    // boundary).
+    let b_html = patches
+        .iter()
+        .find_map(|p| match p {
+            Patch::InsertSubtree { id, html, .. } if id == "B" => Some(html.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        b_html.starts_with("<!--dj-if id=\"B\"-->"),
+        "B's html must start with B's open marker, got: {}",
+        b_html
+    );
+    assert!(
+        b_html.contains("<!--dj-if id=\"C\"-->"),
+        "B's html must include nested C's open marker, got: {}",
+        b_html
+    );
+    assert!(
+        b_html.ends_with("<!--/dj-if-->"),
+        "B's html must end with a close marker, got: {}",
+        b_html
     );
 }
