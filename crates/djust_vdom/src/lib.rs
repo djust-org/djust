@@ -411,6 +411,39 @@ pub enum Patch {
         #[serde(skip_serializing_if = "Option::is_none")]
         child_d: Option<String>,
     },
+    /// Remove a `dj-if` keyed subtree by marker id.
+    ///
+    /// Capability of issue #1358 (keyed VDOM diff for `{% if %}` conditional
+    /// subtrees, re-open of #256 Option A). Iter 3 of v0.9.4-1.
+    ///
+    /// The client locates the `<!--dj-if id="X"-->...<!--/dj-if-->` marker
+    /// pair by id and removes the bracketed range. Position-based path
+    /// tracking is bypassed — the boundary's id normalizes positions, so
+    /// sibling shifts no longer cascade into patch failures.
+    RemoveSubtree {
+        /// Boundary marker id (e.g. `"if-a3b1c2d4-0"`).
+        id: String,
+    },
+    /// Insert a `dj-if` keyed subtree at a parent + index.
+    ///
+    /// Capability of issue #1358. The `html` carries the full marker pair
+    /// (open `<!--dj-if id="..."-->`, body, close `<!--/dj-if-->`) — Shape A
+    /// per Iter 2's locked wire contract. The client parses it via an inert
+    /// `<template>.innerHTML` so any nested `<script>` tags are NOT executed.
+    InsertSubtree {
+        /// Boundary marker id (e.g. `"if-a3b1c2d4-1"`).
+        id: String,
+        /// Parent path (same shape as `InsertChild.path`).
+        path: Vec<usize>,
+        /// Parent's djust_id (same role as `InsertChild.d`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        /// Index within the parent's significant-children where the open
+        /// marker should land (same semantics as `InsertChild.index`).
+        index: usize,
+        /// Full HTML fragment: `<!--dj-if id="..."-->{body}<!--/dj-if-->`.
+        html: String,
+    },
 }
 
 /// Compute the difference between two virtual DOM trees

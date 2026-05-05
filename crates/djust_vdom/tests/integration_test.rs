@@ -396,6 +396,10 @@ fn test_patches_include_djust_id() {
         djust_vdom::Patch::MoveChild { d, .. } => d.is_some(),
         // Text nodes don't have djust_ids
         djust_vdom::Patch::SetText { .. } => false,
+        // dj-if subtree patches (#1358) are dispatched by marker id, not by
+        // the parent's djust_id. They are out of scope for this attribute
+        // test.
+        djust_vdom::Patch::RemoveSubtree { .. } | djust_vdom::Patch::InsertSubtree { .. } => false,
     });
 
     assert!(

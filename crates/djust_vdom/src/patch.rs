@@ -84,6 +84,12 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
                     group.moves.push(patch);
                 }
             }
+            // RemoveSubtree / InsertSubtree are dispatched by marker id on
+            // the client; in the test-only `apply_patches` helper they are
+            // not modeled (the test harness operates on raw VDOM trees, not
+            // on the client's marker-id index). Skip them here so existing
+            // tests continue to compile against the new Patch variants.
+            Patch::RemoveSubtree { .. } | Patch::InsertSubtree { .. } => {}
             _ => {
                 non_child_patches.push(patch);
             }
@@ -291,6 +297,13 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
                 }
             }
         }
+
+        // RemoveSubtree / InsertSubtree are dispatched by marker id on the
+        // client; the test-only `apply_patch` helper does not model the
+        // marker-id index so these are intentionally no-ops here. Tests
+        // that exercise the diff output should assert on patch shape (via
+        // `matches!`) rather than round-tripping through `apply_patch`.
+        Patch::RemoveSubtree { .. } | Patch::InsertSubtree { .. } => {}
     }
 }
 
