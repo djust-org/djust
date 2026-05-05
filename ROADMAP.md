@@ -168,6 +168,66 @@ All 7 drain buckets shipped. 11 of 12 audit-original bugs closed; #1281 deferred
 
 Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` collects all v0.9.2-6 deferred items.
 
+## Pending release: v0.9.4 — Keyed VDOM diff for conditional subtrees (#1358 / #256 Option A)
+
+Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after NYC Claims hit a 2/24-patches-failed → page-reload regression on tab switching.
+
+### Milestone: v0.9.4-1 — Keyed VDOM diff for conditional subtrees (3-iter split-foundation, single milestone)
+
+**Status:** 🚀 commissioned 2026-05-05. Drives #1358 (re-open of #256 Option A) end-to-end in one milestone — no multi-release soak. Per Action #1055 (smallest design-novel iter first), sequenced as Foundation 1 → Foundation 2 → Capability, each as its own PR through the pipeline (Stage 11 mandatory for revertibility).
+
+*Goal:* Eliminate the `{% if %}`-breaks-VDOM-patching class entirely. Apps stop needing the `d-none` workaround that's accumulated as canonical advice in CLAUDE.md and downstream repos. Patches no longer fail when conditionals flip; no more recovery-HTML / page-reload fallback.
+
+#### Iters (sequential — pipeline-run --all)
+
+- [ ] **Iter 1 — Foundation 1: template parser emits boundary markers around `{% if %}` blocks.**
+  Compile-time: each `{% if %}` block containing element nodes (not pure-text conditionals) gets wrapped in `<!--dj-if id="if-N" cond="..."-->...<!--/dj-if-->` HTML comments. Browsers ignore HTML comments → ZERO runtime behavior change. Tests verify markers are emitted correctly + IDs are stable across re-renders + nested `{% if %}` works + `{% elif %}` / `{% else %}` get matching markers.
+  Files: `crates/djust_templates/src/` (parser) + `python/djust/templatetags/` (Django integration). Tests: `crates/djust_templates/src/tests/` + `python/djust/tests/test_template_if_markers.py`.
+  Verdict: design contract locks in here. Foundation 2 + Capability depend on the marker shape this iter establishes.
+
+- [ ] **Iter 2 — Foundation 2: client patch applier learns `RemoveSubtree` + `InsertSubtree` patch types.**
+  JS-side: extend the patch dispatcher in `12-vdom-patch.js` (or wherever patch types are handled) to recognize the new types. Server doesn't emit them yet — still ZERO runtime behavior change. Tests inject the new patch types directly and verify the client correctly removes/inserts the subtree by `dj-if` ID.
+  Files: `python/djust/static/djust/src/12-vdom-patch.js` (dispatcher) + new tests in `tests/js/`.
+  Per Action #181 / Action #1113: any test stubbing async-callback shapes must yield a microtask before invoking the callback (mirrors `startViewTransition` pattern).
+
+- [ ] **Iter 3 — Capability: Rust VDOM differ recognizes `dj-if` boundaries; emits subtree-level patches.**
+  The actual algorithm change. `crates/djust_vdom/src/diff.rs` (or equivalent) walks both old + new VDOM trees, identifies `dj-if` boundary comments as keyed units, treats inner subtree as opaque. Emits `RemoveSubtree(id)` / `InsertSubtree(id, html)` / standard intra-subtree diff (when both have it + inner content changed). Position-based path tracking inside conditionals is bypassed — the boundary normalizes positions.
+  Files: `crates/djust_vdom/src/` + integration tests verifying the full round-trip (template render → diff → patch apply → DOM matches expected).
+  This iter has the biggest blast radius. Stage 4 plan must explicitly compare against Phoenix LiveView's keyed-conditional shape (cited in the issue body) and Vue's `v-if`. Stage 11 review must spot-check at least 6 edge cases: empty conditionals, conditionals containing only text, nested ifs, ifs inside loops, ifs inside other ifs, ifs that swap entirely different DOM trees.
+
+#### Why no multi-release soak (Action #1122 deviation)
+
+Per Action #1122, foundations should "soak through one or more releases before the capability rides on top." This milestone deviates because:
+
+1. **Foundation 1 emits HTML comments**. Browsers ignore comments. Zero observable behavior. The "what could go wrong post-Foundation-1?" surface is template-render correctness, which is unit-testable end-to-end.
+2. **Foundation 2 adds dispatcher entries for unused patch types**. Until Capability ships, the new types are never emitted. Same zero-observable-behavior reasoning.
+3. **The user's urgency is the bigger risk now.** #256 was deferred in 2026-02; #1358 re-opened 2026-05 after the deferral caused real production pain. Per Action #1079 ("fix EXACTLY what the issue cites"), shipping the fix faster is the stronger move when the soak rationale doesn't apply.
+
+Any iter that surfaces unexpected runtime issues during Stage 11 will trigger Stage 12 (Address Findings) before the next iter starts. The pipeline canon's review gates remain mandatory.
+
+#### Acceptance
+
+- All 3 iters merged.
+- Reproducer from #1358 (`ClaimDetailView` tab-switch with `{% if active_tab == "overview" %}...{% endif %}` branching) no longer triggers patch failure → recovery HTML → page reload.
+- Existing `d-none` workaround examples in CLAUDE.md / downstream repos remain valid (backwards-compatible) but are no longer mandatory.
+- `npx eslint client.js` still 0 warnings (carryover from #1351).
+- `make test` exits clean.
+- Then: `/djust-release 0.9.4` (or rc1 first if pre-flight requires).
+
+#### References
+
+- #1358 (re-open of #256 Option A; this milestone closes it)
+- #256 (original 2026-02 closure with Options B + C; #1358 documents what Option A would have shipped)
+- Phoenix LiveView keyed conditional pattern (cited in #1358)
+- Vue `v-if` pattern (cited in #1358)
+- Action #1055 (smallest design-novel iter first)
+- Action #1122 (split-foundation; this milestone deviates with rationale)
+- Action #1079 (fix exactly what's cited; ship the fix faster when soak doesn't apply)
+- Action #181 (two-commit shape per iter)
+
+
+
+
 ### Milestone: v0.9.3-1 — v0.9.2 deferred items (initial drain) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-02. All 7 issues closed via 5 PRs (#1318, #1319, #1320, #1321, #1322).
