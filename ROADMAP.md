@@ -172,6 +172,41 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after NYC Claims hit a 2/24-patches-failed → page-reload regression on tab switching.
 
+### Milestone: v0.9.4-2 — Template-hash-keyed Redis cache + deployment docs (#1362)
+
+**Status:** 🚀 commissioned 2026-05-05. Closes #1362 (production deployment gaps surfaced by NYC Claims). Two iters: (1) code — template-hash-keyed Redis cache for automatic deploy-time state invalidation; (2) docs — recovery-HTML one-shot semantics + Daphne→Uvicorn benchmark.
+
+*Goal:* Eliminate the operator-burden of remembering to set `REDIS_KEY_PREFIX` to a build identifier. After shipping, deployments get auto-invalidation of stale `RustLiveView` cache when ANY template's rendered shape changes — no env var, no setting, no doc to read. Plus document two production-relevant behaviors (recovery one-shot + Uvicorn perf delta).
+
+#### Iters (sequential — pipeline-run --all)
+
+- [ ] **Iter 1 — Template-hash-keyed Redis cache** (code; closes #1362 section 1).
+  Reuse the 8-hex template-source hash from Iter 1 of v0.9.4-1 (`parse_with_source` in `crates/djust_templates/src/parser.rs`). Plumb the hash through to `RedisStateBackend.set()` / `.get()` so the cache key becomes `djust:state:<session>:<view_path>:<template_8hex>` instead of today's `djust:state:<session>:<view_path>`. When any template's source changes (whitespace, attribute, structure), the per-template hash changes → cache miss → fresh state. **Zero operator config.**
+  Files: `python/djust/state_backends/redis.py` (cache key construction); `python/djust/mixins/rust_bridge.py` (where the cache key is built — pass through the template hash); `crates/djust_live/src/lib.rs` (expose template hash to Python if not already).
+  Tests: cache miss when template changes; cache hit when template unchanged; in-memory backend not affected (PR #1355's clone-on-get already handles its different concern); WS reconnect post-deploy lands on a fresh mount instead of a corrupt diff baseline.
+  Backwards compat: existing cached entries become unreachable on the deploy that ships this — bounded by TTL (1 hour default); equivalent to one cache flush, by design.
+
+- [ ] **Iter 2 — Deployment docs additions** (pure docs; closes #1362 sections 2 + 3 + optional production checklist).
+  Edit `docs/website/guides/deployment.md` to add:
+  - **Section 2**: "Recovery HTML semantics" subsection — recovery is per-consumer and one-shot; fresh consumers (rolling deploy / WS reconnect) start with no recovery state; multi-task deployments amplify the user-visible impact. Cross-reference v0.9.4-1's keyed conditional fix as the architectural escape hatch.
+  - **Section 3**: "Uvicorn vs Daphne benchmark" table from #1362 body (1 vCPU / 2 GB Fargate, 6.4× rps, 8.3× p99). Add disclaimer that numbers are app-specific.
+  - **Production checklist**: 8-line deployable recipe (ASGI server, channel layer, state backend, key prefix, sticky sessions, CONN_MAX_AGE, autoscaling, Celery I/O pool). Note that with Iter 1 shipping, the "key prefix" line becomes "no action needed; auto-derived from template hash."
+
+#### Acceptance
+
+- Iter 1: deployment of a code-changed template invalidates affected per-view cache entries automatically; no `REDIS_KEY_PREFIX` env var required.
+- Iter 2: deployment guide has the 3 new sections; production checklist landing snippet present.
+- The reproducer from #1362 section 1 (PR converts `{% if %}` to `d-none`, deploys, sees patch failures on existing sessions) no longer reproduces.
+- Then: `/djust-release 0.9.4` headlines #1358 (the bug fix from v0.9.4-1) + #1362 (the production hardening from v0.9.4-2) as the v0.9.4 release narrative.
+
+#### References
+
+- #1362 (the production deployment gaps; this milestone closes it)
+- #1358 (sibling fix from v0.9.4-1; reduces but doesn't eliminate the recovery-HTML failure mode that #1362 section 2 documents)
+- PR #1363 (Iter 1 of v0.9.4-1; introduced `parse_with_source` 8-hex template hash this milestone reuses)
+- PR #1355 (closed #1353 + #1354; established msgpack clone for InMemoryStateBackend; Redis-backend's clone behavior unchanged in this milestone — only adds the hash to the key)
+
+
 ### Milestone: v0.9.4-1 — Keyed VDOM diff for conditional subtrees (3-iter split-foundation, single milestone) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-05. **Closes the 3-month-old `{% if %}`-breaks-VDOM-patching bug class (#1358 / #256 Option A).** 3 PRs across one milestone, no multi-release soak. Per Action #1055 (smallest design-novel iter first), sequenced as Foundation 1 → Foundation 2 → Capability. Each iter passed Stage 11 mandatory review; Iter 1 + Iter 3 had Stage 11 must-fix findings that Stage 12 + Stage 13 caught and fixed before merge.
