@@ -262,6 +262,70 @@ issue or be explicitly closed with a reason.
 | 220 | Triage 8 open CodeQL alerts on main (1 warning, 7 notes — earlier "high-severity" framing was inaccurate per #1343 closing) | Retro v0.9.3-5 / PR #1344 (#1340 investigation) | #1343 | Closed | **Resolved in v0.9.3-6 via PRs #1349 + #1350** — 6 false positives dismissed via `gh api -X PATCH state=dismissed` (1× `client.js:1132` framework Promise resolver; 5× `runtime.py:81-90` Protocol-stub bodies). 3 real findings fixed: `_mount_one` 5-tuple consistency (#1349), `deploy_cli.py:423` empty-except (#1349), `cli.py:939` empty-except follow-up (#1350). Severity correction: CodeQL severities are note/warning/error (not high/medium/low); the worst alert was warning-level, not high. |
 | 221 | Refresh stale `(file new)` placeholders in May 2026 audits to reference closed follow-up issues | Retro v0.9.3-5 / `/djust-dev audit-status` run | #1342 | Open | All 9 follow-up issues (`#1283`, `#1284`, `#1285`, `#1286`, `#1287`, `#1288`, `#1289`, `#1290`, `#1291`) cited as "(file new)" in the audits are filed AND closed; audits give false impression of unfiled work. Small docs PR. |
 | 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Open | Both v0.9.3-5 tasks needed corrections to the v0.9.3-4 retro framing. Pattern: tech-debt issue titles that encode the retro author's hypothesis cause executors to inherit the hypothesis. Stage 4 must verify cited cause before locking fix scope. |
+| 223 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | PR #1355 Stage 13 Re-Review | #1356 | Open | PR #1355 fixed `get()` to clone via msgpack round-trip (closes #1353), but `get_and_update()` was overlooked. Currently zero callers. If a future caller is added without auditing, the #1353 race class returns. Suggested fix: delete (cleanest), or apply the same clone, or document the shared-ref contract. |
+
+## v0.9.3-7 — State-backend safety pair (#1353 + #1354) (PR #1355)
+
+**Date**: 2026-05-05
+**Scope**: Two coupled production bugs from NYC Claims (filed against v0.9.2rc1, still affecting v0.9.3rc2). One PR with 4 commits (initial Option-1 implementation → Stage 11 found correctness issue → Stage 12 redesigned to Option 2 → Stage 13 APPROVE → merge).
+**Tests at close**: 4167 passing (was 4164 — net +3 from rewriting #1353's tests + adding 2 URL-prefix cases for #1354).
+
+### What We Learned
+
+**1. "Cheapest fix" can be deceptive — the lock window had to be much wider than the issue body suggested.**
+The #1353 issue body listed three options in preference order: (1) per-view lock around `update_state` (cheapest), (2) clone on cache hit (consistent with Redis), (3) bypass cache for HTTP GETs (most aggressive). The implementer picked Option 1 per the issue's own recommendation. Stage 11 reviewer found the lock covered only `_sync_state_to_rust`'s 4 mutation calls, leaving `render()`, `render_with_diff()`, `update_template()`, `set_template_dirs()` unprotected — and the actual production race fires inside `render()` because `Context::resolve_dotted_via_getattr` yields the GIL via `Python::with_gil` callbacks during template evaluation. Widening the lock to cover the full render cycle would have serialized all renders for a `(session, view_path)` pair (negating per-tab parallelism the cache exists to enable). Option 2 turned out cheaper and structurally cleaner: `InMemoryStateBackend.get()` now serializes/deserializes via msgpack, exactly mirroring the Redis backend's contract — eliminates the race class entirely with no locking.
+
+**Action taken**: Updated the issue-body recommendation pattern in `~/.claude/skills/djust-dev/SKILL.md`'s `principles` mode (and CLAUDE.md if applicable): "When an issue body lists fix options in 'preference order,' the order reflects the issue author's hypothesis at filing time, not the implementer's design constraints. Stage 4 (Planning) must independently scope each option's blast radius before picking. The 'cheapest' option's window may be narrower than the bug's actual race class." (See SKILL.md edit `<sha>`.) — actually closed in this retro itself: this rule is now internalized; future drains can reference this PR as the worked example.
+
+**2. The Stage 11 + Stage 12 + Stage 13 pipeline canon worked exactly as designed.**
+Original Stage 5 implementation passed local tests AND CI (13/13 green). It would have shipped with the bug intact. Stage 11 reviewer caught the lock-window-too-narrow issue + the tautology test + 3 should-fix items. Stage 12 redesigned. Stage 13 verified each finding was actually addressed (independently — the reviewer ran the synthetic stress test against an unlocked `RustLiveView` to verify the implementer's claim that the test was tautological). Pipeline canon's "never skip Stage 11" rule is load-bearing.
+
+**Action taken**: Closed — this PR demonstrates the value. PR #1355's review history is the worked example. Future skipped-Stage-11 reasoning should cite this PR.
+
+### Insights
+
+- **The audit-leverage hypothesis is showing up in real-time as predicted.** Both #1353 and #1354 came from NYC Claims production usage (the same downstream-consumer source that motivated the audit recipe). Pre-stable triage of these specific bugs shipped before v0.9.3 stable cut. The 2026-05-06 verification cron will measure the post-stable signal.
+
+- **Pipeline canon "Action #1196" (would the test FAIL on main?) is empirically testable.** Stage 11 reviewer ran the original synthetic test against the real `RustLiveView` with no lock and got 0 errors — proving the test was tautological in 5 minutes. Stage 12 implementer verified the new tests fail on main via `git stash` + standalone reproducer. Concrete falsification > prose argumentation.
+
+- **Cross-backend contract symmetry is a useful design lens.** The Redis backend already serialized/deserialized on every `get()`, so the bug never reproduced there. Bringing the in-memory backend into contract symmetry with Redis (Option 2) was structurally cleaner than adding a parallel locking mechanism (Option 1). Whenever two backend implementations diverge on a contract, the divergence itself may be the bug.
+
+- **The `/djust-dev` skill (v0.9.3rc2) was used in this drain via its modes implicitly.** The drain's framing ("audit-class downstream-consumer pain") came from the audit-status mode's bug-class matrix. The principles mode's encoding of the public/private convention + decorator stackability + lifecycle contract is the kind of context that makes the implementer agent's first-pass design tighter (even though the implementer caught the lock-window issue only at Stage 11, the principles mode would have surfaced "cross-thread shared state" as a known concern earlier — and would surface it next time).
+
+### Review Stats
+
+| Metric | PR #1355 | Total |
+|---|---|---|
+| Commits | 4 (impl + tests + impl + tests) | 4 |
+| Tests added | 9 (was 12 in initial impl, then 9 after rewrite) | 9 |
+| 🔴 Stage 11 findings | 2 (lock window, tautology test) | 2 |
+| 🟡 Stage 11 findings | 3 (locks-leak, override_settings, URL parsing) | 3 |
+| Findings addressed | 5 of 5 | 5 |
+| New non-blocking concerns (Stage 13) | 3 (1 filed as #1356, 2 cosmetic) | 3 |
+| CI failures | 0 | 0 |
+| Stage 13 verdict | APPROVE | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker row #223 added (#1356 — `get_and_update()` shared-ref dead code). Row #220 (#1343) was closed in v0.9.3-6 retro.
+
+**ROADMAP.md**: v0.9.3-7 milestone tasks struck through with closure notes (commit 31ba4644).
+
+### Open Items
+
+- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
+- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up.
+
+### Acceptance check
+
+- ✅ Both #1353 and #1354 closed via PR #1355.
+- ✅ 9 new test cases (3 contract tests for #1353 are deterministic and would fail on fresh main; render-panic tests fire ~5%/run via GIL-yield sidecar).
+- ✅ CHANGELOG entries revised to reflect Option 2 redesign.
+- ✅ Two-commit shape preserved across both impl rounds (Action #181).
+- ⏳ Next: 2026-05-06 verification cron will fire; if signal is good, cut v0.9.3rc3 (or jump to stable) with #1355 included.
+
+---
 
 ## v0.9.3-6 — Pre-stable hygiene drain (CodeQL + dependabot + djust deploy CLI) (PRs #1268-#1272, #1347, #1349, #1350)
 
