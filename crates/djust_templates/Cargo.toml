@@ -19,7 +19,7 @@ once_cell.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 tracing = { workspace = true }
-pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 djust_core = { path = "../djust_core" }
 djust_components = { path = "../djust_components" }
 
