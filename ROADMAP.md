@@ -172,11 +172,13 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after NYC Claims hit a 2/24-patches-failed → page-reload regression on tab switching.
 
-### Milestone: v0.9.4-1 — Keyed VDOM diff for conditional subtrees (3-iter split-foundation, single milestone)
+### Milestone: v0.9.4-1 — Keyed VDOM diff for conditional subtrees (3-iter split-foundation, single milestone) ✅ shipped
 
-**Status:** 🚀 commissioned 2026-05-05. Drives #1358 (re-open of #256 Option A) end-to-end in one milestone — no multi-release soak. Per Action #1055 (smallest design-novel iter first), sequenced as Foundation 1 → Foundation 2 → Capability, each as its own PR through the pipeline (Stage 11 mandatory for revertibility).
+**Status:** ✅ shipped 2026-05-05. **Closes the 3-month-old `{% if %}`-breaks-VDOM-patching bug class (#1358 / #256 Option A).** 3 PRs across one milestone, no multi-release soak. Per Action #1055 (smallest design-novel iter first), sequenced as Foundation 1 → Foundation 2 → Capability. Each iter passed Stage 11 mandatory review; Iter 1 + Iter 3 had Stage 11 must-fix findings that Stage 12 + Stage 13 caught and fixed before merge.
 
 *Goal:* Eliminate the `{% if %}`-breaks-VDOM-patching class entirely. Apps stop needing the `d-none` workaround that's accumulated as canonical advice in CLAUDE.md and downstream repos. Patches no longer fail when conditionals flip; no more recovery-HTML / page-reload fallback.
+
+**Outcome**: ✅ Goal achieved. Reproducer from #1358 (NYC Claims tab-switch with `{% if active_tab == "overview" %}` branching, 17.5% 500-rate at concurrency 2) no longer reproduces. Backwards-compatible: existing `d-none` workaround examples in CLAUDE.md / downstream repos remain valid but no longer mandatory.
 
 #### Iters (sequential — pipeline-run --all)
 
@@ -187,10 +189,7 @@ Single focused minor cycle: the structural fix for `{% if %}` blocks that has be
 
 - [x] ~~**Iter 2 — Foundation 2: client patch applier learns `RemoveSubtree` + `InsertSubtree` patch types.**~~ ✅ — Closed via PR #1364 (commit da92e637). Shape A chosen: server emits full marker pair (`<!--dj-if id=...-->...<!--/dj-if-->`) inside `InsertSubtree.html`; client inserts the whole fragment at `parent[index]`. `RemoveSubtree(id)` walks via TreeWalker (reusing Iter 1's `isDjIfComment` helper), depth-counts nested markers, removes the bracketed range. Inert HTML parsing via `<template>.innerHTML` (script tags don't execute). 25 new tests in `tests/js/dj_if_subtree_patches.test.js`. Stage 11 APPROVED with 0 🔴 / 0 🟡 (2 non-blocking observations parked for Iter 3: same-parent invariant guard, rootEl-scope optimization).
 
-- [ ] **Iter 3 — Capability: Rust VDOM differ recognizes `dj-if` boundaries; emits subtree-level patches.**
-  The actual algorithm change. `crates/djust_vdom/src/diff.rs` (or equivalent) walks both old + new VDOM trees, identifies `dj-if` boundary comments as keyed units, treats inner subtree as opaque. Emits `RemoveSubtree(id)` / `InsertSubtree(id, html)` / standard intra-subtree diff (when both have it + inner content changed). Position-based path tracking inside conditionals is bypassed — the boundary normalizes positions.
-  Files: `crates/djust_vdom/src/` + integration tests verifying the full round-trip (template render → diff → patch apply → DOM matches expected).
-  This iter has the biggest blast radius. Stage 4 plan must explicitly compare against Phoenix LiveView's keyed-conditional shape (cited in the issue body) and Vue's `v-if`. Stage 11 review must spot-check at least 6 edge cases: empty conditionals, conditionals containing only text, nested ifs, ifs inside loops, ifs inside other ifs, ifs that swap entirely different DOM trees.
+- [x] ~~**Iter 3 — Capability: Rust VDOM differ recognizes `dj-if` boundaries; emits subtree-level patches.**~~ ✅ — Closed via PR #1365 (commit d55cda5f). Algorithm: `dj_if_pre_pass_inner` runs at `diff_children` entry. Scans both sibling lists for `dj-if` open + close pairs (depth-counter for nested). For id-only-in-old → `RemoveSubtree(id)`; id-only-in-new → `InsertSubtree(id, target_path, html)`; id-in-both → **recursive call** to `dj_if_pre_pass_inner` on the body slice (handles arbitrary nesting cleanly — including the if/elif/else cascade where Iter 1's parser desugars elif into nested `If` in `false_nodes`). Stage 11 caught a critical algorithm bug (original element-by-element body pairing produced overlapping `Replace` + `InsertSubtree` patches → corrupt DOM); Stage 12 fixed via the recursive pre-pass approach. Stage 13 wrote 9 independent reproducer tests, 4 of which fail on the original commit and pass on the fix — empirical proof of correctness. 19 regression tests in `crates/djust_vdom/tests/test_dj_if_keyed_diff_1358.rs` (5 new elif-cascade scenarios). Backwards-compatible: legacy bare `<!--dj-if-->` placeholder + `data-djust-replace` paths preserved. Known limitation (filed as #1366): dj-key elements reordering across boundaries can produce suboptimal patches; defer to v0.10 polish.
 
 #### Why no multi-release soak (Action #1122 deviation)
 

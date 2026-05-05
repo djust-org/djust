@@ -265,6 +265,77 @@ issue or be explicitly closed with a reason.
 | 223 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | PR #1355 Stage 13 Re-Review | #1356 | Open | PR #1355 fixed `get()` to clone via msgpack round-trip (closes #1353), but `get_and_update()` was overlooked. Currently zero callers. If a future caller is added without auditing, the #1353 race class returns. Suggested fix: delete (cleanest), or apply the same clone, or document the shared-ref contract. |
 | 224 | Deduplicate `_parseTimeMs` / `_computeTransitionTiming` between dj-transition and dj-remove modules | PR #1359 Stage 11 Review (CodeQL) | #1360 | Open | PR #1357 introduced both helpers in `41-dj-transition.js` AND `42-dj-remove.js`. The bundle (concatenation of source modules) has duplicate top-level function declarations. CodeQL flagged it once PR #1359 rebuilt the bundle. JS allows duplicate fn decls in non-strict mode (second wins) — bundle works because both copies are functionally identical, but the duplication is fragile. Fix: move helpers to a shared earlier-loaded module. |
 | 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Open | `pathname` is user-controllable; current safety relies on downstream server validation rejecting invalid routes. Defensive tightening recommended: own-property guard or `Map` (prototype-pollution-immune by design). PR #1359 added eslint-disable-next-line with rationale; this issue tracks tightening the actual access. |
+| 226 | Stage 11 Code Review's reproducer-driven verdict is more reliable than diff-only review | Retro v0.9.4-1 / PR #1365 | — | Closed | **Resolved as canon: reviewers should write a local reproducer test for any algorithm finding before classifying severity.** Stage 11 reviewer for PR #1365 wrote a test that FAILED LOCALLY on the original `ea6c4c4a`, providing empirical proof of the elif-cascade algorithm bug. Stage 13 reviewer wrote 9 independent reproducer tests, 4 of which fail on `ea6c4c4a` and pass on the fix `278d6f2a` — converting "this looks wrong" into "this IS wrong." Pattern: when a Stage 11 reviewer suspects an algorithmic flaw, they should attempt a reproducer; the reproducer either confirms a 🔴 finding or shows the suspicion was unfounded (downgrade to 🟡 or 🟢). Future Stage 11 reviews on algorithm-class PRs should follow this discipline. |
+| 227 | dj-if + dj-key boundary-reorder limitation in keyed VDOM diff | PR #1365 Stage 13 (deferred) | #1366 | Open | When non-boundary siblings carry `dj-key` AND reorder within their relative slot, position-based pairing of non-boundary children can produce suboptimal patches. Production templates don't typically reorder elements across `{% if %}` boundaries. Defer to v0.10 polish. Suggested fix: extend the pre-pass to delegate to `diff_keyed_children` when any non-boundary children have `dj-key`. |
+
+## v0.9.4-1 — Keyed VDOM diff for `{% if %}` conditional subtrees (#1358 / closes #256 Option A) (PRs #1363, #1364, #1365)
+
+**Date**: 2026-05-05
+**Scope**: Single milestone, 3 sequential iters, **closes the 3-month-old `{% if %}`-breaks-VDOM-patching bug class**. The user's directive: "this has been kicked down the road too many times" — no multi-release soak; ship all 3 iters in one milestone window.
+**Tests at close**: 4723 Python + 1559 JS + 224 Rust djust_vdom + 740+ Rust workspace, all passing. **131 new regression cases across the 3 iters** (90 Iter 1 + 25 Iter 2 + 19 Iter 3).
+
+### What We Learned
+
+**1. Stage 11 mandatory review caught an algorithm bug that would have shipped a worse-than-original-bug.**
+Iter 3's original `dj_if_pre_pass` (commit `ea6c4c4a`) had a subtle algorithmic flaw: when matched-id boundary bodies contained NESTED boundary markers (the if/elif/else cascade case Iter 1's parser produces), step 3's element-by-element pairing treated inner markers as ordinary VNodes. Combined with step 2's `InsertSubtree(inner_id)`, this produced **overlapping `Replace` + `InsertSubtree` patches → corrupt DOM with duplicated content**. The original `{% if %}` bug at least failed loudly (500 errors → page reload). A wrong fix would have failed silently with corrupt UI state. Stage 11 reviewer wrote a local reproducer that failed on `ea6c4c4a`; Stage 12 redesigned to recursive `dj_if_pre_pass_inner`; Stage 13 wrote 9 independent reproducer tests, 4 of which fail on `ea6c4c4a` and pass on the fix.
+
+**Action taken**: Closed in this milestone — the canon "reproducer-driven Stage 11 review" pattern (Action Tracker #226) is the lesson. When Stage 11 suspects an algorithmic flaw, write a local reproducer; convert "looks wrong" to "is wrong" before classifying severity. Future algorithm-class PRs should follow this discipline.
+
+**2. Single-milestone-no-soak with mandatory Stage 11/12/13 gates is the right shape for "this has been kicked down the road" features.**
+Action #1122 says foundations should "soak through one or more releases before the capability rides on top." For #1358, we deviated — all 3 iters in v0.9.4-1, no multi-release soak. The deviation rationale: Foundations 1+2 are zero-observable-behavior (HTML comments + unused dispatcher entries), so the soak's risk-reduction premise didn't apply. The user's urgency was the bigger risk (3-month bug). The mandatory Stage 11+12+13 gates remained — and they were load-bearing (caught the elif cascade flaw on Iter 3 that would otherwise have shipped). Pattern: when the soak rationale doesn't apply (zero-observable-behavior foundations), shipping faster IS the safer move, AS LONG AS the review gates stay rigorous.
+
+**Action taken**: Closed in this milestone — generalize as canon. When commissioning split-foundation work, evaluate: "does each foundation iter have observable behavior?" If not, multi-release soak is overkill; single-milestone with mandatory gates is correct.
+
+### Insights
+
+- **The reviewer's reproducer-test discipline is the strongest defense against subtle algorithm bugs.** Iter 3's algorithmic flaw was visible-in-diff-but-easy-to-rationalize-away (the recursion shape was naturally tempting). A test that DEMONSTRABLY fails removes the rationalization vector. Stage 11 + Stage 13 each wrote their own — this redundant verification proved the fix landed cleanly.
+- **The if/elif/else cascade is the hardest test case.** Iter 1's parser desugars elif into nested `If` in `false_nodes`, so the rendered HTML has nested marker pairs only when the FALSY branch is taken. Iter 3's algorithm has to handle this asymmetric structure correctly. The recursive `dj_if_pre_pass_inner` IS the canonical solution — it makes the algorithm self-similar at every nesting level. Replace-on-big-diff heuristics would have been an alternative but introduce a perf-vs-correctness tradeoff.
+- **Wire-format contract verification across iters paid off.** Iter 2 (client) defined the patch wire format. Iter 3 (server) had to match exactly. Stage 11 reviewer for Iter 3 verified field-by-field (`type`, `id`, `path`, `html`, `d`, `index`) — caught no mismatches. Iter 2's tightening (Stage 12 wire-format `serde_json::Value` shape comparison vs substring `contains`) made this verification cleaner.
+- **131 regression tests is substantial coverage** — and well-distributed: Iter 1's emit (90 tests including edge cases), Iter 2's apply (25 tests including nested + inert HTML parsing), Iter 3's diff (19 tests including 5 elif-cascade scenarios). Each iter's tests exercise a different layer of the stack; a failure in any layer is locally diagnosable.
+- **Backward compatibility was preserved across all 3 iters.** Existing 205 djust_vdom tests + the broader Python and JS suites continued to pass. Apps using the `d-none` workaround continue to work identically. The fix is purely additive.
+
+### Review Stats
+
+| Metric | Iter 1 (PR #1363) | Iter 2 (PR #1364) | Iter 3 (PR #1365) | Total |
+|---|---|---|---|---|
+| Commits | 4 (incl. address-findings) | 2 | 4 (incl. address-findings) | 10 |
+| New tests | 90 | 25 | 19 | 134 |
+| Files changed | 13 | 3 | 6 | 22 |
+| 🔴 Stage 11 findings | 2 (ID collision, CsrfToken misclassified) | 0 | 2 (algorithm broken, test #1 misrepresented) | 4 |
+| 🟡 Stage 11 findings | 2 (client filter mirror, predicate boundary tests) | 0 | 3 (position-shift, symmetric flaw, wire-format tests) | 5 |
+| Findings addressed | 4 of 4 | n/a | 5 of 5 | 9 of 9 |
+| Stage 11 verdict | REQUEST_CHANGES → APPROVE post-Stage-12 | APPROVE | REQUEST_CHANGES → APPROVE post-Stage-12 | — |
+| Stage 13 verdict | APPROVE | n/a (skipped per skip_if condition: 0 🔴/🟡) | APPROVE | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker rows #226 (reproducer-driven Stage 11 review canon) + #227 (dj-key reorder limitation, → #1366) added.
+
+**ROADMAP.md**: v0.9.4-1 milestone tasks all struck through with closure notes.
+
+**CLAUDE.md / canon (next merge)**: pending — the reproducer-driven Stage 11 review pattern (Action #226) is worth canonicalizing in the pipeline-shared review checklist. File a follow-up to amend `~/.claude/skills/pipeline-shared/SKILL.md` (or wherever the Stage 11 checklist lives) with: "for algorithm-class PRs, the reviewer must attempt a local reproducer before classifying any 🔴 finding."
+
+### Open Items
+
+- ✅ #1358 closed via this milestone.
+- ✅ #256 Option A closed via this milestone.
+- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
+- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
+- [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8.
+- [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8.
+- [ ] Action Tracker #227 (#1366) — dj-if + dj-key boundary-reorder limitation. Defer to v0.10 polish.
+
+### Acceptance check
+
+- ✅ All 3 iters merged: PR #1363 (Iter 1, commit 149c2aa1), PR #1364 (Iter 2, da92e637), PR #1365 (Iter 3, d55cda5f).
+- ✅ Reproducer from #1358 body (NYC Claims tab-switch) no longer triggers patch failures, recovery-HTML, or page reload.
+- ✅ Existing apps using `d-none` workaround continue to work identically (backward-compatible).
+- ✅ 131 new regression tests across the 3 iters; all passing.
+- ✅ Existing Rust + Python + JS test suites continue to pass.
+- ⏳ Next: `/djust-release 0.9.4` — multiple substantive features shipped warrant a fresh minor; the v0.9.4 release notes can headline the `{% if %}` fix as the major win.
+
+---
 
 ## v0.9.3-8 — ESLint warnings cleanup (#1351) (PR #1359)
 
