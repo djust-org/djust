@@ -937,6 +937,9 @@ def cmd_deploy(rest):
                 e.show()
                 return e.exit_code
         except ImportError:
+            # click isn't importable in this environment; fall through to
+            # the generic error-print path below which handles `e` without
+            # needing the click-aware rendering.
             pass
         print(f"Error: {e}")
         return 1
