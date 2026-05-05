@@ -86,6 +86,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 20 cases in `tests/js/dj_if_comment_predicate.test.js`
     (predicate matrix + path-fallback integration).
 
+- **Client VDOM patch dispatcher learns `RemoveSubtree` + `InsertSubtree`
+  patch types — Foundation 2 of #1358.** Iter 2 of 3 toward keyed VDOM
+  diff for conditional subtrees. The server doesn't emit these patch
+  types yet (Iter 3 adds that), so this is **zero-observable-behavior**.
+  When the upcoming Iter 3 differ recognizes `dj-if` boundaries (from
+  Iter 1) and emits subtree-level patches on conditional flips, this
+  dispatcher will route them correctly without a coordinated
+  client+server release.
+
+  Wire formats:
+  - `{type: "RemoveSubtree", id: "if-<prefix>-N"}` — locates the
+    `<!--dj-if id="...">` open marker via `TreeWalker`-backed scan,
+    walks forward depth-counting opens/closes, removes the entire
+    bracketed range (markers + inner content) inclusive.
+  - `{type: "InsertSubtree", id: "...", html: "<!--dj-if-->...<!--/dj-if-->",
+    path: [...], index: N, d: <parent dj-id?>}` — parses the
+    server-emitted HTML fragment via a `<template>` element so any
+    `<script>` tags inside are inert by spec, then inserts at
+    `parent[index]` using the same path/d resolution other
+    child-targeting patches use.
+
+  New helpers (all reused from Iter 1's `isDjIfComment`):
+  `_extractDjIfMarkerId`, `_findDjIfOpenMarker`, `_findDjIfCloseMarker`
+  (depth-counter, handles arbitrary nesting),
+  `_removeDjIfBracketedRange`, `_parseSubtreeHtml`, `applyRemoveSubtree`,
+  `applyInsertSubtree`. Dispatched from `applySinglePatch` via a
+  short-circuit ahead of the path/d resolution so subtree patches
+  don't try to resolve a non-applicable path. 25 regression cases in
+  `tests/js/dj_if_subtree_patches.test.js` covering
+  `extractDjIfMarkerId` (5) + marker-pair finder + nesting (5) +
+  `RemoveSubtree` positive / empty-inner / nested-outer-removes-inner /
+  nested-inner-leaves-outer / id-not-found / root-pair / missing-id (7) +
+  `InsertSubtree` parses-and-inserts-at-index / appends-on-out-of-range /
+  inert-script-via-template / missing-html / unresolvable-parent (5) +
+  `applySinglePatch` dispatch wiring (3).
+
+  **What this enables (NOT in this PR):** Iter 3 (Capability): Rust
+  VDOM differ recognizes `dj-if` boundaries from Iter 1; emits these
+  patch types when conditionals flip.
+
 ### Changed
 
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
