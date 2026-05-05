@@ -99,13 +99,34 @@ class BackendRegistry:
         self._top_level_aliases = top_level_aliases or {}
         self._backend: Optional[Any] = None
 
+    # URL schemes that should auto-resolve to ``backend_type="redis"``
+    # when the user sets a top-level URL-shaped value via
+    # ``DJUST_STATE_BACKEND``. Covered cases:
+    #
+    # - ``redis://``           — plain TCP, the common case
+    # - ``rediss://``          — TLS-wrapped Redis
+    # - ``redis+sentinel://``  — Sentinel HA (common in production)
+    #
+    # ``unix://`` is intentionally left out for now because the
+    # downstream Redis client library accepts Unix sockets via a
+    # different parameter name (``unix_socket_path`` rather than
+    # ``redis_url``); supporting it cleanly is a larger change than
+    # this fix can justify. Users hitting that path can still set
+    # ``DJUST_CONFIG["STATE_BACKEND"] = "redis"`` plus the appropriate
+    # connection kwargs explicitly. TODO: widen to ``unix://`` and
+    # other forms in a follow-up issue.
+    _REDIS_URL_PREFIXES = ("redis://", "rediss://", "redis+sentinel://")
+
     def _merge_top_level_aliases(self, cfg: dict) -> dict:
         """Layer top-level Django settings on top of the cfg dict (#1354).
 
         Top-level settings only fill in keys that are NOT already in
         ``DJUST_CONFIG`` — backwards-compatible. URL-shaped values for the
         primary ``config_key`` are split into ``(backend_type="redis",
-        REDIS_URL=<url>)``.
+        REDIS_URL=<url>)``. Recognized URL schemes are listed in
+        :attr:`_REDIS_URL_PREFIXES`. Unrecognized schemes (e.g.
+        typos like ``redis:/host``) fall through to the factory which
+        raises a clear ``Unknown backend type: <scheme>`` error.
         """
         if not self._top_level_aliases:
             return cfg
@@ -130,7 +151,7 @@ class BackendRegistry:
             if (
                 config_key == self._config_key
                 and isinstance(value, str)
-                and (value.startswith("redis://") or value.startswith("rediss://"))
+                and value.startswith(self._REDIS_URL_PREFIXES)
             ):
                 merged[self._config_key] = "redis"
                 merged.setdefault("REDIS_URL", value)

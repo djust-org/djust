@@ -61,17 +61,74 @@ class InMemoryStateBackend(StateBackend):
 
     def get(self, key: str) -> Optional[Tuple[RustLiveView, float]]:
         """
-        Retrieve from in-memory cache (thread-safe).
+        Retrieve from in-memory cache and return an isolated copy
+        (thread-safe).
+
+        Backend contract (#1353): ``get()`` MUST return a ``RustLiveView``
+        instance that the caller can safely mutate without racing with
+        other callers. This mirrors how :class:`RedisStateBackend.get`
+        already behaves — every Redis read is a fresh
+        ``RustLiveView.deserialize_msgpack`` call, so two concurrent
+        readers get two distinct Python objects.
+
+        Previously this method returned the cached Python reference
+        directly. When two HTTP requests for the same
+        ``(session, view_path)`` pair landed on the in-memory backend
+        concurrently, both call sites then mutated the same Rust view
+        object via ``update_state`` / ``mark_safe_keys`` /
+        ``set_changed_keys`` / ``set_template_dirs``, racing inside
+        Rust's ``RefCell::borrow_mut`` and surfacing as
+        ``RuntimeError: Already borrowed`` (NYC Claims observed 17.5%
+        500-rate at concurrency 2). The race fired anywhere two
+        ``&mut self`` Rust methods overlapped in time on the shared
+        view — including ``render()`` which yields the GIL inside an
+        active mutable borrow via the ``Context::resolve_dotted_via_getattr``
+        sidecar fallback path.
+
+        We use ``serialize_msgpack`` / ``deserialize_msgpack`` for
+        cloning because (a) ``RustLiveView`` is a Rust extension type
+        that doesn't expose a Python ``__copy__`` / ``__deepcopy__``,
+        and (b) the round-trip already exists for Redis storage and is
+        battle-tested. Note that ``template_dirs``, ``last_html``,
+        ``last_render_timing``, ``node_html_cache`` (transient render
+        caches) and ``raw_py_values`` (Python references) are not
+        carried across the round-trip — callers re-populate the
+        template dirs via ``set_template_dirs`` and the rest are
+        rebuilt on the next render.
 
         Args:
             key: Session key to retrieve
 
         Returns:
-            Tuple of (RustLiveView, timestamp) if found, None otherwise
+            Tuple of (RustLiveView, timestamp) if found, None otherwise.
+            The returned view is a fresh deserialize — mutating it does
+            not affect other callers or the cached canonical state.
         """
         with profiler.profile(profiler.OP_STATE_LOAD):
             with self._lock:
-                return self._cache.get(key)
+                cached = self._cache.get(key)
+                if cached is None:
+                    return None
+                view, timestamp = cached
+
+            # Round-trip outside the lock: serialize/deserialize is
+            # purely CPU work on independent bytes; holding the cache
+            # lock across it would serialize all gets unnecessarily.
+            try:
+                serialized = view.serialize_msgpack()
+                clone = RustLiveView.deserialize_msgpack(serialized)
+            except Exception:
+                # Defensive: if msgpack round-trip fails for any reason,
+                # fall back to returning the cached ref. The race window
+                # is preferable to an outright cache miss that destroys
+                # the diff baseline. Logged so this surfaces in dev.
+                logger.exception(
+                    "InMemoryStateBackend.get: serialize/deserialize round-trip "
+                    "failed for key '%s'; returning shared ref (race risk)",
+                    key,
+                )
+                return (view, timestamp)
+            return (clone, timestamp)
 
     def set(
         self,

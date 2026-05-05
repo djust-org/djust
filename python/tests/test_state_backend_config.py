@@ -59,6 +59,30 @@ class TestTopLevelStateBackendSetting:
             f"got {type(backend).__name__}"
         )
 
+    @override_settings(DJUST_STATE_BACKEND="rediss://secure.example.com:6380/0")
+    def test_rediss_tls_url_resolves_to_redis_backend(self):
+        """``rediss://`` (TLS) URLs are recognized like plain ``redis://``."""
+        with _stub_redis_module():
+            with override_settings(DJUST_CONFIG={}):
+                backend = get_backend()
+        assert isinstance(backend, RedisStateBackend)
+
+    @override_settings(
+        DJUST_STATE_BACKEND="redis+sentinel://sentinel-1:26379,sentinel-2:26379/mymaster/0"
+    )
+    def test_redis_sentinel_url_resolves_to_redis_backend(self):
+        """``redis+sentinel://`` URLs are recognized as Redis (#1354).
+
+        Sentinel HA is common in production; previously this scheme
+        was passed through verbatim and the factory raised
+        ``Unknown backend type`` on
+        ``backend_type="redis+sentinel://..."``.
+        """
+        with _stub_redis_module():
+            with override_settings(DJUST_CONFIG={}):
+                backend = get_backend()
+        assert isinstance(backend, RedisStateBackend)
+
     @override_settings(
         DJUST_STATE_BACKEND="redis",
         DJUST_REDIS_URL="redis://localhost:6379/0",
@@ -79,6 +103,7 @@ class TestTopLevelStateBackendSetting:
     @override_settings(
         DEBUG=False,
         DJUST_CONFIG={},
+        DJUST_STATE_BACKEND=None,
     )
     def test_production_fallback_emits_warning(self, caplog):
         """When DEBUG=False and no backend config, emit a warning (#1354).
@@ -86,13 +111,17 @@ class TestTopLevelStateBackendSetting:
         Reasonable production deploy: forgets to set the state backend,
         falls back to in-memory, multi-replica deployments lose state.
         Logger should fire so this gets caught in startup logs.
+
+        ``DJUST_STATE_BACKEND=None`` is short-circuited at the
+        top-level alias merge step (``utils.py:_merge_top_level_aliases``
+        skips ``None`` values), so this is equivalent to "no top-level
+        alias is set" without depending on the test class's outer
+        scope.
         """
-        # Make sure no top-level alias is set
-        with override_settings(spec=[]):
-            with caplog.at_level(logging.WARNING, logger="djust.utils"):
-                backend = get_backend()
+        with caplog.at_level(logging.WARNING, logger="djust.utils"):
+            backend = get_backend()
         assert isinstance(backend, InMemoryStateBackend), (
-            "Sanity: with no config and no DEBUG=True should still default to memory"
+            "Sanity: with no config and DEBUG=False should still default to memory"
         )
         # The warning should mention "in-memory" and "production"
         warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
