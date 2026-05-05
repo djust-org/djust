@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`{% if %}` blocks now emit `dj-if` boundary markers — Foundation 1 of #1358.**
+  Iter 1 of 3 toward the keyed VDOM diff for conditional subtrees
+  (re-open of #256 Option A). At template-render time, every `{% if %}`
+  block whose body contains element nodes is wrapped in HTML-comment
+  boundary markers:
+  ```html
+  <!--dj-if id="if-N"-->...rendered body...<!--/dj-if-->
+  ```
+  Browsers ignore HTML comments, so this is **zero-observable-behavior**
+  — markers are framework-internal metadata for the upcoming Iter 3
+  (Rust VDOM differ) which uses them as keyed boundaries when
+  conditionals flip.
+
+  Marker shape: **Option B (pair per `Node::If`)**. Nested elif chains
+  produce nested marker pairs (the parser already nests an inner
+  `If(B)` inside the outer's `false_nodes`). Pure-text conditionals
+  (text-only true/false bodies) skip emission — text positions are
+  sibling-stable already; the legacy `<!--dj-if-->` placeholder for
+  false-no-else (issue #295) is preserved unchanged. HTML attribute
+  context (issue #380) skips emission. The `cond=` attribute is
+  intentionally OMITTED for safety (condition strings could contain
+  `--` or `>` that would close the comment early; Iter 3's differ
+  keys off the `id` alone).
+
+  ID generation: stable per-template counter `if-N` assigned at parse
+  time via `parser::assign_if_marker_ids` walking the AST in document
+  order. Stable across re-renders (parser is deterministic). The
+  `{% for %}{% if %}` pattern reuses the same id across loop iterations
+  because the parser only sees one `Node::If`.
+
+  VDOM parser (`crates/djust_vdom/src/parser.rs`) extended to preserve
+  the new opening/closing markers as comment vnodes alongside the
+  legacy `<!--dj-if-->` placeholder. Public `render_template` /
+  `render_template_with_dirs` strip ALL `dj-if`-family markers via
+  `strip_dj_if_markers` helper — preserves the existing contract that
+  public rendering yields clean HTML.
+
+  **What this enables (NOT in this PR):**
+  - Iter 2 (Foundation 2): client patch applier learns `RemoveSubtree`
+    / `InsertSubtree` patch types.
+  - Iter 3 (Capability): Rust VDOM differ recognizes `dj-if`
+    boundaries; emits subtree-level patches when conditionals flip.
+
+  42 regression cases across 3 files — 19 cases in
+  `test_if_markers.rs` (Rust integration test), 4 cases in the
+  `parser::tests` module of `djust_vdom` (legacy + new boundary
+  markers + unrelated comments still filtered), and 19 cases in
+  `TestElementBearingIfMarkers` / `TestPureTextSkip` /
+  `TestPublicRenderTemplateStrips` / `TestIdStability` /
+  `TestIdAssignment` / `TestAttributeContext` /
+  `TestSiblingStability` (Python-level Template API + public-render
+  strip path).
+
 ### Changed
 
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
