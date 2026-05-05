@@ -324,6 +324,40 @@ short-circuit so `render_with_diff()` always runs when
 - Next: `/djust-release 0.9.3` — RC2 first if pre-flight requires it; stable otherwise.
 
 
+### Milestone: v0.9.3-7 — state-backend safety pair (#1353 + #1354)
+
+**Status:** 🚀 commissioned 2026-05-05. Two coupled production bugs from NYC Claims (filed against v0.9.2rc1, still affect v0.9.3rc2). Process as a single batch — they're the two halves of one downstream-consumer pain point.
+
+*Goal:* Land both before v0.9.3 stable cut. The combination is "configured Redis but silently downgraded to in-memory" (#1354) → "in-memory backend panics under per-session HTTP concurrency" (#1353). Either fix alone leaves the production failure mode intact; both together close the class.
+
+#### Tasks (single batch — one PR or grouped)
+
+- [ ] **#1354 — State backend silently falls back to in-memory when configured via top-level Django settings.** `BackendRegistry` reads only `DJUST_CONFIG["STATE_BACKEND"]`; top-level `DJUST_STATE_BACKEND` / `DJUST_REDIS_URL` settings are ignored, with no warning. Recommended fix (in preference order):
+  1. Read both forms (top-level + `DJUST_CONFIG`). URL-shaped values (`redis://...`) → backend_type="redis". Backwards-compatible.
+  2. `logger.warning("Falling back to in-memory state backend in production — multi-process deployments will lose state across replicas")` when DEBUG=False and backend defaults to memory.
+  3. Update docstring + scaffold template to use one consistent form.
+
+  Files: `python/djust/state_backends/registry.py`, `python/djust/utils.py:90-103` (`BackendRegistry.get`), `docs/website/guides/multi-tenant.md` (or wherever STATE_BACKEND is documented).
+
+- [ ] **#1353 — Concurrent same-session HTTP renders collide on shared `RustLiveView` (`RuntimeError: Already borrowed`).** Per-session HTTP cache returns shared Python reference; two parallel renders both call `_rust_view.update_state(...)` and PyO3 panics on `RefCell::borrow_mut`. Recommended fix (issue lists 3 options; pick by judgment during Plan stage):
+  1. Per-`RustLiveView` `threading.Lock` around `_sync_state_to_rust` (cheapest, least invasive).
+  2. Clone the cached object on cache hit (mirror Redis backend's serialize/deserialize round-trip).
+  3. Bypass cache for HTTP `GET`s entirely (most aggressive; eliminates contention class).
+
+  Files: `python/djust/mixins/rust_bridge.py:236-345` (`_initialize_rust_view`), `python/djust/mixins/rust_bridge.py:553` (`_sync_state_to_rust`), `python/djust/state_backends/memory.py:74` (`InMemoryStateBackend.get`).
+
+#### Sequencing
+
+Per Action #1055 (multi-PR milestone iter sequencing): smallest design-novel iter first. **#1354 first** — clearer fix shape (read both forms + warn), small. **#1353 second** — more design-novel (concurrency lock placement choice). Or batch both into one PR if scope allows.
+
+#### Acceptance
+
+- Both issues closed via merged PR(s).
+- Regression test for #1354: configure top-level `DJUST_STATE_BACKEND="redis://..."`, assert `get_backend()` returns `RedisStateBackend`. Plus a startup-warning test for non-DEBUG memory fallback.
+- Regression test for #1353: simulate two `sync_to_async` threads entering `_sync_state_to_rust` against the same cached `RustLiveView`, assert no `RuntimeError: Already borrowed`.
+- Then: `/djust-release 0.9.3rc3` (or stable, depending on the 2026-05-06 verification cron's read).
+
+
 ### Milestone: v0.9.2-7 — broken-anchor cleanup (pre-stable trivial drain) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-02. 1 issue closed via 1 PR. Smallest pre-stable drain bucket: a 1-line broken-anchor fix that's been carried since the deployment guide was written. Pre-existing on main (flagged as 🟡 in PR #1265 Stage 11 review and filed as #1266 rather than scope-creeping the deployment-guide PR — three consecutive milestones now use the canon "🟡 plan-fidelity findings get a separate small PR").
