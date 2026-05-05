@@ -23,6 +23,350 @@
 use crate::{lis::longest_increasing_subsequence, vdom_trace, Patch, VNode};
 use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
+// =============================================================================
+// dj-if keyed boundary detection (Capability of #1358 — Iter 3 of v0.9.4-1)
+//
+// Iter 1 (PR #1363) made the Rust template renderer emit
+// `<!--dj-if id="if-<8hex>-N"-->...<!--/dj-if-->` boundary markers around
+// element-bearing `{% if %}` blocks. Iter 2 (PR #1364) taught the client
+// patch dispatcher to apply `RemoveSubtree { id }` / `InsertSubtree { id,
+// path, d, index, html }` patches.
+//
+// This iter's job: recognize those markers in the diff input and emit the
+// new patch types when conditionals flip — eliminating the long-standing
+// class of `{% if %}`-breaks-VDOM-patching bugs (issue #256, #1358).
+//
+// The predicate mirrors `crates/djust_vdom/src/parser.rs:494-499` (server)
+// and `python/djust/static/djust/src/12-vdom-patch.js:38-43` (client).
+// =============================================================================
+
+/// Returns the id token from a `<!--dj-if id="X"-->` open-marker comment, if
+/// the node is such a comment. Mirrors the JS `_extractDjIfMarkerId` helper
+/// in `12-vdom-patch.js:1180-1199` and the server-side parser predicate at
+/// `crates/djust_vdom/src/parser.rs:497-498`.
+///
+/// Returns `None` for:
+///   - non-comment nodes
+///   - comments not matching the dj-if open-marker shape
+///   - the legacy single-comment placeholder `<!--dj-if-->` (issue #295) —
+///     it has no id and is handled by the existing legacy diff path
+///     (`diff_nodes` lines ~165-241)
+///   - the close marker `<!--/dj-if-->`
+fn dj_if_open_id(node: &VNode) -> Option<String> {
+    if !node.is_comment() {
+        return None;
+    }
+    let text = node.text.as_deref()?;
+    let trimmed = text.trim();
+    // Open marker: `dj-if<space-or-tab>...id="X"...`. Must reject
+    // lookalikes like `dj-iffy`, `dj-ifid="x"` — only literal whitespace
+    // after `dj-if` qualifies (mirrors the parser broadening predicate).
+    if !(trimmed.starts_with("dj-if ") || trimmed.starts_with("dj-if\t")) {
+        return None;
+    }
+    // After `dj-if`, find an `id="..."` token. Production templates emit
+    // exactly one canonical form: `dj-if id="if-<8hex>-N"`. We extract the
+    // first `id=".."` substring. Returns None if absent (defensive — should
+    // not happen in production).
+    let after_dj_if = trimmed.get("dj-if".len()..)?;
+    let id_start = after_dj_if.find("id=\"")? + "id=\"".len();
+    let rest = after_dj_if.get(id_start..)?;
+    let id_end = rest.find('"')?;
+    Some(rest[..id_end].to_string())
+}
+
+/// True if the node is a `<!--/dj-if-->` close marker.
+fn is_dj_if_close(node: &VNode) -> bool {
+    if !node.is_comment() {
+        return false;
+    }
+    node.text
+        .as_deref()
+        .map(|t| t.trim() == "/dj-if")
+        .unwrap_or(false)
+}
+
+/// Find all dj-if boundary pairs in a sibling list.
+///
+/// Returns a vector of `(open_idx, close_idx, id)` tuples in document order.
+/// Uses a depth counter so nested boundaries are paired correctly:
+/// `[open_A, open_B, close_B, close_A]` → `[(0, 3, "A"), (1, 2, "B")]`.
+///
+/// Unbalanced markers (open without matching close, close without preceding
+/// open) are returned as the empty vector — the caller should fall through
+/// to the existing diff in that case (defensive against malformed input).
+fn find_dj_if_pairs(children: &[VNode]) -> Vec<(usize, usize, String)> {
+    let mut pairs: Vec<(usize, usize, String)> = Vec::new();
+    // Stack of (open_idx, id) for unmatched open markers seen so far.
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    for (i, child) in children.iter().enumerate() {
+        if let Some(id) = dj_if_open_id(child) {
+            stack.push((i, id));
+        } else if is_dj_if_close(child) {
+            if let Some((open_idx, id)) = stack.pop() {
+                pairs.push((open_idx, i, id));
+            } else {
+                // Unbalanced close — bail to no pairs; existing diff handles it.
+                return Vec::new();
+            }
+        }
+    }
+    if !stack.is_empty() {
+        // Unbalanced open(s) — bail to no pairs.
+        return Vec::new();
+    }
+    pairs
+}
+
+/// Render a `dj-if` boundary subtree as HTML for `InsertSubtree.html`.
+///
+/// Includes the open marker, all body nodes, and the close marker — Shape A
+/// per Iter 2's wire contract (`12-vdom-patch.js:1345-1389`). The client
+/// parses this via an inert `<template>.innerHTML` so any nested `<script>`
+/// tags do NOT execute.
+fn render_dj_if_boundary_html(children: &[VNode], open_idx: usize, close_idx: usize) -> String {
+    let mut out = String::new();
+    for child in children.iter().take(close_idx + 1).skip(open_idx) {
+        out.push_str(&child.to_html());
+    }
+    out
+}
+
+/// Diff sibling lists with `dj-if` keyed-boundary awareness.
+///
+/// Returns `Some(patches)` when at least one of the lists contains an
+/// id-bearing dj-if boundary pair (i.e. the new keyed-subtree machinery
+/// applies). The caller short-circuits its existing keyed/indexed diff
+/// when this returns `Some` — the returned patches are the complete child
+/// diff for this parent.
+///
+/// Returns `None` when neither list has id-bearing boundaries; the caller
+/// then runs its regular keyed/indexed diff (preserving the legacy
+/// `<!--dj-if-->` placeholder + `data-djust-replace` paths unchanged).
+///
+/// Patch emission rules:
+///   - id in OLD only → `RemoveSubtree { id }`
+///   - id in NEW only → `InsertSubtree { id, path: parent_path, d: parent_id,
+///     index: open_idx_in_new, html: full marker pair + body }`
+///   - id in BOTH → recurse into the inner body element-by-element (markers
+///     themselves are static comment nodes — text matches by construction).
+///   - non-boundary children → paired by relative order among non-boundary
+///     siblings. Patch absolute indices are taken from the NEW tree (target).
+///
+/// The boundary id normalizes positions: shifts caused by adding/removing
+/// boundaries no longer cascade into mis-targeted patches in non-boundary
+/// siblings — the core fix for #1358.
+fn dj_if_pre_pass(
+    old: &[VNode],
+    new: &[VNode],
+    path: &[usize],
+    parent_id: &Option<String>,
+) -> Option<Vec<Patch>> {
+    let old_pairs = find_dj_if_pairs(old);
+    let new_pairs = find_dj_if_pairs(new);
+    if old_pairs.is_empty() && new_pairs.is_empty() {
+        // Common fast path: no id-bearing boundaries on either side. Caller
+        // proceeds with the existing diff unchanged.
+        return None;
+    }
+
+    let mut patches: Vec<Patch> = Vec::new();
+
+    // Build id → (open_idx, close_idx) maps for both lists.
+    let mut old_by_id: HashMap<String, (usize, usize)> = HashMap::new();
+    for (open, close, id) in &old_pairs {
+        old_by_id.insert(id.clone(), (*open, *close));
+    }
+    let mut new_by_id: HashMap<String, (usize, usize)> = HashMap::new();
+    for (open, close, id) in &new_pairs {
+        new_by_id.insert(id.clone(), (*open, *close));
+    }
+
+    // 1. RemoveSubtree for id-only-in-old.
+    for (open, close, id) in &old_pairs {
+        if !new_by_id.contains_key(id) {
+            vdom_trace!(
+                "dj_if_pre_pass: REMOVE_SUBTREE id={} (old open={}, close={})",
+                id,
+                open,
+                close
+            );
+            patches.push(Patch::RemoveSubtree { id: id.clone() });
+        }
+    }
+
+    // 2. InsertSubtree for id-only-in-new. The `index` is the open marker's
+    //    absolute position within the new parent's children array — same
+    //    semantics as `InsertChild.index` (Iter 2 client uses
+    //    `getSignificantChildren(parent)[index]` as the ref-child).
+    for (open, close, id) in &new_pairs {
+        if !old_by_id.contains_key(id) {
+            let html = render_dj_if_boundary_html(new, *open, *close);
+            vdom_trace!(
+                "dj_if_pre_pass: INSERT_SUBTREE id={} index={} html_len={}",
+                id,
+                open,
+                html.len()
+            );
+            patches.push(Patch::InsertSubtree {
+                id: id.clone(),
+                path: path.to_vec(),
+                d: parent_id.clone(),
+                index: *open,
+                html,
+            });
+        }
+    }
+
+    // 3. Recurse into matched boundaries (id present in BOTH). Pair inner
+    //    body children element-by-element. The markers themselves are
+    //    static comments — diffing them returns 0 patches when text matches.
+    //
+    //    The boundary id normalizes positions: even if the boundary's open
+    //    marker is at different absolute indices in old vs new (e.g. a
+    //    sibling was added before it), the inner-body pairing is by relative
+    //    position WITHIN the boundary. Outer-sibling shifts no longer
+    //    cascade into the body's patches.
+    //
+    //    Iterate through old_pairs in document order so the resulting
+    //    patches are deterministic.
+    for (old_open, old_close, id) in &old_pairs {
+        let Some(&(new_open, new_close)) = new_by_id.get(id) else {
+            continue;
+        };
+        vdom_trace!(
+            "dj_if_pre_pass: RECURSE id={} old=[{}, {}] new=[{}, {}]",
+            id,
+            old_open,
+            old_close,
+            new_open,
+            new_close
+        );
+        // Inner body slices (exclusive of markers).
+        let old_body = &old[*old_open + 1..*old_close];
+        let new_body = &new[new_open + 1..new_close];
+        let common = old_body.len().min(new_body.len());
+        for i in 0..common {
+            let mut child_path = path.to_vec();
+            // Path uses absolute index in the NEW tree's children array
+            // (target shape). Inside-body patches resolve via the `d` field
+            // (id-based) on the client; the path is a fallback.
+            child_path.push(new_open + 1 + i);
+            patches.extend(diff_nodes(&old_body[i], &new_body[i], &child_path));
+        }
+        // Extra old body children → RemoveChild on the parent (using OLD
+        // absolute indices, descending order so removes don't shift indices
+        // for subsequent removes within this batch — handled by the client
+        // patch sorter regardless).
+        if old_body.len() > new_body.len() {
+            for i in (new_body.len()..old_body.len()).rev() {
+                let abs_old_idx = old_open + 1 + i;
+                vdom_trace!(
+                    "dj_if_pre_pass: RemoveChild inside boundary id={} abs_old={}",
+                    id,
+                    abs_old_idx
+                );
+                patches.push(Patch::RemoveChild {
+                    path: path.to_vec(),
+                    d: parent_id.clone(),
+                    index: abs_old_idx,
+                    child_d: old[abs_old_idx].djust_id.clone(),
+                });
+            }
+        }
+        // Extra new body children → InsertChild on the parent.
+        if new_body.len() > old_body.len() {
+            for i in old_body.len()..new_body.len() {
+                let abs_new_idx = new_open + 1 + i;
+                vdom_trace!(
+                    "dj_if_pre_pass: InsertChild inside boundary id={} abs_new={}",
+                    id,
+                    abs_new_idx
+                );
+                patches.push(Patch::InsertChild {
+                    path: path.to_vec(),
+                    d: parent_id.clone(),
+                    index: abs_new_idx,
+                    node: new[abs_new_idx].clone(),
+                    ref_d: None,
+                });
+            }
+        }
+    }
+
+    // 4. Diff non-boundary children (entries outside ALL boundary pair
+    //    ranges). Pair them by RELATIVE position among non-boundary
+    //    siblings — adding/removing a boundary doesn't shift these
+    //    positions. Patch indices are absolute in the NEW tree.
+    //
+    //    Limitation (acceptable for v0.9.4-1): when non-boundary siblings
+    //    carry `dj-key` attributes AND reorder within their relative slot,
+    //    this position-based pairing can produce suboptimal patches. The
+    //    existing keyed-diff (`diff_keyed_children`) handles that case
+    //    optimally, but layering keyed-alignment on top of boundary-keyed
+    //    siblings is out of scope for this iter — production templates
+    //    don't typically reorder elements across `{% if %}` boundaries.
+    //    If a regression surfaces, consider extending the pre-pass to
+    //    delegate non-boundary children to `diff_keyed_children` when any
+    //    of them have keys.
+    let old_excluded: Vec<bool> = build_excluded_mask(old.len(), &old_pairs);
+    let new_excluded: Vec<bool> = build_excluded_mask(new.len(), &new_pairs);
+    let old_kept: Vec<usize> = (0..old.len()).filter(|&i| !old_excluded[i]).collect();
+    let new_kept: Vec<usize> = (0..new.len()).filter(|&i| !new_excluded[i]).collect();
+
+    let common = old_kept.len().min(new_kept.len());
+    for i in 0..common {
+        let old_abs = old_kept[i];
+        let new_abs = new_kept[i];
+        let mut child_path = path.to_vec();
+        child_path.push(new_abs);
+        patches.extend(diff_nodes(&old[old_abs], &new[new_abs], &child_path));
+    }
+    // Extra old non-boundary children → RemoveChild (descending).
+    if old_kept.len() > new_kept.len() {
+        for &old_abs in old_kept[new_kept.len()..].iter().rev() {
+            // Skip removing text nodes (no djust_id) — apply_patches on the
+            // client uses path-based fallback for text nodes, but emitting a
+            // RemoveChild for a text whose absolute position has shifted
+            // could mis-target. Production text nodes don't carry djust_id;
+            // the existing diff path has the same caveat, so we mirror it.
+            patches.push(Patch::RemoveChild {
+                path: path.to_vec(),
+                d: parent_id.clone(),
+                index: old_abs,
+                child_d: old[old_abs].djust_id.clone(),
+            });
+        }
+    }
+    // Extra new non-boundary children → InsertChild.
+    if new_kept.len() > old_kept.len() {
+        for &new_abs in new_kept[old_kept.len()..].iter() {
+            let ref_d = old.get(new_abs).and_then(|n| n.djust_id.clone());
+            patches.push(Patch::InsertChild {
+                path: path.to_vec(),
+                d: parent_id.clone(),
+                index: new_abs,
+                node: new[new_abs].clone(),
+                ref_d,
+            });
+        }
+    }
+
+    Some(patches)
+}
+
+/// Build a boolean mask: `true` at indices that fall inside any dj-if
+/// boundary pair's `[open..=close]` range.
+fn build_excluded_mask(len: usize, pairs: &[(usize, usize, String)]) -> Vec<bool> {
+    let mut mask = vec![false; len];
+    for (open, close, _) in pairs {
+        for entry in mask.iter_mut().take(close + 1).skip(*open) {
+            *entry = true;
+        }
+    }
+    mask
+}
+
 /// Synchronize IDs from old VDOM to new VDOM for matched (non-replaced) elements.
 ///
 /// After diffing, the new VDOM has fresh IDs from `parse_html_continue()` which
@@ -391,6 +735,25 @@ fn diff_children(
             parent_id
         );
         return replace_all_children(old, new, path, parent_id);
+    }
+
+    // Capability of #1358: when sibling lists contain id-bearing dj-if
+    // boundary pairs (Iter 1's `<!--dj-if id="..."-->...<!--/dj-if-->`),
+    // run the keyed-boundary pre-pass. It emits RemoveSubtree/InsertSubtree
+    // for unmatched boundaries and recurses into matched ones. Non-boundary
+    // children are paired by relative order — sibling shifts caused by
+    // boundary flips no longer cascade into mis-targeted patches.
+    //
+    // Returns None when neither side has id-bearing boundaries, in which
+    // case we fall through to the existing keyed/indexed diff (preserving
+    // the legacy `<!--dj-if-->` no-id placeholder path at #295).
+    if let Some(boundary_patches) = dj_if_pre_pass(&old.children, &new.children, path, parent_id) {
+        vdom_trace!(
+            "diff_children: dj-if pre-pass produced {} patches",
+            boundary_patches.len()
+        );
+        patches.extend(boundary_patches);
+        return patches;
     }
 
     // Check if we can use keyed diffing
