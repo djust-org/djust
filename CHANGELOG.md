@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc2] - 2026-05-05
+
 ### Fixed
 
 - **HOTFIX: v0.9.4rc1 hooks TDZ regression (#1370).** v0.9.4rc1 shipped a
