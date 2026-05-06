@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc6] - 2026-05-06
+
+### Fixed
+
+- **Handler metadata `<script>` no longer injected inside `dj-root` (#1370 final fix).**
+  `_inject_handler_metadata` was appending a `<script>` element inside the
+  `dj-root` content on initial HTTP render. The server's VDOM doesn't include
+  this script → every sibling path after the script was shifted by +1 → all
+  path-based patches failed with "parent: SCRIPT". Fix: inject handler metadata
+  into the full page HTML (before `</body>`) AFTER the dj-root replacement,
+  so it lives outside the VDOM-tracked subtree. This was the actual root cause
+  of the "15/17 patches failed" pattern — not marker IDs (rc4/rc5 fixed those)
+  nor the extension (confirmed by disabling it).
+
 ## [0.9.4rc5] - 2026-05-06
 
 ### Fixed
