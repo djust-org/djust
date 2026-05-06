@@ -206,14 +206,19 @@ class StickyChildRegistry:
                 continue
             # Update request back-reference so handlers see the new request.
             # Some child types (slot descriptors, read-only proxies) can't
-            # accept a `request` attr — that's expected and fine; the child
-            # just doesn't get the live request handle. Log at DEBUG so the
-            # absence is observable without spamming production logs.
+            # accept a `request` attr. When this happens, downstream
+            # per-event object-permission checks for this child WILL fail
+            # closed (websocket_utils.py:234, #1380) — log at WARNING so
+            # the gap is observable at its source rather than silently at
+            # the denial site.
             try:
                 child.request = new_request
             except AttributeError:
-                logger.debug(
-                    "sticky child %s does not accept request attribute (expected for read-only proxies)",
+                logger.warning(
+                    "sticky child %s does not accept request attribute "
+                    "(read-only proxy?); per-event object-permission "
+                    "checks will fail closed for this child until "
+                    "request is stamped",
                     sticky_id,
                 )
             survivors[sticky_id] = child
