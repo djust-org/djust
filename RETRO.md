@@ -267,6 +267,78 @@ issue or be explicitly closed with a reason.
 | 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Open | `pathname` is user-controllable; current safety relies on downstream server validation rejecting invalid routes. Defensive tightening recommended: own-property guard or `Map` (prototype-pollution-immune by design). PR #1359 added eslint-disable-next-line with rationale; this issue tracks tightening the actual access. |
 | 226 | Stage 11 Code Review's reproducer-driven verdict is more reliable than diff-only review | Retro v0.9.4-1 / PR #1365 | — | Closed | **Resolved as canon: reviewers should write a local reproducer test for any algorithm finding before classifying severity.** Stage 11 reviewer for PR #1365 wrote a test that FAILED LOCALLY on the original `ea6c4c4a`, providing empirical proof of the elif-cascade algorithm bug. Stage 13 reviewer wrote 9 independent reproducer tests, 4 of which fail on `ea6c4c4a` and pass on the fix `278d6f2a` — converting "this looks wrong" into "this IS wrong." Pattern: when a Stage 11 reviewer suspects an algorithmic flaw, they should attempt a reproducer; the reproducer either confirms a 🔴 finding or shows the suspicion was unfounded (downgrade to 🟡 or 🟢). Future Stage 11 reviews on algorithm-class PRs should follow this discipline. |
 | 227 | dj-if + dj-key boundary-reorder limitation in keyed VDOM diff | PR #1365 Stage 13 (deferred) | #1366 | Open | When non-boundary siblings carry `dj-key` AND reorder within their relative slot, position-based pairing of non-boundary children can produce suboptimal patches. Production templates don't typically reorder elements across `{% if %}` boundaries. Defer to v0.10 polish. Suggested fix: extend the pre-pass to delegate to `diff_keyed_children` when any non-boundary children have `dj-key`. |
+| 228 | HTTP path log-injection asymmetry: cache_key not sanitize_for_log'd in rust_bridge.py | PR #1367 Stage 11 (deferred per Action #1079) | #1368 | Open | Pre-existing — `rust_bridge.py:372` (HTTP path) doesn't use `sanitize_for_log` for cache_key while sibling at line 343 (WS path) does. Out of scope for #1362's literal text; one-line fix proposed in the issue. |
+| 229 | Test docstrings should explicitly state the rule being demonstrated AND identify what hypothetical buggy implementation the test would catch | Retro v0.9.4-2 / PR #1367 Stage 11 (Action #1200 generalization) | — | Closed | **Resolved as canon: the tautology rule (Action #1200) extends to docstring honesty.** Iter 1's original `test_multi_template_caveat_only_primary_hash_drives_invalidation` asserted determinism but called itself "demonstrates the multi-template caveat" — looked credible until Stage 11 reviewer asked "what would this test prove that wasn't already proven elsewhere?" Stage 12 rewrote with two `child.html` versions; the rewrite would fail on Option B (composite hash). Generalize: any test docstring claiming to "demonstrate caveat X" should explicitly state what hypothetical buggy implementation the test would catch. If the test would pass on the buggy implementation too, it's not demonstrating the caveat — it's testing something else. |
+
+## v0.9.4-2 — Template-hash-keyed Redis cache + deployment docs (#1362) (PRs #1367, #1369)
+
+**Date**: 2026-05-05
+**Scope**: Closes #1362 (production deployment gaps surfaced by NYC Claims). Two iters: code (template-hash-keyed Redis cache) + docs (deployment guide additions). Builds directly on v0.9.4-1's just-shipped `parse_with_source` infrastructure.
+**Tests at close**: 4949 Python + Rust + JS, all green (DraftMode playwright flake unrelated).
+
+### What We Learned
+
+**1. Reusing infrastructure from a just-shipped milestone is the most elegant solution shape.**
+The user asked "could we do this without requiring the user to remember to do this?" referring to the manual `REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"` pattern. First-pass design: env-var fallback chain + opt-in setting. Second-pass design: reuse v0.9.4-1's 8-hex template-source hash (already shipped 2 hours earlier in PR #1363). The second design is dramatically simpler — one hash function, two callsites edited, zero operator config. Lesson: when a recently-shipped milestone introduces stable infrastructure (here: deterministic per-template hashing), look for downstream uses BEFORE designing parallel mechanisms.
+
+**Action taken**: Closed by Iter 1 itself — PR #1367 IS the worked example. Future "this has been kicked down the road" features should consider whether the previous milestone's infrastructure can be reused, especially when the mechanisms are similar (both wanted "stable identifier per template-source" — markers + cache keys).
+
+**2. Stage 11 perf scrutiny is load-bearing even when the algorithm is correct.**
+PR #1367's first-pass implementation was algorithmically right (cache key includes hash, hash matches what `parse_with_source` derives). Stage 11 reviewer caught that hoisting `template_source = self.get_template()` BEFORE the cache lookup made every cache HIT eat a Django template-load cost — the regression was invisible from "the algorithm is right" inspection. Stage 12 fixed via class-level memoization (`cls.__dict__["_cached_template_hash"]`); the load-bearing test verifies cache HITs call `get_template()` 0 times after warmup. Lesson: Stage 11 reviewers should explicitly trace HOT-PATH performance, not just CORRECTNESS.
+
+**Action taken**: Closed by Stage 12 of Iter 1 (perf regression eliminated via memoization). The "trace hot-path performance during Stage 11" discipline is implicit in the existing review checklist; explicitly canonicalize next time the issue surfaces.
+
+**3. Tautology rule (Action #1200) extends to docstring honesty.**
+Iter 1's first-pass had a test calling itself `test_multi_template_caveat_only_primary_hash_drives_invalidation` but actually testing only `compute_template_hash` determinism — the docstring claimed "demonstrates the multi-template caveat" but the test would pass on a hypothetical Option B implementation too. Stage 11 caught it; Stage 12 rewrote with real two-version `child.html` files. Generalize: any test claiming to "demonstrate caveat X" should explicitly identify what hypothetical buggy implementation the test would catch. If it'd pass on the buggy implementation, the test isn't demonstrating the caveat. New canon row: Action Tracker #229.
+
+### Insights
+
+- **Cross-iter coordination paid off.** Iter 2's docs (PR #1369) accurately reflect Iter 1's behavior (auto-derivation, multi-template caveat, `djust clear --all` escape hatch). Stage 11 reviewer for Iter 2 verified all factual claims by reading the actual code paths Iter 1 introduced. This is what "code + docs in same milestone" buys: docs match shipped behavior because they're written immediately after the behavior is locked in.
+- **Pure-docs PRs benefit from Stage 11.** PR #1369 was DOCS_ONLY — Stages 6 (Test Execution), 7 (Self-Review), 8 (Security Check) all skipped per the `skip_if` condition. But Stage 11 found 0 🔴 / 0 🟡 only because the reviewer verified factual claims against actual code. A diff-only inspection would have missed potential drift between docs and code. Lesson: docs-only PRs need Stage 11 specifically to catch factual drift, not just style nits.
+- **The 1-hour Redis TTL acts as a soft migration window for cache key shape changes.** PR #1367 changed the cache key shape; existing cached entries became unreachable. Bounded by TTL → equivalent to one cache flush. Lesson: when changing cache key formats in cache-with-TTL backends, the TTL itself is the migration window; no explicit dual-key handling needed (assuming the operator can tolerate ~1 hour of fresh-mounts post-deploy, which they always can since deploys themselves invalidate state somewhere).
+- **The "multi-template Option A" caveat was the right call.** Hashing all touched templates (Option B) would have been more accurate but required cross-template-graph traversal at every cache lookup. The escape hatch (`djust clear --all`) handles the rare edge case. Pattern: prefer simple-with-escape-hatch over complex-with-perfect-correctness when the edge case is operator-controllable.
+
+### Review Stats
+
+| Metric | Iter 1 (PR #1367) | Iter 2 (PR #1369) | Total |
+|---|---|---|---|
+| Commits | 4 (incl. address-findings) | 2 | 6 |
+| New tests | 12 (Python + Rust) + 1 rewritten | 0 (docs-only) | 12 |
+| Files changed | 6 | 2 | 8 |
+| 🔴 Stage 11 findings | 0 | 0 | 0 |
+| 🟡 Stage 11 findings | 3 (tautology, perf regression, log-injection asymmetry) | 0 | 3 |
+| Findings addressed | 2 of 3 in this PR (#3 deferred to #1368) | n/a | 2 of 3 |
+| Stage 11 verdict | COMMENT (leaning approve) → APPROVE post-Stage-12 | APPROVE | — |
+| Stage 13 verdict | APPROVE | n/a (skipped per skip_if) | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker rows #228 (#1368 log-injection asymmetry follow-up) + #229 (tautology rule extends to docstring honesty canon) added.
+
+**ROADMAP.md**: v0.9.4-2 milestone tasks all struck through with closure notes.
+
+**`docs/website/guides/deployment.md`**: 4 new sections (Deploy-time state invalidation, Recovery HTML semantics, Daphne→Uvicorn benchmark, Production checklist).
+
+### Open Items
+
+- ✅ #1362 closed via this milestone.
+- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
+- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
+- [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8.
+- [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8.
+- [ ] Action Tracker #227 (#1366) — dj-if + dj-key boundary-reorder limitation. Defer to v0.10 polish.
+- [ ] Action Tracker #228 (#1368) — HTTP path log-injection asymmetry follow-up.
+
+### Acceptance check
+
+- ✅ Both iters merged: PR #1367 (Iter 1, code, commit a23d1db2), PR #1369 (Iter 2, docs, 37330905).
+- ✅ Reproducer from #1362 section 1 (PR converts `{% if %}` to `d-none`, deploys, sees patch failures on existing sessions) no longer reproduces — affected views auto-invalidate via the new template-hash key.
+- ✅ Operators no longer need to remember `REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"`.
+- ✅ Deployment guide has 4 new sections covering recovery semantics + Uvicorn benchmark + production checklist.
+- ⏳ Next: `/djust-release 0.9.4` — multiple substantive features shipped (the {% if %} fix from v0.9.4-1 + auto-deploy invalidation from v0.9.4-2 + comprehensive deployment docs). v0.9.4 release notes can headline both.
+
+---
 
 ## v0.9.4-1 — Keyed VDOM diff for `{% if %}` conditional subtrees (#1358 / closes #256 Option A) (PRs #1363, #1364, #1365)
 
