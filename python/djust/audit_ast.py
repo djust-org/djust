@@ -74,6 +74,10 @@ AST_FINDING_CODES: Dict[str, Tuple[str, str]] = {
     "X005": ("error", "mark_safe() with interpolated value — XSS risk"),
     "X006": ("warning", "Template uses |safe on a view variable"),
     "X007": ("warning", "Template uses {% autoescape off %}"),
+    "X008": (
+        "warning",
+        "Detail view matches IDOR shape — missing object-permission lifecycle override",
+    ),
 }
 
 
@@ -664,6 +668,137 @@ def _check_mark_safe(ctx: _FileContext) -> None:
 
 
 # ---------------------------------------------------------------------------
+# X008 — IDOR-shape: detail view missing object-permission lifecycle override
+# (#1373, ADR-017 § Decision 8, v0.9.5-1c)
+# ---------------------------------------------------------------------------
+
+
+def _class_has_attribute(cls: ast.ClassDef, name: str) -> bool:
+    """Return True if class defines an attribute named ``name`` (any value)."""
+    for stmt in cls.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return True
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            if stmt.target.id == name:
+                return True
+    return False
+
+
+def _class_defines_method(cls: ast.ClassDef, name: str) -> bool:
+    """Return True if class defines a method named ``name`` directly."""
+    for stmt in cls.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == name:
+            return True
+    return False
+
+
+def _mount_method(cls: ast.ClassDef) -> Optional[ast.FunctionDef | ast.AsyncFunctionDef]:
+    for stmt in cls.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "mount":
+            return stmt
+    return None
+
+
+def _mount_assigns_url_kwarg_id(mount_func: ast.AST) -> Optional[str]:
+    """If mount() does ``self.X_id = X_id`` (or ``self.X = X``) where the
+    name on the right matches a parameter name from the mount signature,
+    return the attribute name (e.g. 'document_id'). Otherwise None.
+
+    The pattern: URL kwargs are passed as keyword args to mount() and
+    the user assigns them to ``self`` for later access from event
+    handlers. This is the canonical IDOR shape from ADR-017.
+    """
+    if not isinstance(mount_func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    # Collect parameter names (excluding self, request).
+    param_names = {arg.arg for arg in mount_func.args.args if arg.arg not in ("self", "request")}
+    param_names.update(arg.arg for arg in mount_func.args.kwonlyargs)
+    if not param_names:
+        return None
+    for stmt in ast.walk(mount_func):
+        if not isinstance(stmt, ast.Assign):
+            continue
+        for target in stmt.targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            if not (isinstance(target.value, ast.Name) and target.value.id == "self"):
+                continue
+            attr_name = target.attr
+            # Match self.X = X (or self.X_id = X_id) where X is a kwarg.
+            if isinstance(stmt.value, ast.Name) and stmt.value.id in param_names:
+                # Must look like an id-bearing attribute: ends in _id, or
+                # the value comes from a kwarg whose name ends in _id.
+                if attr_name.endswith("_id") or stmt.value.id.endswith("_id"):
+                    return attr_name
+    return None
+
+
+def _event_handler_reads_self_attr(method: ast.AST, attr_name: str) -> bool:
+    """Return True if ``method`` is an @event_handler that reads
+    ``self.<attr_name>`` in its body."""
+    if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    if not _is_event_handler(method):
+        return False
+    for node in ast.walk(method):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == attr_name
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
+            return True
+    return False
+
+
+def _check_idor_shape_needs_object_permission(ctx: _FileContext) -> None:
+    """Flag detail views matching the IDOR shape that haven't migrated
+    to the v0.9.5-1a get_object() / has_object_permission() lifecycle.
+
+    See ADR-017 § Decision 8 for the heuristic rationale and
+    docs/website/guides/authorization.md for the migration recipe.
+    """
+    for cls in ast.walk(ctx.tree):
+        if not isinstance(cls, ast.ClassDef):
+            continue
+        if not _looks_like_detail_view(cls):
+            continue
+        # Must have role-level permission_required (the shape this check
+        # targets — public views or auth-handled-elsewhere views are not
+        # X008 candidates).
+        if not _class_has_attribute(cls, "permission_required"):
+            continue
+        # Must NOT already have an object-level auth hook. Either is
+        # sufficient as the developer's escape hatch.
+        if _class_defines_method(cls, "has_object_permission"):
+            continue
+        if _class_defines_method(cls, "check_permissions"):
+            continue
+        # Must bind a URL kwarg id to self via mount().
+        mount = _mount_method(cls)
+        if mount is None:
+            continue
+        attr_id = _mount_assigns_url_kwarg_id(mount)
+        if attr_id is None:
+            continue
+        # Must have at least one @event_handler that reads self.<attr>.
+        if not any(_event_handler_reads_self_attr(stmt, attr_id) for stmt in cls.body):
+            continue
+        ctx.emit(
+            "X008",
+            cls,
+            details=(
+                f"{cls.name} binds self.{attr_id} from a URL kwarg in mount() and exposes "
+                f"event handlers that read it, but does not override get_object() / "
+                f"has_object_permission() (ADR-017 v0.9.5-1a). See "
+                f"docs/website/guides/authorization.md for the migration pattern."
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
 # X006 / X007 — Template scanners (regex-based, not AST)
 # ---------------------------------------------------------------------------
 
@@ -733,6 +868,7 @@ ALL_CHECKERS = (
     _check_sql_formatting,
     _check_open_redirect,
     _check_mark_safe,
+    _check_idor_shape_needs_object_permission,
 )
 
 

@@ -486,7 +486,9 @@ class TestX008IDORShapeNeedsObjectPermission:
 
                 @event_handler()
                 def add_comment(self, body=""):
-                    pass
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
         """)
         x008 = [f for f in findings if f.code == "X008"]
         assert len(x008) >= 1
