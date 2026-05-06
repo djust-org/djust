@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`get_object()` + `has_object_permission()` lifecycle hooks on `LiveView` — Foundation 1 of object-level authorization (#1373, ADR-017).**
+  Iter 1 of 3 toward closing a structural IDOR class that affects any djust app where the LiveView is bound to a single object via URL kwarg (`document_id`, `user_id`, `<resource>_id`, etc.). The natural placement for object-level checks (`get_context_data`) runs too late: by the time it fails, `mount()` has set up the WS-session-scoped state and event handlers can fire against the foreign object — the exact bug class this lifecycle closes.
+
+  This iteration ships **mount-time enforcement only**. Per-event re-execution lands in v0.9.5-1b after the API surface soaks one release; tooling (`djust check` IDOR-shape heuristic, `authorization.md` guide, `djust-dev` skill principle) lands in v0.9.5-1c. The split-foundation rollout follows the canon from Action #1122.
+
+  Two new public methods on `LiveView`, both default to no-op (the lifecycle is opt-in via override):
+  - `get_object(self) -> Optional[Any]` — return the view's primary object (typically the FK lookup `Model.objects.get(pk=self.<x>_id)`). Default returns `None` so views that don't override see zero behavior change.
+  - `has_object_permission(self, request, obj) -> bool` — return `True` if the request user may access `obj`. Default returns `True`. Called at mount-time when `get_object` is overridden.
+  - `_invalidate_object_cache(self) -> None` — handlers call this when they mutate state affecting access (e.g. reassigning the FK that determines ownership). Without invalidation, a cached `self._object` would let a formerly-authorized user retain access until WS reconnect.
+
+  The framework caches the result of `get_object()` as `self._object` after mount — reuse it from event handlers and `get_context_data` rather than re-querying. Cache is automatically reset on snapshot/state restore (it's a framework slot, not user-private state), which handles the "object reassigned while user was disconnected" case automatically.
+
+  **OWASP IDOR mitigation built in**: when `get_object()` returns `None`, `has_object_permission` is not called (the caller raises 404 if it wants to). The framework also catches Django's `ObjectDoesNotExist` (and subclasses `Model.DoesNotExist` / `Http404`) inside `check_object_permission` and treats it as `None` — automating the 404-shape pattern so a naive `Model.objects.get(pk=missing)` doesn't leak existence via `DEBUG=True` traceback.
+
+  **Order of auth checks** (logical onion): `login_required` → `permission_required` → `check_permissions` (existing) → `has_object_permission` (NEW). The new step has its own physical call site at `websocket.py:handle_mount` post-mount (not inside `check_view_auth`), because `get_object()` reads `self.<x>_id` populated by the user's `mount()` body — `check_view_auth` runs pre-mount when `self.kwargs` isn't yet bound. ADR-017 § Decision 5 documents the rationale.
+
+  New helpers in `djust.auth.core`:
+  - `check_object_permission(view_instance, request)` — re-exported from `djust.auth`. Wires `get_object` + `has_object_permission` together; raises `PermissionDenied` on denial.
+  - `_has_custom_get_object(view_instance)` — MRO walk that gates the lifecycle as opt-in; mirrors `_has_custom_check_permissions`.
+
+  Wire-protocol semantics: mount-time denial closes the WS with code 4403 + `{"type": "error", "message": "Permission denied"}` error frame, mirroring the existing pre-mount denial path at `websocket.py:1953-1955`.
+
+  Backwards compatible: views that don't override `get_object` see zero behavior change (verified empirically — full pytest suite of 4670 tests + 1563 JS tests passes unchanged). Apps that already use `check_permissions` keep working; the new step runs after.
+
+  6 regression tests in `tests/integration/test_object_permission_mount.py`: denial raises `PermissionDenied`; allow populates `self._object`; no-override is a no-op; `_invalidate_object_cache` resets the cache (verified via call counter); `get_object()=None` skips `has_object_permission`; `get_object()` raising `ObjectDoesNotExist` is treated as `None` (defense-in-depth against the `DEBUG=True` traceback leak).
+
 ## [0.9.4] - 2026-05-06
 
 ### Added
