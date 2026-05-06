@@ -231,7 +231,31 @@ async def _validate_event_security(
     # has_object_permission() raise anything other than PermissionDenied
     # (e.g., AttributeError in the developer's body), treat as denial.
     # Security code should not fail-open when the auth predicate crashes.
-    if owner_request:
+    if owner_request is None:
+        # #1380: when a view overrides get_object() but `request` was
+        # never stamped on the instance (e.g., a sticky child whose
+        # parent could not propagate the request through a read-only-
+        # proxy descriptor — see mixins/sticky.py), we MUST NOT silently
+        # skip the per-event object-permission check. Fail closed instead.
+        # Views that did not opt into the object-permission lifecycle
+        # (no get_object override) keep the original no-op semantics.
+        from .auth.core import _has_custom_get_object
+
+        if _has_custom_get_object(owner_instance):
+            logger.warning(
+                "Per-event object-permission check skipped on %s: "
+                "owner_request is None (child view did not receive a "
+                "request handle from parent). Failing closed.",
+                type(owner_instance).__name__,
+            )
+            await ws.send_error(
+                "Access denied for this object.",
+                code="permission_denied",
+            )
+            return None
+        # No custom get_object → no object-permission lifecycle → fall
+        # through silently (preserves the existing no-op contract).
+    else:
         from .auth.core import check_object_permission
 
         try:

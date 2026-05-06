@@ -467,3 +467,90 @@ def test_embedded_child_view_uses_child_get_object(rf):
     assert _ChildView._get_object_called is True, (
         "child's get_object MUST be called when child is the dispatch target"
     )
+
+
+# -- Tests: sticky-child fail-closed when request unstamped (#1380) -------
+
+
+@pytest.mark.asyncio
+async def test_per_event_fails_closed_when_request_missing_with_custom_get_object(rf):
+    """Case 10 (#1380, reproducer): when a view overrides get_object()
+    but `view.request` is None at event time (e.g., a sticky child whose
+    parent could not stamp the request handle through a read-only-proxy
+    descriptor), _validate_event_security MUST fail closed.
+
+    On parent commit the bare `if owner_request:` gate at
+    websocket_utils.py:234 silently SKIPS the per-event object-permission
+    check, returning the handler — bypassing object-level authorization
+    for the affected child views.
+
+    The fix sends a permission_denied frame and returns None when the
+    view has a custom get_object override but request is missing.
+    """
+    from djust.websocket_utils import _validate_event_security
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    _DenyEventView._handler_ran = False
+    # Construct view + mount, but do NOT stamp view.request (simulates
+    # the read-only-proxy sticky-child failure mode in mixins/sticky.py).
+    view = _DenyEventView()
+    view.mount(request, document_id=1)
+    # Defensive: ensure request really is None on the instance.
+    view.request = None
+
+    ws = _mock_ws()
+    rl = MagicMock()
+    rl.check_handler = MagicMock(return_value=True)
+    rl.should_disconnect = MagicMock(return_value=False)
+
+    handler = await _validate_event_security(ws, "update_value", view, rl)
+
+    # Fail-closed: handler returned None, error frame sent with the
+    # canonical permission_denied code, WS NOT closed (per-event denial
+    # semantics — user is authenticated; only this object/action denied),
+    # handler body did NOT execute.
+    assert handler is None, "missing request + custom get_object MUST fail closed; got handler back"
+    assert ws.send_error.called, "send_error must be called on fail-closed"
+    code = ws.send_error.call_args.kwargs.get("code")
+    assert code == "permission_denied", (
+        f"fail-closed must send permission_denied frame; got code={code}"
+    )
+    assert not ws.close.called, "per-event denial must not close the WS"
+    assert _DenyEventView._handler_ran is False, (
+        "handler body must NOT execute when per-event check fails closed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_per_event_missing_request_no_override_still_allowed(rf):
+    """Case 11 (#1380, regression): a view that does NOT override
+    get_object() must continue to dispatch handlers even if `view.request`
+    is None at event time. The fail-closed branch is gated by
+    `_has_custom_get_object` so views that didn't opt into the
+    object-permission lifecycle are unaffected.
+    """
+    from djust.websocket_utils import _validate_event_security
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    _NoOverrideEventView._handler_ran = False
+    view = _NoOverrideEventView()
+    view.mount(request)
+    view.request = None  # simulate unstamped child
+
+    ws = _mock_ws()
+    rl = MagicMock()
+    rl.check_handler = MagicMock(return_value=True)
+    rl.should_disconnect = MagicMock(return_value=False)
+
+    handler = await _validate_event_security(ws, "update_value", view, rl)
+
+    # No override → no-op path: handler returned, no error frame, no close.
+    assert handler is not None, (
+        "no-override views must continue to dispatch handlers even when "
+        "request is unstamped (the per-event check is opt-in via "
+        "_has_custom_get_object)"
+    )
+    assert not ws.send_error.called, "no-override path must not send a permission_denied frame"
+    assert not ws.close.called

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sticky-child views with overridden `get_object()` no longer silently skip per-event object-permission checks (#1380, deferred from PR #1378 Stage 11 🟡 #2).** When a sticky/embedded child view's `owner_request` is `None` (the parent failed to stamp `request` because `mixins/sticky.py:212-218`'s read-only-child constraint raised `AttributeError`), `_validate_event_security` now FAILS CLOSED if the child opted into the object-permission lifecycle: sends a `permission_denied` error frame and logs a `WARNING` instead of returning the handler. Views that did NOT override `get_object` are unchanged (no security check is active for them, so silent fall-through is correct). Companion change: `mixins/sticky.py:215` `logger.debug` → `logger.warning` on the read-only-child path so the upstream gap is observable in production logs at its source.
+
 ## [0.9.5rc1] - 2026-05-06
 
 ### Added
