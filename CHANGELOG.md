@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.9.4rc7] - 2026-05-06
+
+### Fixed
+
+- **Double-nested dj-root eliminated (#1370 final).** `self._rust_view.render()`
+  produces HTML that already includes its own `<div dj-root>...</div>` wrapper.
+  The Step 3 replacement was inserting that as the innerHTML of the shell's
+  dj-root → double nesting. Fix: replace the shell's ENTIRE `<div dj-root>...</div>`
+  element (opening tag through closing tag) with `liveview_html`. Single dj-root
+  level, correct marker IDs from `self._rust_view`, no path index drift.
+
 ## [0.9.4rc6] - 2026-05-06
 
 ### Fixed
