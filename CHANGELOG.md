@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc4] - 2026-05-06
+
+### Fixed
+
+- **Marker ID mismatch between HTTP render and WS diff resolved (#1370 re-open).**
+  `render_full_template` created a temporary `RustLiveView(self._full_template)`
+  whose template-source hash differed from the VDOM-tracked template's hash
+  (`self.get_template()`). HTTP-rendered DOM had markers with prefix A; WS differ
+  emitted patches with prefix B → "RemoveSubtree: open marker not found" →
+  recovery HTML → page reload. Fix: strip `<!--dj-if-->` markers from the initial
+  HTTP render so the client DOM starts marker-free. On first WS `render_with_diff`,
+  the differ sees "NEW has markers, OLD doesn't" → emits `InsertSubtree` with the
+  correct (VDOM-tracked) IDs. The non-inheritance path (`self.render()`) was already
+  correct (same `RustLiveView` instance as WS path). This only affected projects
+  using `{% extends %}` template inheritance.
+
 ## [0.9.4rc3] - 2026-05-06
 
 ### Fixed
