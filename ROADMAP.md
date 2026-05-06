@@ -172,6 +172,30 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after NYC Claims hit a 2/24-patches-failed → page-reload regression on tab switching.
 
+### Milestone: v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370)
+
+**Status:** 🚀 commissioned 2026-05-05. **P0 hotfix.** v0.9.4rc1 throws `Uncaught ReferenceError: Cannot access 'G' before initialization` on every page load + every WS patch. `G` is `_activeHooks` (declared `let _activeHooks;` in `python/djust/static/djust/src/19-hooks.js:54`). Module 19 is concatenated AFTER the bootstrap call at bundle line ~7842, so the `let` declaration is in TDZ when `djustInit → mountHooks → _ensureHooksInit` reads `_activeHooks`. Hooks are entirely broken on rc1.
+
+*Goal:* Cut v0.9.4rc2 with the fix. Single-iter, fast turnaround.
+
+#### Tasks
+
+- [ ] **#1370 — TDZ regression on hooks init.** Fix: `let _activeHooks; let _hookIdCounter;` → `var _activeHooks; var _hookIdCounter;` in `19-hooks.js:54-55`. `var` is hoisted to script-top, so the `if (!_activeHooks)` check works regardless of concat order. Plus add a regression test that loads the BUNDLED `client.js` in a fresh JSDOM/browser context and verifies no `ReferenceError` on init.
+
+  Files: `python/djust/static/djust/src/19-hooks.js` (the fix); `tests/js/bundle-init-no-tdz.test.js` (new regression).
+
+  **Why this slipped through PR #1359 (eslint cleanup)**: vitest tests import source modules in dependency order, NOT in bundle-concat order. The 4 cross-module vars caught by 97 vitest failures (`liveViewWS`, `clientVdomVersion`, `_eventRefCounter`, `_isBroadcastUpdate`) all happen to be USED from modules concatenated AFTER their declarations. `_activeHooks` is the inverse — declared LATE, used EARLY in the concat order. The vitest-import-order test pattern doesn't catch this class.
+
+  **Process canon to add (Action Tracker)**: bundle-init-order class is distinct from cross-module-reassignment class. Need a separate test / lint that enumerates module-scope `let`/`const` across `src/*.js` and verifies each is declared in a module that comes EARLIER in the bundle than any use site.
+
+#### Acceptance
+
+- v0.9.4rc1's TDZ error no longer reproduces on a fresh deploy.
+- Bundle rebuild ships with the fix.
+- Regression test catches future TDZ regressions in bundle concat order.
+- Then: `/djust-release 0.9.4rc2` (the actual hotfix).
+
+
 ### Milestone: v0.9.4-2 — Template-hash-keyed Redis cache + deployment docs (#1362) ✅ shipped
 
 **Status:** ✅ shipped 2026-05-05. Closes #1362. Iter 1 (PR #1367 → commit a23d1db2): template-hash-keyed Redis cache for automatic deploy-time state invalidation. Iter 2 (PR #1369 → commit 37330905): deployment guide additions (recovery-HTML semantics + Daphne→Uvicorn benchmark + production checklist). Both iters passed Stage 11 mandatory review; Iter 1 had 3 🟡 findings addressed via Stage 12 (tautology test rewrite + perf regression fix via class-level memoization).
