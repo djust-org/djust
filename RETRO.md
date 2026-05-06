@@ -260,8 +260,8 @@ issue or be explicitly closed with a reason.
 | 218 | Add `make check-test-coverage` target (grep test files, verify CI collects them) | Retro v0.9.3-4 / PR #1338 | #1339 | Closed | Resolved in v0.9.3-5 via PR #1341 (`scripts/check-test-coverage.py` + Makefile target + pre-push hook). Test-coverage gap in #1339 framing turned out to be a Makefile-vs-pyproject testpath override (Makefile's explicit pytest paths silently overrode pyproject's testpaths, excluding 2,734 tests for months). Two-direction sync verification deferred to #1346. |
 | 219 | Investigate workaround for stale CodeQL check-run blocking PR merges | Retro v0.9.3-4 / PRs #1331, #1332 | #1340 | Closed | Closed via #1340 closing PR. Investigation surfaced misdiagnosis: branch protection has zero `required_status_checks`, so CodeQL never blocked merges per protection rules; `--admin` is needed because of the 1-approving-review rule (solo maintainer can't self-approve). The "CodeQL fail 3s" was GitHub Advanced Security's *real alert-summary* check (PR #1331's was a real high-severity alert at `client.js:1132`, now open on main). codeql.yml gained a `concurrency:` block to reduce noise; real alerts triage tracked in #1343. |
 | 220 | Triage 8 open CodeQL alerts on main (1 warning, 7 notes — earlier "high-severity" framing was inaccurate per #1343 closing) | Retro v0.9.3-5 / PR #1344 (#1340 investigation) | #1343 | Closed | **Resolved in v0.9.3-6 via PRs #1349 + #1350** — 6 false positives dismissed via `gh api -X PATCH state=dismissed` (1× `client.js:1132` framework Promise resolver; 5× `runtime.py:81-90` Protocol-stub bodies). 3 real findings fixed: `_mount_one` 5-tuple consistency (#1349), `deploy_cli.py:423` empty-except (#1349), `cli.py:939` empty-except follow-up (#1350). Severity correction: CodeQL severities are note/warning/error (not high/medium/low); the worst alert was warning-level, not high. |
-| 221 | Refresh stale `(file new)` placeholders in May 2026 audits to reference closed follow-up issues | Retro v0.9.3-5 / `/djust-dev audit-status` run | #1342 | Open | All 9 follow-up issues (`#1283`, `#1284`, `#1285`, `#1286`, `#1287`, `#1288`, `#1289`, `#1290`, `#1291`) cited as "(file new)" in the audits are filed AND closed; audits give false impression of unfiled work. Small docs PR. |
-| 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Open | Both v0.9.3-5 tasks needed corrections to the v0.9.3-4 retro framing. Pattern: tech-debt issue titles that encode the retro author's hypothesis cause executors to inherit the hypothesis. Stage 4 must verify cited cause before locking fix scope. |
+| 221 | Refresh stale `(file new)` placeholders in May 2026 audits to reference closed follow-up issues | Retro v0.9.3-5 / `/djust-dev audit-status` run | #1342 | Closed | Resolved in v0.9.5-2 PR #1398 — 9 placeholders replaced with real issue refs; lifecycle §3 #7 row got closure annotation citing `python/djust/websocket.py:2145`. |
+| 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Closed | Resolved in v0.9.5-2 PR #1399 — Stage 4 mandatory checklist item added to `.pipeline-templates/bugfix-state.json`. |
 | 223 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | PR #1355 Stage 13 Re-Review | #1356 | Open | PR #1355 fixed `get()` to clone via msgpack round-trip (closes #1353), but `get_and_update()` was overlooked. Currently zero callers. If a future caller is added without auditing, the #1353 race class returns. Suggested fix: delete (cleanest), or apply the same clone, or document the shared-ref contract. |
 | 224 | Deduplicate `_parseTimeMs` / `_computeTransitionTiming` between dj-transition and dj-remove modules | PR #1359 Stage 11 Review (CodeQL) | #1360 | Open | PR #1357 introduced both helpers in `41-dj-transition.js` AND `42-dj-remove.js`. The bundle (concatenation of source modules) has duplicate top-level function declarations. CodeQL flagged it once PR #1359 rebuilt the bundle. JS allows duplicate fn decls in non-strict mode (second wins) — bundle works because both copies are functionally identical, but the duplication is fragile. Fix: move helpers to a shared earlier-loaded module. |
 | 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Open | `pathname` is user-controllable; current safety relies on downstream server validation rejecting invalid routes. Defensive tightening recommended: own-property guard or `Map` (prototype-pollution-immune by design). PR #1359 added eslint-disable-next-line with rationale; this issue tracks tightening the actual access. |
@@ -271,18 +271,82 @@ issue or be explicitly closed with a reason.
 | 230 | Bundle-init-order structural lint — enumerate module-scope `let`/`const` and verify each is declared in a module that comes EARLIER in the bundle than any use site | PR #1370/#1371 hotfix retro / structural class follow-up | #1372 | Open | PR #1359's vitest test caught DECLARED-EARLY-USED-LATE pattern (4 cross-module reverts); rc1 shipped with the INVERSE class (`_activeHooks` declared late, used early via `djustInit`). The new `bundle-init-no-tdz.test.js` catches the symptom at runtime; this issue is for the structural lint that catches the class at lint time. |
 | 231 | JSDOM's default `runScripts` evaluates with `readyState === 'loading'`, masking TDZ bugs that fire only post-`load`. Tests that load the bundle MUST explicitly wait for `load` to reproduce production failure modes | PR #1371 retro / diagnostic finding | — | Closed | **Resolved as canon: bundle-init tests must wait for `load` event before evaluating.** PR #1371's regression test would NOT have caught the rc1 TDZ if it had used the default JSDOM eval pattern (which fires while `readyState === 'loading'`). The TDZ surfaces only when the bundle's bootstrap call runs after DOM-ready. Future bundle-loading tests should use `addEventListener('load')` with explicit wait, NOT `dom.window.eval(clientCode)` directly. |
 | 229 | Test docstrings should explicitly state the rule being demonstrated AND identify what hypothetical buggy implementation the test would catch | Retro v0.9.4-2 / PR #1367 Stage 11 (Action #1200 generalization) | — | Closed | **Resolved as canon: the tautology rule (Action #1200) extends to docstring honesty.** Iter 1's original `test_multi_template_caveat_only_primary_hash_drives_invalidation` asserted determinism but called itself "demonstrates the multi-template caveat" — looked credible until Stage 11 reviewer asked "what would this test prove that wasn't already proven elsewhere?" Stage 12 rewrote with two `child.html` versions; the rewrite would fail on Option B (composite hash). Generalize: any test docstring claiming to "demonstrate caveat X" should explicitly state what hypothetical buggy implementation the test would catch. If the test would pass on the buggy implementation too, it's not demonstrating the caveat — it's testing something else. |
-| 232 | Split-foundation soak-time guidance for solo-author case | Retro v0.9.5-1 (finding #2) | #1385 | Open | When framework owner is the only API customer, soak between iterations is optional. When external consumers exist, soak is load-bearing. Document the decision per-milestone. |
-| 233 | Stage 7 self-review prompts should require disconfirming citations | Retro v0.9.5-1 (finding #3) | #1386 | Open | Stage 7 caught 0 findings across v0.9.5-1's three iterations; Stage 11 caught 7 🟡. Same model, different prompt framing. Amend Stage 7 prompts to require active falsification ("identify one claim you actively try to disprove"). |
+| 232 | Split-foundation soak-time guidance for solo-author case | Retro v0.9.5-1 (finding #2) | #1385 | Closed | Resolved in v0.9.5-2 PR #1399 — added to CLAUDE.md Process Canon. |
+| 233 | Stage 7 self-review prompts should require disconfirming citations | Retro v0.9.5-1 (finding #3) | #1386 | Closed | Resolved in v0.9.5-2 PR #1399 — Stage 7 mandatory checklist item added to `.pipeline-templates/{feature,bugfix}-state.json`. Backed by 4-PR empirical evidence (v0.9.5-1 + #1395 + #1398). |
 | 234 | pipeline-run skill — branch-checkout discipline canon (re-trigger of #1375) | Retro v0.9.5-1 (finding #4) | #1387 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream canon update. Empirical: -1a violated (1 stray commit); -1b/-1c held (0 stray) once preamble was applied ad-hoc. Canon update propagates the discipline. |
 | 235 | Pipeline-run skill — codify documentation-iteration shortcut for Stages 6/7/8 | Retro v0.9.5-1c / Retro v0.9.5-1 (finding #5) | #1384 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream canon update. Implementation under ~200 lines + no new public API + no security-class change + existing tests cover → Stages 6/7/8 may be inline-verified instead of fanned out to subagents. Empirical: -1c saved ~10 min wall-clock vs -1a/-1b without sacrificing review depth. |
-| 236 | X008 + X002 inheritance-chain support in audit_ast | Retro v0.9.5-1c / Retro v0.9.5-1 (finding #6) | #1382 | Open | Both checks walk `cls.body` directly; views inheriting `permission_required` / `check_permissions` from base mixins won't trigger. Heuristic limitation, false-negatives only — but downstream consumer patterns commonly use base mixins. Fix once, apply to both checks. |
-| 237 | Broaden `_mount_assigns_url_kwarg_id` pattern matching | Retro v0.9.5-1c | #1383 | Open | Misses `self.x = self.kwargs["x"]` (Subscript), `int(thing_id)` (Call), `kwargs.get("x")` (Call). False-negatives only. |
-| 238 | Sticky-child views may bypass per-event object-permission check | Retro v0.9.5-1b | #1380 | Open | When sticky child fails `request` attribute assignment in `mixins/sticky.py:213-218`, `owner_request` is None and per-event check silently skips. Rare path; default-deny + log proposed. |
+| 236 | X008 + X002 inheritance-chain support in audit_ast | Retro v0.9.5-1c / Retro v0.9.5-1 (finding #6) | #1382 | Closed | Resolved in v0.9.5-2 PR #1395 — `_class_has_attribute` and `_class_defines_method` now walk same-module MRO when `class_index` is supplied. X002 still uses `_class_has_permission_marker` (separate helper); could file a follow-up if downstream impact appears. |
+| 237 | Broaden `_mount_assigns_url_kwarg_id` pattern matching | Retro v0.9.5-1c | #1383 | Closed | Resolved in v0.9.5-2 PR #1395 — recognizes `self.kwargs["x"]` (Subscript), `int(x)` / `str(x)` / `uuid(x)` / `UUID(x)` (whitelisted casts), `kwargs.get("x")` (Call.attr). |
+| 238 | Sticky-child views may bypass per-event object-permission check | Retro v0.9.5-1b | #1380 | Closed | Resolved in v0.9.5-2 PR #1394 — `_validate_event_security` now fails closed (sends `permission_denied` frame + `logger.warning`) when `owner_request is None AND _has_custom_get_object(owner_instance)`. Companion: `mixins/sticky.py:215` log promotion DEBUG → WARNING. |
 | 239 | Pipeline template stage-name reconciliation with skill canon | Retro v0.9.5-1a | #1376 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream update. Skill canon references Stages 11/13/15; project template has 14 stages with different stage 13. Recommend skill canon use stage NAMES not NUMBERS. |
-| 240 | WS-communicator test pattern capture for full-stack integration | Retro v0.9.5-1a | #1377 | Open | Per-event tests in v0.9.5-1b used unit-style mocks. Full WS-communicator integration tests would catch end-to-end issues (real WS frames, real auth middleware, real handler dispatch). Capture canonical pattern in `djust-dev` skill alongside authorization.md migration recipe. |
-| 241 | Canonicalize `_framework_attrs` snapshot-order invariant | Retro v0.9.3-2 (backfilled 2026-05-06) | #1393 | Open | BEFORE snapshot = framework state (reset on reconnect); AFTER snapshot = user state (persisted). Used by `_action_state` (after, #1324) and `_object` cache (before, v0.9.5-1a). Load-bearing; no explicit canon. Add docstring + CLAUDE.md / djust-dev skill note. |
-| 242 | Canon — when changing a filter convention, grep ALL call sites for the OLD convention | Retro v0.9.3-2 (backfilled) | #1391 | Open | PR #1281 fixed `_snapshot_assigns()` (`k.startswith("_")` → `_framework_attrs` membership); identity snapshots used the OLD filter and weren't migrated until #1327 (audit weakness #8). Stage 4 planner check: any PR changing a filter expression must grep for the pre-fix text and verify all matches updated. |
-| 243 | Canonicalize 'one-shot per-class warning' framework pattern | Retro v0.9.3-2 (backfilled) | #1392 | Open | PR #1326's pattern: `logger.warning` once per view class, suppressed within same call. Reusable for "framework can't help mechanically; tell developer loudly" scenarios. Extract `_emit_one_shot_class_warning()` helper + document in `djust-dev` skill. |
+| 240 | WS-communicator test pattern capture for full-stack integration | Retro v0.9.5-1a | #1377 | Closed | Resolved in v0.9.5-2 PR #1399 — section appended to `docs/website/guides/authorization.md` with full reproducer test + comment annotating user-supplied fixtures. |
+| 241 | Canonicalize `_framework_attrs` snapshot-order invariant | Retro v0.9.3-2 (backfilled 2026-05-06) | #1393 | Closed | Resolved in v0.9.5-2 PR #1399 — comment block on `python/djust/live_view.py:518` documenting BEFORE/AFTER semantics; numbered rule #5 in CLAUDE.md Bug-report triage section. |
+| 242 | Canon — when changing a filter convention, grep ALL call sites for the OLD convention | Retro v0.9.3-2 (backfilled) | #1391 | Closed | Resolved in v0.9.5-2 PR #1399 — added to CLAUDE.md Process Canon section with concrete Stage 4 grep check. |
+| 243 | Canonicalize 'one-shot per-class warning' framework pattern | Retro v0.9.3-2 (backfilled) | #1392 | Closed | Resolved in v0.9.5-2 PR #1399 — `emit_one_shot_class_warning(cls, key, message, *args)` extracted in `python/djust/utils.py`; existing snapshot-truncation warning refactored to use it. |
+| 244 | Extend filter-migration grep canon (#1391) to cover symbol removals during refactor | Retro v0.9.5-2 (finding #2) | #1400 | Open | PR #1399's #1392 helper extraction left an orphan `_TRUNCATION_WARNED` import in `python/tests/test_snapshot_truncation_warning.py`; pre-push hook caught it. Existing #1391 names "filter expressions" specifically; should generalize to "any symbol removal during refactor — grep `tests/`, `python/tests/`, examples for the OLD name." |
+
+## v0.9.5-2 — Post-rc1 retro drain (audit follow-ups + canon batch) (PRs #1394, #1395, #1397, #1398, #1399)
+
+**Date**: 2026-05-06
+**Scope**: 14 in-repo retro-filed items shipped as 5 PRs in ~2 hours autonomous wall-clock. WU1 (#1380 sticky-child fail-closed), WU2 (#1382 + #1383 X008 audit improvements), WU3 (#1388 round-trip-from-parser test refactor — surfaced #1396 follow-up), WU4 (#1346 + #1342 bidir check-test-coverage + audit placeholder refresh), WU5 (#1345 + 7 canon items into CLAUDE.md / pipeline templates / `emit_one_shot_class_warning` helper). 4 OUT-OF-REPO items (#1375, #1376, #1384, #1387) remain tracked, blocked on upstream pipeline-run skill.
+**Tests at close**: 4743 Python passed / 14 skipped (no regressions across all 5 merges); 1 ignored Rust test (`test_nodes_to_template_string_include`, pointer to #1396 follow-up); 17 X008 audit cases (was 7); 11 per-event auth cases (was 9).
+
+### What We Learned
+
+**1. Stage 7 self-review repeatedly missed what Stage 11 caught — empirical justification for #1386.**
+v0.9.5-1 had 0 Stage 7 findings vs 7 Stage 11 🟡 findings (3+2+2 across iterations). v0.9.5-2 surfaced the same pattern twice more: PR #1395's tautology cycle test (Stage 7 missed; Stage 11 caught via active falsification grep) and PR #1398's `tomllib`-vs-Python-3.10 compat (Stage 7 missed; Stage 11 caught via grep of `requires-python` in pyproject.toml). The new disconfirming-citation Stage 7 checklist item (filed as #1386, landed in this drain via PR #1399) is now backed by 4 consecutive PRs of empirical evidence.
+
+**Action taken**: Closed — landed in PR #1399 (`f2930eaf`) as Stage 7 mandatory checklist item in `.pipeline-templates/{feature,bugfix}-state.json`; effective on the NEXT pipeline-run invocation.
+
+**2. Symbol-removal during refactor needs the same grep-discipline as filter-migration.**
+PR #1399's #1392 helper extraction removed the module-global `_TRUNCATION_WARNED: set` from `python/djust/websocket.py`, but the implementer didn't grep `tests/` and `python/tests/` for residual imports. Pre-push hook caught the orphan import at `python/tests/test_snapshot_truncation_warning.py:15` (`Action #122` working as designed). Fix landed as in-band commit `a01f8995`. The existing #1391 filter-migration grep canon already abstracts the right principle ("grep all call sites of the OLD pattern"), but it specifically names "filter expressions" — the canon should generalize to "any symbol removal."
+
+**Action taken**: Open — tracked in Action Tracker #244 (GitHub #1400). Extend #1391 wording in `CLAUDE.md` to cover symbol removals, OR file a separate symbol-removal-grep canon.
+
+**3. In-band 🟡 fixes during Stage 11 are now the standard pattern.**
+4 of 5 PRs in this drain had 🟡 findings addressed via an in-band fix commit before merge (cycle test in #1395, tomllib in #1398, two nits in #1399, one nit in #1394). Across the drain: 0 🔴, 5 🟡, 8 💚 — and zero 🟡s deferred. The Stage 11 → in-band-fix → re-push → CI → merge loop adds ~10-15 min per PR but eliminates downstream tracker debt. Net wall-clock: cheaper than deferred-tracker management.
+
+**Action taken**: Closed — pattern is already implicit in pipeline-run Stage 12 (Review Verdict). Documented as Insights below.
+
+**4. Conversion-uncovers-bug pattern empirically validates #158 canon.**
+PR #1397 converted 12 round-trip tests to drive from parser output (per Action #158 from PR #1086). On the FIRST conversion pass, this surfaced a real `Node::Include` round-trip bug masked for over a year by manual-AST tests. Filed as #1396 with the test marked `#[ignore]`. The canon's value is empirical: the rule produced exactly the failure mode it was designed to detect. **Insight**: when an Action Tracker rule encodes "do X to surface bug class Y," a conversion-pass demonstrating Y is the high-confidence way to validate the rule.
+
+**Action taken**: Closed — pattern documented as Insights; #1396 follow-up captures the actual bug.
+
+**5. Autonomous --group --all mode shipped 5 PRs in ~2h with 1 stop-condition (CI poll waits).**
+The new scheduling discipline (background-poll-then-wakeup at 270s intervals to stay in cache window) kept wall-clock efficient. No human intervention between WUs. The only operator decision per cycle was the CI poll → merge → retro → next-WU sequence, all automated within the skill loop. 0 PRs failed. Comparable v0.9.5-1 wall-clock was ~3h for 3 PRs; v0.9.5-2 averaged ~25 min/PR including CI wait. **Insight**: ScheduleWakeup at 270s sweet spot is the right cache-cost tradeoff — verified across this drain's 4 CI-wait cycles.
+
+**Action taken**: Closed — pattern documented as Insights; no canon update needed.
+
+### Insights
+
+- **In-band 🟡 fix > deferred tracker** when fix is < 30 LoC and CI is fast. Net wall-clock cheaper than tracker mgmt.
+- **Canon-doc citations require grep-verification at write time** (Action #1197). PR #1399's drift (live_view.py:517 vs :518) was caught by Stage 11 reviewer; cheap fix. Pre-empting at write would save the round-trip.
+- **Pre-push hook + post-commit `&& git log -1 --oneline` reflex eliminates entire failure-mode classes**: orphan imports, swallowed commits, formatter loops. Caught all of these in this drain at near-zero cost.
+- **Cross-repo skill items aren't drainable in a project-scoped /pipeline-run**. The 4 OUT-OF-REPO items (#1375, #1376, #1384, #1387) remain tracked but require upstream skill-repo PRs. Action Tracker `OUT-OF-REPO` status is the right shape — they don't pollute the actionable-open count.
+
+### Review Stats
+
+| Metric | #1394 | #1395 | #1397 | #1398 | #1399 | Total |
+|---|---|---|---|---|---|---|
+| Tests added | 2 | 10 | 0 | 0 | 0 | 12 |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 1 | 1 | 0 | 1 | 2 | 5 |
+| Findings fixed | 0 | 1 | 0 | 1 | 2 | 4 (1 deferred) |
+| CI failures | 0 | 0 | 0 | 0 | 1 (pre-push) | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: 4 new rules — `_framework_attrs` snapshot-order invariant (#1393), bit-exact runnable repro for multi-reopen issues (#1389), filter-migration grep canon (#1391), split-foundation soak-time guidance for solo-author case (#1385). Citation drift fix (line 235).
+**Pipeline templates**: 3 new mandatory checklist items — Stage 4 cited-cause verification (#1345); Stage 7 disconfirming citation in `feature-state.json` + `bugfix-state.json` (#1386).
+**Code helpers**: `emit_one_shot_class_warning(cls, key, message, *args)` extracted in `python/djust/utils.py` (#1392); existing snapshot-truncation warning refactored to use it.
+**Audit docs**: `docs/audits/lifecycle-2026-05.md` + `decorator-contract-2026-05.md` placeholder refresh (#1342) — 9 cited issues now real.
+**Tooling**: `scripts/check-test-coverage.py` bidir Makefile↔pyproject (#1346) with Python 3.10 `tomllib` fallback.
+**Guides**: `docs/website/guides/authorization.md` gains WS-communicator test pattern section (#1377).
+
+### Open Items
+
+- [ ] Symbol-removal grep canon — generalize #1391 — tracked in Action Tracker #244 (GitHub #1400).
 
 ## v0.9.5-1 — Object-permission lifecycle (split-foundation rollout, #1373) (PRs #1374, #1378, #1381)
 
@@ -390,15 +454,15 @@ The fix is non-trivial — AST analysis would need to resolve simple base-class 
 
 ### Open Items
 
-- [ ] Item 232 (split-foundation soak-time guidance for solo-author case) — tracked in Action Tracker #232 (GitHub #1385)
-- [ ] Item 233 (Stage 7 prompts should require disconfirming citations) — tracked in Action Tracker #233 (GitHub #1386)
-- [ ] Item 234 (re-trigger of #1375 — branch-checkout canon update in pipeline-run skill) — tracked in Action Tracker #234 (GitHub #1387)
-- [ ] Item 235 — tracked in Action Tracker #235 (GitHub #1384) — documentation-iteration shortcut canon
-- [ ] Item 236 — tracked in Action Tracker #236 (GitHub #1382) — X002+X008 inheritance-chain support
-- [ ] Item 237 — tracked in Action Tracker #237 (GitHub #1383) — broader `_mount_assigns_url_kwarg_id` patterns
-- [ ] Item 238 — tracked in Action Tracker #238 (GitHub #1380) — sticky-child request gap
-- [ ] Item 239 — tracked in Action Tracker #239 (GitHub #1376) — pipeline-run skill stage-name reconciliation
-- [ ] Item 240 — tracked in Action Tracker #240 (GitHub #1377) — WS-communicator test pattern capture
+- [x] Item 232 — resolved in v0.9.5-2 (PR #1399)
+- [x] Item 233 — resolved in v0.9.5-2 (PR #1399)
+- [ ] Item 234 (re-trigger of #1375 — branch-checkout canon update in pipeline-run skill) — tracked in Action Tracker #234 (GitHub #1387) — OUT-OF-REPO
+- [ ] Item 235 — tracked in Action Tracker #235 (GitHub #1384) — documentation-iteration shortcut canon — OUT-OF-REPO
+- [x] Item 236 — resolved in v0.9.5-2 (PR #1395)
+- [x] Item 237 — resolved in v0.9.5-2 (PR #1395)
+- [x] Item 238 — resolved in v0.9.5-2 (PR #1394)
+- [ ] Item 239 — tracked in Action Tracker #239 (GitHub #1376) — pipeline-run skill stage-name reconciliation — OUT-OF-REPO
+- [x] Item 240 — resolved in v0.9.5-2 (PR #1399)
 
 ## v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370) (PR #1371)
 
@@ -510,8 +574,8 @@ Iter 1's first-pass had a test calling itself `test_multi_template_caveat_only_p
 ### Open Items
 
 - ✅ #1362 closed via this milestone.
-- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
-- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
+- [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
 - [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
 - [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8.
 - [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8.
@@ -579,8 +643,8 @@ Action #1122 says foundations should "soak through one or more releases before t
 
 - ✅ #1358 closed via this milestone.
 - ✅ #256 Option A closed via this milestone.
-- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
-- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
+- [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
 - [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
 - [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers. Carryover from v0.9.3-8.
 - [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access. Carryover from v0.9.3-8.
@@ -642,8 +706,8 @@ The #1351 body claimed `--max-warnings 0` was "implicitly via `npx eslint`'s def
 ### Open Items
 
 - ✅ #1351 closed via this drain.
-- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
-- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
+- [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
 - [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up. Carryover from v0.9.3-7.
 - [ ] Action Tracker #224 (#1360) — Deduplicate dj-transition/dj-remove helpers.
 - [ ] Action Tracker #225 (#1361) — Tighten routeMap[pathname] access.
@@ -707,8 +771,8 @@ Original Stage 5 implementation passed local tests AND CI (13/13 green). It woul
 
 ### Open Items
 
-- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
-- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
+- [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
 - [ ] Action Tracker #223 (#1356) — `get_and_update()` shared-ref dead code follow-up.
 
 ### Acceptance check
@@ -760,8 +824,8 @@ v0.9.3-5 retro called the `client.js:1132` finding "high-severity"; the #1343 is
 ### Open Items
 
 - ✅ Action Tracker #220 (#1343) — Closed via this drain.
-- [ ] Action Tracker #221 (#1342) — Refresh stale audit "(file new)" placeholders. Carryover from v0.9.3-5.
-- [ ] Action Tracker #222 (#1345) — Stage 4 plan-template: verify cited cause for retro-filed issues. Carryover from v0.9.3-5.
+- [x] Action Tracker #221 (#1342) — resolved in v0.9.5-2 (PR #1398).
+- [x] Action Tracker #222 (#1345) — resolved in v0.9.5-2 (PR #1399).
 
 ### Acceptance check
 
@@ -837,7 +901,7 @@ The `/pipeline-run` skill's "Close-without-code path" guidance suggests investig
 - [ ] Triage 8 open CodeQL alerts (1 high-severity) — tracked in Action Tracker #220 (GitHub #1343)
 - [ ] Refresh stale audit "(file new)" placeholders — tracked in Action Tracker #221 (GitHub #1342)
 - [ ] Stage 4 plan-template: verify cited cause for retro-filed issues — tracked in Action Tracker #222 (GitHub #1345)
-- [ ] Two-direction Makefile↔pyproject testpath sync — tracked in #1346 (deferred from PR #1341 retro)
+- [x] Two-direction Makefile↔pyproject testpath sync (#1346) — resolved in v0.9.5-2 (PR #1398).
 
 ### Acceptance check
 
