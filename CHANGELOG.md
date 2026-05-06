@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **HOTFIX: v0.9.4rc1 hooks TDZ regression (#1370).** v0.9.4rc1 shipped a
+  bundled `client.js` that threw `Uncaught ReferenceError: Cannot access 'G'
+  before initialization` (`G` is the minified `_activeHooks`) on every page
+  load and every WS patch. Module 19 (`19-hooks.js`) is concatenated after
+  the bootstrap call at bundle line ~7842; `let _activeHooks` was in TDZ
+  when `_ensureHooksInit` was invoked from earlier modules' `djustInit`
+  (the synchronous-init branch fires when `document.readyState !== 'loading'`).
+  Fix: `let` → `var` for `_activeHooks` and `_hookIdCounter` in
+  `src/19-hooks.js:54-56` (hoisted, no TDZ). Bundle rebuilt; new regression
+  test in `tests/js/bundle-init-no-tdz.test.js` (2 cases) loads the bundled
+  `client.js` in a fresh JSDOM context with `readyState === 'complete'` and
+  asserts no `ReferenceError` on init — verified to FAIL against the rc1
+  bundle and PASS against the fixed bundle. Why PR #1359 (eslint cleanup)
+  missed this: the missed-revert was caught via vitest import-order tests
+  that simulate DECLARED-EARLY-USED-LATE patterns, but those tests do not
+  simulate bundle-concat-order execution; `_activeHooks` is the inverse
+  (DECLARED-LATE-USED-EARLY in the concat). The new bundle-init regression
+  test catches the class structurally.
+
 ## [0.9.4rc1] - 2026-05-05
 
 ### Added
