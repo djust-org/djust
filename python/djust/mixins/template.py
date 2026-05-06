@@ -807,11 +807,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # --- Step 1: Render the dj-root content via self._rust_view ---
             # This is the SAME instance the WS path will use for diffing,
             # so marker IDs (if-<8hex>-N) are guaranteed to match.
+            # IMPORTANT: do NOT inject handler metadata here — it appends a
+            # <script> element that the VDOM doesn't know about, which shifts
+            # child indices and breaks path-based patch resolution (#1370).
+            # Handler metadata is injected into the page shell (step 3) AFTER
+            # the dj-root replacement, so it lives OUTSIDE the diffed subtree.
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
             liveview_html = self._rust_view.render()
             liveview_html = self._hydrate_react_components(liveview_html)
-            liveview_html = self._inject_handler_metadata(liveview_html, request=request)
 
             # --- Step 2: Render the page shell from _full_template ---
             from djust._rust import RustLiveView
@@ -871,10 +875,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     elif shell_html[i : i + 6] == "</div>":
                         depth -= 1
                         if depth == 0:
-                            return shell_html[:root_start] + liveview_html + shell_html[i:]
+                            result = shell_html[:root_start] + liveview_html + shell_html[i:]
+                            # Inject handler metadata OUTSIDE dj-root (before
+                            # </body>) so it doesn't shift child indices inside
+                            # the diffed subtree. The <script> lives in the page
+                            # shell, not in the VDOM-tracked dj-root content.
+                            result = self._inject_handler_metadata(result, request=request)
+                            return result
                     i += 1
 
             # Fallback: dj-root not found in shell (shouldn't happen)
+            shell_html = self._inject_handler_metadata(shell_html, request=request)
             return shell_html
         else:
             return self.render(request)
