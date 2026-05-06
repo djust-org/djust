@@ -282,11 +282,17 @@ Any iter that surfaces unexpected runtime issues during Stage 11 will trigger St
 
 ## Pending release: v0.9.5 — Object-level authorization lifecycle
 
-Surfaced 2026-05-06 while reviewing NYC Claims PR #268 (per-tab data gating in `ClaimDetailView`). Diagnostic walked the auth surface and found a structural IDOR class that affects any djust app where the LiveView is bound to a single object via URL kwarg (`claim_id`, `user_id`, `document_id`, etc.) — i.e. most detail-view apps. Tracking issue: #1373.
+Surfaced 2026-05-06 while reviewing NYC Claims PR #268 (per-tab data gating in `ClaimDetailView`). Diagnostic walked the auth surface and found a structural IDOR class that affects any djust app where the LiveView is bound to a single object via URL kwarg (`claim_id`, `user_id`, `document_id`, etc.) — i.e. most detail-view apps. Tracking issue: #1373. Design pinned in [ADR-017](docs/adr/017-object-permission-lifecycle.md).
 
-### Milestone: v0.9.5-1 — `get_object()` + `has_object_permission()` lifecycle (#1373)
+**Split-foundation rollout** (per Action #1122 — high blast radius + permanent public API):
 
-*Goal:* Give djust a first-class lifecycle hook for object-level authorization, enforced on mount AND on every event handler entry, so app authors cannot forget the per-event re-check. This is the structural equivalent of DRF's `get_object()` + `has_object_permission()` split.
+- **v0.9.5-1a** — Foundation: `get_object()` + `has_object_permission()` + mount-time enforcement + `_invalidate_object_cache()`. **Soaks through one release before -1b lands.**
+- **v0.9.5-1b** — Per-event re-execution in `handle_event` + state-restore cache invalidation.
+- **v0.9.5-1c** — Tooling: `djust check` IDOR-shape heuristic + `authorization.md` guide + `djust-dev` skill principle entry.
+
+### Milestone: v0.9.5-1a — Foundation: `get_object()` + `has_object_permission()` (#1373, ADR-017)
+
+*Goal:* Ship the lifecycle hooks with mount-time enforcement only. Establish the API surface; soak through one release before stacking per-event work on top.
 
 **The problem (concrete reproduction):**
 
@@ -294,64 +300,76 @@ NYC Claims `ClaimDetailView` has `permission_required = "claims.access_claim"` (
 
 The bug class is: *the only object-level auth surface djust offers (`check_permissions` hook) runs once before mount, when the URL kwarg has not yet been bound to `self`.* Developers default to putting object-level checks in `get_context_data` (where `self.claim_id` exists) and the framework doesn't push back. This is the same shape Django REST Framework solved with the `get_object()` + `has_object_permission()` split — the framework owns the call site.
 
-**Tasks (single milestone, ranked by leverage):**
+**Tasks:**
 
-- [ ] **`get_object()` lifecycle hook on `LiveView`.** Subclasses override to declare how to fetch the view's primary object from URL kwargs / instance state. djust calls it once at mount (after kwargs are bound to `self`) and caches the result on `self._object` until `mount()` returns. Return value flows into `has_object_permission` automatically.
+- [ ] **`get_object()` and `has_object_permission()` methods on `LiveView`.** Default implementations return `None` and `True` respectively (no-op for non-overriding subclasses). Cached as `self._object`; `self._invalidate_object_cache()` API for handlers that mutate ownership-determining state. See ADR-017 Decisions 1–3 for signatures and cache semantics.
 
-- [ ] **`has_object_permission(request, obj)` hook.** Called by djust at mount-time (after `get_object()` resolves) AND on every event handler entry, before the handler body runs. Returns `bool` or raises `PermissionDenied`. False / raise → WS frame gets a permission-denied error response; handler does not execute.
+- [ ] **Extend `check_view_auth`.** Adds a 4th step after `check_permissions`: if `get_object` is overridden, fetch the object and call `has_object_permission`. Mirrors `_has_custom_check_permissions` pattern (`auth/core.py:114`) via new `_has_custom_get_object()` helper. Order: login → role → custom check_permissions → object. See ADR-017 Decisions 5 + 7.
 
-- [ ] **`check_view_auth` extension to call object-level hooks.** Currently runs `permission_required` (role) → `check_permissions` (custom). Add a 4th step: if `get_object` is overridden, fetch the object and call `has_object_permission`. Order: login → role permission → custom check_permissions → object permission.
+- [ ] **Mount-time enforcement only in this iteration.** The `handle_event` per-event check is deferred to v0.9.5-1b — landing the foundation on its own lets us soak the API surface before stacking per-event work.
 
-- [ ] **Per-event re-execution of `has_object_permission`.** `handle_event` (`websocket.py:2606`) gains a pre-dispatch hook that re-runs the object check before invoking the handler. The cached `self._object` from mount is reused; subclasses can override `get_object()` to refresh it if state has changed. Cost: 1 fast attribute read per event when permissions are static; ~1 query per event when `get_object()` does a fresh fetch (developer choice).
+- [ ] **Regression suite Part 1** (`tests/integration/test_object_permission_mount.py`): mount denial closes WS with code 4403, mount allow proceeds, `self._object` populated after mount, `_invalidate_object_cache()` resets the cache, no-override views see zero behavior change.
 
-- [ ] **System check (`djust check`) for the IDOR shape.** Heuristic in `audit_ast.py`: flag any `LiveView` subclass that (a) sets `permission_required`, (b) assigns from URL kwargs in `mount()` (e.g. `self.claim_id = claim_id`), (c) has at least one `@event_handler`-decorated method that reads `self.<x>_id`, AND (d) does NOT override `has_object_permission` or `check_permissions`. Output: warning with link to the canonical `get_object()` migration pattern. This catches existing apps that won't migrate to the new lifecycle.
+- [ ] **Existing-suite regression check.** Run the demo project test suite + djust.org test suite unchanged. Verify zero failures (the no-override path is the empirical proof of backwards compat).
 
-- [ ] **`djust-dev` skill principle entry.** New entry in the audit-cataloged bug-class matrix: "Object-level auth must be enforced per-event, not per-mount." Canonical pattern shows `get_object()` + `has_object_permission()` + manager-level `for_user()` queryset filter as defense-in-depth. Cites this milestone's reproducer and the NYC Claims case study.
+**Acceptance for v0.9.5-1a:**
 
-- [ ] **Documentation:** new guide `docs/website/guides/authorization.md` walking through role vs object permissions, the lifecycle order, and the canonical `get_object()` + `for_user()` manager pattern. Reference from the existing security-audit docs.
-
-- [ ] **Regression suite:** integration tests under `tests/integration/test_object_permission.py` covering: mount denial, per-event denial, mount allow + handler-time denial (state changed mid-session), inheritance via mixin, and the negative case where `get_object` is not overridden (no behavior change for existing apps).
-
-**Backwards compatibility:**
-
-- Apps that don't override `get_object()` see no behavior change. The new lifecycle is opt-in.
-- Apps that already use `check_permissions()` keep working; `has_object_permission()` is additive, called after `check_permissions()`.
-- Existing `permission_required` semantics unchanged.
-
-**Why this is one milestone, not split-foundation:**
-
-The lifecycle hook (`get_object` + `has_object_permission`) and the per-event re-execution are inseparable — shipping the hook without per-event enforcement gives the same bug class a slightly different shape (the user remembers the mount-time check but forgets the handler-time one). The system check depends on the hook existing to recommend a migration target, so it lands in the same milestone. Doc + skill are documentation-side and ride along.
-
-**Acceptance:**
-
-- [ ] `LiveView.get_object()` and `has_object_permission()` documented and exported from `djust.live_view`.
+- [ ] `LiveView.get_object()` + `has_object_permission()` exported from `djust.live_view`, documented in docstrings.
 - [ ] `check_view_auth` calls `has_object_permission` after `check_permissions` when `get_object` is overridden.
-- [ ] `handle_event` re-runs `has_object_permission` before dispatching to the handler. PermissionDenied is returned as a permission-error frame, not propagated as an unhandled exception.
-- [ ] `djust check` warns on the IDOR shape with a link to the migration guide.
-- [ ] `djust-dev` skill principle catalog includes the new entry.
-- [ ] Regression suite covers all 5 cases above.
-- [ ] No behavior change for views that don't override `get_object()` (verified by running the existing demo + djust.org test suites unchanged).
+- [ ] `_invalidate_object_cache()` works as documented in ADR-017 Decision 3.
+- [ ] Regression suite Part 1 green; existing demo + djust.org suites unchanged.
+- [ ] CHANGELOG entry references ADR-017.
+- [ ] PR description includes the ADR-017 reproducer and notes that mount-time enforcement is sufficient to break the reproducer (per-event hardening lands in -1b).
 
-**Reference reproducer (for the issue body):**
+### Milestone: v0.9.5-1b — Per-event re-execution + state-restore cache invalidation (#1373, ADR-017)
 
-```python
-# Examiner A authenticated, has claims.access_claim, NOT assigned to claim 99.
-# 1. Open WS to /claims/99/ — check_view_auth passes (role check), mount() runs,
-#    self.claim_id = 99. get_context_data raises PermissionDenied during render.
-# 2. djust does NOT close the WS or unbind self.claim_id.
-# 3. Send {"event": "add_claim_note", "params": {"subject": "x", "body": "y"}}.
-# 4. Handler runs Claim.objects.get(pk=99), creates note. NO ACCESS CHECK.
-```
+*Goal:* Stack per-event enforcement on the v0.9.5-1a foundation. Closes the IDOR class fully — handlers cannot bypass the check by reading `self.<x>_id` directly.
 
-#### References
+*Lands AFTER v0.9.5-1a has soaked through one release.* Do not start before -1a is shipped + observed.
 
-- DRF `get_object()` + `has_object_permission()` (the prior art this milestone mirrors)
-- Phoenix LiveView `on_mount` callbacks (alternative model; doesn't solve the per-event class)
-- NYC Claims PR #268 (the diagnostic walk that surfaced this)
-- `apps/claims/services/permissions.py:can_view_claim` (the hand-rolled object check the lifecycle replaces)
-- `python/djust/auth/core.py:check_view_auth` (where the new step inserts)
-- `python/djust/websocket.py:2606` (`handle_event`, where per-event re-check inserts)
-- `python/djust/audit_ast.py` (where the system-check heuristic extends)
+**Tasks:**
+
+- [ ] **`handle_event` pre-dispatch object check** (`websocket.py:2606`). When `_has_custom_get_object()` is true, fetch the object, call `has_object_permission`, send permission-error frame on denial without closing the WS. See ADR-017 Decisions 4 + 7.
+
+- [ ] **Permission-error frame protocol.** `{"type": "error", "code": "permission_denied", "message": "..."}`. Client logs it; optimistic UI updates revert; session stays open. See ADR-017 Decision 4.
+
+- [ ] **State-restore path invalidates `self._object`.** The post-reconnect path skips serializing `_object` (it's a Django model instance, not msgpack-friendly anyway) and re-runs `get_object()` after restore. See ADR-017 "Risks" section.
+
+- [ ] **Regression suite Part 2** (`tests/integration/test_object_permission_event.py`): per-event denial returns error frame and skips handler body, session stays open, cached check is reused (no extra query), `_invalidate_object_cache()` from a handler causes next event to re-fetch, state-restore re-runs `get_object()`.
+
+- [ ] **Reproducer test** (`tests/integration/test_idor_1373.py`): the ADR-017 "What's vulnerable today" reproducer must FAIL on the post-foundation main and PASS after this iteration. This is the empirical proof that the bug class is closed.
+
+**Acceptance for v0.9.5-1b:**
+
+- [ ] `handle_event` per-event enforcement active for views with `get_object` overridden.
+- [ ] Permission-error frame documented and reaches the client.
+- [ ] State-restore re-runs `get_object()`.
+- [ ] Regression suite Part 2 green; reproducer test FAILS on parent of this PR, PASSES on merge.
+- [ ] Performance check: benchmark a view with `get_object` overridden; per-event overhead <2ms p99 on a warm cache.
+- [ ] CHANGELOG references ADR-017 + this iteration's PR.
+
+### Milestone: v0.9.5-1c — Tooling + docs (#1373, ADR-017)
+
+*Goal:* Documentation-grade work that rides on the now-stable lifecycle. Catches existing apps that haven't migrated and teaches new app authors the canonical pattern.
+
+*Lands AFTER v0.9.5-1b is shipped.*
+
+**Tasks:**
+
+- [ ] **`djust check` IDOR-shape heuristic** in `audit_ast.py`. Flags views matching: (a) `permission_required` set, (b) `mount()` assigns from URL kwarg (`self.<x>_id = <x>_id`), (c) has `@event_handler` methods reading `self.<x>_id`, (d) does NOT override `has_object_permission` or `check_permissions`. Category `S` (security) warning with link to the new guide. See ADR-017 Decision 8.
+
+- [ ] **New guide** `docs/website/guides/authorization.md`. Walks through role vs object permissions, four-layer onion (login → role → custom → object), `get_object()` + `_invalidate_object_cache()` patterns, manager-level `for_user()` defense-in-depth, NYC Claims migration as worked example. See ADR-017 "Migration plan" section.
+
+- [ ] **`djust-dev` skill principle catalog entry.** New audit-cataloged bug-class entry: "Object-level auth must be enforced per-event, not per-mount." Canonical pattern + reproducer + ADR-017 link.
+
+- [ ] **CHANGELOG note** that the lifecycle is now complete (foundation + per-event + tooling) and apps with the IDOR shape should run `djust check` and migrate per the guide.
+
+**Acceptance for v0.9.5-1c:**
+
+- [ ] `djust check` warns on the IDOR shape with link to `docs/website/guides/authorization.md`.
+- [ ] `authorization.md` published with worked migration example.
+- [ ] `djust-dev` skill catalog updated.
+- [ ] NYC Claims `ClaimDetailView` migrated to `get_object()` as the empirical case study (filed as a downstream PR after this iteration ships).
 
 
 
