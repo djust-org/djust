@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc5] - 2026-05-06
+
+### Fixed
+
+- **Architectural fix: single RustLiveView for HTTP + WS render (#1370 final).**
+  `render_full_template` now renders `dj-root` content via `self._rust_view`
+  (the SAME instance the WS path uses), guaranteeing marker IDs match by
+  construction. The page shell is still rendered by a temp instance, but the
+  shell's `dj-root` innerHTML is replaced with `self._rust_view.render()`.
+  No marker stripping, no first-WS overhead, no mismatch possible. Removes
+  the architectural debt of two `RustLiveView` instances rendering the same view.
+
 ## [0.9.4rc4] - 2026-05-06
 
 ### Fixed
