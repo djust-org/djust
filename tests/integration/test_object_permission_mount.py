@@ -116,6 +116,29 @@ class _NoneObjectView(LiveView):
         raise AssertionError("has_object_permission must not be called when get_object()=None")
 
 
+class _DoesNotExistView(LiveView):
+    """get_object() raises Django's ObjectDoesNotExist (e.g. naive
+    Model.objects.get(pk=missing)). The framework should catch it and
+    treat the object as None — automating the 404-shape OWASP pattern.
+    """
+
+    template = "<div>missing</div>"
+
+    def mount(self, request, **kwargs):
+        pass
+
+    def get_object(self):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        raise ObjectDoesNotExist("simulated missing row")
+
+    def has_object_permission(self, request, obj):
+        # Should NEVER be called when get_object() raises DoesNotExist.
+        raise AssertionError(
+            "has_object_permission must not be called when get_object() raises ObjectDoesNotExist"
+        )
+
+
 # -- Helpers --------------------------------------------------------------
 
 
@@ -231,5 +254,28 @@ def test_get_object_returning_none_skips_permission_check(rf):
 
     # Should not raise. _NoneObjectView.has_object_permission raises
     # AssertionError if called — so passing here proves it wasn't called.
+    check_object_permission(view, request)
+    assert view._object is None
+
+
+def test_get_object_raising_does_not_exist_treated_as_none(rf):
+    """Case 6: get_object() raising ObjectDoesNotExist is caught and
+    treated as None. The framework automates the OWASP 404-shape pattern
+    rather than relying on developer discipline.
+
+    Without this, a naive `Model.objects.get(pk=self.<x>_id)` in get_object
+    would let DoesNotExist propagate to the outer Exception handler in
+    websocket.handle_mount, where DEBUG=True mode would emit a traceback
+    confirming the object's nonexistence.
+    """
+    from djust.auth.core import check_object_permission
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    view = _make_view(_DoesNotExistView, request)
+
+    # Should not raise. _DoesNotExistView.has_object_permission raises
+    # AssertionError if called — so passing here proves the exception
+    # was caught and has_object_permission was NOT invoked.
     check_object_permission(view, request)
     assert view._object is None

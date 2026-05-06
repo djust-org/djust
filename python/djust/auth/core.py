@@ -165,6 +165,18 @@ def check_object_permission(view_instance, request) -> None:
     cached ``_object`` is ``None``, ``has_object_permission`` is NOT
     called — the caller raises 404 if it wants to.
 
+    The framework also automates this 404-shape mapping for the common
+    case: if ``get_object()`` raises Django's ``ObjectDoesNotExist`` (or
+    any subclass — ``Model.DoesNotExist``, ``Http404``, etc.), the helper
+    catches it and treats the object as ``None`` (skipping
+    ``has_object_permission``). Without this, a ``DoesNotExist`` from a
+    naive ``Model.objects.get(pk=self.<x>_id)`` in ``get_object()`` would
+    fall through to the outer ``except Exception`` in
+    ``websocket.handle_mount``, where ``DEBUG=True`` would expose the
+    exception class name and a traceback — confirming the object's
+    nonexistence (information leak). Catching here makes the 404-shape
+    pattern the default rather than developer discipline.
+
     Raises :class:`~django.core.exceptions.PermissionDenied` on denial.
     The caller in ``websocket.py`` translates that to a
     ``{"type": "error", "message": "Permission denied"}`` frame plus
@@ -177,7 +189,19 @@ def check_object_permission(view_instance, request) -> None:
     if not _has_custom_get_object(view_instance):
         return
 
-    obj = view_instance.get_object()
+    from django.core.exceptions import ObjectDoesNotExist
+
+    try:
+        obj = view_instance.get_object()
+    except ObjectDoesNotExist:
+        # OWASP IDOR mitigation: developer's get_object() did
+        # `Model.objects.get(pk=self.<x>_id)` and the row doesn't exist.
+        # Treat as 404-shape (no object) rather than letting the exception
+        # propagate to the outer exception handler, which would leak
+        # existence via DEBUG-mode tracebacks.
+        view_instance._object = None
+        return
+
     view_instance._object = obj
     if obj is None:
         return
