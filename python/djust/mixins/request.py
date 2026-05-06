@@ -178,22 +178,16 @@ class RequestMixin:
         self.get_template()
         t_get_template = (time.perf_counter() - t0) * 1000
 
-        # Render full template for the browser
+        # Render full template for the browser.
+        # render_full_template() now calls _initialize_rust_view() +
+        # _sync_state_to_rust() internally, so self._rust_view is ready
+        # after this returns.
         t0 = time.perf_counter()
         html = self.render_full_template(request, serialized_context=state_serializable)
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
-        # CRITICAL: Establish VDOM baseline for subsequent PATCH responses
-        t0 = time.perf_counter()
-        self._initialize_rust_view(request)
-        t_init_rust = (time.perf_counter() - t0) * 1000
-
-        t0 = time.perf_counter()
-        self._sync_state_to_rust()
-        t_sync = (time.perf_counter() - t0) * 1000
-
-        # Establish VDOM baseline
+        # Establish VDOM baseline for subsequent PATCH responses.
         t0 = time.perf_counter()
         _, _, _ = self.render_with_diff(request)
         t_render_diff = (time.perf_counter() - t0) * 1000
@@ -223,18 +217,16 @@ class RequestMixin:
         logger.debug(
             "[LIVEVIEW GET TIMING] mount=%.2fms assign_ids=%.2fms "
             "get_context=%.2fms json=%.2fms save_components=%.2fms "
-            "init_rust=%.2fms sync_state=%.2fms get_template=%.2fms "
-            "render_diff=%.2fms render_full=%.2fms TOTAL=%.2fms",
+            "get_template=%.2fms render_full=%.2fms "
+            "render_diff=%.2fms TOTAL=%.2fms",
             t_mount,
             t_assign,
             t_get_context,
             t_json,
             t_save_components,
-            t_init_rust,
-            t_sync,
             t_get_template,
-            t_render_diff,
             t_render_full,
+            t_render_diff,
             t_total,
         )
 
@@ -243,7 +235,7 @@ class RequestMixin:
             "mount_ms": round(t_mount, 2),
             "context_ms": round(t_get_context + t_json, 2),
             "render_ms": round(t_render_full, 2),
-            "vdom_ms": round(t_init_rust + t_sync + t_render_diff, 2),
+            "vdom_ms": round(t_render_diff, 2),
         }
 
         # Inject view path into dj-root for WebSocket mounting
