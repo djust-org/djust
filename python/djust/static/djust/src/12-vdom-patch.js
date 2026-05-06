@@ -1497,19 +1497,39 @@ function groupConsecutiveInserts(inserts) {
 window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
 
 /**
- * Sort patches in 4-phase order for correct DOM mutation sequencing:
- * Phase 0: RemoveChild (descending index within same parent)
- * Phase 1: MoveChild
- * Phase 2: InsertChild
- * Phase 3: SetText, SetAttribute, and other node-targeting patches
+ * Sort patches into phases for correct DOM mutation sequencing.
+ *
+ * The id-based subtree patches (RemoveSubtree / InsertSubtree) MUST
+ * run before the path/index-based child patches. The server emits
+ * path-based RemoveChild/InsertChild indices that reflect the NEW
+ * tree's positions — i.e., the positions AFTER the boundary-keyed
+ * removals/insertions have been applied. Running RemoveChild first
+ * (with a new-tree index) against the still-old DOM state would
+ * either target the wrong child or fail path resolution entirely.
+ *
+ * This was the #1370 path-dependent corruption: short-path batches
+ * (≤10 patches) skipped the id-first pre-pass that the long-path
+ * did, so RemoveChild landed before RemoveSubtree and removed the
+ * wrong child. The fix is to give id-based patches phases that sort
+ * ahead of any path/index-based phase.
+ *
+ * Phases:
+ *   -2: RemoveSubtree (tear down keyed subtrees first)
+ *   -1: InsertSubtree (add keyed subtrees before any path indices apply)
+ *    0: RemoveChild (descending index within same parent)
+ *    1: MoveChild
+ *    2: InsertChild
+ *    3: SetText, SetAttribute, other node-targeting patches
  */
 function _sortPatches(patches) {
     function patchPhase(p) {
         switch (p.type) {
-            case 'RemoveChild': return 0;
-            case 'MoveChild':   return 1;
-            case 'InsertChild': return 2;
-            default:            return 3;
+            case 'RemoveSubtree': return -2;
+            case 'InsertSubtree': return -1;
+            case 'RemoveChild':   return 0;
+            case 'MoveChild':     return 1;
+            case 'InsertChild':   return 2;
+            default:              return 3;
         }
     }
     patches.sort(function(a, b) {

@@ -101,4 +101,31 @@ describe('Patch sorting — 4-phase ordering', () => {
         expect(patches[1].index).toBe(1);
         expect(patches[2].index).toBe(0);
     });
+
+    it('should order RemoveSubtree + InsertSubtree BEFORE path-based child ops (#1370)', () => {
+        // #1370 reproduction: server emits a batch mixing id-based subtree
+        // ops and path-based child ops. The path-based indices reflect the
+        // NEW tree's positions (after subtree ops applied). If RemoveChild
+        // runs before RemoveSubtree, it targets the still-old DOM and
+        // removes the wrong child. Sort must place id-based patches first.
+        const patches = [
+            { type: 'SetAttr', path: [1, 2, 4, 0, 1], d: '2B', key: 'class', value: 'x' },
+            { type: 'RemoveSubtree', id: 'if-290fa3f1-100' },
+            { type: 'RemoveChild', path: [1, 2, 4, 1], d: '2I', index: 6, child_d: '1fh' },
+            { type: 'InsertChild', path: [1, 2, 4, 1], d: '2I', index: 2, node: {} },
+            { type: 'InsertSubtree', id: 'if-290fa3f1-71', path: [1, 2, 4], d: '2I', index: 0, html: '' },
+            { type: 'SetAttr', path: [1, 2, 4, 0, 2], d: '2E', key: 'class', value: 'y' },
+        ];
+
+        _sortPatches(patches);
+        const types = patches.map(p => p.type);
+        // Subtree ops must come first, then RemoveChild, then InsertChild,
+        // then SetAttr. Any phase ordering that puts RemoveChild before
+        // RemoveSubtree is the #1370 corruption bug.
+        expect(types[0]).toBe('RemoveSubtree');
+        expect(types[1]).toBe('InsertSubtree');
+        expect(types.slice(2, 4).sort()).toEqual(['InsertChild', 'RemoveChild']);
+        expect(types.indexOf('RemoveChild')).toBeLessThan(types.indexOf('InsertChild'));
+        expect(types.slice(-2).every(t => t === 'SetAttr')).toBe(true);
+    });
 });
