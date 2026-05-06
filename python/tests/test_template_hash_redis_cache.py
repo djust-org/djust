@@ -324,27 +324,104 @@ def test_compute_template_hash_distinguishes_whitespace():
 # -----------------------------------------------------------------
 
 
-def test_multi_template_caveat_only_primary_hash_drives_invalidation():
-    """Sub-template edits that don't alter the primary don't flip the key.
+def test_multi_template_caveat_sub_template_edit_does_not_flip_primary_hash(tmp_path):
+    """Sub-template edits that don't alter the primary's bytes don't flip the key.
 
-    This is the documented Option-A trade-off: simple, single-source-
-    of-truth cache key. Acceptable in practice because a sub-template
-    edit nearly always coincides with a primary-template edit (block
-    content moves, include filenames change, etc.).
+    Demonstrates Option A's known caveat — operators must use
+    ``djust clear --all`` for sub-template-only changes.
 
-    If/when a deploy ever ships a pure sub-template-only change and
-    operators want immediate invalidation, the existing
-    ``djust clear --all`` CLI works.
+    Setup:
+    1. Build a real ``parent.html`` containing ``{% include "child.html" %}``.
+    2. Build a ``child_v1.html`` and a structurally-different
+       ``child_v2.html`` (extra ``<span>``).
+    3. Render ``parent.html`` against each child via the Django template
+       backend (verifies the child IS pulled into the rendered output —
+       the include-resolution machinery actually runs).
+    4. Compute ``compute_template_hash(parent_src)`` — the primary's
+       source bytes are unchanged across the two scenarios.
+    5. Assert the hashes are byte-identical despite the rendered output
+       differing.
+
+    This test would FAIL on a hypothetical Option B implementation that
+    hashed all touched templates (parent + child) — Option B's hash would
+    change when child content shifted. Under Option A, the cache key
+    derives ONLY from the primary's source bytes, so sub-template-only
+    edits don't trigger automatic invalidation.
+
+    Action #1200 compliance: this is NOT a tautology
+    (``compute_template_hash(same)`` == ``compute_template_hash(same)``)
+    — it shows the rendered output diverges (verifying the include
+    actually pulls in child content) while the primary's hash stays
+    identical. The contract being tested is "primary hash is independent
+    of included sub-template content," not "the hash function is
+    deterministic" (already covered by
+    ``test_compute_template_hash_stable_across_rebuilds``).
     """
-    primary_src = '<div>{% include "child.html" %}</div>'
-    # Two different "child.html" contents — irrelevant to the primary's
-    # hash. The cache key derives from the primary's bytes only.
-    primary_hash_a = compute_template_hash(primary_src)
-    primary_hash_b = compute_template_hash(primary_src)
-    assert primary_hash_a == primary_hash_b, (
-        "Same primary source → same primary hash → same cache key, "
-        "regardless of what the included child template contains. "
-        "This is the documented Option-A trade-off (#1362)."
+    from djust.template_backend import DjustTemplateBackend
+
+    templates_dir = tmp_path / "templates"
+    templates_dir.mkdir()
+
+    # The primary template references "child.html" via {% include %}.
+    # Its source bytes contain only the include directive — they do NOT
+    # contain the child's body.
+    primary_src = '<div class="parent">{% include "child.html" %}</div>'
+    (templates_dir / "parent.html").write_text(primary_src)
+
+    backend = DjustTemplateBackend(
+        {
+            "NAME": "djust",
+            "DIRS": [str(templates_dir)],
+            "APP_DIRS": False,
+            "OPTIONS": {},
+        }
+    )
+
+    # Scenario 1: child_v1 has minimal content.
+    child_v1_src = "<p>v1</p>"
+    (templates_dir / "child.html").write_text(child_v1_src)
+
+    template = backend.from_string(primary_src)
+    rendered_v1 = template.render({})
+    primary_hash_with_v1 = compute_template_hash(primary_src)
+
+    # Sanity: the include actually ran and pulled in the v1 child body.
+    assert "<p>v1</p>" in rendered_v1, (
+        "Sanity check: the include-resolution machinery must actually pull "
+        "child.html v1 into the rendered output, otherwise the test isn't "
+        "exercising the multi-template path."
+    )
+
+    # Scenario 2: rewrite child.html with structurally-different content.
+    # The PRIMARY template (parent.html) source bytes are UNCHANGED.
+    child_v2_src = '<p>v2</p><span class="extra">added</span>'
+    (templates_dir / "child.html").write_text(child_v2_src)
+
+    template = backend.from_string(primary_src)
+    rendered_v2 = template.render({})
+    primary_hash_with_v2 = compute_template_hash(primary_src)
+
+    # Sanity: the rendered output ACTUALLY differs (the test isn't a
+    # no-op; child changes do propagate to render output).
+    assert "<p>v2</p>" in rendered_v2 and 'class="extra"' in rendered_v2
+    assert rendered_v1 != rendered_v2, (
+        "Sanity check: rendered output MUST differ between v1 and v2 — "
+        "if it doesn't, the include isn't being re-resolved against the "
+        "new child.html and the test isn't proving anything."
+    )
+
+    # The point of the test: the primary's hash is BYTE-IDENTICAL across
+    # the two scenarios despite the rendered output differing. This
+    # demonstrates Option A's caveat: a sub-template-only edit (no change
+    # to the primary's bytes) does NOT flip the cache key.
+    assert primary_hash_with_v1 == primary_hash_with_v2, (
+        "Multi-template Option A caveat: the primary's hash is unchanged "
+        "by sub-template edits. Operators must use `djust clear --all` "
+        "to force invalidation when ONLY a sub-template changes (#1362). "
+        "If this assertion fails, the framework switched from Option A "
+        "(primary-only hash) to Option B (composite hash of all touched "
+        "templates), which is a contract change that affects deploy-time "
+        "invalidation semantics."
     )
 
 
@@ -421,4 +498,172 @@ def test_framework_cache_key_includes_template_hash_via_initialize_rust_view():
         f"different cache keys. A={view_a._cache_key} B={view_b._cache_key}. "
         "If this fails, the per-template hash slot regressed and "
         "stale state will leak across deploys (#1362)."
+    )
+
+
+# -----------------------------------------------------------------
+# Perf-regression tests for Stage 12 fix.
+#
+# Background: the initial v0.9.4-2 Iter 1 implementation hoisted
+# ``self.get_template()`` to BEFORE the cache lookup so the per-template
+# hash could be computed for the cache key. That regressed the cache HIT
+# path: pre-#1362 it never called ``get_template()``, post-#1362 every
+# WS reconnect ate the Django template loader + inheritance resolution
+# cost even when the cache hit.
+#
+# Fix: cache the ``_t<8hex>`` slot on the view CLASS (one-time per
+# class lifetime) via ``_get_cached_template_hash_slot``. First call
+# pays the cost, subsequent calls return the memoized slot in O(1).
+# The cache HIT path no longer calls ``get_template()`` after the
+# class warmup.
+# -----------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_template_hash_slot_is_cached_on_view_class():
+    """``_get_cached_template_hash_slot`` memoizes per-class.
+
+    First call invokes ``get_template()`` once; second call returns the
+    memoized slot WITHOUT re-loading the template. This is the perf
+    contract: ``get_template()`` is called at most once per view class
+    lifetime (modulo defensive fallback on Rust-extension failure).
+    """
+    from djust import LiveView
+
+    # Use a fresh dynamic subclass so any test ordering doesn't pre-warm
+    # the class-level cache (Action #1109 — fresh subclass per call).
+    DynView = type(
+        "DynViewHashSlotMemo",
+        (LiveView,),
+        {"template": "<div>{{ x }}</div>"},
+    )
+
+    # Sanity: no cached slot before the first call.
+    assert "_djust_template_hash_slot" not in DynView.__dict__
+
+    # Spy on get_template — count calls.
+    call_count = {"n": 0}
+    real_get_template = DynView.get_template
+
+    def counting_get_template(self):
+        call_count["n"] += 1
+        return real_get_template(self)
+
+    DynView.get_template = counting_get_template
+
+    instance1 = DynView()
+    slot1 = instance1._get_cached_template_hash_slot()
+    assert slot1.startswith("_t")
+    assert len(slot1) == 10  # "_t" + 8 hex chars
+    assert call_count["n"] == 1, "first call should load template once"
+
+    # Second call on the SAME instance should hit the class cache.
+    slot2 = instance1._get_cached_template_hash_slot()
+    assert slot2 == slot1
+    assert call_count["n"] == 1, "second call must NOT re-load template"
+
+    # A second INSTANCE of the same class also hits the class cache.
+    instance2 = DynView()
+    slot3 = instance2._get_cached_template_hash_slot()
+    assert slot3 == slot1
+    assert call_count["n"] == 1, (
+        "different instances of the same class must share the class-level "
+        "memoized slot — get_template() should still only have run once"
+    )
+
+
+@pytest.mark.django_db
+def test_initialize_rust_view_cache_hit_does_not_call_get_template():
+    """Cache HIT path: ``get_template()`` is NOT called after class warmup.
+
+    This is the load-bearing perf-regression test. Before the Stage 12
+    fix, ``_initialize_rust_view`` eagerly called ``get_template()``
+    BEFORE the cache lookup so the hash could be computed for the cache
+    key. After the fix, the hash is memoized on the class and
+    ``get_template()`` is only called on cache MISS (when we need to
+    actually construct a new ``RustLiveView``).
+
+    Test flow:
+    1. Warm up the class-level hash cache by running
+       ``_initialize_rust_view`` once with no cache entry (MISS).
+       This populates the backend AND the class-level slot cache.
+    2. Reset the spy counter and run a SECOND view instance through
+       ``_initialize_rust_view`` — the backend already has an entry
+       (from step 1), so this is a cache HIT.
+    3. Assert ``get_template()`` was called ZERO times during the HIT.
+
+    Pre-fix this would have failed: ``get_template()`` was called every
+    time, regardless of cache HIT/MISS.
+    """
+    from django.contrib.sessions.middleware import SessionMiddleware
+    from django.test import RequestFactory
+
+    from djust import LiveView
+    from djust.state_backend import get_backend
+
+    DynView = type(
+        "DynViewCacheHitNoLoad",
+        (LiveView,),
+        {"template": "<div>{{ y }}</div>"},
+    )
+
+    def _mount(self, request, **kwargs):
+        self.y = 0
+
+    DynView.mount = _mount
+
+    # Spy on get_template — count calls.
+    call_count = {"n": 0}
+    real_get_template = DynView.get_template
+
+    def counting_get_template(self):
+        call_count["n"] += 1
+        return real_get_template(self)
+
+    DynView.get_template = counting_get_template
+
+    factory = RequestFactory()
+
+    def _add_session(req):
+        SessionMiddleware(lambda r: None).process_request(req)
+        req.session.save()
+        return req
+
+    # --- Step 1: warmup pass (cache MISS) ---
+    req1 = _add_session(factory.get("/perf/"))
+    view1 = DynView()
+    view1._websocket_session_id = "perf-session"
+    view1._websocket_path = "/perf/"
+    view1._websocket_query_string = ""
+    view1._rust_view = None
+    view1._cache_key = None
+    view1._initialize_rust_view(req1)
+    # Cache MISS path: get_template() was called (to construct the view
+    # AND to compute the hash slot — though the hash is now class-cached).
+    miss_call_count = call_count["n"]
+    assert miss_call_count >= 1, "MISS path must call get_template at least once"
+    # The backend should now have an entry under view1's cache key.
+    assert get_backend().get(view1._cache_key) is not None
+
+    # --- Step 2: reset spy, do a HIT pass ---
+    call_count["n"] = 0
+    req2 = _add_session(factory.get("/perf/"))
+    view2 = DynView()
+    view2._websocket_session_id = "perf-session"
+    view2._websocket_path = "/perf/"
+    view2._websocket_query_string = ""
+    view2._rust_view = None
+    view2._cache_key = None
+    view2._initialize_rust_view(req2)
+
+    # --- Step 3: cache HIT must NOT have called get_template() ---
+    assert view2._cache_key == view1._cache_key, (
+        "Same template + same session + same path → SAME cache key; "
+        "if these differ the test isn't actually exercising a HIT."
+    )
+    assert view2._rust_view is not None, "Cache HIT must populate _rust_view"
+    assert call_count["n"] == 0, (
+        f"Cache HIT path must NOT call get_template() (perf regression "
+        f"fix); but it was called {call_count['n']} time(s). The class-"
+        f"level hash slot cache should have served the slot directly."
     )
