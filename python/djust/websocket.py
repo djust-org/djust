@@ -2144,6 +2144,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # made by subsequent event handlers.
                 if hasattr(self.view_instance, "_capture_dirty_baseline"):
                     self.view_instance._capture_dirty_baseline()
+
+                # --- Object-permission check (ADR-017 §Decision 5, post-mount) ---
+                # check_view_auth handled login + role + custom checks pre-mount
+                # at line ~1947. The fourth (object-level) step is split out
+                # into a separate helper here because get_object() reads
+                # `self.<x>_id` which only exists after mount() has populated it.
+                # See ADR-017 § "Physical call sites" for the full rationale.
+                from .auth.core import check_object_permission
+
+                try:
+                    await sync_to_async(check_object_permission)(self.view_instance, request)
+                except PermissionDenied as exc:
+                    logger.info(
+                        "Object-permission denied for %s: %s",
+                        self.view_instance.__class__.__name__,
+                        exc,
+                    )
+                    await self.send_json({"type": "error", "message": "Permission denied"})
+                    await self.close(code=4403)
+                    return
+                # --- End object-permission check ---
         except Exception as e:
             response = handle_exception(
                 e,
