@@ -146,9 +146,9 @@ When `has_object_permission` returns False (or raises `PermissionDenied`) on eve
 
 **Mount-time** failure remains a WS close (matches existing `check_view_auth` behavior at line 1954: `await self.close(code=4403)`). Mount-time means the user shouldn't have access to the view at all.
 
-### Decision 5: Order of auth checks
+### Decision 5: Order of auth checks (logical onion + physical call sites)
 
-`check_view_auth` runs in this order (extended from current):
+The **logical** auth onion runs in this order:
 
 1. `login_required` — is user authenticated?
 2. `permission_required` — does user have Django role permission(s)?
@@ -160,6 +160,20 @@ The new step is **after** `check_permissions` because:
 - `check_permissions` is the developer's escape hatch for arbitrary logic — they may want to short-circuit before object lookup (e.g., "is this user banned?").
 - Object-level auth requires the object to be loaded, which is a query. Running role + custom checks first lets cheap denials short-circuit before the query.
 - Subclasses that want object-aware logic in `check_permissions` can call `self.get_object()` explicitly; the cache prevents double-fetch.
+
+**Physical call sites — split for mechanical reasons (verified during v0.9.5-1a planning):**
+
+Steps 1–3 stay inside `check_view_auth` and run **pre-mount** (current behavior, unchanged). Step 4 runs **post-mount** as a separate helper `check_object_permission(view_instance, request)`. The split is forced by call-order facts in djust's WS path:
+
+- `check_view_auth` runs at `websocket.py:1947`, BEFORE `mount()` at `websocket.py:2134`.
+- djust's WS path does NOT call Django's `View.setup()`, so `self.kwargs` is never bound. URL kwargs are passed positionally to `mount()` at `websocket.py:2134` and the user's `mount()` body assigns them to `self` (e.g. `self.document_id = document_id`).
+- Therefore `get_object()` reading `self.document_id` requires `mount()` to have run first.
+
+**The new physical call site for step 4** is `websocket.py:2147` — after `_capture_dirty_baseline` (line 2146) and before the outer `except Exception as e` catch (line 2147). The new call is wrapped in its own `try/except PermissionDenied` that emits the same close-4403 response as the pre-mount denial path at `websocket.py:1953-1955`. Other exceptions (DB errors, etc.) propagate to the outer `handle_exception` path.
+
+This split preserves Decision 5's logical onion (the user-facing semantic ordering is unchanged) while honoring the pre-mount-vs-post-mount call-order constraint. Stage 5 implementation pins this in the docstring of `check_object_permission`.
+
+**Snapshot-restore + prerendered-state-restore branches** (websocket.py reach the post-mount step too — the insertion point is downstream of both restore paths): `self._object` is a framework slot allocated in `__init__`, NOT user state, so it's `None` after either restore. `get_object()` re-runs fresh, which handles the "object reassigned during disconnect" case automatically (Decision 3 § WS-reconnect).
 
 ### Decision 6: Views without a primary object — opt-in via `get_object` override
 
@@ -223,8 +237,9 @@ Per Action #1122 / #1175, this milestone has high blast radius and warrants spli
 ### v0.9.5-1a — Foundation (mount-time enforcement)
 
 - Add `get_object()` and `has_object_permission()` methods to `LiveView`.
-- Extend `check_view_auth` to call the pair when `get_object` is overridden.
-- Add `_has_custom_get_object()` helper in `auth/core.py`.
+- Add `check_object_permission(view_instance, request)` helper in `auth/core.py`.
+- Add `_has_custom_get_object()` helper in `auth/core.py` (mirrors `_has_custom_check_permissions`).
+- Wire `check_object_permission` into `websocket.py:handle_mount` post-mount (after `_capture_dirty_baseline`, before the outer `except` catch). See Decision 5 for the call-site rationale.
 - Add `self._invalidate_object_cache()` API.
 - Regression suite Part 1: mount-time tests (denial closes WS, allow proceeds, cache populated, invalidation works, no-override is no-op).
 
