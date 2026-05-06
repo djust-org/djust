@@ -8,7 +8,7 @@
 - [`python/djust/auth/core.py:check_view_auth`](../../python/djust/auth/core.py) — current view-level auth surface
 - [`python/djust/websocket.py`](../../python/djust/websocket.py) — `handle_mount` (line ~1925), `handle_event` (line 2606), connect-path `PermissionDenied` catch (line 1948)
 - [`python/djust/audit_ast.py`](../../python/djust/audit_ast.py) — static-analysis hook for the system check
-- Issue [#1373](https://github.com/djust-org/djust/issues/1373) (this ADR's tracking issue)
+- Issue [#1373](https://github.com/djust-org/djust/issues/1373) (this ADR's tracking issue) — surfaced during a downstream-consumer code review on 2026-05-06
 - ROADMAP.md milestone v0.9.5-1
 - DRF `get_object()` + `has_object_permission()` (the prior art mirrored here)
 - Phoenix LiveView `on_mount` callbacks (alternative model considered, rejected — see Decision 2)
@@ -18,7 +18,7 @@
 
 ## Summary
 
-djust currently has no first-class hook for **object-level** authorization. The two existing surfaces (`permission_required` class attribute, `check_permissions(self, request)` hook) handle role-level checks but cannot enforce per-object access for views bound to a single object via URL kwarg. The natural placement (`get_context_data`) runs too late: by the time the check fails, `mount()` has set up the WS-session-scoped state and event handlers can fire. Concrete IDOR reproducer: a user authenticated with `claims.access_claim` but unassigned to claim 99 can navigate to `/claims/99/`, fail the render-time check, and still fire write event handlers against claim 99 over the established WS.
+djust currently has no first-class hook for **object-level** authorization. The two existing surfaces (`permission_required` class attribute, `check_permissions(self, request)` hook) handle role-level checks but cannot enforce per-object access for views bound to a single object via URL kwarg. The natural placement (`get_context_data`) runs too late: by the time the check fails, `mount()` has set up the WS-session-scoped state and event handlers can fire. Concrete IDOR reproducer: a user authenticated with `documents.access` (a role permission) but not granted access to document 99 can navigate to `/documents/99/`, fail the render-time check, and still fire write event handlers against document 99 over the established WS.
 
 This ADR proposes a DRF-style lifecycle: `get_object()` declares how to fetch the view's primary object; `has_object_permission(request, obj)` declares whether the user can access it. djust calls both at mount AND on every event handler entry, so the bug class is structurally eliminated, not just documented away.
 
@@ -27,44 +27,44 @@ This ADR proposes a DRF-style lifecycle: `get_object()` declares how to fetch th
 ### What's vulnerable today
 
 ```python
-# Reproducer — Examiner A authenticated, has claims.access_claim,
-# NOT assigned to claim 99.
-class ClaimDetailView(LiveView):
-    permission_required = "claims.access_claim"  # role check at WS connect
+# Reproducer — User A authenticated, has documents.access (role),
+# NOT granted access to document 99 (object-level).
+class DocumentDetailView(LiveView):
+    permission_required = "documents.access"  # role check at WS connect
 
-    def mount(self, request, claim_id=None, **kwargs):
-        self.claim_id = claim_id  # bound from URL kwarg
+    def mount(self, request, document_id=None, **kwargs):
+        self.document_id = document_id  # bound from URL kwarg
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        claim = Claim.objects.get(pk=self.claim_id)
-        if not can_view_claim(self.request.user, claim):
+        doc = Document.objects.get(pk=self.document_id)
+        if not can_access_document(self.request.user, doc):
             raise PermissionDenied()  # <-- runs during render, AFTER mount
-        ctx["claim"] = claim
+        ctx["document"] = doc
 
     @event_handler()
-    def add_claim_note(self, subject="", body="", **kwargs):
-        claim = Claim.objects.get(pk=self.claim_id)  # <-- NO PER-EVENT CHECK
-        ClaimNote.objects.create(claim=claim, subject=subject, body=body)
+    def add_comment(self, subject="", body="", **kwargs):
+        doc = Document.objects.get(pk=self.document_id)  # <-- NO PER-EVENT CHECK
+        Comment.objects.create(document=doc, subject=subject, body=body)
 ```
 
-1. WS connect to `/claims/99/`. `check_view_auth` runs `permission_required` (role OK), passes.
-2. `handle_mount` runs `mount(request, claim_id=99)`. `self.claim_id = 99`.
+1. WS connect to `/documents/99/`. `check_view_auth` runs `permission_required` (role OK), passes.
+2. `handle_mount` runs `mount(request, document_id=99)`. `self.document_id = 99`.
 3. First render calls `get_context_data`, which raises `PermissionDenied`.
-4. `websocket.py` only catches `PermissionDenied` in the **connect** path (line 1948). After mount, the exception propagates as an unhandled error frame; the WS session is **not** closed, `self.claim_id` remains 99.
-5. Examiner A sends `{"event": "add_claim_note", "params": {...}}`. `handle_event` (line 2606) dispatches to the handler. The handler calls `Claim.objects.get(pk=99)` and writes a note. **No access check.**
+4. `websocket.py` only catches `PermissionDenied` in the **connect** path (line 1948). After mount, the exception propagates as an unhandled error frame; the WS session is **not** closed, `self.document_id` remains 99.
+5. User A sends `{"event": "add_comment", "params": {...}}`. `handle_event` (line 2606) dispatches to the handler. The handler calls `Document.objects.get(pk=99)` and writes a comment. **No access check.**
 
 ### Why existing hooks don't fit
 
 - `permission_required` is a role check. It can't see which object the user is asking about.
-- `check_permissions(self, request)` runs **before** `mount()` (`auth/core.py:94`), so `self.claim_id` doesn't exist yet. URL kwargs are bound by `mount()`, not before.
+- `check_permissions(self, request)` runs **before** `mount()` (`auth/core.py:94`), so `self.document_id` doesn't exist yet. URL kwargs are bound by `mount()`, not before.
 - `get_context_data` runs **during render**, after `mount()` has committed session-scoped state. `PermissionDenied` from there is not caught in the per-event path.
 
 There's no hook that fires (a) after URL kwargs are bound to `self`, (b) before mount commits, AND (c) re-runs on every event. DRF solved the equivalent split with `get_object()` + `has_object_permission()` — the framework owns the call site, so developers cannot forget the per-event check.
 
 ### Why now
 
-Surfaced 2026-05-06 reviewing NYC Claims PR #268. The reproducer above is exploitable in the current production v0.9.4. Affects every djust LiveView whose URL contains a primary-object identifier (`/<thing>/<id>/`) — the most common detail-view pattern. Treating this as documentation ("remember to call your check inside event handlers") would let the bug class persist; the framework should own the call site.
+Surfaced 2026-05-06 during a downstream-consumer code review. The reproducer above is exploitable in the current production v0.9.4. Affects every djust LiveView whose URL contains a primary-object identifier (`/<thing>/<id>/`) — the most common detail-view pattern. Treating this as documentation ("remember to call your check inside event handlers") would let the bug class persist; the framework should own the call site.
 
 ## Decision
 
@@ -119,15 +119,15 @@ Pinned to the no-argument shape. The request is already available as `self.reque
 
 ```python
 @event_handler()
-def reassign_claim(self, examiner_id: int = 0, **kwargs):
-    self.claim.assigned_examiner_id = examiner_id
-    self.claim.save()
+def reassign_owner(self, owner_id: int = 0, **kwargs):
+    self._object.owner_id = owner_id
+    self._object.save()
     self._invalidate_object_cache()  # next event re-fetches via get_object()
 ```
 
-**Why cache?** Per-event re-fetch is a query per event. For most views the assigned-examiner FK doesn't change mid-session; caching is the right default. Invalidation is explicit so the cost model is predictable.
+**Why cache?** Per-event re-fetch is a query per event. For most views the ownership FK doesn't change mid-session; caching is the right default. Invalidation is explicit so the cost model is predictable.
 
-**WS reconnect / state-restore**: cache is invalidated on every state-restore (the post-reconnect path). `get_object()` runs fresh because `self._object` is reset by the restore handler. This handles the "claim was reassigned while user was disconnected" case automatically.
+**WS reconnect / state-restore**: cache is invalidated on every state-restore (the post-reconnect path). `get_object()` runs fresh because `self._object` is reset by the restore handler. This handles the "object was reassigned while user was disconnected" case automatically.
 
 **State mutation that doesn't go through a handler** (signal-driven, push-from-server): out of scope. Apps that need it must call `self._invalidate_object_cache()` explicitly from the push handler.
 
@@ -140,7 +140,7 @@ When `has_object_permission` returns False (or raises `PermissionDenied`) on eve
 3. Does NOT close the WS. The session remains valid; the user just can't perform that handler against that object.
 4. The handler body is NOT executed.
 
-**Why not close the WS?** The user is authenticated and has the role; only this specific object is forbidden. Closing the WS forces a full reload, which is wrong UX for "you can't reassign this claim" — they should be able to navigate elsewhere.
+**Why not close the WS?** The user is authenticated and has the role; only this specific object is forbidden. Closing the WS forces a full reload, which is wrong UX for "you can't perform this action on this object" — they should be able to navigate elsewhere.
 
 **Why not silent drop?** The client needs to know the action failed so it can revert optimistic UI updates. The error frame is the load-bearing signal.
 
@@ -163,7 +163,7 @@ The new step is **after** `check_permissions` because:
 
 ### Decision 6: Views without a primary object — opt-in via `get_object` override
 
-Views that don't have a single primary object (`ExaminerDashboardView`, `ClaimAssignmentView`, list views, search views) inherit the default `get_object() -> None` and `has_object_permission(request, None) -> True`. The new lifecycle is invisible to them — zero behavior change.
+Views that don't have a single primary object (dashboards, list views, search views, multi-object queue views) inherit the default `get_object() -> None` and `has_object_permission(request, None) -> True`. The new lifecycle is invisible to them — zero behavior change.
 
 To verify this empirically, the regression suite includes a "negative case" test that runs the existing demo view test suite unchanged and asserts no failures. Same for djust.org's test suite (run as a downstream-consumer integration check before merge).
 
@@ -270,7 +270,7 @@ Documentation-grade work that rides on the now-stable lifecycle.
 - **Subclass override of `get_object()` that does expensive I/O.** A naive override that joins half the database makes every event handler eat that cost. Mitigation: documentation emphasizes minimal `get_object()` (just the FK). The cache helps once it's warm.
 - **Cache invalidation bugs.** A handler mutates the assigned-examiner FK but forgets to call `_invalidate_object_cache()`. Next event sees stale `self._object`, the (formerly authorized) user retains access. Mitigation: regression test that exercises the mutation-without-invalidate path and verifies the cache eventually updates on state-restore. Plus a `djust check` heuristic for FK mutations on `self._object`.
 - **State-restore path interaction.** djust's reconnect / state-restore deserializes view state from msgpack. `self._object` is a Django model instance — not directly msgpack-serializable. The restore path skips serializing `_object` and re-runs `get_object()` after restore, which is the correct behavior but worth pinning explicitly in the test suite.
-- **`PermissionDenied` raised by `get_object()` itself** (e.g., `Claim.DoesNotExist` raised as `PermissionDenied` to avoid object-existence leak). djust's mount-time path catches this; the per-event path catches it too. Documented as the recommended pattern for "deny without confirming existence" (OWASP IDOR mitigation: prefer 404-shape over 403-shape on enumeration).
+- **`PermissionDenied` raised by `get_object()` itself** (e.g., `Document.DoesNotExist` raised as `PermissionDenied` to avoid object-existence leak). djust's mount-time path catches this; the per-event path catches it too. Documented as the recommended pattern for "deny without confirming existence" (OWASP IDOR mitigation: prefer 404-shape over 403-shape on enumeration).
 
 ## Alternatives considered
 
@@ -280,8 +280,8 @@ Apply per-handler:
 
 ```python
 @event_handler()
-@object_permission_required(can_view_claim)
-def add_claim_note(self, ...): ...
+@object_permission_required(can_access_document)
+def add_comment(self, ...): ...
 ```
 
 **Rejected.** Same forgotten-check failure mode as today — developer has to remember to apply it on every handler. The whole point of the framework owning the call site is that the developer can't forget.
@@ -298,20 +298,20 @@ Phoenix LiveView exposes a chain of `on_mount` callbacks that run before mount a
 
 Encode all access logic in custom managers; require views to use them.
 
-**Rejected as the primary mechanism, but adopted as a secondary defense.** Manager-level filtering is the right pattern for *queries* (it auto-filters list views, it works in `Claim.objects.get(pk=x).for_user(user)`), but it doesn't help when an event handler does `Claim.objects.get(pk=self.claim_id)` raw and forgets to call `for_user`. The framework still has to own the per-event call site. The guide will recommend BOTH the lifecycle hooks AND the manager pattern as defense-in-depth.
+**Rejected as the primary mechanism, but adopted as a secondary defense.** Manager-level filtering is the right pattern for *queries* (it auto-filters list views, it works in `Document.objects.for_user(user).get(pk=x)`), but it doesn't help when an event handler does `Document.objects.get(pk=self.document_id)` raw and forgets to call `for_user`. The framework still has to own the per-event call site. The guide will recommend BOTH the lifecycle hooks AND the manager pattern as defense-in-depth.
 
 ### Alt 4: Make object-level auth automatic via URL routing
 
-Inspect URL kwargs (`<int:claim_id>`), auto-fetch the model from the kwarg name, auto-filter via the manager.
+Inspect URL kwargs (`<int:document_id>`), auto-fetch the model from the kwarg name, auto-filter via the manager.
 
 **Rejected.** Too magical. Breaks if the URL kwarg name doesn't match the model name, if the view operates on multiple objects, if the model has a custom manager, or if the object isn't a Django model (UUID, slug, virtual object). The opt-in `get_object()` override is the right amount of explicitness — developer states what they're doing, framework enforces it.
 
 ## Migration plan for existing apps
 
-Pre-existing views with hand-rolled object-level checks (like NYC Claims `ClaimDetailView.get_context_data` calling `can_view_claim`) migrate by:
+Pre-existing views with hand-rolled object-level checks (e.g. a `get_context_data` that calls `can_access_X(request.user, obj)` and raises `PermissionDenied`) migrate by:
 
 1. Override `get_object()` to return the primary object.
-2. Override `has_object_permission(request, obj)` and call the existing helper (`return can_view_claim(request.user, obj)`).
+2. Override `has_object_permission(request, obj)` and call the existing helper (`return can_access_X(request.user, obj)`).
 3. Delete the in-`get_context_data` IDOR check (it's redundant; the framework now owns it).
 4. Run `djust check` — should report 0 IDOR-shape warnings for the migrated view.
 

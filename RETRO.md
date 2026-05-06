@@ -333,7 +333,7 @@ Independent diagnostic finding from the implementer: the TDZ surfaces only when 
 ## v0.9.4-2 — Template-hash-keyed Redis cache + deployment docs (#1362) (PRs #1367, #1369)
 
 **Date**: 2026-05-05
-**Scope**: Closes #1362 (production deployment gaps surfaced by NYC Claims). Two iters: code (template-hash-keyed Redis cache) + docs (deployment guide additions). Builds directly on v0.9.4-1's just-shipped `parse_with_source` infrastructure.
+**Scope**: Closes #1362 (production deployment gaps surfaced by a downstream consumer). Two iters: code (template-hash-keyed Redis cache) + docs (deployment guide additions). Builds directly on v0.9.4-1's just-shipped `parse_with_source` infrastructure.
 **Tests at close**: 4949 Python + Rust + JS, all green (DraftMode playwright flake unrelated).
 
 ### What We Learned
@@ -461,7 +461,7 @@ Action #1122 says foundations should "soak through one or more releases before t
 ### Acceptance check
 
 - ✅ All 3 iters merged: PR #1363 (Iter 1, commit 149c2aa1), PR #1364 (Iter 2, da92e637), PR #1365 (Iter 3, d55cda5f).
-- ✅ Reproducer from #1358 body (NYC Claims tab-switch) no longer triggers patch failures, recovery-HTML, or page reload.
+- ✅ Reproducer from #1358 body (downstream-consumer tab-switch) no longer triggers patch failures, recovery-HTML, or page reload.
 - ✅ Existing apps using `d-none` workaround continue to work identically (backward-compatible).
 - ✅ 131 new regression tests across the 3 iters; all passing.
 - ✅ Existing Rust + Python + JS test suites continue to pass.
@@ -533,7 +533,7 @@ The #1351 body claimed `--max-warnings 0` was "implicitly via `npx eslint`'s def
 ## v0.9.3-7 — State-backend safety pair (#1353 + #1354) (PR #1355)
 
 **Date**: 2026-05-05
-**Scope**: Two coupled production bugs from NYC Claims (filed against v0.9.2rc1, still affecting v0.9.3rc2). One PR with 4 commits (initial Option-1 implementation → Stage 11 found correctness issue → Stage 12 redesigned to Option 2 → Stage 13 APPROVE → merge).
+**Scope**: Two coupled production bugs from a downstream consumer (filed against v0.9.2rc1, still affecting v0.9.3rc2). One PR with 4 commits (initial Option-1 implementation → Stage 11 found correctness issue → Stage 12 redesigned to Option 2 → Stage 13 APPROVE → merge).
 **Tests at close**: 4167 passing (was 4164 — net +3 from rewriting #1353's tests + adding 2 URL-prefix cases for #1354).
 
 ### What We Learned
@@ -550,7 +550,7 @@ Original Stage 5 implementation passed local tests AND CI (13/13 green). It woul
 
 ### Insights
 
-- **The audit-leverage hypothesis is showing up in real-time as predicted.** Both #1353 and #1354 came from NYC Claims production usage (the same downstream-consumer source that motivated the audit recipe). Pre-stable triage of these specific bugs shipped before v0.9.3 stable cut. The 2026-05-06 verification cron will measure the post-stable signal.
+- **The audit-leverage hypothesis is showing up in real-time as predicted.** Both #1353 and #1354 came from downstream-consumer production usage (the same downstream-consumer source that motivated the audit recipe). Pre-stable triage of these specific bugs shipped before v0.9.3 stable cut. The 2026-05-06 verification cron will measure the post-stable signal.
 
 - **Pipeline canon "Action #1196" (would the test FAIL on main?) is empirically testable.** Stage 11 reviewer ran the original synthetic test against the real `RustLiveView` with no lock and got 0 errors — proving the test was tautological in 5 minutes. Stage 12 implementer verified the new tests fail on main via `git stash` + standalone reproducer. Concrete falsification > prose argumentation.
 
@@ -1922,7 +1922,7 @@ PR #1107's `wizard_rendered_fields` annotated as `list | None`, but the code use
 **Action taken**: Open — tracked in Action Tracker #158. New rule: every AST round-trip (inheritance, serialization, cache-rebuild) needs a "parse the source, round-trip, re-parse, assert AST equality" test driven from parser output, not from direct AST construction. PR #1086 added that round-trip case (`test_round_trip_through_resolve_inheritance_preserves_date_filter_arg_1081`).
 
 **2. Multi-reopen issues need bit-exact repro before claiming root cause.**
-Issue #1081 went through 4 reopens, each with a confidently-stated different root cause from the reporter (and 3 confidently-stated "found it" replies from me). All three of my framework-side theories tested clean against the published cp312 wheel SHA — and were wrong. Posted "smoking gun" comments based on theoretical-flow testing without a runnable script that reproduced against the reporter's exact environment. The actual fix landed in 5 minutes once the user provided direct project access at `/Users/tip/online_projects/Flexion/proposals/nyc_a downstream-consumer agency_claims/downstream-consumer/`.
+Issue #1081 went through 4 reopens, each with a confidently-stated different root cause from the reporter (and 3 confidently-stated "found it" replies from me). All three of my framework-side theories tested clean against the published cp312 wheel SHA — and were wrong. Posted "smoking gun" comments based on theoretical-flow testing without a runnable script that reproduced against the reporter's exact environment. The actual fix landed in 5 minutes once the user provided direct project access at `<the consumer project path>`.
 
 **Action taken**: Open — tracked in Action Tracker #162. New triage process rule: on any issue with N≥2 reopens, refuse to post a root-cause claim without a runnable script that reproduces against the user's exact environment. Bit-exact diagnostic-script ask precedes any "found it" claim.
 
@@ -2159,9 +2159,9 @@ After Group E closed at Stage 4 with no code, I went back to `main` and started 
 **Action taken**: Open — tracked in Action Tracker #151 (GitHub #1072).
 
 **4. The new pipeline-retro Stage 3.5 gate was dogfooded at PR-level retros throughout this milestone.**
-Every per-PR retro (#1064, #1065, #1066, #1067, #1068) included a "Stage 3.5 classification: closed" section anticipating the gate's eventual use. This milestone-level retro is the FIRST formal invocation of the new gate. The gate itself is canonical at `~/.claude/skills/pipeline-retro/SKILL.md` and shipped to two downstream consumers via `johnrtipton/pipeline-skills#2` and `flexion/flexion-ai-claude-plugin#90`. Real-data validation: the gate caught 0 violations in this milestone's findings (because each per-PR retro had already pre-classified as `closed`) — but the discipline of the gate is what made each PR retro author write a canonical `Action taken:` line, not a prose-only one.
+Every per-PR retro (#1064, #1065, #1066, #1067, #1068) included a "Stage 3.5 classification: closed" section anticipating the gate's eventual use. This milestone-level retro is the FIRST formal invocation of the new gate. The gate itself is canonical at `~/.claude/skills/pipeline-retro/SKILL.md` and shipped to two downstream consumers via `johnrtipton/pipeline-skills#2` and `<consumer-org>/<consumer-plugin-repo>#90`. Real-data validation: the gate caught 0 violations in this milestone's findings (because each per-PR retro had already pre-classified as `closed`) — but the discipline of the gate is what made each PR retro author write a canonical `Action taken:` line, not a prose-only one.
 
-**Action taken**: Closed — pipeline-retro Stage 3.5 gate canonicalized at `~/.claude/skills/pipeline-retro/SKILL.md` and synced to flexion plugin (PR #90, commit `7d59524`); empirical validation in this milestone retro is the milestone-level proof.
+**Action taken**: Closed — pipeline-retro Stage 3.5 gate canonicalized at `~/.claude/skills/pipeline-retro/SKILL.md` and synced to a downstream-consumer plugin (PR #90, commit `7d59524`); empirical validation in this milestone retro is the milestone-level proof.
 
 ### Insights
 

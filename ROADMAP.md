@@ -170,7 +170,7 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 ## Pending release: v0.9.4 — Keyed VDOM diff for conditional subtrees (#1358 / #256 Option A)
 
-Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after NYC Claims hit a 2/24-patches-failed → page-reload regression on tab switching.
+Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after a downstream consumer hit a 2/24-patches-failed → page-reload regression on tab switching.
 
 ### Milestone: v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370) ✅ shipped
 
@@ -237,7 +237,7 @@ Single focused minor cycle: the structural fix for `{% if %}` blocks that has be
 
 *Goal:* Eliminate the `{% if %}`-breaks-VDOM-patching class entirely. Apps stop needing the `d-none` workaround that's accumulated as canonical advice in CLAUDE.md and downstream repos. Patches no longer fail when conditionals flip; no more recovery-HTML / page-reload fallback.
 
-**Outcome**: ✅ Goal achieved. Reproducer from #1358 (NYC Claims tab-switch with `{% if active_tab == "overview" %}` branching, 17.5% 500-rate at concurrency 2) no longer reproduces. Backwards-compatible: existing `d-none` workaround examples in CLAUDE.md / downstream repos remain valid but no longer mandatory.
+**Outcome**: ✅ Goal achieved. Reproducer from #1358 (downstream-consumer tab-switch with `{% if active_tab == "overview" %}` branching, 17.5% 500-rate at concurrency 2) no longer reproduces. Backwards-compatible: existing `d-none` workaround examples in CLAUDE.md / downstream repos remain valid but no longer mandatory.
 
 #### Iters (sequential — pipeline-run --all)
 
@@ -263,7 +263,7 @@ Any iter that surfaces unexpected runtime issues during Stage 11 will trigger St
 #### Acceptance
 
 - All 3 iters merged.
-- Reproducer from #1358 (`ClaimDetailView` tab-switch with `{% if active_tab == "overview" %}...{% endif %}` branching) no longer triggers patch failure → recovery HTML → page reload.
+- Reproducer from #1358 (downstream-consumer detail view tab-switch with `{% if active_tab == "overview" %}...{% endif %}` branching) no longer triggers patch failure → recovery HTML → page reload.
 - Existing `d-none` workaround examples in CLAUDE.md / downstream repos remain valid (backwards-compatible) but are no longer mandatory.
 - `npx eslint client.js` still 0 warnings (carryover from #1351).
 - `make test` exits clean.
@@ -282,7 +282,7 @@ Any iter that surfaces unexpected runtime issues during Stage 11 will trigger St
 
 ## Pending release: v0.9.5 — Object-level authorization lifecycle
 
-Surfaced 2026-05-06 while reviewing NYC Claims PR #268 (per-tab data gating in `ClaimDetailView`). Diagnostic walked the auth surface and found a structural IDOR class that affects any djust app where the LiveView is bound to a single object via URL kwarg (`claim_id`, `user_id`, `document_id`, etc.) — i.e. most detail-view apps. Tracking issue: #1373. Design pinned in [ADR-017](docs/adr/017-object-permission-lifecycle.md).
+Surfaced 2026-05-06 during a downstream-consumer code review (per-tab data gating in a detail view). Diagnostic walked the auth surface and found a structural IDOR class that affects any djust app where the LiveView is bound to a single object via URL kwarg (`document_id`, `user_id`, `<resource>_id`, etc.) — i.e. most detail-view apps. Tracking issue: #1373. Design pinned in [ADR-017](docs/adr/017-object-permission-lifecycle.md).
 
 **Split-foundation rollout** (per Action #1122 — high blast radius + permanent public API):
 
@@ -296,9 +296,9 @@ Surfaced 2026-05-06 while reviewing NYC Claims PR #268 (per-tab data gating in `
 
 **The problem (concrete reproduction):**
 
-NYC Claims `ClaimDetailView` has `permission_required = "claims.access_claim"` (role-level) and a hand-rolled `can_view_claim(user, claim)` (object-level) call inside `get_context_data`. The role check runs at WS connect via `check_view_auth`. The object check runs during render. **By the time the object check fails, `mount()` has already run and `self.claim_id` is set on the WS session.** djust does not catch the resulting `PermissionDenied` in the WS event-handler path (`websocket.py` only catches it in the connect path at line 1948), so a user who navigates to `/claims/99/` (a claim they don't own) gets a render error but a **fully mounted session** scoped to `claim_id=99`. They can then fire `add_claim_note`, `mark_coverage`, `accept_settlement`, etc., over the WS — every write handler reads `self.claim_id` and calls `Claim.objects.get(pk=self.claim_id)` with no per-event access check.
+A representative detail view has `permission_required = "documents.access"` (role-level) and a hand-rolled `can_access_document(user, doc)` (object-level) call inside `get_context_data`. The role check runs at WS connect via `check_view_auth`. The object check runs during render. **By the time the object check fails, `mount()` has already run and `self.document_id` is set on the WS session.** djust does not catch the resulting `PermissionDenied` in the WS event-handler path (`websocket.py` only catches it in the connect path at line 1948), so a user who navigates to `/documents/99/` (a document they can't access) gets a render error but a **fully mounted session** scoped to `document_id=99`. They can then fire write event handlers over the WS — every write handler reads `self.document_id` and calls `Document.objects.get(pk=self.document_id)` with no per-event access check.
 
-The bug class is: *the only object-level auth surface djust offers (`check_permissions` hook) runs once before mount, when the URL kwarg has not yet been bound to `self`.* Developers default to putting object-level checks in `get_context_data` (where `self.claim_id` exists) and the framework doesn't push back. This is the same shape Django REST Framework solved with the `get_object()` + `has_object_permission()` split — the framework owns the call site.
+The bug class is: *the only object-level auth surface djust offers (`check_permissions` hook) runs once before mount, when the URL kwarg has not yet been bound to `self`.* Developers default to putting object-level checks in `get_context_data` (where `self.document_id` exists) and the framework doesn't push back. This is the same shape Django REST Framework solved with the `get_object()` + `has_object_permission()` split — the framework owns the call site.
 
 **Tasks:**
 
@@ -358,7 +358,7 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 
 - [ ] **`djust check` IDOR-shape heuristic** in `audit_ast.py`. Flags views matching: (a) `permission_required` set, (b) `mount()` assigns from URL kwarg (`self.<x>_id = <x>_id`), (c) has `@event_handler` methods reading `self.<x>_id`, (d) does NOT override `has_object_permission` or `check_permissions`. Category `S` (security) warning with link to the new guide. See ADR-017 Decision 8.
 
-- [ ] **New guide** `docs/website/guides/authorization.md`. Walks through role vs object permissions, four-layer onion (login → role → custom → object), `get_object()` + `_invalidate_object_cache()` patterns, manager-level `for_user()` defense-in-depth, NYC Claims migration as worked example. See ADR-017 "Migration plan" section.
+- [ ] **New guide** `docs/website/guides/authorization.md`. Walks through role vs object permissions, four-layer onion (login → role → custom → object), `get_object()` + `_invalidate_object_cache()` patterns, manager-level `for_user()` defense-in-depth, generic detail-view migration as worked example. See ADR-017 "Migration plan" section.
 
 - [ ] **`djust-dev` skill principle catalog entry.** New audit-cataloged bug-class entry: "Object-level auth must be enforced per-event, not per-mount." Canonical pattern + reproducer + ADR-017 link.
 
@@ -369,7 +369,7 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust check` warns on the IDOR shape with link to `docs/website/guides/authorization.md`.
 - [ ] `authorization.md` published with worked migration example.
 - [ ] `djust-dev` skill catalog updated.
-- [ ] NYC Claims `ClaimDetailView` migrated to `get_object()` as the empirical case study (filed as a downstream PR after this iteration ships).
+- [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
 
 
@@ -558,7 +558,7 @@ short-circuit so `render_with_diff()` always runs when
 
 ### Milestone: v0.9.3-7 — state-backend safety pair (#1353 + #1354) ✅ shipped
 
-**Status:** ✅ shipped 2026-05-05. PR #1355 (4 commits, 2 must-fix Stage 11 findings address-fixed via Stage 12 redesign). Two coupled production bugs from NYC Claims (filed against v0.9.2rc1, still affect v0.9.3rc2). Processed as a single batch — they're the two halves of one downstream-consumer pain point.
+**Status:** ✅ shipped 2026-05-05. PR #1355 (4 commits, 2 must-fix Stage 11 findings address-fixed via Stage 12 redesign). Two coupled production bugs from a downstream consumer (filed against v0.9.2rc1, still affect v0.9.3rc2). Processed as a single batch — they're the two halves of one downstream-consumer pain point.
 
 *Goal:* Land both before v0.9.3 stable cut. The combination is "configured Redis but silently downgraded to in-memory" (#1354) → "in-memory backend panics under per-session HTTP concurrency" (#1353). Either fix alone leaves the production failure mode intact; both together close the class.
 
@@ -800,7 +800,7 @@ Single grouped PR (`feat/v0.9.2-2-template-canon` or similar). Both items edit `
 
 #### Headliner — #1237 SSE transport bug bundle (P1, 1 PR, 3 sub-bugs)
 
-- [ ] **PR: SSE transport DRY refactor** — closes #1237. Three SSE bugs filed post-v0.9.1-cut against the `use_websocket: False` mode (NYC Claims prototype):
+- [ ] **PR: SSE transport DRY refactor** — closes #1237. Three SSE bugs filed post-v0.9.1-cut against the `use_websocket: False` mode (downstream-consumer prototype):
   1. URL kwargs not resolved — SSE reads `request.path` (the SSE endpoint URL) instead of the actual page URL. WebSocket equivalent at `websocket.py:1851` reads `data["url"]` from the client mount frame.
   2. `LiveViewSSE.sendMessage()` missing — `_executePatch()` at `18-navigation.js:317-321` calls `liveViewWS.sendMessage({type: 'url_change', ...})`, crashes with `TypeError` over SSE. Eight other JS call sites also affected.
   3. `handle_params()` never invoked over SSE — Phoenix-parity contract. Views that read URL state in `handle_params` keep mount-time defaults.

@@ -197,7 +197,7 @@ uvicorn myproject.asgi:application \
 
 #### Quantified Daphne → Uvicorn benchmark
 
-Concrete numbers from a 1 vCPU / 2 GB Fargate task running the NYC Claims app (mixed workload — health endpoint plus a DB-touching home page), identical traffic, single-task per ASGI server:
+Concrete numbers from a 1 vCPU / 2 GB Fargate task running the a representative downstream-consumer app (mixed workload — health endpoint plus a DB-touching home page), identical traffic, single-task per ASGI server:
 
 | Endpoint | Daphne | gunicorn -k uvicorn.workers.UvicornWorker -w 2 |
 |---|---|---|
@@ -205,7 +205,7 @@ Concrete numbers from a 1 vCPU / 2 GB Fargate task running the NYC Claims app (m
 | `/health/` p99 @ c=20 | 1815 ms | **218 ms** (8.3× faster) |
 | `/` (home) rps @ c=10 | 11.3 | **18.5** (1.6×) |
 
-**Disclaimer.** Numbers are from a 1 vCPU / 2 GB Fargate task with the NYC Claims app. Per-app variance is expected; absolute numbers will differ for your workload, but the relative improvement (~6× rps headroom on health-check endpoints) has been consistent across multiple deployments. The home-page row is a useful indicator that DB-touching pages also gain headroom — just not as dramatically, because the bottleneck shifts from ASGI server overhead to ORM/DB latency.
+**Disclaimer.** Numbers are from a 1 vCPU / 2 GB Fargate task with the a representative downstream-consumer app. Per-app variance is expected; absolute numbers will differ for your workload, but the relative improvement (~6× rps headroom on health-check endpoints) has been consistent across multiple deployments. The home-page row is a useful indicator that DB-touching pages also gain headroom — just not as dramatically, because the bottleneck shifts from ASGI server overhead to ORM/DB latency.
 
 ### Gunicorn + Uvicorn Workers
 

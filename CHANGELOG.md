@@ -162,7 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   siblings — the conditional's presence/absence doesn't shift their
   relative order.
 
-  The 17.5%-error-rate tab-switch regression in NYC Claims (cited in
+  The 17.5%-error-rate tab-switch regression in a downstream consumer (cited in
   #1358's body) no longer reproduces. The recovery-HTML / page-reload
   fallback path is no longer triggered by `{% if %}` flips.
 
@@ -403,7 +403,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-memory backend returned the same Python reference on cache hits),
   concurrent ``&mut self`` Rust methods on the shared view would
   collide inside Rust's ``RefCell::borrow_mut`` and surface as
-  ``RuntimeError: Already borrowed`` (NYC Claims observed 17.5%
+  ``RuntimeError: Already borrowed`` (a downstream consumer observed 17.5%
   500-rate at concurrency 2). The race spanned more than the
   ``_sync_state_to_rust`` mutation calls — ``render()`` itself holds
   ``&mut self`` across template evaluation, and
@@ -509,7 +509,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (composite-hash) implementation, which is the discipline-correct
     way to demonstrate Option A's caveat (Action #1200).
 
-- **Deployment guide additions for production gaps surfaced from NYC Claims (#1362).**
+- **Deployment guide additions for production gaps surfaced from a downstream consumer (#1362).**
   Added three subsections to `docs/website/guides/deployment.md`:
   - **Recovery HTML semantics**: per-consumer one-shot, fresh-consumer-
     after-reconnect = no recovery state, multi-task amplification of
@@ -518,7 +518,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     escape hatch.
   - **Quantified Daphne → Uvicorn benchmark**: 6.4× rps / 8.3× p99
     on health-check endpoints from a 1 vCPU / 2 GB Fargate task
-    with the NYC Claims app. Per-app variance disclaimer included.
+    with the a representative downstream-consumer app. Per-app variance disclaimer included.
   - **Production checklist**: 8-line copy-pasteable recipe linking
     to each relevant subsection of the guide; inserted as the first
     subsection of the existing Deployment Checklist.
@@ -4668,7 +4668,7 @@ Full migration notes: [`MIGRATION.md`](MIGRATION.md).
 - **Regression coverage for `temporary_assigns`** — `tests/unit/test_temporary_assigns.py` covers reset-after-render semantics, default-value cloning per type (list / dict / set / scalar), idempotent initialization, pre-existing-attribute preservation, instance-level override, and the empty-mapping no-op path.
 - **Unit tests for `assign_async` / `AsyncResult`** — `tests/unit/test_assign_async.py` (18 tests) covers state-flag invariants, frozen dataclass immutability, pending-is-set-immediately, success & failure propagation, multi-concurrent scheduling, cancellation interop with `cancel_async`, sync and async loaders, args/kwargs forwarding, and the generation-counter / stale-loader regression cases added in #793.
 - **Unit tests for `{% dj_suspense %}`** — `tests/unit/test_suspense.py` (12 tests) covers ok → body, loading → fallback, failed → error-div, HTML-escaped error messages, no-`await=` passthrough, unknown / non-`AsyncResult` refs defaulting to loading, default spinner, Django template fallback, template-error graceful degradation, nesting, and whitespace-tolerant comma-separated lists.
-- **Regression suite for `|safe` HTML blob diff ([#783](https://github.com/djust-org/djust/issues/783))** — `tests/test_rust_vdom_safe_diff_783.py` exercises the WizardMixin-style pattern where `field_html` is derived in `get_context_data()` from an instance attribute. Covers dict reassignment, in-place nested mutation, the `_force_full_html` codepath, an `{% if %}` branch swap, a `{% extends %}`/`{% block %}` inheritance chain, and the exact NYC-Claims-style `{% extends %} + {% if %} + {% include %}` structure that originally exhibited the bug. All variants assert non-empty VDOM patches on state change.
+- **Regression suite for `|safe` HTML blob diff ([#783](https://github.com/djust-org/djust/issues/783))** — `tests/test_rust_vdom_safe_diff_783.py` exercises the WizardMixin-style pattern where `field_html` is derived in `get_context_data()` from an instance attribute. Covers dict reassignment, in-place nested mutation, the `_force_full_html` codepath, an `{% if %}` branch swap, a `{% extends %}`/`{% block %}` inheritance chain, and the exact downstream-consumer-style `{% extends %} + {% if %} + {% include %}` structure that originally exhibited the bug. All variants assert non-empty VDOM patches on state change.
 - **Dep-extractor hardening ([#783](https://github.com/djust-org/djust/issues/783) follow-up, P0)** — Three-part hardening against silent dep-drop regressions in `crates/djust_templates/src/parser.rs::extract_from_nodes`:
   - **Rust unit tests for `extract_per_node_deps`** — table-driven assertions on representative AST shapes (simple Variable, If-wrapping-Include, For with tuple unpacking, With + body, InlineIf condition, nested For, Block recursion, plain Text). Explicit `"*"` wildcard membership checks for nested `Include` / `CustomTag` shapes.
   - **Node variant exhaustiveness check** — `sample_for_coverage` exhaustive match on `Node::*` + `sample_nodes()` constructor + `NO_VARS_VARIANTS` allow-list. Any new `Node` variant fails to compile until the match is updated, and at runtime every non-allow-listed variant must produce a non-empty dep set (real vars or `"*"` wildcard). Makes silent dep-drops on future additions impossible.
