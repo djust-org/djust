@@ -29,7 +29,8 @@ import logging
 from typing import List, Optional, Union
 
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
+from django.http import Http404
 
 logger = logging.getLogger(__name__)
 
@@ -192,9 +193,6 @@ def check_object_permission(view_instance, request) -> None:
     if not _has_custom_get_object(view_instance):
         return
 
-    from django.core.exceptions import ObjectDoesNotExist
-    from django.http import Http404
-
     try:
         obj = view_instance.get_object()
     except (ObjectDoesNotExist, Http404):
@@ -209,17 +207,35 @@ def check_object_permission(view_instance, request) -> None:
         view_instance._object = None
         return
 
-    view_instance._object = obj
     if obj is None:
+        # Explicit "no object" — clear cache (was implicit before; making
+        # it explicit so v0.9.5-1b's per-event re-check sees a consistent
+        # post-state regardless of prior cache content).
+        view_instance._object = None
         return
 
+    # Run the permission check BEFORE populating the cache. Populating
+    # the cache before the check (the v0.9.5-1a shape) was benign at
+    # mount-time because the WS closed on denial — but for v0.9.5-1b's
+    # per-event re-check, a denial now leaves the WS open, and a
+    # poisoned cache would let subsequent events read a stale-allowed
+    # `_object` for the same view instance. Strict ordering: check
+    # first, cache second.
     ok = view_instance.has_object_permission(request, obj)
     if ok is False:
         logger.info(
             "Object-permission denied for %s: has_object_permission(...) returned False",
             view_instance.__class__.__name__,
         )
+        # Do NOT touch view_instance._object — leaving the prior cache
+        # value in place is the safest semantic (a fresh view starts at
+        # None; a re-check on a previously-allowed view keeps the prior
+        # legitimate value, which is fine because the next event will
+        # re-run this check anyway in v0.9.5-1b).
         raise PermissionDenied(f"Access denied for object on {view_instance.__class__.__name__}")
+
+    # Permission granted — populate the cache only now.
+    view_instance._object = obj
 
 
 def check_view_auth_lightweight(view_instance, request) -> bool:
