@@ -232,7 +232,7 @@ When investigating an issue with a code-location citation:
    `self._framework_attrs = frozenset(self.__dict__.keys())` line based on
    whether it is framework state (reset on reconnect) or user state
    (persisted, change-tracked). See the comment block at
-   `python/djust/live_view.py:517` for the rule + examples.
+   `python/djust/live_view.py:518` for the rule + examples.
 
 6. **Multi-reopen issues require bit-exact runnable repro before "root
    cause confirmed" (#1389, PR #1086).** Theory-testing against synthetic

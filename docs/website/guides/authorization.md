@@ -257,12 +257,14 @@ Keep `get_object()` minimal — just the FK lookup. Expensive I/O in this method
 Unit tests of `check_object_permission(view, request)` cover mount-time enforcement. For the per-event re-execution path, tests must connect to the WS as an authenticated user and exchange real frames:
 
 ```python
+# Replace `application`, `user_a`, `user_b`, `document` with your test
+# fixtures. `application` is your project's ASGI application (typically
+# from your project's asgi.py or testing harness).
 from channels.testing import WebsocketCommunicator
-from django.contrib.auth.models import AnonymousUser
 import pytest
 
 @pytest.mark.asyncio
-async def test_per_event_denies_after_ownership_change():
+async def test_per_event_denies_after_ownership_change(user_a, user_b, document, application):
     """Per-event object-permission re-runs after the owner FK changes
     mid-session, denying the formerly-authorized user."""
     # Connect as user A who owns document 1.
