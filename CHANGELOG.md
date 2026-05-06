@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5rc2] - 2026-05-06
+
 ### Added
 
 - **New framework helper: `djust.utils.emit_one_shot_class_warning(cls, key, message, *args)` (#1392).** Reusable pattern for "framework can't help mechanically; tell the developer loudly." Sets a class-level sentinel attr `_djust_warned_<key>` so subsequent instances of the same class don't repeat the warning. Subclasses get their own sentinel via `cls.__dict__.get` (avoids attribute inheritance). Refactored the existing snapshot-truncation warning in `python/djust/websocket.py` to use it. Pattern from PR #1326, canonicalized via Retro v0.9.3-2 finding #4.
