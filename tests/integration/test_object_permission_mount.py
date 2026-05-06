@@ -139,6 +139,76 @@ class _DoesNotExistView(LiveView):
         )
 
 
+class _Http404View(LiveView):
+    """get_object() raises django.http.Http404 (e.g. via get_object_or_404).
+
+    Http404 inherits from Exception directly (NOT from ObjectDoesNotExist),
+    so the framework must list it as a separate catch in check_object_permission.
+    Same 404-shape semantics as ObjectDoesNotExist.
+    """
+
+    template = "<div>404</div>"
+
+    def mount(self, request, **kwargs):
+        pass
+
+    def get_object(self):
+        from django.http import Http404
+
+        raise Http404("simulated 404")
+
+    def has_object_permission(self, request, obj):
+        raise AssertionError(
+            "has_object_permission must not be called when get_object() raises Http404"
+        )
+
+
+class _PermissionDeniedView(LiveView):
+    """has_object_permission raises PermissionDenied directly (not return False).
+
+    The docstring documents this as supported alongside `return False`;
+    this test locks the contract.
+    """
+
+    template = "<div>denied-via-raise</div>"
+
+    def mount(self, request, **kwargs):
+        pass
+
+    def get_object(self):
+        return _StubDocument(pk=1, owner_id=42)
+
+    def has_object_permission(self, request, obj):
+        raise PermissionDenied("explicit denial with custom message")
+
+
+class _FalsyObjectView(LiveView):
+    """get_object() returns a falsy non-None value (False).
+
+    The framework's `if obj is None` check is strict-identity — only None
+    is treated as "no object". Falsy non-None values (False, 0, "", []) are
+    valid objects and DO trigger has_object_permission. This test locks the
+    contract so a future refactor doesn't accidentally change `is None` to
+    a truthiness check.
+    """
+
+    template = "<div>falsy</div>"
+
+    def mount(self, request, **kwargs):
+        pass
+
+    def get_object(self):
+        # Falsy non-None: explicitly return False as the object.
+        return False
+
+    def has_object_permission(self, request, obj):
+        # Should be called even though obj is falsy (it's not None).
+        # Return True so the test passes successfully — what we're checking
+        # is that this method WAS called.
+        type(self)._called = True
+        return True
+
+
 # -- Helpers --------------------------------------------------------------
 
 
@@ -279,3 +349,65 @@ def test_get_object_raising_does_not_exist_treated_as_none(rf):
     # was caught and has_object_permission was NOT invoked.
     check_object_permission(view, request)
     assert view._object is None
+
+
+def test_get_object_raising_http404_treated_as_none(rf):
+    """Case 7: get_object() raising django.http.Http404 is also caught
+    and treated as None. Http404 inherits from Exception directly (NOT
+    from ObjectDoesNotExist), so it requires a separate catch in
+    check_object_permission. Same 404-shape semantics — apps using
+    get_object_or_404 inside get_object() get the same OWASP mitigation.
+    """
+    from djust.auth.core import check_object_permission
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    view = _make_view(_Http404View, request)
+
+    check_object_permission(view, request)
+    assert view._object is None
+
+
+def test_has_object_permission_raising_directly(rf):
+    """Case 8: has_object_permission raising PermissionDenied directly
+    (not return False) is supported and propagates with the developer's
+    custom message preserved.
+
+    Both `return False` and `raise PermissionDenied(...)` are documented
+    as denial mechanisms. The latter lets the developer attach a useful
+    message that gets logged server-side (the WS-close path sends a
+    static "Permission denied" string to the client regardless).
+    """
+    from djust.auth.core import check_object_permission
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    view = _make_view(_PermissionDeniedView, request)
+
+    with pytest.raises(PermissionDenied) as exc_info:
+        check_object_permission(view, request)
+    assert "explicit denial with custom message" in str(exc_info.value)
+
+
+def test_get_object_returning_falsy_non_none_is_a_valid_object(rf):
+    """Case 9: get_object() returning a falsy non-None value (e.g. False,
+    0, "") is treated as a valid object — has_object_permission IS called.
+
+    The framework uses strict-identity `if obj is None` (not truthiness)
+    to distinguish "no object" from "any other return value". This test
+    locks the contract so a future refactor doesn't accidentally change
+    `is None` to `not obj`, which would silently skip the permission
+    check for falsy objects.
+    """
+    from djust.auth.core import check_object_permission
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    _FalsyObjectView._called = False
+    view = _make_view(_FalsyObjectView, request)
+
+    check_object_permission(view, request)
+    # has_object_permission WAS called even though obj is falsy.
+    assert _FalsyObjectView._called is True
+    # The cache holds the falsy value (False) — not coerced to None.
+    assert view._object is False

@@ -166,16 +166,19 @@ def check_object_permission(view_instance, request) -> None:
     called — the caller raises 404 if it wants to.
 
     The framework also automates this 404-shape mapping for the common
-    case: if ``get_object()`` raises Django's ``ObjectDoesNotExist`` (or
-    any subclass — ``Model.DoesNotExist``, ``Http404``, etc.), the helper
-    catches it and treats the object as ``None`` (skipping
-    ``has_object_permission``). Without this, a ``DoesNotExist`` from a
-    naive ``Model.objects.get(pk=self.<x>_id)`` in ``get_object()`` would
-    fall through to the outer ``except Exception`` in
-    ``websocket.handle_mount``, where ``DEBUG=True`` would expose the
-    exception class name and a traceback — confirming the object's
-    nonexistence (information leak). Catching here makes the 404-shape
-    pattern the default rather than developer discipline.
+    case: if ``get_object()`` raises ``django.core.exceptions.ObjectDoesNotExist``
+    (parent of every ``Model.DoesNotExist``) or ``django.http.Http404``
+    (raised by ``get_object_or_404``), the helper catches it and treats
+    the object as ``None`` — skipping ``has_object_permission``. Note
+    these are two SEPARATE catches: ``Http404`` does NOT inherit from
+    ``ObjectDoesNotExist`` (its parent is ``Exception``), so both must
+    be listed explicitly. Without this, a ``DoesNotExist`` from a naive
+    ``Model.objects.get(pk=self.<x>_id)`` in ``get_object()`` would fall
+    through to the outer ``except Exception`` in ``websocket.handle_mount``,
+    where ``DEBUG=True`` would expose the exception class name and a
+    traceback — confirming the object's nonexistence (information leak).
+    Catching here makes the 404-shape pattern the default rather than
+    developer discipline.
 
     Raises :class:`~django.core.exceptions.PermissionDenied` on denial.
     The caller in ``websocket.py`` translates that to a
@@ -190,15 +193,19 @@ def check_object_permission(view_instance, request) -> None:
         return
 
     from django.core.exceptions import ObjectDoesNotExist
+    from django.http import Http404
 
     try:
         obj = view_instance.get_object()
-    except ObjectDoesNotExist:
+    except (ObjectDoesNotExist, Http404):
         # OWASP IDOR mitigation: developer's get_object() did
-        # `Model.objects.get(pk=self.<x>_id)` and the row doesn't exist.
-        # Treat as 404-shape (no object) rather than letting the exception
-        # propagate to the outer exception handler, which would leak
-        # existence via DEBUG-mode tracebacks.
+        # `Model.objects.get(pk=self.<x>_id)` (raises DoesNotExist) or
+        # `get_object_or_404(...)` (raises Http404) and the row doesn't
+        # exist. Treat as 404-shape (no object) rather than letting the
+        # exception propagate to the outer exception handler, which would
+        # leak existence via DEBUG-mode tracebacks. The two catches are
+        # listed explicitly because Http404 inherits from Exception, not
+        # ObjectDoesNotExist.
         view_instance._object = None
         return
 
