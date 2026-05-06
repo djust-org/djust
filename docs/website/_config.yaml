@@ -251,6 +251,11 @@ navigation:
         file: guides/admin-widgets.md
         order: 12.8
         level: intermediate
+      - title: Authorization (`get_object` + `has_object_permission`)
+        slug: authorization
+        file: guides/authorization.md
+        order: 12.9
+        level: intermediate
       - title: Deployment
         slug: deployment
         file: guides/deployment.md
