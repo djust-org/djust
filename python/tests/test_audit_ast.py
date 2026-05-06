@@ -492,10 +492,41 @@ class TestX008IDORShapeNeedsObjectPermission:
         """)
         x008 = [f for f in findings if f.code == "X008"]
         assert len(x008) >= 1
-        # Message or details should reference the migration guide.
+        # Message or details must reference the specific migration guide path.
         msg = (x008[0].message or "") + " " + (x008[0].details or "")
-        assert "authorization.md" in msg or "get_object" in msg, (
-            f"X008 must reference the migration target; got: {msg!r}"
+        assert "authorization.md" in msg, (
+            f"X008 must reference docs/website/guides/authorization.md "
+            f"specifically (developers need the URL to find the migration "
+            f"recipe); got: {msg!r}"
+        )
+
+    def test_x008_does_not_co_fire_with_x001(self) -> None:
+        """X008 (structural shape) and X001 (`.get(pk=user_input)` lookup)
+        target overlapping but distinct patterns. A view with the IDOR
+        shape that uses `.create()` (not `.get(pk=...)`) should fire
+        X008 ONLY — not X001. Locks the design distinction so future
+        refactors don't accidentally make X008 a strict superset of X001."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    # No .get(pk=...) here; X001 should not fire.
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        codes = _codes(findings)
+        assert "X008" in codes, f"X008 should fire; got: {codes}"
+        assert "X001" not in codes, (
+            f"X001 should NOT fire when no .get(pk=user_input) is present; got: {codes}"
         )
 
 

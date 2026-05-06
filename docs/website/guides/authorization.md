@@ -111,6 +111,8 @@ def reassign_owner(self, owner_id: int = 0):
 
 Without this, a cached `self._object` would let the formerly-authorized user retain access until the WS reconnects.
 
+Note: `_invalidate_object_cache()` only affects FUTURE events. The render that includes the mutation (the response that ships immediately after the handler returns) still sees the OLD `self._object` because the mutation happened mid-handler. If you need the next render to reflect the new ownership, set `self._object = self._object` after `_invalidate_object_cache()` to force a fresh fetch — or just refresh the FK directly without invalidation.
+
 ## Wire-protocol error frames
 
 | Path | Wire shape | Effect |
