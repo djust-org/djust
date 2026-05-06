@@ -15,8 +15,19 @@ Exit 0: all three directions agree. Exit 1: any direction fails.
 
 import re
 import sys
-import tomllib
 from pathlib import Path
+
+# tomllib is stdlib in 3.11+; fall back to tomli for 3.10
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ImportError:
+        raise ImportError(
+            "Python 3.10 requires the 'tomli' package for TOML parsing. "
+            "Install it with: pip install tomli"
+        )
 
 REPO = Path(__file__).resolve().parent.parent
 MAKEFILE = REPO / "Makefile"
