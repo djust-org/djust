@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`scripts/check-test-coverage.py` now verifies Makefile and `pyproject.toml` testpaths bidirectionally (#1346, defense-in-depth on #1339).** The original one-directional check caught the case where the Makefile missed a path that pyproject.toml declared (#1339, the bug that left `python/djust/tests/` uncollected for months). The reverse direction — a path added to the Makefile but missing from pyproject.toml, or removed from pyproject and still in Makefile — would have gone unflagged. Now fails loud with a clear set diff in either direction.
+
+- **Refreshed stale `(file as new issue)` placeholders in May 2026 audit docs (#1342).** `docs/audits/lifecycle-2026-05.md` and `docs/audits/decorator-contract-2026-05.md` now cite real issue numbers for the 9 follow-ups (#1283-#1291), all of which are closed. The lifecycle §3 #7 row (mount() pre/post snapshot) gets a closure annotation noting `_capture_dirty_baseline` already runs in production at `python/djust/websocket.py:2145`. `/djust-dev audit-status` will now report accurate state to app authors.
+
 - **Round-trip identity tests for AST-shape contracts now drive input from parser output (#1388, Action Tracker #158).** 12 tests in `crates/djust_templates/src/inheritance.rs` migrated from manually-constructed `Node::*` ASTs to `parse(tokenize(source))`. Previously, manual construction bypassed parser invariants like `parse_filter_specs`'s outer-quote preservation, so contract violations silently passed (the original PR #1086 / #1081 case). Conversion uncovered a previously-masked bug in `nodes_to_template_string` for `{% include %}` (parser stores the path with surrounding quotes; emitter wraps again, producing `{% include ""path.html"" %}` on round-trip). Out of scope per #1079 broader-sweep canon — filed as #1396 with the affected test marked `#[ignore]`.
 
 - **X008 audit heuristic now walks same-module MRO and recognizes broader URL-kwarg-binding shapes (#1382, #1383, deferred from PR #1381 Stage 11).** Two improvements to `python/djust/audit_ast.py`:
