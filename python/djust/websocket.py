@@ -160,10 +160,6 @@ def _should_expose_timing() -> bool:
     )
 
 
-# Per-view-class set to suppress duplicate truncation warnings (#1285).
-_TRUNCATION_WARNED: set = set()
-
-
 def _snapshot_assigns(view_instance):
     """Fast identity+hash snapshot of public assigns for change detection.
 
@@ -212,36 +208,40 @@ def _snapshot_assigns(view_instance):
             else:
                 snapshot[k] = (vid, len(v))
                 if v and len(v) >= 100:
-                    _cls = type(view_instance).__qualname__
-                    if _cls not in _TRUNCATION_WARNED:
-                        _TRUNCATION_WARNED.add(_cls)
-                        logger.warning(
-                            "[djust] %s: list '%s' has %d items — content "
-                            "fingerprint truncated. In-place mutations inside "
-                            "list elements will NOT be detected by auto-diff. "
-                            "Use self.set_changed_keys({'%s'}) or assign a "
-                            "new list reference.",
-                            _cls,
-                            k,
-                            len(v),
-                            k,
-                        )
-        elif isinstance(v, dict):
-            snapshot[k] = (vid, len(v), tuple(v.keys()) if len(v) < 50 else len(v))
-            if len(v) >= 50:
-                _cls = type(view_instance).__qualname__
-                if _cls not in _TRUNCATION_WARNED:
-                    _TRUNCATION_WARNED.add(_cls)
-                    logger.warning(
-                        "[djust] %s: dict '%s' has %d keys — key fingerprint "
-                        "truncated. Key additions/removals will NOT be detected "
-                        "by auto-diff. Use self.set_changed_keys({'%s'}) or "
-                        "assign a new dict reference.",
+                    from .utils import emit_one_shot_class_warning
+
+                    _cls = type(view_instance)
+                    emit_one_shot_class_warning(
                         _cls,
+                        "snapshot_list_truncated",
+                        "[djust] %s: list '%s' has %d items — content "
+                        "fingerprint truncated. In-place mutations inside "
+                        "list elements will NOT be detected by auto-diff. "
+                        "Use self.set_changed_keys({'%s'}) or assign a "
+                        "new list reference.",
+                        _cls.__qualname__,
                         k,
                         len(v),
                         k,
                     )
+        elif isinstance(v, dict):
+            snapshot[k] = (vid, len(v), tuple(v.keys()) if len(v) < 50 else len(v))
+            if len(v) >= 50:
+                from .utils import emit_one_shot_class_warning
+
+                _cls = type(view_instance)
+                emit_one_shot_class_warning(
+                    _cls,
+                    "snapshot_dict_truncated",
+                    "[djust] %s: dict '%s' has %d keys — key fingerprint "
+                    "truncated. Key additions/removals will NOT be detected "
+                    "by auto-diff. Use self.set_changed_keys({'%s'}) or "
+                    "assign a new dict reference.",
+                    _cls.__qualname__,
+                    k,
+                    len(v),
+                    k,
+                )
         elif isinstance(v, set):
             snapshot[k] = (vid, len(v))
         elif isinstance(v, _IMMUTABLE_TYPES):

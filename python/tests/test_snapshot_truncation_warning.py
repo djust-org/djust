@@ -12,7 +12,7 @@ developers that auto-diff won't detect mutations inside these containers.
 import logging
 
 from djust import LiveView
-from djust.websocket import _snapshot_assigns, _TRUNCATION_WARNED
+from djust.websocket import _snapshot_assigns
 
 
 class _ListView(LiveView):
@@ -23,11 +23,23 @@ class _DictView(LiveView):
     pass
 
 
+def _reset_truncation_sentinels(*classes):
+    """Clear the per-class one-shot warning sentinels set by
+    ``emit_one_shot_class_warning`` (#1392) so each test starts fresh."""
+    for cls in classes:
+        for attr in (
+            "_djust_warned_snapshot_list_truncated",
+            "_djust_warned_snapshot_dict_truncated",
+        ):
+            if attr in cls.__dict__:
+                delattr(cls, attr)
+
+
 class TestSnapshotTruncationWarning:
     """#1285: warning emitted on first truncation; suppressed on subsequent."""
 
     def setup_method(self):
-        _TRUNCATION_WARNED.clear()
+        _reset_truncation_sentinels(_ListView, _DictView)
 
     def test_list_truncation_emits_warning(self, caplog):
         view = _ListView()

@@ -92,6 +92,11 @@
           "mandatory": true
         },
         {
+          "action": "VERIFY CITED CAUSE FOR RETRO-FILED ISSUES (#1345, v0.9.3-5 retro): for tech-debt / investigation issues, verify the cited cause is accurate against current evidence before locking the fix scope. If the issue title encodes a hypothesis (often the case for retro-filed items), the executor inherits the hypothesis. Two consecutive items in v0.9.3-5 (#1339, #1340) had misdiagnosed causes; correct framing would have shipped the right fix faster. Run `gh issue view <N>` and read the full body, then trace the cited symptom against current code BEFORE writing the plan.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "read codebase for current state",
           "done": false
         },
@@ -255,6 +260,11 @@
         },
         {
           "action": "Tautology check (Action #1200): for every new 'action happened' test assertion, ask 'would this pass if the action didn't run?' Tests that mock-and-call without invoking the SUT fail this check.",
+          "done": false,
+          "mandatory": true
+        },
+        {
+          "action": "DISCONFIRMING CITATION (#1386, v0.9.5-1 retro): identify at least one specific claim in the implementation (a docstring claim about exception class hierarchy, a comment claiming 'no callers', an assertion about wire-protocol shape, a Python version compat assumption) and actively try to DISPROVE it via grep / inspect / test. If the disproof attempt finds the claim wrong, file a 🟡 finding. If the claim survives, document the verification. Empirical: across v0.9.5-1 (-1a/-1b/-1c) Stage 7 caught 0 findings, Stage 11 caught 7 🟡 — the framing 'implementer reviews own diff' biases toward confirmation. Active falsification compresses Stage 11 findings into Stage 7 (cheaper, earlier).",
           "done": false,
           "mandatory": true
         },

@@ -227,6 +227,22 @@ When investigating an issue with a code-location citation:
    TDD surfaced the real path; trying to fix the reporter-cited code would
    have been a no-op.
 
+5. **`_framework_attrs` snapshot-order invariant (#1393).** Any new attr
+   assigned in `LiveView.__init__` must be placed BEFORE or AFTER the
+   `self._framework_attrs = frozenset(self.__dict__.keys())` line based on
+   whether it is framework state (reset on reconnect) or user state
+   (persisted, change-tracked). See the comment block at
+   `python/djust/live_view.py:518` for the rule + examples.
+
+6. **Multi-reopen issues require bit-exact runnable repro before "root
+   cause confirmed" (#1389, PR #1086).** Theory-testing against synthetic
+   test cases is INSUFFICIENT — it confirms only that THE FRAMEWORK
+   behaves a certain way, not that THIS USER'S BUG matches the theory.
+   PR #1086 had 3 "root cause" comments based on framework-side theory
+   testing; all three were wrong. The actual fix landed only after
+   gaining direct project access to reproduce against the user's exact
+   environment.
+
 ## Common Pitfalls
 
 - **Ruff F509**: `%`-format strings containing CSS semicolons trigger false positives. Separate HTML (`%s` substitution) from CSS (static string) and concatenate.
@@ -720,6 +736,29 @@ Rules distilled from the v0.9.3-4 audit and process drain bucket.
   Action #180 (v0.9.1) already lists the single-script-transformation
   pattern as a safe alternative for parallel-agent safety; this rule
   extends it to single-agent bulk operations regardless of agent count.
+
+- **Filter-migration grep canon (#1391, v0.9.3-2 retro).** When changing a
+  filter convention (e.g., `k.startswith("_")` → `k in _framework_attrs`),
+  grep the codebase for the EXACT pre-fix expression text and verify all
+  matches are updated. Filters that operate on the same data type often
+  have parallel implementations (Python change-tracker, Rust differ,
+  push-commands path, identity snapshots). A migration that updates one
+  path and not the others creates a latent invariant violation that may
+  only surface in a future audit. Concrete check during Stage 4 planning:
+  for any PR that changes a filter expression, grep for the pre-fix text
+  and visually scan all hits.
+
+- **Split-foundation soak-time guidance (#1385, v0.9.5-1 retro).** When
+  an iteration ships a new public API surface AND the framework has
+  external consumers, soak the API for at least one release before
+  stacking the next iteration. When the framework owner is the only API
+  customer (no external production usage), soak is optional — proceed
+  directly. Document the soak decision explicitly in the milestone retro
+  for future reference. Empirical: v0.9.5-1's three iterations
+  (-1a/-1b/-1c) shipped in <3 hours with NO soak; iterations stacked
+  cleanly because there were no external consumers. Action #1122
+  (split-foundation pattern) primary value is API design lock-in, not
+  calendar soak.
 
 ## Additional Documentation
 

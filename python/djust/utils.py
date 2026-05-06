@@ -16,6 +16,39 @@ def is_model_list(value: Any) -> bool:
     return isinstance(value, list) and len(value) > 0 and isinstance(value[0], models.Model)
 
 
+def emit_one_shot_class_warning(cls: type, key: str, message: str, *args: Any) -> None:
+    """Emit a logger.warning at most once per class for the given key.
+
+    Reusable framework pattern for "framework can't help mechanically,
+    tell the developer loudly". Sets a class-level sentinel attr
+    ``_djust_warned_<key>`` so subsequent instances of the same class
+    don't repeat the warning. Subclasses get their own sentinel via
+    normal Python attribute lookup (each subclass is a distinct ``cls``),
+    and the sentinel survives module reload (HVR) because the class
+    object outlives the module reload.
+
+    Use cases: snapshot truncation thresholds, missing get_object()
+    on detail-view-shaped classes, deprecated decorator usage.
+
+    Pattern from PR #1326 (snapshot truncation), canonicalized #1392.
+
+    Args:
+        cls: The class to attach the sentinel to (typically
+            ``type(view_instance)``).
+        key: Short identifier for the warning category (used to build the
+            sentinel attr name); use ``snake_case`` and keep it stable.
+        message: A ``%s``-style log format string (per djust logging rules).
+        *args: Substitution args for the format string.
+    """
+    sentinel = f"_djust_warned_{key}"
+    # Use cls.__dict__ (not getattr) so subclasses get their own sentinel
+    # instead of inheriting the parent's "already warned" state.
+    if cls.__dict__.get(sentinel, False):
+        return
+    setattr(cls, sentinel, True)
+    logger.warning(message, *args)
+
+
 def get_csp_nonce(request: Any) -> str:
     """
     Extract the CSP nonce from a Django request, if one is set.

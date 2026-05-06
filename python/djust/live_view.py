@@ -514,6 +514,15 @@ class LiveView(
 
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
+        #
+        # _framework_attrs snapshot-order invariant (#1393):
+        #   BEFORE this snapshot → framework state (excluded from
+        #   user-private serialization, reset on reconnect). Examples:
+        #   self._object cache (v0.9.5-1a), self._async_pending.
+        #   AFTER this snapshot → user state (included in change tracking,
+        #   persisted across reconnects). Examples: self._action_state
+        #   (PR #1324), self._<user_attr>.
+        # Any new framework slot must be assigned BEFORE this line.
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
         # v0.8.0 — @action server-action state. Initialized AFTER
