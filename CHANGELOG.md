@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc8] - 2026-05-06
+
+### Fixed
+
+- **`RemoveSubtree` / `InsertSubtree` are now idempotent w.r.t. the
+  desired end-state (#1370 rc8).** After many tab switches the server's
+  VDOM diff baseline could drift, occasionally emitting a `RemoveSubtree`
+  for a marker already removed in a prior patch (or an `InsertSubtree`
+  for a marker already present). 19/20 patches succeeded but the one
+  stale patch failed → client triggered recovery-HTML → page reload.
+  Fix: both patch handlers now treat "already in the desired state" as
+  success. `RemoveSubtree` with a missing marker is a no-op (returns
+  true); `InsertSubtree` with an already-present marker is a no-op
+  (doesn't duplicate content). Symmetric. Matches the semantics of
+  `RemoveChild` on an already-removed node in the standard patch set.
 
 ## [0.9.4rc7] - 2026-05-06
 
