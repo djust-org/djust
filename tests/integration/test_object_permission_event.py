@@ -308,3 +308,105 @@ async def test_per_event_does_not_exist_treated_as_none(rf):
     # No exception — DNE is caught and treated as None (existing -1a behavior).
     check_object_permission(view, request)
     assert view._object is None
+
+
+# -- Tests: state-restore + embedded-child (Stage 8 🟡 backfill) ----------
+
+
+def test_object_cache_is_framework_slot_excluded_from_user_state(rf):
+    """Case 7 (Stage 8 🟡): _object is allocated as a framework slot
+    BEFORE _framework_attrs snapshot in __init__, so it's NOT included
+    in user-private state serialization.
+
+    This is the empirical proof of ADR-017 Decision 3 § "WS reconnect /
+    state-restore": the cache resets to None after restore (because it's
+    a framework slot, not user state), and get_object() runs fresh on
+    the next access. Handles "object reassigned during disconnect"
+    automatically.
+
+    A future refactor that moves `self._object = None` to AFTER the
+    `_framework_attrs` snapshot at live_view.py:517 would silently
+    regress this — cache would survive restore, leaving a stale-allowed
+    decision in place. This test locks the framework-slot invariant.
+    """
+    from djust.auth.core import check_object_permission
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    view = _make_view(_AllowEventView, request, document_id=7)
+
+    # Populate the cache via a successful permission check.
+    check_object_permission(view, request)
+    assert view._object is not None
+
+    # Verify _object is a framework attr (not user-private state).
+    assert "_object" in view._framework_attrs, (
+        "_object MUST be classified as a framework slot. If this fails, "
+        "the slot was allocated AFTER _framework_attrs snapshot in "
+        "live_view.py:__init__ and would survive state-restore — defeating "
+        "the cache-reset-on-reconnect contract."
+    )
+
+    # Snapshot user-private state and verify _object is NOT in it.
+    if hasattr(view, "_get_private_state"):
+        private = view._get_private_state()
+        assert "_object" not in private, (
+            "_object leaked into user-private state; serialized + "
+            "restored caches would carry stale permission decisions."
+        )
+
+
+def test_embedded_child_view_uses_child_get_object(rf):
+    """Case 8 (Stage 8 🟡): when a parent view embeds a child via
+    {% live_render %}, an event targeted at the CHILD must use the
+    CHILD's get_object/has_object_permission, not the parent's.
+
+    The dispatch sites in websocket.py (lines 2740, 2860, 2978) pass
+    the resolved `target_view` to _validate_event_security — which is
+    either the parent or a child depending on the event's view_id.
+    The new check at websocket_utils.py:228+ then uses
+    `owner_instance` (which IS target_view), so the child's
+    get_object is called automatically. This test locks that contract.
+    """
+    from djust.auth.core import check_object_permission
+
+    class _ParentView(LiveView):
+        template = "<div>parent</div>"
+
+        def mount(self, request, **kwargs):
+            pass
+
+        # Parent has NO get_object override — should be no-op for parent.
+
+    class _ChildView(LiveView):
+        template = "<div>child</div>"
+
+        def mount(self, request, **kwargs):
+            self.value = "child-state"
+            type(self)._get_object_called = False
+
+        def get_object(self):
+            type(self)._get_object_called = True
+            return _StubDocument(pk=42, owner_id=1)
+
+        def has_object_permission(self, request, obj):
+            return False  # always deny
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    parent = _make_view(_ParentView, request)
+    child = _make_view(_ChildView, request)
+    _ChildView._get_object_called = False
+
+    # Parent: no override → check is a no-op.
+    check_object_permission(parent, request)
+    assert _ChildView._get_object_called is False, (
+        "parent's check should not trigger child's get_object"
+    )
+
+    # Child: override → check runs, denial raises PermissionDenied.
+    with pytest.raises(PermissionDenied):
+        check_object_permission(child, request)
+    assert _ChildView._get_object_called is True, (
+        "child's get_object MUST be called when child is the dispatch target"
+    )
