@@ -268,7 +268,67 @@ issue or be explicitly closed with a reason.
 | 226 | Stage 11 Code Review's reproducer-driven verdict is more reliable than diff-only review | Retro v0.9.4-1 / PR #1365 | — | Closed | **Resolved as canon: reviewers should write a local reproducer test for any algorithm finding before classifying severity.** Stage 11 reviewer for PR #1365 wrote a test that FAILED LOCALLY on the original `ea6c4c4a`, providing empirical proof of the elif-cascade algorithm bug. Stage 13 reviewer wrote 9 independent reproducer tests, 4 of which fail on `ea6c4c4a` and pass on the fix `278d6f2a` — converting "this looks wrong" into "this IS wrong." Pattern: when a Stage 11 reviewer suspects an algorithmic flaw, they should attempt a reproducer; the reproducer either confirms a 🔴 finding or shows the suspicion was unfounded (downgrade to 🟡 or 🟢). Future Stage 11 reviews on algorithm-class PRs should follow this discipline. |
 | 227 | dj-if + dj-key boundary-reorder limitation in keyed VDOM diff | PR #1365 Stage 13 (deferred) | #1366 | Open | When non-boundary siblings carry `dj-key` AND reorder within their relative slot, position-based pairing of non-boundary children can produce suboptimal patches. Production templates don't typically reorder elements across `{% if %}` boundaries. Defer to v0.10 polish. Suggested fix: extend the pre-pass to delegate to `diff_keyed_children` when any non-boundary children have `dj-key`. |
 | 228 | HTTP path log-injection asymmetry: cache_key not sanitize_for_log'd in rust_bridge.py | PR #1367 Stage 11 (deferred per Action #1079) | #1368 | Open | Pre-existing — `rust_bridge.py:372` (HTTP path) doesn't use `sanitize_for_log` for cache_key while sibling at line 343 (WS path) does. Out of scope for #1362's literal text; one-line fix proposed in the issue. |
+| 230 | Bundle-init-order structural lint — enumerate module-scope `let`/`const` and verify each is declared in a module that comes EARLIER in the bundle than any use site | PR #1370/#1371 hotfix retro / structural class follow-up | #1372 | Open | PR #1359's vitest test caught DECLARED-EARLY-USED-LATE pattern (4 cross-module reverts); rc1 shipped with the INVERSE class (`_activeHooks` declared late, used early via `djustInit`). The new `bundle-init-no-tdz.test.js` catches the symptom at runtime; this issue is for the structural lint that catches the class at lint time. |
+| 231 | JSDOM's default `runScripts` evaluates with `readyState === 'loading'`, masking TDZ bugs that fire only post-`load`. Tests that load the bundle MUST explicitly wait for `load` to reproduce production failure modes | PR #1371 retro / diagnostic finding | — | Closed | **Resolved as canon: bundle-init tests must wait for `load` event before evaluating.** PR #1371's regression test would NOT have caught the rc1 TDZ if it had used the default JSDOM eval pattern (which fires while `readyState === 'loading'`). The TDZ surfaces only when the bundle's bootstrap call runs after DOM-ready. Future bundle-loading tests should use `addEventListener('load')` with explicit wait, NOT `dom.window.eval(clientCode)` directly. |
 | 229 | Test docstrings should explicitly state the rule being demonstrated AND identify what hypothetical buggy implementation the test would catch | Retro v0.9.4-2 / PR #1367 Stage 11 (Action #1200 generalization) | — | Closed | **Resolved as canon: the tautology rule (Action #1200) extends to docstring honesty.** Iter 1's original `test_multi_template_caveat_only_primary_hash_drives_invalidation` asserted determinism but called itself "demonstrates the multi-template caveat" — looked credible until Stage 11 reviewer asked "what would this test prove that wasn't already proven elsewhere?" Stage 12 rewrote with two `child.html` versions; the rewrite would fail on Option B (composite hash). Generalize: any test docstring claiming to "demonstrate caveat X" should explicitly state what hypothetical buggy implementation the test would catch. If the test would pass on the buggy implementation too, it's not demonstrating the caveat — it's testing something else. |
+
+## v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370) (PR #1371)
+
+**Date**: 2026-05-05
+**Scope**: P0 production hotfix. v0.9.4rc1 shipped a bundled `client.js` that threw `Uncaught ReferenceError: Cannot access 'G' before initialization` (`G` minifies from `_activeHooks`) on every page load + every WS patch. Hooks entirely broken on rc1; user rolled back to 0.9.0.
+**Tests at close**: 1561 JS + 4204 Python all passing. New regression test FAILS on pre-fix bundle, PASSES on fix.
+
+### What We Learned
+
+**1. PR #1359's eslint cleanup canon caught only HALF the cross-module variable failure modes.**
+PR #1359's 97 vitest test failures caught the DECLARED-EARLY-USED-LATE pattern (4 cross-module reverts: `liveViewWS`, `clientVdomVersion`, `_eventRefCounter`, `_isBroadcastUpdate`). All four had `let`/`const` declarations in early modules; vitest happened to import the modules in an order matching the bundle concat order, so the failures surfaced. **What it did NOT catch**: the inverse pattern. `_activeHooks` was declared `let` in module 19 (LATE) but read from `djustInit` in module 14 (EARLY) via `mountHooks`. vitest imports `19-hooks.js` directly when a test file does so; the let-declaration runs immediately. Bundle concat ordering doesn't apply in vitest.
+
+**Action taken**: Closed by this hotfix + Action Tracker #230 — bundle-init-order structural lint (#1372) catches the class at lint time. Future PRs that touch source modules should run the new `bundle-init-no-tdz.test.js` regression test (already in CI), and the lint (when it lands) catches the class proactively.
+
+**2. JSDOM's default `readyState === 'loading'` masks TDZ regressions that fire only post-DOM-ready.**
+Independent diagnostic finding from the implementer: the TDZ surfaces only when `document.readyState !== 'loading'` at bundle-eval time. JSDOM's default `runScripts: 'dangerously'` evaluates with `readyState === 'loading'`, so existing tests that use `dom.window.eval(clientCode)` directly would NOT have caught this even if they loaded the bundle. The new regression test waits on `addEventListener('load')` before evaluating — explicitly simulating the production failure mode (deferred / late-injected scripts that run after DOMContentLoaded).
+
+**Action taken**: Canonicalized as Action Tracker #231 — bundle-init tests must wait for `load` before evaluating. Future bundle-loading tests should use the `addEventListener('load')` pattern, not `dom.window.eval(clientCode)` directly.
+
+### Insights
+
+- **Pre-fix-bundle empirical proof is the gold standard for hotfix regression tests.** The implementer saved the rc1 bundle to `scratch/client-pre-fix.js`, ran the new test against it, confirmed FAIL → restored the fixed bundle, ran the test, confirmed PASS. This is the directly verifiable form of Action #1196 (would the test fail on main?). For hotfixes specifically, the "pre-fix vs post-fix" comparison is concrete and reportable.
+- **The hotfix scope discipline (Action #1079) held.** Implementer was instructed to "fix exactly what's cited; don't proactively convert other `let` declarations to `var`." The structural lint follow-up (#1372) is filed but NOT in this PR. Stage 11 reviewer's structural audit confirmed no other late-module `let` declarations are at-risk currently — but the lint is the proactive defense.
+- **Stage 11 audit caught a structural concern that the implementer's narrow fix didn't address.** The reviewer enumerated `let` declarations in modules 20+ and traced each to verify safety. This kind of audit is exactly what Stage 11 is for: catching the CLASS while the implementer fixes the INSTANCE.
+
+### Review Stats
+
+| Metric | PR #1371 | Total |
+|---|---|---|
+| Commits | 2 (impl + bundle + tests; CHANGELOG) | 2 |
+| New tests | 2 (bundle-init regression) | 2 |
+| 🔴 Stage 11 findings | 0 | 0 |
+| 🟡 Stage 11 findings | 0 | 0 |
+| Stage 11 verdict | APPROVE | — |
+| CI green | 13/13 | — |
+
+### Process Improvements Applied
+
+**RETRO.md**: Action Tracker rows #230 (bundle-init-order structural lint → #1372) + #231 (JSDOM `readyState` waiting canon) added.
+
+**ROADMAP.md**: v0.9.4-3 milestone struck through with closure note.
+
+**`tests/js/bundle-init-no-tdz.test.js`**: new regression test loads the bundled `client.js` in JSDOM with explicit `load`-event wait. Catches future TDZ regressions in bundle concat order.
+
+### Open Items
+
+- ✅ #1370 closed via this hotfix.
+- [ ] #1372 — bundle-init-order structural lint follow-up.
+- [ ] All carryover tracker rows from previous milestones still open.
+
+### Acceptance check
+
+- ✅ PR #1371 merged (commit 5dd9d531).
+- ✅ Regression test FAILS on rc1 bundle, PASSES on fix.
+- ✅ 13/13 CI checks green (first clean CI in many PRs — DraftMode flake passed too, possibly intermittent recovery).
+- ⏳ Next: `/djust-release 0.9.4rc2` — the actual hotfix tag.
+
+---
 
 ## v0.9.4-2 — Template-hash-keyed Redis cache + deployment docs (#1362) (PRs #1367, #1369)
 

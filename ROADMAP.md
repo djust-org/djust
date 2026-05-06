@@ -172,15 +172,15 @@ Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` coll
 
 Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after NYC Claims hit a 2/24-patches-failed → page-reload regression on tab switching.
 
-### Milestone: v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370)
+### Milestone: v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370) ✅ shipped
 
-**Status:** 🚀 commissioned 2026-05-05. **P0 hotfix.** v0.9.4rc1 throws `Uncaught ReferenceError: Cannot access 'G' before initialization` on every page load + every WS patch. `G` is `_activeHooks` (declared `let _activeHooks;` in `python/djust/static/djust/src/19-hooks.js:54`). Module 19 is concatenated AFTER the bootstrap call at bundle line ~7842, so the `let` declaration is in TDZ when `djustInit → mountHooks → _ensureHooksInit` reads `_activeHooks`. Hooks are entirely broken on rc1.
+**Status:** ✅ shipped 2026-05-05. PR #1371 (commit 5dd9d531) merged. Stage 11 APPROVED with 0 🔴/🟡 (structural audit clean — no other late-module TDZ candidates). Empirical proof: regression test FAILS on pre-fix bundle, PASSES on fix. Bundle-init-order structural lint follow-up filed as #1372. **P0 hotfix.** v0.9.4rc1 throws `Uncaught ReferenceError: Cannot access 'G' before initialization` on every page load + every WS patch. `G` is `_activeHooks` (declared `let _activeHooks;` in `python/djust/static/djust/src/19-hooks.js:54`). Module 19 is concatenated AFTER the bootstrap call at bundle line ~7842, so the `let` declaration is in TDZ when `djustInit → mountHooks → _ensureHooksInit` reads `_activeHooks`. Hooks are entirely broken on rc1.
 
 *Goal:* Cut v0.9.4rc2 with the fix. Single-iter, fast turnaround.
 
 #### Tasks
 
-- [ ] **#1370 — TDZ regression on hooks init.** Fix: `let _activeHooks; let _hookIdCounter;` → `var _activeHooks; var _hookIdCounter;` in `19-hooks.js:54-55`. `var` is hoisted to script-top, so the `if (!_activeHooks)` check works regardless of concat order. Plus add a regression test that loads the BUNDLED `client.js` in a fresh JSDOM/browser context and verifies no `ReferenceError` on init.
+- [x] ~~**#1370 — TDZ regression on hooks init.**~~ ✅ — Closed via PR #1371 (commit 5dd9d531). `let` → `var` for `_activeHooks` and `_hookIdCounter` in `19-hooks.js:54-56`; `var` is hoisted (no TDZ), so the lazy-init `if (!_activeHooks)` check works regardless of concat order. Bundle rebuilt cleanly. New regression test in `tests/js/bundle-init-no-tdz.test.js` loads the bundled `client.js` in JSDOM with explicit `addEventListener('load')` setup (forces `readyState === 'complete'` to reproduce the production failure mode); empirically FAILS on pre-fix bundle, PASSES on fix. Structural-lint follow-up filed as #1372. Fix: `let _activeHooks; let _hookIdCounter;` → `var _activeHooks; var _hookIdCounter;` in `19-hooks.js:54-55`. `var` is hoisted to script-top, so the `if (!_activeHooks)` check works regardless of concat order. Plus add a regression test that loads the BUNDLED `client.js` in a fresh JSDOM/browser context and verifies no `ReferenceError` on init.
 
   Files: `python/djust/static/djust/src/19-hooks.js` (the fix); `tests/js/bundle-init-no-tdz.test.js` (new regression).
 
