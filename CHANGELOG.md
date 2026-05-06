@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **New framework helper: `djust.utils.emit_one_shot_class_warning(cls, key, message, *args)` (#1392).** Reusable pattern for "framework can't help mechanically; tell the developer loudly." Sets a class-level sentinel attr `_djust_warned_<key>` so subsequent instances of the same class don't repeat the warning. Subclasses get their own sentinel via `cls.__dict__.get` (avoids attribute inheritance). Refactored the existing snapshot-truncation warning in `python/djust/websocket.py` to use it. Pattern from PR #1326, canonicalized via Retro v0.9.3-2 finding #4.
+
 ### Changed
+
+- **Process canon batch: 8 retro-filed items into CLAUDE.md, pipeline templates, and `docs/website/guides/authorization.md` (#1345, #1377, #1385, #1386, #1389, #1391, #1393).**
+  - `.pipeline-templates/bugfix-state.json` Stage 4: mandatory checklist item to verify cited cause for retro-filed issues before locking the fix scope (#1345).
+  - `.pipeline-templates/feature-state.json` + `bugfix-state.json` Stage 7: mandatory checklist item requiring disconfirming citations during self-review — bias toward active falsification rather than passive confirmation (#1386).
+  - `CLAUDE.md` Bug-report triage section: rule that multi-reopen issues require a bit-exact runnable reproducer against the reporter's environment before "root cause confirmed" (#1389); `_framework_attrs` snapshot-order invariant note (#1393).
+  - `CLAUDE.md` Process Canon: filter-migration grep canon (when changing a filter convention, grep all call sites for the OLD pattern) (#1391); split-foundation soak-time guidance for solo-author case (no external consumers → soak optional) (#1385).
+  - `python/djust/live_view.py`: comment block on `_framework_attrs = frozenset(self.__dict__.keys())` documenting the BEFORE-snapshot vs AFTER-snapshot semantics (#1393).
+  - `docs/website/guides/authorization.md`: WS-communicator test pattern section showing how to test the per-event object-permission re-execution path (#1377).
 
 - **`scripts/check-test-coverage.py` now verifies Makefile and `pyproject.toml` testpaths bidirectionally (#1346, defense-in-depth on #1339).** The original one-directional check caught the case where the Makefile missed a path that pyproject.toml declared (#1339, the bug that left `python/djust/tests/` uncollected for months). The reverse direction — a path added to the Makefile but missing from pyproject.toml, or removed from pyproject and still in Makefile — would have gone unflagged. Now fails loud with a clear set diff in either direction.
 
