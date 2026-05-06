@@ -280,6 +280,9 @@ issue or be explicitly closed with a reason.
 | 238 | Sticky-child views may bypass per-event object-permission check | Retro v0.9.5-1b | #1380 | Open | When sticky child fails `request` attribute assignment in `mixins/sticky.py:213-218`, `owner_request` is None and per-event check silently skips. Rare path; default-deny + log proposed. |
 | 239 | Pipeline template stage-name reconciliation with skill canon | Retro v0.9.5-1a | #1376 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream update. Skill canon references Stages 11/13/15; project template has 14 stages with different stage 13. Recommend skill canon use stage NAMES not NUMBERS. |
 | 240 | WS-communicator test pattern capture for full-stack integration | Retro v0.9.5-1a | #1377 | Open | Per-event tests in v0.9.5-1b used unit-style mocks. Full WS-communicator integration tests would catch end-to-end issues (real WS frames, real auth middleware, real handler dispatch). Capture canonical pattern in `djust-dev` skill alongside authorization.md migration recipe. |
+| 241 | Canonicalize `_framework_attrs` snapshot-order invariant | Retro v0.9.3-2 (backfilled 2026-05-06) | #1393 | Open | BEFORE snapshot = framework state (reset on reconnect); AFTER snapshot = user state (persisted). Used by `_action_state` (after, #1324) and `_object` cache (before, v0.9.5-1a). Load-bearing; no explicit canon. Add docstring + CLAUDE.md / djust-dev skill note. |
+| 242 | Canon — when changing a filter convention, grep ALL call sites for the OLD convention | Retro v0.9.3-2 (backfilled) | #1391 | Open | PR #1281 fixed `_snapshot_assigns()` (`k.startswith("_")` → `_framework_attrs` membership); identity snapshots used the OLD filter and weren't migrated until #1327 (audit weakness #8). Stage 4 planner check: any PR changing a filter expression must grep for the pre-fix text and verify all matches updated. |
+| 243 | Canonicalize 'one-shot per-class warning' framework pattern | Retro v0.9.3-2 (backfilled) | #1392 | Open | PR #1326's pattern: `logger.warning` once per view class, suppressed within same call. Reusable for "framework can't help mechanically; tell developer loudly" scenarios. Extract `_emit_one_shot_class_warning()` helper + document in `djust-dev` skill. |
 
 ## v0.9.5-1 — Object-permission lifecycle (split-foundation rollout, #1373) (PRs #1374, #1378, #1381)
 
@@ -907,6 +910,82 @@ PRs #1331, #1332 both hit the pre-commit stash-restore cycle: ruff/ruff-format m
 
 - [ ] CI test-collection gap — tracked in Action Tracker #218 (GitHub #1339)
 - [x] ~~CodeQL stale check-run workaround~~ — closed via #1340 closing PR. Misdiagnosis corrected; concurrency block added to codeql.yml; real alerts (1 high-severity) tracked separately in #1343.
+
+---
+
+## v0.9.3-2 — #1281 private-state re-render (split-foundation, Audit A Phase 2) (PRs #1323, #1324, #1326, #1327)
+
+**Date**: 2026-05-02 (retro backfilled 2026-05-06 during v0.9.5-1 reconcile sweep)
+**Scope**: Split-foundation closure of audit-A weakness #1281 — handlers that mutate only `self._*` private state were getting `noop` from the Rust diff because the change-tracker only compared public attributes. PR #1323 was the foundation fix (`_snapshot_assigns()` now uses `_framework_attrs` membership instead of `k.startswith("_")`). PRs #1324/#1326/#1327 stacked Phase-2 follow-ups on top: `_action_state` reconnect persistence, snapshot-truncation warning, and identity-snapshot unification (closing audit weakness #8).
+**Tests at close**: 4123 Python passed / 0 failed; 33 new regression tests across the four PRs (9+6+10+8).
+
+### What We Learned
+
+**1. The `_framework_attrs`-membership-check pattern proved versatile across 4 PRs and was canonicalized as a reusable framework primitive.**
+PR #1323 introduced the pattern: replace `k.startswith("_")` with `k in view_instance._framework_attrs` so user-prefixed `_private` attrs participate in change detection while framework slots stay excluded. PR #1324 leveraged the SAME mechanism by ordering: `_action_state` initialized AFTER the `_framework_attrs` snapshot makes it user-private (and thus serialized through reconnect). PR #1327 then extended the pattern to identity snapshots, closing the dual-path discrepancy (audit weakness #8).
+
+The pattern is load-bearing in two directions:
+- **BEFORE the snapshot** = framework state (excluded from user-private serialization, reset on reconnect).
+- **AFTER the snapshot** = user-private state (included in change tracking, persisted across reconnects).
+
+This invariant became the foundation that v0.9.5-1a's `self._object` cache later relied on — the `_object` slot is allocated BEFORE `_framework_attrs` so it's framework state, which made the "object reassigned during disconnect" semantics (Decision 3 of ADR-017) correct by construction. v0.9.3-2 discovered/canonicalized the pattern; v0.9.5-1a benefited from it without explicit canon.
+
+**Action taken**: Open — tracked in Action Tracker #241 (filed during this retro backfill).
+
+**2. Split-foundation rollout works for medium-blast-radius audit fixes, not just for new public APIs.**
+The original split-foundation pattern (Action #1122) was proposed for high-blast-radius public-API features. v0.9.3-2 proves it ALSO applies to audit-driven framework correctness fixes: PR #1323 was the foundation (one filter change with broad implications), and #1324/#1326/#1327 stacked on top. Each stacking PR depended on #1323's contract being committed, not provisional. All 4 PRs landed cleanly, no rebase conflicts, no contract churn.
+
+The lesson: when a fix has cascading consequences (other code paths need to mirror the change), split it as foundation + follow-ups rather than one large PR. Follow-ups can land in parallel against a stable foundation rather than blocking on a megaphone PR.
+
+**Action taken**: Closed — pattern canonical from v0.9.4-1 / v0.9.5-1 retros; v0.9.3-2 is an additional empirical instance.
+
+**3. Audit weakness #8 (dual-path discrepancy) was a real "fix one path, miss the other" failure mode.**
+PR #1281's foundation fix updated `_snapshot_assigns()` (the Python change-tracker path). Audit caught that the IDENTITY snapshots (the `push_commands`-only auto-skip path, #700) were still using `k.startswith("_")` — a parallel filter that hadn't been migrated. Result: `_snapshot_assigns` and identity snapshots disagreed about which `_`-prefixed attrs counted as "user state."
+
+PR #1327 closed the gap by mechanically applying the same membership check at every site. The lesson: **when changing a filter convention, grep for ALL call sites that use the OLD convention and migrate them in the same milestone.** The audit caught the second path; without it, the discrepancy would have been a latent invariant violation.
+
+**Action taken**: Open — tracked in Action Tracker #242 (filed during this retro backfill).
+
+**4. Snapshot truncation warning (#1285) is the canonical shape for "framework can't help; tell the developer loudly."**
+The 100-list-item / 50-dict-key truncation in `_snapshot_assigns` is a perf/memory tradeoff — the framework can't auto-detect in-place mutations inside large containers without bounded cost. PR #1326's response: emit a `logger.warning` ONCE per view class, with a specific suggestion (`set_changed_keys()` or new-reference assignment). Per-call suppression (so verbose loops don't spam logs) + per-class deduplication (so each app gets the warning exactly once during dev).
+
+The "one-shot warning per class" pattern is reusable for any framework limitation that's hard to fix mechanically but easy to document loudly. Worth canonicalizing.
+
+**Action taken**: Open — tracked in Action Tracker #243 (filed during this retro backfill).
+
+### Insights
+
+- **The retro itself was backfilled.** v0.9.3-2 shipped 2026-05-02 but the milestone retro wasn't written at the time. Found during v0.9.5-1 reconcile sweep (2026-05-06). All 4 PRs DO have CHANGELOG entries and Closed Action Tracker rows for the underlying issues — the synthesis layer is what was missing. The pipeline-run retro-artifact-gate was added as canon AFTER this milestone shipped; current iterations enforce per-PR retros at merge time.
+
+- **Audit-driven fix workflow scaled well to 4 PRs in one drain.** Each PR closed exactly one audit issue. No PR conflicts, no rework cycles. The audit doc was load-bearing as the spec — each PR's body referenced its audit-issue number and the Stage 4 plan referenced the audit doc directly.
+
+- **`_framework_attrs` snapshot-order invariant is now a load-bearing framework convention** with no explicit documentation. It's used by `_action_state` (after-snapshot, user state), `_object` (before-snapshot, framework state), and any future `_` slot. Worth a short docstring on `_framework_attrs` itself explaining the two-phase ordering.
+
+### Review Stats
+
+| Metric | PR #1323 | PR #1324 | PR #1326 | PR #1327 | Total |
+|---|---|---|---|---|---|
+| Tests added | 9 | 6 | 10 | 8 | 33 |
+| Audit issue closed | #1281 | #1284 | #1285 | #1286 | 4 |
+| Stage 11 findings (per CHANGELOG/PR body) | 0 | 0 | 0 | 0 | 0 |
+
+(Note: per-PR retros not written; Stage 11 finding counts inferred from CHANGELOG entries and tracker rows. May undercount.)
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no changes from this milestone.
+
+**Pipeline template**: no changes from this milestone.
+
+**Skills**: no changes from this milestone.
+
+**ADR-017** (later — v0.9.5-1a): the `_framework_attrs` ordering invariant from this milestone was the load-bearing primitive that made the `_object` cache reset-on-reconnect work. The ADR's Decision 3 leverages this convention without documenting where it came from.
+
+### Open Items
+
+- [ ] Item 241 — `_framework_attrs` snapshot-order invariant canonicalization — tracked in Action Tracker
+- [ ] Item 242 — "Filter convention migration: grep all call sites" canon — tracked in Action Tracker
+- [ ] Item 243 — "One-shot per-class warning" framework pattern canon — tracked in Action Tracker
 
 ---
 
