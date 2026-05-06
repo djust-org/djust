@@ -252,6 +252,42 @@ The lifecycle is opt-in: views that don't override `get_object()` see ZERO overh
 
 Keep `get_object()` minimal — just the FK lookup. Expensive I/O in this method becomes per-mount overhead.
 
+## Testing the per-event check (the WS-communicator pattern)
+
+Unit tests of `check_object_permission(view, request)` cover mount-time enforcement. For the per-event re-execution path, tests must connect to the WS as an authenticated user and exchange real frames:
+
+```python
+from channels.testing import WebsocketCommunicator
+from django.contrib.auth.models import AnonymousUser
+import pytest
+
+@pytest.mark.asyncio
+async def test_per_event_denies_after_ownership_change():
+    """Per-event object-permission re-runs after the owner FK changes
+    mid-session, denying the formerly-authorized user."""
+    # Connect as user A who owns document 1.
+    communicator = WebsocketCommunicator(application, "/ws/documents/1/")
+    communicator.scope["user"] = user_a
+    connected, _ = await communicator.connect()
+    assert connected
+
+    # Mount succeeds (user A owns the doc).
+    await communicator.send_json_to({"type": "mount", "kwargs": {"document_id": 1}})
+
+    # Reassign ownership to user B mid-session.
+    document.owner_id = user_b.pk
+    document.save()
+
+    # User A sends a write event.
+    await communicator.send_json_to({"type": "event", "name": "add_comment", "args": {"body": "x"}})
+
+    # Per-event check fires; denial frame returned, WS stays open.
+    response = await communicator.receive_json_from()
+    assert response == {"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}
+```
+
+This pattern (real WS communicator + state mutation between mount and event) is the empirical proof that the per-event check fires correctly. Use it for any LiveView feature whose contract depends on between-frame state. (#1377, v0.9.5-1c retro.)
+
 ## Reference
 
 - ADR-017 (full design): `docs/adr/017-object-permission-lifecycle.md`

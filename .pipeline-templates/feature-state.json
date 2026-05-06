@@ -254,6 +254,11 @@
           "mandatory": true
         },
         {
+          "action": "DISCONFIRMING CITATION (#1386, v0.9.5-1 retro): identify at least one specific claim in the implementation (a docstring claim about exception class hierarchy, a comment claiming 'no callers', an assertion about wire-protocol shape, a Python version compat assumption) and actively try to DISPROVE it via grep / inspect / test. If the disproof attempt finds the claim wrong, file a 🟡 finding. If the claim survives, document the verification. Empirical: across v0.9.5-1 (-1a/-1b/-1c) Stage 7 caught 0 findings, Stage 11 caught 7 🟡 — the framing 'implementer reviews own diff' biases toward confirmation. Active falsification compresses Stage 11 findings into Stage 7 (cheaper, earlier).",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "CANON-PR SELF-APPLICABILITY CHECK (#1247 retro / #1248): if this PR adds a new mandatory checklist item or self-review rule, explicitly answer two questions in the Stage 7 output. (a) Does the new rule false-positive on this PR's own diff? If yes, narrow the scope before merge. (b) Would the new rule have caught the originating bug at the stage it adds? If no, reconsider the stage placement. Skip this item only when the PR doesn't introduce new canon (the typical feature/bugfix case).",
           "done": false,
           "mandatory": false
