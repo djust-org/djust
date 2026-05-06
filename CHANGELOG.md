@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **X008 audit heuristic now walks same-module MRO and recognizes broader URL-kwarg-binding shapes (#1382, #1383, deferred from PR #1381 Stage 11).** Two improvements to `python/djust/audit_ast.py`:
+  - `_class_has_attribute` and `_class_defines_method` accept an optional `class_index` parameter and walk the same-module MRO via static analysis when supplied. The X008 IDOR-shape checker uses this so views inheriting `permission_required` from a base mixin (or inheriting `has_object_permission` / `check_permissions` overrides) are correctly classified. Cross-module bases are silently skipped — by design, the static analysis is module-local. Cycle guard via visited-set in `_walk_mro_static` prevents recursion on `class A(B): ...; class B(A): ...`.
+  - `_mount_assigns_url_kwarg_id` now recognizes three additional RHS shapes beyond bare `self.x = x`: `self.kwargs["x"]` (Subscript), `int(x)` / `str(x)` / `uuid(x)` / `UUID(x)` (whitelisted casts; literal arguments like `int(42)` correctly do NOT match), and `(self.)kwargs.get("x"[, default])`. Reduces false-negatives from views using mixins or coercion.
+
+  10 new test cases in `TestX008IDORShapeNeedsObjectPermission` cover the new branches plus the X001-non-co-fire invariant.
+
 ### Fixed
 
 - **Sticky-child views with overridden `get_object()` no longer silently skip per-event object-permission checks (#1380, deferred from PR #1378 Stage 11 🟡 #2).** When a sticky/embedded child view's `owner_request` is `None` (the parent failed to stamp `request` because `mixins/sticky.py:212-218`'s read-only-child constraint raised `AttributeError`), `_validate_event_security` now FAILS CLOSED if the child opted into the object-permission lifecycle: sends a `permission_denied` error frame and logs a `WARNING` instead of returning the handler. Views that did NOT override `get_object` are unchanged (no security check is active for them, so silent fall-through is correct). Companion change: `mixins/sticky.py:215` `logger.debug` → `logger.warning` on the read-only-child path so the upstream gap is observable in production logs at its source.
