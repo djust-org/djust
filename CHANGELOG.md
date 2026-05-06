@@ -61,6 +61,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   9 new regression tests in `tests/integration/test_object_permission_event.py`: cache-not-poisoned-on-denial; cache-populated-only-on-success; per-event denial sends error frame and keeps WS open (handler body verified to NOT execute via sentinel); per-event allow returns the handler; per-event no-override is a no-op; DNE handling; framework-slot exclusion from user state; fail-closed on non-PermissionDenied developer exceptions; embedded-child resolution.
 
+- **Tooling layer for object-level authorization — Foundation 3 of object-level authorization (#1373, ADR-017 § Decision 8).**
+  Final iteration of the split-foundation rollout. Closes the documentation, lint, and skill gap so app authors can DISCOVER the lifecycle and migrate to it.
+
+  Three artifacts:
+
+  - **New `djust check` heuristic — `X008` (`python/djust/audit_ast.py`).** Flags any view matching the IDOR shape: extends `LiveView` (or matches the existing detail-view heuristic), has `permission_required` set, `mount()` assigns from a URL kwarg ending in `_id` (the canonical `self.document_id = document_id` pattern), at least one `@event_handler`-decorated method reads `self.<that>_id`, AND does NOT override `has_object_permission` or `check_permissions`. Severity: warning. Details point to `docs/website/guides/authorization.md` for the migration recipe. Distinct from existing `X001` (`.get(pk=user_input)` pattern); `X008` is structural — it flags the shape regardless of fetch mechanism. Run `python manage.py djust_audit --ast` to find matches.
+
+  - **New guide `docs/website/guides/authorization.md`.** Walks through the four-layer auth onion (login → role → custom → object), the canonical `get_object()` + `has_object_permission()` pattern, OWASP 404-shape mitigation, cache invariants and `_invalidate_object_cache()` discipline, wire-protocol error frames (mount close 4403 vs per-event `code: permission_denied`), defense-in-depth via manager-level `for_user()` filtering, and a worked migration example (before/after diff for hand-rolled `get_context_data` IDOR checks).
+
+  - **`djust-dev` skill principle catalog updated**. Two new entries: "Object-level authorization (post-v0.9.5)" with the canonical pattern, OWASP rationale, cache discipline, migration recipe, and `djust check X008` reference; and "Security-class code defaults to fail-closed at every catch block" — when implementing auth/permission/validation code, catch `Exception` (not just the specific expected error), log via `logger.exception`, and default to deny. Failing-OPEN on unexpected exceptions is a security antipattern. Carries forward from v0.9.5-1b PR #1378's Stage 11 finding.
+
+  6 new regression tests in `python/tests/test_audit_ast.py::TestX008IDORShapeNeedsObjectPermission` (positive case: classic IDOR shape triggers; negatives: `has_object_permission` override OK, `check_permissions` override OK, no `permission_required` no trigger, no URL-kwarg id no trigger; plus message-references-guide test).
+
+  **The split-foundation rollout is now complete**. Issue #1373's IDOR class is structurally closed across mount and event surfaces; downstream consumers have the migration recipe and a static check to find affected views. Apps that override `get_object()` get end-to-end enforcement automatically.
+
 ## [0.9.4] - 2026-05-06
 
 ### Added

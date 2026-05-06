@@ -329,6 +329,208 @@ class TestX005MarkSafe:
 
 
 # ---------------------------------------------------------------------------
+# X008 — IDOR-shape: detail view missing object-permission lifecycle override
+# ---------------------------------------------------------------------------
+
+
+class TestX008IDORShapeNeedsObjectPermission:
+    """X008 (#1373, ADR-017 § Decision 8) flags views that match the
+    IDOR shape and recommends migration to the v0.9.5-1a `get_object()` +
+    `has_object_permission()` lifecycle.
+
+    The shape:
+      - Class extends LiveView (or matches detail-view heuristic)
+      - Has `permission_required` class attribute
+      - `mount()` assigns from URL kwarg (`self.<x>_id = <x>_id` pattern)
+      - At least one `@event_handler` reads `self.<x>_id`
+      - Does NOT override `has_object_permission` AND does NOT override
+        `check_permissions`
+    """
+
+    def test_classic_idor_shape_triggers(self) -> None:
+        """The exact shape from ADR-017's reproducer: role permission
+        + URL-kwarg-bound id + write handler reading self.<x>_id +
+        no object-permission hook."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire on the canonical IDOR shape; got: {_codes(findings)}"
+        )
+
+    def test_view_overriding_has_object_permission_ok(self) -> None:
+        """View that uses the new lifecycle (overrides
+        has_object_permission) is the migration target — should NOT
+        fire X008."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                def get_object(self):
+                    return Document.objects.get(pk=self.document_id)
+
+                def has_object_permission(self, request, obj):
+                    return obj.owner_id == request.user.id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        # The migration target — must not fire X008.
+        assert "X008" not in _codes(findings), (
+            f"X008 must NOT fire when has_object_permission is overridden; got: {_codes(findings)}"
+        )
+
+    def test_view_overriding_check_permissions_ok(self) -> None:
+        """Views with a hand-rolled `check_permissions` hook (the
+        existing escape hatch from -1a) are also accepted — X008 is
+        about FLAGGING the missing-hook case, not enforcing the new
+        lifecycle specifically."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                def check_permissions(self, request):
+                    return Document.objects.filter(
+                        pk=self.kwargs.get("document_id"),
+                        owner=request.user,
+                    ).exists()
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    pass
+        """)
+        assert "X008" not in _codes(findings), (
+            f"X008 must NOT fire when check_permissions is overridden; got: {_codes(findings)}"
+        )
+
+    def test_view_without_permission_required_does_not_trigger(self) -> None:
+        """X008 specifically targets views WITH role-level
+        permission_required (the shape that's most likely to be a
+        migration candidate). A view without permission_required is
+        a different shape entirely — likely public or auth-handled
+        elsewhere — and shouldn't trip X008."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class PublicView(LiveView):
+                def mount(self, request, item_id=None, **kwargs):
+                    self.item_id = item_id
+
+                @event_handler()
+                def fetch(self):
+                    pass
+        """)
+        assert "X008" not in _codes(findings)
+
+    def test_view_without_url_kwarg_id_does_not_trigger(self) -> None:
+        """Views that don't bind a URL kwarg `<x>_id` to `self` are
+        list/dashboard views, not detail views. X008 shouldn't fire."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DashboardView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, **kwargs):
+                    self.search = ""
+
+                @event_handler()
+                def set_search(self, value=""):
+                    self.search = value
+        """)
+        assert "X008" not in _codes(findings)
+
+    def test_x008_message_references_authorization_guide(self) -> None:
+        """The X008 message must point developers at the migration
+        guide (`docs/website/guides/authorization.md`) so they know
+        how to fix it."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        x008 = [f for f in findings if f.code == "X008"]
+        assert len(x008) >= 1
+        # Message or details must reference the specific migration guide path.
+        msg = (x008[0].message or "") + " " + (x008[0].details or "")
+        assert "authorization.md" in msg, (
+            f"X008 must reference docs/website/guides/authorization.md "
+            f"specifically (developers need the URL to find the migration "
+            f"recipe); got: {msg!r}"
+        )
+
+    def test_x008_does_not_co_fire_with_x001(self) -> None:
+        """X008 (structural shape) and X001 (`.get(pk=user_input)` lookup)
+        target overlapping but distinct patterns. A view with the IDOR
+        shape that uses `.create()` (not `.get(pk=...)`) should fire
+        X008 ONLY — not X001. Locks the design distinction so future
+        refactors don't accidentally make X008 a strict superset of X001."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    # No .get(pk=...) here; X001 should not fire.
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        codes = _codes(findings)
+        assert "X008" in codes, f"X008 should fire; got: {codes}"
+        assert "X001" not in codes, (
+            f"X001 should NOT fire when no .get(pk=user_input) is present; got: {codes}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Suppression
 # ---------------------------------------------------------------------------
 
