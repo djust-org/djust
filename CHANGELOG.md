@@ -35,6 +35,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   9 regression tests in `tests/integration/test_object_permission_mount.py`: denial via `return False` raises `PermissionDenied`; allow populates `self._object`; no-override is a no-op; `_invalidate_object_cache` resets the cache (verified via call counter); `get_object()=None` skips `has_object_permission`; `get_object()` raising `ObjectDoesNotExist` is treated as `None`; `get_object()` raising `Http404` is treated as `None` (defense-in-depth against the `DEBUG=True` traceback leak); `has_object_permission` raising `PermissionDenied` directly (vs `return False`) preserves the developer's custom message; `get_object()` returning a falsy non-None value (`False`, `0`, `""`) IS treated as a valid object — `has_object_permission` is called (locks the strict-identity `is None` contract).
 
+- **Per-event object-permission re-execution — Foundation 2 of object-level authorization (#1373, ADR-017 § Decision 7).**
+  Iter 2 of 3, stacking on the v0.9.5-1a foundation. Closes the IDOR class END-TO-END at the per-event surface, not just at mount.
+
+  Without this iteration, an attacker with a valid session for an object they no longer have access to (e.g., access was revoked mid-session, or they crafted a session via timing) could still fire event-handler frames against that object — the foundation only checked permission at mount time. With this iteration, **every event handler dispatch re-runs `has_object_permission(request, obj)` before the handler body executes**, automatically.
+
+  Wired into `djust.websocket_utils._validate_event_security` — the centralized helper called by all event-dispatch paths in djust (actor, component, view dispatch in `websocket.py`, plus HTTP-runtime in `runtime.py` and SSE in `sse.py` — five call sites total). Adding the check there covers all transports without per-site changes.
+
+  Per-event denial semantics:
+  - `has_object_permission(...)` returns `False` → `PermissionDenied` raised by `check_object_permission` → caught by `_validate_event_security` → `send_error("Access denied for this object.", code="permission_denied")` → `return None` (caller skips handler dispatch). **WS stays open** — the user is still authenticated; only this specific action against this specific object is forbidden. (Compare to mount-time denial, which closes the WS with code 4403.)
+  - `get_object()` returning `None` or raising `ObjectDoesNotExist`/`Http404` → no denial, handler proceeds (consistent with mount-time semantics; the developer's `get_object()` already implements the OWASP 404-shape).
+  - View doesn't override `get_object` → `_has_custom_get_object` short-circuit fires; zero overhead, zero behavior change.
+
+  Wire-protocol error frame for per-event denial: `{"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}`. The structured `code` field lets clients distinguish permission-denied from other error types and revert optimistic UI updates accordingly.
+
+  **Cache-population order fix (Stage 11 nit from -1a, addressed here)**: `check_object_permission` now sets `self._object = obj` only AFTER `has_object_permission` returns `True` — never on denial, never on DNE/Http404 (those reset to `None`). Prevents cache poisoning across denials, which becomes load-bearing for per-event re-checks (a stale "allowed" cache could let a denied user retain access).
+
+  **State-restore interaction**: `self._object` is allocated in `LiveView.__init__` BEFORE the `_framework_attrs` snapshot, so it's classified as a framework slot and excluded from msgpack-serialized user-private state. After WS reconnect / state-restore, the cache is `None` and `get_object()` re-runs fresh — handles "object reassigned while user was disconnected" automatically. New regression test `test_object_cache_is_framework_slot_excluded_from_user_state` locks this contract.
+
+  **Embedded child views** (`{% live_render %}`): when an event targets a child view via `view_id`, the dispatch sites pass the resolved `target_view` (the child) to `_validate_event_security`. The check uses the CHILD's `get_object`/`has_object_permission`, NOT the parent's. New regression test `test_embedded_child_view_uses_child_get_object` verifies.
+
+  Backwards compatible: views without `get_object` override see zero behavior change. Existing handler-level `@permission_required` decorators continue to work; the new check runs after them.
+
+  8 new regression tests in `tests/integration/test_object_permission_event.py`: cache-not-poisoned-on-denial; cache-populated-only-on-success; per-event denial sends error frame and keeps WS open (handler body verified to NOT execute via sentinel); per-event allow returns the handler; per-event no-override is a no-op; DNE handling; framework-slot exclusion from user state; embedded-child resolution.
+
 ## [0.9.4] - 2026-05-06
 
 ### Added
