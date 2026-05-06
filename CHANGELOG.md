@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc9] - 2026-05-06
+
+### Fixed
+
+- **`_sortPatches` now orders `RemoveSubtree` / `InsertSubtree`
+  BEFORE path-based child ops — the actual root cause of #1370.**
+  `_sortPatches` assigned id-based patches to the default phase (3),
+  so on the short-path (≤10 patches) the batch ran as
+  `[RemoveChild, InsertChild, SetAttr, RemoveSubtree, InsertSubtree]`.
+  The server's path-based `RemoveChild`/`InsertChild` indices reflect
+  the NEW tree's positions (after subtree ops applied). Running
+  `RemoveChild` against the still-old DOM targeted the wrong child
+  → silent DOM corruption that accumulated across tab switches until
+  client and server state fully desynced. Fix: assign `RemoveSubtree`
+  phase -2 and `InsertSubtree` phase -1, so both sort ahead of
+  `RemoveChild` (phase 0). The long-path (>10 patches) was already
+  pre-separating id-based patches (rc3 fix); this unifies short and
+  long paths on the same ordering. Diagnosed via djust-browser MCP
+  inspecting WS frames against a production reproducer.
+
 ## [0.9.4rc8] - 2026-05-06
 
 ### Fixed
