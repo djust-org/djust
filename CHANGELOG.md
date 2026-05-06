@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5rc1] - 2026-05-06
+
 ### Added
 
 - **`get_object()` + `has_object_permission()` lifecycle hooks on `LiveView` — Foundation 1 of object-level authorization (#1373, ADR-017).**

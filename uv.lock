@@ -588,19 +588,22 @@ wheels = [
 
 [[package]]
 name = "djust"
-version = "0.9.0rc3"
+version = "0.9.4"
 source = { editable = "." }
 dependencies = [
     { name = "channels", extra = ["daphne"] },
+    { name = "click" },
     { name = "django" },
+    { name = "markdown" },
     { name = "msgpack" },
+    { name = "nh3" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
 all = [
     { name = "azure-storage-blob" },
     { name = "boto3" },
-    { name = "click" },
     { name = "google-cloud-storage" },
     { name = "markdown" },
     { name = "nh3" },
@@ -619,18 +622,12 @@ components = [
 compression = [
     { name = "zstandard" },
 ]
-deploy = [
-    { name = "click" },
-    { name = "requests" },
-]
 dev = [
     { name = "click" },
     { name = "fakeredis" },
-    { name = "markdown" },
     { name = "maturin" },
     { name = "mcp", extra = ["cli"] },
     { name = "mypy" },
-    { name = "nh3" },
     { name = "orjson" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -671,20 +668,20 @@ requires-dist = [
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19,<13" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.30,<2" },
     { name = "channels", extras = ["daphne"], specifier = ">=4.0.0,<5" },
-    { name = "click", marker = "extra == 'deploy'", specifier = ">=8.0,<9" },
+    { name = "click", specifier = ">=8.0,<9" },
     { name = "click", marker = "extra == 'dev'", specifier = ">=8.0,<9" },
     { name = "django", specifier = ">=4.2.29,<6" },
     { name = "djust", extras = ["redis", "compression", "performance", "admin", "deploy", "theming", "components", "s3", "gcs", "azure"], marker = "extra == 'all'" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.20,<3" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.10,<4" },
+    { name = "markdown", specifier = ">=3.0,<4" },
     { name = "markdown", marker = "extra == 'components'", specifier = ">=3.0,<4" },
-    { name = "markdown", marker = "extra == 'dev'", specifier = ">=3.0,<4" },
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.0,<2.0" },
     { name = "mcp", extras = ["cli"], marker = "extra == 'dev'", specifier = ">=1.2.0,<2" },
     { name = "msgpack", specifier = ">=1.0.0,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0,<2" },
+    { name = "nh3", specifier = ">=0.2,<1" },
     { name = "nh3", marker = "extra == 'components'", specifier = ">=0.2,<1" },
-    { name = "nh3", marker = "extra == 'dev'", specifier = ">=0.2,<1" },
     { name = "orjson", marker = "extra == 'dev'", specifier = ">=3.11.6,<4" },
     { name = "orjson", marker = "extra == 'performance'", specifier = ">=3.11.6,<4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'tenants-postgres'", specifier = ">=3.1,<4" },
@@ -693,10 +690,10 @@ requires-dist = [
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0.0,<6" },
     { name = "pytest-django", marker = "extra == 'dev'", specifier = ">=4.5,<6" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0,<4" },
-    { name = "redis", marker = "extra == 'dev'", specifier = ">=5.0.0,<7" },
-    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0,<7" },
-    { name = "redis", marker = "extra == 'tenants-redis'", specifier = ">=5.0.0,<7" },
-    { name = "requests", marker = "extra == 'deploy'", specifier = ">=2.28,<3" },
+    { name = "redis", marker = "extra == 'dev'", specifier = ">=5.0.0,<8" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0.0,<8" },
+    { name = "redis", marker = "extra == 'tenants-redis'", specifier = ">=5.0.0,<8" },
+    { name = "requests", specifier = ">=2.28,<3" },
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.28,<3" },
     { name = "requests", marker = "extra == 'gcs'", specifier = ">=2.28,<3" },
     { name = "requests-mock", marker = "extra == 'dev'", specifier = ">=1.11,<2" },
