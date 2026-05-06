@@ -67,6 +67,46 @@ Requires Redis 6.0+ and `redis-py`:
 pip install redis
 ```
 
+### Deploy-time state invalidation
+
+Each session's `RustLiveView` is cached in Redis (default TTL 1 hour) and used as the diff baseline on WebSocket reconnect. When you deploy a new release that changes a template's structure, attributes, or whitespace, a reconnecting client's cached pre-deploy view will not match the new render — the resulting patches target text-node positions that no longer exist, the patch fails, recovery HTML may be unavailable on a fresh consumer, and the user is forced through a `window.location.reload()`.
+
+**Since v0.9.4 this is handled automatically.** Per PR [#1367](https://github.com/johnrtipton/djust/pull/1367), the Redis cache key includes an 8-hex template-source hash:
+
+```
+djust:state:<session>_liveview_<view_path>[_<query_hash>]_t<template_8hex>
+```
+
+Edit any byte of a primary template, the per-template hash flips, the cache key flips, the next reconnect misses the cache, and a fresh `RustLiveView` is constructed cleanly with no stale baseline.
+
+Operators no longer need to manually rotate the prefix on every deploy. Earlier releases (pre-v0.9.4) of djust required a pattern like:
+
+```python
+# settings.py — pre-v0.9.4 only; NO LONGER NEEDED
+import os
+_BUILD_ID = os.environ.get("BUILD_ID", "dev")[:12]  # truncated git SHA
+
+DJUST_CONFIG = {
+    "STATE_BACKEND": "redis",
+    "REDIS_URL": "redis://...",
+    "REDIS_KEY_PREFIX": f"djust:{_BUILD_ID}:",  # obsolete since v0.9.4
+}
+```
+
+**Multi-template caveat.** The cache key uses the **primary** template's hash. If you use `{% include %}` / `{% extends %}` patterns and edit only a sub-template, the primary's source bytes don't change → the hash doesn't flip → the old key keeps hitting until the existing entries TTL out (default 1 hour). For an immediate invalidation in that edge case, run `djust clear --all` after the deploy. Stale entries from before the deploy still expire within `default_ttl` regardless.
+
+### Recovery HTML semantics
+
+When a VDOM patch fails on the client, djust falls back to the server-rendered "recovery HTML" snapshot to repair the DOM without forcing a page reload. Two important properties to be aware of in production deployments:
+
+1. **Recovery HTML is per-consumer and one-shot.** After it's used once, the consumer clears `self._recovery_html = None`. Any subsequent patch failure within the same WebSocket lifetime falls through to the forced-reload error ("Recovery HTML unavailable — the server may have restarted. A page reload will fix this.").
+
+2. **Fresh consumers start with no recovery state at all.** A fresh consumer is spawned on every WebSocket reconnect — including the natural ones (rolling deploys, autoscaling events, network blips). The new consumer has no recovery HTML staged until the next successful render produces one. Any patch failure in the brief window before the first render lands skips the recovery branch entirely and goes straight to the forced reload.
+
+**Multi-task deployments amplify the user-visible impact.** With auto-scaling and rolling-deploy patterns, the proportion of WebSocket frames hitting freshly-spawned consumers is non-trivial. Any patch-failure trigger that exists at all (stale state, structural shift, race) gets channeled into the forced-reload path more often than the per-failure rate would suggest.
+
+**Cross-reference.** v0.9.4-1's keyed conditional VDOM diff (#1358 / PR [#1365](https://github.com/johnrtipton/djust/pull/1365)) is the architectural escape hatch: it eliminates the most common patch-failure trigger by making `{% if %}` structural changes diff cleanly via `dj-if` boundary markers, so the recovery path is exercised much less often in normal operation.
+
 ## Channel Layer (for cross-process push)
 
 `DJUST_STATE_BACKEND` and Django Channels' `CHANNEL_LAYERS` are **two separate concerns** that both happen to use Redis. Don't conflate them:
@@ -154,6 +194,18 @@ uvicorn myproject.asgi:application \
     --log-level warning \
     --access-log
 ```
+
+#### Quantified Daphne → Uvicorn benchmark
+
+Concrete numbers from a 1 vCPU / 2 GB Fargate task running the NYC Claims app (mixed workload — health endpoint plus a DB-touching home page), identical traffic, single-task per ASGI server:
+
+| Endpoint | Daphne | gunicorn -k uvicorn.workers.UvicornWorker -w 2 |
+|---|---|---|
+| `/health/` rps @ c=20 | 18.8 | **120.3** (6.4×) |
+| `/health/` p99 @ c=20 | 1815 ms | **218 ms** (8.3× faster) |
+| `/` (home) rps @ c=10 | 11.3 | **18.5** (1.6×) |
+
+**Disclaimer.** Numbers are from a 1 vCPU / 2 GB Fargate task with the NYC Claims app. Per-app variance is expected; absolute numbers will differ for your workload, but the relative improvement (~6× rps headroom on health-check endpoints) has been consistent across multiple deployments. The home-page row is a useful indicator that DB-touching pages also gain headroom — just not as dramatically, because the bottleneck shifts from ASGI server overhead to ORM/DB latency.
 
 ### Gunicorn + Uvicorn Workers
 
@@ -680,6 +732,32 @@ Configure two cache behaviors on your CloudFront distribution:
 Don't combine `/static/` and `/media/` under one cache behavior — the long-TTL bucket would cache user-private media URLs.
 
 ## Deployment Checklist
+
+### Production checklist (one-page recipe)
+
+The 8-line copy-pasteable recipe. Each line links to the relevant subsection of this guide for rationale and config:
+
+```
+☐ ASGI server: gunicorn -k uvicorn.workers.UvicornWorker -w (CPUs+1)
+☐ Channel layer: channels_redis.core.RedisChannelLayer (not InMemoryChannelLayer)
+☐ State backend: DJUST_CONFIG["STATE_BACKEND"] = "redis"
+☐ State key invalidation: auto-derived from template hash (no env var needed since v0.9.4)
+☐ ALB sticky sessions: app_cookie on "sessionid"
+☐ CONN_MAX_AGE = 60, CONN_HEALTH_CHECKS = True
+☐ App Auto Scaling registered; aws_ecs_service has lifecycle ignore_changes = [desired_count]
+☐ Celery: --pool=gevent --concurrency=N for I/O work; queue-depth autoscaling
+```
+
+Where each line is covered:
+
+- **ASGI server** → [Gunicorn + Uvicorn Workers](#gunicorn--uvicorn-workers).
+- **Channel layer** → [Channel Layer (for cross-process push)](#channel-layer-for-cross-process-push).
+- **State backend** → [Redis (Production)](#redis-production).
+- **State key invalidation** → [Deploy-time state invalidation](#deploy-time-state-invalidation).
+- **ALB sticky sessions** → [WebSocket stickiness on AWS ALB](#websocket-stickiness-on-aws-alb).
+- **`CONN_MAX_AGE` / `CONN_HEALTH_CHECKS`** → [Layer 1: Django connection reuse (`CONN_MAX_AGE`)](#layer-1-django-connection-reuse-conn_max_age).
+- **Auto Scaling + `lifecycle ignore_changes`** → [Sizing and Scaling Tiers](#sizing-and-scaling-tiers) (Tier 2).
+- **Celery `gevent` + queue-depth autoscaling** → [Pool choice: prefork vs gevent](#pool-choice-prefork-vs-gevent) and [Worker auto-scaling: scale on queue depth, not CPU](#worker-auto-scaling-scale-on-queue-depth-not-cpu).
 
 ### Infrastructure
 
