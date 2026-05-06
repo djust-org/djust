@@ -7259,8 +7259,22 @@ function _applyPatchesInner(patches, rootEl = null) {
     let failedCount = 0;
     let successCount = 0;
 
-    // Group patches by parent for potential batching
-    const patchGroups = groupPatchesByParent(patches);
+    // id-based patches (RemoveSubtree, InsertSubtree) don't have a `path`
+    // field — they locate their target by marker id. Apply them directly
+    // before the path-grouped batching pass; they must not enter
+    // groupPatchesByParent which assumes patch.path exists.
+    const pathPatches = [];
+    for (const patch of patches) {
+        if (patch.type === 'RemoveSubtree' || patch.type === 'InsertSubtree') {
+            const ok = applySinglePatch(patch, rootEl);
+            if (ok) { successCount++; } else { failedCount++; }
+        } else {
+            pathPatches.push(patch);
+        }
+    }
+
+    // Group remaining path-based patches by parent for potential batching
+    const patchGroups = groupPatchesByParent(pathPatches);
 
     for (const [, group] of patchGroups) {
         // Phase order within a group MUST match the top-level phase order:
