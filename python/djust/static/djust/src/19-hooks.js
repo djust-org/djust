@@ -47,12 +47,13 @@ function _getHookDefs() {
  * Map of active hook instances keyed by element id.
  * Each entry: { hookName, instance, el }
  */
-// Use var so declarations hoist above the IIFE guard that calls
-// djustInit() → mountHooks() before this file executes.
-// Initializations are deferred to _ensureHooksInit() since var hoists
-// the name but not the `= new Map()` assignment.
-let _activeHooks;
-let _hookIdCounter;
+// var (not let): module 19 is concatenated after the bootstrap call;
+// let would TDZ when _ensureHooksInit() is invoked from earlier modules.
+// The lazy-init pattern below relies on hoisted-undefined semantics.
+// eslint-disable-next-line no-var
+var _activeHooks;
+// eslint-disable-next-line no-var
+var _hookIdCounter;
 
 /**
  * Lazy-initialize hook state.  Called at the top of every public function
