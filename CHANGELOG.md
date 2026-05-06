@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4rc3] - 2026-05-06
+
 ### Fixed
 
 - **`RemoveSubtree` / `InsertSubtree` patches no longer crash `groupPatchesByParent` (#1370 follow-up).**
