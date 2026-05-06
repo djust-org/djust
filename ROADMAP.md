@@ -286,9 +286,10 @@ Surfaced 2026-05-06 during a downstream-consumer code review (per-tab data gatin
 
 **Split-foundation rollout** (per Action #1122 — high blast radius + permanent public API):
 
-- **v0.9.5-1a** — Foundation: `get_object()` + `has_object_permission()` + mount-time enforcement + `_invalidate_object_cache()`. **Soaks through one release before -1b lands.**
-- **v0.9.5-1b** — Per-event re-execution in `handle_event` + state-restore cache invalidation.
-- **v0.9.5-1c** — Tooling: `djust check` IDOR-shape heuristic + `authorization.md` guide + `djust-dev` skill principle entry.
+- **v0.9.5-1a** — Foundation: `get_object()` + `has_object_permission()` + mount-time enforcement + `_invalidate_object_cache()`. **Soaks through one release before -1b lands.** ✅ shipped as part of v0.9.5rc1
+- **v0.9.5-1b** — Per-event re-execution in `handle_event` + state-restore cache invalidation. ✅ shipped as part of v0.9.5rc1
+- **v0.9.5-1c** — Tooling: `djust check` IDOR-shape heuristic + `authorization.md` guide + `djust-dev` skill principle entry. ✅ shipped as part of v0.9.5rc1
+- **v0.9.5-2** — Post-rc1 drain: 14 retro-filed items (X008 audit follow-ups, sticky-child auth gap, inheritance round-trip parser test, canon batch).
 
 ### Milestone: v0.9.5-1a — Foundation: `get_object()` + `has_object_permission()` (#1373, ADR-017)
 
@@ -370,6 +371,54 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `authorization.md` published with worked migration example.
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
+
+### Milestone: v0.9.5-2 — Post-v0.9.5rc1 drain (audit follow-ups + retro canon)
+
+*Goal:* Land 14 in-repo retro-filed items into v0.9.5 stable before cutting the release tag. Items are split between two narrow code-change follow-ups on the v0.9.5-1 audit surface (X008 expansion, sticky-child object-permission gap), an inheritance round-trip parser test, and a canon batch sweeping nine retro-filed process items into `djust-dev`/CLAUDE.md/PR-checklist.
+
+Filed during the v0.9.5-1 retro arc + reconcile sweep. 4 cross-repo items (#1375, #1376, #1384, #1387) are tracked as OUT-OF-REPO in RETRO.md (blocked on the upstream `pipeline-run` skill repo) and excluded from this drain.
+
+**Scope** (7 work units, closes 14 issues):
+
+| # | Issue(s) | Theme | Type | Sized |
+|---|---|---|---|---|
+| 1 | #1382, #1383 | X008 audit improvements — walk MRO + broaden `_mount_assigns_url_kwarg_id` pattern matching | code | ~1-2 hr |
+| 2 | #1380 | Sticky-child views may bypass per-event object-permission check (no request stamped) | code | ~1-2 hr |
+| 3 | #1388 | Inheritance round-trip identity tests drive from parser output, not direct AST construction | code/test | ~30-45 min |
+| 4 | #1342 | Refresh stale `(file new)` placeholders in audit docs to reference closed follow-up issues | docs | ~30 min |
+| 5 | #1346 | Extend `check-test-coverage` to verify Makefile vs `pyproject.toml` `testpaths` bidirectionally | tooling | ~45 min |
+| 6 | #1345 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | process canon | ~30 min |
+| 7 | #1377, #1385, #1386, #1389, #1391, #1392, #1393 | Canon batch — 7 retro patterns into `djust-dev` skill / CLAUDE.md / PR-checklist | process canon | ~1 hr |
+
+**Sequencing strategy**:
+
+1. **#1380 first** — code-change on the still-fresh v0.9.5-1 surface. Lands the structural fix while the lifecycle code is most familiar.
+2. **#1382 + #1383 grouped** — both extend X008 (`audit_ast.py`) and ship cleanly as one PR.
+3. **#1388** — narrow parser test refactor; independent.
+4. **#1346 + #1342** — small tooling/docs items; independent.
+5. **#1345 + canon batch (#1377, #1385, #1386, #1389, #1391, #1392, #1393)** — process/docs only, low-risk; ship last so the underlying patterns have stable evidence to cite.
+
+**Acceptance for v0.9.5-2**:
+
+- [ ] All 7 work units shipped as merged PRs.
+- [ ] All 14 referenced issues closed.
+- [ ] `make check` clean on each PR.
+- [ ] CHANGELOG `[Unreleased]` block updated for user-visible changes (#1380 has WS-protocol implications; X008 expansion is dev-tool-visible).
+- [ ] No regression in `tests/integration/test_object_permission_*.py` from #1380's request-stamping fix.
+- [ ] Once bucket complete, proceed to v0.9.5 stable cut.
+
+**Deferred (OUT-OF-REPO) — not part of this drain**:
+
+- #1375, #1387 — `pipeline-run` skill: code-writing subagent branch-checkout discipline.
+- #1376 — pipeline template stage-name reconciliation with `pipeline-run` skill canon.
+- #1384 — `pipeline-run` skill: documentation-iteration shortcut for Stages 6/7/8.
+
+These are upstream-skill canon items (not this repo's code/docs); tracked in `RETRO.md` Action Tracker and unblock when the skill repo accepts them.
+
+**Pipeline runner notes**:
+
+- `/pipeline-run --milestone v0.9.5-2 --group --all` to process autonomously.
+- Convention recap: this is the 2nd drain bucket toward release v0.9.5 (after v0.9.5-1a/-1b/-1c which already shipped as v0.9.5rc1).
 
 
 
