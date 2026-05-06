@@ -503,6 +503,15 @@ class LiveView(
                 logger.exception("time_travel: failed to allocate buffer")
                 self._time_travel_buffer = None
 
+        # Object-permission cache (ADR-017, v0.9.5-1a). Populated by
+        # check_object_permission() post-mount when get_object is overridden.
+        # None means "not yet fetched" or "no primary object". Allocated
+        # BEFORE the _framework_attrs snapshot so it's treated as a framework
+        # slot, not user-private state — keeps it out of msgpack-serialized
+        # state, so post-restore the cache is reset and get_object() runs
+        # fresh (handles "object reassigned during disconnect").
+        self._object: Any = None
+
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
@@ -1012,6 +1021,74 @@ class LiveView(
                     setattr(self, assign_name, default_value)
 
         self._temporary_assigns_initialized = True
+
+    # ============================================================================
+    # OBJECT-LEVEL AUTHORIZATION (ADR-017, v0.9.5-1a)
+    #
+    # The pair below is djust's first-class lifecycle hook for per-object
+    # auth — the structural counterpart to the role-level `permission_required`
+    # class attribute and the custom `check_permissions(self, request)` hook.
+    # See `docs/adr/017-object-permission-lifecycle.md`.
+    # ============================================================================
+
+    def get_object(self) -> Optional[Any]:
+        """Return the view's primary object, or None if not applicable.
+
+        Override in subclasses bound to a single object via URL kwarg
+        (e.g. `/documents/<int:document_id>/`). The default returns
+        `None` so views that don't override see zero behavior change —
+        the object-permission lifecycle is opt-in.
+
+        Called once by djust per mount, AFTER URL kwargs are bound to
+        `self` via `mount()`. The result is cached as `self._object`
+        for the WS-session lifetime; reuse it from event handlers and
+        `get_context_data` rather than re-querying. If a handler
+        mutates state that affects access (e.g., reassigning the FK
+        that determines ownership), call `self._invalidate_object_cache()`
+        so the next access re-fetches via `get_object()`.
+
+        Returning `None` from a subclass override (e.g. when the object
+        doesn't exist or shouldn't be enumerable) is treated as
+        "no object to check" — `has_object_permission` is NOT called.
+        This is the recommended OWASP IDOR-mitigation pattern: deny via
+        404-shape rather than 403-shape so attackers can't enumerate.
+
+        Keep `get_object()` minimal — just the FK lookup. Expensive I/O
+        in this method becomes per-mount overhead.
+        """
+        return None
+
+    def has_object_permission(self, request, obj) -> bool:
+        """Return True if the request user may access `obj`.
+
+        Override alongside `get_object()` to express object-level auth.
+        Default returns `True` (no-op for views that don't override
+        `get_object`).
+
+        Called by djust at mount-time when `get_object` is overridden.
+        (v0.9.5-1b extends this to per-event re-execution; -1a is
+        mount-time only.)
+
+        Raise `PermissionDenied` for an explicit denial with a message;
+        return `False` for a silent denial. Both close the WS at mount
+        time with code 4403 and a "Permission denied" error frame.
+        """
+        return True
+
+    def _invalidate_object_cache(self) -> None:
+        """Reset `self._object` to None; next get_object() call re-fetches.
+
+        Call from event handlers that mutate state affecting access
+        (e.g., reassigning the FK that determines ownership). Without
+        this, a cached `self._object` lets a formerly-authorized user
+        retain the cached pass until WS reconnect.
+
+        The cache is also automatically reset on snapshot/state restore —
+        `_object` is a framework slot, not user state, so it returns to
+        `None` after either restore path. This handles the "object
+        reassigned while user was disconnected" case automatically.
+        """
+        self._object = None
 
 
 def live_view(template_name: Optional[str] = None, template: Optional[str] = None):
