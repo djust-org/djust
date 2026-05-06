@@ -334,6 +334,28 @@ fn format_id_prefix(hash: u64) -> String {
     format!("{:08x}", hash as u32)
 }
 
+/// Compute the canonical 8-hex template-source hash used both for
+/// `<!--dj-if id="if-<prefix>-N"-->` marker IDs (Foundation 1 of #1358)
+/// and the Redis state-backend cache key (#1362 section 1).
+///
+/// The same `template_hash_hex(src)` value MUST equal the prefix that
+/// `parse_with_source(tokens, src)` would derive — that invariant is
+/// what makes the cache key change automatically when ANY operator
+/// edits a template. The two callers (parser, state-backend cache key)
+/// must never drift; both go through this single helper.
+///
+/// Stability: `DefaultHasher::new()` is constructed with fixed seeds
+/// (unlike `HashMap`'s `RandomState`), so the same source string yields
+/// the same hash both within one process and across separate process
+/// invocations of the same Rust toolchain build. The marker-ID
+/// boundary contract already depends on this; the cache key inherits
+/// the same guarantee. Different Rust toolchain releases may pick
+/// different SipHash constants in theory; if that happens, the cache
+/// key changes (one-deploy invalidation), which is acceptable.
+pub fn template_hash_hex(source: &str) -> String {
+    format_id_prefix(hash_source(source))
+}
+
 /// Walk the AST in document order and assign stable
 /// `marker_id = Some("if-<prefix>-N")` to every `Node::If`. The
 /// counter increments once per `If` (including elif chains, nested
@@ -1640,6 +1662,59 @@ mod tests {
         let n2 = parse_with_source(&tokenize(source).unwrap(), source).unwrap();
         assert_eq!(marker_id_of(&n1[0]), marker_id_of(&n2[0]));
         assert_eq!(marker_id_of(&n1[1]), marker_id_of(&n2[1]));
+    }
+
+    // -----------------------------------------------------------------
+    // template_hash_hex tests (#1362 section 1).
+    //
+    // The cache key in `python/djust/mixins/rust_bridge.py` derives the
+    // template-hash slot from `template_hash_hex(template_source)`. The
+    // SAME helper underlies the marker-ID prefix in `parse_with_source`,
+    // so an invariant test pins the equality of the two derivations.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_template_hash_hex_consistent_for_same_source() {
+        let source = "{% if a %}<div>X</div>{% endif %}";
+        let h1 = template_hash_hex(source);
+        let h2 = template_hash_hex(source);
+        assert_eq!(h1, h2, "same source must produce identical hash");
+        // Shape: 8 lowercase hex chars.
+        let re = regex::Regex::new(r"^[0-9a-f]{8}$").unwrap();
+        assert!(re.is_match(&h1), "hash must be 8 hex chars: {h1}");
+    }
+
+    #[test]
+    fn test_template_hash_hex_distinct_for_distinct_sources() {
+        let h1 = template_hash_hex("<div>{{ a }}</div>");
+        let h2 = template_hash_hex("<div>{{ b }}</div>");
+        assert_ne!(
+            h1, h2,
+            "different sources must (almost certainly) produce different hashes"
+        );
+    }
+
+    #[test]
+    fn test_template_hash_hex_matches_marker_id_prefix() {
+        // The cache-key contract: `template_hash_hex(src)` must equal
+        // the prefix that `parse_with_source(tokens, src)` would derive
+        // for the same source. This invariant is what makes the cache
+        // key change automatically whenever ANY operator edits a
+        // template — both consumers (parser + cache key) flow through
+        // the same hash derivation.
+        let source = "{% if a %}<div>X</div>{% endif %}";
+        let direct = template_hash_hex(source);
+        let nodes = parse_with_source(&tokenize(source).unwrap(), source).unwrap();
+        let id = marker_id_of(&nodes[0]).expect("if must have marker_id");
+        // Marker ID format: `if-<8hex>-<counter>`. Extract the 8-hex
+        // segment between the two dashes.
+        let parts: Vec<&str> = id.splitn(3, '-').collect();
+        assert_eq!(parts.len(), 3, "marker id has 3 dash-segments: {id}");
+        assert_eq!(parts[0], "if");
+        assert_eq!(
+            parts[1], direct,
+            "marker prefix must match template_hash_hex"
+        );
     }
 
     #[test]

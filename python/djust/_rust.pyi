@@ -198,6 +198,30 @@ def extract_template_variables(template: str) -> Dict[str, List[str]]:
     """
     ...
 
+def compute_template_hash(source: str) -> str:
+    """
+    Compute the canonical 8-hex template-source hash.
+
+    The same hash drives both ``<!--dj-if id="if-<prefix>-N"-->``
+    boundary marker IDs (Foundation 1 of #1358) and the per-template
+    slot of the Redis state-backend cache key (#1362 section 1). Both
+    consumers flow through the SAME ``template_hash_hex`` Rust helper,
+    so they cannot drift.
+
+    Args:
+        source: Template source string (any size).
+
+    Returns:
+        8-character lowercase hex string. Same source ⇒ same hash;
+        different sources ⇒ different hashes (collision rate ~1/4B).
+
+    Example::
+
+        compute_template_hash("<div>{{ x }}</div>")
+        # Returns e.g. "42f47713"
+    """
+    ...
+
 def serialize_queryset(
     objects: List[Any],
     field_paths: List[str],
@@ -681,6 +705,22 @@ class RustLiveView:
         """
         ...
 
+    def template_hash(self) -> str:
+        """
+        Return the canonical 8-hex template-source hash for this view.
+
+        Same hash powers the ``<!--dj-if id="if-<prefix>-N"-->`` boundary
+        marker IDs and the per-template slot of the state-backend cache
+        key (#1362 section 1). Cf. :func:`compute_template_hash` for the
+        module-level entry point used by callers that don't have a view
+        instance yet.
+
+        Returns:
+            8 lowercase hex chars; stable across re-renders of the same
+            ``template_source``.
+        """
+        ...
+
     def clear_fragment_cache(self) -> None:
         """
         Clear the partial-render fragment cache, forcing the next render to
@@ -847,6 +887,7 @@ __all__ = [
     # Serialization
     "fast_json_dumps",
     "extract_template_variables",
+    "compute_template_hash",
     "serialize_queryset",
     "serialize_context",
     "serialize_models_fast",

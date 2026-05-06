@@ -238,6 +238,19 @@ impl RustLiveViewBackend {
         self.text_node_index = None; // Invalidate text-region fast-path index
     }
 
+    /// Return the canonical 8-hex template-source hash for this view's
+    /// current `template_source`. The same hash drives the
+    /// `<!--dj-if id="if-<prefix>-N"-->` marker IDs used by the keyed-VDOM
+    /// boundary differ (Foundation 1 of #1358) and now the
+    /// per-template slot of the Redis state-backend cache key
+    /// (#1362 section 1). When a template's source changes, the hash
+    /// changes, so a deploy that ships a new template byte-stream gets
+    /// a fresh cache entry on the next reconnect rather than a stale
+    /// diff baseline. Stable across re-renders for the same source.
+    fn template_hash(&self) -> String {
+        djust_templates::parser::template_hash_hex(&self.template_source)
+    }
+
     /// Clear the partial-render fragment cache, forcing the next render to
     /// do a full collecting render. Keeps `last_vdom` intact so the diff
     /// baseline is preserved. Used by the partial-render correctness harness
@@ -2623,6 +2636,22 @@ fn extract_template_variables_py(py: Python, template: String) -> PyResult<PyObj
     Ok(py_dict.into())
 }
 
+/// Compute the canonical 8-hex template-source hash from a raw source
+/// string, without instantiating a [`RustLiveViewBackend`]. Used by the
+/// Python state-backend cache-key construction in
+/// `python/djust/mixins/rust_bridge.py` — the cache lookup happens
+/// BEFORE a Rust view exists, so we need a module-level entry point.
+///
+/// The same hash powers `<!--dj-if id="if-<prefix>-N"-->` marker IDs
+/// from `parse_with_source` (Foundation 1 of #1358) and the
+/// per-template cache-key slot (#1362 section 1). Both consumers flow
+/// through `djust_templates::parser::template_hash_hex` so they cannot
+/// drift.
+#[pyfunction]
+fn compute_template_hash(source: &str) -> String {
+    djust_templates::parser::template_hash_hex(source)
+}
+
 #[pymodule]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
@@ -2632,6 +2661,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;

@@ -267,6 +267,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Redis state-backend cache keys now include the template-source hash for automatic deploy-time invalidation (#1362).**
+  Previously operators had to set `REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"`
+  (or otherwise rotate the prefix on every deploy) to ensure cached
+  `RustLiveView` state from a prior deploy didn't act as a stale diff
+  baseline for the new render. Easy to forget; production failure mode
+  was patches failing on WS reconnect post-deploy → recovery HTML
+  unavailable → forced page reload. The framework now reuses the 8-hex
+  template-source hash from `parse_with_source` (PR #1363, Foundation 1
+  of #1358) as part of the cache key:
+  ```
+  djust:state:<session>_liveview_<view_path>[_<query_hash>]_t<template_8hex>
+  ```
+  When ANY operator edits a template (whitespace, attribute, structural
+  change), the per-template hash flips → cache key flips → next reconnect
+  misses the cache → fresh state is constructed cleanly, no stale baseline.
+  Zero operator config; no env var to set, no setting to flip.
+  Backwards compat: existing cached entries with the old key shape
+  become unreachable on the deploy that ships this — bounded by TTL
+  (default 1 hour). Multi-template caveat: the cache key uses the
+  PRIMARY template's hash; sub-template-only changes via `{% include %}`
+  / `{% extends %}` parents that don't alter the primary's source bytes
+  won't invalidate by themselves (operators can `djust clear --all` for
+  immediate invalidation in that edge case). Both consumers of the
+  template hash (parser-side `<!--dj-if id="if-<prefix>-N"-->` markers
+  and the new cache-key slot) flow through the single
+  `djust_templates::parser::template_hash_hex` Rust helper, so they
+  cannot drift.
+  12 regression tests in
+  `python/tests/test_template_hash_redis_cache.py` (cache HIT/MISS
+  behavior, multi-session isolation, cross-deploy reproducer, PyO3
+  boundary equality, multi-template caveat with real Django include
+  resolution, plus 2 perf-regression tests verifying the cache HIT path
+  no longer pays the `get_template()` cost). 3 new Rust unit tests in
+  `crates/djust_templates/src/parser.rs` (hash consistency,
+  distinguishability, marker-ID prefix equality). Existing
+  `test_vdom_cache_key.py` updated for the new key shape.
+
+  Stage 12 (address-findings) refinements on the same PR:
+  * **Cache HIT perf-regression fix.** First implementation hoisted
+    `self.get_template()` to before the cache lookup so the per-template
+    hash could be derived. That regressed the cache HIT path: pre-#1362
+    a WS reconnect with a warm cache never called `get_template()`,
+    post-#1362 every reconnect ate the Django template loader +
+    inheritance resolution cost. Stage 12 introduces
+    `_get_cached_template_hash_slot()` which memoizes the `_t<8hex>`
+    slot on the view CLASS so the cost is paid ONCE per class
+    lifetime; subsequent calls return the slot in O(1) without
+    touching `get_template()`. Cache HITs now match the pre-#1362
+    perf profile.
+  * **Multi-template caveat test rewritten.** First version called
+    `compute_template_hash(primary_src)` twice on the same input and
+    asserted equality — a tautology already covered by
+    `test_compute_template_hash_stable_across_rebuilds`. Stage 12
+    rewrites it to set up real `parent.html` + `child.html` files,
+    rewrite `child.html` between two renders, verify the rendered
+    output ACTUALLY differs (so the include is being re-resolved),
+    then assert the primary's source bytes hash to the same `_t<8hex>`
+    slot. The test would FAIL on a hypothetical Option B
+    (composite-hash) implementation, which is the discipline-correct
+    way to demonstrate Option A's caveat (Action #1200).
+
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
   The 393 pre-existing eslint warnings in `client.js` (and 32 in
   `debug-panel.js`) have been resolved across the ~70 source modules in
