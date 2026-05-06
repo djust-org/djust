@@ -529,6 +529,255 @@ class TestX008IDORShapeNeedsObjectPermission:
             f"X001 should NOT fire when no .get(pk=user_input) is present; got: {codes}"
         )
 
+    # ------------------------------------------------------------------
+    # #1382 — MRO walk for permission_required / has_object_permission /
+    # check_permissions. X008's class-level checks should consult the
+    # same-module inheritance chain rather than only the immediate class
+    # body.
+    # ------------------------------------------------------------------
+
+    def test_x008_mro_inherits_permission_required_from_base(self) -> None:
+        """When ``permission_required`` is declared on a base mixin in
+        the same module and the subclass otherwise matches the IDOR
+        shape, X008 should fire. Pre-#1382 the check only looked at the
+        immediate class body and missed inherited markers."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class BaseDocMixin:
+                permission_required = "documents.access"
+
+            class DocumentDetailView(BaseDocMixin, LiveView):
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire when permission_required is inherited; got: {_codes(findings)}"
+        )
+
+    def test_x008_mro_skips_when_base_has_object_permission(self) -> None:
+        """If a base class in the same module overrides
+        ``has_object_permission``, the subclass inherits the safe
+        lifecycle and X008 must NOT fire."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class SafeBase(LiveView):
+                def has_object_permission(self, request, obj):
+                    return obj.owner_id == request.user.id
+
+            class DocumentDetailView(SafeBase):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" not in _codes(findings), (
+            f"X008 must NOT fire when has_object_permission is inherited; got: {_codes(findings)}"
+        )
+
+    def test_x008_mro_skips_when_base_has_check_permissions(self) -> None:
+        """The legacy ``check_permissions`` hook should also propagate
+        through MRO and suppress X008."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class LegacyBase(LiveView):
+                def check_permissions(self, request):
+                    return True
+
+            class DocumentDetailView(LegacyBase):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    pass
+        """)
+        assert "X008" not in _codes(findings), (
+            f"X008 must NOT fire when check_permissions is inherited; got: {_codes(findings)}"
+        )
+
+    def test_x008_mro_unresolvable_base_does_not_crash(self) -> None:
+        """If a base class is imported from another module (and thus
+        not resolvable in the current AST), the walker should silently
+        skip it — but still apply local class-body checks. Here the
+        local class declares ``permission_required`` directly, so X008
+        should still fire."""
+        findings = _scan("""
+            from elsewhere import RemoteAuthMixin
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(RemoteAuthMixin, LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = document_id
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire even with cross-module base; got: {_codes(findings)}"
+        )
+
+    def test_x008_mro_inheritance_cycle_does_not_recurse(self) -> None:
+        """A pathological cycle (``A(B)``, ``B(A)``) must terminate via
+        the visited-set guard. We don't assert a specific finding —
+        only that scanning completes without recursion error."""
+        # No assertion on findings — just confirm the scan terminates.
+        _scan("""
+            class A(B):
+                pass
+
+            class B(A):
+                pass
+        """)
+
+    # ------------------------------------------------------------------
+    # #1383 — Broader URL-kwarg RHS patterns. ``mount()`` may bind URL
+    # kwargs to ``self`` via several shapes beyond bare ``self.x = x``.
+    # ------------------------------------------------------------------
+
+    def test_x008_kwarg_subscript_binding_triggers(self) -> None:
+        """``self.kwargs["document_id"]`` (Django CBV-style) bound to
+        ``self.document_id`` should be recognised."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, **kwargs):
+                    self.document_id = self.kwargs["document_id"]
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire on self.kwargs[...] binding; got: {_codes(findings)}"
+        )
+
+    def test_x008_int_cast_binding_triggers(self) -> None:
+        """``self.x = int(x)`` (whitelisted cast) should still be
+        recognised as a URL-kwarg binding."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, document_id=None, **kwargs):
+                    self.document_id = int(document_id)
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire on int(...) cast binding; got: {_codes(findings)}"
+        )
+
+    def test_x008_kwargs_get_binding_triggers(self) -> None:
+        """``self.x = kwargs.get("x")`` should be recognised."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, **kwargs):
+                    self.document_id = kwargs.get("document_id")
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire on kwargs.get('...') binding; got: {_codes(findings)}"
+        )
+
+    def test_x008_kwargs_get_with_default_binding_triggers(self) -> None:
+        """``kwargs.get("x", default)`` (two-arg form) should also
+        match — the second arg is a fallback, not a different
+        contract."""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, **kwargs):
+                    self.document_id = kwargs.get("document_id", None)
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" in _codes(findings), (
+            f"X008 should fire on kwargs.get('...', default); got: {_codes(findings)}"
+        )
+
+    def test_x008_int_cast_unrelated_value_does_not_trigger_via_pattern(self) -> None:
+        """``self.document_id = int(42)`` is a literal cast — the
+        argument is not a URL kwarg name, so X008 should NOT fire on
+        the binding alone. (Other parts of the shape may be missing,
+        too; the point is the binding-pattern matcher must reject this
+        case.)"""
+        findings = _scan("""
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class DocumentDetailView(LiveView):
+                permission_required = "documents.access"
+
+                def mount(self, request, **kwargs):
+                    self.document_id = int(42)
+
+                @event_handler()
+                def add_comment(self, body=""):
+                    Comment.objects.create(
+                        document_id=self.document_id, body=body
+                    )
+        """)
+        assert "X008" not in _codes(findings), (
+            f"X008 must NOT fire on int(42) literal cast; got: {_codes(findings)}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Suppression
