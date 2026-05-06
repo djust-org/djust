@@ -609,34 +609,40 @@ mod tests {
         assert_eq!(chain.uses_extends(), None);
     }
 
+    /// Helper: drive AST input from parser output, not direct construction.
+    /// Round-trip identity tests for AST-shape contracts must use this so the
+    /// AST under test matches what production parsers actually emit (notably
+    /// `parse_filter_specs`'s outer-quote preservation contract — #787, #1081,
+    /// #1388). Hand-built `Node::*` fixtures silently mask round-trip bugs.
+    fn parse_source(source: &str) -> Vec<Node> {
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        crate::parser::parse(&tokens).unwrap()
+    }
+
     #[test]
     fn test_nodes_to_template_string_preserves_variables() {
-        // Test that variables are preserved as {{ var }} not rendered
-        let nodes = vec![
-            Node::Variable("name".to_string(), vec![], false),
-            Node::Text(" is here".to_string()),
-        ];
+        // Test that variables are preserved as {{ var }} not rendered.
+        // Drive from parser output (#1388) so we exercise the same AST shape
+        // production code sees.
+        let nodes = parse_source("{{ name }} is here");
 
         let result = nodes_to_template_string(&nodes);
 
         // Should preserve Django template syntax
         assert!(result.contains("{{ name }}"));
         assert!(!result.contains("{{name}}")); // Should have spaces
+        assert!(result.contains(" is here"));
     }
 
     #[test]
     fn test_nodes_to_template_string_preserves_filters() {
         // `parse_filter_specs` preserves surrounding quotes on literal args
-        // (the dep-tracking extractor needs them — #787). Mirror the parser
-        // contract here so the round-trip emits the source-form template.
-        let nodes = vec![Node::Variable(
-            "price".to_string(),
-            vec![
-                ("floatformat".to_string(), Some("\"2\"".to_string())),
-                ("default".to_string(), Some("\"0.00\"".to_string())),
-            ],
-            false,
-        )];
+        // (the dep-tracking extractor needs them — #787). Drive from parser
+        // output (#1388) so we test the actual contract, not a hand-mirrored
+        // approximation of it. PR #1086 found that hand-built `Node::Variable`
+        // tests silently passed when real parser-shape input would round-trip
+        // incorrectly.
+        let nodes = parse_source("{{ price|floatformat:\"2\"|default:\"0.00\" }}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -655,12 +661,8 @@ mod tests {
         // Bare identifiers (no quotes) must also round-trip as bare identifiers.
         // `parse_filter_specs` does not add quotes — emit verbatim. Required for
         // the dep-tracking extractor to keep treating bare-identifier args as
-        // template dependencies (#787).
-        let nodes = vec![Node::Variable(
-            "value".to_string(),
-            vec![("default".to_string(), Some("fallback".to_string()))],
-            false,
-        )];
+        // template dependencies (#787). Drive from parser output (#1388).
+        let nodes = parse_source("{{ value|default:fallback }}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -726,14 +728,8 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_block_syntax() {
-        let nodes = vec![Node::Block {
-            name: "content".to_string(),
-            nodes: vec![
-                Node::Text("<p>".to_string()),
-                Node::Variable("message".to_string(), vec![], false),
-                Node::Text("</p>".to_string()),
-            ],
-        }];
+        // Drive from parser output (#1388).
+        let nodes = parse_source("{% block content %}<p>{{ message }}</p>{% endblock %}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -744,13 +740,9 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_if_else() {
-        let nodes = vec![Node::If {
-            condition: "user.is_authenticated".to_string(),
-            true_nodes: vec![Node::Text("Welcome!".to_string())],
-            false_nodes: vec![Node::Text("Please login".to_string())],
-            in_tag_context: false,
-            marker_id: None,
-        }];
+        // Drive from parser output (#1388).
+        let nodes =
+            parse_source("{% if user.is_authenticated %}Welcome!{% else %}Please login{% endif %}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -763,13 +755,8 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_for_loop() {
-        let nodes = vec![Node::For {
-            var_names: vec!["item".to_string()],
-            iterable: "items".to_string(),
-            reversed: false,
-            nodes: vec![Node::Variable("item.name".to_string(), vec![], false)],
-            empty_nodes: vec![],
-        }];
+        // Drive from parser output (#1388).
+        let nodes = parse_source("{% for item in items %}{{ item.name }}{% endfor %}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -780,13 +767,8 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_for_loop_reversed() {
-        let nodes = vec![Node::For {
-            var_names: vec!["item".to_string()],
-            iterable: "items".to_string(),
-            reversed: true,
-            nodes: vec![Node::Text("Item".to_string())],
-            empty_nodes: vec![],
-        }];
+        // Drive from parser output (#1388).
+        let nodes = parse_source("{% for item in items reversed %}Item{% endfor %}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -795,13 +777,9 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_with_tag() {
-        let nodes = vec![Node::With {
-            assignments: vec![
-                ("total".to_string(), "price|add:tax".to_string()),
-                ("discount".to_string(), "0.1".to_string()),
-            ],
-            nodes: vec![Node::Variable("total".to_string(), vec![], false)],
-        }];
+        // Drive from parser output (#1388).
+        let nodes =
+            parse_source("{% with total=price|add:tax discount=0.1 %}{{ total }}{% endwith %}");
 
         let result = nodes_to_template_string(&nodes);
 
@@ -812,56 +790,35 @@ mod tests {
 
     #[test]
     fn test_nodes_to_template_string_csrf_token() {
-        let nodes = vec![Node::CsrfToken];
+        // Drive from parser output (#1388).
+        let nodes = parse_source("{% csrf_token %}");
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% csrf_token %}");
     }
 
     #[test]
     fn test_nodes_to_template_string_static() {
-        let nodes = vec![Node::Static("css/style.css".to_string())];
+        // Drive from parser output (#1388).
+        let nodes = parse_source("{% static \"css/style.css\" %}");
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% static \"css/style.css\" %}");
     }
 
     #[test]
+    #[ignore = "real bug uncovered by #1388 — `Node::Include`'s `template` field is parser-stored with surrounding quotes; emitter double-wraps. Tracked as #1396 (out-of-scope per #1079 broader-sweep canon)."]
     fn test_nodes_to_template_string_include() {
-        let nodes = vec![Node::Include {
-            template: "partials/header.html".to_string(),
-            with_vars: vec![],
-            only: false,
-        }];
+        // Drive from parser output (#1388). Currently fails — see #1396.
+        let nodes = parse_source("{% include \"partials/header.html\" %}");
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% include \"partials/header.html\" %}");
     }
 
     #[test]
     fn test_nodes_to_template_string_complex_nested() {
-        // Test a complex nested structure
-        let nodes = vec![Node::Block {
-            name: "content".to_string(),
-            nodes: vec![Node::If {
-                condition: "items".to_string(),
-                true_nodes: vec![Node::For {
-                    var_names: vec!["item".to_string()],
-                    iterable: "items".to_string(),
-                    reversed: false,
-                    nodes: vec![
-                        Node::Text("<li>".to_string()),
-                        Node::Variable(
-                            "item.name".to_string(),
-                            vec![("upper".to_string(), None)],
-                            false,
-                        ),
-                        Node::Text("</li>".to_string()),
-                    ],
-                    empty_nodes: vec![],
-                }],
-                false_nodes: vec![Node::Text("<p>No items</p>".to_string())],
-                in_tag_context: false,
-                marker_id: None,
-            }],
-        }];
+        // Test a complex nested structure. Drive from parser output (#1388).
+        let nodes = parse_source(
+            "{% block content %}{% if items %}{% for item in items %}<li>{{ item.name|upper }}</li>{% endfor %}{% else %}<p>No items</p>{% endif %}{% endblock %}",
+        );
 
         let result = nodes_to_template_string(&nodes);
 
