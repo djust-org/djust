@@ -11,6 +11,7 @@ import logging
 from typing import Callable, Dict, Any, Optional
 
 from asgiref.sync import sync_to_async
+from django.core.exceptions import PermissionDenied
 
 
 from .config import config as djust_config
@@ -225,14 +226,29 @@ async def _validate_event_security(
     # forbidden. Closing the WS would force a full reload, which is
     # wrong UX for "you can't do this here, but you can navigate
     # elsewhere." Send the error frame and let the client decide.
+    #
+    # Fail-closed on developer-code exceptions: if get_object() or
+    # has_object_permission() raise anything other than PermissionDenied
+    # (e.g., AttributeError in the developer's body), treat as denial.
+    # Security code should not fail-open when the auth predicate crashes.
     if owner_request:
-        from django.core.exceptions import PermissionDenied as _PermissionDenied
-
         from .auth.core import check_object_permission
 
         try:
             check_object_permission(owner_instance, owner_request)
-        except _PermissionDenied:
+        except PermissionDenied:
+            await ws.send_error(
+                "Access denied for this object.",
+                code="permission_denied",
+            )
+            return None
+        except Exception:  # noqa: BLE001 — fail-closed by design
+            logger.exception(
+                "Object-permission check raised non-PermissionDenied exception "
+                "for %s on event %s; failing closed (denying)",
+                owner_instance.__class__.__name__,
+                sanitize_for_log(event_name or ""),
+            )
             await ws.send_error(
                 "Access denied for this object.",
                 code="permission_denied",

@@ -356,6 +356,63 @@ def test_object_cache_is_framework_slot_excluded_from_user_state(rf):
         )
 
 
+@pytest.mark.asyncio
+async def test_per_event_fail_closed_on_developer_exception(rf):
+    """Case 9 (Stage 11 🟡): if get_object() or has_object_permission()
+    raises a non-PermissionDenied exception (e.g., AttributeError in the
+    developer's code), _validate_event_security treats it as denial.
+
+    Security code should fail-CLOSED, not fail-open. A buggy developer
+    body that raises AttributeError would otherwise propagate past the
+    permission check and either (a) crash handle_event opaquely or
+    (b) bypass the check entirely depending on outer exception handling.
+    Both are wrong. Default-deny + log is the safe response.
+    """
+    from djust.websocket_utils import _validate_event_security
+
+    class _BuggyView(LiveView):
+        template = "<div>buggy</div>"
+
+        def mount(self, request, **kwargs):
+            type(self)._handler_ran = False
+
+        def get_object(self):
+            return _StubDocument(pk=1, owner_id=42)
+
+        def has_object_permission(self, request, obj):
+            # Simulate a developer bug: typo accessing a non-existent attr.
+            raise AttributeError("'_StubDocument' object has no attribute 'nonexistent'")
+
+        @event_handler()
+        def update_value(self, value: str = "", **kwargs):
+            type(self)._handler_ran = True
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    _BuggyView._handler_ran = False
+    view = _make_view(_BuggyView, request)
+
+    ws = _mock_ws()
+    rl = MagicMock()
+    rl.check_handler = MagicMock(return_value=True)
+    rl.should_disconnect = MagicMock(return_value=False)
+
+    handler = await _validate_event_security(ws, "update_value", view, rl)
+
+    # Fail-closed: handler returned None (denial), error frame sent,
+    # WS not closed, handler body did NOT execute.
+    assert handler is None, "developer-code exception must fail closed (deny)"
+    assert ws.send_error.called, "send_error must be called on fail-closed"
+    code = ws.send_error.call_args.kwargs.get("code")
+    assert code == "permission_denied", (
+        f"fail-closed must send permission_denied frame; got code={code}"
+    )
+    assert not ws.close.called, "fail-closed denial must not close WS"
+    assert _BuggyView._handler_ran is False, (
+        "handler body must NOT execute when permission check raises"
+    )
+
+
 def test_embedded_child_view_uses_child_get_object(rf):
     """Case 8 (Stage 8 🟡): when a parent view embeds a child via
     {% live_render %}, an event targeted at the CHILD must use the

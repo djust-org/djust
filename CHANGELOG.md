@@ -55,9 +55,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Embedded child views** (`{% live_render %}`): when an event targets a child view via `view_id`, the dispatch sites pass the resolved `target_view` (the child) to `_validate_event_security`. The check uses the CHILD's `get_object`/`has_object_permission`, NOT the parent's. New regression test `test_embedded_child_view_uses_child_get_object` verifies.
 
+  **Fail-closed on developer-code exceptions** (Stage 11 🟡 finding): if `get_object()` or `has_object_permission()` raise anything other than `PermissionDenied` (e.g., an `AttributeError` in the developer's body), the new check catches it, logs an exception-level traceback, and treats it as denial. Security code must not fail-OPEN when the auth predicate crashes. Default-deny is the safe response.
+
   Backwards compatible: views without `get_object` override see zero behavior change. Existing handler-level `@permission_required` decorators continue to work; the new check runs after them.
 
-  8 new regression tests in `tests/integration/test_object_permission_event.py`: cache-not-poisoned-on-denial; cache-populated-only-on-success; per-event denial sends error frame and keeps WS open (handler body verified to NOT execute via sentinel); per-event allow returns the handler; per-event no-override is a no-op; DNE handling; framework-slot exclusion from user state; embedded-child resolution.
+  9 new regression tests in `tests/integration/test_object_permission_event.py`: cache-not-poisoned-on-denial; cache-populated-only-on-success; per-event denial sends error frame and keeps WS open (handler body verified to NOT execute via sentinel); per-event allow returns the handler; per-event no-override is a no-op; DNE handling; framework-slot exclusion from user state; fail-closed on non-PermissionDenied developer exceptions; embedded-child resolution.
 
 ## [0.9.4] - 2026-05-06
 
