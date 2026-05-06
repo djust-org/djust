@@ -271,6 +271,131 @@ issue or be explicitly closed with a reason.
 | 230 | Bundle-init-order structural lint — enumerate module-scope `let`/`const` and verify each is declared in a module that comes EARLIER in the bundle than any use site | PR #1370/#1371 hotfix retro / structural class follow-up | #1372 | Open | PR #1359's vitest test caught DECLARED-EARLY-USED-LATE pattern (4 cross-module reverts); rc1 shipped with the INVERSE class (`_activeHooks` declared late, used early via `djustInit`). The new `bundle-init-no-tdz.test.js` catches the symptom at runtime; this issue is for the structural lint that catches the class at lint time. |
 | 231 | JSDOM's default `runScripts` evaluates with `readyState === 'loading'`, masking TDZ bugs that fire only post-`load`. Tests that load the bundle MUST explicitly wait for `load` to reproduce production failure modes | PR #1371 retro / diagnostic finding | — | Closed | **Resolved as canon: bundle-init tests must wait for `load` event before evaluating.** PR #1371's regression test would NOT have caught the rc1 TDZ if it had used the default JSDOM eval pattern (which fires while `readyState === 'loading'`). The TDZ surfaces only when the bundle's bootstrap call runs after DOM-ready. Future bundle-loading tests should use `addEventListener('load')` with explicit wait, NOT `dom.window.eval(clientCode)` directly. |
 | 229 | Test docstrings should explicitly state the rule being demonstrated AND identify what hypothetical buggy implementation the test would catch | Retro v0.9.4-2 / PR #1367 Stage 11 (Action #1200 generalization) | — | Closed | **Resolved as canon: the tautology rule (Action #1200) extends to docstring honesty.** Iter 1's original `test_multi_template_caveat_only_primary_hash_drives_invalidation` asserted determinism but called itself "demonstrates the multi-template caveat" — looked credible until Stage 11 reviewer asked "what would this test prove that wasn't already proven elsewhere?" Stage 12 rewrote with two `child.html` versions; the rewrite would fail on Option B (composite hash). Generalize: any test docstring claiming to "demonstrate caveat X" should explicitly state what hypothetical buggy implementation the test would catch. If the test would pass on the buggy implementation too, it's not demonstrating the caveat — it's testing something else. |
+| 232 | Split-foundation soak-time guidance for solo-author case | Retro v0.9.5-1 (finding #2) | #1385 | Open | When framework owner is the only API customer, soak between iterations is optional. When external consumers exist, soak is load-bearing. Document the decision per-milestone. |
+| 233 | Stage 7 self-review prompts should require disconfirming citations | Retro v0.9.5-1 (finding #3) | #1386 | Open | Stage 7 caught 0 findings across v0.9.5-1's three iterations; Stage 11 caught 7 🟡. Same model, different prompt framing. Amend Stage 7 prompts to require active falsification ("identify one claim you actively try to disprove"). |
+| 234 | pipeline-run skill — branch-checkout discipline canon (re-trigger of #1375) | Retro v0.9.5-1 (finding #4) | #1387 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream canon update. Empirical: -1a violated (1 stray commit); -1b/-1c held (0 stray) once preamble was applied ad-hoc. Canon update propagates the discipline. |
+| 235 | Pipeline-run skill — codify documentation-iteration shortcut for Stages 6/7/8 | Retro v0.9.5-1c / Retro v0.9.5-1 (finding #5) | #1384 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream canon update. Implementation under ~200 lines + no new public API + no security-class change + existing tests cover → Stages 6/7/8 may be inline-verified instead of fanned out to subagents. Empirical: -1c saved ~10 min wall-clock vs -1a/-1b without sacrificing review depth. |
+| 236 | X008 + X002 inheritance-chain support in audit_ast | Retro v0.9.5-1c / Retro v0.9.5-1 (finding #6) | #1382 | Open | Both checks walk `cls.body` directly; views inheriting `permission_required` / `check_permissions` from base mixins won't trigger. Heuristic limitation, false-negatives only — but downstream consumer patterns commonly use base mixins. Fix once, apply to both checks. |
+| 237 | Broaden `_mount_assigns_url_kwarg_id` pattern matching | Retro v0.9.5-1c | #1383 | Open | Misses `self.x = self.kwargs["x"]` (Subscript), `int(thing_id)` (Call), `kwargs.get("x")` (Call). False-negatives only. |
+| 238 | Sticky-child views may bypass per-event object-permission check | Retro v0.9.5-1b | #1380 | Open | When sticky child fails `request` attribute assignment in `mixins/sticky.py:213-218`, `owner_request` is None and per-event check silently skips. Rare path; default-deny + log proposed. |
+| 239 | Pipeline template stage-name reconciliation with skill canon | Retro v0.9.5-1a | #1376 | OUT-OF-REPO | Awaiting `~/.claude/skills/pipeline-run/SKILL.md` upstream update. Skill canon references Stages 11/13/15; project template has 14 stages with different stage 13. Recommend skill canon use stage NAMES not NUMBERS. |
+| 240 | WS-communicator test pattern capture for full-stack integration | Retro v0.9.5-1a | #1377 | Open | Per-event tests in v0.9.5-1b used unit-style mocks. Full WS-communicator integration tests would catch end-to-end issues (real WS frames, real auth middleware, real handler dispatch). Capture canonical pattern in `djust-dev` skill alongside authorization.md migration recipe. |
+
+## v0.9.5-1 — Object-permission lifecycle (split-foundation rollout, #1373) (PRs #1374, #1378, #1381)
+
+**Date**: 2026-05-06
+**Scope**: Three-iteration split-foundation rollout closing the structural IDOR class for djust LiveViews bound to a single object via URL kwarg. -1a foundation (PR #1374, `c3498e62`) shipped `get_object()` + `has_object_permission()` + `_invalidate_object_cache()` lifecycle hooks with mount-time enforcement. -1b per-event (PR #1378, `a534e77d`) wired `check_object_permission` into `_validate_event_security` so every event handler dispatch re-runs the check; closed the IDOR class end-to-end. -1c tooling (PR #1381, `496117bd`) added the X008 `djust check` heuristic, `docs/website/guides/authorization.md`, and `djust-dev` skill principle entries. Released as `v0.9.5rc1` 2026-05-06.
+**Tests at close**: 6904 Python passed / 20 skipped / 0 failed; 1563 JS passed; X008 reproducer 7/7; combined object-permission suite 16/16 (9 mount-time + 7 per-event including state-restore + embedded-child + fail-closed).
+
+### What We Learned
+
+**1. Reproducer-first / artifact-first discipline scales across split-foundation iterations and consistently caught implementation bugs before Stage 5.**
+All three iterations followed the same pattern: Stage 4 wrote a failing reproducer test, Stage 5 implemented to make it pass. Concrete payoff per iteration:
+- **-1a**: the Plan-stage API-contract verification grepped `websocket.py` for the `check_view_auth` call site, discovered it runs at line 1947 BEFORE `mount()` at line 2134, AND that djust's WS path doesn't call `View.setup()` (so `self.kwargs` is never bound). ADR-017 § Decision 5's literal "extend `check_view_auth`" was mechanically infeasible. The plan-lock verification caught this BEFORE implementation; the ADR was amended in the same Stage 4 artifact-first commit (`3815e3a2`) to document the split-call-site reality.
+- **-1b**: Stage 4 wrote `test_cache_not_poisoned_on_denial` that fails on -1a's parent commit because cache population happened BEFORE the permission check. The Stage 5 implementer swapped the order. Without the explicit test, the cache-poisoning fix could have been silently un-done by a future refactor.
+- **-1c**: the failing reproducer for X008 had 6 cases; 2 failed on the parent commit (the contract for X008 to fire), 4 passed (negative cases — control). The split between "contract" and "negative control" is what made the test suite trustworthy.
+
+Generalization: when an ADR locks a design and the implementer plan verifies API contracts via grep BEFORE coding, real implementation issues surface as plan amendments rather than Stage 11 must-fix findings.
+
+**Action taken**: Closed — pattern is canonical from prior milestones (Action #1196, #1210, #1243); this milestone provides three additional empirical instances of the discipline working as designed.
+
+**2. The split-foundation pattern (Action #1122) shipped end-to-end on schedule and proved its design hypothesis.**
+Three iterations targeting one #1373 closure: foundation → per-event → tooling. The pattern's claim is that high-blast-radius features should ship the API surface in one PR, soak briefly, then stack additions on top. Empirical:
+- Foundation (-1a) merged at `c3498e62`. The user explicitly chose to skip the soak window and proceed directly to -1b — a deviation from the canonical recommendation. The deviation worked: -1b's reviewer pulled the foundation as committed code (not as an open API question), and -1b itself was a clean stack on top.
+- Per-event (-1b) merged at `a534e77d`. Identical pattern for -1c: zero soak, direct stacking.
+- Tooling (-1c) merged at `496117bd`. End-to-end IDOR closure was verified by the X008 reproducer + the per-event reproducer + the foundation reproducer all passing on the same commit.
+
+The lesson: split-foundation's value is primarily in **API design lock-in** (each iteration commits to its predecessor's contracts as load-bearing), not in **calendar soak time**. When the framework owner is the only API customer, soak time is optional. When external consumers are using the API in production, soak time becomes load-bearing.
+
+**Action taken**: Open — tracked in Action Tracker #232 (GitHub #1385).
+
+**3. Stage 11 reviewer consistently caught real defects that Stage 7 self-review missed, with a specific failure mode.**
+Across the three iterations, Stage 11 surfaced 7 🟡 findings total (3 in -1a, 2 in -1b, 2 in -1c). Stage 7 self-review caught zero of these — every Stage 7 review was REVIEW_PASSED with no 🔴/🟡 findings. The Stage 11 reviewer's advantage came from **independent fresh-context verification**: the Stage 11 prompts explicitly framed the reviewer as "approach as a fresh reviewer with no implementation context." Stage 7 prompts framed self-review as the implementer reviewing their own diff, which biases toward finding what the implementer was already worried about, not what they overlooked.
+
+Specific catches:
+- -1a Stage 11 found that `Http404` doesn't inherit from `ObjectDoesNotExist` despite docstring claim — caught via `inspect.getmro` against installed Django source. The docstring claim looked plausible but was empirically wrong.
+- -1b Stage 11 found that the `try/except PermissionDenied` was too narrow (developer code raising `AttributeError` would propagate past the check). The plan flagged this as a risk; the implementer punted; the reviewer made it actionable.
+- -1c Stage 11 verified the X008/X001 design distinction by grepping the actual implementation — the implementer claimed they were distinct; the reviewer made it a locked invariant via test addition.
+
+**Action taken**: Open — tracked in Action Tracker #233 (GitHub #1386).
+
+**4. Branch-checkout discipline went from violation in -1a to clean in -1b/-1c after the canon was added to subagent prompts.**
+-1a's Stage 12 fix landed on the wrong branch (`pr-1374-review` instead of `feat/v0.9.5-1a-object-permission-foundation`) because the Code Reviewer subagent silently switched branches mid-session. ~2 minutes of cherry-pick cleanup. The retro filed this as Action #1375 with the proposed canon: every code-writing subagent prompt must include an explicit `git checkout` gate as the FIRST action.
+
+-1b applied the canon: every Stage 6/7/8/11/12 subagent prompt started with:
+```bash
+EXPECTED_BRANCH="feat/v0.9.5-1b-..."
+git checkout "$EXPECTED_BRANCH" 2>/dev/null
+[ "$(git branch --show-current)" = "$EXPECTED_BRANCH" ] || exit 1
+```
+Result: zero stray-branch commits in -1b or -1c.
+
+The discipline holds when applied. Filing the canon to `pipeline-run` skill canonically (#1375 was filed against the framework repo, but the actual canon update lives in `~/.claude/skills/pipeline-run/SKILL.md`).
+
+**Action taken**: Open — tracked in Action Tracker #234 (GitHub #1387 — re-triggers the existing #1375 with the specific upstream canon-update proposal).
+
+**5. Documentation-grade iterations can skip the Stage 6/7/8 subagent fanout without sacrificing review depth — but the canon doesn't formalize when this is acceptable.**
+-1a took ~80 minutes wall-clock; -1b took ~70; -1c took ~25. The 3x speedup on -1c came primarily from inline-verifying Stages 6/7/8 instead of fanning out to three subagents. The implementation was 100 lines of audit_ast heuristic plumbing with 6 dedicated tests already passing — the marginal value of three independent subagent reviews was negligible.
+
+Stage 11/13/15 (Code Review / Re-Review / Retrospective) stayed mandatory subagent runs. Those caught real issues, as documented above. The shortcut applied only to read-only verification stages.
+
+The pipeline-run canon doesn't formalize the criteria for this shortcut. Filing as Action Tracker #235 (already filed as GitHub #1384 during the -1c retro).
+
+**Action taken**: Open — tracked in Action Tracker #235 (GitHub #1384).
+
+**6. AST-based heuristic checks have a consistent inheritance-chain limitation that surfaces every time an X-class check ships.**
+X008 (this milestone) and X002 (existing) both walk `cls.body` directly without following `class Foo(Bar)` inheritance. A view inheriting `permission_required` from a base mixin won't trigger X008. -1c Stage 11 reviewer flagged this as a 🟡 should-fix; the v0.9.4 retros also documented it for X002. Same heuristic, same limitation, surfaced consistently.
+
+The fix is non-trivial — AST analysis would need to resolve simple base-class references via static lookup in the same module (cross-module imports are out of scope). Worth doing once, applied to both checks. Filed as #1382.
+
+**Action taken**: Open — tracked in Action Tracker #236 (GitHub #1382).
+
+### Insights
+
+- **Plan risks should drive INITIAL implementation defenses, not Stage 12 fix-ups.** -1b's Stage 4 plan explicitly flagged "non-PermissionDenied exception propagates past check" as a risk. The Stage 5 implementer kept the catch narrow (`except PermissionDenied`) and the wider catch landed in Stage 12 fix-up `decab39a`. For security-class iterations, the safe default in the FIRST commit is fail-closed at every catch block. Filed as #1379 (canon for `djust-dev` skill).
+
+- **The Stage 11 reviewer's effectiveness comes from fresh-context framing, not from the reviewer being "smarter."** Same model, same diff, different prompt. Worth canonicalizing in the pipeline-run skill: Stage 7 prompts should add "before approving, identify at least one specific claim in the implementation that you actively tried to disprove via grep/test." This makes Stage 7 less of a rubber stamp.
+
+- **Pre-commit ruff-format reformatted on first attempt for -1b and -1c.** The `&& git log -1 --oneline` post-commit verification caught both occurrences instantly, but it's a recurring 30-second cost. The fix is to run `ruff format` BEFORE the first `git commit` invocation, not rely on the pre-commit hook to catch + retry. Acceptable carry-cost; not actioned.
+
+- **Three separate `### Added` blocks under `[Unreleased]` for one logical milestone (v0.9.5-1).** Reading the CHANGELOG as a third party means absorbing ~200 lines of related-but-separate copy. For future split-foundation rollouts, consider folding all iteration entries into one consolidated entry at release-cut time. Worth canonicalizing in the `djust-release` skill.
+
+### Review Stats
+
+| Metric | -1a (PR #1374) | -1b (PR #1378) | -1c (PR #1381) | Total |
+|---|---|---|---|---|
+| Tests added | 9 | 9 | 7 | 25 |
+| 🔴 Findings | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 3 | 2 | 2 | 7 |
+| 🟡 fixed inline | 3 | 1 | 0 | 4 |
+| 🟡 deferred to follow-up | 0 | 1 | 2 | 3 |
+| 🟢 Findings | 5 | 3 | 3 | 11 |
+| Stage 12 fix-up commits | 2 | 1 | 1 | 4 |
+| Wall-clock Stage 4 → merge | ~80m | ~70m | ~25m | ~175m total |
+| CI checks per PR | 13 | 13 | 13 | — |
+| Follow-up issues filed | 3 (#1375, #1376, #1377) | 2 (#1379, #1380) | 3 (#1382, #1383, #1384) | 8 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: no changes this milestone.
+
+**Pipeline template**: no changes this milestone (carry-over Action #181 / #1173 two-commit shape held across all 3 iterations; carry-over Action #122 post-commit verification caught 2 of the ruff-format reformat events).
+
+**Skills**: `djust-dev` skill updated in v0.9.5-1c with two new principle entries: "Object-level authorization (post-v0.9.5)" and "Security-class code defaults to fail-closed at every catch block." Update lives at `~/.claude/skills/djust-dev/SKILL.md` (outside the repo); commit `cec9cbaf`'s commit message documents the skill changes.
+
+**ADR-017**: Decision 5 amended in -1a Stage 4 (`3815e3a2`) to document the split-call-site reality discovered during plan-lock verification. The amendment is what makes Stage 4's API-contract verification gate canonical for future iterations: when the plan grep contradicts an ADR claim, amend the ADR in the same artifact-first commit.
+
+### Open Items
+
+- [ ] Item 232 (split-foundation soak-time guidance for solo-author case) — tracked in Action Tracker
+- [ ] Item 233 (Stage 7 prompts should require disconfirming citations) — tracked in Action Tracker
+- [ ] Item 234 (re-trigger of #1375 — branch-checkout canon update in pipeline-run skill) — tracked
+- [ ] Item 235 — tracked in Action Tracker #235 (GitHub #1384) — documentation-iteration shortcut canon
+- [ ] Item 236 — tracked in Action Tracker #236 (GitHub #1382) — X002+X008 inheritance-chain support
+- [ ] Item 237 — tracked in Action Tracker #237 (GitHub #1383) — broader `_mount_assigns_url_kwarg_id` patterns
+- [ ] Item 238 — tracked in Action Tracker #238 (GitHub #1380) — sticky-child request gap
+- [ ] Item 239 — tracked in Action Tracker #239 (GitHub #1376) — pipeline-run skill stage-name reconciliation
+- [ ] Item 240 — tracked in Action Tracker #240 (GitHub #1377) — WS-communicator test pattern capture
 
 ## v0.9.4-3 — Hotfix v0.9.4rc1 hooks TDZ regression (#1370) (PR #1371)
 
