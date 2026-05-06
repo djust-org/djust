@@ -328,6 +328,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (composite-hash) implementation, which is the discipline-correct
     way to demonstrate Option A's caveat (Action #1200).
 
+- **Deployment guide additions for production gaps surfaced from NYC Claims (#1362).**
+  Added three subsections to `docs/website/guides/deployment.md`:
+  - **Recovery HTML semantics**: per-consumer one-shot, fresh-consumer-
+    after-reconnect = no recovery state, multi-task amplification of
+    the user-visible impact. Cross-references v0.9.4-1's keyed
+    conditional VDOM diff (PR #1365 / #1358) as the architectural
+    escape hatch.
+  - **Quantified Daphne → Uvicorn benchmark**: 6.4× rps / 8.3× p99
+    on health-check endpoints from a 1 vCPU / 2 GB Fargate task
+    with the NYC Claims app. Per-app variance disclaimer included.
+  - **Production checklist**: 8-line copy-pasteable recipe linking
+    to each relevant subsection of the guide; inserted as the first
+    subsection of the existing Deployment Checklist.
+
+  Also updated the Redis state-backend coverage to note that the
+  template-hash-keyed cache (PR #1367, Iter 1 of v0.9.4-2) makes
+  the previous manual `REDIS_KEY_PREFIX = f"djust:{BUILD_ID}:"`
+  pattern obsolete. Pure docs PR — no code changes; the framework
+  behavior is unchanged from Iter 1.
+
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
   The 393 pre-existing eslint warnings in `client.js` (and 32 in
   `debug-panel.js`) have been resolved across the ~70 source modules in
