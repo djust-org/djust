@@ -212,6 +212,33 @@ async def _validate_event_security(
         await ws.send_error("Permission denied")
         return None
 
+    # Object-level permission check (ADR-017 § Decision 7, v0.9.5-1b).
+    # Re-runs on every event so a session can't bypass mount-time denial
+    # by carrying a stale _object cache or by mutating the access-
+    # determining state without invalidating. The check is a no-op for
+    # views that don't override get_object (Decision 6 — opt-in via
+    # _has_custom_get_object short-circuit).
+    #
+    # Per-event denial does NOT close the WS (mount-time denial does).
+    # Rationale: the user is authenticated and has the role permission;
+    # only this specific action against this specific object is
+    # forbidden. Closing the WS would force a full reload, which is
+    # wrong UX for "you can't do this here, but you can navigate
+    # elsewhere." Send the error frame and let the client decide.
+    if owner_request:
+        from django.core.exceptions import PermissionDenied as _PermissionDenied
+
+        from .auth.core import check_object_permission
+
+        try:
+            check_object_permission(owner_instance, owner_request)
+        except _PermissionDenied:
+            await ws.send_error(
+                "Access denied for this object.",
+                code="permission_denied",
+            )
+            return None
+
     return handler
 
 
