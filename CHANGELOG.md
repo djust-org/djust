@@ -7,134 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.4rc9] - 2026-05-06
-
-### Fixed
-
-- **`_sortPatches` now orders `RemoveSubtree` / `InsertSubtree`
-  BEFORE path-based child ops — the actual root cause of #1370.**
-  `_sortPatches` assigned id-based patches to the default phase (3),
-  so on the short-path (≤10 patches) the batch ran as
-  `[RemoveChild, InsertChild, SetAttr, RemoveSubtree, InsertSubtree]`.
-  The server's path-based `RemoveChild`/`InsertChild` indices reflect
-  the NEW tree's positions (after subtree ops applied). Running
-  `RemoveChild` against the still-old DOM targeted the wrong child
-  → silent DOM corruption that accumulated across tab switches until
-  client and server state fully desynced. Fix: assign `RemoveSubtree`
-  phase -2 and `InsertSubtree` phase -1, so both sort ahead of
-  `RemoveChild` (phase 0). The long-path (>10 patches) was already
-  pre-separating id-based patches (rc3 fix); this unifies short and
-  long paths on the same ordering. Diagnosed via djust-browser MCP
-  inspecting WS frames against a production reproducer.
-
-## [0.9.4rc8] - 2026-05-06
-
-### Fixed
-
-- **`RemoveSubtree` / `InsertSubtree` are now idempotent w.r.t. the
-  desired end-state (#1370 rc8).** After many tab switches the server's
-  VDOM diff baseline could drift, occasionally emitting a `RemoveSubtree`
-  for a marker already removed in a prior patch (or an `InsertSubtree`
-  for a marker already present). 19/20 patches succeeded but the one
-  stale patch failed → client triggered recovery-HTML → page reload.
-  Fix: both patch handlers now treat "already in the desired state" as
-  success. `RemoveSubtree` with a missing marker is a no-op (returns
-  true); `InsertSubtree` with an already-present marker is a no-op
-  (doesn't duplicate content). Symmetric. Matches the semantics of
-  `RemoveChild` on an already-removed node in the standard patch set.
-
-## [0.9.4rc7] - 2026-05-06
-
-### Fixed
-
-- **Double-nested dj-root eliminated (#1370 final).** `self._rust_view.render()`
-  produces HTML that already includes its own `<div dj-root>...</div>` wrapper.
-  The Step 3 replacement was inserting that as the innerHTML of the shell's
-  dj-root → double nesting. Fix: replace the shell's ENTIRE `<div dj-root>...</div>`
-  element (opening tag through closing tag) with `liveview_html`. Single dj-root
-  level, correct marker IDs from `self._rust_view`, no path index drift.
-
-## [0.9.4rc6] - 2026-05-06
-
-### Fixed
-
-- **Handler metadata `<script>` no longer injected inside `dj-root` (#1370 final fix).**
-  `_inject_handler_metadata` was appending a `<script>` element inside the
-  `dj-root` content on initial HTTP render. The server's VDOM doesn't include
-  this script → every sibling path after the script was shifted by +1 → all
-  path-based patches failed with "parent: SCRIPT". Fix: inject handler metadata
-  into the full page HTML (before `</body>`) AFTER the dj-root replacement,
-  so it lives outside the VDOM-tracked subtree. This was the actual root cause
-  of the "15/17 patches failed" pattern — not marker IDs (rc4/rc5 fixed those)
-  nor the extension (confirmed by disabling it).
-
-## [0.9.4rc5] - 2026-05-06
-
-### Fixed
-
-- **Architectural fix: single RustLiveView for HTTP + WS render (#1370 final).**
-  `render_full_template` now renders `dj-root` content via `self._rust_view`
-  (the SAME instance the WS path uses), guaranteeing marker IDs match by
-  construction. The page shell is still rendered by a temp instance, but the
-  shell's `dj-root` innerHTML is replaced with `self._rust_view.render()`.
-  No marker stripping, no first-WS overhead, no mismatch possible. Removes
-  the architectural debt of two `RustLiveView` instances rendering the same view.
-
-## [0.9.4rc4] - 2026-05-06
-
-### Fixed
-
-- **Marker ID mismatch between HTTP render and WS diff resolved (#1370 re-open).**
-  `render_full_template` created a temporary `RustLiveView(self._full_template)`
-  whose template-source hash differed from the VDOM-tracked template's hash
-  (`self.get_template()`). HTTP-rendered DOM had markers with prefix A; WS differ
-  emitted patches with prefix B → "RemoveSubtree: open marker not found" →
-  recovery HTML → page reload. Fix: strip `<!--dj-if-->` markers from the initial
-  HTTP render so the client DOM starts marker-free. On first WS `render_with_diff`,
-  the differ sees "NEW has markers, OLD doesn't" → emits `InsertSubtree` with the
-  correct (VDOM-tracked) IDs. The non-inheritance path (`self.render()`) was already
-  correct (same `RustLiveView` instance as WS path). This only affected projects
-  using `{% extends %}` template inheritance.
-
-## [0.9.4rc3] - 2026-05-06
-
-### Fixed
-
-- **`RemoveSubtree` / `InsertSubtree` patches no longer crash `groupPatchesByParent` (#1370 follow-up).**
-  v0.9.4rc2 fixed the hooks TDZ but exposed a second crash: `TypeError:
-  Cannot read properties of undefined (reading 'slice')` at
-  `groupPatchesByParent` in `12-vdom-patch.js`. The Iter 3 patches
-  (`RemoveSubtree`, `InsertSubtree`) don't carry a `path` field — they
-  locate their target by marker `id`. `groupPatchesByParent` assumed all
-  patches have `path`. Fix: filter out id-based patches and apply them
-  directly via `applySinglePatch` BEFORE the path-grouped batching pass.
-  Without this, any `{% if %}` block flip (the exact feature v0.9.4-1
-  shipped) triggered the TypeError → recovery HTML → page reload.
-
-## [0.9.4rc2] - 2026-05-05
-
-### Fixed
-
-- **HOTFIX: v0.9.4rc1 hooks TDZ regression (#1370).** v0.9.4rc1 shipped a
-  bundled `client.js` that threw `Uncaught ReferenceError: Cannot access 'G'
-  before initialization` (`G` is the minified `_activeHooks`) on every page
-  load and every WS patch. Module 19 (`19-hooks.js`) is concatenated after
-  the bootstrap call at bundle line ~7842; `let _activeHooks` was in TDZ
-  when `_ensureHooksInit` was invoked from earlier modules' `djustInit`
-  (the synchronous-init branch fires when `document.readyState !== 'loading'`).
-  Fix: `let` → `var` for `_activeHooks` and `_hookIdCounter` in
-  `src/19-hooks.js:54-56` (hoisted, no TDZ). Bundle rebuilt; new regression
-  test in `tests/js/bundle-init-no-tdz.test.js` (2 cases) loads the bundled
-  `client.js` in a fresh JSDOM context with `readyState === 'complete'` and
-  asserts no `ReferenceError` on init — verified to FAIL against the rc1
-  bundle and PASS against the fixed bundle. Why PR #1359 (eslint cleanup)
-  missed this: the missed-revert was caught via vitest import-order tests
-  that simulate DECLARED-EARLY-USED-LATE patterns, but those tests do not
-  simulate bundle-concat-order execution; `_activeHooks` is the inverse
-  (DECLARED-LATE-USED-EARLY in the concat). The new bundle-init regression
-  test catches the class structurally.
-
-## [0.9.4rc1] - 2026-05-05
+## [0.9.4] - 2026-05-06
 
 ### Added
 
@@ -394,6 +267,185 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (client patch types). Stage 11 must-fix and should-fix findings
   from this PR's review addressed in commit on this same PR.
 
+### Fixed
+
+- **`_sortPatches` now orders `RemoveSubtree` / `InsertSubtree`
+  BEFORE path-based child ops — the actual root cause of #1370.**
+  `_sortPatches` assigned id-based patches to the default phase (3),
+  so on the short-path (≤10 patches) the batch ran as
+  `[RemoveChild, InsertChild, SetAttr, RemoveSubtree, InsertSubtree]`.
+  The server's path-based `RemoveChild`/`InsertChild` indices reflect
+  the NEW tree's positions (after subtree ops applied). Running
+  `RemoveChild` against the still-old DOM targeted the wrong child
+  → silent DOM corruption that accumulated across tab switches until
+  client and server state fully desynced. Fix: assign `RemoveSubtree`
+  phase -2 and `InsertSubtree` phase -1, so both sort ahead of
+  `RemoveChild` (phase 0). The long-path (>10 patches) was already
+  pre-separating id-based patches (rc3 fix); this unifies short and
+  long paths on the same ordering. Diagnosed via djust-browser MCP
+  inspecting WS frames against a production reproducer.
+
+- **`RemoveSubtree` / `InsertSubtree` are now idempotent w.r.t. the
+  desired end-state (#1370 rc8).** After many tab switches the server's
+  VDOM diff baseline could drift, occasionally emitting a `RemoveSubtree`
+  for a marker already removed in a prior patch (or an `InsertSubtree`
+  for a marker already present). 19/20 patches succeeded but the one
+  stale patch failed → client triggered recovery-HTML → page reload.
+  Fix: both patch handlers now treat "already in the desired state" as
+  success. `RemoveSubtree` with a missing marker is a no-op (returns
+  true); `InsertSubtree` with an already-present marker is a no-op
+  (doesn't duplicate content). Symmetric. Matches the semantics of
+  `RemoveChild` on an already-removed node in the standard patch set.
+
+- **Double-nested dj-root eliminated (#1370 final).** `self._rust_view.render()`
+  produces HTML that already includes its own `<div dj-root>...</div>` wrapper.
+  The Step 3 replacement was inserting that as the innerHTML of the shell's
+  dj-root → double nesting. Fix: replace the shell's ENTIRE `<div dj-root>...</div>`
+  element (opening tag through closing tag) with `liveview_html`. Single dj-root
+  level, correct marker IDs from `self._rust_view`, no path index drift.
+
+- **Handler metadata `<script>` no longer injected inside `dj-root` (#1370 final fix).**
+  `_inject_handler_metadata` was appending a `<script>` element inside the
+  `dj-root` content on initial HTTP render. The server's VDOM doesn't include
+  this script → every sibling path after the script was shifted by +1 → all
+  path-based patches failed with "parent: SCRIPT". Fix: inject handler metadata
+  into the full page HTML (before `</body>`) AFTER the dj-root replacement,
+  so it lives outside the VDOM-tracked subtree. This was the actual root cause
+  of the "15/17 patches failed" pattern — not marker IDs (rc4/rc5 fixed those)
+  nor the extension (confirmed by disabling it).
+
+- **Architectural fix: single RustLiveView for HTTP + WS render (#1370 final).**
+  `render_full_template` now renders `dj-root` content via `self._rust_view`
+  (the SAME instance the WS path uses), guaranteeing marker IDs match by
+  construction. The page shell is still rendered by a temp instance, but the
+  shell's `dj-root` innerHTML is replaced with `self._rust_view.render()`.
+  No marker stripping, no first-WS overhead, no mismatch possible. Removes
+  the architectural debt of two `RustLiveView` instances rendering the same view.
+
+- **Marker ID mismatch between HTTP render and WS diff resolved (#1370 re-open).**
+  `render_full_template` created a temporary `RustLiveView(self._full_template)`
+  whose template-source hash differed from the VDOM-tracked template's hash
+  (`self.get_template()`). HTTP-rendered DOM had markers with prefix A; WS differ
+  emitted patches with prefix B → "RemoveSubtree: open marker not found" →
+  recovery HTML → page reload. Fix: strip `<!--dj-if-->` markers from the initial
+  HTTP render so the client DOM starts marker-free. On first WS `render_with_diff`,
+  the differ sees "NEW has markers, OLD doesn't" → emits `InsertSubtree` with the
+  correct (VDOM-tracked) IDs. The non-inheritance path (`self.render()`) was already
+  correct (same `RustLiveView` instance as WS path). This only affected projects
+  using `{% extends %}` template inheritance.
+
+- **`RemoveSubtree` / `InsertSubtree` patches no longer crash `groupPatchesByParent` (#1370 follow-up).**
+  v0.9.4rc2 fixed the hooks TDZ but exposed a second crash: `TypeError:
+  Cannot read properties of undefined (reading 'slice')` at
+  `groupPatchesByParent` in `12-vdom-patch.js`. The Iter 3 patches
+  (`RemoveSubtree`, `InsertSubtree`) don't carry a `path` field — they
+  locate their target by marker `id`. `groupPatchesByParent` assumed all
+  patches have `path`. Fix: filter out id-based patches and apply them
+  directly via `applySinglePatch` BEFORE the path-grouped batching pass.
+  Without this, any `{% if %}` block flip (the exact feature v0.9.4-1
+  shipped) triggered the TypeError → recovery HTML → page reload.
+
+- **HOTFIX: v0.9.4rc1 hooks TDZ regression (#1370).** v0.9.4rc1 shipped a
+  bundled `client.js` that threw `Uncaught ReferenceError: Cannot access 'G'
+  before initialization` (`G` is the minified `_activeHooks`) on every page
+  load and every WS patch. Module 19 (`19-hooks.js`) is concatenated after
+  the bootstrap call at bundle line ~7842; `let _activeHooks` was in TDZ
+  when `_ensureHooksInit` was invoked from earlier modules' `djustInit`
+  (the synchronous-init branch fires when `document.readyState !== 'loading'`).
+  Fix: `let` → `var` for `_activeHooks` and `_hookIdCounter` in
+  `src/19-hooks.js:54-56` (hoisted, no TDZ). Bundle rebuilt; new regression
+  test in `tests/js/bundle-init-no-tdz.test.js` (2 cases) loads the bundled
+  `client.js` in a fresh JSDOM context with `readyState === 'complete'` and
+  asserts no `ReferenceError` on init — verified to FAIL against the rc1
+  bundle and PASS against the fixed bundle. Why PR #1359 (eslint cleanup)
+  missed this: the missed-revert was caught via vitest import-order tests
+  that simulate DECLARED-EARLY-USED-LATE patterns, but those tests do not
+  simulate bundle-concat-order execution; `_activeHooks` is the inverse
+  (DECLARED-LATE-USED-EARLY in the concat). The new bundle-init regression
+  test catches the class structurally.
+
+- **`dj-transition` now respects CSS `transition-duration` instead of a hard-coded 600ms fallback (#1348).**
+  The fallback timeout is auto-derived from the element's computed
+  `transition-duration` + `transition-delay` (longest pair across all
+  transitioning properties) plus a 50ms grace window. For multi-property
+  transitions, expected `transitionend` events are counted from
+  `transition-property` and cleanup runs only after all have fired —
+  otherwise the first-finishing property would cut off slower ones.
+  `_FALLBACK_MS_DEFAULT` (600ms) is used only when computed-style
+  reading fails or yields zero. Same auto-derivation extended to
+  `dj-remove`. Source-only commit; bundle (`client.js`) rebuild
+  deferred per #1351 (392 pre-existing eslint warnings block
+  `--max-warnings 0`).
+
+- **`db.notifications` exits cleanly on permanent failures instead of
+  retrying forever.** Background — incident 2026-05-05: a 3.5-day-old
+  djust deploy missing the optional `psycopg[binary]>=3.2` dependency
+  had `_run()` retrying `_connect()` every 1 second forever (~302,000
+  attempts), accumulating 15.4 GiB of anonymous heap from un-reaped
+  asyncio Task / coroutine closure state. The kubelet hit memory
+  pressure, transitioned to NodeNotReady for ~7 seconds, which was
+  enough for cnpg to fail over the postgres-cluster primary →
+  3-minute platform outage. Fix: when `_connect()` raises
+  `DatabaseNotificationNotSupported` (missing psycopg or non-postgres
+  engine), treat as PERMANENT — log once at WARNING with
+  operator-actionable wording, set `_stopping = True`, fire
+  `_ready_event`, return from the loop. Process restart re-enables
+  once the cause is fixed. Transient failures
+  (`ConnectionRefusedError`, `OSError`, timeout, etc.) retain their
+  1-second-backoff retry behaviour. 2 regression tests in
+  `python/djust/tests/test_notifications_permanent_failure.py`
+  (`test_run_exits_immediately_on_permanent_failure`,
+  `test_run_retries_transient_connect_failures`).
+
+- **In-memory state backend no longer panics on concurrent same-session
+  HTTP renders (#1353).** When two HTTP requests for the same
+  ``(session, view_path)`` pair shared a cached ``RustLiveView`` (the
+  in-memory backend returned the same Python reference on cache hits),
+  concurrent ``&mut self`` Rust methods on the shared view would
+  collide inside Rust's ``RefCell::borrow_mut`` and surface as
+  ``RuntimeError: Already borrowed`` (NYC Claims observed 17.5%
+  500-rate at concurrency 2). The race spanned more than the
+  ``_sync_state_to_rust`` mutation calls — ``render()`` itself holds
+  ``&mut self`` across template evaluation, and
+  ``Context::resolve_dotted_via_getattr``
+  (``crates/djust_core/src/context.rs``) wraps ``Python::with_gil`` so
+  the embedded ``getattr`` can yield the GIL inside an active mutable
+  borrow. Any peer thread entering an ``&mut self`` method during that
+  window panicked. Fixed by switching ``InMemoryStateBackend.get()`` to
+  return an isolated ``serialize_msgpack`` / ``deserialize_msgpack``
+  clone of the cached view (option 2 of three suggested in the issue
+  body), mirroring the ``RedisStateBackend`` contract — which already
+  deserialized fresh on every read. With each caller holding its own
+  ``RustLiveView`` instance, no two threads can share a Rust ``&mut
+  self`` borrow and the race class is eliminated at the source. No
+  Python-side lock is needed. New regression cases in
+  ``TestInMemoryGetReturnsIsolatedView`` (4 cases — clone identity,
+  state preservation, mutation isolation, concurrent get) and
+  ``TestConcurrentRenderNoBorrowError`` (2 cases — concurrent render
+  with GIL-yielding sidecar, concurrent update_state) in
+  ``python/tests/test_rust_bridge_concurrent.py``.
+
+- **State backend honours top-level ``DJUST_STATE_BACKEND`` /
+  ``DJUST_REDIS_URL`` settings (#1354).** Previously
+  ``BackendRegistry`` only consulted ``DJUST_CONFIG["STATE_BACKEND"]``,
+  so projects configuring via top-level Django settings (e.g.
+  ``DJUST_STATE_BACKEND = "redis://localhost:6379/0"``) were silently
+  downgraded to in-memory with no warning. Now the registry layers
+  top-level aliases on top of ``DJUST_CONFIG`` (``DJUST_CONFIG`` still
+  wins when both are set — backwards-compatible). URL-shaped values
+  (``redis://``, ``rediss://``, ``redis+sentinel://``) are
+  auto-translated to ``backend_type="redis"`` plus ``REDIS_URL=<url>``;
+  the prefix list lives in ``BackendRegistry._REDIS_URL_PREFIXES``.
+  When ``DEBUG=False`` and the resolved backend is the default
+  (in-memory), ``djust.utils.BackendRegistry.get`` now emits a
+  ``logger.warning`` flagging the production misconfig — multi-process
+  deployments lose state across replicas. ``unix://`` URLs are left as
+  a TODO follow-up because the underlying ``redis-py`` client takes
+  Unix sockets via a different parameter name. New regression cases in
+  ``TestTopLevelStateBackendSetting`` (6 cases) and
+  ``TestDjustConfigRegression`` (3 cases) in
+  ``python/tests/test_state_backend_config.py``.
+
 ### Changed
 
 - **Redis state-backend cache keys now include the template-source hash for automatic deploy-time invalidation (#1362).**
@@ -507,90 +559,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hook (`.pre-commit-config.yaml`) — contributors no longer need
   `SKIP=build-js,eslint` to commit JS source changes. Unblocks the
   bundle rebuild deferred from PR #1357 (dj-transition fix #1348).
-
-### Fixed
-
-- **`dj-transition` now respects CSS `transition-duration` instead of a hard-coded 600ms fallback (#1348).**
-  The fallback timeout is auto-derived from the element's computed
-  `transition-duration` + `transition-delay` (longest pair across all
-  transitioning properties) plus a 50ms grace window. For multi-property
-  transitions, expected `transitionend` events are counted from
-  `transition-property` and cleanup runs only after all have fired —
-  otherwise the first-finishing property would cut off slower ones.
-  `_FALLBACK_MS_DEFAULT` (600ms) is used only when computed-style
-  reading fails or yields zero. Same auto-derivation extended to
-  `dj-remove`. Source-only commit; bundle (`client.js`) rebuild
-  deferred per #1351 (392 pre-existing eslint warnings block
-  `--max-warnings 0`).
-
-- **`db.notifications` exits cleanly on permanent failures instead of
-  retrying forever.** Background — incident 2026-05-05: a 3.5-day-old
-  djust deploy missing the optional `psycopg[binary]>=3.2` dependency
-  had `_run()` retrying `_connect()` every 1 second forever (~302,000
-  attempts), accumulating 15.4 GiB of anonymous heap from un-reaped
-  asyncio Task / coroutine closure state. The kubelet hit memory
-  pressure, transitioned to NodeNotReady for ~7 seconds, which was
-  enough for cnpg to fail over the postgres-cluster primary →
-  3-minute platform outage. Fix: when `_connect()` raises
-  `DatabaseNotificationNotSupported` (missing psycopg or non-postgres
-  engine), treat as PERMANENT — log once at WARNING with
-  operator-actionable wording, set `_stopping = True`, fire
-  `_ready_event`, return from the loop. Process restart re-enables
-  once the cause is fixed. Transient failures
-  (`ConnectionRefusedError`, `OSError`, timeout, etc.) retain their
-  1-second-backoff retry behaviour. 2 regression tests in
-  `python/djust/tests/test_notifications_permanent_failure.py`
-  (`test_run_exits_immediately_on_permanent_failure`,
-  `test_run_retries_transient_connect_failures`).
-
-- **In-memory state backend no longer panics on concurrent same-session
-  HTTP renders (#1353).** When two HTTP requests for the same
-  ``(session, view_path)`` pair shared a cached ``RustLiveView`` (the
-  in-memory backend returned the same Python reference on cache hits),
-  concurrent ``&mut self`` Rust methods on the shared view would
-  collide inside Rust's ``RefCell::borrow_mut`` and surface as
-  ``RuntimeError: Already borrowed`` (NYC Claims observed 17.5%
-  500-rate at concurrency 2). The race spanned more than the
-  ``_sync_state_to_rust`` mutation calls — ``render()`` itself holds
-  ``&mut self`` across template evaluation, and
-  ``Context::resolve_dotted_via_getattr``
-  (``crates/djust_core/src/context.rs``) wraps ``Python::with_gil`` so
-  the embedded ``getattr`` can yield the GIL inside an active mutable
-  borrow. Any peer thread entering an ``&mut self`` method during that
-  window panicked. Fixed by switching ``InMemoryStateBackend.get()`` to
-  return an isolated ``serialize_msgpack`` / ``deserialize_msgpack``
-  clone of the cached view (option 2 of three suggested in the issue
-  body), mirroring the ``RedisStateBackend`` contract — which already
-  deserialized fresh on every read. With each caller holding its own
-  ``RustLiveView`` instance, no two threads can share a Rust ``&mut
-  self`` borrow and the race class is eliminated at the source. No
-  Python-side lock is needed. New regression cases in
-  ``TestInMemoryGetReturnsIsolatedView`` (4 cases — clone identity,
-  state preservation, mutation isolation, concurrent get) and
-  ``TestConcurrentRenderNoBorrowError`` (2 cases — concurrent render
-  with GIL-yielding sidecar, concurrent update_state) in
-  ``python/tests/test_rust_bridge_concurrent.py``.
-
-- **State backend honours top-level ``DJUST_STATE_BACKEND`` /
-  ``DJUST_REDIS_URL`` settings (#1354).** Previously
-  ``BackendRegistry`` only consulted ``DJUST_CONFIG["STATE_BACKEND"]``,
-  so projects configuring via top-level Django settings (e.g.
-  ``DJUST_STATE_BACKEND = "redis://localhost:6379/0"``) were silently
-  downgraded to in-memory with no warning. Now the registry layers
-  top-level aliases on top of ``DJUST_CONFIG`` (``DJUST_CONFIG`` still
-  wins when both are set — backwards-compatible). URL-shaped values
-  (``redis://``, ``rediss://``, ``redis+sentinel://``) are
-  auto-translated to ``backend_type="redis"`` plus ``REDIS_URL=<url>``;
-  the prefix list lives in ``BackendRegistry._REDIS_URL_PREFIXES``.
-  When ``DEBUG=False`` and the resolved backend is the default
-  (in-memory), ``djust.utils.BackendRegistry.get`` now emits a
-  ``logger.warning`` flagging the production misconfig — multi-process
-  deployments lose state across replicas. ``unix://`` URLs are left as
-  a TODO follow-up because the underlying ``redis-py`` client takes
-  Unix sockets via a different parameter name. New regression cases in
-  ``TestTopLevelStateBackendSetting`` (6 cases) and
-  ``TestDjustConfigRegression`` (3 cases) in
-  ``python/tests/test_state_backend_config.py``.
 
 ## [0.9.3rc2] - 2026-05-04
 
