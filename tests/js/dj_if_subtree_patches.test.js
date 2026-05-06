@@ -235,11 +235,13 @@ describe('RemoveSubtree patch', () => {
         expect(comments[1].textContent.trim()).toBe('/dj-if');
     });
 
-    it('does NOT throw when the marker id is not present (graceful warn)', () => {
-        // Empty DOM, no markers anywhere.
+    it('returns true (idempotent no-op) when the marker id is not present (#1370 rc8)', () => {
+        // Empty DOM, no markers anywhere. RemoveSubtree is inherently
+        // idempotent — removing something already gone is semantically a
+        // no-op. Return true so the client does not trigger recovery-HTML
+        // fallback for a scenario where the desired end-state is achieved.
         const result = _applyRemoveSubtree({type: 'RemoveSubtree', id: 'if-ghost-0'});
-        // Returns false (the warn is emitted via console.warn, not thrown).
-        expect(result).toBe(false);
+        expect(result).toBe(true);
     });
 
     it('handles a marker pair directly under document.body (no wrapper)', () => {
@@ -360,6 +362,35 @@ describe('InsertSubtree patch', () => {
         expect(result).toBe(false);
     });
 
+    it('returns true (idempotent no-op) when marker id is already present in DOM (#1370 rc8)', () => {
+        // Set up a DOM that already contains the marker pair for id="if-dup-0".
+        // A second InsertSubtree for the same id should be a no-op rather than
+        // duplicating content. Symmetric to RemoveSubtree's idempotent check.
+        const parent = document.createElement('div');
+        parent.id = 'parent-dup';
+        parent.setAttribute('dj-id', 'parent-dup-id');
+        parent.appendChild(document.createComment('dj-if id="if-dup-0"'));
+        const existing = document.createElement('span');
+        existing.id = 'dup-existing';
+        existing.textContent = 'already here';
+        parent.appendChild(existing);
+        parent.appendChild(document.createComment('/dj-if'));
+        document.body.appendChild(parent);
+
+        const result = _applyInsertSubtree({
+            type: 'InsertSubtree',
+            id: 'if-dup-0',
+            html: '<!--dj-if id="if-dup-0"--><span id="dup-new">new</span><!--/dj-if-->',
+            path: [],
+            d: 'parent-dup-id',
+            index: 0,
+        });
+        expect(result).toBe(true);
+        // Original content preserved; no new span was inserted.
+        expect(document.getElementById('dup-existing')).not.toBeNull();
+        expect(document.getElementById('dup-new')).toBeNull();
+    });
+
     it('returns false when parent cannot be resolved (deep unresolvable path)', () => {
         // path:[] + unresolvable d falls back to the live-view root (not
         // null), so it does NOT exercise the not-found branch. Use a deep
@@ -413,8 +444,8 @@ describe('applySinglePatch dispatch wiring', () => {
         expect(document.getElementById('disp-inserted')).not.toBeNull();
     });
 
-    it('returns false (graceful) when RemoveSubtree id is unknown via dispatch', () => {
+    it('returns true (idempotent no-op) when RemoveSubtree id is unknown via dispatch (#1370 rc8)', () => {
         const result = _applySinglePatch({type: 'RemoveSubtree', id: 'if-ghost-disp-0'});
-        expect(result).toBe(false);
+        expect(result).toBe(true);
     });
 });

@@ -1313,8 +1313,20 @@ function applyRemoveSubtree(patch, rootEl = null) {
     }
     const open = _findDjIfOpenMarker(targetId, rootEl);
     if (!open) {
-        console.warn('[LiveView] RemoveSubtree: open marker not found id=%s', sanitizeIdForLog(targetId));
-        return false;
+        // Idempotent no-op: the marker is already gone (likely removed by a
+        // prior patch in the same batch, or an earlier patch cycle that
+        // succeeded but the server's diff baseline hasn't caught up). The
+        // desired end-state (no subtree with this id) is already achieved,
+        // so treat as success rather than failure — returning false would
+        // trigger the client's recovery-HTML fallback → page reload for a
+        // scenario that's semantically fine. See #1370 rc8.
+        if (globalThis.djustDebug) {
+            console.log(
+                '[LiveView] RemoveSubtree: marker already absent id=%s (idempotent no-op)',
+                sanitizeIdForLog(targetId)
+            );
+        }
+        return true;
     }
     const close = _findDjIfCloseMarker(open);
     if (!close) {
@@ -1359,6 +1371,19 @@ function applyInsertSubtree(patch, rootEl = null) {
     if (typeof patch.html !== 'string' || !patch.html) {
         console.warn('[LiveView] InsertSubtree patch missing html, skipping');
         return false;
+    }
+    // Idempotent no-op: the marker with this id is already in the DOM.
+    // Inserting again would duplicate content. Skip. (Counterpart to the
+    // idempotency check in applyRemoveSubtree; see #1370 rc8.)
+    const existingId = String(patch.id || '');
+    if (existingId && _findDjIfOpenMarker(existingId, rootEl)) {
+        if (globalThis.djustDebug) {
+            console.log(
+                '[LiveView] InsertSubtree: marker already present id=%s (idempotent no-op)',
+                sanitizeIdForLog(existingId)
+            );
+        }
+        return true;
     }
     // Resolve the parent node via the same path/d resolution other
     // child-ops use.
