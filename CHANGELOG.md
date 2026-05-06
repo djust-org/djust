@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`RemoveSubtree` / `InsertSubtree` patches no longer crash `groupPatchesByParent` (#1370 follow-up).**
+  v0.9.4rc2 fixed the hooks TDZ but exposed a second crash: `TypeError:
+  Cannot read properties of undefined (reading 'slice')` at
+  `groupPatchesByParent` in `12-vdom-patch.js`. The Iter 3 patches
+  (`RemoveSubtree`, `InsertSubtree`) don't carry a `path` field — they
+  locate their target by marker `id`. `groupPatchesByParent` assumed all
+  patches have `path`. Fix: filter out id-based patches and apply them
+  directly via `applySinglePatch` BEFORE the path-grouped batching pass.
+  Without this, any `{% if %}` block flip (the exact feature v0.9.4-1
+  shipped) triggered the TypeError → recovery HTML → page reload.
+
 ## [0.9.4rc2] - 2026-05-05
 
 ### Fixed
