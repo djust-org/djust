@@ -294,13 +294,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the new cache-key slot) flow through the single
   `djust_templates::parser::template_hash_hex` Rust helper, so they
   cannot drift.
-  10 new regression tests in
+  12 regression tests in
   `python/tests/test_template_hash_redis_cache.py` (cache HIT/MISS
   behavior, multi-session isolation, cross-deploy reproducer, PyO3
-  boundary equality, multi-template caveat). 3 new Rust unit tests in
+  boundary equality, multi-template caveat with real Django include
+  resolution, plus 2 perf-regression tests verifying the cache HIT path
+  no longer pays the `get_template()` cost). 3 new Rust unit tests in
   `crates/djust_templates/src/parser.rs` (hash consistency,
   distinguishability, marker-ID prefix equality). Existing
   `test_vdom_cache_key.py` updated for the new key shape.
+
+  Stage 12 (address-findings) refinements on the same PR:
+  * **Cache HIT perf-regression fix.** First implementation hoisted
+    `self.get_template()` to before the cache lookup so the per-template
+    hash could be derived. That regressed the cache HIT path: pre-#1362
+    a WS reconnect with a warm cache never called `get_template()`,
+    post-#1362 every reconnect ate the Django template loader +
+    inheritance resolution cost. Stage 12 introduces
+    `_get_cached_template_hash_slot()` which memoizes the `_t<8hex>`
+    slot on the view CLASS so the cost is paid ONCE per class
+    lifetime; subsequent calls return the slot in O(1) without
+    touching `get_template()`. Cache HITs now match the pre-#1362
+    perf profile.
+  * **Multi-template caveat test rewritten.** First version called
+    `compute_template_hash(primary_src)` twice on the same input and
+    asserted equality — a tautology already covered by
+    `test_compute_template_hash_stable_across_rebuilds`. Stage 12
+    rewrites it to set up real `parent.html` + `child.html` files,
+    rewrite `child.html` between two renders, verify the rendered
+    output ACTUALLY differs (so the include is being re-resolved),
+    then assert the primary's source bytes hash to the same `_t<8hex>`
+    slot. The test would FAIL on a hypothetical Option B
+    (composite-hash) implementation, which is the discipline-correct
+    way to demonstrate Option A's caveat (Action #1200).
 
 - **Bundled `client.js` and `debug-panel.js` are now eslint-clean (#1351).**
   The 393 pre-existing eslint warnings in `client.js` (and 32 in
