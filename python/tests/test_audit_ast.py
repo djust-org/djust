@@ -644,16 +644,36 @@ class TestX008IDORShapeNeedsObjectPermission:
 
     def test_x008_mro_inheritance_cycle_does_not_recurse(self) -> None:
         """A pathological cycle (``A(B)``, ``B(A)``) must terminate via
-        the visited-set guard. We don't assert a specific finding —
-        only that scanning completes without recursion error."""
-        # No assertion on findings — just confirm the scan terminates.
-        _scan("""
-            class A(B):
-                pass
+        the visited-set guard in ``_walk_mro_static``.
 
-            class B(A):
-                pass
-        """)
+        Both classes are detail-view-shaped (LiveView base, mount binds
+        a URL kwarg, event handler reads ``self.<x>_id``) so the X008
+        checker actually walks the MRO graph and exercises the cycle
+        guard. Without the guard, this would StackOverflow or hang."""
+        # Fence: bound the recursion budget to ensure infinite recursion
+        # would observably fail rather than silently churn.
+        import sys
+
+        original_limit = sys.getrecursionlimit()
+        try:
+            sys.setrecursionlimit(200)
+            _scan("""
+                from djust import LiveView
+                from djust.decorators import event_handler
+
+                class A(B, LiveView):
+                    permission_required = "documents.access"
+                    def mount(self, request, document_id=None, **kwargs):
+                        self.document_id = document_id
+                    @event_handler()
+                    def add_comment(self, body=""):
+                        Comment.objects.create(document_id=self.document_id, body=body)
+
+                class B(A):
+                    pass
+            """)
+        finally:
+            sys.setrecursionlimit(original_limit)
 
     # ------------------------------------------------------------------
     # #1383 — Broader URL-kwarg RHS patterns. ``mount()`` may bind URL
