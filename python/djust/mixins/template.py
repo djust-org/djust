@@ -861,25 +861,30 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 temp_rust.mark_safe_keys(safe_keys)
             shell_html = temp_rust.render()
 
-            # --- Step 3: Replace the dj-root section in the shell ---
-            # The shell's dj-root content was rendered by the temp instance
-            # (wrong marker IDs). Replace it with liveview_html (correct IDs).
+            # --- Step 3: Replace the ENTIRE dj-root div in the shell ---
+            # liveview_html already includes its own <div dj-root>...</div>
+            # wrapper (since get_template() returns the dj-root template).
+            # Replace the shell's <div dj-root>...</div> ENTIRELY (opening
+            # tag through closing tag) with liveview_html.
             dj_root_match = _DJ_ROOT_RE.search(shell_html)
             if dj_root_match:
-                root_start = dj_root_match.end()
+                # Start of the <div dj-root...> opening tag
+                tag_start = dj_root_match.start()
+                # End of the opening tag (past the >)
+                after_open = dj_root_match.end()
+                # Find the matching </div> by counting depth
                 depth = 1
-                i = root_start
+                i = after_open
                 while i < len(shell_html) and depth > 0:
                     if shell_html[i : i + 5] == "<div " or shell_html[i : i + 5] == "<div>":
                         depth += 1
                     elif shell_html[i : i + 6] == "</div>":
                         depth -= 1
                         if depth == 0:
-                            result = shell_html[:root_start] + liveview_html + shell_html[i:]
-                            # Inject handler metadata OUTSIDE dj-root (before
-                            # </body>) so it doesn't shift child indices inside
-                            # the diffed subtree. The <script> lives in the page
-                            # shell, not in the VDOM-tracked dj-root content.
+                            # i points to the '<' of '</div>'
+                            # Replace from tag_start through '</div>' (6 chars)
+                            close_end = i + 6
+                            result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
                             result = self._inject_handler_metadata(result, request=request)
                             return result
                     i += 1
