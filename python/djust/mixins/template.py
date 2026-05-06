@@ -857,6 +857,20 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 temp_rust.mark_safe_keys(safe_keys)
             html = temp_rust.render()
 
+            # Strip dj-if markers from initial HTTP render. The full-page
+            # template (self._full_template) has a different source hash than
+            # the VDOM-tracked template (self.get_template()), so their
+            # marker IDs diverge. The WS differ uses the VDOM-tracked
+            # template's IDs; if the client DOM contains the full-template's
+            # markers, RemoveSubtree/InsertSubtree patches target IDs that
+            # don't exist in the DOM → "open marker not found" error (#1370).
+            # Stripping markers from the initial HTML means the client starts
+            # marker-free; the first WS render_with_diff inserts markers with
+            # the correct (VDOM-tracked) IDs.
+            import re
+
+            html = re.sub(r"<!--/?dj-if[^>]*-->", "", html)
+
             html = self._hydrate_react_components(html)
             html = self._inject_handler_metadata(html, request=request)
 
