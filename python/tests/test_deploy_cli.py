@@ -170,6 +170,14 @@ def _simulate_browser(captured_url_holder: dict, code: str = "test-auth-code-123
     actual browser involved.
     """
 
+    # Completion signal so tests reading captured_url_holder can wait
+    # for the callback thread to finish populating it. Without this the
+    # main test thread occasionally asserts BEFORE the daemon thread
+    # has stashed response_headers / response_status — Python 3.13's
+    # scheduling tickles this race in CI.
+    done = threading.Event()
+    captured_url_holder["done"] = done
+
     def _open(url, *_args, **_kwargs):
         captured_url_holder["url"] = url
         parsed = urllib.parse.urlparse(url)
@@ -196,6 +204,8 @@ def _simulate_browser(captured_url_holder: dict, code: str = "test-auth-code-123
                 captured_url_holder["response_headers"] = dict(resp.headers.items())
             except Exception:
                 pass
+            finally:
+                done.set()
 
         threading.Thread(target=_hit_callback, daemon=True).start()
         return True
@@ -412,6 +422,12 @@ class TestLoginCommand:
         monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser(captured))
         result = runner.invoke(cli, ["login"])
         assert result.exit_code == 0, result.output
+
+        # Wait for the callback thread to finish populating the response
+        # headers — the daemon thread in _simulate_browser may still be
+        # writing them when runner.invoke returns. (Race observed under
+        # py3.13's scheduling.)
+        assert captured["done"].wait(timeout=5), "callback thread did not finish in 5s"
 
         headers = captured.get("response_headers") or {}
         assert headers.get("Referrer-Policy") == "no-referrer", headers
