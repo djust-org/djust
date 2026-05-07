@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bundle-init-order structural lint: `scripts/check-bundle-init-order.mjs` (#1372, #1370 follow-up).** Static check that catches the #1370 TDZ class proactively. Enumerates module-scope `let`/`const` declarations across `python/djust/static/djust/src/*.js`, finds top-level use sites via acorn AST, and flags any cross-module use where the use-site lex-orders BEFORE the declaration. Wired into `Makefile` (`make check-bundle-init-order` is part of `make check`) and pre-push hook. Currently clean on main (Stage 11 audit on PR #1371 confirmed no violations); the `bundle-init-no-tdz.test.js` runtime regression test stays as the safety net.
+
 ### Changed
 
 - **JS micro-cleanup: deduplicated transition helpers + tightened `routeMap` access (#1360, #1361).** Two follow-ups deferred from PR #1359 Stage 11.
