@@ -43,6 +43,19 @@ def _short_oauth_timeout(monkeypatch):
     monkeypatch.setattr("djust.deploy_cli._OAUTH_BROWSER_TIMEOUT_SECONDS", 5, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_browser(monkeypatch):
+    """Belt-and-suspenders: if a test reaches `_login_browser` without
+    explicitly mocking `webbrowser.open`, this default no-op stops the
+    user's real browser from popping up to djustlive.com mid-suite.
+
+    Tests that need to simulate the OAuth flow do `monkeypatch.setattr(
+    "djust.deploy_cli.webbrowser.open", _simulate_browser(...))` —
+    that later setattr wins, so the simulator still drives the flow.
+    """
+    monkeypatch.setattr("djust.deploy_cli.webbrowser.open", lambda *a, **kw: True)
+
+
 @pytest.fixture()
 def runner():
     return CliRunner()
