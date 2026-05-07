@@ -34,8 +34,13 @@
                 ? window.location.pathname
                 : '/');
         const routeMap = (globalThis.djust && globalThis.djust._routeMap) || {};
-        // eslint-disable-next-line security/detect-object-injection
-        if (routeMap[pathname]) return routeMap[pathname];
+        // `pathname` is derived from user-controllable URL state — walk
+        // own entries via Object.entries instead of indexing with the
+        // user-controllable key, which is prototype-pollution-immune by
+        // construction. Closes #1361.
+        for (const [routePath, viewPath] of Object.entries(routeMap)) {
+            if (routePath === pathname) return viewPath;
+        }
         if (typeof document !== 'undefined') {
             const container = document.querySelector('[dj-view]');
             if (container) return container.getAttribute('dj-view') || '';

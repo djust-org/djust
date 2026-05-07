@@ -197,6 +197,20 @@ describe('navigation', () => {
 
             expect(window.djust.navigation.resolveViewPath('/any-path/')).toBe('myapp.views.CurrentView');
         });
+
+        it('does not match Object.prototype keys (#1361 prototype-pollution-immune)', () => {
+            // Regression for #1361: routeMap access uses Object.entries() walk
+            // (own enumerable string-keyed entries only), so paths like
+            // 'toString' / 'constructor' that resolve via prototype chain
+            // on plain object access must NOT match. If a future refactor
+            // reverts to `routeMap[pathname]`, this test fails.
+            const { window } = createEnv('');
+            window.djust._routeMap = {};
+
+            expect(window.djust.navigation.resolveViewPath('toString')).toBeNull();
+            expect(window.djust.navigation.resolveViewPath('constructor')).toBeNull();
+            expect(window.djust.navigation.resolveViewPath('hasOwnProperty')).toBeNull();
+        });
     });
 
     describe('bindDirectives', () => {

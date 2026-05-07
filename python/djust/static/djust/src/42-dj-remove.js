@@ -45,38 +45,8 @@
 const _pendingRemovals = new WeakMap();   // Element -> { fallback, onEnd, observer, spec }
 const _REMOVE_FALLBACK_MS = 600;
 
-function _parseTimeMs(s) {
-    // CSS time tokens: "550ms", "0.55s", "0s". Returns 0 on parse failure.
-    const t = (s || '').trim();
-    if (!t) return 0;
-    if (t.endsWith('ms')) return parseFloat(t) || 0;
-    if (t.endsWith('s')) return (parseFloat(t) || 0) * 1000;
-    return 0;
-}
-
-function _computeTransitionTiming(el) {
-    // Returns {maxMs, propsCount} from the element's computed transition
-    // styles. Same logic as 41-dj-transition.js — duplicated here rather
-    // than shared because the source files are concatenated as separate
-    // modules (no cross-file imports).
-    const cs = (typeof getComputedStyle === 'function') ? getComputedStyle(el) : null;
-    if (!cs) return { maxMs: 0, propsCount: 0 };
-    const props = (cs.transitionProperty || '')
-        .split(',').map(s => s.trim()).filter(s => s && s !== 'none');
-    const durations = (cs.transitionDuration || '')
-        .split(',').map(s => _parseTimeMs(s));
-    const delays = (cs.transitionDelay || '')
-        .split(',').map(s => _parseTimeMs(s));
-    if (props.length === 0) return { maxMs: 0, propsCount: 0 };
-    let maxMs = 0;
-    for (let i = 0; i < props.length; i++) {
-        const dur = durations[i % durations.length] || 0;
-        const del = delays[i % delays.length] || 0;
-        const total = dur + del;
-        if (total > maxMs) maxMs = total;
-    }
-    return { maxMs: maxMs, propsCount: props.length };
-}
+// `_parseTimeMs` and `_computeTransitionTiming` live in
+// `40a-transition-helpers.js` (shared with `41-dj-transition.js`).
 
 function _parseRemoveSpec(raw) {
     if (raw === null || raw === undefined) return null;

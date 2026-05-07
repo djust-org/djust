@@ -159,11 +159,12 @@
         // Check the route map (populated by live_session)
         const routeMap = window.djust._routeMap || {};
 
-        // Try exact match first
-        // eslint-disable-next-line security/detect-object-injection
-        if (routeMap[pathname]) {
-            // eslint-disable-next-line security/detect-object-injection
-            return routeMap[pathname];
+        // Try exact match first. `pathname` is user-controllable (URL
+        // path) so the lookup must be prototype-pollution-immune: walk
+        // own entries explicitly via `Object.entries` rather than
+        // indexing with `routeMap[pathname]`. Closes #1361.
+        for (const [routePath, viewPath] of Object.entries(routeMap)) {
+            if (routePath === pathname) return viewPath;
         }
 
         // Try pattern matching (for paths with parameters like /items/42/)

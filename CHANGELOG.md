@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **JS micro-cleanup: deduplicated transition helpers + tightened `routeMap` access (#1360, #1361).** Two follow-ups deferred from PR #1359 Stage 11.
+  - `_parseTimeMs` and `_computeTransitionTiming` extracted from `41-dj-transition.js` and `42-dj-remove.js` into a new shared `40a-transition-helpers.js` (loads before both consumers per the bundle's lexicographic concat order). CodeQL alerts at `client.js:13162` and `:13171` ("Conflicting function declarations") clear; bundle has exactly one definition of each (#1360).
+  - `routeMap[pathname]` access in `18-navigation.js` replaced with an `Object.entries(routeMap)` walk — prototype-pollution-immune by construction (own enumerable string-keyed entries only). Lints cleanly without `eslint-disable-next-line`. Same shape applied to `46-state-snapshot.js`. Map conversion (option B) rejected because it would change the wire-protocol shape emitted by `python/djust/routing.py` and break downstream consumers (#1361).
+
 ### Removed
 
 - **Dead `InMemoryStateBackend.get_and_update()` removed (#1356).** Method had zero callers and would re-introduce the #1353 shared-mutable-state race class if a future caller was added without auditing. PR #1355 fixed the sibling `get()` to clone via msgpack round-trip; `get_and_update()` was overlooked. Per the issue body's preferred-fix order, deletion was cleanest. Removes ~22 lines of dead code from `python/djust/state_backends/memory.py`. (Surfaced as PR #1355 Stage 13 Re-Review #1.)
