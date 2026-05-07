@@ -210,30 +210,60 @@ def _read_slug_from_pyproject(source_dir: Path) -> Optional[str]:
 
 
 def _save_slug_to_pyproject(source_dir: Path, slug: str) -> bool:
-    """Append ``[tool.djust.deploy] project = "<slug>"`` to pyproject.toml.
+    """Idempotently set ``[tool.djust.deploy] project = "<slug>"`` in pyproject.toml.
 
     Returns True if the write succeeded, False if pyproject.toml is
-    absent (most common reason — the project doesn't use it). Doesn't
-    overwrite an existing key — the resolution path only saves when
-    the key was missing in the first place, so we just append a new
-    block at the end.
+    absent (most common reason — the project doesn't use it).
 
-    We keep this stdlib-only (no tomli_w dependency) by appending text
-    rather than parsing+rewriting. That's safe because we only run it
-    when the key didn't exist; we're never duplicating an existing
-    [tool.djust.deploy] table this way.
+    Three cases:
+
+      1. ``[tool.djust.deploy]`` exists with a ``project = …`` line —
+         rewrite that line in place.
+      2. ``[tool.djust.deploy]`` exists without a ``project`` key —
+         insert one immediately under the table header.
+      3. Neither — append a fresh block at the end.
+
+    Idempotent across both server slug-uniquification (``my-app`` →
+    ``my-app-2``) and repeated runs. Stays stdlib-only (no tomli_w
+    dependency) — TOML rejects duplicate tables, so the prior
+    append-only shape produced unparseable files on case 1.
     """
+    import re
+
     path = _pyproject_path(source_dir)
     if not path.exists():
         return False
-    block = (
-        "\n\n# Auto-saved by `djust deploy` — the project slug to deploy to.\n"
-        "[tool.djust.deploy]\n"
-        f'project = "{slug}"\n'
-    )
     try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(block)
+        original = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    table_re = re.compile(r"^\[tool\.djust\.deploy\][^\n]*\n", re.MULTILINE)
+    project_in_table_re = re.compile(
+        r"(^\[tool\.djust\.deploy\][^\n]*\n(?:[^\[]*\n)*?)\s*project\s*=\s*\"[^\"]*\"\s*\n",
+        re.MULTILINE,
+    )
+
+    new_line = f'project = "{slug}"\n'
+
+    if project_in_table_re.search(original):
+        # Case 1: replace the existing project = "…" line.
+        updated = project_in_table_re.sub(rf"\1{new_line}", original, count=1)
+    elif table_re.search(original):
+        # Case 2: table header is there but no project key yet — insert
+        # it right under the header.
+        updated = table_re.sub(lambda m: m.group(0) + new_line, original, count=1)
+    else:
+        # Case 3: append a fresh block.
+        prefix = "" if original.endswith("\n") else "\n"
+        updated = original + (
+            f"{prefix}\n# Auto-saved by `djust deploy` — the project slug to deploy to.\n"
+            "[tool.djust.deploy]\n"
+            f"{new_line}"
+        )
+
+    try:
+        path.write_text(updated, encoding="utf-8")
     except OSError:
         return False
     return True
@@ -1035,7 +1065,7 @@ def deploy(
 
     creds = _ensure_logged_in(server, interactive=not no_create)
 
-    project_slug = _resolve_project_slug(project_slug, Path.cwd())
+    project_slug = _resolve_project_slug(project_slug, Path.cwd(), interactive=not no_create)
     project_slug = _ensure_project_exists(
         server,
         creds,
@@ -1101,9 +1131,9 @@ def deploy_dir(
     """
     server = ctx.obj["server"]
 
-    creds = _ensure_logged_in(server, interactive=True)
+    creds = _ensure_logged_in(server, interactive=not no_create)
 
-    project_slug = _resolve_project_slug(project_slug, Path(source_dir))
+    project_slug = _resolve_project_slug(project_slug, Path(source_dir), interactive=not no_create)
     project_slug = _ensure_project_exists(
         server,
         creds,

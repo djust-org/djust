@@ -704,6 +704,49 @@ class TestSlugResolution:
         # tmp_path has no pyproject.toml — save should fail gracefully.
         assert _save_slug_to_pyproject(tmp_path, "x") is False
 
+    def test_save_is_idempotent_under_server_uniquification(self, tmp_path):
+        """Server slug-uniquification (`my-app` → `my-app-2`) triggers
+        a SECOND call to `_save_slug_to_pyproject`. The result must be
+        a parseable pyproject.toml with the latest slug — the prior
+        append-only writer left a duplicate `[tool.djust.deploy]`
+        table, which `tomllib` rejects with TOMLDecodeError."""
+        import tomllib
+
+        from djust.deploy_cli import _save_slug_to_pyproject, _read_slug_from_pyproject
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "thing"\n')
+
+        # First save: appends the table.
+        assert _save_slug_to_pyproject(tmp_path, "my-app") is True
+        # Second save (server uniquified): must replace, not append.
+        assert _save_slug_to_pyproject(tmp_path, "my-app-2") is True
+
+        contents = (tmp_path / "pyproject.toml").read_text()
+        # Parses cleanly — no duplicate-table TOMLDecodeError.
+        data = tomllib.loads(contents)
+        assert data["tool"]["djust"]["deploy"]["project"] == "my-app-2"
+        # And the round-trip via _read_slug_from_pyproject sees the new value.
+        assert _read_slug_from_pyproject(tmp_path) == "my-app-2"
+        # Exactly one [tool.djust.deploy] header in the file.
+        assert contents.count("[tool.djust.deploy]") == 1
+
+    def test_save_replaces_in_place_when_table_already_present(self, tmp_path):
+        """If the user hand-wrote `[tool.djust.deploy] project = "old"`
+        before any deploy, the writer must replace that line — not
+        append a sibling table."""
+        import tomllib
+
+        from djust.deploy_cli import _save_slug_to_pyproject
+
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "thing"\n\n[tool.djust.deploy]\nproject = "old-slug"\n'
+        )
+        assert _save_slug_to_pyproject(tmp_path, "new-slug") is True
+        contents = (tmp_path / "pyproject.toml").read_text()
+        data = tomllib.loads(contents)
+        assert data["tool"]["djust"]["deploy"]["project"] == "new-slug"
+        assert "old-slug" not in contents
+
     def test_deploy_command_falls_through_to_pyproject(
         self, runner, creds_dir, saved_creds, requests_mock, tmp_path, monkeypatch
     ):
@@ -938,6 +981,29 @@ class TestGuidedDeploy:
             result = runner.invoke(cli, ["deploy", "my-app"])
         assert deploy_adapter.called
         assert result.exit_code == 0, result.output
+
+    def test_no_create_with_no_slug_and_no_pyproject_fails(
+        self, runner, creds_dir, saved_creds, requests_mock, tmp_path, monkeypatch
+    ):
+        """`deploy --no-create` with no slug arg and no pyproject must
+        fail fast rather than prompt. Regression for the same op-precedence
+        class as the _ensure_logged_in fix — _resolve_project_slug also
+        needs `interactive=not no_create` propagated from both call
+        sites (deploy and deploy_dir)."""
+        # Empty tmp dir as cwd — no pyproject.toml, so slug must come
+        # from the (missing) CLI arg or fail.
+        monkeypatch.chdir(tmp_path)
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            # No positional slug; --no-create.
+            result = runner.invoke(cli, ["deploy", "--no-create"])
+        assert result.exit_code != 0
+        # The non-interactive failure message mentions pyproject — that's
+        # the unique signal the slug-resolution path gave up early.
+        assert "pyproject" in result.output.lower() or "slug" in result.output.lower()
 
     def test_no_create_with_no_creds_fails_non_interactively(
         self, runner, creds_dir, requests_mock
