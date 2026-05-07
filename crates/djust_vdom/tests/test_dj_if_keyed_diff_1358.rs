@@ -39,36 +39,8 @@
 use djust_vdom::diff::diff_nodes;
 use djust_vdom::{Patch, VNode};
 
-/// Helper: build a `<!--dj-if id="X"-->` open-marker comment node.
-fn dj_if_open(id: &str) -> VNode {
-    VNode {
-        tag: "#comment".to_string(),
-        attrs: Default::default(),
-        children: Vec::new(),
-        text: Some(format!("dj-if id=\"{}\"", id)),
-        key: None,
-        djust_id: None,
-        cached_html: None,
-    }
-}
-
-/// Helper: build a `<!--/dj-if-->` close-marker comment node.
-fn dj_if_close() -> VNode {
-    VNode {
-        tag: "#comment".to_string(),
-        attrs: Default::default(),
-        children: Vec::new(),
-        text: Some("/dj-if".to_string()),
-        key: None,
-        djust_id: None,
-        cached_html: None,
-    }
-}
-
-/// Count patches matching a predicate.
-fn count<F: Fn(&Patch) -> bool>(patches: &[Patch], pred: F) -> usize {
-    patches.iter().filter(|p| pred(p)).count()
-}
+mod common;
+use common::{count, dj_if_close, dj_if_open};
 
 // =============================================================================
 // Case 1: Two SEPARATE `{% if %}` blocks — one disappears, another appears
