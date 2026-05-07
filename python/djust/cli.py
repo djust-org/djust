@@ -902,7 +902,25 @@ def cmd_deploy(rest):
     try:
         from djust.deploy_cli import cli as deploy_cli
     except ImportError as e:
-        print(f"Error: deploy CLI requires the 'deploy' extra: pip install 'djust[deploy]'\n  {e}")
+        # The deploy CLI's runtime deps (click, requests) ship as base
+        # `djust` deps, so the most common cause of an ImportError here
+        # is "user installed djust into one env but is invoking it from
+        # another" (e.g. `uv run djust …` from a project whose
+        # pyproject.toml doesn't list djust). Surface the real
+        # underlying error instead of pointing at an obsolete extra.
+        missing = getattr(e, "name", None)
+        hint = (
+            "\n  Hint: ensure the env running `djust` has djust + its deps\n"
+            "  installed. If you're using uv:\n"
+            "    uv pip install 'djust>=0.9.5'           (current env)\n"
+            "    uv add 'djust>=0.9.5' && uv sync         (project env)"
+        )
+        if missing == "click" or missing == "requests":
+            hint = (
+                f"\n  '{missing}' is missing — it's a base djust dep. Reinstall:\n"
+                "    uv pip install --force-reinstall 'djust>=0.9.5'"
+            )
+        print(f"Error: failed to import djust.deploy_cli: {e}{hint}")
         return 1
 
     if not rest or rest[0] in ("-h", "--help"):
