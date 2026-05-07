@@ -335,7 +335,23 @@ class TestDeployCommand:
         assert result.exit_code != 0
         assert "not clean" in result.output.lower() or "clean" in result.output.lower()
 
+    def _mock_preconditions(self, requests_mock, server="https://djustlive.com", slug="my-project"):
+        """Stub the new guided-deploy preconditions (/me/ + /projects/<slug>/)
+        as success, so the existing deploy-API tests assert on the deploy
+        POST itself and not on the precondition chain."""
+        requests_mock.get(
+            f"{server}/api/v1/me/",
+            json={"username": "u", "email": "user@example.com", "is_staff": False},
+            status_code=200,
+        )
+        requests_mock.get(
+            f"{server}/api/v1/projects/{slug}/",
+            json={"slug": slug, "name": slug, "owner_email": "user@example.com"},
+            status_code=200,
+        )
+
     def test_deploy_clean_git_calls_api(self, runner, creds_dir, saved_creds, requests_mock):
+        self._mock_preconditions(requests_mock)
         requests_mock.post(
             "https://djustlive.com/api/v1/projects/my-project/environments/production/deploy/",
             text="Build started\nDone\n",
@@ -346,6 +362,7 @@ class TestDeployCommand:
         assert result.exit_code == 0, result.output
 
     def test_deploy_streams_log_output(self, runner, creds_dir, saved_creds, requests_mock):
+        self._mock_preconditions(requests_mock)
         log_lines = "Step 1/5: Installing dependencies\nStep 2/5: Collecting static\nDone!\n"
         requests_mock.post(
             "https://djustlive.com/api/v1/projects/my-project/environments/production/deploy/",
@@ -357,6 +374,7 @@ class TestDeployCommand:
         assert "Installing dependencies" in result.output or "Done" in result.output
 
     def test_deploy_sends_auth_header(self, runner, creds_dir, saved_creds, requests_mock):
+        self._mock_preconditions(requests_mock, slug="slug-x")
         adapter = requests_mock.post(
             "https://djustlive.com/api/v1/projects/slug-x/environments/production/deploy/",
             text="ok\n",
@@ -372,18 +390,27 @@ class TestDeployCommand:
         assert result.exit_code != 0
 
     def test_deploy_api_error_shows_message(self, runner, creds_dir, saved_creds, requests_mock):
-        requests_mock.post(
-            "https://djustlive.com/api/v1/projects/bad-slug/environments/production/deploy/",
-            json={"detail": "Project not found"},
+        # --no-create makes the precondition check fail-fast on a 404
+        # for the project lookup, so this test exercises the same
+        # "missing project" path it always did.
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+            status_code=200,
+        )
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/bad-slug/",
+            json={"detail": "Not found."},
             status_code=404,
         )
         with patch("djust.deploy_cli._check_git_clean"):
-            result = runner.invoke(cli, ["deploy", "bad-slug"])
+            result = runner.invoke(cli, ["deploy", "bad-slug", "--no-create"])
         assert result.exit_code != 0
 
     def test_deploy_server_flag_overrides_default(
         self, runner, creds_dir, saved_creds, requests_mock
     ):
+        self._mock_preconditions(requests_mock, server="https://other-server.com", slug="proj")
         adapter = requests_mock.post(
             "https://other-server.com/api/v1/projects/proj/environments/production/deploy/",
             text="ok\n",
@@ -467,6 +494,17 @@ class TestSlugResolution:
         """End-to-end: `djust deploy` with no arg reads from pyproject.toml."""
         (tmp_path / "pyproject.toml").write_text('[tool.djust.deploy]\nproject = "auto-slug"\n')
         monkeypatch.chdir(tmp_path)
+        # Mock the new precondition endpoints + the deploy endpoint.
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+            status_code=200,
+        )
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/auto-slug/",
+            json={"slug": "auto-slug", "name": "auto-slug", "owner_email": "u@e.com"},
+            status_code=200,
+        )
         adapter = requests_mock.post(
             "https://djustlive.com/api/v1/projects/auto-slug/environments/production/deploy/",
             text="ok\n",
@@ -475,3 +513,133 @@ class TestSlugResolution:
         with patch("djust.deploy_cli._check_git_clean"):
             result = runner.invoke(cli, ["deploy"])
         assert adapter.called, f"expected slug resolution from pyproject.toml; got {result.output}"
+
+
+# ---------------------------------------------------------------------------
+# Guided onboarding (login if needed, create project if 404)
+# ---------------------------------------------------------------------------
+
+
+class TestGuidedDeploy:
+    """Tests for the precondition chain that turns `djust deploy` into a
+    single-command end-to-end flow:
+
+      - `_ensure_logged_in`: if no creds, prompt for email/password and
+        save token; if creds exist but /me/ 401s, drop and re-prompt.
+      - `_ensure_project_exists`: if /projects/<slug>/ 404s, prompt to
+        create (or auto-create with --yes, or fail with --no-create).
+    """
+
+    def test_yes_flag_creates_project_without_prompting(
+        self, runner, creds_dir, saved_creds, requests_mock
+    ):
+        # /me/ ok, /projects/<slug>/ 404, POST /projects/ → 201
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/new-app/",
+            json={"detail": "Not found."},
+            status_code=404,
+        )
+        create_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/",
+            json={
+                "slug": "new-app",
+                "name": "new-app",
+                "instance_slug": "abc1",
+                "owner_email": "u@e.com",
+                "status": "active",
+                "environments": ["production"],
+                "created_at": "2026-05-07T00:00:00Z",
+            },
+            status_code=201,
+        )
+        deploy_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/new-app/environments/production/deploy/",
+            text="ok\n",
+            status_code=200,
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(cli, ["deploy", "new-app", "--yes"])
+        assert create_adapter.called, "expected POST /projects/ to be called"
+        assert deploy_adapter.called, "expected the deploy POST to follow project creation"
+        assert result.exit_code == 0, result.output
+        # Verify the body sent to POST /projects/ has name=new-app
+        sent_body = create_adapter.last_request.json()
+        assert sent_body == {"name": "new-app"}
+
+    def test_no_create_flag_fails_on_404(self, runner, creds_dir, saved_creds, requests_mock):
+        requests_mock.get(
+            "https://djustlive.com/api/v1/me/",
+            json={"username": "u", "email": "u@e.com", "is_staff": False},
+        )
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/missing/",
+            json={"detail": "Not found."},
+            status_code=404,
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(cli, ["deploy", "missing", "--no-create"])
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower() or "no-create" in result.output.lower()
+
+    def test_revoked_token_triggers_re_login(self, runner, creds_dir, saved_creds, requests_mock):
+        # /me/ returns 401 → CLI should prompt for re-auth, then proceed.
+        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
+        # /auth/login/ accepts the re-auth.
+        requests_mock.post(
+            "https://djustlive.com/api/v1/auth/login/",
+            json={"token": "fresh-token", "email": "u@e.com"},
+            status_code=200,
+        )
+        # And the rest of the flow proceeds.
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/p/",
+            json={"slug": "p", "name": "p", "owner_email": "u@e.com"},
+        )
+        deploy_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/p/environments/production/deploy/",
+            text="ok\n",
+            status_code=200,
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(
+                cli,
+                ["deploy", "p"],
+                # email + password for the re-auth prompt
+                input="u@e.com\nsecret\n",
+            )
+        assert deploy_adapter.called
+        # The re-auth path uses the fresh token, not the stale one.
+        sent_auth = deploy_adapter.last_request.headers.get("Authorization", "")
+        assert "fresh-token" in sent_auth, sent_auth
+        assert result.exit_code == 0, result.output
+
+    def test_no_credentials_at_all_prompts_login(self, runner, creds_dir, requests_mock):
+        """Brand new user — no ~/.djustlive/credentials. CLI should
+        guide them through login inline, no separate `djust deploy
+        login` step."""
+        requests_mock.post(
+            "https://djustlive.com/api/v1/auth/login/",
+            json={"token": "tok-new-user", "email": "newbie@example.com"},
+            status_code=200,
+        )
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/my-app/",
+            json={"slug": "my-app", "name": "my-app", "owner_email": "newbie@example.com"},
+        )
+        deploy_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/my-app/environments/production/deploy/",
+            text="ok\n",
+            status_code=200,
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(
+                cli,
+                ["deploy", "my-app"],
+                input="newbie@example.com\npw1234567\n",
+            )
+        assert deploy_adapter.called
+        assert result.exit_code == 0, result.output

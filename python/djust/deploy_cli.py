@@ -198,6 +198,174 @@ def _resolve_project_slug(
 
 
 # ---------------------------------------------------------------------------
+# Guided onboarding preconditions
+# ---------------------------------------------------------------------------
+
+
+def _ensure_logged_in(server: str, *, interactive: bool = True) -> dict:
+    """Return live credentials, prompting for login if there are none.
+
+    Validates the saved token by calling ``GET /api/v1/me/``. If that
+    returns 401 (token revoked / user deleted), the local credentials
+    are stale — drop them and re-prompt.
+
+    Behaviour matrix:
+
+      | saved token | /me/ result | action                      |
+      |-------------|-------------|-----------------------------|
+      | none        | (n/a)       | prompt for login            |
+      | yes         | 200         | use as-is                   |
+      | yes         | 401         | drop, prompt for login      |
+      | yes         | other       | use as-is + warn (don't    |
+      |             |             | block on transient errors)  |
+
+    Raises ``ClickException`` if ``interactive=False`` and saved
+    credentials are missing or stale.
+    """
+    try:
+        creds = load_credentials()
+    except click.ClickException:
+        if not interactive:
+            raise
+        click.echo("Not logged in to djustlive — let's fix that.")
+        return _login_interactive(server)
+
+    # Validate against /me/. A 401 means the token's no good anymore.
+    try:
+        resp = requests.get(
+            f"{server}/api/v1/me/",
+            headers=_api_headers(creds["token"]),
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        # Don't block the deploy on a transient network blip — fall
+        # through with the saved creds and let the deploy itself fail
+        # if the network is genuinely broken.
+        logger.debug("Could not reach /me/: %s — proceeding with saved creds", exc)
+        return creds
+
+    if resp.status_code == 200:
+        return creds
+
+    if resp.status_code == 401:
+        if not interactive:
+            raise click.ClickException(
+                "Saved credentials are no longer valid (server returned 401). "
+                "Run `djust deploy login` to re-authenticate."
+            )
+        click.echo("Saved credentials are no longer valid — please re-authenticate.")
+        path = credentials_path()
+        if path.exists():
+            path.unlink()
+        return _login_interactive(server)
+
+    # 5xx or other unexpected — log and proceed.
+    logger.debug("/me/ returned %s; proceeding with saved creds", resp.status_code)
+    return creds
+
+
+def _ensure_project_exists(
+    server: str,
+    token: str,
+    project_slug: str,
+    *,
+    source_dir: Path,
+    no_create: bool = False,
+    yes: bool = False,
+) -> str:
+    """Confirm ``project_slug`` exists on the server; offer to create otherwise.
+
+    Returns the slug that the deploy should use — usually the input
+    ``project_slug``, but a freshly-created project may come back with
+    a uniquified slug (e.g. ``my-app-1`` if ``my-app`` was taken).
+
+    Decisions:
+
+      | server says       | --no-create | --yes  | result                |
+      |-------------------|-------------|--------|-----------------------|
+      | 200 (project ok)  | (n/a)       | (n/a)  | use slug as-is        |
+      | 404               | True        | (n/a)  | raise (fail-fast)     |
+      | 404               | False       | True   | create, no prompt     |
+      | 404               | False       | False  | confirm, then create  |
+      | other (5xx/etc)   | (n/a)       | (n/a)  | use slug + warn       |
+    """
+    try:
+        resp = requests.get(
+            f"{server}/api/v1/projects/{project_slug}/",
+            headers=_api_headers(token),
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        logger.debug("project precondition GET failed: %s — proceeding", exc)
+        return project_slug
+
+    if resp.status_code == 200:
+        return project_slug
+
+    if resp.status_code != 404:
+        # 5xx, 401 we already handled, etc. Don't second-guess; the
+        # actual deploy will surface the real error if there's one.
+        logger.debug(
+            "project precondition GET returned %s; proceeding with slug %r",
+            resp.status_code,
+            project_slug,
+        )
+        return project_slug
+
+    # 404 — project doesn't exist for this user. Decide what to do.
+    if no_create:
+        raise click.ClickException(
+            f"Project '{project_slug}' not found on {server} and "
+            "--no-create was passed. Create the project first or drop "
+            "--no-create to be prompted."
+        )
+
+    if not yes and not click.confirm(
+        f"Project '{project_slug}' doesn't exist on djustlive yet. Create it now?",
+        default=True,
+    ):
+        raise click.ClickException("Aborted — project not created.")
+
+    click.echo(f"Creating project '{project_slug}'...")
+    try:
+        resp = requests.post(
+            f"{server}/api/v1/projects/",
+            headers=_api_headers(token),
+            json={"name": project_slug},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise click.ClickException(f"Could not create project: {exc}") from exc
+
+    if resp.status_code != 201:
+        try:
+            body = resp.json() if resp.content else {}
+        except (ValueError, json.JSONDecodeError):
+            body = {}
+        detail = body.get("detail") or resp.text
+        raise click.ClickException(f"Project creation failed ({resp.status_code}): {detail}")
+
+    body = resp.json()
+    actual_slug = body.get("slug") or project_slug
+    click.echo(f"Project created: {actual_slug} (owner: {body.get('owner_email')})")
+
+    # If the server-assigned slug differs (uniqueness collision), offer
+    # to update the local pyproject.toml to match.
+    if actual_slug != project_slug and (
+        yes
+        or click.confirm(
+            f"Server assigned slug '{actual_slug}' (yours collided). "
+            f"Update pyproject.toml to match?",
+            default=True,
+        )
+    ):
+        if _save_slug_to_pyproject(source_dir, actual_slug):
+            click.echo(f"Updated pyproject.toml to use '{actual_slug}'.")
+
+    return actual_slug
+
+
+# ---------------------------------------------------------------------------
 # Git check
 # ---------------------------------------------------------------------------
 
@@ -247,11 +415,14 @@ def cli(ctx: click.Context, server: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-@cli.command()
-@click.pass_context
-def login(ctx: click.Context) -> None:
-    """Log in to djustlive.com and store credentials."""
-    server = ctx.obj["server"]
+def _login_interactive(server: str) -> dict:
+    """Prompt for credentials, POST to /api/v1/auth/login/, save token.
+
+    Extracted so the guided ``deploy`` flow can call this inline when
+    it detects "no credentials yet" — instead of erroring and forcing
+    the user to run ``djust deploy login`` separately. Returns the
+    saved credentials dict.
+    """
     email = click.prompt("Email")
     password = click.prompt("Password", hide_input=True)
 
@@ -278,6 +449,14 @@ def login(ctx: click.Context) -> None:
 
     save_credentials(token, email, server)
     click.echo(f"Logged in as {email}.")
+    return {"token": token, "email": email, "server_url": server}
+
+
+@cli.command()
+@click.pass_context
+def login(ctx: click.Context) -> None:
+    """Log in to djustlive.com and store credentials."""
+    _login_interactive(ctx.obj["server"])
 
 
 # ---------------------------------------------------------------------------
@@ -420,21 +599,46 @@ def _create_tarball(source_dir: Path, output_path: Path) -> None:
 
 @cli.command()
 @click.argument("project_slug", required=False)
+@click.option("--yes", "-y", is_flag=True, help="Auto-accept all prompts (CI / scripted use).")
+@click.option(
+    "--no-create",
+    is_flag=True,
+    help="Fail if the project doesn't already exist instead of prompting to create it.",
+)
 @click.pass_context
-def deploy(ctx: click.Context, project_slug: Optional[str]) -> None:
+def deploy(
+    ctx: click.Context,
+    project_slug: Optional[str],
+    yes: bool,
+    no_create: bool,
+) -> None:
     """Deploy [PROJECT_SLUG] to production on djustlive.com.
 
-    If PROJECT_SLUG is omitted, reads it from ``[tool.djust.deploy].project``
-    in ./pyproject.toml — and prompts (offering to save) if that's missing
-    too.
+    Walks first-time users through the full chain: log in → resolve
+    slug (CLI arg → pyproject → prompt) → confirm project exists on
+    server (or offer to create it) → deploy. Each step is skipped if
+    its precondition is already met, so power users see only the
+    deploy itself.
+
+    Flags:
+      --yes / -y    auto-accept every confirmation (CI / scripts)
+      --no-create   fail-fast if the project doesn't exist server-side
     """
     _check_git_clean()
+    server = ctx.obj["server"]
+
+    creds = _ensure_logged_in(server, interactive=not no_create or True)
+    token = creds["token"]
 
     project_slug = _resolve_project_slug(project_slug, Path.cwd())
-
-    creds = load_credentials()
-    server = ctx.obj["server"]
-    token = creds["token"]
+    project_slug = _ensure_project_exists(
+        server,
+        token,
+        project_slug,
+        source_dir=Path.cwd(),
+        no_create=no_create,
+        yes=yes,
+    )
 
     url = f"{server}/api/v1/projects/{project_slug}/environments/production/deploy/"
 
@@ -470,19 +674,40 @@ def deploy(ctx: click.Context, project_slug: Optional[str]) -> None:
     default=".",
     help="Directory to deploy (default: current working directory)",
 )
+@click.option("--yes", "-y", is_flag=True, help="Auto-accept all prompts (CI / scripted use).")
+@click.option(
+    "--no-create",
+    is_flag=True,
+    help="Fail if the project doesn't already exist instead of prompting to create it.",
+)
 @click.pass_context
-def deploy_dir(ctx: click.Context, project_slug: Optional[str], source_dir: str) -> None:
+def deploy_dir(
+    ctx: click.Context,
+    project_slug: Optional[str],
+    source_dir: str,
+    yes: bool,
+    no_create: bool,
+) -> None:
     """Deploy from a local directory (no git required).
 
-    If PROJECT_SLUG is omitted, reads it from ``[tool.djust.deploy].project``
-    in ``<source_dir>/pyproject.toml`` — and prompts (offering to save) if
-    that's missing too.
+    Same guided onboarding chain as ``deploy``: log in → resolve slug
+    → confirm project exists (or offer to create) → deploy. Skips any
+    step whose precondition is already satisfied.
     """
-    project_slug = _resolve_project_slug(project_slug, Path(source_dir))
-
-    creds = load_credentials()
     server = ctx.obj["server"]
+
+    creds = _ensure_logged_in(server, interactive=True)
     token = creds["token"]
+
+    project_slug = _resolve_project_slug(project_slug, Path(source_dir))
+    project_slug = _ensure_project_exists(
+        server,
+        token,
+        project_slug,
+        source_dir=Path(source_dir),
+        no_create=no_create,
+        yes=yes,
+    )
 
     click.echo(f"Creating tarball from {source_dir}...")
 
