@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5rc3] - 2026-05-07
+
 ### Added
 
 - **Bundle-init-order structural lint: `scripts/check-bundle-init-order.mjs` (#1372, #1370 follow-up).** Static check for the **direct-top-level-read** TDZ subclass — catches the case where a late-declared `let`/`const` is referenced directly at top level of an earlier module. Enumerates module-scope `let`/`const` across `python/djust/static/djust/src/*.js`, finds top-level use sites via acorn AST, and flags any cross-module use where the use-site lex-orders BEFORE the declaration. **Does NOT catch transitive call-graph TDZ** (e.g., `djustInit()` calling `mountHooks()` whose body reads a late `let` — this is exactly the #1370 shape). The runtime regression test `bundle-init-no-tdz.test.js` continues to catch transitive cases via JSDOM eval. The two checks are complementary; extending this lint to a depth-N call-graph walker is filed as a follow-up. Wired into `Makefile` (`make check-bundle-init-order` is part of `make check`) and pre-push hook. Currently clean on main.
