@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6rc1] - 2026-05-07
+
 ### Added
 
 - **`djust deploy` — guided end-to-end onboarding (#1422).** The CLI now walks first-time users through the full chain in a single `djust deploy` invocation: log in → resolve project slug (CLI arg → `pyproject.toml` → prompt) → confirm the project exists server-side (or offer to create it) → deploy. Each step is skipped if its precondition is already met, so power users see only the deploy itself. Slug is auto-saved to `pyproject.toml` (`[tool.djust.deploy] project = "…"`) so subsequent runs are zero-prompt; the writer is idempotent and survives a server-side slug-uniquification round-trip without producing a duplicate-table TOML. Flags: `--yes`/`-y` auto-accepts every confirmation (CI / scripts), `--no-create` fails fast if the project doesn't exist server-side and propagates `interactive=False` through the slug-resolution + login chain so CI runs with no creds and no slug exit instead of prompting.
