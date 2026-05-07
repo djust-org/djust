@@ -135,6 +135,10 @@ check-handler-contracts: ## Cross-reference tag-emit _event defaults against han
 docs-lint: ## Sweep docs/**/*.md for stale .md cross-references (closes #1075)
 	@.venv/bin/python scripts/docs-lint.py $(if $(VERBOSE),--verbose,)
 
+.PHONY: check-bundle-init-order
+check-bundle-init-order: ## Static check: declared-late/used-early let/const across bundle concat (closes #1372)
+	@node scripts/check-bundle-init-order.mjs
+
 .PHONY: test
 test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
@@ -238,7 +242,7 @@ pre-commit-install: ## Install pre-commit hooks (run once after clone)
 	@echo "$(GREEN)Pre-push hooks installed! Tests will run before git push.$(NC)"
 
 .PHONY: check
-check: lint test ## Run linters and tests
+check: lint check-bundle-init-order test ## Run linters and tests
 
 .PHONY: check-changelog
 check-changelog: ## Validate CHANGELOG test-count claims against actual tests (closes #908)
