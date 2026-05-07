@@ -515,7 +515,28 @@ def _check_git_clean() -> None:
 def cli(ctx: click.Context, server: Optional[str]) -> None:
     """djust deploy — manage deployments on djustlive.com."""
     ctx.ensure_object(dict)
-    ctx.obj["server"] = (server or DEFAULT_SERVER).rstrip("/")
+    server_url = (server or DEFAULT_SERVER).rstrip("/")
+    _require_secure_server(server_url)
+    ctx.obj["server"] = server_url
+
+
+def _require_secure_server(url: str) -> None:
+    """Refuse cleartext server URLs except for loopback dev hosts.
+
+    Tokens, refresh_tokens, and the PKCE code_verifier all flow over
+    this URL — http:// would put them in cleartext on the wire. The
+    one exception is local development against 127.0.0.1 / localhost,
+    where there's no network path to MITM.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost"):
+        return
+    raise click.ClickException(
+        f"--server / DJUST_SERVER must use https:// (got {url!r}). "
+        "Use http:// only for 127.0.0.1 / localhost dev servers."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +645,11 @@ class _OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        # Defense-in-depth for the auth code: keep ?code=… out of any
+        # downstream Referer header or browser/proxy cache. RFC 8252 §8.10.
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
@@ -707,10 +733,12 @@ def _login_browser(server: str) -> dict:
             f"Browser login failed: {params.get('error_description') or params['error']}"
         )
 
-    if params.get("state") != state:
+    received_state = params.get("state") or ""
+    if not secrets.compare_digest(received_state, state):
         # Either the user has multiple in-flight `djust deploy login`
         # tabs open or someone tried to ride the redirect — refuse it
-        # either way.
+        # either way. Constant-time compare to keep the state value
+        # opaque under any future timing-side-channel surface.
         raise click.ClickException("OAuth state mismatch — login aborted.")
 
     code = params.get("code")
@@ -803,7 +831,11 @@ def _refresh_oauth_token(server: str, refresh_token: str) -> Optional[dict]:
         return None
 
     if resp.status_code != 200:
-        logger.debug("refresh_token rejected (%s): %s", resp.status_code, resp.text)
+        # Don't log resp.text — error bodies from /o/token/ can echo
+        # back the rejected refresh_token in some IdP configs, and a
+        # 5xx body could carry sensitive context. Status alone is enough
+        # for "should I prompt for a fresh browser login?"
+        logger.debug("refresh_token rejected (status=%s)", resp.status_code)
         return None
 
     payload = resp.json()
@@ -1001,7 +1033,7 @@ def deploy(
     _check_git_clean()
     server = ctx.obj["server"]
 
-    creds = _ensure_logged_in(server, interactive=not no_create or True)
+    creds = _ensure_logged_in(server, interactive=not no_create)
 
     project_slug = _resolve_project_slug(project_slug, Path.cwd())
     project_slug = _ensure_project_exists(

@@ -185,10 +185,15 @@ def _simulate_browser(captured_url_holder: dict, code: str = "test-auth-code-123
             # urllib.request — not requests — so requests_mock's global
             # interception doesn't try to mock the loopback callback.
             try:
-                urllib.request.urlopen(  # noqa: S310 — loopback URL only
+                resp = urllib.request.urlopen(  # noqa: S310 — loopback URL only
                     f"{redirect_uri}?code={code}&state={state}",
                     timeout=5,
-                ).read()
+                )
+                resp.read()
+                # Stash response headers + status so tests can assert
+                # on the callback HTML's defense-in-depth headers.
+                captured_url_holder["response_status"] = resp.status
+                captured_url_holder["response_headers"] = dict(resp.headers.items())
             except Exception:
                 pass
 
@@ -379,6 +384,70 @@ class TestLoginCommand:
         assert captured["url"].startswith("https://myserver.example.com/o/authorize/")
         data = json.loads((creds_dir / "credentials").read_text())
         assert data["server_url"] == "https://myserver.example.com"
+
+    def test_callback_response_has_security_headers(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        """The loopback callback HTML response must carry
+        Referrer-Policy: no-referrer + Cache-Control: no-store so the
+        ?code=…&state=… URL doesn't leak into Referer headers or
+        browser/proxy caches. RFC 8252 §8.10."""
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "u@e.com"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
+        requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "x",
+                "refresh_token": "y",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+            },
+        )
+        captured = {}
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser(captured))
+        result = runner.invoke(cli, ["login"])
+        assert result.exit_code == 0, result.output
+
+        headers = captured.get("response_headers") or {}
+        assert headers.get("Referrer-Policy") == "no-referrer", headers
+        cache = headers.get("Cache-Control") or ""
+        assert "no-store" in cache, headers
+
+    def test_http_server_url_rejected(self, runner, creds_dir):
+        """Cleartext --server (non-loopback) is refused — tokens and the
+        PKCE code_verifier would otherwise flow over the wire in the
+        clear."""
+        result = runner.invoke(cli, ["--server", "http://djustlive.com", "login"])
+        assert result.exit_code != 0
+        assert "https" in result.output.lower()
+
+    def test_http_loopback_url_allowed(self, runner, creds_dir, requests_mock, monkeypatch):
+        """http://127.0.0.1 / http://localhost stays allowed for local
+        IdP development."""
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "u@e.com"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
+        requests_mock.post(
+            "http://127.0.0.1:8000/o/token/",
+            json={
+                "access_token": "x",
+                "refresh_token": "y",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+            },
+        )
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser({}))
+        result = runner.invoke(cli, ["--server", "http://127.0.0.1:8000", "login"])
+        assert result.exit_code == 0, result.output
 
 
 # ---------------------------------------------------------------------------
@@ -869,3 +938,100 @@ class TestGuidedDeploy:
             result = runner.invoke(cli, ["deploy", "my-app"])
         assert deploy_adapter.called
         assert result.exit_code == 0, result.output
+
+    def test_no_create_with_no_creds_fails_non_interactively(
+        self, runner, creds_dir, requests_mock
+    ):
+        """`deploy --no-create` with no saved credentials must fail
+        fast rather than launch a browser. Regression for an
+        operator-precedence bug where ``interactive=not no_create or True``
+        always evaluated truthy and silently launched the OAuth flow."""
+        # No creds on disk; --no-create should refuse to bootstrap
+        # interactively. We do NOT mock /o/token/ — if the CLI tries to
+        # launch a browser flow, the test harness will hang or error,
+        # which is itself a fail.
+        with (
+            patch("djust.deploy_cli._check_git_clean"),
+            patch("djust.deploy_cli.webbrowser.open") as mock_open,
+        ):
+            result = runner.invoke(cli, ["deploy", "p", "--no-create"])
+        assert result.exit_code != 0
+        # And the browser was never opened.
+        assert not mock_open.called, (
+            "--no-create should not launch a browser; got mock_open.call_args_list="
+            f"{mock_open.call_args_list}"
+        )
+
+    def test_stale_refresh_token_falls_back_to_browser(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        """Bearer creds + dead refresh_token: /o/token/ returns 400 on
+        the refresh attempt; the CLI must launch a fresh browser flow
+        rather than give up. End-to-end coverage of the refresh-fallback
+        path."""
+        import base64
+
+        cred_file = creds_dir / "credentials"
+        cred_file.write_text(
+            json.dumps(
+                {
+                    "auth_scheme": "bearer",
+                    "access_token": "expired-access",
+                    "refresh_token": "long-dead-refresh",
+                    "expires_at": 0,
+                    "email": "u@e.com",
+                    "server_url": "https://djustlive.com",
+                }
+            )
+        )
+        cred_file.chmod(0o600)
+
+        # /me/ refuses the expired access token.
+        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
+
+        # /o/token/ matches BOTH the refresh attempt AND the subsequent
+        # auth-code exchange. requests_mock dispatches by body content
+        # via a single adapter that branches on grant_type.
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "u@e.com"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
+
+        def _token_handler(request, _ctx):
+            body = dict(urllib.parse.parse_qsl(request.text or ""))
+            if body.get("grant_type") == "refresh_token":
+                _ctx.status_code = 400
+                return {"error": "invalid_grant"}
+            # authorization_code branch — fresh browser login succeeded.
+            _ctx.status_code = 200
+            return {
+                "access_token": "post-fallback-access",
+                "refresh_token": "post-fallback-refresh",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+                "token_type": "Bearer",
+            }
+
+        requests_mock.post("https://djustlive.com/o/token/", json=_token_handler)
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/p/",
+            json={"slug": "p", "name": "p", "owner_email": "u@e.com"},
+        )
+        deploy_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/p/environments/production/deploy/",
+            text="ok\n",
+        )
+
+        captured = {}
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser(captured))
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(cli, ["deploy", "p"])
+        assert result.exit_code == 0, result.output
+        # The browser flow ran (refresh failed → fallback path executed).
+        assert "url" in captured, "expected browser to be launched after refresh failure"
+        assert captured["url"].startswith("https://djustlive.com/o/authorize/")
+        # Final deploy used the post-fallback access token, not the
+        # rotated value from a refresh attempt that never succeeded.
+        sent_auth = deploy_adapter.last_request.headers.get("Authorization", "")
+        assert "Bearer post-fallback-access" in sent_auth, sent_auth
