@@ -737,16 +737,33 @@ Rules distilled from the v0.9.3-4 audit and process drain bucket.
   pattern as a safe alternative for parallel-agent safety; this rule
   extends it to single-agent bulk operations regardless of agent count.
 
-- **Filter-migration grep canon (#1391, v0.9.3-2 retro).** When changing a
-  filter convention (e.g., `k.startswith("_")` → `k in _framework_attrs`),
-  grep the codebase for the EXACT pre-fix expression text and verify all
-  matches are updated. Filters that operate on the same data type often
-  have parallel implementations (Python change-tracker, Rust differ,
-  push-commands path, identity snapshots). A migration that updates one
-  path and not the others creates a latent invariant violation that may
-  only surface in a future audit. Concrete check during Stage 4 planning:
-  for any PR that changes a filter expression, grep for the pre-fix text
-  and visually scan all hits.
+- **Symbol-migration grep canon (#1391, #1400, v0.9.3-2 + v0.9.5-2 retros).**
+  When changing a filter convention OR removing a top-level symbol as part
+  of a refactor, grep the codebase for the EXACT pre-fix expression / OLD
+  symbol name across `tests/`, `python/tests/`, `examples/`, and any other
+  consumer directory. Verify all matches are updated. Two failure-mode
+  classes this catches:
+
+  1. **Filter conventions** (e.g., `k.startswith("_")` → `k in _framework_attrs`).
+     Filters that operate on the same data type often have parallel
+     implementations (Python change-tracker, Rust differ, push-commands path,
+     identity snapshots). A migration that updates one path and not the
+     others creates a latent invariant violation that may only surface in a
+     future audit. PR #1281 fixed `_snapshot_assigns()` but identity
+     snapshots stayed on the old filter until the audit found it (#1327).
+
+  2. **Symbol removals during refactor** (extracting a helper, removing a
+     module-global, deprecating a function). Python imports are resolved
+     at runtime — the compiler doesn't catch orphan references. PR #1399's
+     `_TRUNCATION_WARNED` removal left an orphan import in
+     `test_snapshot_truncation_warning.py`; pre-push hook caught it after
+     the commit landed locally.
+
+  Concrete check during Stage 4 planning AND Stage 5 implementation: for
+  any PR that changes a filter expression OR removes a top-level symbol,
+  grep for the pre-fix text / OLD symbol name across the repo and visually
+  scan all hits. The grep is fast (<1s); the failure mode is hours of
+  debugging an orphan reference 2 sessions later.
 
 - **Split-foundation soak-time guidance (#1385, v0.9.5-1 retro).** When
   an iteration ships a new public API surface AND the framework has
