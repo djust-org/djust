@@ -496,6 +496,17 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
         return;
     }
 
+    // dj-if boundary awareness (#1408): mirror `diff_children`'s
+    // `dj_if_pre_pass` so id-syncing respects the same boundary semantics
+    // as patch emission. Without this, a dj-if branch swap left
+    // `last_vdom` with stale ids at positions where the new branch
+    // inserted fresh content — the next render's diff then emitted
+    // RemoveChild/SetAttr patches whose `child_d`/`d` referenced ids the
+    // client DOM never had, leaking content from the prior branch.
+    if sync_ids_dj_if_pre_pass(&old.children, &mut new.children) {
+        return;
+    }
+
     // Check if children use keyed diffing
     let has_keys = new.children.iter().any(|n| n.key.is_some());
 
@@ -504,6 +515,80 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
     } else {
         sync_ids_indexed(&old.children, &mut new.children);
     }
+}
+
+/// dj-if-boundary-aware id sync (#1408). Mirrors `dj_if_pre_pass` in
+/// shape but operates on ids instead of patches:
+///   - id only in OLD → skip (subtree is being removed; no syncing needed)
+///   - id only in NEW → skip (subtree is brand-new; the new ids are what
+///     the client just received via `InsertSubtree.html`, so they MUST
+///     remain so the next render's diff emits patches matching the DOM)
+///   - id in BOTH → recurse into the matched body slice
+///   - non-boundary siblings → pair by relative order outside boundary
+///     ranges (mirrors `build_excluded_mask` in `dj_if_pre_pass`)
+///
+/// Returns `true` when at least one of the slices contained a top-level
+/// dj-if boundary pair. The caller short-circuits its existing keyed /
+/// indexed sync when this returns `true`.
+///
+/// Returns `false` when neither slice has boundaries; caller falls
+/// through to the legacy keyed/indexed sync.
+fn sync_ids_dj_if_pre_pass(old: &[VNode], new: &mut [VNode]) -> bool {
+    let old_pairs = find_top_level_dj_if_pairs(old);
+    let new_pairs = find_top_level_dj_if_pairs(new);
+    if old_pairs.is_empty() && new_pairs.is_empty() {
+        return false;
+    }
+
+    // Build id → (open_idx, close_idx) for the new slice (lookup target
+    // when iterating old_pairs in document order).
+    let mut new_by_id: HashMap<String, (usize, usize)> = HashMap::new();
+    for (open, close, id) in &new_pairs {
+        new_by_id.insert(id.clone(), (*open, *close));
+    }
+
+    // Matched boundaries: recurse into the body slice. Iterate old_pairs
+    // in document order — each iteration's mutable borrow of `new[..]`
+    // ends before the next iteration. Bodies are disjoint slices.
+    for (old_open, old_close, id) in &old_pairs {
+        let Some(&(new_open, new_close)) = new_by_id.get(id) else {
+            continue;
+        };
+        let old_body = &old[*old_open + 1..*old_close];
+        let new_body = &mut new[new_open + 1..new_close];
+
+        // Recurse first: handles `if/elif/else` cascades where a matched-
+        // id boundary's body itself contains nested boundaries. If the
+        // body has no nested boundaries, fall through to element-by-
+        // element pairwise sync (mirrors `dj_if_pre_pass`'s body
+        // fall-through at line 333+).
+        if !sync_ids_dj_if_pre_pass(old_body, new_body) {
+            let common = old_body.len().min(new_body.len());
+            for i in 0..common {
+                sync_ids(&old_body[i], &mut new_body[i]);
+            }
+            // Extra body children (either side) are removed/inserted;
+            // no syncing applies.
+        }
+    }
+
+    // Non-boundary siblings (entries outside ALL top-level boundary
+    // ranges in this slice): pair by relative order. Adding/removing a
+    // boundary doesn't shift these positions — same invariant
+    // `dj_if_pre_pass` relies on for patch emission.
+    let old_excluded = build_excluded_mask(old.len(), &old_pairs);
+    let new_excluded = build_excluded_mask(new.len(), &new_pairs);
+    let old_kept: Vec<usize> = (0..old.len()).filter(|&i| !old_excluded[i]).collect();
+    let new_kept: Vec<usize> = (0..new.len()).filter(|&i| !new_excluded[i]).collect();
+
+    let common = old_kept.len().min(new_kept.len());
+    for i in 0..common {
+        sync_ids(&old[old_kept[i]], &mut new[new_kept[i]]);
+    }
+    // Extra non-boundary children on either side: kept as-is — old
+    // extras are being removed; new extras keep their fresh ids.
+
+    true
 }
 
 fn sync_ids_keyed(old: &[VNode], new: &mut [VNode]) {
