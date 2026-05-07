@@ -14,15 +14,26 @@
  * top-level by module-M (where M < N) crash with
  * `Cannot access 'X' before initialization`.
  *
- * What this lint catches
- * ----------------------
- * For every module-scope `let`/`const` declaration in the bundle,
- * find every top-level (non-deferred) reference. If a reference site
- * lex-orders BEFORE the declaration site, that's a structural TDZ
- * bug. The runtime regression test
- * `tests/js/bundle-init-no-tdz.test.js` catches the SYMPTOM by
- * eval'ing the bundle in JSDOM; this lint catches the CLASS at
- * lint time.
+ * What this lint catches (and what it does NOT)
+ * ----------------------------------------------
+ * **DOES catch**: direct top-level reads of late-declared `let`/`const`.
+ * For every module-scope `let`/`const` declaration in the bundle, find
+ * every top-level (non-deferred) IDENTIFIER REFERENCE in any earlier
+ * module. Lex-order-before-declaration → flag.
+ *
+ * **DOES NOT catch**: transitive call-graph TDZ. If `14-init.js` calls
+ * `someFunc()` at top level whose body (in `19-hooks.js`) reads a late
+ * `let`, this lint stays silent — function bodies are deferred per
+ * design. #1370 itself is exactly this transitive shape (`djustInit() →
+ * mountHooks() → _ensureHooksInit() → _activeHooks`). The runtime
+ * regression test `tests/js/bundle-init-no-tdz.test.js` catches that
+ * via JSDOM `eval` — keep it as the safety net.
+ *
+ * The two checks are complementary: the lint is fast/structural and
+ * catches the direct-read subclass at lint-time; the runtime test is
+ * slower but catches transitive cases at simulate-bundle-init time.
+ * Extending this lint to a depth-N call-graph walker is filed as a
+ * follow-up.
  *
  * Implementation note
  * -------------------
