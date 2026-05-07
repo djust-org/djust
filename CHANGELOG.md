@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-05-07
+
+Stable promotion of `0.9.5rc4`. No code changes since rc4. The rc1 → rc4 progression is summarized below.
+
+### Highlights vs `0.9.4`
+
+- **`fix(vdom)`** — `sync_ids` is now dj-if-boundary-aware (#1408 / #1411). Closes the cross-render dj-id drift class that produced visible content-bleed on `{% if %}` branch swaps in production.
+- **`test(vdom)`** — multi-cycle `sync_ids` round-trip torture (#1412 / #1414) exercising the production server loop (`diff` → apply on a faithful client tracker → `sync_ids` → store as `last_vdom`). Catches the #1408 regression class locally on `cargo test`.
+- **`test(vdom)`** — shared test harness extracted to `crates/djust_vdom/tests/common/mod.rs` (#1415 / #1421). Unblocks 5 follow-up torture/fuzz issues (#1413, #1416, #1417, #1418, #1419, #1420).
+- Plus the rc1–rc3 contents already shipped — see those entries below.
+
 ## [0.9.5rc4] - 2026-05-07
 
 ### Tests
