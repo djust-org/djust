@@ -395,3 +395,83 @@ class TestDeployCommand:
                 ["--server", "https://other-server.com", "deploy", "proj"],
             )
         assert adapter.called
+
+
+# ---------------------------------------------------------------------------
+# Project-slug resolution
+# ---------------------------------------------------------------------------
+
+
+class TestSlugResolution:
+    """Tests for _resolve_project_slug and the explicit > pyproject > prompt
+    precedence chain. Covers the "don't make me retype the slug every deploy"
+    feature."""
+
+    def test_explicit_arg_wins_over_pyproject(self, tmp_path):
+        from djust.deploy_cli import _resolve_project_slug
+
+        (tmp_path / "pyproject.toml").write_text('[tool.djust.deploy]\nproject = "from-file"\n')
+        assert _resolve_project_slug("from-arg", tmp_path, interactive=False) == "from-arg"
+
+    def test_pyproject_used_when_arg_missing(self, tmp_path):
+        from djust.deploy_cli import _resolve_project_slug
+
+        (tmp_path / "pyproject.toml").write_text('[tool.djust.deploy]\nproject = "saved-slug"\n')
+        assert _resolve_project_slug(None, tmp_path, interactive=False) == "saved-slug"
+
+    def test_missing_arg_and_no_pyproject_raises_when_non_interactive(self, tmp_path):
+        from djust.deploy_cli import _resolve_project_slug
+
+        with pytest.raises(click.ClickException):
+            _resolve_project_slug(None, tmp_path, interactive=False)
+
+    def test_pyproject_missing_djust_section_falls_through(self, tmp_path):
+        """A pyproject.toml that exists but doesn't have the section
+        should not error — the prompt path takes over."""
+        from djust.deploy_cli import _resolve_project_slug
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "thing"\n')
+        with pytest.raises(click.ClickException):
+            _resolve_project_slug(None, tmp_path, interactive=False)
+
+    def test_malformed_pyproject_falls_through(self, tmp_path):
+        """A pyproject.toml that fails to parse should not crash the
+        deploy — fall through to the prompt path."""
+        from djust.deploy_cli import _resolve_project_slug
+
+        (tmp_path / "pyproject.toml").write_text("not valid TOML at all !@#$%")
+        with pytest.raises(click.ClickException):
+            _resolve_project_slug(None, tmp_path, interactive=False)
+
+    def test_save_appends_block_to_pyproject(self, tmp_path):
+        from djust.deploy_cli import _save_slug_to_pyproject, _read_slug_from_pyproject
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "thing"\nversion = "0.1.0"\n')
+        assert _save_slug_to_pyproject(tmp_path, "my-project") is True
+        # Round-trips: the next read picks up the saved value.
+        assert _read_slug_from_pyproject(tmp_path) == "my-project"
+        # Original section preserved.
+        contents = (tmp_path / "pyproject.toml").read_text()
+        assert "[project]" in contents
+        assert 'name = "thing"' in contents
+
+    def test_save_returns_false_when_no_pyproject(self, tmp_path):
+        from djust.deploy_cli import _save_slug_to_pyproject
+
+        # tmp_path has no pyproject.toml — save should fail gracefully.
+        assert _save_slug_to_pyproject(tmp_path, "x") is False
+
+    def test_deploy_command_falls_through_to_pyproject(
+        self, runner, creds_dir, saved_creds, requests_mock, tmp_path, monkeypatch
+    ):
+        """End-to-end: `djust deploy` with no arg reads from pyproject.toml."""
+        (tmp_path / "pyproject.toml").write_text('[tool.djust.deploy]\nproject = "auto-slug"\n')
+        monkeypatch.chdir(tmp_path)
+        adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/auto-slug/environments/production/deploy/",
+            text="ok\n",
+            status_code=200,
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(cli, ["deploy"])
+        assert adapter.called, f"expected slug resolution from pyproject.toml; got {result.output}"

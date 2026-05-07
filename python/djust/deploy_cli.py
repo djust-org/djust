@@ -87,6 +87,117 @@ def _api_headers(token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Project-slug resolution
+# ---------------------------------------------------------------------------
+
+
+def _pyproject_path(source_dir: Path) -> Path:
+    return Path(source_dir) / "pyproject.toml"
+
+
+def _read_slug_from_pyproject(source_dir: Path) -> Optional[str]:
+    """Read ``[tool.djust.deploy].project`` from pyproject.toml.
+
+    Returns None if the file or key is absent. Returns None on a
+    malformed file rather than raising — the prompt path will then ask
+    the user explicitly. Uses Python 3.11+ stdlib ``tomllib``.
+    """
+    path = _pyproject_path(source_dir)
+    if not path.exists():
+        return None
+    try:
+        import tomllib
+
+        data = tomllib.loads(path.read_text())
+    except Exception:
+        return None
+    slug = data.get("tool", {}).get("djust", {}).get("deploy", {}).get("project")
+    if isinstance(slug, str) and slug.strip():
+        return slug.strip()
+    return None
+
+
+def _save_slug_to_pyproject(source_dir: Path, slug: str) -> bool:
+    """Append ``[tool.djust.deploy] project = "<slug>"`` to pyproject.toml.
+
+    Returns True if the write succeeded, False if pyproject.toml is
+    absent (most common reason — the project doesn't use it). Doesn't
+    overwrite an existing key — the resolution path only saves when
+    the key was missing in the first place, so we just append a new
+    block at the end.
+
+    We keep this stdlib-only (no tomli_w dependency) by appending text
+    rather than parsing+rewriting. That's safe because we only run it
+    when the key didn't exist; we're never duplicating an existing
+    [tool.djust.deploy] table this way.
+    """
+    path = _pyproject_path(source_dir)
+    if not path.exists():
+        return False
+    block = (
+        "\n\n# Auto-saved by `djust deploy` — the project slug to deploy to.\n"
+        "[tool.djust.deploy]\n"
+        f'project = "{slug}"\n'
+    )
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(block)
+    except OSError:
+        return False
+    return True
+
+
+def _resolve_project_slug(
+    arg: Optional[str],
+    source_dir: Path,
+    *,
+    interactive: bool = True,
+) -> str:
+    """Resolve the project slug for a deploy command.
+
+    Order:
+
+      1. The explicit CLI argument, if provided.
+      2. ``[tool.djust.deploy].project`` in ``<source_dir>/pyproject.toml``.
+      3. Interactive prompt — and offer to save the answer back so future
+         runs find it in pyproject.toml.
+
+    Raises ``click.ClickException`` if ``interactive=False`` and (1) and
+    (2) both miss.
+    """
+    if arg:
+        return arg
+    saved = _read_slug_from_pyproject(source_dir)
+    if saved:
+        click.echo(f"Using project slug from pyproject.toml: {saved}")
+        return saved
+    if not interactive:
+        raise click.ClickException(
+            "No project slug provided and none found in pyproject.toml "
+            "[tool.djust.deploy].project. Pass it as a positional argument."
+        )
+    slug = click.prompt(
+        "Project slug to deploy to (will be saved to pyproject.toml)",
+        type=str,
+    ).strip()
+    if not slug:
+        raise click.ClickException("Empty slug — aborting.")
+    if click.confirm(
+        f"Save '{slug}' to {_pyproject_path(source_dir)} so you don't get asked next time?",
+        default=True,
+    ):
+        if _save_slug_to_pyproject(source_dir, slug):
+            click.echo(f"Saved [tool.djust.deploy].project = '{slug}'.")
+        else:
+            click.echo(
+                "Couldn't save (no pyproject.toml in source directory). "
+                "Pass the slug explicitly or create pyproject.toml first.",
+                err=True,
+            )
+    return slug
+
+
+# ---------------------------------------------------------------------------
 # Git check
 # ---------------------------------------------------------------------------
 
@@ -308,11 +419,18 @@ def _create_tarball(source_dir: Path, output_path: Path) -> None:
 
 
 @cli.command()
-@click.argument("project_slug")
+@click.argument("project_slug", required=False)
 @click.pass_context
-def deploy(ctx: click.Context, project_slug: str) -> None:
-    """Deploy PROJECT_SLUG to production on djustlive.com."""
+def deploy(ctx: click.Context, project_slug: Optional[str]) -> None:
+    """Deploy [PROJECT_SLUG] to production on djustlive.com.
+
+    If PROJECT_SLUG is omitted, reads it from ``[tool.djust.deploy].project``
+    in ./pyproject.toml — and prompts (offering to save) if that's missing
+    too.
+    """
     _check_git_clean()
+
+    project_slug = _resolve_project_slug(project_slug, Path.cwd())
 
     creds = load_credentials()
     server = ctx.obj["server"]
@@ -344,7 +462,7 @@ def deploy(ctx: click.Context, project_slug: str) -> None:
 
 
 @cli.command()
-@click.argument("project_slug")
+@click.argument("project_slug", required=False)
 @click.option(
     "--dir",
     "source_dir",
@@ -353,8 +471,15 @@ def deploy(ctx: click.Context, project_slug: str) -> None:
     help="Directory to deploy (default: current working directory)",
 )
 @click.pass_context
-def deploy_dir(ctx: click.Context, project_slug: str, source_dir: str) -> None:
-    """Deploy from a local directory (no git required)."""
+def deploy_dir(ctx: click.Context, project_slug: Optional[str], source_dir: str) -> None:
+    """Deploy from a local directory (no git required).
+
+    If PROJECT_SLUG is omitted, reads it from ``[tool.djust.deploy].project``
+    in ``<source_dir>/pyproject.toml`` — and prompts (offering to save) if
+    that's missing too.
+    """
+    project_slug = _resolve_project_slug(project_slug, Path(source_dir))
+
     creds = load_credentials()
     server = ctx.obj["server"]
     token = creds["token"]
