@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Dead `InMemoryStateBackend.get_and_update()` removed (#1356).** Method had zero callers and would re-introduce the #1353 shared-mutable-state race class if a future caller was added without auditing. PR #1355 fixed the sibling `get()` to clone via msgpack round-trip; `get_and_update()` was overlooked. Per the issue body's preferred-fix order, deletion was cleanest. Removes ~22 lines of dead code from `python/djust/state_backends/memory.py`. (Surfaced as PR #1355 Stage 13 Re-Review #1.)
+
 ### Fixed
 
 - **`Node::Include` round-trip no longer double-quotes the template path (#1396).** Parser was preserving the outer quotes on `Include.template`; emitter `nodes_to_template_string` then wrapped again, producing `{% include ""partials/header.html"" %}` on round-trip. Surfaced during PR #1397's conversion of round-trip tests to drive from parser output (Action #158 working as designed). Fixed by aligning the parser to strip outer quotes (matching the existing `Extends`, `Static`, and `Now` contracts) — single source of truth, emitter unchanged. `test_nodes_to_template_string_include` un-ignored. Added `test_nodes_to_template_string_now` for defense-in-depth.
