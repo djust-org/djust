@@ -902,29 +902,58 @@ def cmd_deploy(rest):
     try:
         from djust.deploy_cli import cli as deploy_cli
     except ImportError as e:
-        print(f"Error: deploy CLI requires the 'deploy' extra: pip install 'djust[deploy]'\n  {e}")
+        # The deploy CLI's runtime deps (click, requests) ship as base
+        # `djust` deps, so the most common cause of an ImportError here
+        # is "user installed djust into one env but is invoking it from
+        # another" (e.g. `uv run djust …` from a project whose
+        # pyproject.toml doesn't list djust). Surface the real
+        # underlying error instead of pointing at an obsolete extra.
+        missing = getattr(e, "name", None)
+        hint = (
+            "\n  Hint: ensure the env running `djust` has djust + its deps\n"
+            "  installed. If you're using uv:\n"
+            "    uv pip install 'djust>=0.9.5'           (current env)\n"
+            "    uv add 'djust>=0.9.5' && uv sync         (project env)"
+        )
+        if missing == "click" or missing == "requests":
+            hint = (
+                f"\n  '{missing}' is missing — it's a base djust dep. Reinstall:\n"
+                "    uv pip install --force-reinstall 'djust>=0.9.5'"
+            )
+        print(f"Error: failed to import djust.deploy_cli: {e}{hint}")
         return 1
 
-    if not rest or rest[0] in ("-h", "--help"):
+    # `djust deploy --help` / `djust deploy -h` → print our hand-written
+    # umbrella help. The click subcommands have their own --help that
+    # users get via `djust deploy login --help`, etc.
+    if rest and rest[0] in ("-h", "--help"):
         print(DEPLOY_HELP)
         return 0
 
-    first = rest[0]
-
-    # Pass-through subcommands that already exist on the Click group.
-    if first in ("login", "logout", "status"):
-        argv = rest
-    elif first == "--from-git":
-        # `djust deploy --from-git <slug>` — delegate to the git-based deploy.
-        argv = ["deploy", *rest[1:]]
-    elif first.startswith("-"):
-        # Unknown flag at the top level — show help.
-        print(DEPLOY_HELP)
-        return 1
+    # `djust deploy` with no args (or with flags only — `djust deploy
+    # --yes`) → the guided directory-deploy flow. Walks the user through
+    # login + project-create + deploy. The slug comes from
+    # [tool.djust.deploy].project in pyproject.toml or an interactive
+    # prompt.
+    if not rest:
+        argv = ["deploy-dir"]
     else:
-        # `djust deploy <slug> [...]` — default to the directory flow,
-        # which works against the prebuilt-image pipeline (no git required).
-        argv = ["deploy-dir", *rest]
+        first = rest[0]
+        if first in ("login", "logout", "status"):
+            argv = rest
+        elif first == "--from-git":
+            # `djust deploy --from-git <slug>` — git-based deploy.
+            argv = ["deploy", *rest[1:]]
+        elif first.startswith("-"):
+            # `djust deploy --yes` / `djust deploy --no-create` etc. —
+            # flags-only invocation routes to the guided directory flow,
+            # same as the bare `djust deploy` case above.
+            argv = ["deploy-dir", *rest]
+        else:
+            # `djust deploy <slug> [...]` — directory flow with explicit
+            # slug. Works against the prebuilt-image pipeline (no git
+            # required).
+            argv = ["deploy-dir", *rest]
 
     try:
         deploy_cli.main(args=argv, prog_name="djust deploy", standalone_mode=False)
