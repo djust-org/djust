@@ -73,6 +73,14 @@ repos:
   # JavaScript - Build, test, and lint
   - repo: local
     hooks:
+      - id: check-bundle-init-order
+        name: bundle init-order static lint (#1372)
+        entry: node scripts/check-bundle-init-order.mjs
+        language: system
+        files: ^python/djust/static/djust/src/
+        types: [javascript]
+        pass_filenames: false
+
       - id: build-js
         name: build client.js from src/ modules
         entry: bash -c 'bash scripts/build-client.sh && git add python/djust/static/djust/client.js python/djust/static/djust/debug-panel.js'
