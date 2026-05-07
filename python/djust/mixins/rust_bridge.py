@@ -360,7 +360,11 @@ class RustBridgeMixin:
 
                 backend = get_backend()
                 self._cache_key = f"{session_key}_{view_key}{template_hash_slot}"
-                logger.debug("[LiveView] Cache lookup (HTTP): cache_key=%s", self._cache_key)
+                # codeql[py/log-injection] — cache_key may contain request.path; sanitize
+                logger.debug(
+                    "[LiveView] Cache lookup (HTTP): cache_key=%s",
+                    sanitize_for_log(self._cache_key),
+                )
 
                 cached = backend.get(self._cache_key)
                 if cached:
