@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`djust deploy` — guided end-to-end onboarding (#1422).** The CLI now walks first-time users through the full chain in a single `djust deploy` invocation: log in → resolve project slug (CLI arg → `pyproject.toml` → prompt) → confirm the project exists server-side (or offer to create it) → deploy. Each step is skipped if its precondition is already met, so power users see only the deploy itself. Slug is auto-saved to `pyproject.toml` (`[tool.djust] project_slug = "…"`) so subsequent runs are zero-prompt. Flags: `--yes`/`-y` auto-accepts every confirmation (CI / scripts), `--no-create` fails fast if the project doesn't exist server-side.
+- **`djust deploy` login is now an OAuth Auth Code + PKCE browser flow (#1422).** Replaces the previous email/password prompt. The CLI binds an ephemeral 127.0.0.1 port (RFC 8252 loopback redirect), opens the browser to djustlive's `/o/authorize/`, and exchanges the returned code at `/o/token/` for an access + refresh + id_token. PKCE (RFC 7636 / S256) defends code interception; the CLI is a public client (no `client_secret`). Credential format extends to `{auth_scheme: "bearer", access_token, refresh_token, expires_at, email, server_url}`; the legacy `{token: …}` DRF shape is still honored transparently until those tokens expire. On `/me/` 401 the CLI silently tries `refresh_token` before re-launching the browser, so weeks-apart deploys don't bounce the user. Loopback callback HTML emits `Referrer-Policy: no-referrer` + `Cache-Control: no-store` to keep the auth code out of any future Referer header or browser/proxy cache (RFC 8252 §8.10). State parameter compared with `secrets.compare_digest`. `--server` / `DJUST_SERVER` enforces `https://` except for `127.0.0.1` / `localhost` dev hosts.
+
 ## [0.9.5] - 2026-05-07
 
 Stable promotion of `0.9.5rc4`. No code changes since rc4. The rc1 → rc4 progression is summarized below.
