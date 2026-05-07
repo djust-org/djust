@@ -6,6 +6,10 @@ Uses Click's test runner and requests_mock for HTTP mocking.
 
 import json
 import stat
+import threading
+import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,6 +33,14 @@ from djust.deploy_cli import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _short_oauth_timeout(monkeypatch):
+    """Cap OAuth browser-flow waits at 5s during tests so a stuck test
+    fails in seconds instead of wedging the suite for the full 300s
+    production timeout."""
+    monkeypatch.setattr("djust.deploy_cli._OAUTH_BROWSER_TIMEOUT_SECONDS", 5, raising=False)
 
 
 @pytest.fixture()
@@ -141,97 +153,232 @@ class TestCredentialHelpers:
 # ---------------------------------------------------------------------------
 
 
+def _simulate_browser(captured_url_holder: dict, code: str = "test-auth-code-123"):
+    """Stand in for ``webbrowser.open()`` during tests of the OAuth flow.
+
+    The real browser receives the auth URL, the user clicks
+    "Authorize", and the IdP 302s to ``redirect_uri?code=...&state=...``.
+    The CLI's local HTTP server captures that callback. Tests don't have
+    a browser or a real IdP — so this helper:
+
+      1. Records the URL that ``webbrowser.open`` was handed (for asserts).
+      2. Parses ``redirect_uri`` and ``state`` out of it.
+      3. Spawns a background thread that does a real GET against the
+         CLI's loopback callback with ``?code=...&state=...``.
+
+    The CLI then continues as if the IdP had redirected the user — no
+    actual browser involved.
+    """
+
+    def _open(url, *_args, **_kwargs):
+        captured_url_holder["url"] = url
+        parsed = urllib.parse.urlparse(url)
+        qs = dict(urllib.parse.parse_qsl(parsed.query))
+        redirect_uri = qs["redirect_uri"]
+        state = qs["state"]
+
+        def _hit_callback():
+            # Tiny delay so the CLI's HTTPServer is listening before
+            # we GET it. handle_request() blocks on accept(), but the
+            # test occasionally races otherwise.
+            time.sleep(0.05)
+            # urllib.request — not requests — so requests_mock's global
+            # interception doesn't try to mock the loopback callback.
+            try:
+                urllib.request.urlopen(  # noqa: S310 — loopback URL only
+                    f"{redirect_uri}?code={code}&state={state}",
+                    timeout=5,
+                ).read()
+            except Exception:
+                pass
+
+        threading.Thread(target=_hit_callback, daemon=True).start()
+        return True
+
+    return _open
+
+
 class TestLoginCommand:
-    def test_login_success_writes_credentials(self, runner, creds_dir, requests_mock):
-        requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"token": "server-token-xyz"},
+    """The ``djust deploy login`` command exercises the full PKCE
+    auth-code flow against a mocked OIDC IdP."""
+
+    def test_browser_login_writes_oauth_credentials(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        # /o/token/ exchange returns access + refresh + id_token.
+        # The id_token's payload section base64-decodes to {"email":...}.
+        # Manually constructed since we don't sign it in tests — the CLI
+        # decodes-without-verifying for display.
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "user@example.com"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
+        id_token = f"header.{payload}.sig"
+
+        token_adapter = requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "oauth-access-xyz",
+                "refresh_token": "oauth-refresh-xyz",
+                "expires_in": 3600,
+                "id_token": id_token,
+                "token_type": "Bearer",
+            },
             status_code=200,
         )
-        result = runner.invoke(
-            cli,
-            ["login"],
-            input="user@example.com\nsecretpass\n",
-        )
+
+        captured = {}
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser(captured))
+
+        result = runner.invoke(cli, ["login"])
         assert result.exit_code == 0, result.output
+
+        # Credentials saved with bearer shape, not legacy DRF token.
         cred_file = creds_dir / "credentials"
         assert cred_file.exists()
         data = json.loads(cred_file.read_text())
-        assert data["token"] == "server-token-xyz"
+        assert data["auth_scheme"] == "bearer"
+        assert data["access_token"] == "oauth-access-xyz"
+        assert data["refresh_token"] == "oauth-refresh-xyz"
         assert data["email"] == "user@example.com"
         assert data["server_url"] == "https://djustlive.com"
+        assert "expires_at" in data
 
-    def test_login_success_prints_success_message(self, runner, creds_dir, requests_mock):
-        requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"token": "server-token-xyz"},
-            status_code=200,
-        )
-        result = runner.invoke(cli, ["login"], input="user@example.com\npass\n")
-        assert "Logged in" in result.output or "logged in" in result.output.lower()
+        # The token-exchange request used PKCE parameters.
+        assert token_adapter.called
+        sent = token_adapter.last_request.text
+        assert "grant_type=authorization_code" in sent
+        assert "code_verifier=" in sent
+        assert "client_id=djust-cli" in sent
 
-    def test_login_failure_401_does_not_write_credentials(self, runner, creds_dir, requests_mock):
-        requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"detail": "Invalid credentials"},
-            status_code=401,
+        # The auth URL handed to webbrowser.open included the right shape.
+        url = captured["url"]
+        assert url.startswith("https://djustlive.com/o/authorize/")
+        assert "response_type=code" in url
+        assert "code_challenge_method=S256" in url
+        assert "client_id=djust-cli" in url
+
+    def test_browser_login_prints_success_message(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "alice@example.com"}).encode())
+            .rstrip(b"=")
+            .decode()
         )
-        result = runner.invoke(cli, ["login"], input="user@example.com\nwrongpass\n")
+        requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "x",
+                "refresh_token": "y",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+                "token_type": "Bearer",
+            },
+        )
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser({}))
+        result = runner.invoke(cli, ["login"])
+        assert "Logged in as alice@example.com" in result.output
+
+    def test_browser_login_state_mismatch_aborts(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        """If the callback's state doesn't match what the CLI generated,
+        we refuse the code. Defends against CSRF / cross-tab leaks."""
+
+        def _bad_state_browser(url, *_args, **_kwargs):
+            parsed = urllib.parse.urlparse(url)
+            qs = dict(urllib.parse.parse_qsl(parsed.query))
+            redirect_uri = qs["redirect_uri"]
+            # Use a wrong state — the handler should reject this.
+
+            def _hit():
+                time.sleep(0.05)
+                try:
+                    urllib.request.urlopen(  # noqa: S310
+                        f"{redirect_uri}?code=abc&state=wrong-state",
+                        timeout=5,
+                    ).read()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_hit, daemon=True).start()
+            return True
+
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _bad_state_browser)
+        result = runner.invoke(cli, ["login"])
         assert result.exit_code != 0
-        cred_file = creds_dir / "credentials"
-        assert not cred_file.exists()
+        assert "state mismatch" in result.output.lower()
+        # No creds written.
+        assert not (creds_dir / "credentials").exists()
 
-    def test_login_failure_shows_error(self, runner, creds_dir, requests_mock):
-        requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"detail": "Invalid credentials"},
-            status_code=401,
-        )
-        result = runner.invoke(cli, ["login"], input="user@example.com\nwrongpass\n")
-        assert (
-            "Invalid" in result.output
-            or "invalid" in result.output.lower()
-            or "error" in result.output.lower()
-            or "failed" in result.output.lower()
-        )
+    def test_browser_login_token_endpoint_500_aborts(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        requests_mock.post("https://djustlive.com/o/token/", status_code=500, text="boom")
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser({}))
+        result = runner.invoke(cli, ["login"])
+        assert result.exit_code != 0
+        assert "Token exchange failed" in result.output
 
-    def test_login_custom_server_flag(self, runner, creds_dir, requests_mock):
+    def test_browser_login_idp_returns_error_aborts(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        """User clicked 'Deny' on the consent screen → callback gets
+        ``?error=access_denied`` instead of a code."""
+
+        def _denying_browser(url, *_args, **_kwargs):
+            parsed = urllib.parse.urlparse(url)
+            qs = dict(urllib.parse.parse_qsl(parsed.query))
+
+            def _hit():
+                time.sleep(0.05)
+                try:
+                    urllib.request.urlopen(  # noqa: S310
+                        f"{qs['redirect_uri']}?error=access_denied"
+                        f"&error_description=User+denied+access",
+                        timeout=5,
+                    ).read()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_hit, daemon=True).start()
+            return True
+
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _denying_browser)
+        result = runner.invoke(cli, ["login"])
+        assert result.exit_code != 0
+        assert "denied" in result.output.lower() or "access_denied" in result.output.lower()
+
+    def test_browser_login_custom_server_flag(self, runner, creds_dir, requests_mock, monkeypatch):
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "u@u.com"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
         requests_mock.post(
-            "https://myserver.example.com/api/v1/auth/login/",
-            json={"token": "custom-token"},
-            status_code=200,
+            "https://myserver.example.com/o/token/",
+            json={
+                "access_token": "t",
+                "refresh_token": "r",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+            },
         )
-        result = runner.invoke(
-            cli,
-            ["--server", "https://myserver.example.com", "login"],
-            input="u@u.com\npass\n",
-        )
+        captured = {}
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser(captured))
+        result = runner.invoke(cli, ["--server", "https://myserver.example.com", "login"])
         assert result.exit_code == 0, result.output
+        assert captured["url"].startswith("https://myserver.example.com/o/authorize/")
         data = json.loads((creds_dir / "credentials").read_text())
         assert data["server_url"] == "https://myserver.example.com"
-
-    def test_login_server_env_var(self, runner, creds_dir, requests_mock):
-        requests_mock.post(
-            "https://env-server.com/api/v1/auth/login/",
-            json={"token": "env-token"},
-            status_code=200,
-        )
-        result = runner.invoke(
-            cli,
-            ["login"],
-            input="u@u.com\npass\n",
-            env={"DJUST_SERVER": "https://env-server.com"},
-        )
-        assert result.exit_code == 0, result.output
-
-    def test_login_empty_email_prompts(self, runner, creds_dir, requests_mock):
-        requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"token": "t"},
-            status_code=200,
-        )
-        result = runner.invoke(cli, ["login"], input="test@test.com\npass\n")
-        assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -585,16 +732,31 @@ class TestGuidedDeploy:
         assert result.exit_code != 0
         assert "not found" in result.output.lower() or "no-create" in result.output.lower()
 
-    def test_revoked_token_triggers_re_login(self, runner, creds_dir, saved_creds, requests_mock):
-        # /me/ returns 401 → CLI should prompt for re-auth, then proceed.
-        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
-        # /auth/login/ accepts the re-auth.
-        requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"token": "fresh-token", "email": "u@e.com"},
-            status_code=200,
+    def test_revoked_token_triggers_re_login(
+        self, runner, creds_dir, saved_creds, requests_mock, monkeypatch
+    ):
+        """/me/ returns 401 with a *legacy* DRF token — the OAuth
+        refresh path doesn't apply, so the CLI falls through to a fresh
+        browser login. Verifies the re-auth path still works."""
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "u@e.com"}).encode())
+            .rstrip(b"=")
+            .decode()
         )
-        # And the rest of the flow proceeds.
+
+        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
+        requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "fresh-bearer",
+                "refresh_token": "fresh-refresh",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+                "token_type": "Bearer",
+            },
+        )
         requests_mock.get(
             "https://djustlive.com/api/v1/projects/p/",
             json={"slug": "p", "name": "p", "owner_email": "u@e.com"},
@@ -604,42 +766,106 @@ class TestGuidedDeploy:
             text="ok\n",
             status_code=200,
         )
+
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser({}))
         with patch("djust.deploy_cli._check_git_clean"):
-            result = runner.invoke(
-                cli,
-                ["deploy", "p"],
-                # email + password for the re-auth prompt
-                input="u@e.com\nsecret\n",
-            )
+            result = runner.invoke(cli, ["deploy", "p"])
+
         assert deploy_adapter.called
-        # The re-auth path uses the fresh token, not the stale one.
+        # The re-auth path uses the fresh OAuth bearer, not the stale
+        # legacy DRF token.
         sent_auth = deploy_adapter.last_request.headers.get("Authorization", "")
-        assert "fresh-token" in sent_auth, sent_auth
+        assert "Bearer fresh-bearer" in sent_auth, sent_auth
         assert result.exit_code == 0, result.output
 
-    def test_no_credentials_at_all_prompts_login(self, runner, creds_dir, requests_mock):
-        """Brand new user — no ~/.djustlive/credentials. CLI should
-        guide them through login inline, no separate `djust deploy
-        login` step."""
+    def test_oauth_refresh_swaps_token_silently(self, runner, creds_dir, requests_mock):
+        """Bearer creds with a fresh refresh_token: when /me/ 401s, the
+        CLI uses the refresh_token to mint a new access_token without
+        re-launching the browser. The user shouldn't notice."""
+        # Pre-seed bearer-shape credentials.
+        cred_file = creds_dir / "credentials"
+        cred_file.write_text(
+            json.dumps(
+                {
+                    "auth_scheme": "bearer",
+                    "access_token": "expired-access",
+                    "refresh_token": "valid-refresh",
+                    "expires_at": 0,
+                    "email": "u@e.com",
+                    "server_url": "https://djustlive.com",
+                }
+            )
+        )
+        cred_file.chmod(0o600)
+
+        # First /me/ call (with expired token) → 401.
+        requests_mock.get("https://djustlive.com/api/v1/me/", status_code=401)
+        # Refresh exchange: returns fresh access token.
         requests_mock.post(
-            "https://djustlive.com/api/v1/auth/login/",
-            json={"token": "tok-new-user", "email": "newbie@example.com"},
-            status_code=200,
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "refreshed-access",
+                "refresh_token": "rotated-refresh",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+            },
+        )
+        requests_mock.get(
+            "https://djustlive.com/api/v1/projects/p/",
+            json={"slug": "p", "name": "p", "owner_email": "u@e.com"},
+        )
+        deploy_adapter = requests_mock.post(
+            "https://djustlive.com/api/v1/projects/p/environments/production/deploy/",
+            text="ok\n",
+        )
+        with patch("djust.deploy_cli._check_git_clean"):
+            result = runner.invoke(cli, ["deploy", "p"])
+        assert result.exit_code == 0, result.output
+        # Deploy got the refreshed bearer.
+        sent_auth = deploy_adapter.last_request.headers.get("Authorization", "")
+        assert "Bearer refreshed-access" in sent_auth
+        # And the rotated refresh_token landed on disk.
+        saved = json.loads(cred_file.read_text())
+        assert saved["refresh_token"] == "rotated-refresh"
+
+    def test_no_credentials_at_all_prompts_login(
+        self, runner, creds_dir, requests_mock, monkeypatch
+    ):
+        """Brand new user — no ~/.djustlive/credentials. CLI should
+        guide them through browser login inline, no separate
+        ``djust deploy login`` step."""
+        import base64
+
+        payload = (
+            base64.urlsafe_b64encode(json.dumps({"email": "newbie@example.com"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
+
+        requests_mock.post(
+            "https://djustlive.com/o/token/",
+            json={
+                "access_token": "newbie-bearer",
+                "refresh_token": "newbie-refresh",
+                "expires_in": 3600,
+                "id_token": f"a.{payload}.s",
+            },
         )
         requests_mock.get(
             "https://djustlive.com/api/v1/projects/my-app/",
-            json={"slug": "my-app", "name": "my-app", "owner_email": "newbie@example.com"},
+            json={
+                "slug": "my-app",
+                "name": "my-app",
+                "owner_email": "newbie@example.com",
+            },
         )
         deploy_adapter = requests_mock.post(
             "https://djustlive.com/api/v1/projects/my-app/environments/production/deploy/",
             text="ok\n",
             status_code=200,
         )
+        monkeypatch.setattr("djust.deploy_cli.webbrowser.open", _simulate_browser({}))
         with patch("djust.deploy_cli._check_git_clean"):
-            result = runner.invoke(
-                cli,
-                ["deploy", "my-app"],
-                input="newbie@example.com\npw1234567\n",
-            )
+            result = runner.invoke(cli, ["deploy", "my-app"])
         assert deploy_adapter.called
         assert result.exit_code == 0, result.output

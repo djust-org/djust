@@ -4,11 +4,19 @@ djust deploy CLI — deployment commands for djustlive.com.
 Entry point: djust-deploy
 """
 
+import base64
+import hashlib
+import http.server
 import json
 import logging
 import os
+import secrets
 import subprocess
 import tarfile
+import threading
+import time
+import urllib.parse
+import webbrowser
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +28,19 @@ logger = logging.getLogger(__name__)
 DEFAULT_SERVER = "https://djustlive.com"
 _CREDS_DIR_NAME = ".djustlive"
 _CREDS_FILE_NAME = "credentials"
+
+# Public OAuth client registered on djustlive (accounts migration 0006).
+# Hardcoded because the CLI is a public client per RFC 8252 — there's no
+# secret to leak. PKCE provides the security here, not a confidential
+# client_id. If you fork djustlive, register your own Application row
+# and override this via DJUST_CLI_CLIENT_ID.
+DJUST_CLI_CLIENT_ID = os.environ.get("DJUST_CLI_CLIENT_ID", "djust-cli")
+
+# How long to wait for the user to complete the browser flow before
+# giving up. Generous because users may need to sign up first, hunt
+# through password managers, or do MFA. Tests override via env var so
+# a stuck test fails fast instead of wedging the suite for 5 minutes.
+_OAUTH_BROWSER_TIMEOUT_SECONDS = int(os.environ.get("DJUST_CLI_OAUTH_TIMEOUT", "300"))
 
 # Default patterns to exclude from tarball
 TARBALL_EXCLUDES = [
@@ -61,14 +82,58 @@ def credentials_path() -> Path:
     return Path.home() / _CREDS_DIR_NAME / _CREDS_FILE_NAME
 
 
-def save_credentials(token: str, email: str, server_url: str) -> None:
-    """Write credentials to disk with mode 0o600 (created atomically)."""
+def _write_credentials_file(data: dict) -> None:
+    """Atomic 0o600 write helper. The file holds the OAuth refresh token
+    and is therefore high-value — chmod the directory to 0o700 too."""
     path = credentials_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    data = {"token": token, "email": email, "server_url": server_url}
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(json.dumps(data))
+
+
+def save_credentials(token: str, email: str, server_url: str) -> None:
+    """Legacy DRF-token credential write (email + password login flow).
+
+    Kept for backwards compatibility — existing test suites and any
+    automation still calling ``/api/v1/auth/login/`` use this shape.
+    The browser-login flow uses :func:`save_oauth_credentials` instead.
+    """
+    _write_credentials_file(
+        {
+            "token": token,
+            "email": email,
+            "server_url": server_url,
+        }
+    )
+
+
+def save_oauth_credentials(
+    *,
+    access_token: str,
+    refresh_token: str,
+    expires_at: int,
+    email: str,
+    server_url: str,
+) -> None:
+    """Write OAuth credentials produced by the browser-login flow.
+
+    ``expires_at`` is a unix timestamp (server-relative; we set it from
+    ``time.time() + expires_in`` at token-receipt time). The refresh
+    token survives ~30 days and is what gates "is this user still
+    logged in" — once it expires, the next deploy re-launches the
+    browser flow.
+    """
+    _write_credentials_file(
+        {
+            "auth_scheme": "bearer",
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_at": expires_at,
+            "email": email,
+            "server_url": server_url,
+        }
+    )
 
 
 def load_credentials() -> dict:
@@ -79,9 +144,36 @@ def load_credentials() -> dict:
     return json.loads(path.read_text())
 
 
-def _api_headers(token: str) -> dict:
+def _api_headers(creds: dict) -> dict:
+    """Build Authorization header from a credentials dict.
+
+    Two formats accepted, kept compatible during the email/password →
+    browser-login transition:
+
+      - ``{"auth_scheme": "bearer", "access_token": ...}`` — new flow,
+        sends ``Authorization: Bearer ...``. Authenticated server-side
+        by ``oauth2_provider.contrib.rest_framework.OAuth2Authentication``.
+      - ``{"token": ...}`` — legacy DRF token. Sent as
+        ``Authorization: Token ...``. Recognized by DRF's
+        ``TokenAuthentication``. New logins never produce this shape;
+        the helper just doesn't break for users with stored creds from
+        an older djust release.
+
+    Single-arg ``token`` strings are accepted too for callers that
+    haven't been migrated to pass the dict — wrap them as legacy DRF.
+    """
+    if isinstance(creds, str):
+        creds = {"token": creds}
+
+    if creds.get("auth_scheme") == "bearer":
+        scheme = "Bearer"
+        token = creds["access_token"]
+    else:
+        scheme = "Token"
+        token = creds["token"]
+
     return {
-        "Authorization": f"Token {token}",
+        "Authorization": f"{scheme} {token}",
         "Content-Type": "application/json",
     }
 
@@ -228,13 +320,13 @@ def _ensure_logged_in(server: str, *, interactive: bool = True) -> dict:
         if not interactive:
             raise
         click.echo("Not logged in to djustlive — let's fix that.")
-        return _login_interactive(server)
+        return _login_browser(server)
 
     # Validate against /me/. A 401 means the token's no good anymore.
     try:
         resp = requests.get(
             f"{server}/api/v1/me/",
-            headers=_api_headers(creds["token"]),
+            headers=_api_headers(creds),
             timeout=10,
         )
     except requests.RequestException as exc:
@@ -248,6 +340,22 @@ def _ensure_logged_in(server: str, *, interactive: bool = True) -> dict:
         return creds
 
     if resp.status_code == 401:
+        # OAuth path: try refresh_token before forcing a fresh browser
+        # login. Access tokens expire after 1h; refresh tokens after
+        # 30d. The whole point is the user shouldn't notice.
+        if creds.get("auth_scheme") == "bearer":
+            refreshed = _refresh_oauth_token(server, creds.get("refresh_token", ""))
+            if refreshed is not None:
+                save_oauth_credentials(
+                    access_token=refreshed["access_token"],
+                    refresh_token=refreshed["refresh_token"],
+                    expires_at=refreshed["expires_at"],
+                    email=creds.get("email", ""),
+                    server_url=server,
+                )
+                creds.update(refreshed)
+                return creds
+
         if not interactive:
             raise click.ClickException(
                 "Saved credentials are no longer valid (server returned 401). "
@@ -257,7 +365,7 @@ def _ensure_logged_in(server: str, *, interactive: bool = True) -> dict:
         path = credentials_path()
         if path.exists():
             path.unlink()
-        return _login_interactive(server)
+        return _login_browser(server)
 
     # 5xx or other unexpected — log and proceed.
     logger.debug("/me/ returned %s; proceeding with saved creds", resp.status_code)
@@ -266,7 +374,7 @@ def _ensure_logged_in(server: str, *, interactive: bool = True) -> dict:
 
 def _ensure_project_exists(
     server: str,
-    token: str,
+    creds: dict,
     project_slug: str,
     *,
     source_dir: Path,
@@ -292,7 +400,7 @@ def _ensure_project_exists(
     try:
         resp = requests.get(
             f"{server}/api/v1/projects/{project_slug}/",
-            headers=_api_headers(token),
+            headers=_api_headers(creds),
             timeout=10,
         )
     except requests.RequestException as exc:
@@ -330,7 +438,7 @@ def _ensure_project_exists(
     try:
         resp = requests.post(
             f"{server}/api/v1/projects/",
-            headers=_api_headers(token),
+            headers=_api_headers(creds),
             json={"name": project_slug},
             timeout=30,
         )
@@ -415,48 +523,316 @@ def cli(ctx: click.Context, server: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _login_interactive(server: str) -> dict:
-    """Prompt for credentials, POST to /api/v1/auth/login/, save token.
+# ---------------------------------------------------------------------------
+# OAuth 2.0 browser-login (Auth Code + PKCE + loopback redirect)
+# ---------------------------------------------------------------------------
+#
+# Overall shape (RFC 6749 §4.1 + RFC 7636 + RFC 8252):
+#
+#   1. CLI binds an ephemeral port on 127.0.0.1 — RFC 8252 says the
+#      authorization server MUST honor the loopback redirect on any
+#      port, so we don't have to fight for a fixed one.
+#   2. CLI generates a PKCE code_verifier (random ≥43 chars) and the
+#      derived code_challenge = base64url(sha256(verifier)). The
+#      challenge is sent to /o/authorize/; the verifier is held by the
+#      CLI and presented to /o/token/. A man-in-the-middle on the
+#      browser-redirect leg can't redeem the code without the verifier.
+#   3. CLI also generates a `state` nonce (CSRF defense per RFC 6749
+#      §10.12) — the callback handler refuses any redirect whose state
+#      doesn't match.
+#   4. Browser opens to /o/authorize/?response_type=code&...
+#      djustlive's IdP authenticates the user and redirects to the
+#      loopback URL with `?code=...&state=...`.
+#   5. CLI exchanges the code at /o/token/ for an access + refresh
+#      token, decodes the id_token to learn the user's email, and
+#      writes the credentials.
+#
+# Why not device flow (RFC 8628)? Auth-code+loopback is the modern
+# norm for desktop CLIs (gh, fly, heroku, vercel) and it's the path
+# most users will encounter. A `--device` fallback for headless/SSH
+# sessions is tracked as a follow-up.
 
-    Extracted so the guided ``deploy`` flow can call this inline when
-    it detects "no credentials yet" — instead of erroring and forcing
-    the user to run ``djust deploy login`` separately. Returns the
-    saved credentials dict.
+
+def _pkce_pair() -> tuple[str, str]:
+    """Return ``(code_verifier, code_challenge)`` for an S256 PKCE flow.
+
+    RFC 7636 §4.1 requires the verifier to be 43-128 unreserved chars.
+    ``secrets.token_urlsafe(64)`` produces 86 base64url-encoded chars,
+    well inside the spec.
     """
-    email = click.prompt("Email")
-    password = click.prompt("Password", hide_input=True)
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def _decode_id_token_email(id_token: str) -> Optional[str]:
+    """Pull the ``email`` claim out of an unverified JWT id_token.
+
+    We **deliberately** don't verify the signature here. The id_token
+    arrived over TLS from a token endpoint we just authenticated to
+    via PKCE — the email is for display only ("Logged in as X.") and
+    isn't a security boundary. Anything that needs trustworthy identity
+    calls ``GET /api/v1/me/`` server-side.
+    """
+    try:
+        _header, payload_b64, _sig = id_token.split(".")
+        # base64url-decode with padding fixup.
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("email")
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.debug("Could not decode id_token email claim: %s", exc)
+        return None
+
+
+class _OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
+    """Single-shot HTTP handler that captures the OAuth code + state.
+
+    Stashes results on the *server* instance (``server.captured``) so
+    the launcher can read them out after the request thread completes.
+    Suppresses the default ``BaseHTTPRequestHandler`` access logging —
+    the user already sees CLI output and a stray "GET /callback HTTP/1.1"
+    line in the middle of a deploy is noise.
+    """
+
+    server_version = "djust-cli-oauth/1.0"
+
+    def log_message(self, *_args, **_kwargs) -> None:  # noqa: D401
+        return
+
+    def do_GET(self) -> None:  # noqa: N802 — http.server convention
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/callback":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        self.server.captured = params  # type: ignore[attr-defined]
+
+        if "error" in params:
+            body = b"<h1>Login failed</h1><p>You can close this tab and check your terminal.</p>"
+            status_code = 400
+        else:
+            body = (
+                b"<h1>You're logged in.</h1>"
+                b"<p>You can close this tab and return to your terminal.</p>"
+            )
+            status_code = 200
+
+        self.send_response(status_code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _login_browser(server: str) -> dict:
+    """Authenticate via browser and store OAuth credentials.
+
+    Returns the saved credentials dict (matching :func:`load_credentials`'s
+    return shape, with ``auth_scheme="bearer"``).
+
+    Failure modes surfaced as ClickException:
+
+      - User declined the consent screen (``error=access_denied``)
+      - state mismatch (CSRF: aborted-and-retried mid-flow, or attack)
+      - token endpoint refused the code (network blip, code reuse)
+      - browser timeout (``_OAUTH_BROWSER_TIMEOUT_SECONDS``)
+    """
+    code_verifier, code_challenge = _pkce_pair()
+    state = secrets.token_urlsafe(32)
+
+    # Let HTTPServer bind on a kernel-assigned port so we know which
+    # port to advertise as redirect_uri. RFC 8252 §7.3 says the
+    # authorization server must allow any loopback port — DOT 3.x
+    # honors this when the registered URI uses 127.0.0.1.
+    http_server = http.server.HTTPServer(("127.0.0.1", 0), _OAuthCallbackHandler)
+    http_server.captured = None  # type: ignore[attr-defined]
+    port = http_server.server_port
+
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    auth_url = f"{server}/o/authorize/?" + urllib.parse.urlencode(
+        {
+            "response_type": "code",
+            "client_id": DJUST_CLI_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "scope": "openid email profile",
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+
+    click.echo("Opening browser to sign in to djustlive…")
+    click.echo(f"  If it doesn't open, paste this into a browser:\n  {auth_url}")
+    try:
+        webbrowser.open(auth_url, new=2)
+    except webbrowser.Error:
+        # Headless box — user has the URL above; fall through.
+        pass
+
+    thread = threading.Thread(target=http_server.handle_request, daemon=True)
+    thread.start()
+    thread.join(timeout=_OAUTH_BROWSER_TIMEOUT_SECONDS)
+    timed_out = thread.is_alive()
+
+    if timed_out:
+        # Unblock the accept() loop so the thread exits cleanly. The
+        # self-request returns a recognizable error param, so the
+        # handler doesn't try to treat it as a real callback.
+        try:
+            requests.get(f"http://127.0.0.1:{port}/callback?error=timeout", timeout=1)
+        except requests.RequestException:
+            pass
+        thread.join(timeout=2)
 
     try:
+        http_server.server_close()
+    except OSError:
+        pass
+
+    if timed_out:
+        raise click.ClickException(
+            f"Timed out waiting for browser login (after {_OAUTH_BROWSER_TIMEOUT_SECONDS}s)."
+        )
+
+    params = http_server.captured  # type: ignore[attr-defined]
+    if not params:
+        raise click.ClickException("Browser login did not complete.")
+
+    if "error" in params:
+        raise click.ClickException(
+            f"Browser login failed: {params.get('error_description') or params['error']}"
+        )
+
+    if params.get("state") != state:
+        # Either the user has multiple in-flight `djust deploy login`
+        # tabs open or someone tried to ride the redirect — refuse it
+        # either way.
+        raise click.ClickException("OAuth state mismatch — login aborted.")
+
+    code = params.get("code")
+    if not code:
+        raise click.ClickException("OAuth callback missing authorization code.")
+
+    # Step 5: exchange the code for an access + refresh + id_token.
+    try:
         resp = requests.post(
-            f"{server}/api/v1/auth/login/",
-            json={"email": email, "password": password},
+            f"{server}/o/token/",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": DJUST_CLI_CLIENT_ID,
+                "code_verifier": code_verifier,
+            },
             timeout=30,
         )
     except requests.RequestException as exc:
-        raise click.ClickException(f"Request failed: {exc}") from exc
+        raise click.ClickException(f"Token exchange request failed: {exc}") from exc
 
     if resp.status_code != 200:
+        raise click.ClickException(f"Token exchange failed ({resp.status_code}): {resp.text}")
+
+    payload = resp.json()
+    access_token = payload.get("access_token")
+    refresh_token = payload.get("refresh_token", "")
+    expires_in = int(payload.get("expires_in", 3600))
+    id_token = payload.get("id_token", "")
+
+    if not access_token:
+        raise click.ClickException("Token endpoint did not return an access_token.")
+
+    email = _decode_id_token_email(id_token) or ""
+    if not email:
+        # Fall back to userinfo when the IdP didn't include id_token
+        # (older deployments without DJUST_OIDC_RSA_KEY set).
         try:
-            body = resp.json() if resp.content else {}
-        except (ValueError, json.JSONDecodeError):
-            body = {}
-        detail = body.get("detail") or body.get("non_field_errors") or resp.text
-        raise click.ClickException(f"Login failed: {detail}")
+            ui = requests.get(
+                f"{server}/o/userinfo/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10,
+            )
+            if ui.status_code == 200:
+                email = ui.json().get("email", "") or ""
+        except requests.RequestException:
+            pass
 
-    token = resp.json().get("token")
-    if not token:
-        raise click.ClickException("Server did not return a token.")
+    expires_at = int(time.time()) + expires_in
+    save_oauth_credentials(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        email=email,
+        server_url=server,
+    )
 
-    save_credentials(token, email, server)
-    click.echo(f"Logged in as {email}.")
-    return {"token": token, "email": email, "server_url": server}
+    click.echo(f"Logged in as {email or '<unknown>'}.")
+    return {
+        "auth_scheme": "bearer",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "expires_at": expires_at,
+        "email": email,
+        "server_url": server,
+    }
+
+
+def _refresh_oauth_token(server: str, refresh_token: str) -> Optional[dict]:
+    """Try to refresh an expired access token. Returns new creds dict
+    on success, ``None`` if the refresh token itself is no good (the
+    caller must then prompt for a fresh browser login).
+    """
+    if not refresh_token:
+        return None
+
+    try:
+        resp = requests.post(
+            f"{server}/o/token/",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": DJUST_CLI_CLIENT_ID,
+            },
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        logger.debug("refresh_token request failed: %s — skipping refresh", exc)
+        return None
+
+    if resp.status_code != 200:
+        logger.debug("refresh_token rejected (%s): %s", resp.status_code, resp.text)
+        return None
+
+    payload = resp.json()
+    access_token = payload.get("access_token")
+    if not access_token:
+        return None
+
+    # Refresh-token rotation: the IdP issues a new refresh_token on
+    # each refresh by default in DOT. Persist whichever one came back.
+    new_refresh = payload.get("refresh_token", refresh_token)
+    expires_in = int(payload.get("expires_in", 3600))
+    expires_at = int(time.time()) + expires_in
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh,
+        "expires_at": expires_at,
+    }
+
+
+# Kept under the legacy name so anything that imports this helper
+# (tests, old scripts) keeps working. The body is now the browser flow.
+_login_interactive = _login_browser
 
 
 @cli.command()
 @click.pass_context
 def login(ctx: click.Context) -> None:
-    """Log in to djustlive.com and store credentials."""
-    _login_interactive(ctx.obj["server"])
+    """Log in to djustlive.com via your browser."""
+    _login_browser(ctx.obj["server"])
 
 
 # ---------------------------------------------------------------------------
@@ -475,12 +851,11 @@ def logout(ctx: click.Context) -> None:
         return
 
     server = creds.get("server_url", ctx.obj["server"])
-    token = creds["token"]
 
     try:
         requests.delete(
             f"{server}/api/v1/auth/logout/",
-            headers=_api_headers(token),
+            headers=_api_headers(creds),
             timeout=30,
         )
     except requests.RequestException as exc:
@@ -505,7 +880,6 @@ def status(ctx: click.Context, project: Optional[str]) -> None:
     """Show current deployment status. Optionally filter by PROJECT slug."""
     creds = load_credentials()
     server = ctx.obj["server"]
-    token = creds["token"]
 
     params = {}
     if project:
@@ -514,7 +888,7 @@ def status(ctx: click.Context, project: Optional[str]) -> None:
     try:
         resp = requests.get(
             f"{server}/api/v1/deployments/status/",
-            headers=_api_headers(token),
+            headers=_api_headers(creds),
             params=params,
             timeout=30,
         )
@@ -628,12 +1002,11 @@ def deploy(
     server = ctx.obj["server"]
 
     creds = _ensure_logged_in(server, interactive=not no_create or True)
-    token = creds["token"]
 
     project_slug = _resolve_project_slug(project_slug, Path.cwd())
     project_slug = _ensure_project_exists(
         server,
-        token,
+        creds,
         project_slug,
         source_dir=Path.cwd(),
         no_create=no_create,
@@ -645,7 +1018,7 @@ def deploy(
     try:
         resp = requests.post(
             url,
-            headers=_api_headers(token),
+            headers=_api_headers(creds),
             stream=True,
             timeout=300,
         )
@@ -697,12 +1070,11 @@ def deploy_dir(
     server = ctx.obj["server"]
 
     creds = _ensure_logged_in(server, interactive=True)
-    token = creds["token"]
 
     project_slug = _resolve_project_slug(project_slug, Path(source_dir))
     project_slug = _ensure_project_exists(
         server,
-        token,
+        creds,
         project_slug,
         source_dir=Path(source_dir),
         no_create=no_create,
@@ -724,13 +1096,12 @@ def deploy_dir(
         url = f"{server}/api/v1/projects/{project_slug}/deploy/directory/"
 
         click.echo(f"Uploading to {server}...")
+        upload_headers = _api_headers(creds)
+        upload_headers["Content-Type"] = "application/octet-stream"
         with open(tarball_path, "rb") as f:
             resp = requests.post(
                 url,
-                headers={
-                    "Authorization": f"Token {token}",
-                    "Content-Type": "application/octet-stream",
-                },
+                headers=upload_headers,
                 data=f,
                 timeout=300,
             )
@@ -752,7 +1123,7 @@ def deploy_dir(
             try:
                 status_resp = requests.get(
                     status_url,
-                    headers=_api_headers(token),
+                    headers=_api_headers(creds),
                     timeout=30,
                 )
                 if status_resp.status_code == 200:
