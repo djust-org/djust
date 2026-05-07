@@ -805,12 +805,23 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "real bug uncovered by #1388 — `Node::Include`'s `template` field is parser-stored with surrounding quotes; emitter double-wraps. Tracked as #1396 (out-of-scope per #1079 broader-sweep canon)."]
     fn test_nodes_to_template_string_include() {
-        // Drive from parser output (#1388). Currently fails — see #1396.
+        // Drive from parser output (#1388). Regression for #1396 — parser
+        // stored Include.template with surrounding quotes, emitter wrapped
+        // them in another pair, producing {% include ""partials/header.html"" %}.
         let nodes = parse_source("{% include \"partials/header.html\" %}");
         let result = nodes_to_template_string(&nodes);
         assert_eq!(result, "{% include \"partials/header.html\" %}");
+    }
+
+    #[test]
+    fn test_nodes_to_template_string_now() {
+        // Drive from parser output (#1388). Lock in Now round-trip
+        // (audited under #1396 — Now strips quotes correctly at parse,
+        // no double-wrap; defense-in-depth test against future regression).
+        let nodes = parse_source("{% now \"Y-m-d\" %}");
+        let result = nodes_to_template_string(&nodes);
+        assert_eq!(result, "{% now \"Y-m-d\" %}");
     }
 
     #[test]

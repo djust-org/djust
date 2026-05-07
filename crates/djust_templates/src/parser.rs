@@ -582,7 +582,12 @@ fn parse_token(tokens: &[Token], i: &mut usize) -> Result<Option<Node>> {
                             "Include tag requires a template name".to_string(),
                         ));
                     }
-                    let template = args[0].clone();
+                    // Strip surrounding quotes (#1396) so Include.template
+                    // shares the unquoted-field contract with Extends/Static/Now.
+                    // Without this strip, the inheritance emitter
+                    // (`nodes_to_template_string`) double-wraps the value,
+                    // producing `{% include ""x.html"" %}` on round-trip.
+                    let template = args[0].trim_matches(|c| c == '"' || c == '\'').to_string();
                     let mut with_vars = Vec::new();
                     let mut only = false;
 

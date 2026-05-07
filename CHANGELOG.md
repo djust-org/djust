@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Node::Include` round-trip no longer double-quotes the template path (#1396).** Parser was preserving the outer quotes on `Include.template`; emitter `nodes_to_template_string` then wrapped again, producing `{% include ""partials/header.html"" %}` on round-trip. Surfaced during PR #1397's conversion of round-trip tests to drive from parser output (Action #158 working as designed). Fixed by aligning the parser to strip outer quotes (matching the existing `Extends`, `Static`, and `Now` contracts) — single source of truth, emitter unchanged. `test_nodes_to_template_string_include` un-ignored. Added `test_nodes_to_template_string_now` for defense-in-depth.
+
 ### Security
 
 - **`sanitize_for_log` cache_key on HTTP cache-lookup debug log (#1368).** Pre-existing log-injection asymmetry between WebSocket and HTTP paths in `python/djust/mixins/rust_bridge.py`: the WS site at line 333 sanitized correctly; the HTTP site at line 363 did not. Since `cache_key` derives from `request.path` (user-controlled), an attacker-supplied path like `/page/\n[FAKE LOG ENTRY]` could inject newlines into the log stream. Mirrors the WS-path call to `sanitize_for_log(self._cache_key)` and adds the matching CodeQL annotation. Surfaced in PR #1367 Stage 11 SHOULD-FIX #3 (deferred per Action #1079).
