@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM `sync_ids` is now dj-if-boundary-aware (#1408).** `diff::diff_children` already aligned children across `<!--dj-if id="…"-->` boundary swaps via `dj_if_pre_pass` (#1358); the post-diff `sync_ids` did not, falling through to `sync_ids_keyed`/`sync_ids_indexed` and positionally pairing children regardless of branch identity. After a `{% if %}` branch swap, fresh `djust_id`s on new-branch content were overwritten by stale ids from the unmatched-old-branch — the next render's diff then emitted `RemoveChild`/`SetAttr` patches whose `child_d`/`d` referenced ids the client DOM never had, leaving orphan content from the prior branch. Added `sync_ids_dj_if_pre_pass` mirroring `dj_if_pre_pass`'s shape (id-only-in-OLD → skip, id-only-in-NEW → skip with fresh ids preserved, id-in-BOTH → recurse, non-boundary siblings → relative-order pairing via `build_excluded_mask`). Verified at the `DJUST_VDOM_TRACE=1` level: pre-fix a tab-swap diff emitted `RemoveChild child_d="2y"` (a stale id from a render two cycles back) for the bottom-tab content slot; post-fix it correctly emits `child_d="5m"` matching what the previous diff's `InsertChild` placed there. Regression test in `crates/djust_vdom/tests/test_sync_ids_dj_if_1408.rs` (4 cases; 3 fail pre-fix). All 228 existing `djust_vdom` tests still pass.
+
 ## [0.9.5rc3] - 2026-05-07
 
 ### Added
