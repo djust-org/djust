@@ -59,315 +59,12 @@
 //! bug-triggers.
 
 use djust_vdom::diff::sync_ids;
-use djust_vdom::patch::apply_patches;
-use djust_vdom::{diff, Patch, VNode};
-use std::cell::Cell;
+use djust_vdom::{diff, VNode};
 
-// =============================================================================
-// dj-id generator (mirrors the production base62 counter)
-// =============================================================================
-
-fn next_id(counter: &Cell<u64>) -> String {
-    let v = counter.get();
-    counter.set(v + 1);
-    base62(v)
-}
-
-fn base62(mut n: u64) -> String {
-    const ALPHA: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    if n == 0 {
-        return "0".to_string();
-    }
-    let mut s = Vec::new();
-    while n > 0 {
-        s.push(ALPHA[(n % 62) as usize]);
-        n /= 62;
-    }
-    s.reverse();
-    String::from_utf8(s).unwrap()
-}
-
-// =============================================================================
-// VNode helpers
-// =============================================================================
-
-fn elem(tag: &str, c: &Cell<u64>) -> VNode {
-    let id = next_id(c);
-    VNode::element(tag)
-        .with_djust_id(&id)
-        .with_attr("dj-id", &id)
-}
-
-fn elem_with_text(tag: &str, text: &str, c: &Cell<u64>) -> VNode {
-    elem(tag, c).with_child(VNode::text(text))
-}
-
-fn dj_if_open(boundary_id: &str) -> VNode {
-    VNode {
-        tag: "#comment".to_string(),
-        attrs: Default::default(),
-        children: Vec::new(),
-        text: Some(format!("dj-if id=\"{}\"", boundary_id)),
-        key: None,
-        djust_id: None,
-        cached_html: None,
-    }
-}
-
-fn dj_if_close() -> VNode {
-    VNode {
-        tag: "#comment".to_string(),
-        attrs: Default::default(),
-        children: Vec::new(),
-        text: Some("/dj-if".to_string()),
-        key: None,
-        djust_id: None,
-        cached_html: None,
-    }
-}
-
-// =============================================================================
-// Client tracker — faithfully apply ALL patches (including subtree variants)
-// =============================================================================
-
-/// Apply every patch variant to a tracker `VNode` so we can assert that
-/// each subsequent diff round's targeting handles still resolve.
-///
-/// The crate's `apply_patches` helper does not model Insert/RemoveSubtree
-/// (the production client dispatches those by marker id, not by tree
-/// walk). We layer a small wrapper that handles them, so the tracker
-/// stays faithful to what the real client would have after applying the
-/// same patch stream.
-fn apply_all(client: &mut VNode, patches: &[Patch], new_vdom: &VNode) {
-    // Phase 1: RemoveSubtree — find the open marker in the tracker, drop
-    // everything from open through matching close (inclusive).
-    for p in patches {
-        if let Patch::RemoveSubtree { id } = p {
-            remove_dj_if_subtree(client, id);
-        }
-    }
-
-    // Phase 2: InsertSubtree — find the corresponding boundary in
-    // `new_vdom` (which IS the source-of-truth content the server emits
-    // as `html` in the patch), splice it into the tracker at the
-    // specified parent + index.
-    for p in patches {
-        if let Patch::InsertSubtree { id, d, index, .. } = p {
-            if let (Some(parent_id), Some(subtree)) = (d.as_ref(), find_dj_if_subtree(new_vdom, id))
-            {
-                if let Some(target) = find_by_djust_id_mut(client, parent_id) {
-                    let insert_at = (*index).min(target.children.len());
-                    for (offset, node) in subtree.into_iter().enumerate() {
-                        target.children.insert(insert_at + offset, node);
-                    }
-                }
-            } else {
-                panic!(
-                    "InsertSubtree id={} could not be resolved in new_vdom (parent_id={:?})",
-                    id, d
-                );
-            }
-        }
-    }
-
-    // Phase 3: everything else via the crate helper.
-    let others: Vec<Patch> = patches
-        .iter()
-        .filter(|p| !matches!(p, Patch::InsertSubtree { .. } | Patch::RemoveSubtree { .. }))
-        .cloned()
-        .collect();
-    apply_patches(client, &others);
-}
-
-/// Walk `node`, find a `<!--dj-if id="boundary_id"-->` open marker, then
-/// the matching `<!--/dj-if-->` close marker among its siblings (counting
-/// nested boundaries). Return the slice of nodes from open through close,
-/// inclusive, cloned.
-fn find_dj_if_subtree(node: &VNode, boundary_id: &str) -> Option<Vec<VNode>> {
-    fn walk(siblings: &[VNode], target: &str) -> Option<Vec<VNode>> {
-        for (i, child) in siblings.iter().enumerate() {
-            if is_dj_if_open(child, target) {
-                let close = match_close_idx(siblings, i)?;
-                return Some(siblings[i..=close].to_vec());
-            }
-            if let Some(found) = walk(&child.children, target) {
-                return Some(found);
-            }
-        }
-        None
-    }
-    walk(&node.children, boundary_id)
-}
-
-/// Remove the boundary identified by `boundary_id` from `node` (anywhere
-/// in the tree). Removes the open marker, everything between, and the
-/// close marker.
-fn remove_dj_if_subtree(node: &mut VNode, boundary_id: &str) {
-    fn walk(siblings: &mut Vec<VNode>, target: &str) -> bool {
-        let mut open_idx: Option<usize> = None;
-        for (i, child) in siblings.iter().enumerate() {
-            if is_dj_if_open(child, target) {
-                open_idx = Some(i);
-                break;
-            }
-        }
-        if let Some(open) = open_idx {
-            if let Some(close) = match_close_idx(siblings, open) {
-                siblings.drain(open..=close);
-                return true;
-            }
-        }
-        for child in siblings.iter_mut() {
-            if walk(&mut child.children, target) {
-                return true;
-            }
-        }
-        false
-    }
-    walk(&mut node.children, boundary_id);
-}
-
-fn is_dj_if_open(n: &VNode, id: &str) -> bool {
-    n.tag == "#comment"
-        && n.text
-            .as_deref()
-            .map(|t| {
-                let trimmed = t.trim();
-                trimmed.starts_with("dj-if ") && trimmed.contains(&format!("id=\"{}\"", id))
-            })
-            .unwrap_or(false)
-}
-
-fn is_dj_if_open_any(n: &VNode) -> bool {
-    n.tag == "#comment"
-        && n.text
-            .as_deref()
-            .map(|t| t.trim().starts_with("dj-if "))
-            .unwrap_or(false)
-}
-
-fn is_dj_if_close(n: &VNode) -> bool {
-    n.tag == "#comment"
-        && n.text
-            .as_deref()
-            .map(|t| t.trim() == "/dj-if")
-            .unwrap_or(false)
-}
-
-/// Given the index of an open marker in `siblings`, return the index of
-/// its matching close marker (handling nested boundaries).
-fn match_close_idx(siblings: &[VNode], open_idx: usize) -> Option<usize> {
-    let mut depth = 1;
-    for (i, n) in siblings.iter().enumerate().skip(open_idx + 1) {
-        if is_dj_if_open_any(n) {
-            depth += 1;
-        } else if is_dj_if_close(n) {
-            depth -= 1;
-            if depth == 0 {
-                return Some(i);
-            }
-        }
-    }
-    None
-}
-
-fn find_by_djust_id_mut<'a>(root: &'a mut VNode, id: &str) -> Option<&'a mut VNode> {
-    if root.djust_id.as_deref() == Some(id) {
-        return Some(root);
-    }
-    for child in root.children.iter_mut() {
-        if let Some(found) = find_by_djust_id_mut(child, id) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-// =============================================================================
-// THE INVARIANT — every patch's targeting handle must be in the tracker
-// =============================================================================
-
-/// For each emitted patch, every `djust_id` referenced as a targeting
-/// handle (`d`, `child_d`, `ref_d`) must be present somewhere in the
-/// client tracker. If absent, the production client's
-/// `querySelector('[dj-id="X"]')` returns `null` and the patch silently
-/// drops, leaving stale content from a prior render.
-///
-/// `child_d` of `InsertChild` is exempt (it's the id of a brand-new
-/// node not yet in the tracker — the patch's purpose is to add it).
-///
-/// `id` of `Insert/RemoveSubtree` is a boundary marker id (a different
-/// namespace), not a `djust_id`, so it's exempt.
-fn assert_handles_resolve(patches: &[Patch], client: &VNode, ctx: &str) {
-    for (i, patch) in patches.iter().enumerate() {
-        match patch {
-            Patch::RemoveChild { d, child_d, .. } => {
-                check_handle(d, client, ctx, i, "RemoveChild.d");
-                check_handle(child_d, client, ctx, i, "RemoveChild.child_d");
-            }
-            Patch::InsertChild { d, ref_d, .. } => {
-                check_handle(d, client, ctx, i, "InsertChild.d");
-                if ref_d.is_some() {
-                    check_handle(ref_d, client, ctx, i, "InsertChild.ref_d");
-                }
-            }
-            Patch::MoveChild { d, child_d, .. } => {
-                check_handle(d, client, ctx, i, "MoveChild.d");
-                check_handle(child_d, client, ctx, i, "MoveChild.child_d");
-            }
-            Patch::SetAttr { d, .. } => {
-                check_handle(d, client, ctx, i, "SetAttr.d");
-            }
-            Patch::RemoveAttr { d, .. } => {
-                check_handle(d, client, ctx, i, "RemoveAttr.d");
-            }
-            Patch::SetText { d, .. } => {
-                // SetText.d is None for text nodes (text nodes have no
-                // dj-id); only enforce when present.
-                if d.is_some() {
-                    check_handle(d, client, ctx, i, "SetText.d");
-                }
-            }
-            Patch::Replace { d, .. } => {
-                check_handle(d, client, ctx, i, "Replace.d");
-            }
-            Patch::InsertSubtree { d, .. } => {
-                // d is the parent's id; the subtree itself is brand-new.
-                check_handle(d, client, ctx, i, "InsertSubtree.d");
-            }
-            Patch::RemoveSubtree { .. } => {
-                // Boundary id, not a dj-id. No handle to check; the
-                // boundary marker's presence is verified by
-                // `apply_all` panicking if it can't find it.
-            }
-        }
-    }
-}
-
-fn check_handle(handle: &Option<String>, client: &VNode, ctx: &str, patch_idx: usize, field: &str) {
-    if let Some(id) = handle {
-        let present = find_by_djust_id(client, id).is_some();
-        assert!(
-            present,
-            "[{}] patch[{}] {} = {:?} — id not present in client tracker; \
-             this is the #1408 class of bug (server-side `last_vdom` drifted \
-             from client DOM, emitting handles for nodes the client never had)",
-            ctx, patch_idx, field, id
-        );
-    }
-}
-
-fn find_by_djust_id<'a>(root: &'a VNode, id: &str) -> Option<&'a VNode> {
-    if root.djust_id.as_deref() == Some(id) {
-        return Some(root);
-    }
-    for child in root.children.iter() {
-        if let Some(found) = find_by_djust_id(child, id) {
-            return Some(found);
-        }
-    }
-    None
-}
+mod common;
+use common::{
+    apply_all, assert_handles_resolve, dj_if_close, dj_if_open, elem, elem_with_text, IdGen,
+};
 
 // =============================================================================
 // Cycle helper — one render iteration matching the production loop
@@ -400,9 +97,9 @@ fn run_cycle(label: &str, last_vdom: &mut VNode, client: &mut VNode, new_vdom: V
 /// non-regression of the boundary-keyed swap path under variety.
 #[test]
 fn torture_three_branch_tab_toggle_no_handle_drift() {
-    let c = Cell::new(0u64);
+    let c = IdGen::new();
 
-    fn build(branch: char, c: &Cell<u64>) -> VNode {
+    fn build(branch: char, c: &IdGen) -> VNode {
         let parent = elem("div", c);
         let header = elem_with_text("h2", "Stable Header", c);
 
@@ -470,9 +167,9 @@ fn torture_three_branch_tab_toggle_no_handle_drift() {
 /// ```
 #[test]
 fn torture_five_boundary_independent_toggles() {
-    let c = Cell::new(0u64);
+    let c = IdGen::new();
 
-    fn build(toggles: [bool; 5], c: &Cell<u64>) -> VNode {
+    fn build(toggles: [bool; 5], c: &IdGen) -> VNode {
         let parent = elem("div", c);
         let mut children = Vec::new();
         for (i, on) in toggles.iter().enumerate() {
@@ -526,9 +223,9 @@ fn torture_five_boundary_independent_toggles() {
 /// across many cycles.
 #[test]
 fn torture_long_alternation_matched_boundary_id() {
-    let c = Cell::new(0u64);
+    let c = IdGen::new();
 
-    fn build(state: bool, c: &Cell<u64>) -> VNode {
+    fn build(state: bool, c: &IdGen) -> VNode {
         let parent = elem("div", c);
         let mut children = vec![dj_if_open("if-stable-id")];
         if state {
@@ -567,9 +264,9 @@ fn torture_long_alternation_matched_boundary_id() {
 /// unmatched-boundary path with same-tag wrappers.
 #[test]
 fn torture_branch_swap_with_same_tag_non_boundary_siblings() {
-    let c = Cell::new(0u64);
+    let c = IdGen::new();
 
-    fn build(branch: char, c: &Cell<u64>) -> VNode {
+    fn build(branch: char, c: &IdGen) -> VNode {
         let parent = elem("div", c);
         // All sibling tags are <div> so positional alignment WOULD have
         // tag-compatible matches available pre-fix.

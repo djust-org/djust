@@ -34,29 +34,8 @@
 use djust_vdom::diff::sync_ids;
 use djust_vdom::VNode;
 
-fn dj_if_open(id: &str) -> VNode {
-    VNode {
-        tag: "#comment".to_string(),
-        attrs: Default::default(),
-        children: Vec::new(),
-        text: Some(format!("dj-if id=\"{}\"", id)),
-        key: None,
-        djust_id: None,
-        cached_html: None,
-    }
-}
-
-fn dj_if_close() -> VNode {
-    VNode {
-        tag: "#comment".to_string(),
-        attrs: Default::default(),
-        children: Vec::new(),
-        text: Some("/dj-if".to_string()),
-        key: None,
-        djust_id: None,
-        cached_html: None,
-    }
-}
+mod common;
+use common::{dj_if_close, dj_if_open};
 
 /// Case 1: branch swap — id in OLD only + id in NEW only.
 ///
