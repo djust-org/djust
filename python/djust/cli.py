@@ -923,26 +923,37 @@ def cmd_deploy(rest):
         print(f"Error: failed to import djust.deploy_cli: {e}{hint}")
         return 1
 
-    if not rest or rest[0] in ("-h", "--help"):
+    # `djust deploy --help` / `djust deploy -h` → print our hand-written
+    # umbrella help. The click subcommands have their own --help that
+    # users get via `djust deploy login --help`, etc.
+    if rest and rest[0] in ("-h", "--help"):
         print(DEPLOY_HELP)
         return 0
 
-    first = rest[0]
-
-    # Pass-through subcommands that already exist on the Click group.
-    if first in ("login", "logout", "status"):
-        argv = rest
-    elif first == "--from-git":
-        # `djust deploy --from-git <slug>` — delegate to the git-based deploy.
-        argv = ["deploy", *rest[1:]]
-    elif first.startswith("-"):
-        # Unknown flag at the top level — show help.
-        print(DEPLOY_HELP)
-        return 1
+    # `djust deploy` with no args (or with flags only — `djust deploy
+    # --yes`) → the guided directory-deploy flow. Walks the user through
+    # login + project-create + deploy. The slug comes from
+    # [tool.djust.deploy].project in pyproject.toml or an interactive
+    # prompt.
+    if not rest:
+        argv = ["deploy-dir"]
     else:
-        # `djust deploy <slug> [...]` — default to the directory flow,
-        # which works against the prebuilt-image pipeline (no git required).
-        argv = ["deploy-dir", *rest]
+        first = rest[0]
+        if first in ("login", "logout", "status"):
+            argv = rest
+        elif first == "--from-git":
+            # `djust deploy --from-git <slug>` — git-based deploy.
+            argv = ["deploy", *rest[1:]]
+        elif first.startswith("-"):
+            # `djust deploy --yes` / `djust deploy --no-create` etc. —
+            # flags-only invocation routes to the guided directory flow,
+            # same as the bare `djust deploy` case above.
+            argv = ["deploy-dir", *rest]
+        else:
+            # `djust deploy <slug> [...]` — directory flow with explicit
+            # slug. Works against the prebuilt-image pipeline (no git
+            # required).
+            argv = ["deploy-dir", *rest]
 
     try:
         deploy_cli.main(args=argv, prog_name="djust deploy", standalone_mode=False)
