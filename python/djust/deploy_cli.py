@@ -227,9 +227,11 @@ def _save_slug_to_pyproject(source_dir: Path, slug: str) -> bool:
     ``my-app-2``) and repeated runs. Stays stdlib-only (no tomli_w
     dependency) — TOML rejects duplicate tables, so the prior
     append-only shape produced unparseable files on case 1.
-    """
-    import re
 
+    Implementation walks the file line-by-line (no regex with
+    nested quantifiers) — a single backtrackable pattern across the
+    whole file would be a ReDoS surface on hostile pyproject input.
+    """
     path = _pyproject_path(source_dir)
     if not path.exists():
         return False
@@ -238,29 +240,51 @@ def _save_slug_to_pyproject(source_dir: Path, slug: str) -> bool:
     except OSError:
         return False
 
-    table_re = re.compile(r"^\[tool\.djust\.deploy\][^\n]*\n", re.MULTILINE)
-    project_in_table_re = re.compile(
-        r"(^\[tool\.djust\.deploy\][^\n]*\n(?:[^\[]*\n)*?)\s*project\s*=\s*\"[^\"]*\"\s*\n",
-        re.MULTILINE,
-    )
-
     new_line = f'project = "{slug}"\n'
+    lines = original.splitlines(keepends=True)
 
-    if project_in_table_re.search(original):
-        # Case 1: replace the existing project = "…" line.
-        updated = project_in_table_re.sub(rf"\1{new_line}", original, count=1)
-    elif table_re.search(original):
-        # Case 2: table header is there but no project key yet — insert
-        # it right under the header.
-        updated = table_re.sub(lambda m: m.group(0) + new_line, original, count=1)
-    else:
-        # Case 3: append a fresh block.
-        prefix = "" if original.endswith("\n") else "\n"
+    # Find the [tool.djust.deploy] header, if any. A TOML table lasts
+    # from its header line until the next `[…]` header line (or EOF).
+    table_start = -1
+    table_end = len(lines)
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if table_start == -1:
+            if stripped == "[tool.djust.deploy]":
+                table_start = i
+            continue
+        # Already inside the table — bail at the next table header.
+        if stripped.startswith("[") and stripped.endswith("]"):
+            table_end = i
+            break
+
+    if table_start == -1:
+        # Case 3: no table at all — append a fresh block.
+        prefix = "" if not original or original.endswith("\n") else "\n"
         updated = original + (
             f"{prefix}\n# Auto-saved by `djust deploy` — the project slug to deploy to.\n"
             "[tool.djust.deploy]\n"
             f"{new_line}"
         )
+    else:
+        # Look for an existing `project = ...` line within the table.
+        project_idx = -1
+        for j in range(table_start + 1, table_end):
+            stripped = lines[j].lstrip()
+            if stripped.startswith("project") and "=" in stripped:
+                # Match `project` only, not `project_x`.
+                key_part = stripped.split("=", 1)[0].rstrip()
+                if key_part == "project":
+                    project_idx = j
+                    break
+
+        if project_idx >= 0:
+            # Case 1: replace in place.
+            lines[project_idx] = new_line
+        else:
+            # Case 2: insert right under the table header.
+            lines.insert(table_start + 1, new_line)
+        updated = "".join(lines)
 
     try:
         path.write_text(updated, encoding="utf-8")
@@ -741,12 +765,17 @@ def _login_browser(server: str) -> dict:
         try:
             requests.get(f"http://127.0.0.1:{port}/callback?error=timeout", timeout=1)
         except requests.RequestException:
+            # Timeout-unblock self-request is best-effort. If it fails,
+            # the server thread will exit when its accept() socket is
+            # closed below — we just lose the clean-shutdown nicety.
             pass
         thread.join(timeout=2)
 
     try:
         http_server.server_close()
     except OSError:
+        # Server already cleaned up by handle_request() returning. Not
+        # an error we need to surface.
         pass
 
     if timed_out:
@@ -816,6 +845,9 @@ def _login_browser(server: str) -> dict:
             if ui.status_code == 200:
                 email = ui.json().get("email", "") or ""
         except requests.RequestException:
+            # userinfo is a display-only nicety. If the IdP doesn't
+            # expose /o/userinfo/ or the call blips, the deploy still
+            # works — we just don't echo "Logged in as <email>".
             pass
 
     expires_at = int(time.time()) + expires_in
@@ -885,9 +917,18 @@ def _refresh_oauth_token(server: str, refresh_token: str) -> Optional[dict]:
     }
 
 
-# Kept under the legacy name so anything that imports this helper
-# (tests, old scripts) keeps working. The body is now the browser flow.
+# Public alias: anything that imports `_login_interactive` from older
+# djust releases still resolves. Keep until the next major release; new
+# code should call `_login_browser` directly.
 _login_interactive = _login_browser
+__all__ = [
+    "cli",
+    "credentials_path",
+    "load_credentials",
+    "save_credentials",
+    "save_oauth_credentials",
+    "_login_interactive",
+]
 
 
 @cli.command()
