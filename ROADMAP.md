@@ -289,7 +289,8 @@ Surfaced 2026-05-06 during a downstream-consumer code review (per-tab data gatin
 - **v0.9.5-1a** — Foundation: `get_object()` + `has_object_permission()` + mount-time enforcement + `_invalidate_object_cache()`. **Soaks through one release before -1b lands.** ✅ shipped as part of v0.9.5rc1
 - **v0.9.5-1b** — Per-event re-execution in `handle_event` + state-restore cache invalidation. ✅ shipped as part of v0.9.5rc1
 - **v0.9.5-1c** — Tooling: `djust check` IDOR-shape heuristic + `authorization.md` guide + `djust-dev` skill principle entry. ✅ shipped as part of v0.9.5rc1
-- **v0.9.5-2** — Post-rc1 drain: 14 retro-filed items (X008 audit follow-ups, sticky-child auth gap, inheritance round-trip parser test, canon batch).
+- **v0.9.5-2** — Post-rc1 drain: 14 retro-filed items (X008 audit follow-ups, sticky-child auth gap, inheritance round-trip parser test, canon batch). ✅ shipped as v0.9.5rc2.
+- **v0.9.5-3** — Pre-stable cleanup drain: 8 in-repo items (carryovers + post-rc2 follow-ups). Lands before v0.9.5 stable cut.
 
 ### Milestone: v0.9.5-1a — Foundation: `get_object()` + `has_object_permission()` (#1373, ADR-017)
 
@@ -372,7 +373,53 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
-### Milestone: v0.9.5-2 — Post-v0.9.5rc1 drain (audit follow-ups + retro canon)
+### Milestone: v0.9.5-3 — Pre-stable cleanup drain (carryovers + post-rc2 follow-ups)
+
+*Goal:* Clear in-repo open tech-debt before cutting v0.9.5 stable. 6 carryover items from prior milestones + 2 newly-filed items from the v0.9.5-2 drain. 4 OUT-OF-REPO items (#1375, #1376, #1384, #1387) excluded — blocked on upstream `pipeline-run` skill repo.
+
+**Scope** (7 work units, closes 8 issues):
+
+| # | Issue(s) | Theme | Type | Sized |
+|---|---|---|---|---|
+| 1 | #1396 | `Node::Include` round-trip double-quote (uncovered by #1388) | bugfix (Rust template emitter) | ~1 hr |
+| 2 | #1368 | HTTP path log-injection — `cache_key` not `sanitize_for_log`'d in rust_bridge.py | security | ~30-45 min |
+| 3 | #1356 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | code | ~30 min |
+| 4 | #1360 + #1361 | JS micro-cleanup: dedupe `_parseTimeMs`/`_computeTransitionTiming` between dj-transition + dj-remove; tighten `routeMap[pathname]` with `hasOwnProperty.call` | JS refactor | ~45 min |
+| 5 | #1372 | bundle-init-order structural lint — enumerate module-scope `let`/`const`, verify declared-before-use across bundle concat order | tooling | ~1-2 hrs |
+| 6 | #1400 | extend filter-migration grep canon (#1391) to cover symbol removals during refactor | docs/canon | ~15 min |
+| 7 | #1366 | dj-if + dj-key boundary-reorder limitation — extend pre-pass to delegate non-boundary children to `diff_keyed_children` when ANY carry `dj-key` | VDOM refactor | ~2-3 hrs |
+
+**Sequencing strategy**:
+
+1. **#1368 first** — security-class fix on `rust_bridge.py`. Lands sanitize_for_log gap before others touch the same area.
+2. **#1396** — Rust template round-trip; un-ignores the test from PR #1397.
+3. **#1356** — small Python state-backend fix.
+4. **#1360 + #1361 grouped** — both JS micro-cleanups.
+5. **#1372** — JS tooling lint.
+6. **#1400** — small canon-doc PR.
+7. **#1366 last** — largest VDOM polish; the issue body explicitly suggests deferring to v0.10 unless a real-world regression is reported, so consider close-without-code if Stage 4 investigation confirms no regression evidence yet.
+
+**Acceptance for v0.9.5-3**:
+
+- [ ] All 7 work units shipped (or #1366 close-without-code if deferred per its own ask).
+- [ ] All 8 referenced issues closed.
+- [ ] `make check` clean on each PR.
+- [ ] CHANGELOG `[Unreleased]` block updated for user-visible changes (#1356, #1366, #1396 are user-visible; #1368 + #1372 are internal; #1360, #1361, #1400 are docs/refactor).
+- [ ] Once bucket complete, proceed to v0.9.5 stable cut.
+
+**Pre-existing closures**:
+- #1339 (CLOSED 2026-05-06) — already shipped via PR #1341 + extended in PR #1398.
+- #1370 (CLOSED 2026-05-06) — TDZ regression resolved via 13 fix commits in main.
+
+**Pipeline runner notes**:
+- `/pipeline-run --milestone v0.9.5-3 --group --all` to process autonomously.
+- Convention: third drain bucket toward release v0.9.5 (rc1 + v0.9.5-2 already shipped; rc2 cut).
+
+
+
+### Milestone: v0.9.5-2 — Post-v0.9.5rc1 drain (audit follow-ups + retro canon) ✅ shipped 2026-05-06
+
+**Status:** ✅ all 5 PRs merged (#1394, #1395, #1397, #1398, #1399). Released as `v0.9.5rc2` (2026-05-06). 14 in-repo issues closed; 4 OUT-OF-REPO items remain tracked (#1375, #1376, #1384, #1387). Retro: RETRO.md §v0.9.5-2.
 
 *Goal:* Land 14 in-repo retro-filed items into v0.9.5 stable before cutting the release tag. Items are split between two narrow code-change follow-ups on the v0.9.5-1 audit surface (X008 expansion, sticky-child object-permission gap), an inheritance round-trip parser test, and a canon batch sweeping nine retro-filed process items into `djust-dev`/CLAUDE.md/PR-checklist.
 
