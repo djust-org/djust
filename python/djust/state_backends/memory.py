@@ -178,28 +178,6 @@ class InMemoryStateBackend(StateBackend):
                 if state_size > 0:
                     self._state_sizes[key] = state_size
 
-    def get_and_update(self, key: str) -> Optional[Tuple[RustLiveView, float]]:
-        """
-        Atomically retrieve and update timestamp (thread-safe).
-
-        This is useful for extending session TTL on access without
-        separate get/set calls that could race.
-
-        Args:
-            key: Session key
-
-        Returns:
-            Tuple of (RustLiveView, new_timestamp) if found, None otherwise
-        """
-        with self._lock:
-            cached = self._cache.get(key)
-            if cached:
-                view, _ = cached
-                new_timestamp = time.time()
-                self._cache[key] = (view, new_timestamp)
-                return (view, new_timestamp)
-            return None
-
     def delete(self, key: str) -> bool:
         """
         Remove from in-memory cache (thread-safe).
