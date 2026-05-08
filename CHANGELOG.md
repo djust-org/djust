@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **LiveView state survives WS reconnect (Phase 11 / djustlive snapshot/wake).** The `LiveViewConsumer` now persists view state to the Django session on every WS event handler completion, mirroring the save that already existed for the HTTP GET/POST paths in `mixins/request.py:603-609`. Previously, state changes driven by `dj-click` / `dj-input` / `dj-submit` events lived only in the consumer's in-memory view instance — any WS reconnect (page refresh, network blip, the djustlive proxy's snapshot/restore cycle) discarded everything since the last full HTTP request. Now a click that increments `self.click_count` is durable across reconnects, opt-in via the existing `enable_state_snapshot = True` class attribute. Save fires after the user handler returns and before render, so saved values include the just-applied mutation. Components, private (`_`-prefixed) attrs, and explicit cleanups for empty private-state are all mirrored from the HTTP-path semantics; failures in save are caught and logged (never break event handling). Fixes the long-standing gap where `enable_state_snapshot` was effectively HTTP-only.
+
+### Changed
+
+- **Mount-time state restore now fires on plain WS reconnect, not just SSR-prerendered loads.** The `if has_prerendered:` gate that wrapped the `request.session.aget(view_key)` lookup in `LiveViewConsumer.handle_mount` was widened to `if has_prerendered or saved_state:`. The original gate was correct for its intended case (skip running `mount()` again when the browser already has SSR HTML), but it also meant pure-WS apps and reconnect-after-reload paths could never restore state from the session — even with the new event-time save in place. With the widened gate, any reconnect that finds saved state hydrates from it; views with `enable_state_snapshot = True` get true reconnect continuity. Behavior unchanged for views without saved state (gate is or'd, not replaced).
+
+- **Mount response skips `html` field on resume from saved state.** When state was restored from the Django session AND the inbound mount frame has `has_prerendered: true`, the response no longer includes the freshly-rendered `html` field. The client's DOM was already produced from this state on the original SSR + first mount, and `client.js`'s `e.html && (n.innerHTML = e.html)` short-circuits cleanly when the field is absent, preserving the existing DOM. Previously, the redundant html field caused a visible page refresh on every WS reconnect (e.g. djustlive proxy's snapshot/wake), even when nothing about the rendered output had changed except `current_time`. The `version` field still flows so subsequent patches stay in sync. Mount response shrinks from ~12KB → ~500 bytes for a typical view on the resume path.
+
 ## [0.9.6rc1] - 2026-05-07
 
 ### Added
