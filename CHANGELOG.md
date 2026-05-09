@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **System check `djust.D001` — warn when Postgres is configured but `psycopg[binary]>=3.2` is not installed (#1433).** djust's `db.notifications` (LISTEN/NOTIFY bridge) requires psycopg3. The 0.9.5 cycle hardened the runtime path to permanent-fail with a WARNING when `@notify_on_save` actually fires (#1357), but operators who deploy the misconfig without an active consumer wouldn't see the warning until much later. D001 surfaces it at `manage.py check` / `runserver` startup, before traffic. Fires only when the default DB engine is Postgres AND `psycopg2` is importable AND `psycopg` (3.x) is missing or at version < 3.2. Silenceable per-project via `SILENCED_SYSTEM_CHECKS = ['djust.D001']`.
+
 ### Fixed
 
 - **`InMemoryStateBackend.get()` discards corrupt entries instead of returning the shared in-memory ref (#1410).** When `RustLiveView.deserialize_msgpack` raised — typically after a hot-swap struct change or msgpack schema drift — the previous fallback returned the cached object directly. Two concurrent connections to the same view then shared one `_rust_view`, and mutations from connection A leaked into connection B's render context. After a `cargo build` of `djust_vdom` + `.so` swap, fresh navigations could re-render with state from the prior session. Now the backend pops the corrupt entry from its in-memory dict and returns `None`; the caller's mount path treats the cache as cold and runs `mount()` cleanly. Discovered during the #1408 investigation.
