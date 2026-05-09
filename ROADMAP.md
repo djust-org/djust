@@ -373,6 +373,57 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
+### Milestone: v0.9.6-1 — Post-v0.9.6rc1 drain (security + DX cleanup)
+
+*Goal:* Drain the open-issue backlog filed during the v0.9.5 stable cycle into a coherent v0.9.6 RC. One P0 state-backend issue (silent shared-ref race), one P1 template-parser bug, three DX/perf items in the theme/tenant subsystem, two small tooling chores, and a 6-issue VDOM-test cluster shipped as a single grouped PR (extends `crates/djust_vdom/tests/common/mod.rs` from #1421). The other P0 (#1430 Redis ZstdDecompressor segfault) is already in flight as PR #1431. Two heavier items deferred to v0.9.6-2 (async-ORM rewrite needs psycopg3, free-threaded-safe declaration needs research).
+
+**Status (planning):** 0 of ~8 PRs shipped (one already in flight: PR #1431 closes #1430). Bucket targets v0.9.6 stable.
+
+#### Priority breakdown
+
+| # | Issue(s) | Theme | Type | Sized | Status |
+|---|---|---|---|---|---|
+| 1 | #1430 | RedisStateBackend ZstdDecompressor race → segfault under concurrent load | P0 bugfix | ~1-2 hr | **🚧 PR #1431** |
+| 2 | #1410 | InMemoryStateBackend silently returns shared-ref on msgpack deserialize failure | P0 hardening | ~30-45 min | open |
+| 3 | #1423 | Django template parser rejects `{# … {% if %} … #}` comments | P1 bugfix (template engine) | ~1 hr | open |
+| 4 | #1406 | Extend bundle-init-order lint to depth-N call-graph (#1372 follow-up) | P2 tooling | ~1-2 hr | open |
+| 5 | #1433 | System check for psycopg2-without-psycopg3 misconfiguration | P2 system check | ~30 min | open |
+| 6 | #1437 | Cache `theme_context` output by `(preset, pack, mode, locale)` tuple | P2 perf | ~1 hr | open |
+| 7 | #1436 | TenantMiddleware short-circuit when no resolver configured | P2 perf | ~30 min | open |
+| 8 | #1435 | Pre-render `theme_panel`/`theme_mode_toggle`/`theme_preset_selector` as context strings | P2 perf | ~1-2 hr | open |
+| 9 | #1413 + #1416 + #1417 + #1418 + #1419 + #1420 | VDOM test cluster (6 issues) — proptest-randomized round-trip, full HTML round-trip, dj-update=ignore × dj-if × sync_ids, deep-cascade dj-if, wire-protocol JSON snapshots, intra-batch handle invalidation | P3 test (grouped PR) | ~3-4 hr | open |
+
+#### Sequencing strategy
+
+1. **PR #1431 lands first** — already in flight; segfault-class P0.
+2. **#1410** — small P0, no dependencies. Lands the deserialize-failure hardening.
+3. **#1423** — template parser bug. Self-contained.
+4. **#1433** — system check. Self-contained.
+5. **#1406** — bundle-init-order depth-N. Builds on #1372.
+6. **#1437 + #1436 + #1435** — theme/tenant perf trio; can ship in parallel or batched.
+7. **VDOM test cluster** (#1413, #1416-#1420) — single grouped PR via `--group`. All extend `tests/common/mod.rs` from #1421; coherent unit.
+
+#### Acceptance for v0.9.6-1
+
+- [ ] All 9 work units shipped (PR #1431 + 7 individual + 1 grouped).
+- [ ] All 11 referenced issues closed.
+- [ ] `make check` clean on each PR.
+- [ ] CHANGELOG `[Unreleased]` block updated for user-visible changes (#1410, #1423, #1430, #1433, #1435-#1437 are user-visible; #1406 is internal; the VDOM test cluster is test-only).
+- [ ] Once bucket complete, proceed to v0.9.6 stable cut (or v0.9.6-2 if more drain accumulates).
+
+#### Deferred to v0.9.6-2
+
+- **#1434** — Replace `sync_to_async(Model.objects.X)` with native async ORM after psycopg3 lands. Needs psycopg3 driver migration to ship first.
+- **#1432** — Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL. Research task: audit every `unsafe` block + global state for thread-safety under no-GIL semantics.
+
+#### Pipeline runner notes
+
+- `/pipeline-run --milestone v0.9.6-1 --all --group` to process autonomously (skip #1430 — already PR'd).
+- Convention: first drain bucket toward release v0.9.6 (rc1 just cut).
+- v0.9.5 retro lessons apply: reproducer-first (especially for the P0 segfault), reviewer-prompt budget, two-commit shape per Action #181.
+
+---
+
 ### Milestone: v0.9.5-3 — Pre-stable cleanup drain (carryovers + post-rc2 follow-ups)
 
 *Goal:* Clear in-repo open tech-debt before cutting v0.9.5 stable. 6 carryover items from prior milestones + 2 newly-filed items from the v0.9.5-2 drain. 4 OUT-OF-REPO items (#1375, #1376, #1384, #1387) excluded — blocked on upstream `pipeline-run` skill repo.
