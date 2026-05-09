@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6rc2] - 2026-05-09
+
 ### Performance
 
 - **`theme_context` now pre-renders `theme_panel`, `theme_mode_toggle`, and `theme_preset_selector` as context strings (#1435).** Templates can now use `{{ theme_panel }}` / `{{ theme_mode_toggle }}` / `{{ theme_preset_selector }}` instead of the corresponding `{% … %}` tags. The work runs once per request in the context processor instead of once per `{% … %}` invocation — meaningful when the same tag appears multiple times on a page (e.g., djust-scaffold's `base.html` had `{% theme_panel %}` twice). Customization-with-args still uses the `{% … %}` form. If a tag function raises (broken manifest, missing template, downstream shadowing), pre-renders come back as empty strings instead of 500-ing the request.
