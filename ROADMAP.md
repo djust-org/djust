@@ -373,6 +373,52 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
+### Milestone: v0.9.6-2 — v0.9.6-1 retro follow-ups + VDOM cluster carryovers
+
+*Goal:* Clear the v0.9.6-1 retro follow-ups (5 canon items #1445–#1449 + 1 stale-base canon #1450) and the VDOM-test cluster carryovers (5 issues, single grouped PR + 1 standalone). Targets v0.9.6 stable.
+
+**Status (planning):** 0 of ~7 PRs shipped.
+
+#### Priority breakdown
+
+| # | Issue(s) | Theme | Type | Sized |
+|---|---|---|---|---|
+| 1 | #1445 + #1446 + #1447 + #1450 | Process canon batch — TOCTOU lock-window rule, zero-cost-when-unused middleware pattern, cache-by-struct discipline, Stage 11 stale-base check. All four are CLAUDE.md / pipeline-template edits — group as a single PR | P2 docs/canon | ~2-3 hr (grouped) |
+| 2 | #1448 | Wire-protocol JSON pinning — generalize PR #1444's shape to the JIT serialization, time-travel payloads, presence frames, streaming frames, push-event envelope. Probably 5 small snapshot files | P2 test | ~3-4 hr |
+| 3 | #1449 | Deferral-pattern-aware depth-N call-graph walker for bundle-init-order lint (#1406 redo) — model `addEventListener` / `setTimeout` / `Promise.then` as exclusion sites | P2 tooling | ~3-4 hr |
+| 4 | #1413 | Proptest-randomized multi-cycle sync_ids round-trip (follow-up to #1412) | P3 test | ~2 hr |
+| 5 | #1416 | Full HTML round-trip torture (parse → diff → serialize → re-parse stability) | P3 test | ~3 hr |
+| 6 | #1417 | dj-update="ignore" × dj-if boundaries × sync_ids interaction | P3 test | ~2-3 hr |
+| 7 | #1418 + #1420 | Deep-cascade dj-if torture (10+ levels) + patch-batch ordering torture (intra-batch handle invalidation) — both extend `tests/common/mod.rs`; group as one PR if scope stays small | P3 test | ~3 hr |
+
+#### Sequencing strategy
+
+1. **#1445 + #1446 + #1447 + #1450 grouped first** — pure canon-doc batch, no code dependencies. Lands the Stage 11 mandatory checklist updates that benefit every subsequent PR in this bucket.
+2. **#1448** — wire-protocol pinning. Independent; can ship in parallel sequencing with #1449 since they touch different file trees.
+3. **#1449** — depth-N walker redo. Independent of the rest.
+4. **VDOM cluster carryovers (#1413, #1416, #1417, #1418, #1420)** — 4-5 individual PRs (or grouped where harness sharing makes sense per #1421's harness extraction). Each P3; these are quality-tier hardeners, not user-visible.
+
+#### Acceptance for v0.9.6-2
+
+- [ ] All ~7 work units shipped.
+- [ ] All 11 referenced issues closed.
+- [ ] `make check` clean on each PR.
+- [ ] CHANGELOG `[Unreleased]` updated for any user-visible changes (most of this bucket is internal canon + tests; no user-visible changes expected).
+- [ ] Once bucket complete, proceed to v0.9.6 stable cut.
+
+#### Deferred to v0.9.7 / v0.10.0
+
+- **#1432** — Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL. Research task: audit every `unsafe` block + global state for thread-safety under no-GIL semantics. Stays deferred per v0.9.6-1 plan.
+- **#1434** — Replace `sync_to_async(Model.objects.X)` with native async ORM after psycopg3 lands. Needs psycopg3 driver migration to ship first. Stays deferred per v0.9.6-1 plan.
+
+#### Pipeline runner notes
+
+- `/pipeline-run --milestone v0.9.6-2 --all --group` to process autonomously.
+- Convention: second drain bucket toward release v0.9.6 (rc2 just cut).
+- Once #1450 lands, the Stage 11 stale-base check applies to every subsequent PR — that's the one item that benefits THIS milestone's own remaining PRs.
+
+---
+
 ### Milestone: v0.9.6-1 — Post-v0.9.6rc1 drain (security + DX cleanup)
 
 *Goal:* Drain the open-issue backlog filed during the v0.9.5 stable cycle into a coherent v0.9.6 RC. One P0 state-backend issue (silent shared-ref race), one P1 template-parser bug, three DX/perf items in the theme/tenant subsystem, two small tooling chores, and a 6-issue VDOM-test cluster shipped as a single grouped PR (extends `crates/djust_vdom/tests/common/mod.rs` from #1421). The other P0 (#1430 Redis ZstdDecompressor segfault) is already in flight as PR #1431. Two heavier items deferred to v0.9.6-2 (async-ORM rewrite needs psycopg3, free-threaded-safe declaration needs research).
