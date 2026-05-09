@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **`theme_context` now caches its rendered output by `ThemeState` tuple (#1437).** The Django context processor `djust.theming.context_processors.theme_context` previously ran the full CSS-generation + theme-switcher HTML pipeline on every templating request. Output is now `lru_cache(maxsize=512)`'d on `(theme, preset, pack, mode, resolved_mode, layout, presets_key)` — a pure function of state, no request data flows in. djust's catalog of ~60 presets × 2 modes × handful of packs fits comfortably under the cache size. Per-request cost: ~1-3 ms → ~5-10 µs post-warmup. New `djust.theming.context_processors.clear_theme_context_cache()` exposed for theme-pack hot-reload and tests.
 - **`TenantMiddleware` short-circuits when no resolver is configured (#1436).** When neither `DJUST_CONFIG['TENANT_RESOLVER']` nor `DJUST_TENANTS` is set, the middleware now bypasses the resolver call, the thread-local set/clear pair, and the required-tenant gate — switching `__call__` to a straight `get_response(request)` passthrough. Saves ~2-5% per-request CPU for consumers with `djust[tenants]` installed but no tenant opt-in (single-tenant deploys, scaffold starters, demo apps). Consumers who set either config keep the full path; `request.tenant` is still set to `None` on the no-op path so `getattr(request, "tenant", None)` callers see the same shape.
 
 ### Added
