@@ -157,6 +157,69 @@ class TestThemeContextCache:
             theme_context(MagicMock())
         assert mock_css.call_count == 2
 
+    def test_pre_rendered_panel_keys_present_in_context(self):
+        """#1435: theme_context returns pre-rendered theme_panel,
+        theme_mode_toggle, theme_preset_selector strings so templates
+        can use them as `{{ theme_panel }}` instead of `{% theme_panel %}`.
+        """
+        from djust.theming.context_processors import theme_context
+
+        mgr = _make_manager()
+        with (
+            patch("djust.theming.context_processors.get_theme_manager", return_value=mgr),
+            patch(
+                "djust.theming.context_processors.generate_css_for_state",
+                return_value="x",
+            ),
+        ):
+            # Stub the three tag functions to deterministic values so we
+            # don't depend on Django template-loading config in this
+            # narrow unit test.
+            with (
+                patch(
+                    "djust.theming.templatetags.theme_tags.theme_panel",
+                    return_value="PANEL_HTML",
+                ),
+                patch(
+                    "djust.theming.templatetags.theme_tags.theme_mode_toggle",
+                    return_value="MODE_TOGGLE_HTML",
+                ),
+                patch(
+                    "djust.theming.templatetags.theme_tags.theme_preset_selector",
+                    return_value="PRESET_SELECTOR_HTML",
+                ),
+            ):
+                ctx = theme_context(MagicMock())
+
+        assert ctx["theme_panel"] == "PANEL_HTML"
+        assert ctx["theme_mode_toggle"] == "MODE_TOGGLE_HTML"
+        assert ctx["theme_preset_selector"] == "PRESET_SELECTOR_HTML"
+
+    def test_pre_render_failure_does_not_break_request(self):
+        """If a tag function raises (broken manifest, missing template,
+        downstream shadowing), the context still returns — pre-renders
+        come back as empty strings instead of 500-ing the request."""
+        from djust.theming.context_processors import theme_context
+
+        mgr = _make_manager()
+        with (
+            patch("djust.theming.context_processors.get_theme_manager", return_value=mgr),
+            patch(
+                "djust.theming.context_processors.generate_css_for_state",
+                return_value="x",
+            ),
+            patch(
+                "djust.theming.templatetags.theme_tags.theme_panel",
+                side_effect=RuntimeError("manifest broken"),
+            ),
+        ):
+            ctx = theme_context(MagicMock())
+
+        # Empty strings, not raised — request keeps going.
+        assert ctx["theme_panel"] == ""
+        assert ctx["theme_mode_toggle"] == ""
+        assert ctx["theme_preset_selector"] == ""
+
     def test_request_object_does_not_leak_into_cached_output(self):
         """The cached function takes only the (preset, pack, mode,
         resolved_mode, presets_key) tuple — nothing from request flows

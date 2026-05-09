@@ -97,9 +97,19 @@ def theme_context(request):
 
     Injects theme CSS and state directly into the template context.
 
+    Pre-renders the heavy theme HTML chunks as ``mark_safe`` strings so
+    templates can use ``{{ theme_head }}`` / ``{{ theme_panel }}`` etc.
+    instead of ``{% theme_head %}`` / ``{% theme_panel %}`` (#1435).
+    The latter forms still work — they're how customization-with-args
+    is supported — but consumers using the default shape pay
+    once-per-request rather than once-per-tag-invocation.
+
     Usage in templates:
-        {{ theme_head }}
-        {{ theme_switcher }}
+        {{ theme_head }}                  (replaces {% theme_head %})
+        {{ theme_switcher }}              (replaces {% theme_switcher %})
+        {{ theme_panel }}                 (replaces {% theme_panel %})
+        {{ theme_mode_toggle }}           (replaces {% theme_mode_toggle %})
+        {{ theme_preset_selector }}       (replaces {% theme_preset_selector %})
     """
     manager = get_theme_manager(request)
     state = manager.get_state()
@@ -116,9 +126,39 @@ def theme_context(request):
         presets_key,
     )
 
+    # Pre-render the remaining tag outputs that consumers commonly use
+    # with default args. The work runs once per request instead of once
+    # per `{% theme_X %}` invocation in the template — a meaningful
+    # savings when the same tag appears multiple times on a page.
+    # Customization-with-args (e.g., `{% theme_panel show_packs=False %}`)
+    # remains available via the existing template tags.
+    tag_context = {"request": request}
+    theme_panel_html = ""
+    theme_mode_toggle_html = ""
+    theme_preset_selector_html = ""
+    try:
+        from .templatetags.theme_tags import (
+            theme_mode_toggle as _theme_mode_toggle_tag,
+            theme_panel as _theme_panel_tag,
+            theme_preset_selector as _theme_preset_selector_tag,
+        )
+
+        theme_panel_html = _theme_panel_tag(tag_context)
+        theme_mode_toggle_html = _theme_mode_toggle_tag(tag_context)
+        theme_preset_selector_html = _theme_preset_selector_tag(tag_context)
+    except Exception:
+        # If a downstream consumer has shadowed any tag function or the
+        # theme-pack manifest is in a broken state, don't blow up the
+        # whole request — just leave the optional pre-renders empty.
+        # The template can still fall back to `{% theme_X %}`.
+        pass
+
     return {
         "theme_head": mark_safe(theme_head),
         "theme_switcher": mark_safe(theme_switcher),
+        "theme_panel": theme_panel_html,
+        "theme_mode_toggle": theme_mode_toggle_html,
+        "theme_preset_selector": theme_preset_selector_html,
         "theme_preset": state.preset,
         "theme_mode": state.mode,
         "theme_resolved_mode": state.resolved_mode,
