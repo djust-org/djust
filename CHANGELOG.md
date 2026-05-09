@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **`TenantMiddleware` short-circuits when no resolver is configured (#1436).** When neither `DJUST_CONFIG['TENANT_RESOLVER']` nor `DJUST_TENANTS` is set, the middleware now bypasses the resolver call, the thread-local set/clear pair, and the required-tenant gate — switching `__call__` to a straight `get_response(request)` passthrough. Saves ~2-5% per-request CPU for consumers with `djust[tenants]` installed but no tenant opt-in (single-tenant deploys, scaffold starters, demo apps). Consumers who set either config keep the full path; `request.tenant` is still set to `None` on the no-op path so `getattr(request, "tenant", None)` callers see the same shape.
+
 ### Added
 
 - **System check `djust.D001` — warn when Postgres is configured but `psycopg[binary]>=3.2` is not installed (#1433).** djust's `db.notifications` (LISTEN/NOTIFY bridge) requires psycopg3. The 0.9.5 cycle hardened the runtime path to permanent-fail with a WARNING when `@notify_on_save` actually fires (#1357), but operators who deploy the misconfig without an active consumer wouldn't see the warning until much later. D001 surfaces it at `manage.py check` / `runserver` startup, before traffic. Fires only when the default DB engine is Postgres AND `psycopg2` is importable AND `psycopg` (3.x) is missing or at version < 3.2. Silenceable per-project via `SILENCED_SYSTEM_CHECKS = ['djust.D001']`.
