@@ -255,6 +255,92 @@ class TestInMemoryBackend:
         backend = InMemoryStateBackend()
         assert backend.delete_all() == 0
 
+    def test_get_discards_corrupt_entry_on_round_trip_failure(self):
+        """#1410: when serialize/deserialize round-trip fails (msgpack
+        schema drift after a hot-swap, corrupt state, etc.) `get()` must
+        DISCARD the entry and return None — never the shared in-memory
+        ref. Returning a shared ref would let two concurrent connections
+        mutate the same `_rust_view`, leaking state across sessions.
+
+        The strictly-safer alternative is to fail-the-cache-hit so the
+        caller's mount path treats it as uninitialized and runs `mount()`
+        again on a clean state.
+        """
+        from unittest.mock import patch
+
+        backend = InMemoryStateBackend()
+        view = RustLiveView("<div>orig</div>")
+        backend.set("k", view)
+
+        # Confirm baseline: a normal get() returns a (clone, ts) tuple.
+        assert backend.get("k") is not None
+
+        # Force the round-trip to fail. Patch deserialize_msgpack on the
+        # class so the next call inside `get()` raises.
+        with patch.object(
+            RustLiveView,
+            "deserialize_msgpack",
+            side_effect=ValueError("simulated msgpack schema drift"),
+        ):
+            result = backend.get("k")
+
+        # Must return None — NOT the shared ref. The previous shape was
+        # `return (view, timestamp)`, which is the silent-corruption path
+        # this fix closes.
+        assert result is None, (
+            f"expected None on round-trip failure, got {result!r} "
+            "(this means the shared-ref fallback is back — see #1410)"
+        )
+
+        # And the corrupt entry must be discarded so the next caller
+        # doesn't re-trip the same exception cycle.
+        assert backend.get("k") is None, "corrupt entry was not popped from cache"
+
+    def test_get_round_trip_failure_does_not_clobber_concurrent_set(self):
+        """#1410 TOCTOU regression: between the lock-release after the
+        failed round-trip and the lock-reacquire for the discard pop,
+        a concurrent `set(key, new_view)` can land a fresh valid entry.
+        The discard must NOT delete that fresh entry — only the corrupt
+        ref the round-trip was operating on. Identity-guard via `is`.
+        """
+        from unittest.mock import patch
+
+        backend = InMemoryStateBackend()
+        original = RustLiveView("<div>orig</div>")
+        backend.set("k", original)
+
+        replacement = RustLiveView("<div>replacement</div>")
+
+        # Simulate the concurrent set() landing INSIDE the failed
+        # round-trip handler — patch deserialize_msgpack to raise AND
+        # write a fresh entry as a side effect, mirroring the worst-case
+        # interleaving.
+        def raise_and_simulate_concurrent_set(*_args, **_kwargs):
+            backend.set("k", replacement)
+            raise ValueError("simulated msgpack schema drift")
+
+        with patch.object(
+            RustLiveView,
+            "deserialize_msgpack",
+            side_effect=raise_and_simulate_concurrent_set,
+        ):
+            result = backend.get("k")
+
+        # The failed get returns None as documented.
+        assert result is None
+
+        # But the fresh `replacement` entry from the concurrent set
+        # MUST still be there — the discard path identity-guards on
+        # the original view ref.
+        cached = backend.get("k")
+        assert cached is not None, (
+            "TOCTOU bug regression: the concurrent set() landed a fresh "
+            "entry, but the failed-round-trip discard popped it anyway. "
+            "Identity-guard (`is`) is missing or broken."
+        )
+        view, _ts = cached
+        assert view.render() == "<div>replacement</div>"
+
 
 class TestRedisBackend:
     """Test RedisStateBackend (requires Redis server)."""

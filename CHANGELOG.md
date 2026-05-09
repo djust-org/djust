@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`InMemoryStateBackend.get()` discards corrupt entries instead of returning the shared in-memory ref (#1410).** When `RustLiveView.deserialize_msgpack` raised — typically after a hot-swap struct change or msgpack schema drift — the previous fallback returned the cached object directly. Two concurrent connections to the same view then shared one `_rust_view`, and mutations from connection A leaked into connection B's render context. After a `cargo build` of `djust_vdom` + `.so` swap, fresh navigations could re-render with state from the prior session. Now the backend pops the corrupt entry from its in-memory dict and returns `None`; the caller's mount path treats the cache as cold and runs `mount()` cleanly. Discovered during the #1408 investigation.
+
 ## [0.9.6rc1] - 2026-05-07
 
 ### Added
