@@ -4,10 +4,91 @@ Context processors for djust_theming.
 Adds theme CSS and state to template context.
 """
 
+from functools import lru_cache
+
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.utils.safestring import mark_safe
 
-from .manager import generate_css_for_state, get_css_prefix, get_theme_manager
+from .manager import (
+    ThemeState,
+    generate_css_for_state,
+    get_css_prefix,
+    get_theme_manager,
+)
+
+# Anti-FOUC script — static; defined at module load (NOT per-request).
+_ANTI_FOUC_SCRIPT = """<script>
+(function() {
+    var storageKey = 'djust-theme-mode';
+    var storedMode = localStorage.getItem(storageKey);
+    var mode = storedMode || 'system';
+    var resolvedMode = mode;
+    if (mode === 'system') {
+        resolvedMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', resolvedMode);
+    document.documentElement.setAttribute('data-theme-mode', mode);
+})();
+</script>"""
+
+
+@lru_cache(maxsize=512)
+def _render_theme_outputs(theme, preset, pack, mode, resolved_mode, layout, presets_key):
+    """Pure-function render of (theme_head_html, theme_switcher_html).
+
+    Cached because the output is byte-identical for the same theme
+    `(theme, preset, pack, mode, resolved_mode, layout)` tuple on a
+    given preset list. djust's whole catalog is ~60 presets × 2 modes
+    × handful of packs = a few hundred unique keys, well under
+    maxsize=512.
+
+    `presets_key` is a hashable digest of the available-presets list.
+    The list itself is unhashable (list of dicts), so the caller
+    passes a tuple-of-tuples representation as the cache key and the
+    rebuild reconstructs presets from that tuple.
+
+    Per #1437: ~1-3 ms per request → ~5-10 µs (dict lookup) post-warmup
+    on every template-rendering request. The cache is per-process;
+    that's fine because the function is genuinely a pure function —
+    no request data leaks in.
+    """
+    state = ThemeState(
+        theme=theme,
+        preset=preset,
+        mode=mode,
+        resolved_mode=resolved_mode,
+        pack=pack,
+        layout=layout,
+    )
+    css = generate_css_for_state(state, css_prefix=get_css_prefix())
+    js_url = staticfiles_storage.url("djust_theming/js/theme.js")
+    theme_head = (
+        f"{_ANTI_FOUC_SCRIPT}\n"
+        f"<style data-djust-theme>{css}</style>\n"
+        f'<script src="{js_url}" defer></script>'
+    )
+    presets = [dict(t) for t in presets_key]
+    theme_switcher = _render_theme_switcher(state, presets)
+    return theme_head, theme_switcher
+
+
+def _presets_to_cache_key(presets):
+    """Convert the available-presets list (list of dicts) into a
+    hashable tuple-of-tuples for use as an `lru_cache` key. Only the
+    fields actually consumed by `_render_theme_switcher` are kept."""
+    return tuple(
+        tuple(sorted((k, v) for k, v in p.items() if k in {"name", "display_name", "is_active"}))
+        for p in presets
+    )
+
+
+def clear_theme_context_cache():
+    """Drop the per-process render cache.
+
+    Call this on theme-pack reload, or in tests that mutate theme state
+    between assertions. Cheap; the cache rebuilds lazily.
+    """
+    _render_theme_outputs.cache_clear()
 
 
 def theme_context(request):
@@ -22,33 +103,18 @@ def theme_context(request):
     """
     manager = get_theme_manager(request)
     state = manager.get_state()
+    presets = manager.get_available_presets()
+    presets_key = _presets_to_cache_key(presets)
 
-    # Generate CSS - use pack generator if pack is set, otherwise use theme generator
-    css = generate_css_for_state(state, css_prefix=get_css_prefix())
-
-    # Anti-FOUC script
-    anti_fouc_script = """<script>
-(function() {
-    var storageKey = 'djust-theme-mode';
-    var storedMode = localStorage.getItem(storageKey);
-    var mode = storedMode || 'system';
-    var resolvedMode = mode;
-    if (mode === 'system') {
-        resolvedMode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    document.documentElement.setAttribute('data-theme', resolvedMode);
-    document.documentElement.setAttribute('data-theme-mode', mode);
-})();
-</script>"""
-
-    # Complete theme head HTML
-    js_url = staticfiles_storage.url("djust_theming/js/theme.js")
-    theme_head = f"""{anti_fouc_script}
-<style data-djust-theme>{css}</style>
-<script src="{js_url}" defer></script>"""
-
-    # Theme switcher HTML
-    theme_switcher = _render_theme_switcher(state, manager.get_available_presets())
+    theme_head, theme_switcher = _render_theme_outputs(
+        state.theme,
+        state.preset,
+        state.pack,
+        state.mode,
+        state.resolved_mode,
+        state.layout,
+        presets_key,
+    )
 
     return {
         "theme_head": mark_safe(theme_head),
@@ -56,7 +122,7 @@ def theme_context(request):
         "theme_preset": state.preset,
         "theme_mode": state.mode,
         "theme_resolved_mode": state.resolved_mode,
-        "theme_presets": manager.get_available_presets(),
+        "theme_presets": presets,
     }
 
 
