@@ -19,6 +19,7 @@ compression code path directly, which is where the race lived.
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -127,11 +128,13 @@ def test_per_thread_decompressor_identity(monkeypatch):
     for t in threads:
         t.start()
     # Wait for all n threads to have grabbed before letting them exit.
+    # Plain time.sleep — allocating a fresh threading.Event per iteration
+    # is wasteful (Stage 11 review #1431).
     while True:
         with lock:
             if len(seen_ids) == n:
                 break
-        threading.Event().wait(0.01)
+        time.sleep(0.01)
     release.set()
     for t in threads:
         t.join()
@@ -143,6 +146,44 @@ def test_per_thread_decompressor_identity(monkeypatch):
     )
 
 
+def test_per_thread_compressor_identity(monkeypatch):
+    """Symmetric to the decompressor identity test: each thread should
+    see a distinct ZstdCompressor instance. The fix lives or dies on
+    BOTH paths — only-decompressor coverage would let a future refactor
+    re-introduce a single shared compressor undetected.
+    """
+    backend = _make_backend(monkeypatch)
+
+    n = 8
+    barrier = threading.Barrier(n)
+    release = threading.Event()
+    seen_ids: list[int] = []
+    lock = threading.Lock()
+
+    def grab():
+        c = backend._get_compressor()
+        with lock:
+            seen_ids.append(id(c))
+        barrier.wait()
+        release.wait()
+
+    threads = [threading.Thread(target=grab) for _ in range(n)]
+    for t in threads:
+        t.start()
+    while True:
+        with lock:
+            if len(seen_ids) == n:
+                break
+        time.sleep(0.01)
+    release.set()
+    for t in threads:
+        t.join()
+
+    assert len(set(seen_ids)) == n, (
+        f"expected {n} distinct compressor objects, got {len(set(seen_ids))}"
+    )
+
+
 def test_decompressor_reused_within_thread(monkeypatch):
     """A single thread should reuse its ZstdDecompressor instead of
     constructing a fresh one per call (the construction cost adds up
@@ -150,4 +191,12 @@ def test_decompressor_reused_within_thread(monkeypatch):
     backend = _make_backend(monkeypatch)
     first = backend._get_decompressor()
     second = backend._get_decompressor()
+    assert first is second
+
+
+def test_compressor_reused_within_thread(monkeypatch):
+    """Symmetric: same-thread compressor calls return the same instance."""
+    backend = _make_backend(monkeypatch)
+    first = backend._get_compressor()
+    second = backend._get_compressor()
     assert first is second
