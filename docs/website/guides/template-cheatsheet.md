@@ -841,3 +841,16 @@ Data passing:
   dj-value-*                      (extra value kwargs)
   dj-target="#selector"           (scoped DOM updates)
 ```
+
+## Gotchas
+
+### Don't put `{%` or `%}` inside `{# … #}` comments
+
+djust's Rust template engine handles this correctly — it treats `{# … #}` as opaque. **Django's stock template parser does not.** When a template flows through Django (e.g., the non-LiveView HTTP path, or any third-party tool that re-parses your templates), a comment that contains a partial tag string will trip Django's tokenizer:
+
+```django
+{# d-none (not {% if %}) so the VDOM ... #}        <!-- ❌ Django will choke -->
+{# d-none keeps the DOM stable so the VDOM ... #}  <!-- ✅ both engines OK -->
+```
+
+The Django error is `TemplateSyntaxError: Unexpected end of expression in if tag` from `django/template/smartif.py`. Workaround: rewrite the comment without `{%` / `%}`. (Reference: [#1423](https://github.com/djust-org/djust/issues/1423).)
