@@ -2977,3 +2977,133 @@ def check_admin_widgets(app_configs, _admin_sites=None, **kwargs):
             )
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Database-driver checks (D0xx)
+# ---------------------------------------------------------------------------
+
+
+def _parse_psycopg_version(version_str: str) -> tuple:
+    """Parse a `major.minor[.patch[...]]` version string into a tuple of ints.
+
+    Returns ``(0, 0)`` on anything we can't parse — the caller treats
+    that as "couldn't determine version, don't make claims about it".
+    """
+    parts = []
+    for chunk in version_str.split(".")[:2]:
+        digits = ""
+        for ch in chunk:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if not digits:
+            return (0, 0)
+        parts.append(int(digits))
+    while len(parts) < 2:
+        parts.append(0)
+    return tuple(parts[:2])
+
+
+@register("djust")
+def check_psycopg3_for_pg_notify(app_configs, **kwargs):
+    """djust.D001 — warn when Postgres is configured but psycopg3 is missing.
+
+    djust's ``db.notifications`` (LISTEN/NOTIFY bridge) requires
+    ``psycopg[binary]>=3.2``. The 0.9.5 cycle hardened the runtime path
+    to permanent-fail with a WARNING when ``@notify_on_save`` actually
+    fires (#1357), but operators who deploy the misconfig and don't have
+    any consumer running won't see that warning until much later.
+
+    This check surfaces the misconfig at ``manage.py check`` /
+    ``runserver`` startup, before traffic. It only emits when:
+
+      1. ``DATABASES['default']['ENGINE']`` is the Postgres backend.
+      2. The legacy ``psycopg2`` driver IS importable.
+      3. ``psycopg`` (3.x) is NOT importable, OR is at version < 3.2.
+
+    Scoped to ``"default"`` because that's where 99% of djust apps put
+    their primary DB; multi-database setups can silence per-project via
+    ``SILENCED_SYSTEM_CHECKS``.
+    """
+    results: list = []
+    if _is_check_suppressed("djust.D001"):
+        return results
+
+    try:
+        from django.conf import settings
+    except Exception:
+        return results
+
+    databases = getattr(settings, "DATABASES", {}) or {}
+    default = databases.get("default", {}) or {}
+    engine = default.get("ENGINE", "") or ""
+
+    # Only the postgres backend matters for LISTEN/NOTIFY.
+    if engine != "django.db.backends.postgresql":
+        return results
+
+    # If psycopg2 is NOT importable AND psycopg is NOT importable,
+    # Django itself raises an unrelated error — don't pile on.
+    try:
+        import psycopg2  # noqa: F401
+    except ImportError:
+        return results
+
+    psycopg2_version = ""
+    try:
+        psycopg2_version = getattr(psycopg2, "__version__", "")  # noqa: F821
+    except Exception:
+        pass
+
+    psycopg3_version: str | None = None
+    try:
+        import psycopg as _psycopg3
+
+        psycopg3_version = getattr(_psycopg3, "__version__", "0.0")
+    except ImportError:
+        psycopg3_version = None
+
+    needs_warning = False
+    if psycopg3_version is None:
+        needs_warning = True
+        detected_msg = "psycopg[binary]>=3.2 NOT installed"
+    else:
+        major_minor = _parse_psycopg_version(psycopg3_version)
+        if major_minor < (3, 2):
+            needs_warning = True
+            detected_msg = f"psycopg installed but at version {psycopg3_version} (need >= 3.2)"
+
+    if not needs_warning:
+        return results
+
+    psycopg2_label = (
+        f"psycopg2 (legacy driver) at version {psycopg2_version}"
+        if psycopg2_version
+        else "psycopg2 (legacy driver)"
+    )
+
+    results.append(
+        DjustWarning(
+            (
+                "Postgres LISTEN/NOTIFY (db.notifications) is unavailable because "
+                "psycopg[binary]>=3.2 is not installed.\n"
+                "  Detected: %s.\n"
+                "  Required: psycopg[binary] (psycopg3) at version >= 3.2.\n"
+                "  %s.\n"
+                "  Non-Postgres apps and apps that don't use @notify_on_save / "
+                "db.listen() are unaffected. Apps that DO use those features will "
+                "hit a permanent-failure WARNING at first NOTIFY attempt (#1357)."
+            )
+            % (psycopg2_label, detected_msg),
+            hint=(
+                "pip install 'psycopg[binary]>=3.2' — or silence with "
+                "SILENCED_SYSTEM_CHECKS = ['djust.D001'] if your app doesn't "
+                "use db.notifications."
+            ),
+            id="djust.D001",
+            fix_hint="pip install 'psycopg[binary]>=3.2'",
+        )
+    )
+    return results

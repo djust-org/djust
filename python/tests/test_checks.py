@@ -4276,3 +4276,99 @@ class TestA090DjustMarkdownCheck:
         assert len(a090) == 1
         # Message includes the total count (3).
         assert "3 location(s)" in a090[0].msg
+
+
+# ---------------------------------------------------------------------------
+# D001 -- psycopg2 installed but psycopg3 missing or too old
+# ---------------------------------------------------------------------------
+
+
+class TestD001PsycopgVersionCheck:
+    """djust.D001: warn when Postgres is configured but psycopg[binary]>=3.2 isn't installed."""
+
+    def _run(self):
+        from djust.checks import check_psycopg3_for_pg_notify
+
+        return check_psycopg3_for_pg_notify(None)
+
+    def test_no_warn_for_sqlite_engine(self, settings):
+        """Non-Postgres apps are unaffected."""
+        settings.DATABASES = {
+            "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+        }
+        results = self._run()
+        assert [r for r in results if r.id == "djust.D001"] == []
+
+    def test_no_warn_when_psycopg3_at_required_version(self, settings):
+        """Postgres + psycopg2 + psycopg3>=3.2 → no warning."""
+        settings.DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": "x"}}
+        # Both modules must be importable. Patch what's likely missing
+        # in this environment via sys.modules surrogate.
+        import sys
+        import types
+
+        fake_psycopg2 = types.ModuleType("psycopg2")
+        fake_psycopg2.__version__ = "2.9.9"
+        fake_psycopg3 = types.ModuleType("psycopg")
+        fake_psycopg3.__version__ = "3.2.4"
+        with patch.dict(sys.modules, {"psycopg2": fake_psycopg2, "psycopg": fake_psycopg3}):
+            results = self._run()
+        assert [r for r in results if r.id == "djust.D001"] == []
+
+    def test_warns_when_psycopg3_missing(self, settings):
+        """Postgres + psycopg2 + no psycopg3 → D001 warning."""
+        settings.DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": "x"}}
+        import sys
+        import types
+
+        fake_psycopg2 = types.ModuleType("psycopg2")
+        fake_psycopg2.__version__ = "2.9.9"
+        # Block psycopg3 import by putting None in sys.modules — that's
+        # the canonical way to cause `import psycopg` to raise ImportError.
+        with patch.dict(sys.modules, {"psycopg2": fake_psycopg2, "psycopg": None}):
+            results = self._run()
+        d001 = [r for r in results if r.id == "djust.D001"]
+        assert len(d001) == 1
+        assert "NOT installed" in d001[0].msg
+        assert "2.9.9" in d001[0].msg
+
+    def test_warns_when_psycopg3_too_old(self, settings):
+        """Postgres + psycopg2 + psycopg3<3.2 → D001 warning."""
+        settings.DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": "x"}}
+        import sys
+        import types
+
+        fake_psycopg2 = types.ModuleType("psycopg2")
+        fake_psycopg2.__version__ = "2.9.9"
+        fake_psycopg3 = types.ModuleType("psycopg")
+        fake_psycopg3.__version__ = "3.1.18"
+        with patch.dict(sys.modules, {"psycopg2": fake_psycopg2, "psycopg": fake_psycopg3}):
+            results = self._run()
+        d001 = [r for r in results if r.id == "djust.D001"]
+        assert len(d001) == 1
+        assert "3.1.18" in d001[0].msg
+        assert "need >= 3.2" in d001[0].msg
+
+
+class TestParsePsycopgVersion:
+    """Internal: _parse_psycopg_version handles the common version-string shapes."""
+
+    def test_parses_standard_three_part(self):
+        from djust.checks import _parse_psycopg_version
+
+        assert _parse_psycopg_version("3.2.4") == (3, 2)
+
+    def test_parses_two_part(self):
+        from djust.checks import _parse_psycopg_version
+
+        assert _parse_psycopg_version("3.2") == (3, 2)
+
+    def test_parses_pre_release_tail(self):
+        from djust.checks import _parse_psycopg_version
+
+        assert _parse_psycopg_version("3.2.0rc1") == (3, 2)
+
+    def test_unparseable_returns_zeros(self):
+        from djust.checks import _parse_psycopg_version
+
+        assert _parse_psycopg_version("not-a-version") == (0, 0)
