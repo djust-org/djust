@@ -2,8 +2,9 @@
 Redis-backed state backend for production horizontal scaling.
 """
 
-import time
 import logging
+import threading
+import time
 from typing import Optional, Dict, Any, Tuple
 from djust._rust import RustLiveView
 from djust.profiler import profiler
@@ -86,13 +87,12 @@ class RedisStateBackend(StateBackend):
         self._compression_threshold = compression_threshold_kb * 1024
         self._compression_level = compression_level
 
-        # Initialize zstd compressor/decompressor if available
-        if self._compression_enabled:
-            self._compressor = zstd.ZstdCompressor(level=compression_level)
-            self._decompressor = zstd.ZstdDecompressor()
-        else:
-            self._compressor = None
-            self._decompressor = None
+        # zstd compressor/decompressor objects are NOT thread-safe when
+        # shared across threads — see python-zstandard #244 + djust #1430.
+        # Stash one per thread in a threading.local so concurrent
+        # callers (uvicorn worker threads, asyncio executor pool, etc.)
+        # never reach into the same C-level state.
+        self._tls = threading.local()
 
         if compression_enabled and not ZSTD_AVAILABLE:
             logger.warning(
@@ -128,6 +128,37 @@ class RedisStateBackend(StateBackend):
         """Add prefix to key."""
         return f"{self._key_prefix}{key}"
 
+    def _get_compressor(self):
+        """Return this thread's `ZstdCompressor`, creating it lazily.
+
+        Returns ``None`` if compression is disabled or zstandard isn't
+        installed; callers must check before use.
+        """
+        if not self._compression_enabled:
+            return None
+        c = getattr(self._tls, "compressor", None)
+        if c is None:
+            c = zstd.ZstdCompressor(level=self._compression_level)
+            self._tls.compressor = c
+        return c
+
+    def _get_decompressor(self):
+        """Return this thread's `ZstdDecompressor`, creating it lazily.
+
+        Always returns a real decompressor when zstandard is available,
+        regardless of ``_compression_enabled`` — compression-on-write
+        and decompression-on-read are independent: a backend that
+        recently disabled compression must still be able to read
+        previously-compressed values.
+        """
+        if not ZSTD_AVAILABLE:
+            return None
+        d = getattr(self._tls, "decompressor", None)
+        if d is None:
+            d = zstd.ZstdDecompressor()
+            self._tls.decompressor = d
+        return d
+
     def _compress(self, data: bytes) -> bytes:
         """
         Compress data if it exceeds threshold and compression is enabled.
@@ -141,7 +172,7 @@ class RedisStateBackend(StateBackend):
             return NO_COMPRESSION_MARKER + data
 
         try:
-            compressed = self._compressor.compress(data)
+            compressed = self._get_compressor().compress(data)
 
             # Only use compression if it actually saves space
             if len(compressed) < len(data):
@@ -171,13 +202,14 @@ class RedisStateBackend(StateBackend):
         payload = data[1:]
 
         if marker == COMPRESSION_MARKER:
-            if not self._decompressor:
+            decompressor = self._get_decompressor()
+            if decompressor is None:
                 raise ValueError(
                     "Received compressed data but zstandard is not available. "
                     "Install with: pip install zstandard"
                 )
             try:
-                return self._decompressor.decompress(payload)
+                return decompressor.decompress(payload)
             except Exception as e:
                 logger.error("Decompression failed: %s", e)
                 raise
