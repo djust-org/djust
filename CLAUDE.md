@@ -777,6 +777,31 @@ Rules distilled from the v0.9.3-4 audit and process drain bucket.
   (split-foundation pattern) primary value is API design lock-in, not
   calendar soak.
 
+## Process canonicalizations from v0.9.6-1 retro arc
+
+Five rules from the v0.9.6-1 retro tracker rows #245–#250 (PRs #1431, #1438, #1441, #1442, #1443, #1444). Canonicalized here so the next milestone doesn't repeat the failure modes.
+
+- **Lock-release/lock-reacquire TOCTOU rule (#245 / #1445).** When a code path acquires a lock, releases for unlocked work (CPU-only round-trips, network calls, async yields), then re-acquires the lock to mutate state, the entry it's mutating may have been replaced by a concurrent writer. Identity-guard the mutation (`current is original_ref`) or version-counter check at re-entry. Same class of failure as Action #1198 (`commit-or-rollback handler shape`) but for lock-windows rather than await-windows. Canonical case study: PR #1438's `python/djust/state_backends/memory.py:117-141` — the first-pass fail-closed pop did `lock → read → unlock → round-trip → relock → pop(key)` and a concurrent `set(key, new_view)` in the unlock window would have been clobbered. Identity-guarded with `current[0] is view`.
+
+- **Zero-cost-when-unused middleware/processor pattern (#246 / #1446).** Any middleware or context-processor for an optional djust extra (`tenants`, `theming`, `presence`, `streaming`, etc.) should detect "not opted in" once in `__init__` and switch the hot path to a no-op that just calls `get_response(request)`. Preserve attribute existence on `request` (e.g., `request.tenant = None`) so `getattr(request, "X", None)` callers see the same shape. Canonical case studies: PR #1441 (`TenantMiddleware` short-circuits when neither `DJUST_CONFIG['TENANT_RESOLVER']` nor `DJUST_TENANTS` is set) and PR #1443 (`theme_context` pre-rendering with fail-soft empty-string fallback). Saves ~2-5% per-request CPU when unused.
+
+- **Cache-by-struct: include all fields upfront, prune later (#247 / #1447).** When wrapping a function whose inputs are derived from a struct, the cache key MUST include every field of the struct. Pruning a field later (because profiling shows it doesn't matter) is a one-line change with a regression test. Adding a field later means cache-poisoning bugs in production — two callers with different field-N values get the same cached output. Canonical case study: PR #1442's `_render_theme_outputs` initially keyed on `(preset, pack, mode, resolved_mode, presets_key)` but missed `theme` and `layout`; test failure caught it pre-merge.
+
+- **Wire-protocol JSON pinning as a standard test class (#248 / #1448).** Any Rust↔JS or Python↔JS wire-format that's a `serde`/`json.dumps`-derived contract with a client gets a snapshot-test file. Existing tests verify *semantics* (`this input produces this output`); the new class pins the *JSON shape*. A field rename or `#[serde(skip_serializing_if = "Option::is_none")]` removal would silently break every deployed client running an older bundle. Canonical case study: PR #1444's `crates/djust_vdom/tests/wire_protocol_snapshot.rs` (16 literal-string assertions for every Patch variant + VNode struct + every optional-field permutation).
+
+- **Stage 11 must verify branch is not stale vs base BEFORE reviewing (#250 / #1450).** Any PR opened a non-trivial number of commits ago + not rebased gets a stale-base diff. The reviewer reviews against THAT base; the merge applies on top of CURRENT main. The two are different programs. Canonical case study: PR #1431 was 7 PRs behind main; the diff vs main *deleted* 5 CHANGELOG entries, the entire v0.9.6-1 retro, the wire-protocol snapshot test, and reverted the perf rewrites — merging would have silently undone v0.9.6-1. All 13 CI checks were green; the merge button looked safe. The reviewer subagent caught it via `git log main..HEAD --oneline` showing only 1 commit despite 7 on main since branch base. Mandatory Stage 11 check:
+
+```bash
+git fetch origin
+BEHIND=$(git rev-list --count HEAD..origin/<base>)
+if [ "$BEHIND" -gt 0 ]; then
+  echo "STOP: branch is $BEHIND commits behind origin/<base>. Rebase before reviewing."
+  exit 1
+fi
+```
+
+If BEHIND > 0, STOP. Rebase (`git rebase origin/<base>`) or merge base into branch BEFORE reviewing. Reviewing against a stale base reviews a different program than the merge will apply.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

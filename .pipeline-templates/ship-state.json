@@ -250,6 +250,11 @@
       "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists. Step 2: Review for correctness, security (XSS, injection, secrets exposure), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3: Run project test suite, report pass/fail. Step 4: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 5 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review with checklist>'. If REQUEST_CHANGES use --request-changes. Step 6: Output verdict.",
       "checklist": [
         {
+          "action": "Stage-11 stale-base check (#1450 / Action #250): run `git fetch origin && BEHIND=$(git rev-list --count HEAD..origin/{pr_target_branch})`. If BEHIND > 0, STOP. The branch is reviewing against a stale base; the merge applies on top of CURRENT main. Rebase (`git rebase origin/{pr_target_branch}`) BEFORE reviewing.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "git diff against target branch",
           "done": false
         },

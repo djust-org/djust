@@ -431,6 +431,11 @@
       "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 250 words. For security-related changes, enumerate at most the attack shapes the plan documented — do NOT spelunk for additional edge cases beyond that list. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists — use as review framework. Step 2: Cross-ref plan vs implementation — verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files — every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure — only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 4: Run project test suite, report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 250 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
       "checklist": [
         {
+          "action": "Stage-11 stale-base check (#1450 / Action #250): run `git fetch origin && BEHIND=$(git rev-list --count HEAD..origin/{pr_target_branch})`. If BEHIND > 0, STOP. The branch is reviewing against a stale base; the merge applies on top of CURRENT main. Rebase (`git rebase origin/{pr_target_branch}`) BEFORE reviewing.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "read .pipeline-state/<branch>-plan.md for plan compliance check",
           "done": false
         },
