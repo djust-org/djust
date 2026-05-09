@@ -118,16 +118,25 @@ class InMemoryStateBackend(StateBackend):
                 serialized = view.serialize_msgpack()
                 clone = RustLiveView.deserialize_msgpack(serialized)
             except Exception:
-                # Defensive: if msgpack round-trip fails for any reason,
-                # fall back to returning the cached ref. The race window
-                # is preferable to an outright cache miss that destroys
-                # the diff baseline. Logged so this surfaces in dev.
+                # Round-trip failed (msgpack schema drift after a hot-swap,
+                # corrupt payload, etc). Returning the shared ref is
+                # silently corrupting — two concurrent connections to the
+                # same view would mutate the SAME `_rust_view` and leak
+                # state across each other (#1410). The strictly-safer
+                # alternative is to fail the cache-hit and let the caller
+                # treat this as uninitialized — `mount()` will run again
+                # and rebuild clean state.
+                #
+                # Discard the corrupt entry under the lock so the next
+                # caller doesn't re-trip the same exception.
+                with self._lock:
+                    self._cache.pop(key, None)
                 logger.exception(
                     "InMemoryStateBackend.get: serialize/deserialize round-trip "
-                    "failed for key '%s'; returning shared ref (race risk)",
+                    "failed for key '%s'; entry discarded — caller should remount",
                     key,
                 )
-                return (view, timestamp)
+                return None
             return (clone, timestamp)
 
     def set(
