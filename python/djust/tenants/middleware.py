@@ -52,9 +52,37 @@ class TenantMiddleware:
 
     def __init__(self, get_response):
         self.get_response = get_response
-        self.resolver = get_tenant_resolver()
+
+        # Short-circuit: when neither DJUST_CONFIG['TENANT_RESOLVER'] nor
+        # DJUST_TENANTS is configured, the middleware is effectively a
+        # no-op — it would call SubdomainResolver, get back None, set
+        # request.tenant=None, set+clear a thread-local, and run the
+        # required-gate (which is False by default). For consumers who
+        # have djust[tenants] installed but never opted in (single-tenant
+        # deploys, scaffold starters, demo apps), that's pure overhead
+        # on every request. Detect once at boot, switch __call__ to a
+        # straight passthrough.
+        from django.conf import settings
+
+        djust_config = getattr(settings, "DJUST_CONFIG", {}) or {}
+        djust_tenants = getattr(settings, "DJUST_TENANTS", {}) or {}
+        self._enabled = "TENANT_RESOLVER" in djust_config or bool(djust_tenants)
+
+        if self._enabled:
+            self.resolver = get_tenant_resolver()
+        else:
+            # Skip resolver instantiation too — it reads settings.
+            self.resolver = None
 
     def __call__(self, request):
+        if not self._enabled:
+            # Preserve `request.tenant` attribute existence so consumer
+            # code doing `getattr(request, "tenant", None)` keeps working
+            # the same as before. (Direct `request.tenant.id` was already
+            # broken whether the middleware ran with no resolver or not.)
+            request.tenant = None
+            return self.get_response(request)
+
         # Resolve tenant
         tenant = self.resolver.resolve(request)
 
