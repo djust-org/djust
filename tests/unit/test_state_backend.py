@@ -296,6 +296,51 @@ class TestInMemoryBackend:
         # doesn't re-trip the same exception cycle.
         assert backend.get("k") is None, "corrupt entry was not popped from cache"
 
+    def test_get_round_trip_failure_does_not_clobber_concurrent_set(self):
+        """#1410 TOCTOU regression: between the lock-release after the
+        failed round-trip and the lock-reacquire for the discard pop,
+        a concurrent `set(key, new_view)` can land a fresh valid entry.
+        The discard must NOT delete that fresh entry — only the corrupt
+        ref the round-trip was operating on. Identity-guard via `is`.
+        """
+        from unittest.mock import patch
+
+        backend = InMemoryStateBackend()
+        original = RustLiveView("<div>orig</div>")
+        backend.set("k", original)
+
+        replacement = RustLiveView("<div>replacement</div>")
+
+        # Simulate the concurrent set() landing INSIDE the failed
+        # round-trip handler — patch deserialize_msgpack to raise AND
+        # write a fresh entry as a side effect, mirroring the worst-case
+        # interleaving.
+        def raise_and_simulate_concurrent_set(*_args, **_kwargs):
+            backend.set("k", replacement)
+            raise ValueError("simulated msgpack schema drift")
+
+        with patch.object(
+            RustLiveView,
+            "deserialize_msgpack",
+            side_effect=raise_and_simulate_concurrent_set,
+        ):
+            result = backend.get("k")
+
+        # The failed get returns None as documented.
+        assert result is None
+
+        # But the fresh `replacement` entry from the concurrent set
+        # MUST still be there — the discard path identity-guards on
+        # the original view ref.
+        cached = backend.get("k")
+        assert cached is not None, (
+            "TOCTOU bug regression: the concurrent set() landed a fresh "
+            "entry, but the failed-round-trip discard popped it anyway. "
+            "Identity-guard (`is`) is missing or broken."
+        )
+        view, _ts = cached
+        assert view.render() == "<div>replacement</div>"
+
 
 class TestRedisBackend:
     """Test RedisStateBackend (requires Redis server)."""

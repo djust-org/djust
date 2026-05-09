@@ -128,9 +128,18 @@ class InMemoryStateBackend(StateBackend):
                 # and rebuild clean state.
                 #
                 # Discard the corrupt entry under the lock so the next
-                # caller doesn't re-trip the same exception.
+                # caller doesn't re-trip the same exception. Identity-
+                # guard the pop: between the unlock above and the
+                # re-lock here, a concurrent `set(key, new_view)` could
+                # have landed a fresh, valid entry — we must not delete
+                # the *new* one in place of the corrupt one we held.
+                # `cached`'s reference to `view` keeps the original
+                # alive, so `is` is sound.
                 with self._lock:
-                    self._cache.pop(key, None)
+                    current = self._cache.get(key)
+                    if current is not None and current[0] is view:
+                        self._cache.pop(key, None)
+                        self._state_sizes.pop(key, None)
                 logger.exception(
                     "InMemoryStateBackend.get: serialize/deserialize round-trip "
                     "failed for key '%s'; entry discarded — caller should remount",
