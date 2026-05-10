@@ -116,7 +116,16 @@ def theme_context(request):
     presets = manager.get_available_presets()
     presets_key = _presets_to_cache_key(presets)
 
-    theme_head, theme_switcher = _render_theme_outputs(
+    # `theme_switcher` is the simple state-only render — keep it cached.
+    # `theme_head` MUST go through the existing simple_tag (#1452): the
+    # classic-tag template emits a strict superset of what
+    # `_render_theme_outputs` was building (component-CSS link,
+    # print.css link, components.js script, deferred-CSS preload, RTL
+    # direction, cookie-namespace JS prefix). A hand-built string drops
+    # silently — production saw unstyled theme panels because the
+    # `<link>` to `djust_theming/css/components.css` was missing.
+    # Pin `{{ theme_head }}` ≡ `{% theme_head %}` for the default args.
+    _theme_head_only_unused, theme_switcher = _render_theme_outputs(
         state.theme,
         state.preset,
         state.pack,
@@ -126,35 +135,39 @@ def theme_context(request):
         presets_key,
     )
 
-    # Pre-render the remaining tag outputs that consumers commonly use
-    # with default args. The work runs once per request instead of once
-    # per `{% theme_X %}` invocation in the template — a meaningful
-    # savings when the same tag appears multiple times on a page.
-    # Customization-with-args (e.g., `{% theme_panel show_packs=False %}`)
+    # Pre-render every tag's output by calling the existing simple_tag
+    # bodies once. The work runs once per request instead of once per
+    # `{% theme_X %}` invocation in the template — a meaningful savings
+    # when the same tag appears multiple times on a page.
+    # Customization-with-args (`{% theme_panel show_packs=False %}`)
     # remains available via the existing template tags.
-    tag_context = {"request": request}
-    theme_panel_html = ""
-    theme_mode_toggle_html = ""
-    theme_preset_selector_html = ""
-    try:
-        from .templatetags.theme_tags import (
-            theme_mode_toggle as _theme_mode_toggle_tag,
-            theme_panel as _theme_panel_tag,
-            theme_preset_selector as _theme_preset_selector_tag,
-        )
+    #
+    # Per-tag fail-soft: a broken manifest in ONE tag (e.g.,
+    # theme_panel) must not blank the OTHER pre-renders. Each tag is
+    # independently wrapped so a failure leaves only that string empty;
+    # the template falls back to `{% theme_X %}` for that one.
+    from .templatetags.theme_tags import (
+        theme_head as _theme_head_tag,
+        theme_mode_toggle as _theme_mode_toggle_tag,
+        theme_panel as _theme_panel_tag,
+        theme_preset_selector as _theme_preset_selector_tag,
+    )
 
-        theme_panel_html = _theme_panel_tag(tag_context)
-        theme_mode_toggle_html = _theme_mode_toggle_tag(tag_context)
-        theme_preset_selector_html = _theme_preset_selector_tag(tag_context)
-    except Exception:
-        # If a downstream consumer has shadowed any tag function or the
-        # theme-pack manifest is in a broken state, don't blow up the
-        # whole request — just leave the optional pre-renders empty.
-        # The template can still fall back to `{% theme_X %}`.
-        pass
+    tag_context = {"request": request}
+
+    def _safe_render(fn) -> str:
+        try:
+            return fn(tag_context) or ""
+        except Exception:
+            return ""
+
+    theme_head_html = _safe_render(_theme_head_tag)
+    theme_panel_html = _safe_render(_theme_panel_tag)
+    theme_mode_toggle_html = _safe_render(_theme_mode_toggle_tag)
+    theme_preset_selector_html = _safe_render(_theme_preset_selector_tag)
 
     return {
-        "theme_head": mark_safe(theme_head),
+        "theme_head": mark_safe(theme_head_html) if theme_head_html else "",
         "theme_switcher": mark_safe(theme_switcher),
         "theme_panel": theme_panel_html,
         "theme_mode_toggle": theme_mode_toggle_html,
