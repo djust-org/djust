@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6rc3] - 2026-05-10
+
 ### Fixed
 
 - **`{{ theme_head }}` context-string emits the same payload as `{% theme_head %}` template tag (#1452, regression in 0.9.6rc2).** The 0.9.6rc2 implementation of `_render_theme_outputs` hand-built a small string for `theme_head` that dropped the `<link>` to `djust_theming/css/components.css` (where `.theme-panel*` rules live), the `print.css` link, the `components.js` script, the deferred-CSS preload, the RTL `direction` attribute, and the cookie-namespace JS prefix. Production saw unstyled theme panels because components.css never loaded. Fix: route `{{ theme_head }}` through the existing `theme_head` simple_tag (same shape #1443 already adopted for `theme_panel` / `theme_mode_toggle` / `theme_preset_selector`), so any future addition to the classic tag's output flows through to the context-string form automatically. Also: per-tag fail-soft — one tag's failure (broken manifest, downstream shadowing) no longer blanks the other pre-renders.
