@@ -72,6 +72,25 @@ This document outlines the mandatory checks that must be evaluated when reviewin
 - [ ] **Memory safety** - No unsafe code without justification
 - [ ] **Performance implications** considered for VDOM-affecting changes
 
+### Shell Scripts Processing Git Output
+
+<!-- shell-git-output-safety -->
+
+- [ ] **NUL-delimited reads for git path output** — Any shell script that processes paths from `git diff --name-only`, `git ls-files`, `git status --porcelain`, etc. must read NUL-delimited (`-z` flag) into a bash array, then pass via quoted array expansion + `--` separator. Filenames with spaces or glob metacharacters (`*`, `?`, `[`) silently corrupt under newline-split + word-split. Reference: PR #1470 first-pass shipped `git add $STAGED` inside a wrapper specifically written to prevent ruff-bounce friction — Stage 11 caught it before merge. Pattern (macOS bash 3.2 compatible):
+
+  ```bash
+  STAGED=()
+  while IFS= read -r -d '' f; do
+      STAGED+=("$f")
+  done < <(git diff --cached -z --name-only --diff-filter=ACMR)
+
+  # Consume via quoted array expansion + `--` separator:
+  git add -- "${STAGED[@]}"
+  uvx pre-commit run --files "${STAGED[@]}"
+  ```
+
+  AVOID: `STAGED=$(git diff --cached --name-only)` + `git add $STAGED`. Source: Action Tracker #256 / #1473.
+
 ### JavaScript Code Standards
 
 - [ ] **ESLint rules** pass - Code follows project style guide
