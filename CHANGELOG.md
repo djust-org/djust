@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **#1416** — `torture_html_round_trip.rs`: 8 scenarios exercising the live `VDOM → to_html → parse_html` round-trip (plain/nested elements, text, dj-if single + nested, dj-key keyed children, dj-update="ignore" subtrees, mixed attrs incl. data-*/aria-*/role/href entities, text-with-entities).
   - **#1417** — `test_dj_update_ignore_dj_if_sync_ids_1417.rs`: 3 scenarios for the dj-update="ignore" × dj-if × sync_ids three-way interaction. Verifies sync_ids preserves the ignored subtree's dj-ids across boundary swap-out → swap-in cycles.
   - **#1418** — `torture_deep_cascade_dj_if_1418.rs`: 4 scenarios with 10/12/15 levels of nested dj-if boundaries at start/middle/end positions of the children list. Toggles deepest boundary across cycles.
-  - **#1420** — `torture_patch_batch_ordering_1420.rs`: 7 invariant scenarios + 1 snapshot. The canonical "RemoveChild + SetAttr on the removed child" snapshot asserts RemoveChild is the LAST patch in the batch (so prior patches resolve before the child is gone).
+  - **#1420** — `torture_patch_batch_ordering_1420.rs`: 7 invariant scenarios + 1 snapshot. The canonical "SetAttr on kept child + RemoveChild on removed sibling" snapshot asserts RemoveChild comes at-or-after SetAttr in the batch (so any future emitter regression that reordered Remove ahead of Set would trip the test).
 
 ## [0.9.6] - 2026-05-12
 

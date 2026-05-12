@@ -251,24 +251,29 @@ fn snapshot_remove_child_appears_at_or_after_sibling_setattr() {
     let patches = diff(&old, &new);
 
     // Find the index of the first SetAttr, and the index of the first
-    // RemoveChild. RemoveChild MUST come at-or-after SetAttr — emitting
-    // RemoveChild first would not affect SetAttr's handle (different
-    // node), but it WOULD affect any future emitter regression that
-    // tried to reference the removed child's id post-removal.
+    // RemoveChild. Both MUST be present (the diff has both a mutation
+    // and a removal); a tautology-pass via `if let (Some, Some)` would
+    // silently accept a future regression that stopped emitting either
+    // patch type (Action #1200). Use expect() so absence is a test
+    // failure, not a silent pass.
     let first_setattr = patches
         .iter()
-        .position(|p| matches!(p, Patch::SetAttr { .. }));
+        .position(|p| matches!(p, Patch::SetAttr { .. }))
+        .expect("expected at least one SetAttr in the batch (mutated child's class change)");
     let first_removechild = patches
         .iter()
-        .position(|p| matches!(p, Patch::RemoveChild { .. }));
+        .position(|p| matches!(p, Patch::RemoveChild { .. }))
+        .expect("expected at least one RemoveChild in the batch (removed sibling)");
 
-    if let (Some(sa), Some(rc)) = (first_setattr, first_removechild) {
-        assert!(
-            rc >= sa,
-            "RemoveChild at idx {} preceded SetAttr at idx {} — emit order regression. Patches: {:#?}",
-            rc,
-            sa,
-            patches
-        );
-    }
+    // RemoveChild MUST come at-or-after SetAttr — emitting RemoveChild
+    // first would not affect SetAttr's handle (different node), but it
+    // WOULD affect any future emitter regression that tried to reference
+    // the removed child's id post-removal.
+    assert!(
+        first_removechild >= first_setattr,
+        "RemoveChild at idx {} preceded SetAttr at idx {} — emit order regression. Patches: {:#?}",
+        first_removechild,
+        first_setattr,
+        patches
+    );
 }
