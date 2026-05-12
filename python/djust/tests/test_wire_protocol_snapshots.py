@@ -77,12 +77,13 @@ def test_flash_command_spread_into_top_level():
 
 
 # =============================================================================
-# 3. page_metadata — websocket.py:476-481
+# 3. page_metadata — websocket.py:478-487
 # =============================================================================
 
 
 def test_page_metadata_command_spread_into_top_level():
-    """`{"type": "page_metadata", **cmd}` — same shape as flash."""
+    """`{"type": "page_metadata", **cmd}` — same shape as flash.
+    Emit site: websocket.py:478-487 (dict literal begins at line 481)."""
     cmd = {"title": "New Page Title"}
     frame = {"type": "page_metadata", **cmd}
     expected = '{"type": "page_metadata", "title": "New Page Title"}'
