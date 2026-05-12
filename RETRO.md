@@ -292,8 +292,91 @@ issue or be explicitly closed with a reason.
 | 250 | Stage 11 must refuse review of PR with stale base (behind main) | Retro v0.9.6-1 (PR #1431 retro) | #1450 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section + as a mandatory Stage 11 checklist item in all 3 pipeline-state templates (`feature-state.json`, `bugfix-state.json`, `ship-state.json`). Validated empirically: every subsequent v0.9.6-2 PR ran the check with BEHIND=0; no merges blocked. |
 | 251 | Pre-commit ruff hook auto-restage on reformat | Retro v0.9.6-2 (finding #1) | #1458 | Closed | **Investigation-class close (v0.9.7-1)** — root cause verified: pre-commit framework (4.2.0) intentionally does NOT auto-stage hook-modified files. Three implementation options identified (wrapper script, --check-only switch, lefthook migration); each warrants a deliberate design decision. Action #122 remains the safety net. See https://github.com/djust-org/djust/issues/1458#issuecomment-4434563832 for the full analysis. |
 | 252 | Empirical Stage 11 canary for tooling/lint PRs | Retro v0.9.6-2 (finding #2) | #1459 | Closed | **Resolved in v0.9.7-1 PR #1460** — landed `docs/PULL_REQUEST_CHECKLIST.md` Test Quality bullet + CLAUDE.md "Process canonicalizations from v0.9.6-2 retro arc" section with the PR #1455 + #1370 case study. Out-of-repo `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum is the only remaining piece, tracked as Open Items on the v0.9.7-1 retro entry. |
-| 253 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 follow-up) | Retro v0.9.7-1 (finding #2) | #1464 | Open | Action #251 closed the investigation with 3 implementation options. This row tracks picking one and shipping it. Empirical case: **5 ruff-bounces** caught by Action #122 across PRs #1454/#1457/#1462/#1463/#1466 — 5th hit was on a `feat:` PR's fix-commit (backticks in commit-message body triggered markdown-aware reformatter). Recommend Option A (wrapper script) as lowest-risk first step. |
-| 254 | Implementer-subagent prompt must mandate gate-the-change-off tautology self-test | Retro v0.9.7-2 (finding #2) | #1468 | Open | PR #1466 first-pass shipped 7 tests; only 3 (source-grep pins) exercised the actual change. Stage 11 reviewer caught 4 tautologies via Action #1200 (gate-off-and-re-run). Move the self-test left: implementer must run gate-off BEFORE reporting tests pass. If all tests still pass with the change gated off, AT LEAST ONE test is tautological — fix before reporting. Lands as a one-bullet PR-checklist addition + CLAUDE.md case study from PR #1466's 4/7 first-pass rate. |
+| 253 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 follow-up) | Retro v0.9.7-1 (finding #2) | #1464 | Closed | **Resolved in v0.9.7-3 PR #1470** — landed `scripts/git-commit-with-precommit.sh` (opt-in wrapper) + `make commit MSG="..."` Makefile target + `CONTRIBUTING.md` docs + 9 regression tests covering bounce recovery, multi-file partial rewrite, NUL-delimited filename safety, partial-stage hunk preservation, and outside-repo handling. Wrapper dogfooded for its own commits. Stage 11 caught + Stage 13 fixed two 🟡: bash word-splitting on `$STAGED` (switched to NUL-delimited `git diff -z` + bash array + quoted expansion) and bulk `git add` swallowing unstaged hunks (switched to per-file diff + scoped `git add -- "${REWRITTEN[@]}"`). |
+| 254 | Implementer-subagent prompt must mandate gate-the-change-off tautology self-test | Retro v0.9.7-2 (finding #2) | #1468 | Closed | **Resolved in v0.9.7-3 PR #1469** — landed `docs/PULL_REQUEST_CHECKLIST.md` Test Quality bullet + CLAUDE.md "Process canonicalizations from v0.9.7-2 retro arc" section with the PR #1466 4/7 first-pass case study. First non-trivial application immediately followed in PR #1470 (Stage 5 implementer's gate-off sabotaged `git add $STAGED` → recovery test caught it at `assert status == ""`). Canon landed at the right shape. Out-of-repo follow-up: the implementer-subagent prompt template in the pipeline-run skill repository should incorporate the same Verification-section step. |
+| 255 | LiveComponent vs sticky-child LiveView event-routing distinction (canon) | Retro v0.9.7-3 (#1467 investigation) | #1471 | OUT-OF-REPO | **Closed for djust-repo (v0.9.7-3 PR #1472)** — CLAUDE.md "Process canonicalizations from v0.9.7-3 retro arc" section documents that LiveComponent embedded children (`component_id`-routed) and sticky-child LiveViews (`view_id`-routed) are distinct mechanisms with different persistence semantics. Confusion between the two cost ~1hr of code-path tracing during #1467. Follow-up architectural work (sticky-child WS state persistence with LOAD-time discovery) tracked in #1471 for v0.10.0+. |
+| 256 | Shell tools that process git output default to NUL-delimited + bash-array + quoted expansion | Retro v0.9.7-3 (PR #1470 Stage 11 finding #1) | #1473 | Open | PR #1470's first-pass shipped `git add $STAGED` (newline-split + unquoted word-split) inside the wrapper that was specifically written to prevent ruff-bounce friction. Stage 11 reviewer caught it: a filename with a space would corrupt the re-stage path, reproducing the exact failure mode the wrapper was preventing. Pattern: any new shell script that processes `git diff --name-only` etc. should use `git diff -z` + `while IFS= read -r -d ''` + quoted array expansion + `--` separator on `git add`. Worth a `docs/PULL_REQUEST_CHECKLIST.md` Stage 7 self-review bullet. Filed as a tracker row pending dedicated PR to add the bullet (estimated <10 min — small enough to roll into the next docs-canon PR). |
+
+## v0.9.7-3 — Canon + tooling follow-ups + investigation-class close (PRs #1469, #1470, #1472)
+
+**Date**: 2026-05-12
+**Scope**: 3 PRs merged + 1 issue closed Option C (out-of-scope, investigation-only). Two canon PRs (#1469 gate-off self-test, #1472 LiveComponent vs sticky-child routing distinction), one tooling PR (#1470 pre-commit auto-restage wrapper), one investigation that pivoted scope (#1467 → #1471 follow-up). All three v0.9.7-2 retro tracker rows resolved this milestone.
+**Tests at close**: 2800 Python + 9 new in `test_git_commit_with_precommit.py` (PR #1470) + 39 wire-protocol snapshots + 272 djust_vdom Rust + 1564 JS. No regression at close.
+
+### What We Learned
+
+**1. The gate-the-change-off canon (#1468) landed at exactly the right shape — first non-trivial application worked.**
+PR #1469 canonized the gate-off self-test (Action #254). The very next PR (#1470, opt-in commit wrapper) put it through its first non-trivial use:
+- Stage 5: sabotaged `git add $STAGED` → no-op → ran 5 wrapper tests → `test_wrapper_recovers_from_ruff_bounce` failed at the load-bearing `assert status == ""` (working tree dirty). Existence-check tests (`test_wrapper_skipped_when_wrapper_missing`, `test_bash_available`) passed under sabotage as expected — they verify infrastructure, not behavior. Restoration → all 5 pass.
+- Stage 13 (after Stage 11 reviewer added per-file diff): sabotaged the per-file restage to `git add -A` → `test_wrapper_preserves_unstaged_hunks` failed at `assert files == "staged.py"` (other.txt swept up).
+
+Two empirical validations in one PR. The canon caught the regression in the load-bearing assertion at the right place each time. Confirms the design: gate-off self-test should fire at Stage 5 (implementer) AND Stage 11 (reviewer) — same epistemic, applied twice for redundancy. Closes Action #254.
+
+**Action taken**: Closed — Action #254 resolved by PR #1469 + immediately validated by PR #1470's two applications.
+
+**2. Stage 4 grep before architecting saved ~3hr of misdirected implementation on #1467.**
+#1467 issue body offered 3 design options (A: propagate `_djust_mount_request` to children, B: new identity scheme, C: out-of-scope) and estimated 2-3hr. Initial draft of "Option D" (always save the parent) was prepped before Stage 4 code-path tracing revealed:
+
+- The issue uses "LiveComponent" loosely. The actual routing path the issue cites (`websocket.py:2689-2696`) is sticky-child LiveViews (`view_id` routing), not LiveComponents (`component_id` routing).
+- LiveComponent embedded children **already persist** across WS reconnect via the existing `_save_components_to_session` call in PR #1466's save block. `target_view` stays as `self.view_instance` for component events, so the gate passes.
+- The actual gap is sticky-child LiveView state. Same gap exists in HTTP path today (`mixins/request.py:593-609` doesn't save sticky-child state either) — forward-looking architectural alignment, not a regression.
+- Closing the sticky-child gap properly requires SAVE side + LOAD-time discovery + sticky-id index — a multi-PR architectural design pass, not a 2-3hr fix.
+
+Pivoted to Option C (out-of-scope). Filed #1471 for v0.10.0+. Documented the routing distinction in CLAUDE.md (PR #1472) so future readers don't re-trace.
+
+Validates Action #168 / #1143 (first-principles grep before architecting) and Action #1079 (broader-sweep → follow-up issue scope-discipline). Generalized rule: **when an issue body uses domain terminology, verify the terminology maps to the routing path you intend to change before sizing the work.** Loose terminology in the issue body cost effectively 0 hours here because Stage 4 caught it; without Stage 4 it would have cost a full Option-A/B implementation cycle.
+
+**Action taken**: Closed — Action #255 (this row) captures the LiveComponent vs sticky-child distinction; PR #1472 lands the canon. No new canon-process rule needed.
+
+**3. PR #1470's first-pass shipped the exact bug class the wrapper was built to prevent.**
+The wrapper's job is to prevent ruff-bounce friction. Its first-pass implementation used `git add $STAGED` — newline-split + bash word-split. A filename with a space would corrupt the re-stage path, leaving the reformat unstaged. Stage 11 reviewer caught it: ironic.
+
+Generalizable to a pattern for shell tools: any new script that processes `git diff --name-only` etc. should default to NUL-delimited reads (`git diff -z`) + bash array + quoted expansion (`"${arr[@]}"`) + `--` separator on `git add`. Three prior instances surfaced this same word-splitting class on djust tooling (the script header comment in PR #1470 notes the prior cases). Worth a Stage 7 self-review bullet so reviewers catch it before reaching Stage 11.
+
+**Action taken**: Open — tracked in Action Tracker #256 (GitHub #1473). Estimated <10 min to land the PR-checklist bullet; roll into next docs-canon PR.
+
+### Insights
+
+- **0 ruff-bounces this milestone** (#1470's wrapper makes them unreachable from here forward). The running tally from prior milestones (5 across v0.9.7-2's 5 PRs) is now closed.
+- **3 of 3 v0.9.7-2 retro tracker rows resolved this milestone.** #253 (#1464 implementation), #254 (#1468 canon), and #1467 (originally pending design) all landed. Combined with PR #1472, every v0.9.7-2 follow-up converged into v0.9.7-3.
+- **Investigation-class outcomes count.** #1467 closed without code, but the investigation itself shipped value: the LiveComponent vs sticky-child distinction is now canonized, and the follow-up #1471 has a real design-phases proposal. The /pipeline-run skill's "close-without-code path" was the right shape here. Action #1079 (broader-sweep → follow-up issue) validated for the third consecutive milestone.
+- **Cycle time**: ~2.5hr wall-clock for 3 PRs + 1 investigation + retro. Lower than v0.9.7-2's single-PR ~50min × the PR count would suggest — the canon PRs (#1469, #1472) were small and the wrapper PR (#1470) leaned heavily on the dogfood loop.
+- **Dogfood loops compound.** PR #1470's wrapper committed its own implementation. The two commits in the implementation PR went through `scripts/git-commit-with-precommit.sh`; pre-commit hooks fired on real diffs; the wrapper handled them. A regression in the wrapper's own logic would have shown up during its own commit — no separate integration test needed.
+
+### Review Stats
+
+| Metric | PR #1469 | PR #1470 | PR #1472 | Total |
+|---|---|---|---|---|
+| LOC | +73 / -0 | +428 / 0 | +19 / -1 | +520 / -1 |
+| Tests added | 0 | 9 | 0 | 9 |
+| 🔴 must-fix | 0 | 0 | 0 | 0 |
+| 🟡 should-fix | 0 | 2 (both fixed Stage 13) | 0 | 2 |
+| 🟢 observations | 0 | 3 (2 addressed Stage 13) | 0 | 3 |
+| Action #122 ruff bounces | 0 | 0 (wrapper) | 0 | 0 |
+| Stage 11 depth | Light (docs) | Deep (shell + tests + safety) | Light (docs) | — |
+| Stage 13 fix-pass | n/a | 1 (per-file restage + NUL handling) | n/a | 1 |
+| Cycle time | ~25 min | ~70 min | ~15 min | ~110 min |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New "Process canonicalizations from v0.9.7-3 retro arc" section (PR #1472) — LiveComponent vs sticky-child routing distinction. The v0.9.7-2 retro arc section landed via PR #1469 (gate-off self-test).
+**PR Checklist**: Test Quality section gained the gate-the-change-off self-test bullet (PR #1469).
+**Pipeline template**: No changes.
+**Skills**: No changes in-repo. The pipeline-run skill's implementer-subagent prompt template would benefit from the gate-off canon as a Verification-section step — that's the out-of-repo follow-up tracked under #254.
+
+### Open Items
+
+- [ ] **#256 (GitHub #1473)** — Shell tools that process git output default to NUL-delimited + bash-array + quoted expansion. Stage 7 self-review bullet. <10 min to land.
+- [ ] **OUT-OF-REPO** (carried from earlier milestones):
+  - #252/#1459 follow-up — pipeline-run skill repo edits for empirical Stage 11 canary.
+  - #254/#1468 follow-up — pipeline-run skill repo edits for gate-off self-test in the Verification section of the implementer-subagent prompt.
+- [ ] **#1471** — Sticky-child LiveView state persistence across WS reconnect (architectural; v0.10.0+).
+
+### Sequencing notes
+
+The three PRs sequenced as planned in the v0.9.7-3 ROADMAP entry: canon first (#1469), tooling second (#1470 — benefited from the canon at Stage 5), investigation third (#1467 → close + #1472 docs). Stacking the canon ahead of the implementer-PR pays off when the canon is new — the implementer-subagent applies it on first run rather than learning it via Stage 11 feedback. Worth keeping as a sequencing rule for any future milestone that combines canon-adds with implementation work.
+
+---
 
 ## v0.9.7-2 — WS-reconnect state continuity via clean-redo of stale PR #1429 (PR #1466)
 
