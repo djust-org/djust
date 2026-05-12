@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bundle init-order lint now does a deferral-pattern-aware depth-N call-graph walk (#1449, #1406).** `scripts/check-bundle-init-order.mjs` previously caught only direct top-level reads of late-declared `let`/`const`. The walker now descends through synchronously-called function bodies (default depth 8) to catch the transitive TDZ class that PR #1370 hit — `djustInit() → mountHooks() → _ensureHooksInit() → _activeHooks` (read at top level via a transitive call chain, declared later in lexicographic concat order). Models deferral sites (`addEventListener`/`removeEventListener`, `setTimeout`/`setInterval`/`setImmediate`, `requestAnimationFrame`/`queueMicrotask`/`requestIdleCallback`, Promise `.then`/`.catch`/`.finally`, `new XxxObserver(...)`) so callbacks passed to those APIs are correctly treated as non-top-level. The walker uses an "effective-line" model: identifiers reached transitively through a top-level call at bundle line L are flagged only if `decl.bundleLine > L`, which eliminates the 16 false positives the naive depth-N version produced (per #1449). New CLI flags: `--max-depth=N` (default 8), `--shallow-only` (preserves v0.9.5 behavior). New env-var override `BUNDLE_SRC_DIR` for synthetic-bundle tests. The runtime regression test `tests/js/bundle-init-no-tdz.test.js` remains the simulate-bundle-init safety net — the two checks are complementary. Current `main` bundle is clean at default depth.
+
 ### Tests
 
 - **VDOM cluster carryovers — 24 new tests across 5 files (#1413, #1416, #1417, #1418, #1420).** Five P3 hardeners extending `crates/djust_vdom/tests/common/mod.rs` (the harness from #1421). Test-only; no production code changes; none surfaced regressions on `main`. Test count: djust_vdom 248 → 272.
