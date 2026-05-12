@@ -345,3 +345,107 @@ def test_embedded_update_envelope():
         '"html": "<section>updated</section>", "event_name": "click"}'
     )
     assert _emit(frame) == expected
+
+
+# =============================================================================
+# 14. i18n — websocket.py:729-734 (#1456 Batch 2)
+# =============================================================================
+
+
+def test_i18n_command_spread_into_top_level():
+    """`{"type": "i18n", **cmd}` — cmd keys spread into top level
+    (same shape as flash / page_metadata)."""
+    cmd = {"action": "set_language", "language": "fr"}
+    frame = {"type": "i18n", **cmd}
+    expected = '{"type": "i18n", "action": "set_language", "language": "fr"}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 15. accessibility — websocket.py:749-754 (#1456 Batch 2)
+# =============================================================================
+
+
+def test_accessibility_announcements_envelope():
+    """`{"type": "accessibility", "announcements": [...]}` — only emitted
+    when announcements list is non-empty (line 748 guard)."""
+    frame = {
+        "type": "accessibility",
+        "announcements": [
+            {"message": "Item saved", "priority": "polite"},
+        ],
+    }
+    expected = (
+        '{"type": "accessibility", '
+        '"announcements": [{"message": "Item saved", "priority": "polite"}]}'
+    )
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 16. focus — websocket.py:764-770 (#1456 Batch 2)
+# =============================================================================
+
+
+def test_focus_command_envelope():
+    """`{"type": "focus", "selector": <str>, "options": <obj>}` —
+    programmatic focus targeting (delivered as a 2-tuple internally)."""
+    frame = {
+        "type": "focus",
+        "selector": "#email-input",
+        "options": {"preventScroll": False},
+    }
+    expected = '{"type": "focus", "selector": "#email-input", "options": {"preventScroll": false}}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 17. html_update — websocket.py:1125-1144 (#1456 Batch 2)
+# =============================================================================
+
+
+def test_html_update_envelope_minimal():
+    """`{"type": "html_update", "html": <str>, "version": <int>}` —
+    fallback full-HTML update path (used when VDOM patching mismatches)."""
+    frame = {
+        "type": "html_update",
+        "html": "<div>updated</div>",
+        "version": 5,
+    }
+    expected = '{"type": "html_update", "html": "<div>updated</div>", "version": 5}'
+    assert _emit(frame) == expected
+
+
+def test_html_update_envelope_with_conditional_appends():
+    """The html_update emit site (websocket.py:1130-1143) conditionally
+    appends `reset_form`, `cache_request_id`, `async_pending`, `event_name`,
+    `source`, `ref` AFTER `version` in insertion order. Pin a representative
+    case with reset_form + event_name to lock the order."""
+    response = {
+        "type": "html_update",
+        "html": "<div/>",
+        "version": 1,
+    }
+    response["reset_form"] = True
+    response["event_name"] = "submit"
+    expected = (
+        '{"type": "html_update", "html": "<div/>", "version": 1, '
+        '"reset_form": true, "event_name": "submit"}'
+    )
+    assert _emit(response) == expected
+
+
+# =============================================================================
+# 18. connect — websocket.py:1424-1428 (#1456 Batch 2)
+# =============================================================================
+
+
+def test_connect_envelope():
+    """`{"type": "connect", "session_id": <str>}` — connection
+    acknowledgment frame sent after WebSocket accept."""
+    frame = {
+        "type": "connect",
+        "session_id": "sess-new",
+    }
+    expected = '{"type": "connect", "session_id": "sess-new"}'
+    assert _emit(frame) == expected
