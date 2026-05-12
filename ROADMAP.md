@@ -373,6 +373,51 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
+### Milestone: v0.9.7-3 — Process canon follow-ups + WS-event child-view save
+
+*Goal:* Drain 3 P2 follow-ups filed during v0.9.7-1 and v0.9.7-2 milestones. Two are process-canon fixes that pay back per-PR friction caught empirically across this session; one is a substantive feature gap. Targets v0.9.7 stable.
+
+**Status (planning):** 0 of 3 PRs shipped.
+
+#### Priority breakdown
+
+| # | Issue | Theme | Type | Sized |
+|---|---|---|---|---|
+| 1 | #1468 | Implementer-subagent prompt must mandate gate-the-change-off tautology self-test before reporting tests passing. One-bullet PR-checklist addition + CLAUDE.md case study from PR #1466 (4/7 first-pass tautology rate caught by Stage 11). Lowest-risk, highest-leverage of the three | P2 docs/canon | ~30-45 min |
+| 2 | #1464 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 investigation closed with 3 options). Empirical case: 5 ruff-bounces caught by Action #122 across PRs #1454/#1457/#1462/#1463/#1466 this session. Recommend Option A (wrapper script `scripts/git-commit-with-precommit.sh`) as lowest-risk first step | P2 tooling | ~1-1.5 hr |
+| 3 | #1467 | WS-event save for child LiveComponent views. PR #1466's gate skips child views entirely (conservative); this issue picks one of 3 design options (propagate `_djust_mount_request` to children at construction / new identity scheme / declare out-of-scope) and ships | P2 feature | ~2-3 hr |
+
+#### Sequencing strategy
+
+1. **#1468 first** — small PR-checklist + CLAUDE.md edit. Lands the implementer-subagent gate-off self-test canon so subsequent PRs in this bucket benefit from the tighter Stage 5 verification.
+2. **#1464** — pre-commit ruff wrapper. Eliminates the Action #122 friction class going forward. Wrapper-script approach (Option A from the #1458 investigation) is the recommended first step; reversible if a different option proves better.
+3. **#1467** — substantive child-view feat work. Largest single task; pick one of the 3 design options (likely option (a): propagate `_djust_mount_request` to children at construction). Empirical proof: extend the `test_ws_event_save_block_writes_through_to_session` integration test pattern from PR #1466 to cover a child-component view.
+
+#### Acceptance for v0.9.7-3
+
+- [ ] All 3 work units shipped.
+- [ ] All 3 referenced issues closed.
+- [ ] `make check` clean on each PR.
+- [ ] CHANGELOG `[Unreleased]` entries: #1468 + #1464 are internal canon/tooling (no user-visible change); #1467 IS user-visible (child-view session persistence) and needs a CHANGELOG entry.
+- [ ] After bucket complete, consider v0.9.7 stable cut (v0.9.7rc2 already includes the v0.9.7-2 feature).
+
+#### Stage 4 plan additions
+
+- **#1467**: trace the HTTP-path child-view save semantics (or confirm there is no HTTP-path child save — in which case this is genuinely new surface). Use Action #1079 (broader-sweep → follow-up issue scope-discipline) — if the chosen approach surfaces a deeper gap (e.g., child views never had session persistence on either path), defer the deeper gap to a fresh issue rather than expanding scope.
+- **#1464**: per the #1458 investigation comment, Option A (wrapper script) is recommended. Stage 4 plan should verify: does Django's `pre-commit` hook framework version (4.2.0 in this repo) document a "stage modified files" option? If yes, that's Option D — even simpler than the wrapper script.
+
+#### Pipeline runner notes
+
+- `/pipeline-run --milestone v0.9.7-3 --all` to process autonomously (no `--group` — each item is independent).
+- Sequencing matters: ship #1468 first so subsequent implementer subagents in #1464 and #1467 benefit from the gate-off self-test canon.
+
+#### Deferred (carried forward)
+
+- **#1432, #1434** — to v0.10.0 (research / psycopg3-dependency-blocked).
+- **OUT-OF-REPO**: #1375, #1376, #1384, #1387 (all pipeline-run skill repo); also the `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 empirical-canary prompt addendum (carried from v0.9.7-1).
+
+---
+
 ### Milestone: v0.9.7-2 — WS-reconnect state continuity (redo of stale PR #1429)
 
 *Goal:* Clean re-do of stale PR #1429 (29 commits behind main, conflicting, no tests). Three companion changes that let LiveView state survive a WebSocket reconnect when the view opts in via `enable_state_snapshot`. Targets v0.9.7 stable.
