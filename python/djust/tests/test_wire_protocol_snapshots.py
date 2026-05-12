@@ -223,3 +223,125 @@ def test_error_envelope_with_context_keys():
         '{"type": "error", "error": "validation_failed", "field": "email", "code": "invalid"}'
     )
     assert _emit(response) == expected
+
+
+# =============================================================================
+# 9. mount_batch — websocket.py:2609-2617 (#1456 Batch 1)
+# =============================================================================
+
+
+def test_mount_batch_envelope_minimal():
+    """Multi-view batched mount. Pins order: type, session_id, views, failed.
+    Optional `navigate` is appended AFTER failed (websocket.py:2615-2616)."""
+    response = {
+        "type": "mount_batch",
+        "session_id": "sess-xyz",
+        "views": [{"view_id": "v1", "html": "<div/>"}],
+        "failed": [],
+    }
+    expected = (
+        '{"type": "mount_batch", "session_id": "sess-xyz", '
+        '"views": [{"view_id": "v1", "html": "<div/>"}], "failed": []}'
+    )
+    assert _emit(response) == expected
+
+
+def test_mount_batch_envelope_with_navigate():
+    """Optional `navigate` key appended after `failed`."""
+    response = {
+        "type": "mount_batch",
+        "session_id": "sess-xyz",
+        "views": [],
+        "failed": [],
+    }
+    response["navigate"] = [{"to": "/dashboard"}]
+    expected = (
+        '{"type": "mount_batch", "session_id": "sess-xyz", "views": [], "failed": [], '
+        '"navigate": [{"to": "/dashboard"}]}'
+    )
+    assert _emit(response) == expected
+
+
+# =============================================================================
+# 10. child_update — websocket.py:654-661 (#1456 Batch 1)
+# =============================================================================
+
+
+def test_child_update_envelope():
+    """Embedded LiveComponent child VDOM patch frame.
+    `{"type": "child_update", "view_id": <str>, "patches": [...], "version": <int>}`."""
+    frame = {
+        "type": "child_update",
+        "view_id": "child-abc",
+        "patches": [{"op": "SetAttr", "d": "n1", "k": "class", "v": "active"}],
+        "version": 3,
+    }
+    expected = (
+        '{"type": "child_update", "view_id": "child-abc", '
+        '"patches": [{"op": "SetAttr", "d": "n1", "k": "class", "v": "active"}], '
+        '"version": 3}'
+    )
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 11. sticky_update — websocket.py:687-694 (#1456 Batch 1)
+# =============================================================================
+
+
+def test_sticky_update_envelope():
+    """Sticky-child VDOM patch frame. Same shape as child_update but with
+    distinct `type` (sticky path vs embedded path)."""
+    frame = {
+        "type": "sticky_update",
+        "view_id": "sticky-feed",
+        "patches": [],
+        "version": 1,
+    }
+    expected = '{"type": "sticky_update", "view_id": "sticky-feed", "patches": [], "version": 1}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 12. sticky_hold — websocket.py:2399-2403 (#1456 Batch 1)
+# =============================================================================
+
+
+def test_sticky_hold_envelope():
+    """Pre-mount frame instructing the client which sticky views to preserve.
+    `{"type": "sticky_hold", "views": [<view_id>, ...]}`. Empty list is
+    meaningful — tells the client to drop everything in its stash."""
+    frame = {"type": "sticky_hold", "views": ["sticky-feed", "sticky-chat"]}
+    expected = '{"type": "sticky_hold", "views": ["sticky-feed", "sticky-chat"]}'
+    assert _emit(frame) == expected
+
+
+def test_sticky_hold_envelope_empty_list():
+    """Empty `views` list is wire-meaningful (drop-all signal). Pin separately
+    so the empty case is locked in."""
+    frame = {"type": "sticky_hold", "views": []}
+    expected = '{"type": "sticky_hold", "views": []}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 13. embedded_update — websocket.py:3259-3265 (#1456 Batch 1)
+# =============================================================================
+
+
+def test_embedded_update_envelope():
+    """Embedded child view full-HTML update (vs the patch-shape child_update).
+    `{"type": "embedded_update", "view_id": <str>, "html": <str>, "event_name": <str>}`.
+    Distinct from child_update — this is the full-HTML fallback path used when
+    VDOM patching would mismatch (component path issue)."""
+    frame = {
+        "type": "embedded_update",
+        "view_id": "embed-1",
+        "html": "<section>updated</section>",
+        "event_name": "click",
+    }
+    expected = (
+        '{"type": "embedded_update", "view_id": "embed-1", '
+        '"html": "<section>updated</section>", "event_name": "click"}'
+    )
+    assert _emit(frame) == expected
