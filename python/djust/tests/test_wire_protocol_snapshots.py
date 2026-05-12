@@ -449,3 +449,222 @@ def test_connect_envelope():
     }
     expected = '{"type": "connect", "session_id": "sess-new"}'
     assert _emit(frame) == expected
+
+
+# =============================================================================
+# 19. noop — websocket.py:624 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_noop_envelope_minimal():
+    """`{"type": "noop"}` — minimal no-op response."""
+    frame = {"type": "noop"}
+    expected = '{"type": "noop"}'
+    assert _emit(frame) == expected
+
+
+def test_noop_envelope_with_optional_keys():
+    """`async_pending` and `ref` are conditionally appended after `type`."""
+    msg = {"type": "noop"}
+    msg["async_pending"] = True
+    msg["ref"] = 42
+    expected = '{"type": "noop", "async_pending": true, "ref": 42}'
+    assert _emit(msg) == expected
+
+
+# =============================================================================
+# 20. rate_limit_exceeded — websocket.py:1594-1597 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_rate_limit_exceeded_envelope():
+    """`{"type": "rate_limit_exceeded", "message": <str>}`."""
+    frame = {
+        "type": "rate_limit_exceeded",
+        "message": "Too many messages, some events are being dropped",
+    }
+    expected = (
+        '{"type": "rate_limit_exceeded", '
+        '"message": "Too many messages, some events are being dropped"}'
+    )
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 21. pong — websocket.py:1607 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_pong_envelope():
+    """`{"type": "pong"}` — ping-pong heartbeat response."""
+    frame = {"type": "pong"}
+    expected = '{"type": "pong"}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 22. error.message variant — websocket.py:1953, 2164 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_error_message_variant_envelope():
+    """Distinct from error.error (websocket.py:794). Permission-denied path
+    uses `message` key instead of `error` key. Pin separately — these are
+    WIRE-DISTINCT frames despite sharing `type`."""
+    frame = {"type": "error", "message": "Permission denied"}
+    expected = '{"type": "error", "message": "Permission denied"}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 23. navigate — websocket.py:1959, 1983 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_navigate_envelope():
+    """`{"type": "navigate", "to": <url>}` — auth-check redirect path and
+    on_mount-hook redirect path both emit this shape."""
+    frame = {"type": "navigate", "to": "/login"}
+    expected = '{"type": "navigate", "to": "/login"}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 24. upload_registered — websocket.py:3548-3553 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_upload_registered_envelope():
+    """`{"type": "upload_registered", "ref": <str>, "upload_name": <str>}`."""
+    frame = {
+        "type": "upload_registered",
+        "ref": "upl-abc123",
+        "upload_name": "avatar",
+    }
+    expected = '{"type": "upload_registered", "ref": "upl-abc123", "upload_name": "avatar"}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 25. upload_progress — websocket.py:3661-3667 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_upload_progress_envelope_error_case():
+    """`{"type": "upload_progress", "ref": <str>, "progress": <int>,
+    "status": <str>, "error": <str>}` — pins the error-case shape with all
+    5 keys in declared order."""
+    frame = {
+        "type": "upload_progress",
+        "ref": "upl-xyz",
+        "progress": 0,
+        "status": "error",
+        "error": "File too large",
+    }
+    expected = (
+        '{"type": "upload_progress", "ref": "upl-xyz", "progress": 0, '
+        '"status": "error", "error": "File too large"}'
+    )
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 26. reload — websocket.py:3848 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_reload_envelope():
+    """`{"type": "reload", "file": <path>}` — HVR full-reload fallback."""
+    frame = {"type": "reload", "file": "/path/to/template.html"}
+    expected = '{"type": "reload", "file": "/path/to/template.html"}'
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 27. hvr-applied — websocket.py:3856-3860 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_hvr_applied_envelope():
+    """`{"type": "hvr-applied", "view": <str>, "version": <int>, "file": <path>}` —
+    note kebab-case `type` value (distinct from the other snake_case types)."""
+    frame = {
+        "type": "hvr-applied",
+        "view": "myapp.views.MyView",
+        "version": 3,
+        "file": "/path/to/template.html",
+    }
+    expected = (
+        '{"type": "hvr-applied", "view": "myapp.views.MyView", '
+        '"version": 3, "file": "/path/to/template.html"}'
+    )
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 28. presence_event — presence.py:347-351 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_presence_event_envelope():
+    """`{"type": "presence_event", "event": <str>, "payload": <obj>}` —
+    presence-channel event dispatch shape."""
+    frame = {
+        "type": "presence_event",
+        "event": "joined",
+        "payload": {"user_id": 7, "username": "alice"},
+    }
+    expected = (
+        '{"type": "presence_event", "event": "joined", '
+        '"payload": {"user_id": 7, "username": "alice"}}'
+    )
+    assert _emit(frame) == expected
+
+
+# =============================================================================
+# 29. streaming.patch / streaming.html_update / streaming.stream
+#     — streaming.py:278-294, 357-363 (#1456 Batch 3)
+# =============================================================================
+
+
+def test_streaming_patch_envelope():
+    """streaming.py:278-285 emits the SAME `type: "patch"` shape as the
+    main websocket path but without conditional appends. Verifies the
+    patch-envelope contract is consistent across emit sites."""
+    frame = {
+        "type": "patch",
+        "patches": [{"op": "Replace", "d": "x1", "html": "<p>new</p>"}],
+        "version": 2,
+    }
+    expected = (
+        '{"type": "patch", "patches": [{"op": "Replace", "d": "x1", "html": "<p>new</p>"}], '
+        '"version": 2}'
+    )
+    assert _emit(frame) == expected
+
+
+def test_streaming_html_update_envelope():
+    """streaming.py:288-294 emits a CLEAN html_update without the 6
+    conditional appends of the main websocket path. Pin separately to
+    catch any future divergence."""
+    frame = {
+        "type": "html_update",
+        "html": "<section>streamed</section>",
+        "version": 1,
+    }
+    expected = '{"type": "html_update", "html": "<section>streamed</section>", "version": 1}'
+    assert _emit(frame) == expected
+
+
+def test_streaming_stream_envelope():
+    """streaming.py:358-362 — `{"type": "stream", "stream": <name>, "ops": [...]}`."""
+    frame = {
+        "type": "stream",
+        "stream": "messages",
+        "ops": [{"op": "prepend", "html": "<li>new</li>"}],
+    }
+    expected = (
+        '{"type": "stream", "stream": "messages", '
+        '"ops": [{"op": "prepend", "html": "<li>new</li>"}]}'
+    )
+    assert _emit(frame) == expected
