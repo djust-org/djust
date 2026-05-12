@@ -291,7 +291,77 @@ issue or be explicitly closed with a reason.
 | 249 | Deferral-pattern-aware depth-N call-graph walker for bundle-init-order lint (#1406 redo) | Retro v0.9.6-1 (finding #6) | #1449 | Closed | **Resolved in v0.9.6-2 PR #1455**. `scripts/check-bundle-init-order.mjs` extended from shallow to depth-N (default 8) with effective-line model + deferral-site allowlist (addEventListener, setTimeout/Interval/Immediate, requestAnimationFrame/queueMicrotask/requestIdleCallback, Promise then/catch/finally, `new XxxObserver`). Zero false positives on current bundle. Empirical Stage 11 canary confirmed walker catches #1370 transitive TDZ at depth 3. Umbrella #1406 also closed. |
 | 250 | Stage 11 must refuse review of PR with stale base (behind main) | Retro v0.9.6-1 (PR #1431 retro) | #1450 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section + as a mandatory Stage 11 checklist item in all 3 pipeline-state templates (`feature-state.json`, `bugfix-state.json`, `ship-state.json`). Validated empirically: every subsequent v0.9.6-2 PR ran the check with BEHIND=0; no merges blocked. |
 | 251 | Pre-commit ruff hook auto-restage on reformat | Retro v0.9.6-2 (finding #1) | #1458 | Closed | **Investigation-class close (v0.9.7-1)** — root cause verified: pre-commit framework (4.2.0) intentionally does NOT auto-stage hook-modified files. Three implementation options identified (wrapper script, --check-only switch, lefthook migration); each warrants a deliberate design decision. Action #122 remains the safety net. See https://github.com/djust-org/djust/issues/1458#issuecomment-4434563832 for the full analysis. |
-| 252 | Empirical Stage 11 canary for tooling/lint PRs | Retro v0.9.6-2 (finding #2) | #1459 | Open | PR #1455 Stage 11 reviewer flipped `var _activeHooks` → `let _activeHooks` in a bundle copy and ran the lint, confirming it caught the exact #1370 chain at depth 3. Highest-confidence validation for a tooling PR. Codify as PR-checklist bullet + skill template Stage 11 prompt addendum for tooling-class PRs. |
+| 252 | Empirical Stage 11 canary for tooling/lint PRs | Retro v0.9.6-2 (finding #2) | #1459 | Closed | **Resolved in v0.9.7-1 PR #1460** — landed `docs/PULL_REQUEST_CHECKLIST.md` Test Quality bullet + CLAUDE.md "Process canonicalizations from v0.9.6-2 retro arc" section with the PR #1455 + #1370 case study. Out-of-repo `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum is the only remaining piece, tracked as Open Items on the v0.9.7-1 retro entry. |
+| 253 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 follow-up) | Retro v0.9.7-1 (finding #2) | #1464 | Open | Action #251 closed the investigation with 3 implementation options. This row tracks picking one and shipping it. Empirical case: 4 ruff-bounces caught by Action #122 across PRs #1454/#1457/#1462/#1463 in 4 days. Recommend Option A (wrapper script) as lowest-risk first step. |
+
+## v0.9.7-1 — v0.9.6-2 retro follow-ups + wire-protocol pinning continuation (PRs #1460, #1461, #1462, #1463 + #1458 investigation-class close)
+
+**Date**: 2026-05-12
+**Scope**: 3 work units shipped across 4 PRs + 1 investigation-class issue close. Empirical Stage 11 canary canon (#1459 → PR #1460), pre-commit ruff auto-restage investigation (#1458 closed-without-code with 3 implementation options surfaced), and wire-protocol snapshot pinning across 4 PRs closing #1456 (PRs #1461 Batch 1 lifecycle + #1462 Batch 2 optional-features + #1463 Batch 3 FINAL). Entirely test/canon/investigation — no user-facing code changes.
+**Tests at close**: 4271 Python + 39 wire-protocol snapshots (12 starter from PR #1457 → 39 across the 4-PR arc) + 272 djust_vdom Rust + 1564 JS.
+
+### What We Learned
+
+**1. Wire-protocol snapshot template scales mechanically across batches — 4 PRs landed at ~12-15 min cycle time each.**
+PR #1457 established the template (8 highest-value frames, 12 tests). PRs #1461/#1462/#1463 mechanically extended it to 30 distinct frame shapes across 39 tests. Each batch followed the same shape: read emit-sites, mirror dict literals in tests, assert against literal JSON string. Stage 11 reviewer performed the same wire-shape fidelity check on each PR. No design decisions needed past Batch 1.
+
+This is the canonical example of Action #1079 (broader-sweep → follow-up issue scope-discipline) paying off across a multi-batch arc: starter + 3 batches + final close, with line-number precision carried forward via follow-up #1456's issue body. Validates that for "mechanical mirror N call sites" work, splitting into 1 starter + N batches is consistently faster than 1 big PR.
+
+**Action taken**: Closed — Action #1079 already canonicalizes this pattern; the v0.9.7-1 4-PR arc is documented here as the canonical multi-batch validation.
+
+**2. Action #122 (post-commit verification) caught 4 ruff-reformat bounces in 4 days — strongest empirical case yet for #1458's resolution.**
+Across PRs #1454, #1457, #1462, #1463 the same Action #122 trip fired: `git commit` → ruff reformats long lines → pre-commit framework conflict-aborts the commit → `git log -1 --oneline` shows the prior commit → re-stage + re-commit. Net cost ~30 sec per occurrence × 4 occurrences = ~2 min wall-clock this session. Action #122 worked every time; the underlying gap is the pre-commit framework's intentional "don't auto-stage modifications" behavior (per #1458 investigation).
+
+This milestone's investigation-class close on #1458 surfaced 3 implementation options (wrapper script, --check-only switch, lefthook migration) but didn't ship a fix; the empirical evidence accumulated here makes the case for actually picking one option in v0.9.7+.
+
+**Action taken**: Open — tracked in Action Tracker #253 (GitHub #1464). Action #251 (the investigation) is closed; this new tracker row covers the implementation decision + work.
+
+**3. Investigation-class close as a milestone-shipping tool worked cleanly.**
+#1458 was 1 of 3 v0.9.7-1 work units. Investigation surfaced that the issue's stated fix path didn't match the root cause; the implementation needed a design decision (wrapper vs migration). Per the pipeline's close-without-code path (state file `pipeline_type: investigation`), the issue was closed with a detailed comment + 3 implementation options + recommendation. The milestone still shipped as "3 of 3 work units complete" (1 via code, 2 via code, 1 via investigation), and the underlying tech-debt is preserved with line-of-sight to the design decision.
+
+This is the second milestone (after v0.9.6-1's #1423 investigation close) where the close-without-code path was the right call. Pattern: when an issue's surface area is small but the right fix needs deliberate design, ship the investigation as the deliverable. The code follows in a fresh issue once the design lands.
+
+**Action taken**: Closed — Action #1210 (Stage 4 reproducer-first) already canonicalizes investigation-class as a first-class pipeline outcome. The v0.9.7-1 application validates the pattern for design-decision deferrals (not just bug-vs-not-bug investigation).
+
+### Insights
+
+- **First milestone shipped POST-stable (v0.9.6 cut 2026-05-12)**. Fast wall-clock (~3 hr for 4 PRs + retro + drain + retro), no user-facing changes, no rc cycle needed. Pure follow-up cleanup.
+- **All 4 PRs ran clean through 14-stage pipeline**. Zero 🔴 across the arc. PR #1461 had 0 🟡 (clean first-pass), PR #1463 had 0 🟡 (clean first-pass), PRs #1462 and #1460 each had small 🟡 items absorbed pre-merge.
+- **Stage 11 empirical-canary canon (PR #1460) landed before any tooling PRs in this milestone**. The next milestone with a tooling PR will be the first to apply it formally; the v0.9.6-2 PR #1455 retro already documented the canonical empirical-canary case study informally.
+- **`hvr-applied` is the only kebab-case `type` value in the entire wire protocol**. PR #1463 pinned it specifically to catch any accidental future rename to snake_case. Discovered during Batch 3 inventory — a small but real protocol hygiene observation.
+- **Dual-site wire-shape invariants pinned implicitly**. `error.message` is emitted at `websocket.py:1953` AND `:2164`; `navigate` at `:1959` AND `:1983`. The single test for each shape pins both sites because they emit identical dicts; a future divergence at either site would fail the same test.
+- **Pipeline cycle times**:
+  - PR #1460 (docs canon): ~12 min
+  - PR #1461 (Batch 1 mechanical extension): ~15 min
+  - PR #1462 (Batch 2 same template): ~12 min
+  - PR #1463 (Batch 3 final, largest batch): ~15 min
+  - Average: ~13.5 min branch-to-merge across the arc.
+
+### Review Stats
+
+| Metric | PR #1460 | PR #1461 | PR #1462 | PR #1463 | Total |
+|---|---|---|---|---|---|
+| LOC | +20 (docs) | +124 | +106 | +221 | +471 |
+| Tests added | 0 (docs) | 7 | 6 | 14 | 27 |
+| 🔴 must-fix | 0 | 0 | 0 | 0 | 0 |
+| 🟡 should-fix | 0 | 0 | 0 | 0 | 0 |
+| 🟢 observations | 4 | 0 | 0 | 0 | 4 |
+| CI failures | 0 | 0 | 0 | 0 | 0 |
+| Action #122 ruff bounces caught | 0 | 0 | 1 | 1 | 2 (in addition to PR #1457's bounce from v0.9.6-2, total 4 across both milestones) |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New "Process canonicalizations from v0.9.6-2 retro arc" section landed in PR #1460 (1 rule: empirical-canary for tooling/lint PRs, with PR #1455 + #1370 case study).
+**Pipeline template**: No changes.
+**Checklist**: `docs/PULL_REQUEST_CHECKLIST.md` Test Quality section gained the "Empirical canary for tooling/lint PRs" bullet (PR #1460).
+**Skills**: No changes (the `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum is out-of-repo follow-up on #1459).
+
+### Open Items
+
+- [ ] #253 (GitHub #1464) — Pre-commit ruff auto-restage IMPLEMENTATION. Investigation on #1458 closed in v0.9.7-1 with 3 implementation options surfaced; this new tracker row covers picking one and shipping it. Recommend: Option A (wrapper script) as the lowest-risk first step.
+- [ ] **OUT-OF-REPO**: pipeline-run skill repo edits for #1459 Stage 11 empirical-canary canon. The in-repo canon landed in PR #1460; the `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum needs to be edited in the pipeline-run skill repository when next touched.
+
+---
 
 ## v0.9.6-2 — Retro follow-ups + VDOM cluster carryovers (PRs #1451, #1454, #1455, #1457)
 
