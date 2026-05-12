@@ -373,6 +373,48 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
+### Milestone: v0.9.7-2 — WS-reconnect state continuity (redo of stale PR #1429)
+
+*Goal:* Clean re-do of stale PR #1429 (29 commits behind main, conflicting, no tests). Three companion changes that let LiveView state survive a WebSocket reconnect when the view opts in via `enable_state_snapshot`. Targets v0.9.7 stable.
+
+**Status (planning):** 0 of 1 PR shipped.
+
+#### Priority breakdown
+
+| # | Issue | Theme | Type | Sized |
+|---|---|---|---|---|
+| 1 | #1465 (redo of #1429) | WS-reconnect state save + load-gate widening + skip-html on resume. ~108 LOC across 3 sites in `python/djust/websocket.py` + 3 new tests (1 unit for the load gate, 1 unit for skip-html-on-resume, 1 integration via `WebsocketCommunicator`) | P1 feature | ~2-3 hr |
+
+#### Why P1
+
+Closes a real bug: `enable_state_snapshot` is effectively HTTP-only without this change. Any WS-event-driven mutation (`dj-click`, `dj-input`, `dj-submit`) is lost on reconnect even with the opt-in flag set. Unblocks djustlive's "scale-to-zero with sub-50ms wake" platform story.
+
+#### Sequencing
+
+Solo task. `--group` doesn't apply. After it ships, close stale PR #1429 with a "superseded by PR #14XX" comment.
+
+#### Stage 4 plan additions (per the issue body)
+
+- **Engine path declaration** (Action #131): the change touches `handle_event` and `handle_mount` — verify Python-engine-only; no Rust-side equivalent of session restore exists yet.
+- **External-crate doc.rs read** (Action #128): `aset`/`aget` are Django's async session API; verify the contract docs at https://docs.djangoproject.com/en/stable/topics/http/sessions/#using-sessions-out-of-views vs what `python/djust/mixins/request.py:603-609` uses on the HTTP path.
+- **Empirical canary** (Action #252 / #1459): not a tooling PR, but the wire-shape change to `mount` (conditionally omitting `html` on resume) should be canary-tested — assert that the existing `test_mount_envelope_minimal` snapshot still passes (it pins the minimal shape, which IS the resume shape) AND add a new `test_mount_envelope_resume_path_omits_html` to pin the resume-specific path.
+
+#### Acceptance for v0.9.7-2
+
+- [ ] PR #14XX (TBD) shipped, closing #1465.
+- [ ] Stale PR #1429 closed-without-merge with "superseded" comment + cross-ref.
+- [ ] All 3 acceptance-criteria tests in the issue body land in-PR (not deferred).
+- [ ] `make check` clean.
+- [ ] CHANGELOG `[Unreleased]` Fixed/Changed entry added.
+- [ ] Wire-protocol snapshot test for the resume-path `mount` shape.
+
+#### Pipeline runner notes
+
+- `/pipeline-run --milestone v0.9.7-2` to process autonomously (solo task; no `--group`).
+- After merge, consider whether to roll into v0.9.7 stable cut or hold for additional drain.
+
+---
+
 ### Milestone: v0.9.7-1 — v0.9.6-2 retro follow-ups + wire-protocol pinning continuation
 
 *Goal:* Clear 3 P2 tech-debt items filed during v0.9.6-2 (retro + wire-protocol starter). Each is independent; can ship in any order. Targets v0.9.7 (no rc cycle pre-planned yet — likely a maintenance-only cut).
