@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-05-12
+
+Stable promotion of `0.9.6rc3`. No code changes since rc3. The rc1 → rc3 progression is summarized below.
+
+### Highlights vs `0.9.5`
+
+- **`fix(theming)`** — `{{ theme_head }}` context-string parity with `{% theme_head %}` template tag (#1452 / #1453, regression introduced in rc2 and fixed in rc3). Production saw unstyled theme panels because the hand-built rc2 string dropped six output elements; rc3 routes the context string through the existing simple_tag so future tag additions flow through automatically.
+- **`fix(state-backends)`** — `RedisStateBackend` ZstdCompressor/ZstdDecompressor moved to `threading.local` (#1430 / #1431). The previous shared-instance shape produced `ZstdError`, "Data corruption detected", and outright SIGSEGV inside `ZSTD_decompressSequencesLong_default` under concurrent load.
+- **`fix(state-backends)`** — `InMemoryStateBackend.get()` discards corrupt entries instead of returning a shared in-memory ref (#1410 / #1438). Closes the cross-connection state-leak class introduced when `RustLiveView.deserialize_msgpack` raised after a hot-swap struct change.
+- **`feat(checks)`** — `djust.D001` system check for Postgres-configured-without-`psycopg[binary]>=3.2` misconfig (#1433 / #1440).
+- **`perf(theming)`** — `theme_context` now caches its output by `ThemeState` tuple AND pre-renders `theme_panel` / `theme_mode_toggle` / `theme_preset_selector` as context strings (#1435 / #1437 / #1442 / #1443). Per-request cost ~1-3 ms → ~5-10 µs post-warmup on theme-rendering pages.
+- **`perf(tenants)`** — `TenantMiddleware` short-circuits when no resolver is configured (#1436 / #1441). Saves ~2-5% per-request CPU for `djust[tenants]` deploys without tenant opt-in.
+- **`feat(deploy)`** — `djust deploy` CLI is now a guided end-to-end onboarding (login → resolve slug → confirm project → deploy) with OAuth Auth Code + PKCE browser flow login (#1422). RFC 8252 loopback redirect; no `client_secret`; refresh-token rotation.
+- **`test(vdom)`** — wire-protocol JSON snapshot tests for every `Patch` variant + `VNode` struct (#1419 / #1444). Pins the Rust↔JS contract against silent serde shape changes.
+- Plus the rc1–rc3 contents already shipped — see those entries below.
+
 ## [0.9.6rc3] - 2026-05-10
 
 ### Fixed
