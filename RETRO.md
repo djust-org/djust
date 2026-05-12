@@ -292,7 +292,72 @@ issue or be explicitly closed with a reason.
 | 250 | Stage 11 must refuse review of PR with stale base (behind main) | Retro v0.9.6-1 (PR #1431 retro) | #1450 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section + as a mandatory Stage 11 checklist item in all 3 pipeline-state templates (`feature-state.json`, `bugfix-state.json`, `ship-state.json`). Validated empirically: every subsequent v0.9.6-2 PR ran the check with BEHIND=0; no merges blocked. |
 | 251 | Pre-commit ruff hook auto-restage on reformat | Retro v0.9.6-2 (finding #1) | #1458 | Closed | **Investigation-class close (v0.9.7-1)** — root cause verified: pre-commit framework (4.2.0) intentionally does NOT auto-stage hook-modified files. Three implementation options identified (wrapper script, --check-only switch, lefthook migration); each warrants a deliberate design decision. Action #122 remains the safety net. See https://github.com/djust-org/djust/issues/1458#issuecomment-4434563832 for the full analysis. |
 | 252 | Empirical Stage 11 canary for tooling/lint PRs | Retro v0.9.6-2 (finding #2) | #1459 | Closed | **Resolved in v0.9.7-1 PR #1460** — landed `docs/PULL_REQUEST_CHECKLIST.md` Test Quality bullet + CLAUDE.md "Process canonicalizations from v0.9.6-2 retro arc" section with the PR #1455 + #1370 case study. Out-of-repo `~/.claude/skills/pipeline-run/SKILL.md` Stage 11 prompt addendum is the only remaining piece, tracked as Open Items on the v0.9.7-1 retro entry. |
-| 253 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 follow-up) | Retro v0.9.7-1 (finding #2) | #1464 | Open | Action #251 closed the investigation with 3 implementation options. This row tracks picking one and shipping it. Empirical case: 4 ruff-bounces caught by Action #122 across PRs #1454/#1457/#1462/#1463 in 4 days. Recommend Option A (wrapper script) as lowest-risk first step. |
+| 253 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 follow-up) | Retro v0.9.7-1 (finding #2) | #1464 | Open | Action #251 closed the investigation with 3 implementation options. This row tracks picking one and shipping it. Empirical case: **5 ruff-bounces** caught by Action #122 across PRs #1454/#1457/#1462/#1463/#1466 — 5th hit was on a `feat:` PR's fix-commit (backticks in commit-message body triggered markdown-aware reformatter). Recommend Option A (wrapper script) as lowest-risk first step. |
+| 254 | Implementer-subagent prompt must mandate gate-the-change-off tautology self-test | Retro v0.9.7-2 (finding #2) | #1468 | Open | PR #1466 first-pass shipped 7 tests; only 3 (source-grep pins) exercised the actual change. Stage 11 reviewer caught 4 tautologies via Action #1200 (gate-off-and-re-run). Move the self-test left: implementer must run gate-off BEFORE reporting tests pass. If all tests still pass with the change gated off, AT LEAST ONE test is tautological — fix before reporting. Lands as a one-bullet PR-checklist addition + CLAUDE.md case study from PR #1466's 4/7 first-pass rate. |
+
+## v0.9.7-2 — WS-reconnect state continuity via clean-redo of stale PR #1429 (PR #1466)
+
+**Date**: 2026-05-12
+**Scope**: 1 work unit, 1 PR. Clean re-do of stale PR #1429 (29 commits behind main, conflicting, 0 automated tests) via `/pipeline-run`. Closes #1465 (the redo issue) + supersedes #1429. Three companion changes to `python/djust/websocket.py` that let LiveView state survive a WebSocket reconnect when the view opts in via `enable_state_snapshot`. Unblocks djustlive's "scale-to-zero with sub-50ms wake" story.
+**Tests at close**: 2800 Python djust tests + 7 new in `test_ws_reconnect_state_1465.py` (incl. 1 real `WebsocketCommunicator` integration) + 39/39 wire-protocol snapshots still passing.
+
+### What We Learned
+
+**1. Stale-PR clean-redo via `/pipeline-run` outperforms rebase-and-merge for any PR more than ~10 commits behind main.**
+The original #1429 was 29 commits behind, `mergeStateStatus: DIRTY`, `mergeable: CONFLICTING`, with zero automated tests. Forcing it through the full pipeline (file fresh issue → ROADMAP entry → `pipeline-next` → branch from current main → implement against current code → Stage 11 → Stage 13 fix-pass → merge → close stale PR with "superseded" comment) produced a stronger PR than any rebase could have: real `WebsocketCommunicator` integration test, Stage 11 caught a real correctness bug (child views silently writing to `liveview_/`), and the canonical Stage 13 fix-pass against 4 🟡 findings. Net cost: ~50 min vs the unknown cost of merging stale + retroactive fix-up. This validates the workflow proactively for any future stale PR.
+
+Generalizes Action #250 / #1450 (Stage 11 stale-base check) from "block the merge of a stale PR" to "drive a positive workflow that converts the staleness into a better PR." The stale PR's body becomes the issue spec; the original commits become a reference diff; the pipeline does the rest.
+
+**Action taken**: Closed — Action #250 already canonicalizes the defensive half (block stale-base reviews). The positive-workflow half is documented here as the v0.9.7-2 case study. No new canon entry needed; the existing pipeline-ship + pipeline-run skills already support this shape.
+
+**2. Implementer-subagent first-pass tests are heavily tautological — 4 of 7 on PR #1466. The reviewer-subagent catches it, but the implementer-subagent should self-test FIRST.**
+PR #1466 first-pass shipped 7 tests; only 3 (source-grep pins) actually exercised the change under test. The other 4 mocked the session, reproduced logic in pytest, or proxied via HTTP-path POST — none drove the actual `handle_event` runtime. Stage 11 reviewer caught it via Action #1200 (tautology test detection): gate the change off, re-run, see which tests fail. By that point, the implementer had already reported "tests pass."
+
+The fix: amend the implementer-subagent prompt template's "Verification" section to mandate a gate-the-change-off self-test BEFORE reporting test results. If all tests still pass with the change gated off, AT LEAST ONE test is tautological — fix before reporting.
+
+**Action taken**: Open — tracked in Action Tracker #254 (GitHub #1468).
+
+**3. Stage 11 reviewer caught a real correctness bug (child views save to wrong key) — this is what the deep-review gate is for.**
+Finding 2 in the PR #1466 Stage 11 review: `target_view._djust_mount_request` is only set on `self.view_instance`, never on child `LiveComponent` views. When a child-view event handler ran, `mount_request is None` → fallback path → `save_path = "/"` → `save_view_key = "liveview_/"` → child-view state was silently written to the wrong key. Components-save also gated `mount_request is not None` → silently skipped. Reviewer caught it BEFORE merge by reading `websocket.py:2143` and tracing the child-view path. Fixed pre-merge by gating the save block on `target_view is self.view_instance` (top-level only). Filed #1467 for follow-up.
+
+This validates the "Stage 11 must never be skipped" canon for `feat:` PRs touching session-write surfaces. Inspection-only reviews would have missed the trace through to `_djust_mount_request`'s setting site.
+
+**Action taken**: Closed — no new canon needed. Stage 11 mandatory + the existing "trace HTTP-path parity for new session-write code" item under PR-checklist Security Review captures the rule. The PR #1466 case study is documented here as empirical validation.
+
+### Insights
+
+- **Single-PR milestone, but high-value findings**. 1 PR, 1 Stage 13 fix-pass, 1 new tracker row, 1 new follow-up issue. The findings density per PR is higher than the multi-PR `--group` milestones because the PR's surface area was larger (real session-write logic vs mechanical test extensions).
+- **Action #122 caught the 5th ruff bounce this session** (the trigger was backticks in the commit-message body — pre-commit's markdown-aware reformatter normalized the body). Bringing the running tally to **5 across 5 PRs** (#1454, #1457, #1462, #1463, #1466). The empirical case for #1464's implementation is now overwhelming.
+- **The Stage 11 → Stage 13 cycle was the load-bearing depth**. Stage 11 found 4 🟡 (1 close to 🔴 with the child-view bug). Stage 13 fix-pass empirically validated each fix (gating the save off, confirming the new `WebsocketCommunicator` test fails, restoring). Without the cycle, the child-view bug + tautology rate would have landed.
+
+### Review Stats
+
+| Metric | PR #1466 |
+|---|---|
+| LOC | +623 / -5 (impl + 7 tests + CHANGELOG) |
+| Tests added | 7 (1 real `WebsocketCommunicator` integration) |
+| 🔴 must-fix | 0 |
+| 🟡 should-fix | 4 (all fixed in Stage 13 pre-merge) |
+| 🟢 observations | 5 (pre-existing async-session compat gap; out-of-scope) |
+| Action #122 ruff bounces | 1 (5th this session) |
+| Stage 11 depth | Deepest of session (security/correctness focus) |
+| Stage 13 fix-pass | 4-finding fix-pass + empirical-canary validation |
+| Cycle time | ~50 min branch-to-merge |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: No additions this milestone (the new Action #254 will land canon in v0.9.7-3+).
+**Pipeline template**: No changes.
+**Checklist**: No changes.
+**Skills**: No changes.
+
+### Open Items
+
+- [ ] #254 (GitHub #1468) — Implementer-subagent prompt template should mandate gate-the-change-off tautology self-test before reporting tests pass. Validates against Action #1200 at Stage 5 instead of waiting for Stage 11.
+- [ ] **OUT-OF-REPO** (carried from v0.9.7-1): pipeline-run skill repo edits for #1459 Stage 11 empirical-canary canon. Still pending.
+- [ ] **#1467** — WS-event save for child LiveComponent views. Targeted for v0.9.7-3+; three solution options surfaced.
+
+---
 
 ## v0.9.7-1 — v0.9.6-2 retro follow-ups + wire-protocol pinning continuation (PRs #1460, #1461, #1462, #1463 + #1458 investigation-class close)
 
