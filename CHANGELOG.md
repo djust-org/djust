@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-commit auto-restage commit wrapper — opt-in (#1464).** New `scripts/git-commit-with-precommit.sh` and `make commit MSG="..."` target. Runs `uvx pre-commit run --files <staged>` first; if hooks (ruff-format, ruff --fix, etc.) rewrote staged files the wrapper computes a per-file hash diff and `git add`s only the files whose content actually changed, then proceeds to `git commit`. Eliminates the ruff-bounce friction class where vanilla `git commit` exits non-zero with the reformat left unstaged — the failure mode hit 5× across v0.9.7-2 PRs (#1454, #1457, #1462, #1463, #1466) at ~30s per bounce. Bare `git commit` path unchanged; wrapper is opt-in. Path handling is NUL-delimited (`git diff --cached -z`) so filenames containing spaces or glob metacharacters round-trip safely. The per-file (not bulk `-A`) restage preserves unstaged hunks from a `git add -p` partial stage. Post-commit Action #122 verification (`git rev-parse HEAD` advanced) is built in. Pre-flight `git rev-parse --git-dir` check gives a clean exit-1 outside a repo. macOS bash 3.2 compatible (no `declare -A`, no `mapfile -d`). 9 regression tests in `tests/test_git_commit_with_precommit.py`.
+
 ## [0.9.7rc2] - 2026-05-12
 
 ### Added
