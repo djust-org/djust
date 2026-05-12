@@ -373,6 +373,60 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 - [ ] `djust-dev` skill catalog updated.
 - [ ] At least one downstream-consumer detail view migrated to `get_object()` as an empirical case study (filed as a downstream PR after this iteration ships).
 
+### Milestone: v0.9.7-1 — v0.9.6-2 retro follow-ups + wire-protocol pinning continuation
+
+*Goal:* Clear 3 P2 tech-debt items filed during v0.9.6-2 (retro + wire-protocol starter). Each is independent; can ship in any order. Targets v0.9.7 (no rc cycle pre-planned yet — likely a maintenance-only cut).
+
+**Status (planning):** 0 of 3 PRs shipped.
+
+#### Priority breakdown
+
+| # | Issue | Theme | Type | Sized |
+|---|---|---|---|---|
+| 1 | #1459 | Codify empirical Stage 11 canary pattern for tooling/lint PRs (PR-checklist + skill template edit). Small canon-doc edit | P2 docs/canon | ~30-45 min |
+| 2 | #1458 | Pre-commit ruff hook should auto-restage reformatted files (eliminates the Action #122 trip class) | P2 tooling | ~1-1.5 hr |
+| 3 | #1456 | Wire-protocol JSON pinning for remaining ~22 frame shapes (#1448 follow-up); 2-3 grouped batches | P2 test | ~3-4 hr (batches) |
+
+#### Sequencing strategy
+
+1. **#1459 first** — small canon-doc edit. Lands the Stage 11 canary canon so subsequent tooling PRs in this bucket can apply it.
+2. **#1458** — pre-commit hook fix. Eliminates the Action #122 ruff-reformat-bounce friction. Eliminates a recurring per-commit cost going forward.
+3. **#1456** — three grouped batches per the issue body:
+   - **Batch 1**: lifecycle frames (`mount_batch`, `child_update`, `sticky_update`, `sticky_hold`, `embedded_update`)
+   - **Batch 2**: optional features (`i18n`, `accessibility`, `focus`, `html_update`, `connect`)
+   - **Batch 3**: uploads + reload + control plane + presence + streaming + `error.message` variant + conditional `patch`/`mount` keys
+
+   Each batch ~30-90 min wall-clock following the PR #1457 pattern.
+
+#### Acceptance for v0.9.7-1
+
+- [ ] All 3 work units shipped (or split as 5 if #1456 breaks into its 3 batches).
+- [ ] All 3 referenced issues closed (or #1456 closed when its final batch lands).
+- [ ] `make check` clean on each PR.
+- [ ] CHANGELOG `[Unreleased]` updated for any user-visible changes (most of this bucket is internal canon + tests; no user-visible changes expected).
+- [ ] Once bucket complete, consider v0.9.7 cut OR roll into v0.10.0 planning.
+
+#### Deferred to v0.10.0
+
+- **#1434** — Replace `sync_to_async(Model.objects.X)` with native async ORM after psycopg3 lands. Stays deferred — blocked on psycopg3 driver migration upstream.
+- **#1432** — Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL. Research task; stays deferred.
+
+#### OUT-OF-REPO (pipeline-run skill repo, not this repo)
+
+- **#1375** — code-writing subagents should explicitly checkout branch as first action (#1144 re-trigger)
+- **#1376** — pipeline template stage-name reconciliation with pipeline-run skill canon
+- **#1384** — pipeline-run skill — codify documentation-iteration shortcut for Stages 6/7/8
+- **#1387** — pipeline-run skill — branch-checkout discipline canon (re-trigger of #1375)
+
+These need to be moved to the pipeline-run skill repository; tracked here for visibility only.
+
+#### Pipeline runner notes
+
+- `/pipeline-run --milestone v0.9.7-1 --all` to process autonomously (no `--group` — each item is independent and #1456 is internally batched).
+- Convention: first drain bucket toward release v0.9.7 (v0.9.6 stable just cut on 2026-05-12).
+
+---
+
 ### Milestone: v0.9.6-2 — v0.9.6-1 retro follow-ups + VDOM cluster carryovers
 
 *Goal:* Clear the v0.9.6-1 retro follow-ups (5 canon items #1445–#1449 + 1 stale-base canon #1450) and the VDOM-test cluster carryovers (5 issues, single grouped PR + 1 standalone). Targets v0.9.6 stable.
