@@ -171,6 +171,103 @@ def test_wrapper_no_reformat_needed(repo: tuple[Path, dict[str, str]]) -> None:
     assert post_head != pre_head
 
 
+def test_wrapper_multi_file_partial_rewrite(repo: tuple[Path, dict[str, str]]) -> None:
+    """Two staged files, only one rewritten — wrapper re-stages only the rewritten one."""
+    tmp, env = repo
+    dirty = tmp / "dirty.py"
+    clean = tmp / "clean.py"
+    dirty.write_text("x=1\n")  # will be rewritten by shim
+    clean.write_text("x = 1\n")  # already canonical
+    _git(tmp, "add", "dirty.py", "clean.py", env=env).check_returncode()
+
+    result = _run_wrapper(tmp, env, "-m", "feat: multi")
+
+    assert result.returncode == 0, result.stderr
+    # Only ONE file should appear in the "rewrote N file(s)" message —
+    # locks in the per-file diff check rather than blanket re-stage.
+    assert "rewrote 1 file" in result.stdout, result.stdout
+    status = _git(tmp, "status", "--porcelain", env=env).stdout
+    assert status == "", f"working tree not clean: {status!r}"
+
+
+def test_wrapper_filename_with_space(repo: tuple[Path, dict[str, str]]) -> None:
+    """Filename with embedded space must not corrupt the re-stage path (Stage 11 #1)."""
+    tmp, env = repo
+    weird = tmp / "my file.py"
+    weird.write_text("x=1\n")
+    _git(tmp, "add", "my file.py", env=env).check_returncode()
+    pre_head = _git(tmp, "rev-parse", "HEAD", env=env).stdout.strip()
+
+    result = _run_wrapper(tmp, env, "-m", "feat: weirdname")
+
+    assert result.returncode == 0, (
+        f"wrapper failed on space-in-name:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    post_head = _git(tmp, "rev-parse", "HEAD", env=env).stdout.strip()
+    assert post_head != pre_head
+    status = _git(tmp, "status", "--porcelain", env=env).stdout
+    assert status == "", f"working tree not clean for space-in-name: {status!r}"
+    assert weird.read_text() == "x = 1\n"
+
+
+def test_wrapper_preserves_unstaged_hunks(repo: tuple[Path, dict[str, str]]) -> None:
+    """`git add -p`-style partial stage: unstaged hunks must NOT be promoted.
+
+    Exercises the REWRITE path: staged.py needs reformatting (forcing the
+    auto-restage branch); other.txt has unstaged local changes; the
+    auto-restage must scope to staged.py ONLY and leave other.txt's
+    unstaged hunks where they were. A regression that swapped
+    `git add -- "${REWRITTEN[@]}"` for `git add -A` would promote
+    other.txt's unstaged changes into the commit.
+    """
+    tmp, env = repo
+    # File 1 (other.txt): commit a baseline, then modify locally WITHOUT
+    # staging. The wrapper must not promote this change to the commit.
+    other = tmp / "other.txt"
+    other.write_text("v1\n")
+    _git(tmp, "add", "other.txt", env=env).check_returncode()
+    _git(tmp, "commit", "-q", "-m", "prep", env=env).check_returncode()
+    other.write_text("v2-unstaged\n")  # local change, not in index
+
+    # File 2 (staged.py): create + stage in un-canonical form so the shim
+    # WILL rewrite it, forcing the wrapper into the recovery branch.
+    staged = tmp / "staged.py"
+    staged.write_text("x=1\n")
+    _git(tmp, "add", "staged.py", env=env).check_returncode()
+
+    result = _run_wrapper(tmp, env, "-m", "feat: partial")
+
+    assert result.returncode == 0, result.stderr
+    # Recovery branch was taken — locks in that the unstaged-hunks
+    # protection applies to the path where auto-restage actually runs.
+    assert "rewrote 1 file" in result.stdout, result.stdout
+    # The new commit must contain ONLY staged.py (NOT other.txt).
+    files = _git(tmp, "show", "--name-only", "--format=", "HEAD", env=env).stdout.strip()
+    assert files == "staged.py", f"unexpected files in commit: {files!r}"
+    # `other.txt` should still show as unstaged (M) — the load-bearing assertion.
+    status = _git(tmp, "status", "--porcelain", env=env).stdout
+    assert " M other.txt" in status, f"expected unstaged other.txt, got: {status!r}"
+    assert other.read_text() == "v2-unstaged\n"
+
+
+def test_wrapper_outside_git_repo(tmp_path: Path) -> None:
+    """Invocation outside a git repo gives a clean exit-1 instead of git's raw usage."""
+    env = os.environ.copy()
+    env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    bare = tmp_path / "not-a-repo"
+    bare.mkdir()
+    result = subprocess.run(
+        [str(WRAPPER), "-m", "x"],
+        cwd=bare,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1
+    assert "not in a git repository" in result.stderr
+
+
 def test_wrapper_skipped_when_wrapper_missing() -> None:
     """The wrapper itself must exist and be executable in the repo."""
     assert WRAPPER.exists()
