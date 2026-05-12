@@ -802,6 +802,25 @@ fi
 
 If BEHIND > 0, STOP. Rebase (`git rebase origin/<base>`) or merge base into branch BEFORE reviewing. Reviewing against a stale base reviews a different program than the merge will apply.
 
+## Process canonicalizations from v0.9.6-2 retro arc
+
+One rule from the v0.9.6-2 drain (PRs #1454, #1455, #1457). The other v0.9.6-2 retro tracker rows (#251 pre-commit ruff auto-restage, #248-follow-up #1456 wire-protocol pinning for ~22 remaining shapes) are filed for v0.9.7+ and don't change canon yet.
+
+- **Empirical canary for tooling/lint PRs (#252 / #1459).** For any PR whose central claim is "catches bug class X" (lint extension, static-analysis addition, new system check, AST walker, codemod-style tool), Stage 11 review must construct a SYNTHETIC bug-trigger of class X — ideally by copying a real pre-fix shape from git history — run the tool against it, and confirm the tool reports the trigger.
+
+  **Why**: empirical canary is the highest-confidence validation a tooling PR can get. Inspection-only review can rubber-stamp a lint that doesn't actually catch what it claims to catch.
+
+  **How to apply**: in the Stage 11 prompt's "What to check" list, include a "synthetic-bug-trigger empirical canary" item for tooling-class PRs. The reviewer subagent:
+
+  1. Identifies a real pre-fix commit from history that exemplifies bug class X (e.g., for a bundle-init-order lint, `git log --all -- python/djust/static/djust/src/19-hooks.js` to find the pre-#1370 shape).
+  2. Constructs a synthetic test bundle that re-introduces that shape (in a copy, never on main).
+  3. Runs the tool against the synthetic bundle and asserts it reports the bug.
+  4. Cites the file:line of the synthetic trigger in the review comment.
+
+  **Canonical case study**: PR #1455 (depth-N bundle-init-order walker). The Stage 11 reviewer flipped `var _activeHooks` → `let _activeHooks` in a copy of `python/djust/static/djust/src/19-hooks.js` (the exact pre-fix shape of #1370). The walker reported the transitive chain `djustInit() → mountHooks() → _ensureHooksInit()` at depth 3, plus two more variants via the Turbo reinit path. Without the empirical canary, the reviewer would have rubber-stamped the lint based on the unit tests alone. With it, "the walker catches the bug class it claims to catch" was empirically proven, not just trusted from inspection.
+
+  Generalizes Action #1046 (doc-claim verbatim TDD) for the tooling-PR subclass: the doc claim "this lint catches X" gets an executable verifier (run the lint against the canonical X shape).
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
