@@ -233,6 +233,11 @@ pre-commit: ## Run pre-commit hooks on all files
 	@echo "$(GREEN)Running pre-commit hooks...$(NC)"
 	@uvx pre-commit run --all-files
 
+.PHONY: commit
+commit: ## Commit staged files with auto-restage on pre-commit reformat (closes #1464). Usage: make commit MSG="feat: ..."
+	@if [ -z "$(MSG)" ]; then echo "$(RED)Usage: make commit MSG=\"feat: your message\"$(NC)"; exit 1; fi
+	@scripts/git-commit-with-precommit.sh -m "$(MSG)"
+
 .PHONY: pre-commit-install
 pre-commit-install: ## Install pre-commit hooks (run once after clone)
 	@echo "$(GREEN)Installing pre-commit hooks...$(NC)"

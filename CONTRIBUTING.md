@@ -38,6 +38,25 @@ uvx pre-commit install
 uvx pre-commit install --hook-type pre-push
 ```
 
+### Optional: commit wrapper that auto-restages reformats
+
+Pre-commit hooks like ruff-format reformat staged files but do not
+auto-restage the rewrite — so `git commit` exits non-zero and you have
+to re-`git add` + re-commit by hand. `scripts/git-commit-with-precommit.sh`
+(or `make commit MSG="..."`) wraps that loop:
+
+```bash
+# instead of: git add foo.py && git commit -m "feat: bar"
+make commit MSG="feat: bar"
+
+# or directly, forwarding any git commit args:
+scripts/git-commit-with-precommit.sh -m "feat: bar" --signoff
+```
+
+The wrapper runs pre-commit against your staged files first; if hooks
+rewrote anything it re-stages and commits. The bare `git commit` path
+still works — the wrapper is opt-in. Closes #1464.
+
 ## Code Style
 
 ### Python
