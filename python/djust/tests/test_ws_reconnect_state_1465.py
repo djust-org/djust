@@ -284,11 +284,16 @@ def test_save_block_present_in_handle_event_source():
 
     source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
 
-    # Critical markers from the inserted block:
-    assert 'getattr(target_view, "_djust_mount_request", None)' in source
+    # Critical markers from the inserted block. Use a whitespace-tolerant
+    # check so re-indentation (e.g. the Stage 11 fix that nested the block
+    # under `if target_view is self.view_instance:`) doesn't break the grep.
+    source_collapsed = " ".join(source.split())
+
+    assert '"_djust_mount_request"' in source
+    assert "getattr(" in source and "_djust_mount_request" in source
     assert 'self.scope.get("session")' in source
     assert 'save_view_key = f"liveview_{save_path}"' in source
-    assert "await save_session.aset(save_view_key" in source
+    assert "await save_session.aset(save_view_key" in source_collapsed
     assert "await save_session.asave()" in source
     # Private-state path:
     assert "_get_private_state" in source
@@ -297,6 +302,9 @@ def test_save_block_present_in_handle_event_source():
     assert "_save_components_to_session" in source
     # Save MUST be wrapped so failures don't break event handling.
     assert "Failed to save LiveView state after WS event" in source
+    # Stage 11 (PR #1466): save block MUST be gated on top-level view
+    # identity so child LiveComponent events don't write to "liveview_/".
+    assert "target_view is self.view_instance" in source
 
 
 # ---------------------------------------------------------------------------
@@ -326,65 +334,156 @@ def test_mount_envelope_resume_path_omits_html():
 
 
 # ---------------------------------------------------------------------------
-# Round-trip: handler save → fresh-view restore (proxies WS reconnect)
+# WebsocketCommunicator integration test — the real save-runtime proof
 # ---------------------------------------------------------------------------
+#
+# Stage 11 (PR #1466) Finding #4 — Action #1200: 4/7 tests above are
+# tautologies (mock the session, reproduce the boolean, or proxy via
+# HTTP-path POST). The reviewer asked for a real integration test that
+# drives ``handle_event`` through a WebsocketCommunicator and asserts the
+# session contains the post-event state.
+#
+# Pattern lifted from ``tests/benchmarks/test_request_path.py:178-263``
+# (working ``WebsocketCommunicator`` + ``handle_mount`` precedent) and
+# the existing ``python/tests/test_websocket_origin_validation.py``
+# (working WS handshake precedent).
+#
+# Why this is non-tautological:
+#   - Drives the real ``LiveViewConsumer.as_asgi()`` ASGI app.
+#   - Sends a real WS ``event`` frame that flows through ``handle_event``.
+#   - Reads the session backend AFTER the handler completes — proving the
+#     save block ran, not that the test reproduces the save block.
+#   - A revert of the save block (or a ``_normalize`` regression) would
+#     leave ``saved.get("count") == 0`` and fail this test.
+
+# Module-level view class so the consumer's dotted-path mount-import
+# whitelist can resolve it. Mirrors the
+# ``test_request_path.py:_WSMountCounter`` registration pattern.
+
+
+class _WSReconnectCounter(LiveView):
+    """Module-level CounterView for WebsocketCommunicator integration test."""
+
+    template = (
+        '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSReconnectCounter" '
+        'dj-id="0">Counter: {{ count }}</div>'
+    )
+    enable_state_snapshot = True
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler()
+    def increment(self, **kwargs):
+        self.count += 1
 
 
 @pytest.mark.django_db
-def test_round_trip_save_then_restore_proxies_ws_reconnect():
-    """A focused integration test that proxies the WS-event-save → WS-reconnect
-    flow without a real WebsocketCommunicator (the consumer's full machinery
-    has too many moving parts to mock cleanly).
+@pytest.mark.asyncio
+async def test_ws_event_save_block_writes_through_to_session():
+    """Drive ``handle_event`` via a real WebsocketCommunicator and assert
+    the session contains the post-event state.
 
-    The flow mirrored:
-    1. Initial GET populates session (acts like cold WS mount).
-    2. Mutate state in-process (acts like a dj-click handler firing).
-    3. Save the mutated state to the session using the HTTP-path save
-       (the WS save block produces identical session contents — same
-       ``get_context_data()`` + ``_get_private_state`` + components shape).
-    4. Build a FRESH CounterView and restore from the session (acts like
-       the loosened load gate on WS reconnect).
-    5. Assert the restored state reflects the mutation.
+    This is the canonical non-tautological proof (Action #1200) that the
+    save block writes through — a revert of the save block, a missing
+    ``asave()``, or a ``_normalize`` regression would fail this test.
+
+    Flow:
+      1. Open a WebsocketCommunicator against ``LiveViewConsumer.as_asgi()``.
+      2. Connect (real Channels handshake).
+      3. Send a mount frame for the module-level ``_WSReconnectCounter``.
+      4. Send an ``event: increment`` frame.
+      5. Read the session backend directly — assert ``count == 1``.
+
+    The save block in ``handle_event`` is the only path that could have
+    written the post-increment state to the session via WS.
     """
-    # 1. Initial GET populates session.
-    view = CounterView()
-    factory = RequestFactory()
-    request = factory.get("/counter/")
-    request = _add_session(request)
-    view.get(request)
-    assert view.count == 0
+    pytest.importorskip("channels")
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import override_settings
 
-    # 2 + 3. Drive the HTTP POST path with the ``increment`` event. This
-    # invokes mount() (count=0) → increment() (count=1) → canonical save.
-    # The WS save block produces identical session contents (same
-    # ``get_context_data()`` + ``_get_private_state`` + components shape),
-    # so this is a faithful proxy for what the WS save block writes.
-    post_request = factory.post(
-        "/counter/",
-        data='{"event":"increment","params":{}}',
-        content_type="application/json",
-    )
-    post_request.session = request.session
-    view2 = CounterView()
-    view2.post(post_request)
+    from djust.websocket import LiveViewConsumer
 
-    # The session now reflects the post-increment state (count=1).
-    view_key = "liveview_/counter/"
-    saved = post_request.session.get(view_key, {})
-    assert saved.get("count") == 1, (
-        "POST handler must have run increment() and saved the new count to session."
-    )
+    # The consumer's mount-import allowlist must permit this module.
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        # Pre-create a session so we have a known session_key to inspect
+        # after the WS event. The WS scope's session_key threads through
+        # to the synthesized request inside handle_mount (websocket.py
+        # ~line 1900-1913), so the save lands in this SessionStore.
+        # SessionStore.create() is sync-only — wrap with sync_to_async.
+        def _create_session():
+            s = SessionStore()
+            s.create()
+            return s.session_key
 
-    # 4. Fresh view restores from session (proxies the loosened load gate).
-    # This is exactly what handle_mount does on WS reconnect when
-    # `has_prerendered or saved_state` evaluates True.
-    from djust.security import safe_setattr
+        session_key = await sync_to_async(_create_session)()
 
-    reconnect_view = CounterView()
-    saved_state = post_request.session.get(view_key, {})
-    assert saved_state, "saved_state must be non-empty for the new load gate to fire"
-    for key, value in saved_state.items():
-        safe_setattr(reconnect_view, key, value, allow_private=False)
+        # Build a Channels-compatible scope with a session that exposes
+        # session_key (mirrors what AuthMiddlewareStack provides in prod).
+        class _ScopeSession:
+            def __init__(self, key):
+                self.session_key = key
 
-    # 5. The restored state reflects the post-handler mutation.
-    assert reconnect_view.count == 1
+        communicator = WebsocketCommunicator(
+            LiveViewConsumer.as_asgi(),
+            "/ws/",
+        )
+        # Inject the session BEFORE connect so the consumer sees it.
+        communicator.scope["session"] = _ScopeSession(session_key)
+
+        connected, _ = await communicator.connect()
+        assert connected, "WebsocketCommunicator must connect"
+
+        # 1. Drain the initial connect frame.
+        connect_msg = await communicator.receive_json_from(timeout=2)
+        assert connect_msg.get("type") == "connect"
+
+        # 2. Send the mount frame — runs handle_mount, which stashes
+        # _djust_mount_request on the view (websocket.py:2143). The
+        # save block in handle_event reads this stashed request to
+        # discover the session and save_path.
+        await communicator.send_json_to(
+            {
+                "type": "mount",
+                "view": f"{__name__}._WSReconnectCounter",
+                "url": "/counter/",
+            }
+        )
+        mount_resp = await communicator.receive_json_from(timeout=3)
+        assert mount_resp.get("type") == "mount", (
+            f"expected mount response, got {mount_resp.get('type')!r}: {mount_resp}"
+        )
+
+        # 3. Send an event frame — runs handle_event, which mutates
+        # state via the @event_handler and then runs the SAVE BLOCK.
+        await communicator.send_json_to(
+            {
+                "type": "event",
+                "event": "increment",
+                "params": {},
+                "ref": 1,
+            }
+        )
+        # Drain any frames sent in response (state diff / push / etc.).
+        # We don't care about the response shape — only the session write.
+        try:
+            await communicator.receive_json_from(timeout=3)
+        except Exception:  # noqa: BLE001 — response timing is incidental here
+            pass
+
+        await communicator.disconnect()
+
+        # 4. Read the session backend directly. The save block must have
+        # written the post-increment state to "liveview_/counter/" with
+        # count=1. A reverted save block would leave this key absent.
+        post_session = SessionStore(session_key=session_key)
+        saved = await post_session.aget("liveview_/counter/", None)
+        assert saved is not None, (
+            "Save block in handle_event must have written "
+            "'liveview_/counter/' to the session — but the key is absent. "
+            "Did the save block silently fail, or was it reverted?"
+        )
+        assert saved.get("count") == 1, (
+            f"Save block must have captured post-increment state count=1, got: {saved!r}"
+        )
