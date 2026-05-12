@@ -284,12 +284,73 @@ issue or be explicitly closed with a reason.
 | 242 | Canon — when changing a filter convention, grep ALL call sites for the OLD convention | Retro v0.9.3-2 (backfilled) | #1391 | Closed | Resolved in v0.9.5-2 PR #1399 — added to CLAUDE.md Process Canon section with concrete Stage 4 grep check. |
 | 243 | Canonicalize 'one-shot per-class warning' framework pattern | Retro v0.9.3-2 (backfilled) | #1392 | Closed | Resolved in v0.9.5-2 PR #1399 — `emit_one_shot_class_warning(cls, key, message, *args)` extracted in `python/djust/utils.py`; existing snapshot-truncation warning refactored to use it. |
 | 244 | Extend filter-migration grep canon (#1391) to cover symbol removals during refactor | Retro v0.9.5-2 (finding #2) | #1400 | Open | PR #1399's #1392 helper extraction left an orphan `_TRUNCATION_WARNED` import in `python/tests/test_snapshot_truncation_warning.py`; pre-push hook caught it. Existing #1391 names "filter expressions" specifically; should generalize to "any symbol removal during refactor — grep `tests/`, `python/tests/`, examples for the OLD name." |
-| 245 | Lock-release/lock-reacquire TOCTOU canon (generalize Action #1198 to lock-windows) | Retro v0.9.6-1 (finding #1) | #1445 | Open | PR #1438's first-pass fix had a TOCTOU between unlocked round-trip and relocked discard. Stage 11 caught via explicit TOCTOU prompt; Stage 7 missed. Identity-guarded the pop. Generalizes Action #1198 (`commit-or-rollback handler shape`) from await-windows to lock-windows. |
-| 246 | Zero-cost-when-unused middleware/processor pattern canon | Retro v0.9.6-1 (finding #3) | #1446 | Open | Same shape applied to two PRs in the same drain (#1441 TenantMiddleware, #1443 theme components): detect-once-in-init + no-op fast path. Generalizes to other djust extras (`presence`, `streaming`, etc.). Audit candidates listed in the issue body. |
-| 247 | Cache-by-struct: include all fields upfront, prune later | Retro v0.9.6-1 (finding #4) | #1447 | Open | PR #1442's initial cache key missed `theme` and `layout` fields of `ThemeState`. Test failure caught it pre-merge. Lesson: when wrapping a function whose inputs derive from a struct, key on the FULL struct upfront. Add to Stage 4 plan template. |
-| 248 | Wire-protocol JSON pinning across other Rust↔JS / Python↔JS contracts | Retro v0.9.6-1 (finding #5) | #1448 | Open | Generalizes PR #1444's #1419 VDOM-patch wire snapshots. Other unpinned contracts: JIT serialization, time-travel payloads, presence frames, streaming frames, push-event envelope. Each is a silent-break-on-rename surface. |
-| 249 | Deferral-pattern-aware depth-N call-graph walker for bundle-init-order lint (#1406 redo) | Retro v0.9.6-1 (finding #6) | #1449 | Open | Naive depth-N walker produced 16 false positives — flags handler-registered functions (`addEventListener`/Turbo callbacks) that don't actually run at top-level. New shape: model `addEventListener` / `setTimeout` / `Promise.then` deferrals as exclusion sites. Umbrella #1406 stays open with the new shape recorded; this issue is the v0.9.6-2 / v0.10.0 redo. |
-| 250 | Stage 11 must refuse review of PR with stale base (behind main) | Retro v0.9.6-1 (PR #1431 retro) | #1450 | Open | PR #1431 was cut from v0.9.6rc1 and never rebased; was 7 PRs behind main when reviewed. Diff vs main DELETED 5 CHANGELOG entries, the v0.9.6-1 retro, the wire-protocol snapshot test, D001, and reverted theming + tenants perf rewrites. Reviewer subagent caught it incidentally via `git log main..HEAD --oneline` showing only 1 commit despite 7 on main. All 13 CI checks were green. Stage 11 must verify branch is not stale BEFORE reviewing. |
+| 245 | Lock-release/lock-reacquire TOCTOU canon (generalize Action #1198 to lock-windows) | Retro v0.9.6-1 (finding #1) | #1445 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section. |
+| 246 | Zero-cost-when-unused middleware/processor pattern canon | Retro v0.9.6-1 (finding #3) | #1446 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section. |
+| 247 | Cache-by-struct: include all fields upfront, prune later | Retro v0.9.6-1 (finding #4) | #1447 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section. |
+| 248 | Wire-protocol JSON pinning across other Rust↔JS / Python↔JS contracts | Retro v0.9.6-1 (finding #5) | #1448 | Closed | **Resolved in v0.9.6-2** — PR #1451 landed the canon preview; **PR #1457** shipped the starter pinning 8 highest-value Python-emitted frames (`push_event`, `flash`, `page_metadata`, `patch`-envelope, `mount`, `layout`, `navigation`, `error`). Follow-up #1456 tracks the remaining ~22 shapes in 2-3 grouped batches (v0.9.7+). |
+| 249 | Deferral-pattern-aware depth-N call-graph walker for bundle-init-order lint (#1406 redo) | Retro v0.9.6-1 (finding #6) | #1449 | Closed | **Resolved in v0.9.6-2 PR #1455**. `scripts/check-bundle-init-order.mjs` extended from shallow to depth-N (default 8) with effective-line model + deferral-site allowlist (addEventListener, setTimeout/Interval/Immediate, requestAnimationFrame/queueMicrotask/requestIdleCallback, Promise then/catch/finally, `new XxxObserver`). Zero false positives on current bundle. Empirical Stage 11 canary confirmed walker catches #1370 transitive TDZ at depth 3. Umbrella #1406 also closed. |
+| 250 | Stage 11 must refuse review of PR with stale base (behind main) | Retro v0.9.6-1 (PR #1431 retro) | #1450 | Closed | **Resolved in v0.9.6-2 PR #1451** (canon batch). Landed in CLAUDE.md "Process canonicalizations from v0.9.6-1 retro arc" section + as a mandatory Stage 11 checklist item in all 3 pipeline-state templates (`feature-state.json`, `bugfix-state.json`, `ship-state.json`). Validated empirically: every subsequent v0.9.6-2 PR ran the check with BEHIND=0; no merges blocked. |
+| 251 | Pre-commit ruff hook auto-restage on reformat | Retro v0.9.6-2 (finding #1) | #1458 | Open | Pre-commit framework stashes the working tree, ruff reformats, restore conflicts, commit silently fails. Hit 2× consecutively in PRs #1454 + #1457; Action #122's `&& git log -1 --oneline` reflex caught both. Underlying hook configuration gap; fix is hook-side (auto-`git add` after reformat). |
+| 252 | Empirical Stage 11 canary for tooling/lint PRs | Retro v0.9.6-2 (finding #2) | #1459 | Open | PR #1455 Stage 11 reviewer flipped `var _activeHooks` → `let _activeHooks` in a bundle copy and ran the lint, confirming it caught the exact #1370 chain at depth 3. Highest-confidence validation for a tooling PR. Codify as PR-checklist bullet + skill template Stage 11 prompt addendum for tooling-class PRs. |
+
+## v0.9.6-2 — Retro follow-ups + VDOM cluster carryovers (PRs #1451, #1454, #1455, #1457)
+
+**Date**: 2026-05-12
+**Scope**: 4 work units shipped, closing 11 issues. Canon batch (#1451 — closed #1445/#1446/#1447/#1450 + preview-section #1448), VDOM test cluster (#1454 — closed #1413/#1416/#1417/#1418/#1420), deferral-pattern-aware depth-N call-graph walker (#1455 — closed #1449 + meaningfully resolves #1406), and a wire-protocol JSON snapshot starter (#1457 — closed #1448, follow-up #1456 filed for ~22 remaining shapes). Ships entirely test/tooling/canon — no user-facing code changes; CHANGELOG entries are under `### Tests` and `### Changed`. Targets v0.9.6 stable (already cut as v0.9.6rc3 + the rc3-class fix #1453 → stable promotion on 2026-05-12).
+**Tests at close**: 4271 Python (+12 wire-protocol snapshots vs v0.9.6-1) + 272 djust_vdom Rust (248 → +24 cluster tests) + 1564 JS (+8 deferral-pattern walker tests).
+
+### What We Learned
+
+**1. Pre-commit ruff hook reformats but doesn't auto-restage — hits Action #122 trip on 2 consecutive PRs (#1454, #1457).**
+Pattern: stage a file → `git commit` → pre-commit framework stashes the working tree → ruff reformats → restore conflicts → commit silently fails. Action #122's `&& git log -1 --oneline` post-commit reflex caught both occurrences (PR #1454 cargo-fmt analog, PR #1457 ruff). The underlying gap is in the hook configuration itself; the safety net is doing its job but the friction is recurrent (~30 sec per trip; 2 trips this milestone).
+
+**Action taken**: Open — tracked in Action Tracker #251 (GitHub #1458).
+
+**2. Empirical Stage 11 canary works for tooling/lint PRs (PR #1455 → walker catches synthetic #1370 at depth 3).**
+The PR #1455 Stage 11 reviewer didn't just trust the deferral-pattern depth-N walker; they temporarily flipped `var _activeHooks` → `let _activeHooks` in a bundle copy and ran the lint. The lint reported the exact pre-#1370 transitive chain (`djustInit() → mountHooks() → _ensureHooksInit()` at depth 3) plus two more via the Turbo reinit path. That's the highest-confidence validation a tooling PR can get — empirical, not just inspection. This pattern generalizes to any future lint / static-analysis / CI-tool PR whose central claim is "catches bug class X". Generalizes Action #1046 (doc-claim verbatim TDD) for the tooling-PR subclass.
+
+**Action taken**: Open — tracked in Action Tracker #252 (GitHub #1459).
+
+**3. Starter-PR + follow-up-issue scope discipline validated on #1448 — Decision 5 prediction held.**
+The v0.9.6-1 retro flagged #1448 as "5 contracts" per the ROADMAP estimate. Empirical investigation (Decision 5 in `context/history/v0.9.6-2-autonomous-decisions.md`) found the actual surface is 30+ frame shapes across websocket.py (28), streaming.py (3), presence.py (1), plus non-type-keyed contracts. PR #1457 shipped an 8-shape starter; follow-up issue #1456 was filed with the remaining ~22 shapes, with Stage 11-absorbed precision (additional `error.message` variant, ~11 conditional `patch` keys, `mount.html`/`has_ids` conditional appends — all called out with line numbers in the issue body). Subsequent milestones can pick the follow-up batches without re-investigating. This validates Action #1079 (broader-sweep → follow-up issue scope-discipline) for a 2nd milestone.
+
+**Action taken**: Closed — Action #1079 already canonicalizes this pattern; the v0.9.6-2 application is documented in `context/history/v0.9.6-2-autonomous-decisions.md` Decision 5.
+
+### Insights
+
+- **Subagent-delegated bulk implementation produces ~30-min branch-to-merge for test-heavy PRs.** PR #1454 delegated 1283 LOC of Rust test code to one subagent; 30 min branch-to-merge. PR #1455 delegated +86 LOC of walker extension + 8 vitest cases; 30 min. PR #1457 was 224 LOC and direct implementation was faster than delegating; 25 min. Heuristic: delegate when work is >~300 LOC of mechanical/pattern-following code; write directly when <~200 LOC. Pure executor observation, not framework canon.
+- **3/3 PRs ran clean through 14-stage pipeline + Stage 11 caught real test-quality issues**. PR #1454 Stage 11 caught a `if let (Some, Some)` tautology (Action #1200 class) + a CHANGELOG-vs-test drift (Action #1046 class). PR #1455 Stage 11 ran an empirical canary, APPROVE'd with 3 documented limitations. PR #1457 Stage 11 caught a minor line citation off-by-a-few + absorbed 3 🟡 observations into follow-up #1456 with line precision. Stage 11 ran zero rubber-stamps in this milestone.
+- **Two-commit shape held cleanly across all 3 PRs.** Gate 1 (Stage 5 no CHANGELOG) and Gate 2 (Stage 9 docs-only) passed first-try on every commit (after Action #122 auto-restage on PRs #1454 + #1457).
+- **Decision 5's option (b) ("focused starter PR") was the right call on #1448** — saved a 30-frame messy PR. Decision 7's brief pause-and-resume between #1455 and #1457 also worked as designed; the user's re-invocation re-entered cleanly via `pipeline-next` against the milestone.
+- **Stage 11 stale-base check (#1450, canonicalized in PR #1451) fired on every subsequent PR in this milestone**. All 3 PRs had BEHIND=0 at review time; the check added <5 sec wall-time and prevented zero merges. Gate is cheap; keep.
+
+### Review Stats
+
+| Metric | PR #1451 | PR #1454 | PR #1455 | PR #1457 | Total |
+|---|---|---|---|---|---|
+| LOC | +canon docs | +1283 / -5 | +667 / -170 | +227 / 0 | +~2200 / -175 |
+| Tests added | 0 (docs) | 24 (Rust) | 8 (vitest) | 12 (pytest) | 44 |
+| 🔴 must-fix | 0 | 0 | 0 | 0 | 0 |
+| 🟡 should-fix | 0 | 2 (fixed pre-merge) | 0 | 3 (absorbed into #1456 follow-up) | 5 |
+| 🟢 observations | 0 | 5 | 3 (documented limitations) | 0 | 8 |
+| Findings fixed pre-merge | 0 | 2 | 0 | 1 (line-citation) | 3 |
+| CI failures | 0 | 0 | 0 | 0 | 0 |
+| Empirical-canary Stage 11 | N/A | N/A | ✅ (synthetic #1370) | N/A | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New "Process canonicalizations from v0.9.6-1 retro arc" section landed in PR #1451 — 5 rules: TOCTOU lock-window (#245/#1445), zero-cost-when-unused middleware (#246/#1446), cache-by-struct (#247/#1447), wire-protocol JSON pinning (#248/#1448 preview), Stage 11 stale-base check (#250/#1450 with bash one-liner).
+**Pipeline template**: All 3 templates (`feature-state.json`, `bugfix-state.json`, `ship-state.json`) gained a mandatory Stage 11 stale-base check item in PR #1451.
+**Checklist**: No additional changes this milestone (canon batch already landed the load-bearing edits).
+**Skills**: No changes.
+
+### Open Items
+
+- [ ] #251 — Pre-commit ruff hook auto-restage on reformat (GitHub #1458)
+- [ ] #252 — Empirical Stage 11 canary pattern for tooling/lint PRs (GitHub #1459)
+- [ ] **#1456** — Wire-protocol snapshot pinning for remaining ~22 frame shapes (`mount_batch`, `child_update`, `sticky_update`, `i18n`, `accessibility`, `focus`, `embedded_update`, `upload_*`, `reload`, `hvr-applied`, `sticky_hold`, `html_update`, `connect`, `rate_limit_exceeded`, `pong`, `navigate`, `noop`, `error.message`-variant, conditional `patch` keys, conditional `mount` keys, `presence_event`, streaming.*; plus inbound shapes). 2-3 grouped batches. Targeted for v0.9.7+.
+
+---
 
 ## v0.9.6-1 — Post-v0.9.6rc1 drain (security + DX cleanup) (PRs #1438–#1444)
 
@@ -366,13 +427,13 @@ The same shape generalizes to any other Rust↔JS or Python↔JS wire contract i
 
 ### Open Items
 
-- [ ] #245 — Lock-release/lock-reacquire TOCTOU canon (GitHub #1445)
-- [ ] #246 — Zero-cost-when-unused middleware/processor pattern docs (GitHub #1446)
-- [ ] #247 — Cache-by-struct: include-all-fields-upfront discipline (GitHub #1447)
-- [ ] #248 — Wire-protocol JSON pinning across other Rust↔JS / Python↔JS contracts (GitHub #1448)
-- [ ] #249 — Deferral-pattern-aware depth-N call-graph walker (GitHub #1449; umbrella #1406)
-- [ ] **VDOM cluster carryovers**: #1413, #1416, #1417, #1418, #1420 — each needs substantial test design; targeted for v0.9.6-2.
-- [ ] **#1431 (P0 Redis ZstdDecompressor segfault)** — in flight when this drain ran; counts toward v0.9.6-1 by membership but its retro happens when the PR merges.
+- [x] #245 — Lock-release/lock-reacquire TOCTOU canon (GitHub #1445) — resolved in v0.9.6-2 (PR #1451)
+- [x] #246 — Zero-cost-when-unused middleware/processor pattern docs (GitHub #1446) — resolved in v0.9.6-2 (PR #1451)
+- [x] #247 — Cache-by-struct: include-all-fields-upfront discipline (GitHub #1447) — resolved in v0.9.6-2 (PR #1451)
+- [x] #248 — Wire-protocol JSON pinning across other Rust↔JS / Python↔JS contracts (GitHub #1448) — preview canon in v0.9.6-2 PR #1451; starter shipped in v0.9.6-2 PR #1457; follow-up #1456 tracks remaining ~22 shapes
+- [x] #249 — Deferral-pattern-aware depth-N call-graph walker (GitHub #1449; umbrella #1406) — resolved in v0.9.6-2 (PR #1455)
+- [x] **VDOM cluster carryovers**: #1413, #1416, #1417, #1418, #1420 — resolved in v0.9.6-2 (PR #1454)
+- [x] **#1431 (P0 Redis ZstdDecompressor segfault)** — merged 2026-05-09; retro embedded in #1431's PR comments. Action #250 (Stage 11 stale-base check) was filed off #1431's retro and canonicalized in PR #1451.
 
 ---
 
