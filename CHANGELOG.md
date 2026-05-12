@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- **Wire-protocol snapshots: 12 final frames pinned (#1456 Batch 3 — closes #1456).** `noop` (with optional appends), `rate_limit_exceeded`, `pong`, `error.message` variant (wire-distinct from `error.error`), `navigate`, `upload_registered`, `upload_progress`, `reload`, `hvr-applied` (kebab-case type — the only one in the protocol), `presence_event` (presence.py), `streaming.patch`, `streaming.html_update`, `streaming.stream`. 14 new tests, 39 total. Across the 4 PRs (#1457 starter + #1461 Batch 1 + #1462 Batch 2 + this), the entire `send_json` wire surface is now pinned.
+
 - **Wire-protocol snapshots: 5 optional-feature frames pinned (#1456 Batch 2, follow-up to Batch 1 PR #1461).** `i18n`, `accessibility`, `focus`, `html_update` (minimal + with `reset_form`/`event_name` conditional appends), `connect`. 6 new tests, 25 total in `python/djust/tests/test_wire_protocol_snapshots.py`. Closes Batch 2 of 3 in #1456; remaining ~12 shapes tracked there for Batch 3 (uploads, reload variants, control plane, presence, streaming).
 
 - **Wire-protocol snapshots: 5 lifecycle frames pinned (#1456 Batch 1, follow-up to PR #1457).** Extends `python/djust/tests/test_wire_protocol_snapshots.py` with `mount_batch` (envelope + optional `navigate` append), `child_update`, `sticky_update`, `sticky_hold` (with views + empty-list drop-all signal), and `embedded_update`. 7 new tests, 19 total. Closes Batch 1 of 3 in #1456; remaining ~17 shapes tracked there for Batches 2-3.
