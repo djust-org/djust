@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests
+
+- **VDOM cluster carryovers — 24 new tests across 5 files (#1413, #1416, #1417, #1418, #1420).** Five P3 hardeners extending `crates/djust_vdom/tests/common/mod.rs` (the harness from #1421). Test-only; no production code changes; none surfaced regressions on `main`. Test count: djust_vdom 248 → 272.
+  - **#1413** — `proptest_round_trip_with_sync.rs`: randomized counterpart to #1412's hand-crafted scenarios. 1 proptest fn × 64 cases × 5-20 steps of dj-if boundary toggles + inner mutations, asserts `assert_handles_resolve` invariant on every cycle.
+  - **#1416** — `torture_html_round_trip.rs`: 8 scenarios exercising the live `VDOM → to_html → parse_html` round-trip (plain/nested elements, text, dj-if single + nested, dj-key keyed children, dj-update="ignore" subtrees, mixed attrs incl. data-*/aria-*/role/href entities, text-with-entities).
+  - **#1417** — `test_dj_update_ignore_dj_if_sync_ids_1417.rs`: 3 scenarios for the dj-update="ignore" × dj-if × sync_ids three-way interaction. Verifies sync_ids preserves the ignored subtree's dj-ids across boundary swap-out → swap-in cycles.
+  - **#1418** — `torture_deep_cascade_dj_if_1418.rs`: 4 scenarios with 10/12/15 levels of nested dj-if boundaries at start/middle/end positions of the children list. Toggles deepest boundary across cycles.
+  - **#1420** — `torture_patch_batch_ordering_1420.rs`: 7 invariant scenarios + 1 snapshot. The canonical "RemoveChild + SetAttr on the removed child" snapshot asserts RemoveChild is the LAST patch in the batch (so prior patches resolve before the child is gone).
+
 ## [0.9.6] - 2026-05-12
 
 Stable promotion of `0.9.6rc3`. No code changes since rc3. The rc1 → rc3 progression is summarized below.
