@@ -385,7 +385,7 @@ The bug class is: *the only object-level auth surface djust offers (`check_permi
 |---|---|---|---|---|
 | 1 | #1468 | Implementer-subagent prompt must mandate gate-the-change-off tautology self-test before reporting tests passing. One-bullet PR-checklist addition + CLAUDE.md case study from PR #1466 (4/7 first-pass tautology rate caught by Stage 11). Lowest-risk, highest-leverage of the three | P2 docs/canon | ~30-45 min |
 | 2 | #1464 | Pre-commit ruff auto-restage IMPLEMENTATION (#1458 investigation closed with 3 options). Empirical case: 5 ruff-bounces caught by Action #122 across PRs #1454/#1457/#1462/#1463/#1466 this session. Recommend Option A (wrapper script `scripts/git-commit-with-precommit.sh`) as lowest-risk first step | P2 tooling | ~1-1.5 hr |
-| 3 | #1467 | WS-event save for child LiveComponent views. PR #1466's gate skips child views entirely (conservative); this issue picks one of 3 design options (propagate `_djust_mount_request` to children at construction / new identity scheme / declare out-of-scope) and ships | P2 feature | ~2-3 hr |
+| 3 | ~~#1467~~ | ~~WS-event save for child LiveComponent views.~~ **Closed Option C (out-of-scope)** — investigation revealed LiveComponent embedded children already persist via parent's `_save_components_to_session` (no gap). Sticky-child `LiveView` persistence is a separate architectural problem (LOAD-time discovery) tracked at #1471 for v0.10.0+ | P2 → closed | investigation-only |
 
 #### Sequencing strategy
 

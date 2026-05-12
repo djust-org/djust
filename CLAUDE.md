@@ -837,6 +837,24 @@ One rule from the v0.9.7-2 drain (PR #1466 — clean-redo of stale PR #1429 via 
 
   **Where this lives now**: `docs/PULL_REQUEST_CHECKLIST.md` Test Quality section as a one-bullet requirement. Out-of-repo follow-up: the implementer-subagent prompt template in the pipeline-run skill repository should add a Verification-section step calling this out explicitly.
 
+## Process canonicalizations from v0.9.7-3 retro arc
+
+One rule from the v0.9.7-3 drain (PRs #1469, #1470 + the #1467 investigation).
+
+- **LiveComponent vs sticky-child LiveView event-routing distinction (#1467 investigation).** Two distinct mechanisms exist for embedded children in a djust page; they look similar from a template/user perspective but route events through different code paths and have different persistence semantics:
+
+  1. **LiveComponents** (`python/djust/components/base.py` `LiveComponent`): assigned as parent attributes (`self.foo = MyComponent(...)`); routed via `component_id` param; resolved at `python/djust/websocket.py:2856` via `self.view_instance._components.get(component_id)`; persisted via `_save_components_to_session` walking parent's `get_context_data()`.
+
+  2. **Sticky-child LiveViews** (`{% live_render %}`-embedded full `LiveView` subclasses): registered via `StickyChildRegistry._register_child`; routed via `view_id` param; resolved at `python/djust/websocket.py:2689-2696` via `self.view_instance._get_all_child_views()`; NOT persisted (gap; tracked at #1471).
+
+  **Implication for save-block work**: when the `handle_event` save block gates on `target_view is self.view_instance`, only sticky-child events are skipped (LiveComponent events pass the gate because `target_view` stays as parent — `component_id` routing doesn't reassign `target_view`). PR #1466's gate was originally written about "child LiveComponent views" but the actual path it gates is sticky-children. Future readers should not conflate these.
+
+  **Investigation cost saved**: ~1 hour of code-path tracing at Stage 4 of #1467. The issue body and #1466's gate comment both used "LiveComponent" loosely to mean "embedded child"; tracing the routing showed LiveComponents already persist via the existing parent-save path, and only sticky-child LiveViews need new architectural work.
+
+  **Where this lives now**: this CLAUDE.md section + the #1467 close comment + the #1471 follow-up issue body.
+
+  **Generalized rule for child-routing PRs**: when working on `handle_event`-adjacent code, explicitly state whether the change targets LiveComponents (`component_id`), sticky-child LiveViews (`view_id`), or both. Test the routing path you claim to affect — a `component_id`-routed test does NOT exercise the sticky-child path, and vice versa.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
