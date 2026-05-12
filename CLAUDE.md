@@ -821,6 +821,22 @@ One rule from the v0.9.6-2 drain (PRs #1454, #1455, #1457). The other v0.9.6-2 r
 
   Generalizes Action #1046 (doc-claim verbatim TDD) for the tooling-PR subclass: the doc claim "this lint catches X" gets an executable verifier (run the lint against the canonical X shape).
 
+## Process canonicalizations from v0.9.7-2 retro arc
+
+One rule from the v0.9.7-2 drain (PR #1466 — clean-redo of stale PR #1429 via `/pipeline-run`).
+
+- **Gate-the-change-off tautology self-test (Action #254 / #1468).** Action #1200 (tautology test detection) is a Stage 11 reviewer concern: gate the change off, re-run tests, see which fail. PR #1466 showed this needs to fire at Stage 5 (implementer) too — the first-pass subagent shipped 7 tests, and only 3 (source-grep pins) exercised the actual change under test. The other 4 mocked the session / proxied via HTTP-path POST / reproduced logic in pytest. Stage 11 caught all 4 via the gate-off check; the Stage 13 fix-pass replaced one with a real `WebsocketCommunicator` integration test.
+
+  **Why**: subagents under context pressure write tests that look plausible but exercise the wrong path. The gate-off self-test makes "would this test fail if the change did nothing?" an explicit verification step, not an implicit assumption.
+
+  **How to apply**: after writing new tests + verifying they pass, temporarily revert the change under test — set a flag to `False`, comment out the new behavior, gate it on an always-False conditional, or similar. Re-run the tests. Confirm AT LEAST ONE of the new tests fails — preferably the most behavior-meaningful one. Restore the change. If all tests still pass with the change gated off, AT LEAST ONE test is tautological. Fix before reporting "tests pass."
+
+  **Canonical case study**: PR #1466 (WS-reconnect state continuity, the clean-redo of stale PR #1429). First-pass subagent reported "7/7 tests pass." Stage 11 reviewer ran the gate-off check (`if False and target_view is self.view_instance:`) and found 4 of 7 still passed — they were tautological. Stage 13 fix-pass: replaced `test_round_trip_save_then_restore_proxies_ws_reconnect` (HTTP-POST proxy — never exercised `handle_event`) with `test_ws_event_save_block_writes_through_to_session` (real `WebsocketCommunicator` against `LiveViewConsumer.as_asgi()`). Empirically validated: gating the save off makes the new test fail with `"Save block in handle_event must have written 'liveview_/counter/' to the session — but the key is absent"`.
+
+  Generalizes Action #1200 from "reviewer applies at Stage 11" to "implementer applies at Stage 5." Same epistemic, left-shifted by 6 stages. Saves the Stage 13 fix-pass cycle when subagent tests turn out tautological.
+
+  **Where this lives now**: `docs/PULL_REQUEST_CHECKLIST.md` Test Quality section as a one-bullet requirement. Out-of-repo follow-up: the implementer-subagent prompt template in the pipeline-run skill repository should add a Verification-section step calling this out explicitly.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
