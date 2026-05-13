@@ -305,6 +305,24 @@ def test_save_block_present_in_handle_event_source():
     # Stage 11 (PR #1466): save block MUST be gated on top-level view
     # identity so child LiveComponent events don't write to "liveview_/".
     assert "target_view is self.view_instance" in source
+    # #1475 / 0.9.7rc3: save block MUST be gated on
+    # ``enable_state_snapshot`` so default views (which don't opt in)
+    # don't pay the per-event async-DB-write overhead. djustlive
+    # 0.9.7rc2 was bricked by unconditional saves leaving async work
+    # in flight across a host snapshot. The two gates are AND'd in the
+    # `if (...)` condition immediately above the save block.
+    assert '"enable_state_snapshot"' in source, (
+        "Save block must read enable_state_snapshot. PR #1466 omitted the "
+        "gate; #1475 added it because unconditional WS saves left async "
+        "session-backend I/O in flight, which a host snapshot captured "
+        "unrecoverably (djustlive 0.9.7rc2 production block)."
+    )
+    # #1475: 150ms timeout MUST wrap the save body. Even opt-in views
+    # need close-time tail latency bounded so a stalled session backend
+    # can't recreate the snapshot-poisoning failure mode.
+    assert "asyncio.wait_for" in source
+    assert "timeout=0.150" in source
+    assert "asyncio.TimeoutError" in source
 
 
 # ---------------------------------------------------------------------------
@@ -486,4 +504,291 @@ async def test_ws_event_save_block_writes_through_to_session():
         )
         assert saved.get("count") == 1, (
             f"Save block must have captured post-increment state count=1, got: {saved!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# #1475 / 0.9.7rc3 — opt-out regression tests
+# ---------------------------------------------------------------------------
+#
+# Without these tests, PR #1466's "unconditional save" regression could be
+# reintroduced silently. Default views (no ``enable_state_snapshot``) must
+# pay ZERO async-DB-write overhead per WS event.
+
+
+class _WSDefaultCounter(LiveView):
+    """Default-config LiveView — no ``enable_state_snapshot`` opt-in.
+
+    Pins the negative case: the save block must NOT fire for this view.
+    """
+
+    template = (
+        '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSDefaultCounter" '
+        'dj-id="0">Counter: {{ count }}</div>'
+    )
+    # Note: NO ``enable_state_snapshot = True`` here.
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler()
+    def increment(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_ws_event_save_block_skipped_when_state_snapshot_opt_out():
+    """Default view (no ``enable_state_snapshot``) must NOT trigger the
+    save block. Locks in the 0.9.7rc3 fix for #1475.
+
+    A regression that removes the ``enable_state_snapshot`` gate would
+    cause the session key to be written here — the opposite of what we
+    want. The assertion ``saved is None`` is load-bearing.
+    """
+    pytest.importorskip("channels")
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import override_settings
+
+    from djust.websocket import LiveViewConsumer
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+
+        def _create_session():
+            s = SessionStore()
+            s.create()
+            return s.session_key
+
+        session_key = await sync_to_async(_create_session)()
+
+        class _ScopeSession:
+            def __init__(self, key):
+                self.session_key = key
+
+        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator.scope["session"] = _ScopeSession(session_key)
+        connected, _ = await communicator.connect()
+        assert connected
+
+        # Drain connect frame.
+        await communicator.receive_json_from(timeout=2)
+
+        # Mount + increment.
+        await communicator.send_json_to(
+            {
+                "type": "mount",
+                "view": f"{__name__}._WSDefaultCounter",
+                "url": "/default-counter/",
+            }
+        )
+        mount_resp = await communicator.receive_json_from(timeout=3)
+        assert mount_resp.get("type") == "mount"
+
+        await communicator.send_json_to(
+            {
+                "type": "event",
+                "event": "increment",
+                "params": {},
+                "ref": 1,
+            }
+        )
+        try:
+            await communicator.receive_json_from(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+
+        await communicator.disconnect()
+
+        # The load-bearing negative assertion: no session write for default
+        # views. A regression that drops the ``enable_state_snapshot``
+        # gate would populate this key — exactly what bricked djustlive.
+        post_session = SessionStore(session_key=session_key)
+        saved = await post_session.aget("liveview_/default-counter/", None)
+        assert saved is None, (
+            "Save block must NOT have written 'liveview_/default-counter/' "
+            "to the session — but it did. The ``enable_state_snapshot`` "
+            "gate is the regression guard for djustlive's snapshot path "
+            f"(#1475). Got: {saved!r}"
+        )
+
+
+def test_save_block_gates_on_enable_state_snapshot_source():
+    """Belt-and-suspenders source pin for the #1475 gate.
+
+    The runtime test above proves the negative behavior at the
+    WebsocketCommunicator level. This test pins the gate's lexical
+    presence so a future refactor that drops the keyword would fail
+    fast even if the runtime test were skipped under some CI config.
+    """
+    import djust.websocket as ws_mod
+
+    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
+    source_collapsed = " ".join(source.split())
+
+    # The exact form of the gate: AND'd with the existing top-level
+    # identity check. Strip ALL whitespace to be tolerant of ruff-format
+    # wrapping long if-conditions across lines.
+    source_nospaces = "".join(source.split())
+    assert "enable_state_snapshot" in source
+    assert "target_view is self.view_instance" in source_collapsed
+    # Both gate conditions must co-occur in an AND expression.
+    assert (
+        'iftarget_viewisself.view_instanceandgetattr(self.view_instance,"enable_state_snapshot",False)'
+        in source_nospaces
+    ), "Both gates must be AND'd in the save-block condition for #1475 fix."
+
+
+class _WSSlowOptInCounter(LiveView):
+    """Opt-in view whose ``mount`` injects a slow async session so the
+    save block exceeds the 150ms timeout — end-to-end fixture for the
+    wrapper's TimeoutError → log → continue path.
+
+    The save block looks up ``save_session`` via ``mount_request.session``
+    (see ``handle_event`` save block). Replacing ``request.session`` in
+    ``mount()`` routes the save's ``aset``/``asave`` calls through the
+    slow stub.
+    """
+
+    template = (
+        '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSSlowOptInCounter" '
+        'dj-id="0">Counter: {{ count }}</div>'
+    )
+    enable_state_snapshot = True
+
+    def mount(self, request, **kwargs):
+        import asyncio as _asyncio
+
+        class _SlowSession:
+            async def aget(self, key, default=None):
+                return default
+
+            async def aset(self, key, value):
+                # 250ms > 150ms wrapper timeout → triggers TimeoutError
+                # in the save body's first ``aset`` call.
+                await _asyncio.sleep(0.25)
+
+            async def apop(self, key, default=None):
+                return default
+
+            async def asave(self):
+                await _asyncio.sleep(0.25)
+
+        request.session = _SlowSession()
+        self.count = 0
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_save_block_timeout_logs_and_continues_end_to_end(caplog):
+    """End-to-end test of the wrapper's timeout → log → continue path.
+
+    Stage 11 review of PR #1478 (Finding #1) flagged that the original
+    timeout test validated ``asyncio.wait_for`` semantics in isolation,
+    not the wrapper's actual log+continue behavior — same shape Action
+    #254 (gate-off self-test, #1468) was filed to prevent.
+
+    This test drives the real consumer's ``handle_event`` save block
+    through a slow session and asserts the wrapper's three guarantees:
+    - WARNING log fires with the ``exceeded 150ms`` marker.
+    - ``handle_event`` completes without raising (saves never break
+      event handling — the event response still goes out).
+    - Total elapsed is bounded by the timeout, not the slow body.
+
+    Sabotage check: if the ``except asyncio.TimeoutError`` branch were
+    deleted from the wrapper, the TimeoutError would propagate up and
+    crash ``handle_event`` — no WARNING log, communicator would receive
+    an error frame. The ``warning_logs`` assertion is the load-bearing
+    catch for that regression.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+
+    pytest.importorskip("channels")
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import override_settings
+
+    from djust.websocket import LiveViewConsumer
+
+    caplog.set_level(_logging.WARNING, logger="djust")
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+
+        def _create_session():
+            s = SessionStore()
+            s.create()
+            return s.session_key
+
+        session_key = await sync_to_async(_create_session)()
+
+        class _ScopeSession:
+            def __init__(self, key):
+                self.session_key = key
+
+        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator.scope["session"] = _ScopeSession(session_key)
+
+        connected, _ = await communicator.connect()
+        assert connected
+
+        # Drain connect frame.
+        await communicator.receive_json_from(timeout=2)
+
+        # Mount — view.mount() injects the SlowSession into
+        # request.session, which gets stashed as
+        # view._djust_mount_request.session.
+        await communicator.send_json_to(
+            {
+                "type": "mount",
+                "view": f"{__name__}._WSSlowOptInCounter",
+                "url": "/slow-counter/",
+            }
+        )
+        mount_resp = await communicator.receive_json_from(timeout=3)
+        assert mount_resp.get("type") == "mount"
+
+        t0 = _asyncio.get_event_loop().time()
+        await communicator.send_json_to(
+            {
+                "type": "event",
+                "event": "bump",
+                "params": {},
+                "ref": 1,
+            }
+        )
+        # Drain the event response — it MUST arrive (saves don't break
+        # event handling). If wait_for's exception propagated up,
+        # handle_event would crash and no normal response would come.
+        try:
+            await communicator.receive_json_from(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+
+        elapsed = _asyncio.get_event_loop().time() - t0
+        await communicator.disconnect()
+
+        # Load-bearing: WARNING log fired with the wrapper's marker.
+        warning_logs = [
+            r
+            for r in caplog.records
+            if r.levelno == _logging.WARNING and "exceeded 150ms" in r.getMessage()
+        ]
+        assert len(warning_logs) >= 1, (
+            "Wrapper must log a WARNING containing 'exceeded 150ms' when "
+            "the save body times out. The except asyncio.TimeoutError "
+            "branch in handle_event is the regression guard. caplog "
+            f"records: {[(r.levelname, r.getMessage()[:140]) for r in caplog.records]!r}"
+        )
+
+        # Bounded elapsed — wrapper cancels at 150ms. If the timeout
+        # were absent, the slow aset alone would burn 250ms. Allow
+        # generous headroom for CI scheduler jitter.
+        assert elapsed < 2.0, (
+            f"Event round-trip took {elapsed:.3f}s — far longer than the "
+            "150ms timeout suggests. Wrapper may not be cancelling the slow body."
         )

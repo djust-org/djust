@@ -3113,19 +3113,39 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # ~line 1990, and views opting into
                         # `enable_state_snapshot` actually get true reconnect
                         # state continuity.
-                        # Stage 11 (PR #1466) — gate the save block on
-                        # top-level view identity. Child LiveComponent views
-                        # never get ``_djust_mount_request`` stashed (see
-                        # line ~2143, which is set only on
-                        # ``self.view_instance``), so for a child-view-routed
-                        # event the save would fall back to scope_session
-                        # with save_path="/" → write to "liveview_/" (wrong
-                        # key, no read-side ever finds it). Skipping child
-                        # views entirely matches current "no child save"
-                        # semantics for the HTTP path. Child-view save
-                        # coverage tracked at #1467.
-                        if target_view is self.view_instance:
-                            try:
+                        # Gate (Stage 11 PR #1466): only run for top-level
+                        # view identity — child LiveComponent views never
+                        # get ``_djust_mount_request`` stashed (see
+                        # line ~2143), so the save would fall back to
+                        # scope_session with save_path="/" → write to
+                        # "liveview_/" (wrong key, no read-side ever finds
+                        # it). Child-view coverage tracked at #1467 / #1471.
+                        # Gate (#1475 / 0.9.7rc3): only run when the view
+                        # opts in via ``enable_state_snapshot = True``.
+                        # PR #1466 omitted this gate, citing HTTP-path
+                        # symmetry (HTTP also saves on every POST). That
+                        # symmetry argument doesn't survive contact with
+                        # snapshot-on-idle infrastructure: WS events leave
+                        # async session-backend I/O in flight beyond
+                        # ``send_json``; when the host snapshots the VM
+                        # mid-flight, the asyncio state is captured
+                        # unrecoverably. Default views ship 0.9.6 close-
+                        # path semantics (no async session writes per
+                        # event), opt-in views get the feature they asked
+                        # for. Wraps the body in a 150ms timeout so even
+                        # opt-in views can't extend close-time tail
+                        # latency under DB/Redis backpressure — saves
+                        # must never break event handling.
+                        if target_view is self.view_instance and getattr(
+                            self.view_instance, "enable_state_snapshot", False
+                        ):
+
+                            async def _persist_state_after_event() -> None:
+                                """Inner helper so the entire save body can
+                                be bounded by ``asyncio.wait_for``. Closes
+                                over outer locals (target_view, event_name,
+                                etc.) by reference.
+                                """
                                 mount_request = getattr(target_view, "_djust_mount_request", None)
                                 scope_session = (
                                     self.scope.get("session") if mount_request is None else None
@@ -3135,73 +3155,87 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     if mount_request is not None
                                     else scope_session
                                 )
-                                if save_session is not None:
-                                    from .components.base import LiveComponent as _LC
-                                    from .serialization import (
-                                        normalize_django_value as _normalize,
-                                    )
+                                if save_session is None:
+                                    return
 
-                                    save_path = (
-                                        mount_request.path if mount_request is not None else "/"
-                                    )
-                                    save_view_key = f"liveview_{save_path}"
+                                from .components.base import LiveComponent as _LC
+                                from .serialization import (
+                                    normalize_django_value as _normalize,
+                                )
 
-                                    # Save order mirrors HTTP path
-                                    # (mixins/request.py:593-609):
-                                    # private attrs FIRST, then public via
-                                    # get_context_data(). The HTTP-path
-                                    # comment explains the ordering: private
-                                    # is captured BEFORE get_context_data()
-                                    # because get_context_data() sets
-                                    # render-cycle internals that we don't
-                                    # want to accidentally capture.
-                                    if hasattr(target_view, "_get_private_state"):
-                                        _priv = await sync_to_async(
-                                            target_view._get_private_state
-                                        )()
-                                        if _priv:
-                                            await save_session.aset(
-                                                f"{save_view_key}__private",
-                                                _normalize(_priv),
-                                            )
-                                        else:
-                                            # Clean up if no private attrs remain
-                                            try:
-                                                await save_session.apop(
-                                                    f"{save_view_key}__private", None
-                                                )
-                                            except AttributeError:
-                                                # Older Django: no apop, fall back
-                                                await sync_to_async(save_session.pop)(
-                                                    f"{save_view_key}__private", None
-                                                )
+                                save_path = mount_request.path if mount_request is not None else "/"
+                                save_view_key = f"liveview_{save_path}"
 
-                                    # Pull a fresh public-state snapshot.
-                                    # Mirrors the get_context_data() call
-                                    # in HTTP path so the saved keys match
-                                    # the LOAD path's reads.
-                                    _gcd_save = target_view.get_context_data
-                                    if inspect.iscoroutinefunction(_gcd_save):
-                                        save_context = await _gcd_save()
+                                # Save order mirrors HTTP path
+                                # (mixins/request.py:593-609):
+                                # private attrs FIRST, then public via
+                                # get_context_data(). The HTTP-path
+                                # comment explains the ordering: private
+                                # is captured BEFORE get_context_data()
+                                # because get_context_data() sets
+                                # render-cycle internals that we don't
+                                # want to accidentally capture.
+                                if hasattr(target_view, "_get_private_state"):
+                                    _priv = await sync_to_async(target_view._get_private_state)()
+                                    if _priv:
+                                        await save_session.aset(
+                                            f"{save_view_key}__private",
+                                            _normalize(_priv),
+                                        )
                                     else:
-                                        save_context = await sync_to_async(_gcd_save)()
+                                        # Clean up if no private attrs remain
+                                        try:
+                                            await save_session.apop(
+                                                f"{save_view_key}__private", None
+                                            )
+                                        except AttributeError:
+                                            # Older Django: no apop, fall back
+                                            await sync_to_async(save_session.pop)(
+                                                f"{save_view_key}__private", None
+                                            )
 
-                                    save_state = {
-                                        k: v
-                                        for k, v in save_context.items()
-                                        if not isinstance(v, _LC)
-                                    }
-                                    await save_session.aset(save_view_key, _normalize(save_state))
+                                # Pull a fresh public-state snapshot.
+                                # Mirrors the get_context_data() call
+                                # in HTTP path so the saved keys match
+                                # the LOAD path's reads.
+                                _gcd_save = target_view.get_context_data
+                                if inspect.iscoroutinefunction(_gcd_save):
+                                    save_context = await _gcd_save()
+                                else:
+                                    save_context = await sync_to_async(_gcd_save)()
 
-                                    # Components — sync helper, wrap with sync_to_async.
-                                    if mount_request is not None and hasattr(
-                                        target_view, "_save_components_to_session"
-                                    ):
-                                        await sync_to_async(
-                                            target_view._save_components_to_session
-                                        )(mount_request, save_context)
+                                save_state = {
+                                    k: v for k, v in save_context.items() if not isinstance(v, _LC)
+                                }
+                                await save_session.aset(save_view_key, _normalize(save_state))
 
-                                    await save_session.asave()
+                                # Components — sync helper, wrap with sync_to_async.
+                                if mount_request is not None and hasattr(
+                                    target_view, "_save_components_to_session"
+                                ):
+                                    await sync_to_async(target_view._save_components_to_session)(
+                                        mount_request, save_context
+                                    )
+
+                                await save_session.asave()
+
+                            try:
+                                # 150ms bound on the entire save body. If a
+                                # session backend stalls (DB pressure,
+                                # Redis hiccup), the WS close path can't
+                                # be extended past this window — which is
+                                # what bricked djustlive snapshots in
+                                # 0.9.7rc2 (#1475). Saves must never
+                                # break event handling, so timeout +
+                                # exception are both caught & logged.
+                                await asyncio.wait_for(_persist_state_after_event(), timeout=0.150)
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "WS-event state save exceeded 150ms for %r — "
+                                    "session backend backpressure; skipping this event's save. "
+                                    "Subsequent events will retry.",
+                                    sanitize_for_log(event_name or ""),
+                                )
                             except Exception:  # noqa: BLE001 — saves must never break event handling
                                 logger.exception(
                                     "Failed to save LiveView state after WS event %r",
