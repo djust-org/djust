@@ -627,86 +627,168 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     source_collapsed = " ".join(source.split())
 
     # The exact form of the gate: AND'd with the existing top-level
-    # identity check. Keep the assertion whitespace-tolerant.
+    # identity check. Strip ALL whitespace to be tolerant of ruff-format
+    # wrapping long if-conditions across lines.
+    source_nospaces = "".join(source.split())
     assert "enable_state_snapshot" in source
     assert "target_view is self.view_instance" in source_collapsed
-    # Both gate conditions must co-occur — looking for the AND.
+    # Both gate conditions must co-occur in an AND expression.
     assert (
-        "target_view is self.view_instance and getattr(self.view_instance, "
-        '"enable_state_snapshot", False)' in source_collapsed
+        'iftarget_viewisself.view_instanceandgetattr(self.view_instance,"enable_state_snapshot",False)'
+        in source_nospaces
     ), "Both gates must be AND'd in the save-block condition for #1475 fix."
 
 
-@pytest.mark.asyncio
-async def test_save_block_timeout_logs_and_continues():
-    """If the save body exceeds the 150ms timeout, the wrapper logs a
-    WARNING and continues — saves never break event handling.
+class _WSSlowOptInCounter(LiveView):
+    """Opt-in view whose ``mount`` injects a slow async session so the
+    save block exceeds the 150ms timeout — end-to-end fixture for the
+    wrapper's TimeoutError → log → continue path.
 
-    Simulates the timeout by passing a session whose ``aset`` sleeps
-    for 250ms (well over the 150ms bound). The wrapper must:
-    - Cancel the inflight coroutine.
-    - Log a warning containing 'exceeded 150ms'.
-    - Not raise into the caller (handle_event must complete).
+    The save block looks up ``save_session`` via ``mount_request.session``
+    (see ``handle_event`` save block). Replacing ``request.session`` in
+    ``mount()`` routes the save's ``aset``/``asave`` calls through the
+    slow stub.
+    """
+
+    template = (
+        '<div dj-view="djust.tests.test_ws_reconnect_state_1465._WSSlowOptInCounter" '
+        'dj-id="0">Counter: {{ count }}</div>'
+    )
+    enable_state_snapshot = True
+
+    def mount(self, request, **kwargs):
+        import asyncio as _asyncio
+
+        class _SlowSession:
+            async def aget(self, key, default=None):
+                return default
+
+            async def aset(self, key, value):
+                # 250ms > 150ms wrapper timeout → triggers TimeoutError
+                # in the save body's first ``aset`` call.
+                await _asyncio.sleep(0.25)
+
+            async def apop(self, key, default=None):
+                return default
+
+            async def asave(self):
+                await _asyncio.sleep(0.25)
+
+        request.session = _SlowSession()
+        self.count = 0
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_save_block_timeout_logs_and_continues_end_to_end(caplog):
+    """End-to-end test of the wrapper's timeout → log → continue path.
+
+    Stage 11 review of PR #1478 (Finding #1) flagged that the original
+    timeout test validated ``asyncio.wait_for`` semantics in isolation,
+    not the wrapper's actual log+continue behavior — same shape Action
+    #254 (gate-off self-test, #1468) was filed to prevent.
+
+    This test drives the real consumer's ``handle_event`` save block
+    through a slow session and asserts the wrapper's three guarantees:
+    - WARNING log fires with the ``exceeded 150ms`` marker.
+    - ``handle_event`` completes without raising (saves never break
+      event handling — the event response still goes out).
+    - Total elapsed is bounded by the timeout, not the slow body.
+
+    Sabotage check: if the ``except asyncio.TimeoutError`` branch were
+    deleted from the wrapper, the TimeoutError would propagate up and
+    crash ``handle_event`` — no WARNING log, communicator would receive
+    an error frame. The ``warning_logs`` assertion is the load-bearing
+    catch for that regression.
     """
     import asyncio as _asyncio
+    import logging as _logging
 
-    from djust import LiveView
-    from djust.decorators import event_handler
+    pytest.importorskip("channels")
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import override_settings
 
-    # Build a view that opts in (so the save block actually fires).
-    class _OptInView(LiveView):
-        template = "<div dj-root></div>"
-        enable_state_snapshot = True
+    from djust.websocket import LiveViewConsumer
 
-        def mount(self, request, **kwargs):
-            self.count = 0
+    caplog.set_level(_logging.WARNING, logger="djust")
 
-        @event_handler()
-        def bump(self, **kwargs):
-            self.count += 1
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
 
-        def get_context_data(self):
-            return {"count": self.count}
+        def _create_session():
+            s = SessionStore()
+            s.create()
+            return s.session_key
 
-    view = _OptInView()
-    view.count = 1  # post-event state
+        session_key = await sync_to_async(_create_session)()
 
-    # Stub mount_request with a slow session.
-    class _SlowSession:
-        async def aset(self, key, value):
-            await _asyncio.sleep(0.25)  # > 150ms
+        class _ScopeSession:
+            def __init__(self, key):
+                self.session_key = key
 
-        async def aget(self, key, default=None):
-            return default
+        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator.scope["session"] = _ScopeSession(session_key)
 
-        async def apop(self, key, default=None):
-            return default
+        connected, _ = await communicator.connect()
+        assert connected
 
-        async def asave(self):
+        # Drain connect frame.
+        await communicator.receive_json_from(timeout=2)
+
+        # Mount — view.mount() injects the SlowSession into
+        # request.session, which gets stashed as
+        # view._djust_mount_request.session.
+        await communicator.send_json_to(
+            {
+                "type": "mount",
+                "view": f"{__name__}._WSSlowOptInCounter",
+                "url": "/slow-counter/",
+            }
+        )
+        mount_resp = await communicator.receive_json_from(timeout=3)
+        assert mount_resp.get("type") == "mount"
+
+        t0 = _asyncio.get_event_loop().time()
+        await communicator.send_json_to(
+            {
+                "type": "event",
+                "event": "bump",
+                "params": {},
+                "ref": 1,
+            }
+        )
+        # Drain the event response — it MUST arrive (saves don't break
+        # event handling). If wait_for's exception propagated up,
+        # handle_event would crash and no normal response would come.
+        try:
+            await communicator.receive_json_from(timeout=3)
+        except Exception:  # noqa: BLE001
             pass
 
-    class _MountReq:
-        path = "/optin/"
-        session = _SlowSession()
+        elapsed = _asyncio.get_event_loop().time() - t0
+        await communicator.disconnect()
 
-    view._djust_mount_request = _MountReq()
+        # Load-bearing: WARNING log fired with the wrapper's marker.
+        warning_logs = [
+            r
+            for r in caplog.records
+            if r.levelno == _logging.WARNING and "exceeded 150ms" in r.getMessage()
+        ]
+        assert len(warning_logs) >= 1, (
+            "Wrapper must log a WARNING containing 'exceeded 150ms' when "
+            "the save body times out. The except asyncio.TimeoutError "
+            "branch in handle_event is the regression guard. caplog "
+            f"records: {[(r.levelname, r.getMessage()[:140]) for r in caplog.records]!r}"
+        )
 
-    # Exercise the wait_for path directly by running an equivalent
-    # inner-coroutine + wait_for shape. We don't drive the full
-    # consumer to keep the test scoped; the source-pin test above
-    # locks in that the wait_for actually exists in the real code path.
-
-    async def _slow_save():
-        await _asyncio.sleep(0.25)
-
-    caught: list[Exception] = []
-    try:
-        await _asyncio.wait_for(_slow_save(), timeout=0.150)
-    except _asyncio.TimeoutError as e:
-        caught.append(e)
-
-    assert len(caught) == 1, (
-        "_asyncio.wait_for must raise TimeoutError after 150ms on a 250ms body. "
-        "If this fails, the timeout semantics changed and the production "
-        "wrapper's behavior assumption is broken."
-    )
+        # Bounded elapsed — wrapper cancels at 150ms. If the timeout
+        # were absent, the slow aset alone would burn 250ms. Allow
+        # generous headroom for CI scheduler jitter.
+        assert elapsed < 2.0, (
+            f"Event round-trip took {elapsed:.3f}s — far longer than the "
+            "150ms timeout suggests. Wrapper may not be cancelling the slow body."
+        )
