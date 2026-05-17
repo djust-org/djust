@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-05-16
+
+Stable release. No code changes since v0.9.7rc3 (2026-05-12) — RC3 soaked for 4 days with djustlive on the pinned wheel and zero regressions reported. See the rc1, rc2, rc3 entries below for the full v0.9.7 changeset:
+
+- **rc1**: bundle init-order lint depth-N (#1449/#1406); wire-protocol snapshot pinning (#1456 starter + Batch 1/2/3 = #1457/#1461/#1462/#1463); LiveView state survives WS reconnect via `enable_state_snapshot` (#1465/#1466); investigation-class close of #1458 (pre-commit ruff auto-restage with 3 options surfaced); empirical Stage 11 canary canon (#1459/#1460).
+- **rc2**: same as rc1 (cargo lock + scaffolding bumps only).
+- **rc3**: 🚨 P0 — WS-event save block gated on `enable_state_snapshot` (#1475) + 150ms `asyncio.wait_for` defense-in-depth; pre-commit auto-restage wrapper landed (#1464).
+
 ## [0.9.7rc3] - 2026-05-12
 
 ### Fixed
