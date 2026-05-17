@@ -1,6 +1,6 @@
 # djust Roadmap
 
-> Current version: **0.9.1** (released 2026-04-30) — Last roadmap refresh: 2026-04-30 (v0.9.1 cut, v0.9.2-1 drain bucket opened).
+> Current version: **0.9.7** (released 2026-05-16) — Last roadmap refresh: 2026-05-17 (roadmap audit: 50 stale matrix entries struck, v0.9.3–0.9.5 state labels corrected).
 
 This roadmap outlines what has been built, what is actively being worked on, and where djust is headed. Priorities are shaped by real-world usage across [djust.org](https://djust.org) and [djustlive](https://djustlive.com), and by feature parity goals with Phoenix LiveView 1.0 and React 19-level interactivity.
 
@@ -164,11 +164,11 @@ Per user directive: ship every remaining issue in v0.9.1 (no carryover to v0.9.2
 
 All 7 drain buckets shipped. 11 of 12 audit-original bugs closed; #1281 deferred to v0.9.3.
 
-## Current: v0.9.3 — Post-stable drain (split-foundation #1281 + follow-ups)
+## Shipped: v0.9.3 drain — rolled into the v0.9.4 release (no standalone v0.9.3 tag) — Post-stable drain (split-foundation #1281 + follow-ups)
 
 Drain buckets accumulating toward release `v0.9.3`. First bucket `v0.9.3-1` collects all v0.9.2-6 deferred items.
 
-## Pending release: v0.9.4 — Keyed VDOM diff for conditional subtrees (#1358 / #256 Option A)
+## Released: v0.9.4 — Keyed VDOM diff for conditional subtrees (#1358 / #256 Option A)
 
 Single focused minor cycle: the structural fix for `{% if %}` blocks that has been deferred since 2026-02 (#256 closed with Options B + C; Option A — keyed VDOM diffing — was never shipped). Re-opened as #1358 after a downstream consumer hit a 2/24-patches-failed → page-reload regression on tab switching.
 
@@ -280,7 +280,7 @@ Any iter that surfaces unexpected runtime issues during Stage 11 will trigger St
 - Action #1079 (fix exactly what's cited; ship the fix faster when soak doesn't apply)
 - Action #181 (two-commit shape per iter)
 
-## Pending release: v0.9.5 — Object-level authorization lifecycle
+## Released: v0.9.5 — Object-level authorization lifecycle
 
 Surfaced 2026-05-06 during a downstream-consumer code review (per-tab data gating in a detail view). Diagnostic walked the auth surface and found a structural IDOR class that affects any djust app where the LiveView is bound to a single object via URL kwarg (`document_id`, `user_id`, `<resource>_id`, etc.) — i.e. most detail-view apps. Tracking issue: #1373. Design pinned in [ADR-017](docs/adr/017-object-permission-lifecycle.md).
 
@@ -1205,7 +1205,7 @@ Single grouped PR (`feat/v0.9.2-2-template-canon` or similar). Both items edit `
 | ~~**P2**~~ | ~~Async Streams~~ ✅ Shipped — `python/djust/streaming.py` `StreamingMixin` (token-by-token DOM updates via `stream_to(...)` + LLM streaming primitives) | ~~Phoenix 1.0 parity; infinite scroll and real-time feeds at scale~~ | ~~v0.8.0~~ |
 | **P2** | Connection multiplexing | Pages with 5+ live sections need this to not waste connections | v0.6.0 |
 | **P2** | Dead View / Progressive Enhancement | 1.0 requirement for government/accessibility projects | v1.0.0 |
-| **P2** | Accessibility (ARIA/WCAG) | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
+| **P2** | Accessibility (ARIA/WCAG) — _Partial: WCAG color-contrast validation shipped (`python/djust/theming/accessibility.py`); framework-wide ARIA/WCAG markup audit still pending._ | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
 | ~~**P2**~~ | ~~Type-safe template validation~~ ✅ Shipped in v0.5.1 (`manage.py djust_typecheck`) | ~~Catch template variable typos at CI — unique differentiator vs all competitors~~ | ~~v0.5.1~~ |
 | ~~**P2**~~ | ~~Keep-Alive / `dj-activity`~~ ✅ Shipped — `static/djust/src/49-activity.js` + `templatetags/live_tags.py` `{% dj_activity %}` (React 19.2 `<Activity>` parity, server-canonical visibility) | ~~Pre-render hidden routes, preserve state — React 19.2 parity~~ | ~~v0.7.0~~ |
 | ~~**P2**~~ | ~~Streaming markdown renderer~~ ✅ Shipped in v0.7.0 (`{% djust_markdown %}` + `djust.render_markdown`, pulldown-cmark backend, provisional-line splitter) | ~~Incremental markdown for LLM output — strongest AI vertical signal~~ | ~~v0.7.0~~ |
@@ -1215,7 +1215,7 @@ Single grouped PR (`feat/v0.9.2-2-template-canon` or similar). Both items edit `
 | ~~**P2**~~ | ~~Error overlay (dev mode)~~ ✅ Shipped in v0.5.1 (`36-error-overlay.js`) | ~~In-browser error display like Next.js/Vite — faster debugging loop~~ | ~~v0.5.1~~ |
 | ~~**P2**~~ | ~~WebSocket compression~~ ✅ Shipped — `config.py:65` `websocket_compression: True` default + `mixins/post_processing.py:245` propagation (`window.DJUST_WS_COMPRESSION` + ASGI server permessage-deflate negotiation) | ~~`permessage-deflate` for 60-80% bandwidth reduction — cheapest optimization available~~ | ~~v0.6.0~~ |
 | ~~**P2**~~ | ~~Static asset tracking (`dj-track-static`)~~ ✅ Shipped — `static/djust/src/39-dj-track-static.js` (Phoenix `phx-track-static` parity, stale-on-reconnect prompt) | ~~Detect stale JS/CSS on reconnect, prompt reload — Phoenix `phx-track-static` parity~~ | ~~v0.6.0~~ |
-| **P3** | View Transitions API | Cheapest way to make navigation feel native | v0.5.0 |
+| ~~**P3**~~ | ~~View Transitions API~~ ✅ Shipped — View Transitions ADR-013 (v0.8.5/v0.8.6); static/djust/src/12-vdom-patch.js:1934 | ~~Cheapest way to make navigation feel native~~ | ~~v0.5.0~~ |
 | **P3** | Islands of interactivity | Content-heavy sites with small interactive zones | v0.7.1 |
 | **P3** | Offline mutation queue | Mobile/spotty-connection differentiator | v0.6.0 |
 | ~~**P3**~~ | ~~Native `<dialog>` integration~~ ✅ Shipped in v0.5.1 (`dj-dialog="open|close"`, 8 tests) | ~~Browser-native modals with better a11y than custom implementations~~ | ~~v0.5.0~~ |
@@ -1273,63 +1273,63 @@ Single grouped PR (`feat/v0.9.2-2-template-canon` or similar). Both items edit `
 | ~~**P3**~~ | ~~docs: tutorial bubble must be outside `dj-root` (#699)~~ ✅ | ~~Morphdom recovery wipes bubble if inside LiveView container — undocumented~~ | v0.4.2 |
 | ~~**P2**~~ | ~~push_commands-only handlers should auto-skip VDOM re-render (#700)~~ ✅ | ~~Unnecessary re-renders cause patch failures + morphdom recovery during tours~~ | v0.4.2 |
 | ~~**P1**~~ | ~~Derived context vars stale under incremental Rust sync (#703)~~ ✅ | ~~`id()` optimization skips sub-objects of mutated dicts — templates render stale data~~ | v0.4.2 |
-| **P2** | Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1) | Eliminate theoretical-audience package fragmentation; extras pattern + compat shim | v0.5.0 |
+| ~~**P2**~~ | ~~Fold `djust-auth` + `djust-tenants` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 1)~~ ✅ Shipped — auth/tenants folded into core; `auth`/`tenants` extras in pyproject.toml (ADR-007) | ~~Eliminate theoretical-audience package fragmentation; extras pattern + compat shim~~ | ~~v0.5.0~~ |
 | ~~**P2**~~ | ~~Fold `djust-theming` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 2)~~ ✅ Shipped in v0.5.0 (PR #772) | ~~Unified CSS/theming story with core; compat shim for plain-Django users~~ | ~~v0.5.1~~ |
-| **P2** | Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3) | Largest fold — 64K LOC — dedicated release window in v0.5.2 | v0.5.2 |
+| ~~**P2**~~ | ~~Fold `djust-components` into core ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 3)~~ ✅ Shipped in PR #773 — `djust[components]` extra (ADR-007 Phase 3) | ~~Largest fold — 64K LOC — dedicated release window in v0.5.2~~ | ~~v0.5.2~~ |
 | **P3** | Strip `examples/demo_project` to a test harness (move to `tests/test_project/`) | Stops pretending the repo has a demo; real starter is `djust-scaffold`. See `docs/plans/strip-demo-project-to-test-harness.md` | v0.5.2 |
 | ~~**P2**~~ | ~~Consolidation sunset — remove compat shims ([ADR-007](docs/adr/007-package-taxonomy-and-consolidation.md) Phase 4)~~ ✅ **Shipped v0.6.0 (PR #971)** — Path A (tag-only sunset). All 5 sibling repos tagged `v99.0.0`. djust core ships `djust[auth]` / `djust[tenants]` / `djust[theming]` / `djust[components]` / `djust[admin]` extras. Migration guide at `docs/website/guides/migration-from-standalone-packages.md`. | ~~v0.6.0~~ |
 | **P1** | `broadcast_commands` + multi-user sync ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 4) | Instructor → students UI sync in a single primitive; novel for Python frameworks | v0.5.x |
 | **P1** | Consent envelope for remote control ([ADR-005](docs/adr/005-consent-envelope-for-remote-control.md)) | Security-critical primitive for support handoffs, accessibility caregivers, AI assist | v0.5.x |
 | **P0** | `AssistantMixin` + LLM provider abstraction ([ADR-002](docs/adr/002-backend-driven-ui-automation.md) Phase 5, [ADR-003](docs/adr/003-llm-provider-abstraction.md), [ADR-004](docs/adr/004-undo-for-llm-driven-actions.md)) | Voice/chat-driven djust apps; market window is ~12 months; largest revenue angle | v0.5.x |
 | **P0** | AI-generated UIs with capture-and-promote ([ADR-006](docs/adr/006-ai-generated-uis-with-capture-and-promote.md)) | "User builds an app with an LLM" — v0.6.0 headline feature; lossless export to Python | **v0.6.1** (deferred from v0.6.0rc1) |
-| **P1 ⭐** | **Auto-generated HTTP API from `@event_handler`** ([ADR-008](docs/adr/008-auto-generated-http-api-from-event-handlers.md)) | **v0.5.1 headline feature (pulled forward from v0.7.0).** Opt-in `expose_api=True` turns handlers into `POST /djust/api/<view>/<handler>/` endpoints with OpenAPI schema — unlocks mobile, S2S, CLI, and AI-agent callers without duplicating logic. Transport adapter over the existing handler stack (same coercion, permissions, rate limiter) → manifesto principle #4 preserved. | v0.5.1 |
-| **P1** | 3 pre-existing main test failures (#935) | `test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view` — failing on main, surfaced during PR #924 | v0.5.2 |
-| **P1** | FormArrayNode drops inner template content (#930) | Latent bug — `{% form_array %}inner{% endform_array %}` silently loses markup | v0.5.2 |
-| **P1** | tag_input missing `name=` attribute (#932) | Form submissions silently drop field values | v0.5.2 |
-| **P1** | Audit all HttpResponseRedirect sites (#921) | `url_has_allowed_host_and_scheme` coverage — close open-redirect category | v0.5.2 |
-| **P2** | Drop redundant `ch == ' '` in sanitize_for_log (#914) | 1-line simplification; ASCII space is printable | v0.5.2 |
-| **P2** | gallery/registry.py dead discover_* path (#933) | `get_gallery_data` never consumes discovery results | v0.5.2 |
-| **P2** | add javascript: + HTTPS-downgrade + path-traversal edge tests (#922) | Test coverage gaps flagged in PR #920 review | v0.5.2 |
-| **P2** | 10 py-format-drift files (#915) | Pre-existing ruff-format drift; bulk reformat | v0.5.2 |
-| **P2** | dj-remove teardown dedupe via _teardownState (#900) | Code-quality refactor; Stage 11 nit from PR #898 | v0.5.2 |
-| **P2** | dj-remove 2-token-form debug warn (#901) | Silent fall-through on malformed spec; debug-only warn | v0.5.2 |
-| **P2** | dj-transition-group reduce 700ms test wallclock (#905) | Override `dj-remove-duration=50` in the integration test | v0.5.2 |
-| **P2** | dj-transition-group nested-group regression test (#906) | Verify inner groups install independently | v0.5.2 |
-| **P2** | dj-transition parser reject comma/paren separators (#886) | Input validation; avoid silent coercion | v0.5.2 |
-| **P2** | dj-transition fallback timer vs detached element (#887) | Timer fires against node already removed from DOM | v0.5.2 |
-| **P2** | dj-transition stabilize transitionend-dispatch tests (#888) | 2 tests skipped in PR #885 — fix under vitest parallel load | v0.5.2 |
-| **P2** | dj-mutation test for pre-debounce removal (#882) | Assert no CustomEvent fires when element removed before debounce | v0.5.2 |
-| **P2** | dj-mutation/sticky-scroll observer misses attr removal (#879) | Root observer doesn't re-scan when attribute removed on kept element | v0.5.2 |
-| **P2** | dj-sticky-scroll document scroll-to-bottom install behavior (#881) | Unconditional on install — explicit doc | v0.5.2 |
-| **P2** | dj-track-static document Map-vs-WeakMap choice (#880) | `39-dj-track-static.js` — explain non-weak reference | v0.5.2 |
-| **P2** | UploadMixin schema-changed saved-configs replay (#892) | Defensive replay when allow_upload kwargs shift between versions | v0.5.2 |
-| **P2** | _restore_listen_channels vs _assert_same_loop (#896) | Cross-loop restore interaction — verify no AssertionError | v0.5.2 |
-| **P2** | ADR for mixin-side-effect replay pattern (#897) | Document the `_restore_*` pattern formally | v0.5.2 |
-| **P2** | CodeQL MaD model for sanitize_for_log (#934) | Teach CodeQL the custom sanitizer — close FP class | v0.5.2 |
-| **P2** | Automate CHANGELOG test-count validation (#908) | Pre-commit hook or make target; 3 retros flagged drift | v0.5.2 |
-| **P2** | codeql-triage.sh script (#916) | Dump alerts as markdown triage table | v0.5.2 |
-| **P2** | Audit open-ended dep ceilings (#910) | `requests>=2.28`, `markdown>=3.0` etc. — add upper bounds | v0.5.2 |
-| **P3** | Variable-height virtual-list items via ResizeObserver (#797) | ~200 LOC; extends virtual-list to variable row heights | v0.5.x |
-| **P3** | Ship final standalone package compat shims (#778) | djust-auth/tenants/theming/components final PyPI releases | v0.6.0 |
-| **P1** | `djust.A010` check recognize proxy-trusted deployments (#890) | AWS ALB / L7-LB deployments need `ALLOWED_HOSTS=['*']`; current check forces silencing workaround | v0.5.7 |
-| **P1** | `LiveView.get_state()` filter framework-internal attrs (#762) | ~30 framework attrs leak into state_sizes + reactive-state debug payloads | v0.5.7 |
-| **P2** | Pre-signed S3 PUT URLs — client-direct upload (#820) | Bypass djust for large uploads; djust only signs URL + observes completion | v0.5.7 |
-| **P2** | Resumable uploads across WS disconnects (#821) | Client-side byte tracking + Redis MPU state; Phoenix 1.0 pattern | v0.5.7 |
-| **P2** | First-class GCS + Azure Blob UploadWriter subclasses (#822) | `djust.contrib.uploads.gcs` / `azure`; optional extras | v0.5.7 |
-| **P1** | NameError on module load — `DjustFileChangeHandler` references undefined `FileSystemEventHandler` when `watchdog` is not installed (#994) | Breaks `manage.py check` in any production install without the `[dev]` extra — latent since ≥v0.5.4rc1, surfaced v0.7.0rc1 | v0.7.2 |
-| **P1** | Rust renderer ignores `__str__` key in serialized model dicts — renders literal `[Object]` (#968) | Asymmetry with Django template semantics: `{{ obj }}` should call `__str__`, the dict already carries `"__str__"` from `_serialize_model_safely`, Rust just doesn't consume it | v0.7.2 |
-| **P2** | docs: prominent `key_template` convention for `s3_events` UUID extraction (#964) | Silent `upload_id` fallback when key doesn't match UUID-prefix shape; doc + debug-warn | v0.7.2 |
-| **P2** | tooling: weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers (#963) | All v0.5.7 writer tests mock SDKs; weekly happy-path integration run | v0.7.2 |
-| **P2** | feat: inline radio buttons in forms (#991) | Segmented controls / filter pills / Yes-No — common LiveView UX; API TBD (form-level flag vs widget attr vs template variant) | v0.7.2 |
+| ~~**P1 ⭐**~~ | ~~**Auto-generated HTTP API from `@event_handler`** ([ADR-008](docs/adr/008-auto-generated-http-api-from-event-handlers.md))~~ ✅ Shipped in PR #835 — ADR-008, v0.5.1 headline (`expose_api=` in decorators.py) | ~~**v0.5.1 headline feature (pulled forward from v0.7.0).** Opt-in `expose_api=True` turns handlers into `POST /djust/api/<view>/<handler>/` endpoints with OpenAPI schema — unlocks mobile, S2S, CLI, and AI-agent callers without duplicating logic. Transport adapter over the existing handler stack (same coercion, permissions, rate limiter) → manifesto principle #4 preserved.~~ | ~~v0.5.1~~ |
+| ~~**P1**~~ | ~~3 pre-existing main test failures (#935)~~ ✅ Resolved — #935 closed-completed | ~~`test_api_response`, `test_observability_eval_handler`, `test_observability_reset_view` — failing on main, surfaced during PR #924~~ | ~~v0.5.2~~ |
+| ~~**P1**~~ | ~~FormArrayNode drops inner template content (#930)~~ ✅ Shipped in PR #939 | ~~Latent bug — `{% form_array %}inner{% endform_array %}` silently loses markup~~ | ~~v0.5.2~~ |
+| ~~**P1**~~ | ~~tag_input missing `name=` attribute (#932)~~ ✅ Resolved — #932 closed-completed | ~~Form submissions silently drop field values~~ | ~~v0.5.2~~ |
+| ~~**P1**~~ | ~~Audit all HttpResponseRedirect sites (#921)~~ ✅ Resolved — #921 closed-completed | ~~`url_has_allowed_host_and_scheme` coverage — close open-redirect category~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~Drop redundant `ch == ' '` in sanitize_for_log (#914)~~ ✅ Resolved — #914 closed-completed | ~~1-line simplification; ASCII space is printable~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~gallery/registry.py dead discover_* path (#933)~~ ✅ Resolved — #933 closed-completed | ~~`get_gallery_data` never consumes discovery results~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~add javascript: + HTTPS-downgrade + path-traversal edge tests (#922)~~ ✅ Resolved — #922 closed-completed | ~~Test coverage gaps flagged in PR #920 review~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~10 py-format-drift files (#915)~~ ✅ Resolved — #915 closed-completed | ~~Pre-existing ruff-format drift; bulk reformat~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-remove teardown dedupe via _teardownState (#900)~~ ✅ Shipped in commit b9746987 | ~~Code-quality refactor; Stage 11 nit from PR #898~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-remove 2-token-form debug warn (#901)~~ ✅ Shipped in commit b9746987 | ~~Silent fall-through on malformed spec; debug-only warn~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-transition-group reduce 700ms test wallclock (#905)~~ ✅ Shipped in PR #942 | ~~Override `dj-remove-duration=50` in the integration test~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-transition-group nested-group regression test (#906)~~ ✅ Shipped in PR #942 | ~~Verify inner groups install independently~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-transition parser reject comma/paren separators (#886)~~ ✅ Shipped in PR #941 | ~~Input validation; avoid silent coercion~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-transition fallback timer vs detached element (#887)~~ ✅ Resolved — #887 closed-completed | ~~Timer fires against node already removed from DOM~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-transition stabilize transitionend-dispatch tests (#888)~~ ✅ Resolved — #888 closed-completed | ~~2 tests skipped in PR #885 — fix under vitest parallel load~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-mutation test for pre-debounce removal (#882)~~ ✅ Resolved — #882 closed-completed | ~~Assert no CustomEvent fires when element removed before debounce~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-mutation/sticky-scroll observer misses attr removal (#879)~~ ✅ Shipped in PR #943 | ~~Root observer doesn't re-scan when attribute removed on kept element~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-sticky-scroll document scroll-to-bottom install behavior (#881)~~ ✅ Resolved — #881 closed-completed | ~~Unconditional on install — explicit doc~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~dj-track-static document Map-vs-WeakMap choice (#880)~~ ✅ Resolved — #880 closed-completed | ~~`39-dj-track-static.js` — explain non-weak reference~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~UploadMixin schema-changed saved-configs replay (#892)~~ ✅ Shipped in PR #944 | ~~Defensive replay when allow_upload kwargs shift between versions~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~_restore_listen_channels vs _assert_same_loop (#896)~~ ✅ Shipped in PR #944 | ~~Cross-loop restore interaction — verify no AssertionError~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~ADR for mixin-side-effect replay pattern (#897)~~ ✅ Shipped in PR #944 | ~~Document the `_restore_*` pattern formally~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~CodeQL MaD model for sanitize_for_log (#934)~~ ✅ Shipped in PR #945 | ~~Teach CodeQL the custom sanitizer — close FP class~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~Automate CHANGELOG test-count validation (#908)~~ ✅ Shipped in PR #945 | ~~Pre-commit hook or make target; 3 retros flagged drift~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~codeql-triage.sh script (#916)~~ ✅ Shipped in PR #945 | ~~Dump alerts as markdown triage table~~ | ~~v0.5.2~~ |
+| ~~**P2**~~ | ~~Audit open-ended dep ceilings (#910)~~ ✅ Shipped in PR #946 | ~~`requests>=2.28`, `markdown>=3.0` etc. — add upper bounds~~ | ~~v0.5.2~~ |
+| ~~**P3**~~ | ~~Variable-height virtual-list items via ResizeObserver (#797)~~ ✅ Shipped in PR #947 | ~~~200 LOC; extends virtual-list to variable row heights~~ | ~~v0.5.x~~ |
+| ~~**P3**~~ | ~~Ship final standalone package compat shims (#778)~~ ✅ Shipped in commit b8995e6c | ~~djust-auth/tenants/theming/components final PyPI releases~~ | ~~v0.6.0~~ |
+| ~~**P1**~~ | ~~`djust.A010` check recognize proxy-trusted deployments (#890)~~ ✅ Shipped in PR #957 | ~~AWS ALB / L7-LB deployments need `ALLOWED_HOSTS=['*']`; current check forces silencing workaround~~ | ~~v0.5.7~~ |
+| ~~**P1**~~ | ~~`LiveView.get_state()` filter framework-internal attrs (#762)~~ ✅ Shipped in commit 0c054792 | ~~~30 framework attrs leak into state_sizes + reactive-state debug payloads~~ | ~~v0.5.7~~ |
+| ~~**P2**~~ | ~~Pre-signed S3 PUT URLs — client-direct upload (#820)~~ ✅ Shipped in commit fbaaf1b7 | ~~Bypass djust for large uploads; djust only signs URL + observes completion~~ | ~~v0.5.7~~ |
+| ~~**P2**~~ | ~~Resumable uploads across WS disconnects (#821)~~ ✅ Shipped in PR #959 | ~~Client-side byte tracking + Redis MPU state; Phoenix 1.0 pattern~~ | ~~v0.5.7~~ |
+| ~~**P2**~~ | ~~First-class GCS + Azure Blob UploadWriter subclasses (#822)~~ ✅ Resolved — #822 closed-completed | ~~`djust.contrib.uploads.gcs` / `azure`; optional extras~~ | ~~v0.5.7~~ |
+| ~~**P1**~~ | ~~NameError on module load — `DjustFileChangeHandler` references undefined `FileSystemEventHandler` when `watchdog` is not installed (#994)~~ ✅ Shipped in PR #998 | ~~Breaks `manage.py check` in any production install without the `[dev]` extra — latent since ≥v0.5.4rc1, surfaced v0.7.0rc1~~ | ~~v0.7.2~~ |
+| ~~**P1**~~ | ~~Rust renderer ignores `__str__` key in serialized model dicts — renders literal `[Object]` (#968)~~ ✅ Shipped in PR #999 | ~~Asymmetry with Django template semantics: `{{ obj }}` should call `__str__`, the dict already carries `"__str__"` from `_serialize_model_safely`, Rust just doesn't consume it~~ | ~~v0.7.2~~ |
+| ~~**P2**~~ | ~~docs: prominent `key_template` convention for `s3_events` UUID extraction (#964)~~ ✅ Shipped in PR #1000 | ~~Silent `upload_id` fallback when key doesn't match UUID-prefix shape; doc + debug-warn~~ | ~~v0.7.2~~ |
+| ~~**P2**~~ | ~~tooling: weekly real-cloud CI matrix job for S3 / GCS / Azure upload writers (#963)~~ ✅ Shipped in PR #1001 | ~~All v0.5.7 writer tests mock SDKs; weekly happy-path integration run~~ | ~~v0.7.2~~ |
+| ~~**P2**~~ | ~~feat: inline radio buttons in forms (#991)~~ ✅ Shipped in PR #1007 | ~~Segmented controls / filter pills / Yes-No — common LiveView UX; API TBD (form-level flag vs widget attr vs template variant)~~ | ~~v0.7.2~~ |
 | ~~**P2**~~ | ~~policy: decide breaking rename of framework-internal attrs to `_*` prefix (#962)~~ ✅ **Closed without code in v0.7.2** — [ADR-012](docs/adr/012-framework-internal-attrs-filter-vs-rename.md) documents the decision: keep the `_FRAMEWORK_INTERNAL_ATTRS` filter (shipped #762), do NOT rename. Rename would break every user view reading `self.login_required` / `self.template_name` without net defense-in-depth benefit. | ~~v0.7.2~~ |
-| **P1** | `djust.C011` doesn't catch stale/placeholder `output.css` (#1003) | `_check_missing_compiled_css` only tests `os.path.exists` — a committed placeholder passes; site serves without Tailwind utilities silently | v0.7.3 |
-| **P1** | `djust.A070` false positive on `{% verbatim %}`-wrapped `dj_activity` examples (#1004) | A070 scans template source as raw text and fires on docs/marketing examples wrapped in `{% verbatim %}` | v0.7.3 |
-| **P2** | `djust_theming.W001` should only contrast-check the active pack (#1005) | 65+ built-in packs produce hundreds of warnings on every `manage.py check` — bad S/N ratio means real warnings get ignored | v0.7.3 |
-| **P2** | py3.14 timing-sensitive CI flake class (#1016) | `test_hotreload_slow_patch_warning` + `test_broadcast_latency_scales[10]` flake on py3.14 only — pick per-runner tolerance / `@flaky(reruns=2)` / non-required matrix slot | v0.7.4 |
-| **P2** | docs: `_FRAMEWORK_INTERNAL_ATTRS` PR-checklist reminder (#1017) | ADR-012 mitigation — one bullet in `PULL_REQUEST_CHECKLIST.md` | v0.7.4 |
-| **P2** | docs: "misleading existing tests" pattern note (#1018) | One paragraph in `PULL_REQUEST_CHECKLIST.md` — when fixing a check, audit existing tests whose fixtures exemplify the broken behavior | v0.7.4 |
-| **P2** | docs: whitespace-preserving redaction pattern in check-authoring guide (#1019) | New section documenting the `_strip_verbatim_blocks` pattern as canonical reference for line-number-aware regex scanners | v0.7.4 |
-| **P2** | docs: scope-decision helper extraction pattern in check-authoring guide (#1020) | New section documenting `_contrast_check_scope` / `_presets_to_check` as canonical reference for config-driven check scope | v0.7.4 |
+| ~~**P1**~~ | ~~`djust.C011` doesn't catch stale/placeholder `output.css` (#1003)~~ ✅ Shipped in PR #1008 | ~~`_check_missing_compiled_css` only tests `os.path.exists` — a committed placeholder passes; site serves without Tailwind utilities silently~~ | ~~v0.7.3~~ |
+| ~~**P1**~~ | ~~`djust.A070` false positive on `{% verbatim %}`-wrapped `dj_activity` examples (#1004)~~ ✅ Shipped in PR #1014 | ~~A070 scans template source as raw text and fires on docs/marketing examples wrapped in `{% verbatim %}`~~ | ~~v0.7.3~~ |
+| ~~**P2**~~ | ~~`djust_theming.W001` should only contrast-check the active pack (#1005)~~ ✅ Shipped in PR #1015 | ~~65+ built-in packs produce hundreds of warnings on every `manage.py check` — bad S/N ratio means real warnings get ignored~~ | ~~v0.7.3~~ |
+| ~~**P2**~~ | ~~py3.14 timing-sensitive CI flake class (#1016)~~ ✅ Shipped in PR #1021 | ~~`test_hotreload_slow_patch_warning` + `test_broadcast_latency_scales[10]` flake on py3.14 only — pick per-runner tolerance / `@flaky(reruns=2)` / non-required matrix slot~~ | ~~v0.7.4~~ |
+| ~~**P2**~~ | ~~docs: `_FRAMEWORK_INTERNAL_ATTRS` PR-checklist reminder (#1017)~~ ✅ Shipped in commit 6b20da67 | ~~ADR-012 mitigation — one bullet in `PULL_REQUEST_CHECKLIST.md`~~ | ~~v0.7.4~~ |
+| ~~**P2**~~ | ~~docs: "misleading existing tests" pattern note (#1018)~~ ✅ Resolved — #1018 closed-completed | ~~One paragraph in `PULL_REQUEST_CHECKLIST.md` — when fixing a check, audit existing tests whose fixtures exemplify the broken behavior~~ | ~~v0.7.4~~ |
+| ~~**P2**~~ | ~~docs: whitespace-preserving redaction pattern in check-authoring guide (#1019)~~ ✅ Resolved — #1019 closed-completed | ~~New section documenting the `_strip_verbatim_blocks` pattern as canonical reference for line-number-aware regex scanners~~ | ~~v0.7.4~~ |
+| ~~**P2**~~ | ~~docs: scope-decision helper extraction pattern in check-authoring guide (#1020)~~ ✅ Resolved — #1020 closed-completed | ~~New section documenting `_contrast_check_scope` / `_presets_to_check` as canonical reference for config-driven check scope~~ | ~~v0.7.4~~ |
 | ~~**P1**~~ | ~~Bisect 6 flaky tests that fail in full pytest run, pass in isolation (#1134)~~ ✅ Shipped in PR #1159 | ~~Every PR pays a ~30s skip-marker tax on full-suite runs; root cause is a polluting test mutating global state (Django settings / Channels registry / Redis mock). Bisect first, fix the polluter — unblocks the pre-push hook for every future PR.~~ | ~~v0.9.1~~ |
 | ~~**P1**~~ | ~~Rust template renderer rejects project-defined `register.filter` (#1121)~~ ✅ Shipped in PR #1161 | ~~Real bug, surfaced post-v0.9.0 — projects that register custom filters via the Django registry don't see them in the Rust path. Asymmetry with the Python engine; same shape as the v0.7.2 `__str__` fix (#968).~~ | ~~v0.9.1~~ |
 | ~~**P2**~~ | ~~A075 system check — sticky+lazy template scan (#1146)~~ ✅ Shipped in PR #1163 | ~~ADR-015 §"Deferred from PR-B". Catch `{% live_render sticky=True lazy=True %}` collision at startup, not template-render time. ~80 LoC + tests.~~ | ~~v0.9.1~~ |
@@ -2499,7 +2499,7 @@ Three downstream-consumer issues filed during the v0.8.6 session, plus async-ena
 
 *Goal:* Ship all 4 v0.9.0 backlog candidates so 1.0 testing starts from a feature-complete base. ADR-006 #1044 (AI-generated UIs) is the only deferred candidate — pushed down the road to post-1.0 because it needs the AssistantMixin/LLM-provider design work first.
 
-**Status (live):** 1 of 6 PRs shipped. PR #1128 closed #1032; remaining work below is broken into pipeline-runnable units.
+**Status:** ✅ all 6 PRs shipped. #1032, #1041, #1042, #1043 (PR-A/B/C) all closed-completed; #1044 deferred to post-1.0. (Roadmap audit 2026-05-17.)
 
 #### Shipped
 
@@ -2509,17 +2509,17 @@ Three downstream-consumer issues filed during the v0.8.6 session, plus async-ena
 
 The Plan-stage pre-flight pass discovered that Phase 1 streaming (v0.6.1) was a regex-split-after-render — TTFB unchanged, retro #116 already documented this as doc overclaim. So #1043 is **introducing real streaming for the first time**, not "completing" Phase 1. Per retro #1122 split-foundation rule, this needs to ship as 3 PRs:
 
-- [ ] **#1043 PR-A — async render path foundation** (P2, ~600 LoC core + 250 tests, ~1.5 days). Branch: `feat/streaming-phase2-1043-pr-a`. Pipeline state already exists at `.pipeline-state/feat-streaming-phase2-1043.json` (Stages 1-4 passed; ready to resume at Stage 5). Add `async def aget()` parallel to `RequestMixin.get()`; new `python/djust/http_streaming.py` with `ChunkEmitter`; `arender_chunks()` async generator in `mixins/template.py`. No new user-facing API. `streaming_render = True` flag actually shell-flushes for the first time. Rewrite `docs/website/guides/streaming-render.md` to close retro #116 doc-claim debt. Standalone ship value: TTFB win for slow `get_context_data()` views; releasable as v0.9.0rc1.
+- [x] **#1043 PR-A — async render path foundation** (P2, ~600 LoC core + 250 tests, ~1.5 days). Branch: `feat/streaming-phase2-1043-pr-a`. Pipeline state already exists at `.pipeline-state/feat-streaming-phase2-1043.json` (Stages 1-4 passed; ready to resume at Stage 5). Add `async def aget()` parallel to `RequestMixin.get()`; new `python/djust/http_streaming.py` with `ChunkEmitter`; `arender_chunks()` async generator in `mixins/template.py`. No new user-facing API. `streaming_render = True` flag actually shell-flushes for the first time. Rewrite `docs/website/guides/streaming-render.md` to close retro #116 doc-claim debt. Standalone ship value: TTFB win for slow `get_context_data()` views; releasable as v0.9.0rc1.
 
-- [ ] **#1043 PR-B — `{% live_render lazy=True %}` capability** (P2, ~500 LoC + 550 tests, ~2 days, depends on PR-A). Branch: `feat/streaming-phase2-1043-pr-b`. Tag `live_render` `lazy=` kwarg branch; emit `<dj-lazy-slot>` placeholder + register thunk on `parent._chunk_emitter`; new `static/djust/src/16-lazy-fill.js` for `<template id="djl-fill-X">` + inline-script slot replacement; system check A075 to flag `lazy=True + sticky=True` collision (`TemplateSyntaxError` at tag eval). `lazy="visible"` opts into IntersectionObserver-triggered fill (composes with `dj-lazy` from `13-lazy-hydration.js`). Demo: extend `examples/demo_project` with a `lazy_demo` view exercising 3 children at different render times.
+- [x] **#1043 PR-B — `{% live_render lazy=True %}` capability** (P2, ~500 LoC + 550 tests, ~2 days, depends on PR-A). Branch: `feat/streaming-phase2-1043-pr-b`. Tag `live_render` `lazy=` kwarg branch; emit `<dj-lazy-slot>` placeholder + register thunk on `parent._chunk_emitter`; new `static/djust/src/16-lazy-fill.js` for `<template id="djl-fill-X">` + inline-script slot replacement; system check A075 to flag `lazy=True + sticky=True` collision (`TemplateSyntaxError` at tag eval). `lazy="visible"` opts into IntersectionObserver-triggered fill (composes with `dj-lazy` from `13-lazy-hydration.js`). Demo: extend `examples/demo_project` with a `lazy_demo` view exercising 3 children at different render times.
 
-- [ ] **#1043 PR-C — `asyncio.as_completed()` parallel render** (P2, ~80 LoC + 200 tests, ~0.5 days, depends on PR-A; can ship before PR-B if scheduling demands). Branch: `feat/streaming-phase2-1043-pr-c`. Replace sequential `await` over thunks with `asyncio.as_completed()`; per-task timeout; sentinel-based cancellation propagates via `request_token` from emitter on ASGI scope `disconnected`. Children render in parallel; chunks emerge in completion order. Closes #1043 (umbrella) on merge.
+- [x] **#1043 PR-C — `asyncio.as_completed()` parallel render** (P2, ~80 LoC + 200 tests, ~0.5 days, depends on PR-A; can ship before PR-B if scheduling demands). Branch: `feat/streaming-phase2-1043-pr-c`. Replace sequential `await` over thunks with `asyncio.as_completed()`; per-task timeout; sentinel-based cancellation propagates via `request_token` from emitter on ASGI scope `disconnected`. Children render in parallel; chunks emerge in completion order. Closes #1043 (umbrella) on merge.
 
 #### Remaining P3 features (DevTools polish)
 
-- [ ] **#1041 — Component-level time-travel** (P3, ~2-3 days). v0.6.1's time-travel ring-buffer records against the parent LiveView. Phase 2 captures component-level state too, so multi-component pages get per-component scrubbing in the debug panel. **Stage-4 first-principles guideline** (canonicalized from #1032 retro): the Plan stage should grep for existing `time_travel`, `state_snapshot`, `ring_buffer` symbols before locking architecture; reuse the existing parent-level recorder if at all possible.
+- [x] **#1041 — Component-level time-travel** (P3, ~2-3 days). v0.6.1's time-travel ring-buffer records against the parent LiveView. Phase 2 captures component-level state too, so multi-component pages get per-component scrubbing in the debug panel. **Stage-4 first-principles guideline** (canonicalized from #1032 retro): the Plan stage should grep for existing `time_travel`, `state_snapshot`, `ring_buffer` symbols before locking architecture; reuse the existing parent-level recorder if at all possible.
 
-- [ ] **#1042 — Forward-replay through branched timeline (Redux DevTools parity)** (P3, ~2 days, depends on #1041). Currently the time-travel debug panel only scrubs back through linear history. Forward-replay through alternative timelines (replay from state X with new event Y) closes the React DevTools / Redux DevTools UX parity gap. Smaller than #1041 but builds on its data model.
+- [x] **#1042 — Forward-replay through branched timeline (Redux DevTools parity)** (P3, ~2 days, depends on #1041). Currently the time-travel debug panel only scrubs back through linear history. Forward-replay through alternative timelines (replay from state X with new event Y) closes the React DevTools / Redux DevTools UX parity gap. Smaller than #1041 but builds on its data model.
 
 #### Deferred to post-1.0
 
