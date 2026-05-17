@@ -623,7 +623,9 @@ pub enum Node {
 
 **Condition operators**: The `If` node supports comparison operators:
 - Equality: `==`, `!=`
+- Identity: `is`, `is not` (Django identity semantics — true only for the `None`, `True`, `False` singletons)
 - Comparison: `>`, `<`, `>=`, `<=`
+- Membership: `in`
 - Boolean: `and`, `or`, `not`
 - Branching: `{% elif %}` is supported (converted to nested `If` nodes)
 

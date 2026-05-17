@@ -135,6 +135,7 @@ def my_view(request):
 - Filters: `{{ variable|filter }}` (including `urlencode`)
 - Tags: `{% if %}`, `{% elif %}`, `{% else %}`, `{% for %}`, `{% extends %}`, `{% block %}`, `{% url %}`, `{% include %}`
 - Comparison operators: `>`, `<`, `>=`, `<=` in `{% if %}` tags
+- Identity operators: `is`, `is not` in `{% if %}` tags (e.g. `{% if x is None %}`)
 - Comments: `{# comment #}`
 
 ✅ **Template Loading**
