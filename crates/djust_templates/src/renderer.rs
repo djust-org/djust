@@ -1658,6 +1658,21 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
         }
     }
 
+    // Handle Django identity operators "is" / "is not" (Django 4.0+).
+    // " is not " MUST be checked before " is " because the former
+    // contains the latter as a substring. Space-padded markers avoid
+    // matching variable names that merely contain "is" (e.g. "analysis").
+    if let Some(pos) = condition.find(" is not ") {
+        let left = get_value(condition[..pos].trim(), context)?;
+        let right = get_value(condition[pos + 8..].trim(), context)?;
+        return Ok(!values_identity(&left, &right));
+    }
+    if let Some(pos) = condition.find(" is ") {
+        let left = get_value(condition[..pos].trim(), context)?;
+        let right = get_value(condition[pos + 4..].trim(), context)?;
+        return Ok(values_identity(&left, &right));
+    }
+
     // Handle >= (must be before > to avoid false match)
     if condition.contains(">=") {
         let parts: Vec<&str> = condition.split(">=").map(|s| s.trim()).collect();
@@ -1808,6 +1823,23 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Integer(a), Value::Integer(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < f64::EPSILON,
         (Value::String(a), Value::String(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Django identity comparison for the `is` / `is not` template operators.
+///
+/// Mirrors Python's `is`: identity holds only for the singletons
+/// `None`, `True`, and `False`. Arbitrary equal values (`5 is 5`,
+/// `"a" is "a"`) are NOT contractually identical — CPython interning is
+/// an implementation detail templates must not rely on — so non-singleton
+/// types always return false. This is intentionally stricter than
+/// [`values_equal`].
+fn values_identity(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        // Non-singletons: Python `is` is not identity-stable; treat as false.
         _ => false,
     }
 }
@@ -3018,5 +3050,145 @@ mod tests {
         context.set("True".to_string(), Value::String("not a bool".to_string()));
         let val = get_value("True", &context).unwrap();
         assert_eq!(val.to_string(), "not a bool");
+    }
+
+    // ----- #1483: `is` / `is not` identity operators -----
+
+    fn render_if(template: &str, vars: Vec<(&str, Value)>) -> String {
+        let tokens = tokenize(template).unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        for (k, v) in vars {
+            context.set(k.to_string(), v);
+        }
+        render_nodes(&nodes, &context).unwrap()
+    }
+
+    #[test]
+    fn test_values_identity() {
+        // Null/Null -> true (Python `None is None`)
+        assert!(values_identity(&Value::Null, &Value::Null));
+        // Bool/Bool -> matches value (Python `True is True`, `False is False`)
+        assert!(values_identity(&Value::Bool(true), &Value::Bool(true)));
+        assert!(values_identity(&Value::Bool(false), &Value::Bool(false)));
+        assert!(!values_identity(&Value::Bool(true), &Value::Bool(false)));
+        // Mismatched singletons -> false
+        assert!(!values_identity(&Value::Null, &Value::Bool(false)));
+        assert!(!values_identity(&Value::Bool(true), &Value::Null));
+        // Non-singletons -> always false (CPython interning is not contractual)
+        assert!(!values_identity(&Value::Integer(5), &Value::Integer(5)));
+        assert!(!values_identity(&Value::Float(1.0), &Value::Float(1.0)));
+        assert!(!values_identity(
+            &Value::String("a".to_string()),
+            &Value::String("a".to_string())
+        ));
+    }
+
+    #[test]
+    fn test_if_is_none_true() {
+        let result = render_if(
+            "{% if val is None %}empty{% else %}filled{% endif %}",
+            vec![("val", Value::Null)],
+        );
+        assert_eq!(result, "empty");
+    }
+
+    #[test]
+    fn test_if_is_none_false() {
+        // 0 is not None — identity, not truthiness
+        let result = render_if(
+            "{% if val is None %}empty{% else %}filled{% endif %}",
+            vec![("val", Value::Integer(0))],
+        );
+        assert_eq!(result, "filled");
+    }
+
+    #[test]
+    fn test_if_is_not_none_true() {
+        let result = render_if(
+            "{% if some_float is not None %}set{% else %}unset{% endif %}",
+            vec![("some_float", Value::Float(12.3))],
+        );
+        assert_eq!(result, "set");
+    }
+
+    #[test]
+    fn test_if_is_not_none_false() {
+        let result = render_if(
+            "{% if val is not None %}set{% else %}unset{% endif %}",
+            vec![("val", Value::Null)],
+        );
+        assert_eq!(result, "unset");
+    }
+
+    #[test]
+    fn test_if_is_true_singleton() {
+        let result = render_if(
+            "{% if flag is True %}yes{% else %}no{% endif %}",
+            vec![("flag", Value::Bool(true))],
+        );
+        assert_eq!(result, "yes");
+    }
+
+    #[test]
+    fn test_if_is_false_singleton() {
+        let result = render_if(
+            "{% if flag is False %}off{% else %}on{% endif %}",
+            vec![("flag", Value::Bool(false))],
+        );
+        assert_eq!(result, "off");
+    }
+
+    #[test]
+    fn test_if_is_not_true() {
+        let result = render_if(
+            "{% if flag is not True %}not-true{% else %}true{% endif %}",
+            vec![("flag", Value::Bool(false))],
+        );
+        assert_eq!(result, "not-true");
+    }
+
+    #[test]
+    fn test_if_is_non_singleton_not_identical() {
+        // Python identity semantics: `5 is 5` does NOT contractually hold.
+        let result = render_if(
+            "{% if a is b %}same{% else %}diff{% endif %}",
+            vec![("a", Value::Integer(5)), ("b", Value::Integer(5))],
+        );
+        assert_eq!(result, "diff");
+    }
+
+    #[test]
+    fn test_if_is_combined_with_and() {
+        // `is` / `is not` compose with the lower-precedence `and`.
+        let result = render_if(
+            "{% if a is not None and b is None %}match{% else %}nomatch{% endif %}",
+            vec![("a", Value::Integer(7)), ("b", Value::Null)],
+        );
+        assert_eq!(result, "match");
+    }
+
+    #[test]
+    fn test_if_is_not_checked_before_is() {
+        // Substring-ordering invariant: `x is not None` must be parsed as
+        // `x  (is not)  None`, NOT `x  (is)  (not None)`. With val set to a
+        // non-None value, `is not None` -> true. If " is " matched first,
+        // the right operand would be "not None" and resolve incorrectly.
+        let result = render_if(
+            "{% if val is not None %}set{% else %}unset{% endif %}",
+            vec![("val", Value::Integer(1))],
+        );
+        assert_eq!(result, "set");
+    }
+
+    #[test]
+    fn test_if_variable_named_with_is_substring_no_false_match() {
+        // A variable named "analysis" contains "is" but must not false-match
+        // the operator branch — space-padding guards against this.
+        let result = render_if(
+            "{% if analysis %}has-analysis{% else %}none{% endif %}",
+            vec![("analysis", Value::Bool(true))],
+        );
+        assert_eq!(result, "has-analysis");
     }
 }

@@ -342,5 +342,76 @@ class TestElifInHtmlAttribute:
         assert 'class=""' in result
 
 
+class TestIsIdentityOperators:
+    """#1483: Django 4.0+ `is` / `is not` identity-test operators.
+
+    Identity semantics follow Python: `is` is true only for the
+    None/True/False singletons (`None is None` -> true, `5 is 5` -> false).
+    """
+
+    def test_is_not_none_with_non_none_value(self):
+        """#1483 repro: `is not None` must render the true branch for a set float value."""
+        template = (
+            "{% if some_float is not None %}rendered: {{ some_float }}"
+            "{% else %}fallthrough{% endif %}"
+        )
+        result = render_template(template, {"some_float": 12.3})
+        assert result == "rendered: 12.3"
+
+    def test_is_not_none_with_none_value(self):
+        """#1483: `is not None` must render the false branch when the value is None."""
+        template = "{% if val is not None %}set{% else %}unset{% endif %}"
+        result = render_template(template, {"val": None})
+        assert result == "unset"
+
+    def test_is_none_with_none_value(self):
+        """#1483: `is None` must render the true branch when the value is None."""
+        template = "{% if val is None %}empty{% else %}filled{% endif %}"
+        result = render_template(template, {"val": None})
+        assert result == "empty"
+
+    def test_is_none_with_non_none_value(self):
+        """#1483: `is None` must render the false branch for a set value."""
+        template = "{% if val is None %}empty{% else %}filled{% endif %}"
+        result = render_template(template, {"val": 0})
+        assert result == "filled"
+
+    def test_is_none_with_zero_value(self):
+        """#1483: `is None` is identity, not truthiness — 0 is not None."""
+        template = "{% if count is not None %}has-count{% else %}no-count{% endif %}"
+        result = render_template(template, {"count": 0})
+        assert result == "has-count"
+
+    def test_is_true_singleton(self):
+        """#1483: `is True` is true for the True singleton."""
+        template = "{% if flag is True %}yes{% else %}no{% endif %}"
+        result = render_template(template, {"flag": True})
+        assert result == "yes"
+
+    def test_is_false_singleton(self):
+        """#1483: `is False` is true for the False singleton."""
+        template = "{% if flag is False %}off{% else %}on{% endif %}"
+        result = render_template(template, {"flag": False})
+        assert result == "off"
+
+    def test_is_not_true_with_false(self):
+        """#1483: `is not True` is true when the value is False."""
+        template = "{% if flag is not True %}not-true{% else %}true{% endif %}"
+        result = render_template(template, {"flag": False})
+        assert result == "not-true"
+
+    def test_is_non_singleton_values_are_not_identical(self):
+        """#1483: Python identity semantics — `5 is 5` style equality does NOT hold."""
+        template = "{% if a is b %}same{% else %}diff{% endif %}"
+        result = render_template(template, {"a": 5, "b": 5})
+        assert result == "diff"
+
+    def test_is_none_combined_with_and(self):
+        """#1483: `is`/`is not` must compose with `and` (lower precedence)."""
+        template = "{% if a is not None and b is None %}match{% else %}nomatch{% endif %}"
+        result = render_template(template, {"a": 7, "b": None})
+        assert result == "match"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
