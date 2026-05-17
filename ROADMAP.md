@@ -1,6 +1,6 @@
 # djust Roadmap
 
-> Current version: **0.9.7** (released 2026-05-16) — Last roadmap refresh: 2026-05-17 (roadmap audit: 50 stale matrix entries struck, v0.9.3–0.9.5 state labels corrected).
+> Current version: **0.9.7** (released 2026-05-16) — Last roadmap refresh: 2026-05-17 (v1.0.0 milestone scoped via `/pipeline-strategy` deep session — Path 3: Accessibility-in, Dead-View-out).
 
 This roadmap outlines what has been built, what is actively being worked on, and where djust is headed. Priorities are shaped by real-world usage across [djust.org](https://djust.org) and [djustlive](https://djustlive.com), and by feature parity goals with Phoenix LiveView 1.0 and React 19-level interactivity.
 
@@ -18,6 +18,44 @@ Two name shapes appear in this roadmap, with distinct meanings:
 **Historical note**: ROADMAP entries `v0.9.1` through `v0.9.5` (already shipped) were drain buckets under the old naming; they are equivalent to `v0.9.1-1` through `v0.9.1-5` under the new convention. They are NOT being retroactively renamed (would invalidate cross-references in 50+ PRs, retro files, and CHANGELOG entries). The convention applies forward-only.
 
 **Released**: `v0.9.1` cut 2026-04-30 (tag `v0.9.1`, GitHub Release published, PyPI live). Bundles 8 drain buckets + post-cleanup. Retro: RETRO.md §v0.9.1. Tracker carryovers (#1234, #1235, #1236) and the post-release SSE bug bundle (#1237) move into `v0.9.2-1` below.
+
+## Next: v1.0.0 — Release Readiness
+
+> Scoped 2026-05-17 by a `/pipeline-strategy` deep session — see `docs/strategy-sessions/2026-05-17-v1.0.0-readiness.md`.
+
+*Goal:* Promote djust from the v0.9.x bake (7 stable releases of audit-driven hardening since the v0.9.0 "feature wave before 1.0 testing") to a 1.0 SemVer stability commitment. The strategy session compared three paths and chose **Path 3 — Accessibility-in, Dead-View-out**: ship the correctness/stability gate plus framework-wide Accessibility; defer Dead View / Progressive Enhancement to post-1.0 as an additive capability that does not break the 1.0 API contract.
+
+**Scope** (~3 weeks, 6 work units):
+
+| # | Work unit | Theme | Priority | Effort |
+|---|---|---|---|---|
+| 1 | Fix Rust template `is None` / `is not None` operator bug (#1483) | Correctness gate | P0 | S |
+| 2 | 1.0 API-stability + deprecation policy | Stability gate | P0 | M |
+| 3 | Pre-1.0 security sweep (`djust_audit` + CodeQL + dependency ceilings) | Stability gate | P1 | S–M |
+| 4 | Framework-wide Accessibility (ARIA/WCAG) — finish the PARTIAL theming-only state | 1.0 feature | P1 | L |
+| 5 | ADR status reconciliation (008/013/014/016/017 → Accepted; AI arc → post-1.0) | Polish | P2 | S |
+| 6 | 1.0 documentation pass (Getting Started, upgrade guide, CHANGELOG release narrative) | Polish | P1 | M |
+
+**Sequencing:** #1483 first (pre-req correctness bug, smallest, design-novel). API-stability policy second — it is foundational and gates what the docs pass (unit 6) documents. Security sweep (3) and Accessibility (4) run in parallel after. ADR reconciliation (5) + docs (6) ship last, once the API-stability policy is settled.
+
+**Deferred to post-1.0** (recorded so future strategy sessions don't re-litigate):
+- **Dead View / Progressive Enhancement** — additive; does not break the 1.0 API contract. Re-scoped from `v1.0.0` to `post-1.0` in the Priority Matrix.
+- **Free-threaded-safe declaration (#1432)**, **sticky-child WS-reconnect persistence (#1471)** — borderline; revisit for v1.0.x / v1.1.
+- **AI / server-driven arc** (ADR-002 phases 4–5, ADR-003/004/005/006) — already roadmap-committed post-1.0.
+
+**Acceptance for v1.0.0:**
+- [ ] #1483 fixed with a regression test (Rust + Python template-engine parity).
+- [ ] API-stability + deprecation policy published; public surface audited for experimental/provisional markers.
+- [ ] Pre-1.0 security sweep clean.
+- [ ] Accessibility: framework-wide ARIA/WCAG markup pass + system check(s); theming color-contrast validation already shipped.
+- [ ] ADRs 008/013/014/016/017 marked Accepted; AI arc explicitly marked post-1.0.
+- [ ] 1.0 docs complete (Getting Started, upgrade guide, CHANGELOG release narrative).
+- [ ] Then: cut `v1.0.0rc1` via `/djust-release`.
+
+**Pipeline runner notes:**
+- `/pipeline-run --milestone v1.0.0` picks the next unit by priority + dependency order.
+- Drain buckets toward this release use the `v1.0.0-N` naming (see convention above).
+- First task: **#1483** — bugfix pipeline.
 
 ## Released: v0.9.1 (2026-04-30)
 
@@ -1204,8 +1242,8 @@ Single grouped PR (`feat/v0.9.2-2-template-canon` or similar). Both items edit `
 | ~~**P2**~~ | ~~Server Actions (`@action` decorator)~~ ✅ Shipped — `python/djust/decorators.py:233` (`@action` with auto-tracked `_action_state[name] = {pending, error, result}`) | ~~React 19 parity; standardized pending/error/success for mutations~~ | ~~v0.8.0~~ |
 | ~~**P2**~~ | ~~Async Streams~~ ✅ Shipped — `python/djust/streaming.py` `StreamingMixin` (token-by-token DOM updates via `stream_to(...)` + LLM streaming primitives) | ~~Phoenix 1.0 parity; infinite scroll and real-time feeds at scale~~ | ~~v0.8.0~~ |
 | **P2** | Connection multiplexing | Pages with 5+ live sections need this to not waste connections | v0.6.0 |
-| **P2** | Dead View / Progressive Enhancement | 1.0 requirement for government/accessibility projects | v1.0.0 |
-| **P2** | Accessibility (ARIA/WCAG) — _Partial: WCAG color-contrast validation shipped (`python/djust/theming/accessibility.py`); framework-wide ARIA/WCAG markup audit still pending._ | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
+| **P2** | Dead View / Progressive Enhancement — _deferred to post-1.0 (strategy 2026-05-17): additive capability, does not break the 1.0 API contract_ | 1.0 requirement for government/accessibility projects | post-1.0 |
+| **P1** | Accessibility (ARIA/WCAG) — _Partial: WCAG color-contrast validation shipped (`python/djust/theming/accessibility.py`); framework-wide ARIA/WCAG markup audit is unit 4 of the v1.0.0 milestone (strategy 2026-05-17)._ | 1.0 requirement; Phoenix was criticized for shipping without this | v1.0.0 |
 | ~~**P2**~~ | ~~Type-safe template validation~~ ✅ Shipped in v0.5.1 (`manage.py djust_typecheck`) | ~~Catch template variable typos at CI — unique differentiator vs all competitors~~ | ~~v0.5.1~~ |
 | ~~**P2**~~ | ~~Keep-Alive / `dj-activity`~~ ✅ Shipped — `static/djust/src/49-activity.js` + `templatetags/live_tags.py` `{% dj_activity %}` (React 19.2 `<Activity>` parity, server-canonical visibility) | ~~Pre-render hidden routes, preserve state — React 19.2 parity~~ | ~~v0.7.0~~ |
 | ~~**P2**~~ | ~~Streaming markdown renderer~~ ✅ Shipped in v0.7.0 (`{% djust_markdown %}` + `djust.render_markdown`, pulldown-cmark backend, provisional-line splitter) | ~~Incremental markdown for LLM output — strongest AI vertical signal~~ | ~~v0.7.0~~ |

@@ -299,6 +299,11 @@ issue or be explicitly closed with a reason.
 
 ## v0.9.7-3 — Canon + tooling follow-ups + investigation-class close (PRs #1469, #1470, #1472)
 
+> **Forward-link:** the v0.9.x bake closed here. Strategy session 2026-05-17
+> (`docs/strategy-sessions/2026-05-17-v1.0.0-readiness.md`) scoped the next
+> milestone — **v1.0.0 — Release Readiness** (Path 3: Accessibility-in,
+> Dead-View-out). See `ROADMAP.md` §"Next: v1.0.0".
+
 **Date**: 2026-05-12
 **Scope**: 3 PRs merged + 1 issue closed Option C (out-of-scope, investigation-only). Two canon PRs (#1469 gate-off self-test, #1472 LiveComponent vs sticky-child routing distinction), one tooling PR (#1470 pre-commit auto-restage wrapper), one investigation that pivoted scope (#1467 → #1471 follow-up). All three v0.9.7-2 retro tracker rows resolved this milestone.
 **Tests at close**: 2800 Python + 9 new in `test_git_commit_with_precommit.py` (PR #1470) + 39 wire-protocol snapshots + 272 djust_vdom Rust + 1564 JS. No regression at close.
