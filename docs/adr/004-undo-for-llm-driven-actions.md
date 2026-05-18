@@ -3,7 +3,7 @@
 **Status**: Deferred — post-1.0 (AI/server-driven arc; roadmap-committed)
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
-**Target version**: v0.5.x (lands with `AssistantMixin`)
+**Target version**: post-1.0 (deferred — lands with `AssistantMixin`; see Status)
 **Related**: [ADR-002](002-backend-driven-ui-automation.md), [ADR-003](003-llm-provider-abstraction.md)
 
 ---

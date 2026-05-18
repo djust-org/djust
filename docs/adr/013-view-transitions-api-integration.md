@@ -3,7 +3,7 @@
 **Status**: Accepted — async foundation (PR-A #1099) shipped v0.8.5; opt-in wrap (PR-B #1113) shipped v0.8.6
 **Date**: 2026-04-26
 **Deciders**: Project maintainers
-**Target version**: v0.8.5 candidate
+**Shipped in**: v0.8.5 (async foundation PR #1099) + v0.8.6 (opt-in wrap PR #1113)
 **Related**: [ROADMAP](../../ROADMAP.md) "View Transitions API" parity-tracker row + Quick Win #23
 **Withdrawn PR**: [#1092](https://github.com/djust-org/djust/pull/1092) — first attempt; Stage 11 review found load-bearing design flaw, full re-design needed before re-attempting
 

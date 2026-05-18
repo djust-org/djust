@@ -2,7 +2,7 @@
 
 **Status**: Accepted
 **Date**: 2026-04-26
-**Target version**: v0.9.0 P2 (shape C)
+**Shipped in**: v0.9.0 (P2, shape C — lazy children PR #1138)
 **Related**: #1043, retro #1122 split-foundation rule, retro #116 doc-claim
 verification rule, ADR-014 (slot-replace pattern), `AsyncWorkMixin.assign_async`
 

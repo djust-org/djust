@@ -3,7 +3,7 @@
 **Status**: Partially Accepted — Phases 1a-1c (push_commands, wait_for_event, TutorialMixin) shipped 2026-04-13 in v0.4.2; Phases 4-5 (broadcast_commands, AssistantMixin) deferred post-1.0
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
-**Target version**: v0.4.2 (MVP), v0.5.x (full surface)
+**Target version**: v0.4.2 (Phases 1a-1c shipped); Phases 4-5 deferred post-1.0
 **Related**: [#672 — JS Commands](https://github.com/djust-org/djust/pull/672), [#650 — `{% live_input %}`](https://github.com/djust-org/djust/issues/650)
 
 ---

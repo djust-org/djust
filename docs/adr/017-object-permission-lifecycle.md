@@ -3,7 +3,7 @@
 **Status**: Accepted — shipped 2026-05-06 in v0.9.5 (PR #1374, closes #1373)
 **Date**: 2026-05-06
 **Deciders**: Project maintainers
-**Target version**: v0.9.5 (P0, security)
+**Shipped in**: v0.9.5 (P0 security, PR #1374)
 **Related**:
 - [`python/djust/auth/core.py:check_view_auth`](../../python/djust/auth/core.py) — current view-level auth surface
 - [`python/djust/websocket.py`](../../python/djust/websocket.py) — `handle_mount` (line ~1925), `handle_event` (line 2606), connect-path `PermissionDenied` catch (line 1948)

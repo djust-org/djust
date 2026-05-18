@@ -3,7 +3,7 @@
 **Status**: Accepted — shipped 2026-04-27 in v0.9.0 (PR #1128, closes #1032)
 **Date**: 2026-04-26
 **Deciders**: Project maintainers
-**Target version**: v0.9.0 (P1, 1.0-blocker)
+**Shipped in**: v0.9.0 (P1, PR #1128)
 **Related**: [ADR-011](011-sticky-liveviews.md) (Sticky LiveViews baseline),
 [`python/djust/templatetags/live_tags.py`](../../python/djust/templatetags/live_tags.py) `live_render` tag,
 [`python/djust/websocket.py`](../../python/djust/websocket.py) `handle_live_redirect_mount`/`handle_mount`,

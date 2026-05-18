@@ -2,7 +2,7 @@
 
 **Status**: Accepted — ViewRuntime + Transport interface shipped 2026-04-30 in v0.9.2 (PR #1239, closes #1237); subsequent transport-migration PRs are non-blocking follow-ups
 **Date**: 2026-04-30
-**Target version**: v0.9.2-1 (PR-A: minimal extraction); subsequent PRs migrate the rest
+**Shipped in**: v0.9.2 (PR-A minimal extraction, PR #1239); subsequent transport-migration PRs are non-blocking follow-ups
 **Related**: #1237 (3 SSE bugs that motivate the refactor),
 v0.9.1 retro Action #181 (two-commit shape), v0.9.1 retro Action #180
 (single-implementer-per-checkout)

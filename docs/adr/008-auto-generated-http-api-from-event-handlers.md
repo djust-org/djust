@@ -3,7 +3,7 @@
 **Status**: Accepted — shipped 2026-04-21 in v0.5.1 (PR #835)
 **Date**: 2026-04-20
 **Deciders**: Project maintainers
-**Target version**: v0.7.0 (candidate; could merge with ADR-N "Server Actions" in v0.8.0 if scope allows)
+**Shipped in**: v0.5.1 (PR #835)
 **Related**: [ADR-002](002-backend-driven-ui-automation.md), [ADR-003](003-llm-provider-abstraction.md), [ADR-007](007-package-taxonomy-and-consolidation.md)
 
 ---
