@@ -9,8 +9,9 @@ import asyncio
 import functools
 import logging
 import threading
-import warnings
 from typing import Callable, Any, TypeVar, Union, cast, List, Optional
+
+from ._deprecation import warn_deprecated
 
 
 logger = logging.getLogger(__name__)
@@ -209,14 +210,19 @@ def event(func: F) -> F:
     """
     Deprecated alias for @event_handler. Use @event_handler instead.
 
-    .. deprecated::
-        ``@event`` is deprecated and will be removed in a future release.
-        Use ``@event_handler`` instead.
+    .. deprecated:: 0.3
+        ``@event`` is deprecated and will be removed no earlier than
+        djust 1.1.0. Use ``@event_handler`` instead.
     """
-    warnings.warn(
-        "@event is deprecated. Use @event_handler instead.",
-        DeprecationWarning,
-        stacklevel=2,
+    warn_deprecated(
+        "@event",
+        since="0.3",
+        removed_in="1.1.0",
+        instead="@event_handler",
+        # stacklevel=3: warnings.warn -> warn_deprecated -> event -> user.
+        # Empirically verified (scratch sweep): 3 points the warning at the
+        # caller's file, not decorators.py.
+        stacklevel=3,
     )
     return event_handler(func)
 
