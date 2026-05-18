@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc1] - 2026-05-17
+
 **v1.0.0 — the stability milestone.** After the v0.9.x audit-driven bake,
 djust 1.0 makes its SemVer commitment: code written against the public API
 keeps working across every 1.x release. 1.0 is a *consolidation* release —
