@@ -285,9 +285,12 @@ Rust code is confirmed thread-safe. Small, contained Rust-side change.
 for import ergonomics. Explicitly deferred to the post-1.0 minor when filed.
 
 **Deferred / blocked (tracked, not in this milestone's drain):**
-- **#1471** — sticky-child `LiveView` WS-reconnect state persistence. Needs
-  an ADR + design pass (LOAD-time discovery), not a one-PR fix. Promote to a
-  drain item once the design ADR lands.
+- **#1471** — sticky-child `LiveView` WS-reconnect state persistence. Design
+  ADR drafted — [ADR-018](docs/adr/018-sticky-child-state-persistence.md)
+  (Proposed): persist keyed on the stable `sticky_id`, restore tag-driven at
+  `{% live_render %}` render time; split into 3 iterations (18a save side /
+  18b load side / 18c opt-in + docs). Promote the iterations to drain-ready
+  priority-matrix rows once ADR-018 is Accepted.
 - **#1434** — native async ORM (`sync_to_async(Model.objects.X)` → native
   async). Blocked on psycopg3 landing; revisit when the dependency ships.
 
