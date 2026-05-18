@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc3] - 2026-05-18
+
 ### Added
 
 - **`scripts/check-doc-snippets.py` gained a `check_security_style()` AST walker — doc examples are now linted for djust auto-reject triggers (#1509, completes part (c) of #1500).** Every fenced Python code block in `README.md` / `QUICKSTART.md` is now also scanned for the security/style anti-patterns the djust PR-checklist auto-rejects: a `print()` call, a `print(f"...")` call, an interpolating `mark_safe(f"...")`, a bare `except: pass`, and f-string logging (`logger.<level>(f"...")`). Each is a hard failure (exit 1) — a published doc snippet should never teach a pattern the framework's own review forbids. `@csrf_exempt` is reported as a **non-blocking WARNING** (it is sometimes legitimate with a documented justification). A new `<!-- doc-snippet-check: anti-pattern -->` HTML-comment marker placed immediately before a fenced block opts that block out of the security/style verdict — for deliberately-wrong "don't do this" examples — while still subjecting it to the existing syntax and import checks. This completes part (c) of #1500 (doc-example security/style linting), which the original #1500 PR deferred. Covered by `tests/test_check_doc_snippets.py` — 28 tests.
