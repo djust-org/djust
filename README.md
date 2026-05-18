@@ -564,21 +564,26 @@ When the dismiss button is clicked, the client sends `component_id="alert_warnin
 #### Creating Custom Components
 
 ```python
-from djust import Component, register_component, event_handler
+from djust import LiveComponent, event_handler
+from djust.components import register_component
 
-@register_component('my-button')
-class Button(Component):
-    template = '<button dj-click="on_click">{{ label }}</button>'
+class ButtonComponent(LiveComponent):
+    template = '<button dj-click="on_click" data-component-id="{{ component_id }}">{{ label }}</button>'
 
-    def __init__(self, label="Click"):
-        super().__init__()
-        self.label = label
+    def mount(self, **kwargs):
+        self.label = kwargs.get("label", "Click")
         self.clicks = 0
 
-    @event_handler
-    def on_click(self):
+    @event_handler()
+    def on_click(self, **kwargs):
         self.clicks += 1
-        # self.clicks is auto-exposed to the template (public attribute)
+        self.trigger_update()
+
+    def get_context_data(self):
+        return {"label": self.label, "clicks": self.clicks}
+
+# register_component accepts LiveComponent subclasses (stateful, event-driven)
+register_component('my-button', ButtonComponent)
 ```
 
 ### Decorators
@@ -1067,8 +1072,8 @@ Areas we'd love help with:
 - [x] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
 - [x] TypeScript definitions (`djust.d.ts` shipped with the package)
-- [ ] Redis-backed session storage
-- [ ] Horizontal scaling support
+- [x] Redis-backed session storage
+- [x] Horizontal scaling support
 
 ## 🔒 Security
 
