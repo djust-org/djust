@@ -2172,12 +2172,19 @@ _INTERACTIVE_EL_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 # An accessible-name attribute present on the opening tag silences Y001.
+# The `(?<![\w-])` lookbehind (in place of a plain `\b`) ensures a
+# preceding hyphen also blocks the match, so a custom attribute like
+# `data-aria-label='x'` is NOT mistaken for the element's real
+# `aria-label` and used to wrongly silence a genuine Y001.
 _ACCESSIBLE_NAME_ATTR_RE = re.compile(
-    r"""\b(aria-label|aria-labelledby|title)\s*=\s*["'][^"']*["']""",
+    r"""(?<![\w-])(aria-label|aria-labelledby|title)\s*=\s*["'][^"']*["']""",
     re.IGNORECASE,
 )
 # href presence on an <a> opening tag (interactive only when linked).
-_HREF_ATTR_RE = re.compile(r"""\bhref\s*=\s*["'][^"']*["']""", re.IGNORECASE)
+# The `(?<![\w-])` lookbehind (in place of a plain `\b`) ensures a
+# preceding hyphen also blocks the match, so a custom attribute like
+# `data-href='/x'` is NOT mistaken for the anchor's real `href`.
+_HREF_ATTR_RE = re.compile(r"""(?<![\w-])href\s*=\s*["'][^"']*["']""", re.IGNORECASE)
 # "Icon-only" = the inner content is composed exclusively of HTML
 # entities, <svg>...</svg>, self-closing tags (<i .../>, <img .../>),
 # <i>...</i> / <span>...</span> wrappers whose own content is
@@ -2197,7 +2204,10 @@ _TEMPLATE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
 # <img> with NO `alt` token at all. {% ... %} / {{ ... }} dynamic
 # attribute injection is treated as "alt may be present" (no flag).
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*?/?>", re.IGNORECASE | re.DOTALL)
-_IMG_HAS_ALT_RE = re.compile(r"""\balt\s*=""", re.IGNORECASE)
+# The `(?<![\w-])` lookbehind (in place of a plain `\b`) ensures a
+# preceding hyphen also blocks the match, so a custom attribute like
+# `data-alt='x'` is NOT mistaken for the image's real `alt` attribute.
+_IMG_HAS_ALT_RE = re.compile(r"""(?<![\w-])alt\s*=""", re.IGNORECASE)
 _IMG_DYNAMIC_ATTRS_RE = re.compile(r"\{[%{].*?[%}]\}", re.DOTALL)
 
 # Y003 — form control (<input>/<select>/<textarea>) with no associated
@@ -2218,7 +2228,11 @@ _INPUT_TYPE_RE = re.compile(r"""(?<![\w-])type\s*=\s*["']?\s*([a-zA-Z]+)""", re.
 # <input> types that are NOT user-named text controls (no Y003 flag).
 _Y003_SKIPPED_INPUT_TYPES = frozenset({"hidden", "submit", "button", "reset", "image"})
 # An `id="X"` attribute on a form control — pairs with a <label for="X">.
-_CONTROL_ID_RE = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+# The `(?<![\w-])` lookbehind (in place of a plain `\b`) ensures a
+# preceding hyphen also blocks the match, so a custom attribute like
+# `data-id='X'` is NOT mistaken for the control's real `id` and wrongly
+# paired with an unrelated <label for='X'>.
+_CONTROL_ID_RE = re.compile(r"""(?<![\w-])id\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
 # A <label for="X"> attribute (the `for` value, file-scoped). The set of
 # all `for` values silences any control whose `id` is in the set.
 _LABEL_FOR_RE = re.compile(

@@ -6,6 +6,9 @@ templates into tmp_path, points settings.TEMPLATES['DIRS'] at them,
 calls check_accessibility(None) directly, and filters results by e.id.
 """
 
+import re
+
+from djust import checks as _checks_mod
 from djust.checks import (
     _content_is_icon_only,
     _IMG_HAS_ALT_RE,
@@ -90,6 +93,10 @@ class TestY002Regex:
 
     def test_no_alt_not_detected(self):
         assert _IMG_HAS_ALT_RE.search('<img src="x.png">') is None
+
+    def test_data_alt_not_detected_as_real_alt(self):
+        """`data-alt=` must NOT register as the image's real alt (#1514)."""
+        assert _IMG_HAS_ALT_RE.search("<img src='x.png' data-alt='x'>") is None
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +202,49 @@ class TestY001CheckIntegration:
         assert len(y001) == 1
         assert y001[0].line_number == 3
 
+    def test_y001_data_href_not_treated_as_real_href(self, tmp_path, settings):
+        """An <a> with only `data-href` (no real href) is NOT interactive.
+
+        Regression (#1514): the `_HREF_ATTR_RE` `\\b` word boundary
+        false-matched inside `data-href='/x'` (a `-` is a non-word char),
+        so a bare <a> carrying only a `data-href` JS hook was wrongly
+        treated as a linked, interactive control and false-flagged Y001.
+        The `(?<![\\w-])` lookbehind blocks a match preceded by a hyphen,
+        so the non-linked <a> is correctly ignored (an anchor target is
+        not a control).
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<a data-href='/x'>&rarr;</a>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y001 = [e for e in errors if e.id == "djust.Y001"]
+        assert len(y001) == 0
+
+    def test_y001_data_aria_label_does_not_silence(self, tmp_path, settings):
+        """A `data-aria-label` custom attr must NOT silence a real Y001.
+
+        Regression (#1514): the `_ACCESSIBLE_NAME_ATTR_RE` `\\b` word
+        boundary false-matched inside `data-aria-label='x'` (a `-` is a
+        non-word char), so an icon-only <button> carrying only a
+        `data-aria-label` JS hook (and no real accessible name) was
+        wrongly treated as named and Y001 silently skipped it (false
+        negative). The `(?<![\\w-])` lookbehind blocks a match preceded
+        by a hyphen, so the unnamed icon-only button is still flagged.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text(
+            "<button class='close' data-aria-label='Close'>&times;</button>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y001 = [e for e in errors if e.id == "djust.Y001"]
+        assert len(y001) == 1
+        assert "accessible name" in y001[0].msg
+
 
 # ---------------------------------------------------------------------------
 # Y002 -- check integration
@@ -271,6 +321,26 @@ class TestY002CheckIntegration:
         errors = check_accessibility(None)
         y002 = [e for e in errors if e.id == "djust.Y002"]
         assert len(y002) == 0
+
+    def test_y002_data_alt_not_mistaken_for_real_alt(self, tmp_path, settings):
+        """A `data-alt='...'` custom attr must NOT shadow a missing real `alt`.
+
+        Regression (#1514): the `_IMG_HAS_ALT_RE` `\\b` word boundary
+        false-matched inside `data-alt='decorative'` (a `-` is a non-word
+        char), so an <img> carrying only `data-alt` was wrongly treated as
+        having an alt attribute and Y002 silently skipped it (false
+        negative). The `(?<![\\w-])` lookbehind blocks a match preceded by a
+        hyphen, so the genuinely alt-less <img> is still flagged.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<img src='x.png' data-alt='decorative'>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y002 = [e for e in errors if e.id == "djust.Y002"]
+        assert len(y002) == 1
+        assert "alt" in y002[0].msg
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +541,31 @@ class TestY003CheckIntegration:
         assert len(y003) == 1
         assert "label" in y003[0].msg
 
+    def test_y003_data_id_not_paired_with_label_for(self, tmp_path, settings):
+        """A `data-id` custom attr must NOT pair with a <label for=...>.
+
+        Regression (#1514): the `_CONTROL_ID_RE` `\\b` word boundary
+        false-matched inside `data-id='q'` (a `-` is a non-word char), so
+        an unlabelled <input> carrying only a `data-id` JS hook had its
+        `data-id` value extracted as the control's real `id`; if a
+        <label for='q'> existed elsewhere on the page, the genuinely
+        unlabelled control was wrongly silenced (false negative). The
+        `(?<![\\w-])` lookbehind blocks a match preceded by a hyphen, so
+        the control's `data-id` is not read as its real `id` and the
+        unlabelled input is still flagged Y003.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text(
+            "<label for='q'>Query</label><input type='text' data-id='q'>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert "label" in y003[0].msg
+
     def test_y003_data_type_only_treated_as_text_input(self, tmp_path, settings):
         """An <input> with only `data-type` (no real type) is a text control.
 
@@ -661,3 +756,118 @@ class TestCheckAccessibilityGeneral:
         relevant = [e for e in errors if e.id in ("djust.Y001", "djust.Y002")]
         assert len(relevant) == 2
         assert all(isinstance(e, DjustWarning) for e in relevant)
+
+
+# ---------------------------------------------------------------------------
+# Meta-check (#1517) -- no bare `\b`-anchored HTML-attribute regexes
+# ---------------------------------------------------------------------------
+
+# A compiled-regex pattern that LEADS with a literal `\b` then an
+# attribute-name-like literal (word chars / hyphens) then `\s*=` or `=`
+# is the #1514 / #1512 bug shape: `\b` matches the `data-`/name boundary
+# (a `-` is a non-word char), so `\balt=` false-matches `data-alt=`. The
+# correct anchor is the `(?<![\w-])` negative lookbehind.
+#
+# Note: `pattern.pattern` is the regex *source string*, so a leading
+# backslash-b is the two LITERAL characters `\` + `b`. In this detection
+# regex `\\b` matches that literal escape sequence; `[A-Za-z][\w-]*`
+# matches the attribute name; `(?:\\s\*)?` optionally matches a literal
+# `\s*` (whitespace-tolerance) before the `=`.
+_BARE_B_ATTR_RE = re.compile(r"^\\b\(?[A-Za-z][\w-]*(?:\|[\w-]+)*\)?(?:\\s\*)?=")
+
+# The four `_LIVE_RENDER_*` regexes also lead with a literal `\b`, but
+# they scan the body of a `{% live_render ... %}` template tag, NOT HTML
+# attributes. Django template-tag kwargs are space-separated `name=value`
+# tokens with no `data-`/`aria-` prefix convention, so `\bsticky` cannot
+# false-match a `data-sticky`-style token (no such thing in tag syntax).
+# They are NOT the #1514 bug class — allowlisted with this explanation.
+_BARE_B_KWARG_ALLOWLIST = frozenset(
+    {
+        "_LIVE_RENDER_STICKY_TRUTHY_RE",
+        "_LIVE_RENDER_LAZY_TRUTHY_RE",
+        "_LIVE_RENDER_STICKY_FALSY_RE",
+        "_LIVE_RENDER_LAZY_FALSY_RE",
+    }
+)
+
+
+class TestChecksRegexHardening:
+    """Meta-check (#1517): no bare `\\b`-anchored HTML-attribute regexes."""
+
+    def test_detection_regex_matches_pre_fix_1514_shape(self):
+        """The meta-check's detection regex matches the pre-#1514 `\\balt\\s*=`.
+
+        Doc-claim pin (Action #1046): without reverting the source, this
+        asserts the meta-check would have caught the #1514 bug shape —
+        the literal pre-fix pattern string of `_IMG_HAS_ALT_RE`.
+        """
+        assert _BARE_B_ATTR_RE.match(r"\balt\s*=") is not None
+        # The sibling pre-fix shapes (#1512 / the other 3 #1514 regexes).
+        assert _BARE_B_ATTR_RE.match(r"\bhref\s*=") is not None
+        assert _BARE_B_ATTR_RE.match(r"\bid\s*=") is not None
+        assert _BARE_B_ATTR_RE.match(r"\b(aria-label|aria-labelledby|title)\s*=") is not None
+        # The fixed `(?<![\w-])` anchor must NOT match.
+        assert _BARE_B_ATTR_RE.match(r"(?<![\w-])alt\s*=") is None
+
+    def test_live_render_kwarg_regexes_are_allowlisted(self):
+        """The `_LIVE_RENDER_*` kwarg regexes share the bare-`\\b` shape but
+        are the documented allowlist, not the #1514 bug class.
+
+        The `_LIVE_RENDER_*` regexes lead with `\\bsticky=` / `\\blazy=`,
+        so the detection regex DOES match them — by design they look like
+        the bug shape. The load-bearing discriminator is the explicit
+        4-name allowlist (`_BARE_B_KWARG_ALLOWLIST`), which documents that
+        they scan `{% live_render %}` template-tag kwargs (no `data-*`
+        prefix convention exists in `{% %}` syntax), not HTML attributes.
+        This asserts that contract: the regex matches, the allowlist
+        names the four constants, and the four exist in checks.py.
+        """
+        kwarg_pattern = r"""\bsticky\s*=\s*(?:True|"[^"]+"|'[^']+'|[A-Za-z_]\w*)"""
+        # The detection regex flags the kwarg shape too (by design).
+        assert _BARE_B_ATTR_RE.match(kwarg_pattern) is not None
+        # The allowlist is the discriminator — exactly the 4 kwarg regexes.
+        assert _BARE_B_KWARG_ALLOWLIST == frozenset(
+            {
+                "_LIVE_RENDER_STICKY_TRUTHY_RE",
+                "_LIVE_RENDER_LAZY_TRUTHY_RE",
+                "_LIVE_RENDER_STICKY_FALSY_RE",
+                "_LIVE_RENDER_LAZY_FALSY_RE",
+            }
+        )
+        # Every allowlisted name must be a real compiled regex in checks.py
+        # (a stale allowlist entry would silently weaken the meta-check).
+        for name in _BARE_B_KWARG_ALLOWLIST:
+            val = getattr(_checks_mod, name, None)
+            assert isinstance(val, re.Pattern), f"{name} is not a compiled regex"
+            assert _BARE_B_ATTR_RE.match(val.pattern), (
+                f"{name} no longer matches the bare-`\\b` shape — remove it from the allowlist"
+            )
+
+    def test_no_bare_b_anchor_before_attribute_name_in_checks_regexes(self):
+        """Meta-check (#1517): no compiled regex in checks.py may anchor an
+        attribute-name match with a bare `\\b`.
+
+        `\\b` matches the `data-`/name boundary because `-` is a non-word
+        char, so `\\balt=` false-matches `data-alt=`. This bug class has
+        appeared multiple times (`_IMG_HAS_ALT_RE` + 3 siblings #1514,
+        `_INPUT_TYPE_RE` / `_POSITIVE_TABINDEX_RE` fixed in #1512). The
+        correct anchor is the `(?<![\\w-])` negative lookbehind. This test
+        fails fast on any future regression.
+
+        The four `_LIVE_RENDER_*` regexes are allowlisted: they scan
+        `{% live_render %}` template-tag kwargs, not HTML attributes, and
+        so are not the #1514 bug class.
+        """
+        offenders = []
+        for name, val in vars(_checks_mod).items():
+            if not isinstance(val, re.Pattern):
+                continue
+            if name in _BARE_B_KWARG_ALLOWLIST:
+                continue
+            if _BARE_B_ATTR_RE.match(val.pattern):
+                offenders.append((name, val.pattern))
+        assert not offenders, (
+            "checks.py regex(es) anchor an attribute name with a bare `\\b` "
+            "(false-matches data-* / custom attributes — use `(?<![\\w-])`): "
+            + ", ".join(f"{n}={p!r}" for n, p in offenders)
+        )
