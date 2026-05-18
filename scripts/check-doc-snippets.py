@@ -21,11 +21,31 @@ Part (a) — Fenced Python snippet AST/import smoke check
       and renamed/removed public symbols.
 
     Honest scope: AST + import-resolution does NOT execute snippets, so it
-    cannot catch a phantom *method call* (e.g. `View.as_live_view()`). That
-    is deferred to part (c) — see #1500 follow-up.
+    cannot catch a phantom *method call* (e.g. `View.as_live_view()`).
 
     Escape hatch: a `<!-- doc-snippet-check: skip -->` HTML comment on the
-    line immediately before a ```python fence skips that block.
+    line immediately before a ```python fence skips that block from ALL
+    checks (parts a + b + c).
+
+Part (c) — Doc-example security/style lint (#1509)
+    An AST walker re-encodes djust's auto-reject Security Rules and applies
+    them to every fenced Python snippet. Five hard triggers (each → exit 1):
+      1. `print(...)`               — CLAUDE.md rule 6 (no print in prod code)
+      2. `print(f"...")`            — subset of #1, reported as the f-string form
+      3. `mark_safe(f"...{x}...")`  — CLAUDE.md rule 1 (interpolating mark_safe);
+         a constant f-string with no interpolation is NOT flagged
+      4. bare `except: pass`        — CLAUDE.md rule 5 (also `except E: pass`,
+         softer message); a body that does anything but `pass` is fine
+      5. `logger.X(f"...")`         — CLAUDE.md rule 4 (f-string logging on a
+         `logger`/`logging`/`log` receiver); a constant f-string is not flagged
+    Plus one soft advisory (WARNING only, never exit 1): a `@csrf_exempt`
+    decorator — legitimate with documented justification, so surfaced for a
+    human, never a build failure.
+
+    Escape hatch: a `<!-- doc-snippet-check: anti-pattern -->` HTML comment
+    on the line immediately before a ```python fence opts that block out of
+    the part-(c) style verdict ONLY — it is still syntax/import-checked by
+    part (a). Use it for deliberately-wrong "❌ Wrong" examples.
 
 Part (b) — Mechanically-derivable claim assertions
     1. Django floor: the `Django>=X.Y...` line in pyproject.toml is the
@@ -41,6 +61,9 @@ Part (b) — Mechanically-derivable claim assertions
        fresh checkout before build-client.sh ran), the size sub-check
        SKIPS with a warning — exit stays 0 for that sub-check.
 
+This audit is mechanical and self-contained — it does NOT call git, gh,
+or the network (keeps it CI-fast and deterministic).
+
 Usage:
     python3 scripts/check-doc-snippets.py
     python3 scripts/check-doc-snippets.py --readme README.md --quickstart QUICKSTART.md
@@ -48,8 +71,9 @@ Usage:
     make check-doc-snippets
 
 Exit code:
-    0 — no drift (snippets parse/resolve; claims match; size warnings allowed)
-    1 — drift found (>=1 bad snippet, version mismatch, or out-of-band size)
+    0 — no drift (snippets parse/resolve; claims match; size/style warnings allowed)
+    1 — drift found (>=1 bad snippet, version mismatch, out-of-band size,
+        or a part-(c) security/style trigger)
     2 — usage error (an explicitly-passed input file does not exist)
 """
 
@@ -71,8 +95,24 @@ ROOT = Path(__file__).resolve().parents[1]
 _SIZE_TOLERANCE_KB = 3.0
 
 # HTML-comment escape hatch: when this exact marker is on the line directly
-# before a ```python fence, that block is skipped.
+# before a ```python fence, that block is skipped from ALL checks.
 _SKIP_MARKER = "<!-- doc-snippet-check: skip -->"
+
+# HTML-comment escape hatch (part c only): when this exact marker is on the
+# line directly before a ```python fence, the block is still syntax/import
+# checked (part a) but is opted OUT of the part-(c) security/style verdict.
+# Use it for deliberately-wrong "❌ Wrong" anti-pattern examples.
+_ANTIPATTERN_MARKER = "<!-- doc-snippet-check: anti-pattern -->"
+
+# Logger-call receiver names. A doc snippet has no logger config to
+# introspect, so f-string logging is keyed on these conventional receiver
+# names (djust's convention is `logger = logging.getLogger(__name__)`).
+_LOGGER_NAMES = frozenset({"logger", "logging", "log"})
+
+# Logging method names that take a message as their first positional arg.
+_LOGGER_METHODS = frozenset(
+    {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+)
 
 # Matches the `Django>=X.Y` floor in pyproject.toml's dependency list.
 _DJANGO_FLOOR_RE = re.compile(r'"Django>=(\d+\.\d+)')
@@ -89,16 +129,21 @@ _DJANGO_PROSE_RE = re.compile(r"Django (\d+\.\d+)\+")
 _SIZE_CLAIM_RE = re.compile(r"~\s*(\d+(?:\.\d+)?)\s*KB")
 
 
-def extract_python_blocks(path: Path) -> list[tuple[int, str]]:
+def extract_python_blocks(path: Path) -> list[tuple[int, str, str | None]]:
     """Extract every ```python fenced block from a markdown file.
 
-    Returns a list of (start_line, code) tuples. `start_line` is the
-    1-based line number of the opening fence. Blocks immediately preceded
-    by the `<!-- doc-snippet-check: skip -->` marker line are omitted.
+    Returns a list of (start_line, code, marker) tuples. `start_line` is
+    the 1-based line number of the opening fence. `marker` is:
+      - ``None``           — no escape-hatch comment precedes the block.
+      - ``"anti-pattern"`` — the block is preceded by the
+        `<!-- doc-snippet-check: anti-pattern -->` comment; part (c)
+        skips it but parts (a)/(b) still process it.
+    Blocks immediately preceded by the `<!-- doc-snippet-check: skip -->`
+    marker line are omitted entirely.
     """
     text = path.read_text()
     lines = text.splitlines()
-    blocks: list[tuple[int, str]] = []
+    blocks: list[tuple[int, str, str | None]] = []
 
     i = 0
     n = len(lines)
@@ -106,15 +151,21 @@ def extract_python_blocks(path: Path) -> list[tuple[int, str]]:
         line = lines[i]
         if line.strip() == "```python":
             fence_lineno = i + 1  # 1-based
-            # Skip-marker check: the line immediately before the fence.
+            # Escape-hatch check: the line immediately before the fence.
             prev = lines[i - 1].strip() if i > 0 else ""
             body: list[str] = []
             j = i + 1
             while j < n and lines[j].strip() != "```":
                 body.append(lines[j])
                 j += 1
+            if prev == _SKIP_MARKER:
+                marker: str | None = None  # dropped below
+            elif prev == _ANTIPATTERN_MARKER:
+                marker = "anti-pattern"
+            else:
+                marker = None
             if prev != _SKIP_MARKER:
-                blocks.append((fence_lineno, "\n".join(body)))
+                blocks.append((fence_lineno, "\n".join(body), marker))
             i = j + 1
         else:
             i += 1
@@ -203,7 +254,7 @@ def check_snippets(readme: Path, quickstart: Path) -> list[str]:
     """
     errors: list[str] = []
     for doc in (readme, quickstart):
-        for start_line, code in extract_python_blocks(doc):
+        for start_line, code, _marker in extract_python_blocks(doc):
             loc = f"{doc.name}:{start_line}"
             try:
                 tree = ast.parse(code)
@@ -215,6 +266,142 @@ def check_snippets(readme: Path, quickstart: Path) -> list[str]:
                 for err in _resolve_imports(imports):
                     errors.append(f"{loc} — {err}")
     return errors
+
+
+def _joinedstr_interpolates(node: ast.AST) -> bool:
+    """True if `node` is an f-string with >=1 interpolated value.
+
+    A `JoinedStr` whose parts are all `Constant` is a constant f-string
+    with no interpolation — not a violation for mark_safe/logging.
+    """
+    return isinstance(node, ast.JoinedStr) and any(
+        isinstance(part, ast.FormattedValue) for part in node.values
+    )
+
+
+def _func_name(func: ast.AST) -> str | None:
+    """Return the bare callable name for `ast.Name`/`ast.Attribute`, else None."""
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _walk_security_style(code: str) -> tuple[list[str], list[str]]:
+    """Walk one snippet's AST for the part-(c) triggers.
+
+    Returns (errors, warnings) as lists of `lineN: message` strings.
+    Assumes `code` already parses (caller handles SyntaxError).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    tree = ast.parse(code)
+
+    for node in ast.walk(tree):
+        # --- Triggers 1 + 2: print(...) / print(f"...") ---
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "print":
+                fstring = bool(node.args) and _joinedstr_interpolates(
+                    node.args[0]
+                )
+                if fstring:
+                    errors.append(
+                        f"line {node.lineno}: f-string `print(f\"...\")` — "
+                        f"use the logging module (CLAUDE.md rules 4 + 6)"
+                    )
+                else:
+                    errors.append(
+                        f"line {node.lineno}: `print(...)` in example code — "
+                        f"use the logging module (CLAUDE.md rule 6)"
+                    )
+
+        # --- Trigger 3: mark_safe(f"...{x}...") with interpolation ---
+        if isinstance(node, ast.Call):
+            if _func_name(node.func) == "mark_safe":
+                if node.args and _joinedstr_interpolates(node.args[0]):
+                    errors.append(
+                        f"line {node.lineno}: interpolating `mark_safe(f\"...\")` "
+                        f"— use `format_html()` or `escape()` (CLAUDE.md rule 1)"
+                    )
+
+        # --- Trigger 5: f-string logging — logger.X(f"...") ---
+        if isinstance(node, ast.Call) and isinstance(
+            node.func, ast.Attribute
+        ):
+            attr = node.func
+            base = attr.value
+            if (
+                attr.attr in _LOGGER_METHODS
+                and isinstance(base, ast.Name)
+                and base.id in _LOGGER_NAMES
+                and node.args
+                and _joinedstr_interpolates(node.args[0])
+            ):
+                errors.append(
+                    f"line {node.lineno}: f-string logging "
+                    f"`{base.id}.{attr.attr}(f\"...\")` — use %s-style "
+                    f"formatting (CLAUDE.md rule 4)"
+                )
+
+        # --- Trigger 4: bare `except: pass` / `except E: pass` ---
+        if isinstance(node, ast.ExceptHandler):
+            body_is_solely_pass = len(node.body) == 1 and isinstance(
+                node.body[0], ast.Pass
+            )
+            if body_is_solely_pass:
+                if node.type is None:
+                    errors.append(
+                        f"line {node.lineno}: bare `except: pass` — always "
+                        f"log or re-raise (CLAUDE.md rule 5)"
+                    )
+                else:
+                    errors.append(
+                        f"line {node.lineno}: silenced `except ...: pass` — "
+                        f"log or re-raise (CLAUDE.md rule 5)"
+                    )
+
+        # --- Soft advisory: @csrf_exempt decorator ---
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for dec in node.decorator_list:
+                target = dec.func if isinstance(dec, ast.Call) else dec
+                if _func_name(target) == "csrf_exempt":
+                    warnings.append(
+                        f"line {node.lineno}: `@csrf_exempt` in an example — "
+                        f"verify it carries a documented justification "
+                        f"(CLAUDE.md rule 3; advisory only)"
+                    )
+
+    return errors, warnings
+
+
+def check_security_style(
+    readme: Path, quickstart: Path
+) -> tuple[list[str], list[str]]:
+    """Part (c) — #1509: AST-walk every ```python block for djust's
+    auto-reject security/style triggers.
+
+    Blocks marked `<!-- doc-snippet-check: anti-pattern -->` are skipped
+    (deliberately-wrong examples). Returns (errors, warnings).
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    for doc in (readme, quickstart):
+        for start_line, code, marker in extract_python_blocks(doc):
+            if marker == "anti-pattern":
+                continue  # opted out of the style verdict (still parsed by part a)
+            loc = f"{doc.name}:{start_line}"
+            try:
+                snippet_errors, snippet_warnings = _walk_security_style(code)
+            except SyntaxError:
+                # An unparseable snippet is part (a)'s failure to report,
+                # not part (c)'s — skip it here.
+                continue
+            for e in snippet_errors:
+                errors.append(f"{loc} — {e}")
+            for w in snippet_warnings:
+                warnings.append(f"{loc} — {w}")
+    return errors, warnings
 
 
 def check_django_floor(
@@ -305,6 +492,9 @@ def run(
     all_warnings: list[str] = []
 
     all_errors.extend(check_snippets(readme, quickstart))
+    style_errors, style_warnings = check_security_style(readme, quickstart)
+    all_errors.extend(style_errors)
+    all_warnings.extend(style_warnings)
     all_errors.extend(check_django_floor(pyproject, readme, quickstart))
     size_errors, size_warnings = check_js_size(bundle, readme)
     all_errors.extend(size_errors)
