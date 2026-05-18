@@ -2152,12 +2152,14 @@ def _strip_verbatim_blocks(content: str) -> str:
 #
 # Y001 — interactive element (<button>/<a>) with no accessible name.
 # Y002 — <img> tag missing an `alt` attribute (WCAG 1.1.1, A-level).
+# Y003 — form control (<input>/<select>/<textarea>) with no associated
+#        label (WCAG 1.3.1 / 3.3.2, A-level).
+# Y004 — positive tabindex (WCAG 2.4.3, Focus Order anti-pattern).
 #
-# Both are deliberately the two lowest-ambiguity a11y defects so the
-# regex heuristics carry near-zero false positives (see the #1060 dogfood
-# discipline note in the Stage-4 plan). The category is extensible — Y003+
-# (heading order, form-label association, etc.) are single-function-body
-# additions in a follow-up.
+# All are deliberately low-ambiguity a11y defects so the regex heuristics
+# carry near-zero false positives (see the #1060 dogfood discipline note
+# in the Stage-4 plan). The category is extensible — Y005+ are
+# single-function-body additions in a follow-up.
 
 # Y001 — captures the OPENING tag (group "open"), the tag name (group
 # "tag"), and the inner content up to the matching close tag (group
@@ -2197,6 +2199,47 @@ _TEMPLATE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*?/?>", re.IGNORECASE | re.DOTALL)
 _IMG_HAS_ALT_RE = re.compile(r"""\balt\s*=""", re.IGNORECASE)
 _IMG_DYNAMIC_ATTRS_RE = re.compile(r"\{[%{].*?[%}]\}", re.DOTALL)
+
+# Y003 — form control (<input>/<select>/<textarea>) with no associated
+# accessible name (WCAG 1.3.1 / 3.3.2, Level A). Matches the OPENING tag
+# only (group "tag" = element name, group "open" = attribute text). For
+# <input>, `type` values in {hidden, submit, button, reset, image} are
+# skipped — those are not user-named text controls (submit/button/reset
+# get their name from `value`, image inputs from `alt`).
+_FORM_CONTROL_RE = re.compile(
+    r"<(?P<tag>input|select|textarea)\b(?P<open>[^>]*)>",
+    re.IGNORECASE | re.DOTALL,
+)
+# <input type="..."> extraction — used to skip non-text-control types.
+# The `(?<![\w-])` lookbehind (in place of a plain `\b`) ensures a
+# preceding hyphen also blocks the match, so `data-type='hidden'` is
+# NOT mistaken for the control's real `type` attribute.
+_INPUT_TYPE_RE = re.compile(r"""(?<![\w-])type\s*=\s*["']?\s*([a-zA-Z]+)""", re.IGNORECASE)
+# <input> types that are NOT user-named text controls (no Y003 flag).
+_Y003_SKIPPED_INPUT_TYPES = frozenset({"hidden", "submit", "button", "reset", "image"})
+# An `id="X"` attribute on a form control — pairs with a <label for="X">.
+_CONTROL_ID_RE = re.compile(r"""\bid\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+# A <label for="X"> attribute (the `for` value, file-scoped). The set of
+# all `for` values silences any control whose `id` is in the set.
+_LABEL_FOR_RE = re.compile(
+    r"""<label\b[^>]*?\bfor\s*=\s*["']([^"']+)["']""", re.IGNORECASE | re.DOTALL
+)
+# A <label>...</label> span — a control appearing inside one is wrapped
+# (its accessible name comes from the label text).
+_LABEL_BLOCK_RE = re.compile(r"<label\b[^>]*>.*?</label>", re.IGNORECASE | re.DOTALL)
+# {% ... %} / {{ ... }} dynamic attribute injection on a control's
+# opening tag — the id / aria-* may be injected at render time (no flag).
+_CONTROL_DYNAMIC_ATTRS_RE = re.compile(r"\{[%{].*?[%}]\}", re.DOTALL)
+
+# Y004 — positive tabindex (WCAG 2.4.3, Focus Order anti-pattern). Only
+# a value matching `[1-9]\d*` (a positive integer) is flagged; `0`, `-1`,
+# and `{{ }}`-interpolated values do not match the body and are silent.
+# The `(?<![\w-])` lookbehind (in place of a plain `\b`) ensures a
+# preceding hyphen also blocks the match, so a JS-driven custom
+# attribute like `data-tabindex='5'` is NOT flagged as a Y004 defect.
+_POSITIVE_TABINDEX_RE = re.compile(
+    r"""(?<![\w-])tabindex\s*=\s*["']\s*([1-9]\d*)\s*["']""", re.IGNORECASE
+)
 
 
 def _content_is_icon_only(inner: str) -> bool:
@@ -2245,16 +2288,27 @@ def check_accessibility(app_configs, **kwargs):
       / ``title``. Screen-reader users hear nothing for such a control.
     - **Y002** — an ``<img>`` tag with no ``alt`` attribute (WCAG 1.1.1,
       Level A). ``alt=""`` (decorative image) is correct and not flagged.
+    - **Y003** — a form control (``<input>`` / ``<select>`` /
+      ``<textarea>``) with no associated label (WCAG 1.3.1 / 3.3.2,
+      Level A). Satisfied by a ``<label for>`` pairing the control's
+      ``id``, a wrapping ``<label>`` element, ``aria-label``, or
+      ``aria-labelledby``. ``<input>`` types ``hidden`` / ``submit`` /
+      ``button`` / ``reset`` / ``image`` are not flagged.
+    - **Y004** — an element with a positive ``tabindex`` (WCAG 2.4.3,
+      Focus Order). ``tabindex="0"`` and ``tabindex="-1"`` are valid and
+      not flagged.
 
-    Both emit :class:`DjustWarning` (not error) so a stray false positive
-    never fails ``manage.py check``; both are suppressible via
+    All emit :class:`DjustWarning` (not error) so a stray false positive
+    never fails ``manage.py check``; all are suppressible via
     ``DJUST_CONFIG['suppress_checks']``.
     """
     errors = []
 
     y001_suppressed = _is_check_suppressed("djust.Y001")
     y002_suppressed = _is_check_suppressed("djust.Y002")
-    if y001_suppressed and y002_suppressed:
+    y003_suppressed = _is_check_suppressed("djust.Y003")
+    y004_suppressed = _is_check_suppressed("djust.Y004")
+    if y001_suppressed and y002_suppressed and y003_suppressed and y004_suppressed:
         return errors
 
     tpl_dirs = _get_template_dirs()
@@ -2332,6 +2386,87 @@ def check_accessibility(app_configs, **kwargs):
                         fix_hint=(
                             'Add an alt="..." attribute to the <img> tag at '
                             'line %d in `%s` (use alt="" if decorative).' % (lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+
+        # Y003 — form control with no associated label.
+        if not y003_suppressed:
+            # File-scoped set of every <label for="X"> value — an <input
+            # id="X"> whose id is in this set is considered named.
+            label_for_ids = set(_LABEL_FOR_RE.findall(scan_source))
+            # Spans of every <label>...</label> block — a control whose
+            # opening tag starts inside one is wrapped (named by it).
+            label_spans = [(m.start(), m.end()) for m in _LABEL_BLOCK_RE.finditer(scan_source)]
+            for match in _FORM_CONTROL_RE.finditer(scan_source):
+                open_attrs = match.group("open")
+                tag = match.group("tag").lower()
+                # <input> types that aren't user-named text controls.
+                if tag == "input":
+                    type_match = _INPUT_TYPE_RE.search(open_attrs)
+                    input_type = type_match.group(1).lower() if type_match else "text"
+                    if input_type in _Y003_SKIPPED_INPUT_TYPES:
+                        continue
+                # Dynamic attribute injection ({% ... %} / {{ ... }})
+                # may carry id / aria-* — conservatively don't flag.
+                if _CONTROL_DYNAMIC_ATTRS_RE.search(open_attrs):
+                    continue
+                # Explicit accessible-name attribute → named.
+                if _ACCESSIBLE_NAME_ATTR_RE.search(open_attrs):
+                    continue
+                # id paired with a same-file <label for="..."> → named.
+                id_match = _CONTROL_ID_RE.search(open_attrs)
+                if id_match and id_match.group(1) in label_for_ids:
+                    continue
+                # Wrapped by a <label>...</label> element → named.
+                if any(start <= match.start() < end for start, end in label_spans):
+                    continue
+                lineno = scan_source[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- <%s> form control has no associated label "
+                        "(WCAG 1.3.1)." % (relpath, lineno, tag),
+                        hint=(
+                            "Assistive tech announces nothing meaningful for a "
+                            "form control with no accessible name. Associate a "
+                            'label via <label for="...">, wrap the control in a '
+                            "<label>, or add aria-label / aria-labelledby. "
+                            "Note: <label for> matching is file-scoped — a "
+                            "label in a different template won't be detected."
+                        ),
+                        id="djust.Y003",
+                        fix_hint=(
+                            'Add a <label for="..."> (or aria-label) for the '
+                            "<%s> control at line %d in `%s`." % (tag, lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+
+        # Y004 — positive tabindex (focus-order anti-pattern).
+        if not y004_suppressed:
+            for match in _POSITIVE_TABINDEX_RE.finditer(scan_source):
+                value = match.group(1)
+                lineno = scan_source[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        '%s:%d -- positive tabindex="%s" overrides natural '
+                        "focus order (WCAG 2.4.3)." % (relpath, lineno, value),
+                        hint=(
+                            "A positive tabindex forces this element to the "
+                            "front of the tab order, ahead of earlier DOM "
+                            "elements — a confusing, hard-to-maintain focus "
+                            'order. Use tabindex="0" to add an element to the '
+                            'natural order, or tabindex="-1" to make it '
+                            "focusable only programmatically."
+                        ),
+                        id="djust.Y004",
+                        fix_hint=(
+                            'Change tabindex="%s" to tabindex="0" (or remove '
+                            "it) at line %d in `%s`." % (value, lineno, relpath)
                         ),
                         file_path=filepath,
                         line_number=lineno,

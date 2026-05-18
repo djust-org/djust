@@ -274,6 +274,356 @@ class TestY002CheckIntegration:
 
 
 # ---------------------------------------------------------------------------
+# Y003 -- form control missing an associated label
+# ---------------------------------------------------------------------------
+
+
+class TestY003CheckIntegration:
+    """Integration tests for Y003 using check_accessibility() directly."""
+
+    def test_y003_flags_input_without_label(self, tmp_path, settings):
+        """A bare <input> with no label association is flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<form><input type='text' name='q'></form>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert "label" in y003[0].msg
+
+    def test_y003_flags_select_without_label(self, tmp_path, settings):
+        """A bare <select> with no label association is flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<select name='country'><option>US</option></select>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert "select" in y003[0].msg
+
+    def test_y003_flags_textarea_without_label(self, tmp_path, settings):
+        """A bare <textarea> with no label association is flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<textarea name='bio'></textarea>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert "textarea" in y003[0].msg
+
+    def test_y003_passes_input_with_aria_label(self, tmp_path, settings):
+        """An <input> with aria-label is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<input type='text' aria-label='Search'>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_passes_input_with_aria_labelledby(self, tmp_path, settings):
+        """An <input> with aria-labelledby is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text(
+            "<span id='lbl'>Query</span><input type='text' aria-labelledby='lbl'>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_passes_input_with_label_for(self, tmp_path, settings):
+        """An <input id='q'> matched by a <label for='q'> is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<label for='q'>Query</label><input type='text' id='q'>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_passes_input_wrapped_by_label(self, tmp_path, settings):
+        """An <input> wrapped by a <label> element is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<label>Query <input type='text' name='q'></label>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_ignores_hidden_and_button_inputs(self, tmp_path, settings):
+        """hidden / submit inputs are not user-named text controls -> ignored."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text(
+            "<input type='hidden' name='csrf'><input type='submit' value='Go'>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_ignores_button_reset_image_inputs(self, tmp_path, settings):
+        """button / reset / image inputs get their name from value/alt -> ignored."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text(
+            "<input type='button' value='X'>"
+            "<input type='reset' value='Clear'>"
+            "<input type='image' alt='Search' src='/s.png'>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_ignores_input_with_dynamic_attrs(self, tmp_path, settings):
+        """An <input> with {% ... %}/{{ ... }} may carry id/aria dynamically -> not flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "dyn.html").write_text("<input type='text' {{ field_attrs }}>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_no_false_positive_on_plain_template(self, tmp_path, settings):
+        """A template with no form controls yields zero Y003 (no tautology)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "plain.html").write_text("<div><p>No form here</p></div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_suppressed(self, tmp_path, settings):
+        """DJUST_CONFIG suppress_checks=['Y003'] silences Y003."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<input type='text' name='q'>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+        settings.DJUST_CONFIG = {"suppress_checks": ["Y003"]}
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_reports_line_number(self, tmp_path, settings):
+        """Y003 result carries an accurate line_number."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text(
+            "<div>\n<p>line two</p>\n<input type='text' name='q'>\n</div>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert y003[0].line_number == 3
+
+    def test_y003_verbatim_block_not_flagged(self, tmp_path, settings):
+        """A bare <input> inside {% verbatim %} (a docs example) is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "docs.html").write_text(
+            "{% verbatim %}<input type='text' name='q'>{% endverbatim %}"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 0
+
+    def test_y003_data_type_before_real_type_not_skipped(self, tmp_path, settings):
+        """A `data-type='hidden'` attr must NOT shadow the real `type`.
+
+        Regression: the `_INPUT_TYPE_RE` `\\b` word boundary false-matched
+        inside `data-type='hidden'`, so the regex picked `hidden` first and
+        the input was wrongly skipped (false negative). With the
+        `(?<![\\w-])` lookbehind, the real `type='text'` is selected and the
+        unlabelled text input is still flagged.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<input data-type='hidden' type='text' name='q'>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert "label" in y003[0].msg
+
+    def test_y003_data_type_only_treated_as_text_input(self, tmp_path, settings):
+        """An <input> with only `data-type` (no real type) is a text control.
+
+        `data-type='hidden'` must not be read as the control's `type`, so
+        the input defaults to a user-named text control and an unlabelled
+        one is flagged.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<input data-type='hidden' name='q'>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y003 = [e for e in errors if e.id == "djust.Y003"]
+        assert len(y003) == 1
+        assert "label" in y003[0].msg
+
+
+# ---------------------------------------------------------------------------
+# Y004 -- positive tabindex
+# ---------------------------------------------------------------------------
+
+
+class TestY004CheckIntegration:
+    """Integration tests for Y004 using check_accessibility() directly."""
+
+    def test_y004_flags_positive_tabindex(self, tmp_path, settings):
+        """An element with tabindex='3' is flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<div tabindex='3'>panel</div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 1
+        assert "tabindex" in y004[0].msg
+        assert y004[0].line_number == 1
+
+    def test_y004_flags_multi_digit_positive_tabindex(self, tmp_path, settings):
+        """A multi-digit positive tabindex (tabindex='10') is flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text('<div tabindex="10">panel</div>')
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 1
+
+    def test_y004_passes_tabindex_zero(self, tmp_path, settings):
+        """tabindex='0' (valid 'add to natural order') is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<div tabindex='0'>panel</div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+    def test_y004_passes_tabindex_negative(self, tmp_path, settings):
+        """tabindex='-1' (valid 'focusable but not tabbable') is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<div tabindex='-1'>panel</div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+    def test_y004_passes_dynamic_tabindex(self, tmp_path, settings):
+        """A {{ }}-interpolated tabindex value is unknowable -> NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "dyn.html").write_text("<div tabindex='{{ idx }}'>panel</div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+    def test_y004_no_false_positive_on_plain_template(self, tmp_path, settings):
+        """A template with no positive tabindex yields zero Y004 (no tautology)."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "plain.html").write_text("<div><p>No tabindex here</p></div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+    def test_y004_suppressed(self, tmp_path, settings):
+        """DJUST_CONFIG suppress_checks=['Y004'] silences Y004."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<div tabindex='3'>panel</div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+        settings.DJUST_CONFIG = {"suppress_checks": ["Y004"]}
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+    def test_y004_reports_line_number(self, tmp_path, settings):
+        """Y004 result carries an accurate line_number."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text(
+            "<div>\n<p>line two</p>\n<span tabindex='5'>x</span>\n</div>"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 1
+        assert y004[0].line_number == 3
+
+    def test_y004_verbatim_block_not_flagged(self, tmp_path, settings):
+        """A positive tabindex inside {% verbatim %} (a docs example) is NOT flagged."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "docs.html").write_text(
+            "{% verbatim %}<div tabindex='3'>panel</div>{% endverbatim %}"
+        )
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+    def test_y004_data_tabindex_not_flagged(self, tmp_path, settings):
+        """A `data-tabindex='5'` custom attribute must NOT be flagged.
+
+        Regression: the `_POSITIVE_TABINDEX_RE` `\\b` word boundary sat
+        between `data-` and `tabindex` (a `-` is a non-word char), so a
+        JS-driven custom attribute like `data-tabindex='5'` false-matched
+        as a Y004 positive-tabindex defect. The `(?<![\\w-])` lookbehind
+        blocks a match preceded by a hyphen, silencing the false positive.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<div data-tabindex='5'>panel</div>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        errors = check_accessibility(None)
+        y004 = [e for e in errors if e.id == "djust.Y004"]
+        assert len(y004) == 0
+
+
+# ---------------------------------------------------------------------------
 # check_accessibility -- general behaviour
 # ---------------------------------------------------------------------------
 
