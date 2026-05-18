@@ -281,6 +281,11 @@ navigation:
         file: guides/typecheck.md
         order: 17
         level: intermediate
+      - title: API Stability & Deprecations
+        slug: api-stability
+        file: guides/api-stability.md
+        order: 18
+        level: reference
       - title: Hot View Replacement (v0.6.1)
         slug: hot-view-replacement
         file: guides/hot-view-replacement.md
