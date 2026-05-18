@@ -318,8 +318,9 @@ from djust.decorators import optimistic, cache, client_state, background
 
 This is intentional for the 1.0 freeze — adding them to the top-level
 namespace is an additive change that is more appropriately considered for a
-1.1 release. A follow-up issue tracks that consideration. Until then, the
-`djust.decorators` import path above is the stable, documented one.
+1.1 release; [issue #1489](https://github.com/djust-org/djust/issues/1489)
+tracks that consideration. Until then, the `djust.decorators` import path
+above is the stable, documented one.
 
 ### F4 — `djust.mixins.*` internal-composition mixins are not public
 
