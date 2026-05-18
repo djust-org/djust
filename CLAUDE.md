@@ -855,6 +855,61 @@ One rule from the v0.9.7-3 drain (PRs #1469, #1470 + the #1467 investigation).
 
   **Generalized rule for child-routing PRs**: when working on `handle_event`-adjacent code, explicitly state whether the change targets LiveComponents (`component_id`), sticky-child LiveViews (`view_id`), or both. Test the routing path you claim to affect — a `component_id`-routed test does NOT exercise the sticky-child path, and vice versa.
 
+## Process canonicalizations from v1.0.0rc2 retro arc
+
+One rule from the v1.0.0rc2 drain (PRs #1504, #1506, #1508, #1510, #1512 —
+9 issues, 5 PRs). Tasks 1-3 of the drain each lost time to the same failure
+class; tasks 4-5 applied the lesson. Canonicalized here so the next drain
+doesn't repeat it.
+
+- **Verify environment premises before acting on them (#1516, v1.0.0rc2
+  retro finding #1).** A subagent — planner, implementer, or reviewer —
+  will silently assume facts about repo state unless the pipeline either
+  verifies them upfront or states them in the subagent's brief. Three
+  v1.0.0rc2 tasks were bitten by exactly this:
+
+  1. **File-tracked state (PR #1506).** The Stage-4 plan assumed
+     `.claude/skills/djust-release/SKILL.md` was an in-repo file and
+     scheduled an edit to it. `.gitignore:73` ignores all of `.claude/`;
+     `git ls-files .claude/` returns nothing on `main`. **Before planning
+     any edit to a file, verify it is tracked:**
+     ```bash
+     git ls-files --error-unmatch <path> 2>/dev/null \
+       || echo "NOT TRACKED: $path — the edit cannot land via this repo's PR"
+     git check-ignore -v <path> 2>/dev/null \
+       && echo "GITIGNORED: $path — re-scope as out-of-repo"
+     ```
+     An untracked or gitignored target is a hard signal the work belongs
+     out-of-repo (or the plan's repo-boundary assumption is wrong). This
+     extends the Stage-4 "VERIFY LITERAL API CONTRACTS" discipline from
+     symbol names / line numbers to **file-tracking state**.
+
+  2. **`git add -f` on a gitignored path is a STOP, not a workaround
+     (PR #1506).** When `git add` reports a path is ignored, that is
+     *information* — usually the file is intentionally out-of-repo
+     (user-private skills, secrets, generated artifacts). Do NOT reach for
+     `-f`. Stop, surface the conflict between the plan's premise and the
+     repo's gitignore state, and re-scope. Force-adding silently converts
+     a planning error into a committed artifact that then needs an amend
+     (or escapes to `main`).
+
+  3. **Execution-verify doc-snippet fixes (PR #1508).** An import-path
+     correction to a fenced code snippet that is "plausible on inspection"
+     can still raise on copy-paste (PR #1508: a snippet used
+     `class X(Component)` while `register_component` requires
+     `LiveComponent` — disjoint hierarchies). AST + import-resolution
+     checks (`scripts/check-doc-snippets.py`) are necessary but not
+     sufficient — they cannot catch a phantom method call or a wrong base
+     class. Any doc-snippet edit must be *executed* (`django.setup()` +
+     `exec` the snippet body, or a minimal harness) and confirmed to raise
+     no exception before the fix is reported done.
+
+  The durable form of the rule: the gate that works is **active
+  falsification** — construct the case that would disprove the premise and
+  run it — not passive inspection. PR #1512's Stage 7 caught a real
+  `\b`/`data-tabindex` regex false-match precisely because it built a
+  falsifying `data-tabindex` case rather than re-reading the regex.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

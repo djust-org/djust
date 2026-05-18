@@ -296,11 +296,82 @@ issue or be explicitly closed with a reason.
 | 254 | Implementer-subagent prompt must mandate gate-the-change-off tautology self-test | Retro v0.9.7-2 (finding #2) | #1468 | Closed | **Resolved in v0.9.7-3 PR #1469** — landed `docs/PULL_REQUEST_CHECKLIST.md` Test Quality bullet + CLAUDE.md "Process canonicalizations from v0.9.7-2 retro arc" section with the PR #1466 4/7 first-pass case study. First non-trivial application immediately followed in PR #1470 (Stage 5 implementer's gate-off sabotaged `git add $STAGED` → recovery test caught it at `assert status == ""`). Canon landed at the right shape. Out-of-repo follow-up: the implementer-subagent prompt template in the pipeline-run skill repository should incorporate the same Verification-section step. |
 | 255 | LiveComponent vs sticky-child LiveView event-routing distinction (canon) | Retro v0.9.7-3 (#1467 investigation) | #1471 | OUT-OF-REPO | **Closed for djust-repo (v0.9.7-3 PR #1472)** — CLAUDE.md "Process canonicalizations from v0.9.7-3 retro arc" section documents that LiveComponent embedded children (`component_id`-routed) and sticky-child LiveViews (`view_id`-routed) are distinct mechanisms with different persistence semantics. Confusion between the two cost ~1hr of code-path tracing during #1467. Follow-up architectural work (sticky-child WS state persistence with LOAD-time discovery) tracked in #1471 for v0.10.0+. |
 | 256 | Shell tools that process git output default to NUL-delimited + bash-array + quoted expansion | Retro v0.9.7-3 (PR #1470 Stage 11 finding #1) | #1473 | Closed | **Resolved in v0.9.7-3 PR #1476** — landed `docs/PULL_REQUEST_CHECKLIST.md` Shell Scripts Processing Git Output section under Code Quality. Includes the macOS bash 3.2 compatible NUL-delimited read pattern + quoted array expansion + `--` separator on `git add`. The v0.9.7-3 retro's only Open Item is now closed; no carryover into v0.9.7-4+. |
-| 257 | Release procedure must refresh + verify all lockfile self-entries on version bump | Retro v1.0.0 (PR #1486 + #1490) | #1498 | Open | Two lockfiles drifted behind their manifests across release cuts — `Cargo.lock` (#1486; also #1487) and `uv.lock` self-entry (#1490). Fix: `djust-release` step to regenerate+stage both lockfiles + a CI self-entry-vs-manifest check. |
-| 258 | Left-shift deprecation-migration stacklevel test to Stage 5 implementer | Retro v1.0.0 (PR #1488) | #1499 | Open | Stage 7 caught 2 `stacklevel` bugs the implementer tests missed (asserted message text, not frame). Per-call-site "warning points at caller's frame" test, probe-verified. |
-| 259 | Doc-snippet smoke test + mechanically-derivable doc-claim assertions | Retro v1.0.0 (PR #1494) | #1500 | Open | PR #1494 caught a P0 README bug (`as_live_view()` never existed) + stale claims. Extract+check fenced code blocks; assert version/size claims against source. |
-| 260 | Close the ADR-status drift loop — flip Status to Accepted when a feature ships | Retro v1.0.0 (PR #1492) | #1501 | Open | 10 ADRs stale "Proposed" across ~5 releases. Documentation-stage prompt + a `djust_check` ADR-status audit. |
-| 261 | Stage 4 plan-template — describe intent, not specific values (ARIA roles, dep constraints) | Retro v1.0.0 (PR #1491 + #1490) | #1502 | Open | Plan over-specified `role="button"` (impl correctly diverged) and mislabeled constrained deps "unpinned". |
+| 257 | Release procedure must refresh + verify all lockfile self-entries on version bump | Retro v1.0.0 (PR #1486 + #1490) | #1498 | Closed | **Resolved in v1.0.0rc2 PR #1510** — `scripts/check-lockfile-versions.py` audit + `make version`/`make release` lockfile-refresh + verification gate + CI + pre-commit. Also closed #1487. |
+| 258 | Left-shift deprecation-migration stacklevel test to Stage 5 implementer | Retro v1.0.0 (PR #1488) | #1499 | Closed | **Resolved in v1.0.0rc2 PR #1510** — `docs/PULL_REQUEST_CHECKLIST.md` Test-Quality bullet requiring a probe-verified caller-frame test per touched `warn_deprecated`/`warnings.warn` site. Out-of-repo skill-prompt component → #1511. |
+| 259 | Doc-snippet smoke test + mechanically-derivable doc-claim assertions | Retro v1.0.0 (PR #1494) | #1500 | Closed | **Resolved in v1.0.0rc2 PR #1508** — `scripts/check-doc-snippets.py` (parts a+b: AST/import-check fenced blocks + Django-floor/JS-size claim assertions). Part c (doc-example security lint) → #1509. |
+| 260 | Close the ADR-status drift loop — flip Status to Accepted when a feature ships | Retro v1.0.0 (PR #1492) | #1501 | Closed | **Resolved in v1.0.0rc2 PR #1506** — `scripts/check-adr-status.py` hard-invariant audit + 12-ADR cleanup (#1493). Skill-prompt part (b) is out-of-repo → #1507. |
+| 261 | Stage 4 plan-template — describe intent, not specific values (ARIA roles, dep constraints) | Retro v1.0.0 (PR #1491 + #1490) | #1502 | Closed | **Resolved in v1.0.0rc2 PR #1510** — two `mandatory:false` Stage-4 rules (ARIA intent not values; grep constraint tables before labeling deps) added to `feature-state.json` + `bugfix-state.json`. |
+| 262 | `_create_tarball` substring-match over-excludes legitimate paths | PR #1504 | #1505 | Open | Pre-existing; substring containment over-matches (`venv` inside `venvironment.py`). Basename-anchored or `fnmatch` follow-up. |
+| 263 | ADR-status-flip prompt for `djust-release` + `pipeline-run` skills | Retro v1.0.0rc2 (PR #1506, #1501 part b) | #1507 | OUT-OF-REPO | Skill-prompt component; `.claude/` gitignored repo-wide. Upstream: pipeline-skill repo. |
+| 264 | Doc-example security/style lint (part c of #1500) | PR #1508 | #1509 | Open | Custom AST walker for `print(f"...")`/`mark_safe(f"...")` etc. in fenced doc snippets + anti-pattern allowlist. |
+| 265 | Skill-prompt components of #1498 + #1499 (lockfile-verify + stacklevel-test prompts) | Retro v1.0.0rc2 (PR #1510) | #1511 | OUT-OF-REPO | `djust-release` + `pipeline-run` skill prompts; `.claude/` gitignored. Upstream: pipeline-skill repo. |
+| 266 | Accessibility long-tail remainder — P2/P3 component ARIA, keyboard JS, `djust_audit` a11y | PR #1512 | #1513 | Open | 3 of 5 #1496 sub-areas not in PR #1512's slice, + 3 genuine Y003 defects in demo templates. |
+| 267 | `_IMG_HAS_ALT_RE` (Y002) false-matches `data-alt` — same `\b` weakness fixed for Y003/Y004 | PR #1512 | #1514 | Open | Latent false-negative; apply the `(?<![\w-])` anchor as done for Y003/Y004 in PR #1512. |
+| 268 | Codify the `scripts/check-*.py` audit-shape as a scaffold/template | Retro v1.0.0rc2 (finding #2) | #1515 | Open | 3 sibling audits now exist (check-adr-status/doc-snippets/lockfile-versions); the 4th should be fill-in-the-blank. |
+| 269 | Reviewer-subagent prompt needs an environment-premises brief | Retro v1.0.0rc2 (finding #3) | #1516 | OUT-OF-REPO | Recurring two-commit-shape "CHANGELOG missing" false positive. Upstream: pipeline-run skill repo. |
+| 270 | Meta-check for `\b` word-boundary anchors in attribute-matching regexes | Retro v1.0.0rc2 (finding #4) | #1517 | Open | `\b`/`data-*` false-match — 3rd occurrence (Y002 latent, Y003, Y004 in PR #1512). |
+
+## v1.0.0rc2 — Post-rc1 retro drain (PRs #1504, #1506, #1508, #1510, #1512)
+
+**Date**: 2026-05-18
+**Scope**: Post-rc1 cleanup bucket draining the v1.0.0 retrospective's own action items (#1498–#1502) plus four Action-#1079 follow-ups deferred during the v1.0.0 milestone (#1493, #1495, #1496, #1497). Created by `/pipeline-drain`, processed by `/pipeline-run --milestone v1.0.0rc2 --all --group`: 9 issues grouped into 5 PRs. Four of the five PRs shipped a standing automated audit. Zero post-merge fixes; all CI green.
+**Tests at close**: 7253
+
+### What We Learned
+
+**1. "Verify, don't assume" was the milestone's defining thread — and it converged within the milestone.**
+Tasks 1–3 each lost time to a single unverified environment premise. Task 1 (PR #1504): a Stage-7 reviewer subagent flagged "CHANGELOG missing" because its prompt lacked two-commit-shape context — a guaranteed false positive on every two-commit PR. Task 2 (PR #1506): the Stage-4 plan assumed `.claude/skills/djust-release/SKILL.md` was an in-repo file; it is gitignored repo-wide, and the Stage-5 implementer compounded the miss by `git add -f` force-adding it (caught post-commit, amended before the PR opened). Task 3 (PR #1508): the implementer's import-path fix to a README snippet was "plausible on inspection" but still raised on copy-paste — not execution-verified. Tasks 4–5 then applied the lesson: PR #1510's implementer inspected `uv lock`'s output, spotted an incidental out-of-scope `mypy` delta, and discarded it for a targeted one-line edit; PR #1512's Stage 7 didn't assume a new regex was correct — it constructed a falsifying `data-tabindex` case and found the bug. The durable form of the lesson: the gate that works is *active falsification*, not passive inspection.
+
+**Action taken**: Added a "Process canonicalizations from v1.0.0rc2 retro arc" section to `CLAUDE.md` in this commit — verify environment premises before acting (`git ls-files` / `git check-ignore` for file-tracked state before planning an edit; treat `git add -f` on a gitignored path as a STOP, not a workaround; execution-verify doc-snippet fixes rather than trusting inspection).
+
+**2. The drain was a deliberate "build the guardrails" investment — the right pre-1.0-freeze work.**
+Four of the five PRs added or extended a standing, executable audit: `scripts/check-adr-status.py` (#1506), `scripts/check-doc-snippets.py` (#1508), `scripts/check-lockfile-versions.py` (#1510), and the Y003/Y004 accessibility checks (#1512). Each catches a bug class the v1.0.0 retro identified. The `scripts/check-*.py` shape — pure stdlib, no network, wired identically into `make` + CI + pre-commit + a `tests/test_check_*.py` with a gate-off self-test and a real-repo dogfood — is now a de-facto template; each successive audit was faster to build by mirroring the last. Every guardrail shipped before the 1.0 API freeze is a regression class that cannot reappear once the surface is locked.
+
+**Action taken**: Open — tracked in Action Tracker #268 (GitHub #1515).
+
+**3. The two-commit-shape Stage-7 false positive is structural, not incidental.**
+The "CHANGELOG missing" false positive (Task 1) is not a one-off — it recurs on *every* two-commit-shape PR, because the Stage-7 reviewer subagent runs before the Stage-9 docs commit and its prompt does not state that CHANGELOG is intentionally deferred. Across the drain the orchestrator hand-briefed each reviewer subagent to suppress it; the durable fix is to put an environment-premises brief (CHANGELOG-deferred, base-may-be-stale per #1450, `.claude/` gitignored) into the reviewer-subagent prompt template itself.
+
+**Action taken**: Open (OUT-OF-REPO) — tracked in Action Tracker #269 (GitHub #1516).
+
+**4. The `\b`/`data-*` regex false-match surfaced a third time — it needs a meta-check.**
+PR #1512's Y003/Y004 used a `\b` word-boundary anchor in attribute-matching regexes; `\b` sits between `data-` and the attribute name, so `data-tabindex` / `data-type` false-matched. Stage 7 caught it; the fix re-anchored with `(?<![\w-])`. The pre-existing Y002 `_IMG_HAS_ALT_RE` has the identical latent weakness (`data-alt`). Three occurrences of one regex-anchor bug. A meta-check that greps check modules for `\b` anchors adjacent to attribute names would have caught all three at once.
+
+**Action taken**: Open — tracked in Action Tracker #270 (GitHub #1517).
+
+### Insights
+
+- **The drain recipe held at 5/5.** `/pipeline-drain` → grouped `/pipeline-run --all --group` → per-PR retro → milestone retro produced 5 merged PRs, 9 issues closed, zero post-merge fixes. Four PRs rated 5/5, one 4/5 (PR #1506's gitignore detour).
+- **In-milestone learning is observable.** The verify-vs-assume thread was *named* at Task 3's retro and *applied* at Tasks 4–5. A multi-task drain is long enough for its own retro lessons to change behavior before it closes — worth designing for.
+- **Convention reuse compounds.** Each `scripts/check-*.py` audit after the first was a fill-in-the-blank, not a re-derive. Establishing one good shape early in a drain pays back on every later task.
+- **The quality gates earned their cost.** Stage 7 caught a 🔴 the tool by design could not (PR #1508's base-class error — `check-doc-snippets.py` does AST + import-resolution, not execution) and a false-positive regex class (PR #1512). The one 🔴 and every real 🟡 were caught pre-merge; nothing escaped to a post-merge fix.
+- **Scope discipline (Action #1079) held throughout.** Every PR fixed exactly its cited issues; 6 follow-up issues (#1505, #1507, #1509, #1511, #1513, #1514) were filed for genuinely out-of-scope work rather than scope-crept. `#1489` was correctly left for v1.1.
+
+### Review Stats
+
+| Metric | #1504 | #1506 | #1508 | #1510 | #1512 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Tests added | 3 | 11 | 14 | 6 | 26 | 60 |
+| 🔴 Findings | 0 | 0 | 1 | 0 | 0 | 1 |
+| 🟡 Findings | 0\* | 0 | 0 | 2 | 2 | 4 |
+| Findings fixed pre-merge | — | — | 1 | 2 | 2 | 5 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0 |
+
+\*PR #1504's Stage-7 "CHANGELOG missing" was a false positive (two-commit-shape context gap), not a real finding — see Finding 3.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added "Process canonicalizations from v1.0.0rc2 retro arc" — the verify-environment-premises rule (file-tracked state via `git ls-files`/`git check-ignore`; `git add -f` on a gitignored path is a STOP; execution-verify doc-snippet fixes).
+**Pipeline template**: None this milestone.
+**Checklist**: `docs/PULL_REQUEST_CHECKLIST.md` gained the probe-verified deprecation-stacklevel-test bullet (PR #1510, issue #1499).
+**Skills**: `/pipeline-drain` + `/pipeline-run --all --group` + `/pipeline-retro` exercised end-to-end; no skill files changed — all skill-prompt improvements are tracked as OUT-OF-REPO follow-ups (#1507, #1511, #1516).
+
+### Open Items
+
+- [ ] `scripts/check-*.py` audit-shape scaffold — Action Tracker #268 (GitHub #1515)
+- [ ] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO)
+- [ ] `\b`-anchor-in-attribute-regex meta-check — Action Tracker #270 (GitHub #1517)
+- [ ] 6 deferred drain follow-ups — Action Tracker #262–#267 (GitHub #1505, #1507, #1509, #1511, #1513, #1514)
 
 ## v1.0.0 — Release Readiness (PRs #1486, #1488, #1490, #1491, #1492, #1494)
 
@@ -362,11 +433,11 @@ Unit 4 (#1491): the plan pinned `role="button"` on a sortable `<th>`; the implem
 
 ### Open Items
 
-- [ ] Lockfile self-entry sync on release — Action Tracker #257 (GitHub #1498)
-- [ ] Stage-5 deprecation stacklevel test — Action Tracker #258 (GitHub #1499)
-- [ ] Doc-snippet smoke test — Action Tracker #259 (GitHub #1500)
-- [ ] ADR-status drift loop — Action Tracker #260 (GitHub #1501)
-- [ ] Stage 4 plan intent-not-values — Action Tracker #261 (GitHub #1502)
+- [x] Lockfile self-entry sync on release — Action Tracker #257 (GitHub #1498) — resolved in v1.0.0rc2 (PR #1510)
+- [x] Stage-5 deprecation stacklevel test — Action Tracker #258 (GitHub #1499) — resolved in v1.0.0rc2 (PR #1510)
+- [x] Doc-snippet smoke test — Action Tracker #259 (GitHub #1500) — resolved in v1.0.0rc2 (PR #1508)
+- [x] ADR-status drift loop — Action Tracker #260 (GitHub #1501) — resolved in v1.0.0rc2 (PR #1506)
+- [x] Stage 4 plan intent-not-values — Action Tracker #261 (GitHub #1502) — resolved in v1.0.0rc2 (PR #1510)
 - Deferred-findings issues filed during the milestone: #1487, #1489, #1493, #1495, #1496, #1497.
 
 ## v0.9.7-3 — Canon + tooling follow-ups + investigation-class close (PRs #1469, #1470, #1472)
