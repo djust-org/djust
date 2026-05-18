@@ -632,6 +632,7 @@ class RequestMixin:
             from .sticky import (
                 save_sticky_child_state_sync,
                 sticky_child_should_persist,
+                warn_sticky_child_optin_skip,
                 write_sticky_index_and_prune_sync,
             )
 
@@ -645,6 +646,13 @@ class RequestMixin:
                 for child in _sticky_children.values()
                 if sticky_child_should_persist(child, self)
             ]
+            # ADR-018 iter 18c — for each registered child NOT in the save set,
+            # warn if it's the Decision-5 opt-in mismatch (child opted in,
+            # parent did not). The helper re-checks the misconfiguration, so
+            # children that simply don't opt in produce no warning.
+            for _child in _sticky_children.values():
+                if _child not in _sticky_to_save:
+                    warn_sticky_child_optin_skip(_child, self)
             # Run the save + ledger sweep when there are children to save OR a
             # stale ledger exists (so a parent whose last sticky child was
             # removed still gets its orphans pruned). A parent that never had

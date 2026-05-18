@@ -93,6 +93,58 @@ def sticky_child_should_persist(child: Any, parent: Any) -> bool:
     )
 
 
+def warn_sticky_child_optin_skip(child: Any, parent: Any) -> None:
+    """ADR-018 iter 18c — runtime one-shot warning for the Decision-5
+    opt-in mismatch.
+
+    Emits a ``logger.warning`` exactly once per ``(parent-class, sticky_id)``
+    when a sticky-child save is skipped because the CHILD opted into
+    ``enable_state_snapshot`` but its PARENT did not — the precise
+    misconfiguration :func:`sticky_child_should_persist` rejects.
+
+    The helper re-checks the misconfiguration internally, so call sites
+    (the WS save-block else-branch, the HTTP save sweep) can invoke it
+    unconditionally for any non-parent child without duplicating the gate
+    logic — it is a no-op unless EXACTLY this misconfiguration holds:
+
+    * the child has a truthy ``sticky_id`` AND ``enable_state_snapshot=True``
+      (a non-sticky or non-opted-in child has nothing to persist), and
+    * the parent does NOT set ``enable_state_snapshot`` (a both-opted-in
+      pair runs the save — no misconfig).
+
+    Dedup is via :func:`~djust.utils.emit_one_shot_class_warning` with the
+    key ``sticky_optin_<sticky_id>`` on the *parent* class — exactly "once
+    per ``(parent, sticky_id)``" per ADR-018 Decision 5. Two distinct
+    sticky children under one parent get two sentinels; the same child
+    re-embedded under a different parent class gets a fresh sentinel.
+
+    The static counterpart is the ``djust.V011`` system check
+    (``check_sticky_child_optin``); this runtime warning is the safety net
+    for misconfigurations the static template scan cannot see (dynamic
+    ``{% live_render %}`` paths, templates with no statically-resolvable
+    parent class).
+    """
+    sticky_id = getattr(child, "sticky_id", None)
+    if not (sticky_id and getattr(child, "enable_state_snapshot", False)):
+        return  # child not opted in / non-sticky — nothing to warn about
+    if getattr(parent, "enable_state_snapshot", False):
+        return  # both opted in — the save runs, no misconfiguration
+
+    from ..utils import emit_one_shot_class_warning
+
+    emit_one_shot_class_warning(
+        type(parent),
+        "sticky_optin_%s" % sticky_id,
+        "Sticky child %r (sticky_id=%r) has enable_state_snapshot=True but "
+        "its parent %r does not — the child's state is NOT persisted across "
+        "reconnect. Set enable_state_snapshot=True on the parent too "
+        "(ADR-018 Decision 5).",
+        type(child).__name__,
+        sticky_id,
+        type(parent).__name__,
+    )
+
+
 def _collect_sticky_child_state(child: Any, get_context_data: dict) -> dict:
     """Filter LiveComponents out of a child's public context dict.
 
