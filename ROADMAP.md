@@ -59,7 +59,7 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 **Status (2026-05-17):** All 6 units shipped (PRs #1486, #1488, #1490, #1491, #1492, #1494); milestone retro written (RETRO.md §v1.0.0); `v1.0.0rc1` cut via `/djust-release`. Post-rc1 cleanup is the `v1.0.0rc2` milestone below.
 
-## Next: v1.0.0rc2 — Post-rc1 retro drain
+## Shipped: v1.0.0rc2 — Post-rc1 retro drain (rc2 cut 2026-05-18)
 
 > Created 2026-05-17 by `/pipeline-drain` — drains the v1.0.0 retrospective
 > action items (#1498–#1502, Action Tracker #257–#261) plus the four
@@ -159,6 +159,86 @@ record constrained-vs-unpinned per target by grepping constraint tables.
 - `/pipeline-run --milestone v1.0.0rc2 --all --group` processes the bucket;
   items cluster as ADR-hygiene (#1493+#1501), docs (#1497+#1500), process
   canon (#1498+#1499+#1502), and code fixes (#1495, #1496 solo — L-effort).
+
+**Status (2026-05-18):** All 9 issues drained across 5 PRs (#1504, #1506, #1508, #1510, #1512); milestone retro written (RETRO.md §v1.0.0rc2, Action Tracker rows #257–#270); `v1.0.0rc2` cut via `/djust-release`. Post-rc2 backlog is the `v1.0.0rc3` milestone below.
+
+## Next: v1.0.0rc3 — rc2-retro backlog drain
+
+> Created 2026-05-18 by `/pipeline-drain` — drains the in-repo backlog
+> remaining after the v1.0.0rc2 retro: the 6 follow-up issues filed during
+> the rc2 drain + rc2 retro that are genuinely fixable in this repo.
+> Completion → `/djust-release` cuts `v1.0.0rc3`.
+
+*Goal:* Clear the in-repo rc2-retro backlog before v1.0.0 final — finish the
+audit-tooling family (#1509, #1515), close the regex-hardening cluster
+(#1514, #1517), and land the remaining code/a11y follow-ups (#1505, #1513).
+All P2 tech-debt; none release-blocking for rc3.
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P2** | #1505 | `_create_tarball` exclude matching over-excludes legitimate paths (substring containment) |
+| **P2** | #1509 | Doc-example security/style lint — part (c) of #1500 |
+| **P2** | #1513 | Accessibility long-tail remainder — P2/P3 component ARIA, keyboard JS, `djust_audit` a11y |
+| **P2** | #1514 | `_IMG_HAS_ALT_RE` (Y002) false-matches `data-alt` — apply the `(?<![\w-])` anchor |
+| **P2** | #1515 | Codify the `scripts/check-*.py` audit-shape as a scaffold/template |
+| **P2** | #1517 | Meta-check for `\b` word-boundary anchors in attribute-matching regexes |
+
+**Detail:**
+
+**#1505 — `_create_tarball` substring over-match.** PR #1504 wired
+`TARBALL_EXCLUDES` into `_create_tarball` (`python/djust/deploy_cli.py`);
+both the dir and file filters match exclude patterns via substring
+containment (`pattern in path`). Substring matching over-excludes — `venv`
+matches `venvironment.py`, `dist` matches `distance.py`, etc. Pre-existing,
+not worsened by #1504. Fix: basename/path-segment-anchored or `fnmatch`-based
+matching + regression tests.
+
+**#1509 — doc-example security/style lint (part c of #1500).** PR #1508
+shipped parts (a)+(b) of the doc-snippet smoke test. Part (c) — a custom AST
+walker that re-encodes djust's auto-reject triggers (`print(f"...")`,
+`mark_safe(f"...")`, bare `except: pass`, f-string logging) and applies them
+to fenced doc snippets — was deferred (ruff does not flag these by default).
+Needs an allowlist mechanism for deliberately-shown anti-pattern snippets.
+
+**#1513 — accessibility long-tail remainder.** PR #1512 shipped slice 1 of
+#1496 (Y003/Y004 checks). The remaining 3 sub-areas: P2/P3 component ARIA +
+decorative-icon `aria-hidden` sweep; keyboard-interaction client JS (focus
+trap, Esc-to-close, roving tabindex); `djust_audit` a11y reporting. Plus 3
+genuine Y003 defects in demo templates. **L-effort — Planning must scope a
+single-PR slice (as #1496/PR #1512 did) and file follow-ups for the rest.**
+
+**#1514 — `_IMG_HAS_ALT_RE` data-alt false-match.** The Y002 regex
+(`_IMG_HAS_ALT_RE`, from PR #1491) uses a `\b` anchor that false-matches
+`data-alt` — the same weakness PR #1512 fixed for Y003/Y004's regexes.
+Apply the `(?<![\w-])` anchor + a regression test. Tiny, contained.
+
+**#1515 — audit-shape scaffold.** The v1.0.0rc2 drain added 3 sibling
+`scripts/check-*.py` audits with a now-stable shape (pure stdlib, no network,
+`make`+CI+pre-commit wiring, a `tests/test_check_*.py` with gate-off + dogfood
+tests). Codify the shape as a documented mini-template or a `make new-audit`
+scaffold so the next audit is fill-in-the-blank.
+
+**#1517 — `\b`-anchor meta-check.** The `\b`/`data-*` regex false-match has
+appeared 3× in `checks.py` (Y002 latent, Y003, Y004). Add a meta-check (a
+test or lint) that greps check modules for `\b` anchors adjacent to attribute
+names and flags them — `(?<![\w-])` is the correct anchor.
+
+**Excluded from this drain (not in-repo-processable now):**
+- **OUT-OF-REPO skill work** — #1375, #1384, #1387, #1507, #1511, #1516 —
+  changes to the `pipeline-run` / `djust-release` skill prompts (`.claude/`
+  is gitignored repo-wide; `~/.claude/skills/` is the user's private dir).
+  Tracked in RETRO.md Action Tracker; not drainable by an in-repo pipeline.
+- **Deferred / blocked** — #1432 (free-threaded-safe declaration — revisit
+  v1.0.x/v1.1), #1434 (native async ORM — blocked on psycopg3 landing),
+  #1471 (sticky-child WS persistence — v0.10.0+), #1489 (top-level
+  re-exports — explicitly v1.1).
+- **Skill-coupled** — #1376 (pipeline-template stage-name reconciliation)
+  depends on the out-of-repo skill canon being settled first.
+
+**Pipeline runner notes:**
+- `/pipeline-run --milestone v1.0.0rc3 --all --group` — items cluster as
+  regex-hardening (#1514 + #1517), audit-tooling (#1509 + #1515), and
+  code/a11y fixes (#1505 solo small; #1513 solo L-effort — scope at Planning).
 
 ## Released: v0.9.1 (2026-04-30)
 
