@@ -6,11 +6,11 @@ enabling real-time validation, error display, and reactive form handling.
 """
 
 import logging
-import warnings
 from typing import Dict, Any, Optional, Type, List
 from django import forms
 from django.core.exceptions import ValidationError
 
+from ._deprecation import warn_deprecated
 from .decorators import event_handler
 
 logger = logging.getLogger(__name__)
@@ -410,18 +410,26 @@ class LiveViewForm(forms.Form):
     """
     Base form class for LiveView usage.
 
-    .. deprecated::
-        LiveViewForm adds no functionality over ``forms.Form``.
-        Use ``django.forms.Form`` directly instead.
+    .. deprecated:: 0.3
+        ``LiveViewForm`` adds no functionality over ``forms.Form`` and will
+        be removed no earlier than djust 1.1.0. Use ``django.forms.Form``
+        directly instead.
     """
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        warnings.warn(
-            "LiveViewForm is deprecated and will be removed in djust 0.4. "
-            "Use django.forms.Form directly instead.",
-            DeprecationWarning,
-            stacklevel=2,
+        # stacklevel=5: __init_subclass__ runs inside Django's
+        # DeclarativeFieldsMetaclass __new__ chain, which adds two metaclass
+        # frames. Chain: warnings.warn -> warn_deprecated -> __init_subclass__
+        # -> widgets.py metaclass __new__ -> forms.py metaclass __new__ ->
+        # user `class` statement. Empirically verified (scratch sweep): 5
+        # points the warning at the user's file, not forms.py / widgets.py.
+        warn_deprecated(
+            "LiveViewForm",
+            since="0.3",
+            removed_in="1.1.0",
+            instead="django.forms.Form",
+            stacklevel=5,
         )
 
     def get_field_errors_json(self) -> str:

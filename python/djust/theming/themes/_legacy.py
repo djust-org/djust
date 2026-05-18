@@ -21,80 +21,65 @@ Each theme defines a complete design system including:
 - Component styles
 """
 
-import warnings
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-_DEPRECATION_MSG = (
-    "{name} is deprecated. Use DESIGN_SYSTEMS from djust.theming.theme_packs instead."
-)
+from ..._deprecation import warn_deprecated
+
+# Common migration target for every deprecation in this module.
+_LEGACY_INSTEAD = "DESIGN_SYSTEMS from djust.theming.theme_packs"
+
+
+def _warn_legacy(name: str, stacklevel: int = 4) -> None:
+    """Emit the standardized DeprecationWarning for this legacy module.
+
+    The default ``stacklevel=4`` accounts for the frames between
+    :func:`warnings.warn` and the user's call site:
+    ``warnings.warn`` -> ``warn_deprecated`` -> ``_warn_legacy`` ->
+    deprecated entry point -> user. So the warning points at the user.
+    """
+    warn_deprecated(
+        name,
+        since="0.5",
+        removed_in="1.1.0",
+        instead=_LEGACY_INSTEAD,
+        stacklevel=stacklevel,
+    )
 
 
 class _DeprecatedThemesDict(dict):
     """Dict wrapper that emits DeprecationWarning on access."""
 
     def __getitem__(self, key):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().__getitem__(key)
 
     def __contains__(self, key):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().__contains__(key)
 
     def get(self, key, default=None):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().get(key, default)
 
     def items(self):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().items()
 
     def keys(self):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().keys()
 
     def values(self):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().values()
 
     def __iter__(self):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().__iter__()
 
     def __len__(self):
-        warnings.warn(
-            _DEPRECATION_MSG.format(name="THEMES"),
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        _warn_legacy("THEMES")
         return super().__len__()
 
 
@@ -927,14 +912,11 @@ THEMES: Dict[str, Theme] = _DeprecatedThemesDict(
 def get_theme(name: str) -> Optional[Theme]:
     """Get a theme by name.
 
-    .. deprecated::
-        Use ``get_design_system`` from ``djust_theming.theme_packs`` instead.
+    .. deprecated:: 0.5
+        ``get_theme()`` will be removed no earlier than djust 1.1.0.
+        Use ``get_design_system`` from ``djust.theming.theme_packs`` instead.
     """
-    warnings.warn(
-        _DEPRECATION_MSG.format(name="get_theme()"),
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    _warn_legacy("get_theme()")
     # Bypass the _DeprecatedThemesDict warning to avoid double-warning
     return dict.get(THEMES, name)
 
@@ -942,13 +924,11 @@ def get_theme(name: str) -> Optional[Theme]:
 def list_themes() -> Dict[str, Theme]:
     """Get all available themes.
 
-    .. deprecated::
-        Use ``get_all_design_systems`` from ``djust_theming.theme_packs`` instead.
+    .. deprecated:: 0.5
+        ``list_themes()`` will be removed no earlier than djust 1.1.0.
+        Use ``get_all_design_systems`` from ``djust.theming.theme_packs``
+        instead.
     """
-    warnings.warn(
-        _DEPRECATION_MSG.format(name="list_themes()"),
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    _warn_legacy("list_themes()")
     # Bypass the _DeprecatedThemesDict warning to avoid double-warning
     return dict.copy(THEMES)
