@@ -3242,6 +3242,74 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     sanitize_for_log(event_name or ""),
                                 )
 
+                        # ADR-018 iter 18a — Branch B: sticky-child state save.
+                        # Kept as a SEPARATE ``if`` (NOT merged into Branch A's
+                        # gate) so the #1466 source-grep guard in
+                        # test_ws_reconnect_state_1465.py — which asserts the
+                        # exact Branch-A gate string — stays green.
+                        #
+                        # When a sticky-child event fires, the routing path
+                        # (~line 2696) sets ``target_view`` to the child, so
+                        # Branch A's ``target_view is self.view_instance`` gate
+                        # skips it. This branch generalizes the save (Decision
+                        # 4) to persist the child under its stable sticky key
+                        # (Decision 1), gated on the both-opt-in predicate
+                        # (Decision 5). It is wrapped in the SAME 150ms
+                        # ``asyncio.wait_for`` bound as Branch A — a sticky
+                        # child save must not extend close-time tail latency.
+                        from .mixins.sticky import (
+                            save_sticky_child_state,
+                            sticky_child_should_persist,
+                            write_sticky_index_and_prune,
+                        )
+
+                        if target_view is not self.view_instance and sticky_child_should_persist(
+                            target_view, self.view_instance
+                        ):
+
+                            async def _persist_sticky_child_after_event() -> None:
+                                """Inner helper bounded by ``asyncio.wait_for``.
+                                Saves the sticky child under its stable key +
+                                writes the GC ledger, then batches one
+                                ``asave()``.
+                                """
+                                parent = self.view_instance
+                                mount_request = getattr(parent, "_djust_mount_request", None)
+                                save_session = getattr(
+                                    mount_request, "session", None
+                                ) or self.scope.get("session")
+                                if save_session is None:
+                                    return
+
+                                parent_path = (
+                                    mount_request.path if mount_request is not None else "/"
+                                )
+
+                                await save_sticky_child_state(
+                                    target_view, save_session, parent_path
+                                )
+                                await write_sticky_index_and_prune(
+                                    parent, save_session, parent_path
+                                )
+                                await save_session.asave()
+
+                            try:
+                                await asyncio.wait_for(
+                                    _persist_sticky_child_after_event(), timeout=0.150
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "WS-event sticky-child state save exceeded 150ms "
+                                    "for %r — session backend backpressure; skipping "
+                                    "this event's save. Subsequent events will retry.",
+                                    sanitize_for_log(event_name or ""),
+                                )
+                            except Exception:  # noqa: BLE001 — saves must never break event handling
+                                logger.exception(
+                                    "Failed to save sticky-child state after WS event %r",
+                                    sanitize_for_log(event_name or ""),
+                                )
+
                         # Auto-detect unchanged state: if no public assigns were
                         # reassigned, auto-skip the render (eliminates DJE-053).
                         # In-place mutations (list.append) are NOT detected and
