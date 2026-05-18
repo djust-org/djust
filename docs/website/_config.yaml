@@ -286,6 +286,11 @@ navigation:
         file: guides/api-stability.md
         order: 18
         level: reference
+      - title: Accessibility (ARIA / WCAG)
+        slug: accessibility
+        file: guides/accessibility.md
+        order: 18.5
+        level: intermediate
       - title: Hot View Replacement (v0.6.1)
         slug: hot-view-replacement
         file: guides/hot-view-replacement.md

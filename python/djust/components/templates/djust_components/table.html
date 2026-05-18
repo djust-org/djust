@@ -28,10 +28,10 @@
         </th>
         {% endif %}
         {% for col in columns %}
-        <th{% if col.sortable|default:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event }}" data-value="{{ col.key }}"{% else %} role="columnheader"{% endif %}{% if col.width %} style="width:{{ col.width }}"{% endif %}>
+        <th{% if col.sortable|default:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" tabindex="0" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event }}" data-value="{{ col.key }}"{% else %} role="columnheader"{% endif %}{% if col.width %} style="width:{{ col.width }}"{% endif %}>
           {{ col.label }}
           {% if sort_by == col.key %}
-            {% if sort_desc %}&#8595;{% else %}&#8593;{% endif %}
+            <span class="data-table-sort-glyph" aria-hidden="true">{% if sort_desc %}&#8595;{% else %}&#8593;{% endif %}</span>
           {% endif %}
         </th>
         {% endfor %}

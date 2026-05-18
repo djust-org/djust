@@ -120,12 +120,18 @@ class ModalNode(template.Node):
         cid_attr = (
             f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
         )
+        # ARIA: derive a stable id for the title so aria-labelledby can
+        # point at it. Derived deterministically from the existing `id`
+        # kwarg (or "modal" default) → VDOM dj-id stable, no randomness.
+        modal_id = conditional_escape(kw.get("id", "modal"))
+        title_id = f"{modal_id}-title"
+        labelledby = f' aria-labelledby="{title_id}"' if title else ""
 
         return mark_safe(f"""<div class="dj-modal-backdrop" dj-click="{e_close_event}"{cid_attr}>
-  <div class="dj-modal {size_class}" onclick="event.stopPropagation()">
+  <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby} onclick="event.stopPropagation()">
     <div class="dj-modal__header">
-      <h3 class="dj-modal__title">{e_title}</h3>
-      <button class="dj-modal__close" dj-click="{e_close_event}"{cid_attr}>&times;</button>
+      <h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>
+      <button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>
     </div>
     <div class="dj-modal__body">{content}</div>
   </div>
@@ -180,35 +186,53 @@ class TabsNode(template.Node):
             f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
         )
 
+        # ARIA: derive stable per-tab ids for the tab/tabpanel
+        # aria-controls / aria-labelledby pairing. Derived deterministically
+        # from the existing `id` kwarg + the tab id → VDOM dj-id stable.
+        e_tabs_id = conditional_escape(tabs_id)
+
         # Build tab nav
         nav_items = []
         for tab in tabs:
             tid = _resolve(tab.tab_id, context)
             label = _resolve(tab.label, context)
             icon = _resolve(tab.icon, context) if tab.icon else ""
-            active_cls = "dj-tab--active" if tid == active else ""
+            is_active = tid == active
+            active_cls = "dj-tab--active" if is_active else ""
             icon_html = (
-                f'<span class="dj-tab__icon">{conditional_escape(icon)}</span> ' if icon else ""
+                f'<span class="dj-tab__icon" aria-hidden="true">{conditional_escape(icon)}</span> '
+                if icon
+                else ""
             )
+            e_tid = conditional_escape(tid)
+            tab_el_id = f"{e_tabs_id}-tab-{e_tid}"
+            panel_el_id = f"{e_tabs_id}-panel-{e_tid}"
             nav_items.append(
-                f'<button class="dj-tab {active_cls}" '
-                f'dj-click="{conditional_escape(event)}" data-value="{conditional_escape(tid)}"{cid_attr}>'
+                f'<button class="dj-tab {active_cls}" role="tab" '
+                f'id="{tab_el_id}" aria-controls="{panel_el_id}" '
+                f'aria-selected="{"true" if is_active else "false"}" '
+                f'dj-click="{conditional_escape(event)}" data-value="{e_tid}"{cid_attr}>'
                 f"{icon_html}{conditional_escape(label)}</button>"
             )
 
-        nav = f'<nav class="dj-tabs__nav">{"".join(nav_items)}</nav>'
+        nav = f'<nav class="dj-tabs__nav" role="tablist">{"".join(nav_items)}</nav>'
 
         # Build active pane
         pane = ""
         for tab in tabs:
             tid = _resolve(tab.tab_id, context)
             if tid == active:
-                pane = f'<div class="dj-tabs__pane">{tab.render(context)}</div>'
+                e_tid = conditional_escape(tid)
+                tab_el_id = f"{e_tabs_id}-tab-{e_tid}"
+                panel_el_id = f"{e_tabs_id}-panel-{e_tid}"
+                pane = (
+                    f'<div class="dj-tabs__pane" role="tabpanel" '
+                    f'id="{panel_el_id}" aria-labelledby="{tab_el_id}">'
+                    f"{tab.render(context)}</div>"
+                )
                 break
 
-        return mark_safe(
-            f'<div class="dj-tabs" id="{conditional_escape(tabs_id)}">{nav}{pane}</div>'
-        )
+        return mark_safe(f'<div class="dj-tabs" id="{e_tabs_id}">{nav}{pane}</div>')
 
 
 @register.tag("tabs")
@@ -263,6 +287,11 @@ class AccordionNode(template.Node):
             f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
         )
 
+        # ARIA: derive stable per-item ids so the trigger's aria-controls
+        # and the content panel's id/aria-labelledby can be paired.
+        # Deterministic from the existing `id` kwarg + item id.
+        e_accordion_id = conditional_escape(accordion_id)
+
         items = [n for n in self.nodelist if isinstance(n, AccordionItemNode)]
         parts = []
         for idx, item in enumerate(items):
@@ -271,21 +300,29 @@ class AccordionNode(template.Node):
             is_open = iid == active
             open_cls = "dj-accordion-item--open" if is_open else ""
             chevron_cls = "dj-accordion__chevron--open" if is_open else ""
+            e_iid = conditional_escape(iid)
+            trigger_id = f"{e_accordion_id}-trigger-{e_iid}"
+            panel_id = f"{e_accordion_id}-panel-{e_iid}"
             content_html = ""
             if is_open:
-                content_html = f'<div class="dj-accordion__content">{item.render(context)}</div>'
+                content_html = (
+                    f'<div class="dj-accordion__content" id="{panel_id}" '
+                    f'role="region" aria-labelledby="{trigger_id}">'
+                    f"{item.render(context)}</div>"
+                )
             parts.append(
                 f'<div class="dj-accordion-item {open_cls}">'
-                f'<button class="dj-accordion__trigger" dj-click="{conditional_escape(event)}" data-value="{conditional_escape(iid)}"{cid_attr}>'
+                f'<button class="dj-accordion__trigger" id="{trigger_id}" '
+                f'aria-expanded="{"true" if is_open else "false"}" '
+                f'aria-controls="{panel_id}" '
+                f'dj-click="{conditional_escape(event)}" data-value="{e_iid}"{cid_attr}>'
                 f"<span>{conditional_escape(title)}</span>"
-                f'<span class="dj-accordion__chevron {chevron_cls}">&#9662;</span>'
+                f'<span class="dj-accordion__chevron {chevron_cls}" aria-hidden="true">&#9662;</span>'
                 f"</button>"
                 f"{content_html}</div>"
             )
 
-        return mark_safe(
-            f'<div class="dj-accordion" id="{conditional_escape(accordion_id)}">{"".join(parts)}</div>'
-        )
+        return mark_safe(f'<div class="dj-accordion" id="{e_accordion_id}">{"".join(parts)}</div>')
 
 
 @register.tag("accordion")
@@ -334,13 +371,22 @@ class DropdownNode(template.Node):
             f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
         )
 
+        # ARIA: pair the trigger with the menu via aria-controls; the
+        # menu id is derived deterministically from the existing `id`
+        # kwarg so VDOM dj-id stays stable.
+        e_dropdown_id = conditional_escape(dropdown_id)
+        menu_id = f"{e_dropdown_id}-menu"
+
         menu_html = ""
         if is_open:
-            menu_html = f'<div class="dj-dropdown__menu">{content}</div>'
+            menu_html = f'<div class="dj-dropdown__menu" id="{menu_id}" role="menu">{content}</div>'
 
         return mark_safe(
-            f'<div class="dj-dropdown {variant_cls}" id="{conditional_escape(dropdown_id)}"{open_attr}>'
-            f'<button class="dj-dropdown__trigger" dj-click="{conditional_escape(toggle_event)}"{cid_attr}>{conditional_escape(label)}</button>'
+            f'<div class="dj-dropdown {variant_cls}" id="{e_dropdown_id}"{open_attr}>'
+            f'<button class="dj-dropdown__trigger" aria-haspopup="menu" '
+            f'aria-expanded="{"true" if is_open else "false"}" '
+            f'aria-controls="{menu_id}" '
+            f'dj-click="{conditional_escape(toggle_event)}"{cid_attr}>{conditional_escape(label)}</button>'
             f"{menu_html}</div>"
         )
 
@@ -909,16 +955,21 @@ class AlertNode(template.Node):
         icon_char = _ALERT_ICONS.get(alert_type, "&#8505;")
         dismissible_cls = " alert-dismissible" if dismissible else ""
 
+        # ARIA: error/warning alerts are assertive ("alert"); info/success
+        # are polite ("status"). Both are static role literals.
+        aria_role = "alert" if alert_type in ("error", "danger", "warning") else "status"
+
         title_html = f'<div class="alert-title">{conditional_escape(title)}</div>' if title else ""
         close_html = (
-            f'<button class="alert-close" dj-click="{conditional_escape(event)}">&times;</button>'
+            f'<button class="alert-close" aria-label="Dismiss" '
+            f'dj-click="{conditional_escape(event)}">&times;</button>'
             if dismissible
             else ""
         )
 
         return mark_safe(
-            f'<div class="alert alert-{css_type}{dismissible_cls}">'
-            f'<span class="alert-icon">{icon_char}</span>'
+            f'<div class="alert alert-{css_type}{dismissible_cls}" role="{aria_role}">'
+            f'<span class="alert-icon" aria-hidden="true">{icon_char}</span>'
             f'<div class="alert-body">'
             f"{title_html}"
             f'<div class="alert-message">{content}</div>'

@@ -1,11 +1,11 @@
-<nav class="dj-pagination">
-  <button class="dj-pagination__btn" dj-click="{{ prev_event }}" {% if page <= 1 %}disabled{% endif %}>&larr;</button>
+<nav class="dj-pagination" aria-label="Pagination">
+  <button class="dj-pagination__btn" aria-label="Previous page" dj-click="{{ prev_event }}" {% if page <= 1 %}disabled{% endif %}>&larr;</button>
   {% for p in pages %}
     {% if p == "..." %}
-      <span class="dj-pagination__ellipsis">&hellip;</span>
+      <span class="dj-pagination__ellipsis" aria-hidden="true">&hellip;</span>
     {% else %}
-      <button class="dj-pagination__btn{% if p == page %} dj-pagination__btn--active{% endif %}" dj-click="{{ next_event }}" data-value="{{ p }}">{{ p }}</button>
+      <button class="dj-pagination__btn{% if p == page %} dj-pagination__btn--active{% endif %}"{% if p == page %} aria-current="page"{% endif %} aria-label="Page {{ p }}" dj-click="{{ next_event }}" data-value="{{ p }}">{{ p }}</button>
     {% endif %}
   {% endfor %}
-  <button class="dj-pagination__btn" dj-click="{{ next_event }}" {% if page >= total_pages %}disabled{% endif %}>&rarr;</button>
+  <button class="dj-pagination__btn" aria-label="Next page" dj-click="{{ next_event }}" {% if page >= total_pages %}disabled{% endif %}>&rarr;</button>
 </nav>

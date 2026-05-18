@@ -137,9 +137,13 @@ class RowClickAccessibilityTest(SimpleTestCase):
         rows = [{"id": 1}, {"id": 2}, {"id": 3}]
         columns = [{"key": "id", "label": "ID"}]
         out = _render(_base_ctx(rows, columns, row_click_event="open"))
-        # 3 rows → 3 each
-        self.assertEqual(out.count('role="button"'), 3)
-        self.assertEqual(out.count('tabindex="0"'), 3)
+        # 3 rows → 3 each. Scope tabindex/role counts to <tbody> (matching
+        # the sibling tests above): the sortable <th> header also carries
+        # tabindex="0" (a v1.0 a11y fix making sort headers keyboard-
+        # operable), so a whole-output count would be 4, not 3.
+        body = _tbody(out)
+        self.assertEqual(body.count('role="button"'), 3)
+        self.assertEqual(body.count('tabindex="0"'), 3)
 
 
 # ---------------------------------------------------------------------------
