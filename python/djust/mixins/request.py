@@ -618,6 +618,42 @@ class RequestMixin:
                 html, patches_json, version = self.render_with_diff(request)
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
 
+            # ADR-018 iter 18a — HTTP sticky-child state save (Decision 4,
+            # HTTP side). The POST path has no ``view_id`` routing — it
+            # always operates on ``self`` (the parent) — so this is a
+            # parent-driven sweep, not a child-routed save. It MUST run
+            # AFTER ``render_with_diff`` because ``{% live_render %}``
+            # registers children on ``self._child_views`` during the
+            # template render (verified: ``_child_views`` is empty before
+            # the render at line ~604, populated after it here). For each
+            # registered child satisfying the both-opt-in gate, persist
+            # its state under the stable sticky key; then write the GC
+            # ledger. Django saves the session at response time.
+            from .sticky import (
+                save_sticky_child_state_sync,
+                sticky_child_should_persist,
+                write_sticky_index_and_prune_sync,
+            )
+
+            from .sticky import sticky_ids_index_key as _sticky_index_key
+
+            _sticky_children = (
+                self._get_all_child_views() if hasattr(self, "_get_all_child_views") else {}
+            )
+            _sticky_to_save = [
+                child
+                for child in _sticky_children.values()
+                if sticky_child_should_persist(child, self)
+            ]
+            # Run the save + ledger sweep when there are children to save OR a
+            # stale ledger exists (so a parent whose last sticky child was
+            # removed still gets its orphans pruned). A parent that never had
+            # sticky children pays zero cost — no ledger key, empty sweep.
+            if _sticky_to_save or _sticky_index_key(request.path) in request.session:
+                for _child in _sticky_to_save:
+                    save_sticky_child_state_sync(_child, request.session, request.path)
+                write_sticky_index_and_prune_sync(self, request.session, request.path)
+
             import json as json_module
 
             PATCH_THRESHOLD = 100
