@@ -162,7 +162,7 @@ record constrained-vs-unpinned per target by grepping constraint tables.
 
 **Status (2026-05-18):** All 9 issues drained across 5 PRs (#1504, #1506, #1508, #1510, #1512); milestone retro written (RETRO.md §v1.0.0rc2, Action Tracker rows #257–#270); `v1.0.0rc2` cut via `/djust-release`. Post-rc2 backlog is the `v1.0.0rc3` milestone below.
 
-## Next: v1.0.0rc3 — rc2-retro backlog drain
+## Shipped: v1.0.0rc3 — rc2-retro backlog drain (rc3 cut 2026-05-18)
 
 > Created 2026-05-18 by `/pipeline-drain` — drains the in-repo backlog
 > remaining after the v1.0.0rc2 retro: the 6 follow-up issues filed during
@@ -239,6 +239,62 @@ names and flags them — `(?<![\w-])` is the correct anchor.
 - `/pipeline-run --milestone v1.0.0rc3 --all --group` — items cluster as
   regex-hardening (#1514 + #1517), audit-tooling (#1509 + #1515), and
   code/a11y fixes (#1505 solo small; #1513 solo L-effort — scope at Planning).
+
+**Status (2026-05-18):** All 6 issues drained across 4 PRs (#1518, #1519,
+#1520, #1521); milestone retro written (RETRO.md §v1.0.0rc3, Action Tracker
+rows #271–#274); `v1.0.0rc3` cut via `/djust-release`. The 7 OUT-OF-REPO
+skill items (#1375, #1376, #1384, #1387, #1507, #1511, #1516, #1524) were
+resolved upstream in `pipeline-skills` and their Action Tracker rows closed.
+Post-rc3 follow-ups are the `v1.1.0` milestone below.
+
+## Next: v1.1.0 — Post-1.0 follow-ups
+
+> Created 2026-05-18. Houses the post-1.0 follow-ups carried out of the
+> v1.0.0 → rc3 arc: the accessibility phase-2 cluster deferred from #1513,
+> the free-threaded-Python safety declaration, and the top-level re-export
+> polish. None are release-blockers for v1.0.0 final.
+
+*Goal:* Land the deferred-but-tracked post-1.0 work so the v1.0.0-arc retros
+close with nothing silently dropped.
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P2** | #1522 | a11y phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) |
+| **P2** | #1523 | a11y phase 2 — surface accessibility findings in `djust_audit` |
+| **P2** | #1432 | Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL |
+| **P3** | #1489 | Re-export optimistic/cache/client_state/background from top-level `djust.__all__` |
+
+**Detail:**
+
+**Accessibility phase 2 (#1522 + #1523).** PR #1521 shipped slice 1 of the
+#1513 a11y long-tail (P2/P3 component ARIA + decorative-icon sweep) and
+deferred the two highest-complexity sub-areas. #1522 is a CSP-strict
+client-JS module (focus trap, Esc-to-close, roving tabindex) — it carries
+JSDOM-test + client-size-budget constraints and deserves a coherent design
+slice. #1523 adds accessibility findings to the `djust_audit` management
+command. Cluster both into one drain.
+
+**#1432 — free-threaded-safe `djust._rust`.** Importing `djust._rust` into a
+free-threaded CPython (`python3.13t`/`3.14t`) currently auto-re-enables the
+GIL with a `RuntimeWarning`, silently downgrading no-GIL users. Declare the
+PyO3 module free-threaded-safe (`gil_used = false` or equivalent) once the
+Rust code is confirmed thread-safe. Small, contained Rust-side change.
+
+**#1489 — top-level re-exports.** Consider re-exporting `optimistic` /
+`cache` / `client_state` / `background` from the top-level `djust.__all__`
+for import ergonomics. Explicitly deferred to the post-1.0 minor when filed.
+
+**Deferred / blocked (tracked, not in this milestone's drain):**
+- **#1471** — sticky-child `LiveView` WS-reconnect state persistence. Needs
+  an ADR + design pass (LOAD-time discovery), not a one-PR fix. Promote to a
+  drain item once the design ADR lands.
+- **#1434** — native async ORM (`sync_to_async(Model.objects.X)` → native
+  async). Blocked on psycopg3 landing; revisit when the dependency ships.
+
+**Pipeline runner notes:**
+- `/pipeline-drain --milestone v1.1.0` once v1.0.0 final is cut.
+- #1522 + #1523 cluster as the a11y-phase-2 group; #1432 + #1489 are solo
+  small.
 
 ## Released: v0.9.1 (2026-04-30)
 
