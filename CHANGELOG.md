@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Orphaned `TARBALL_EXCLUDES` constant wired into `_create_tarball` — CodeQL #2330 `py/unused-global-variable` (#1495).** `python/djust/deploy_cli.py` defined a `TARBALL_EXCLUDES` constant with a `# Default patterns to exclude from tarball` comment, but `_create_tarball` ignored it and hardcoded two separate inline pattern lists — leaving the constant with zero call sites. The constant is now the single source of truth, consulted for both the directory filter and the file filter. Its glob-prefixed entries (`*.pyc`, `*.pyo`, `*.egg-info`, `*.log`) were normalized to substring form (the function matches by `in`, not glob — a leading `*` would never match). **This is an intended behavior change**: deploy tarballs created by `_create_tarball` now also exclude `.hg` and `.svn` directories, `logs/`, `media/`, and `staticfiles/` directories, and `.log` files (the old inline `*.log` entry never matched, due to the literal `*`, so `.log` files were silently shipped before). Nothing previously excluded becomes included. These are build/runtime artifacts (SCM metadata, collectstatic output, user uploads, runtime logs) that should be regenerated server-side rather than shipped in a source deploy tarball. Regression coverage in the new `TestCreateTarball` class (`python/tests/test_deploy_cli.py`) — 3 tests, all of which fail if the constant wiring is reverted.
+- **Empty `except: pass` in `check_psycopg3_for_pg_notify` documented — CodeQL #2334 `py/empty-except` (#1495).** A bare `except Exception: pass` in `python/djust/checks.py` (the psycopg2 `__version__` read guard) was the only pass-only `except` in the file lacking an explanatory comment. It is now replaced with an explicit `psycopg2_version = ""` fallback assignment plus a comment explaining the guard: `getattr` already supplies a `""` default, so the block only fires on a pathological `__version__` descriptor, and `psycopg2_version` keeping its `""` ("version unknown") value is the correct, intentional fallback. No behavior change.
+
 ## [1.0.0rc1] - 2026-05-17
 
 **v1.0.0 — the stability milestone.** After the v0.9.x audit-driven bake,
