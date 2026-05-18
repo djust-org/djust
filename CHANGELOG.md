@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rust template renderer now supports Django's `is` / `is not` identity operators in `{% if %}` conditions (#1483).** `{% if x is None %}` and `{% if x is not None %}` previously fell through every operator branch in `evaluate_condition` to the default `Ok(false)`, so they silently evaluated false for *all* values — templates using this Django-standard syntax always took the `{% else %}` branch even when the condition was true. The renderer now implements `is` / `is not` with Python identity semantics: identity holds only for the singletons `None`, `True`, and `False`; arbitrary equal values (`5 is 5`, `"a" is "a"`) are NOT treated as identical (CPython interning is an implementation detail templates must not rely on). Templates that previously fell through to the `{% else %}` branch — e.g. `{% if some_value is not None %}` for a non-`None` value — will now correctly take the `{% if %}` branch. This brings the Rust template engine to parity with the Django (Python) engine, which has supported `is` / `is not` natively since Django 4.0. Regression coverage in `TestIsIdentityOperators` (`python/tests/test_template_conditions.py`) plus Rust unit tests in `crates/djust_templates/src/renderer.rs`.
+
 ## [0.9.7] - 2026-05-16
 
 Stable release. No code changes since v0.9.7rc3 (2026-05-12) — RC3 soaked for 4 days with djustlive on the pinned wheel and zero regressions reported. See the rc1, rc2, rc3 entries below for the full v0.9.7 changeset:
