@@ -1,6 +1,6 @@
 # ADR-002: Backend-Driven UI Automation
 
-**Status**: Proposed
+**Status**: Partially Accepted — Phases 1a-1c (push_commands, wait_for_event, TutorialMixin) shipped 2026-04-13 in v0.4.2; Phases 4-5 (broadcast_commands, AssistantMixin) deferred post-1.0
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
 **Target version**: v0.4.2 (MVP), v0.5.x (full surface)

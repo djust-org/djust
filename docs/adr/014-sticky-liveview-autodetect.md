@@ -1,6 +1,6 @@
 # ADR-014: `{% live_render %}` Auto-Detection of Preserved Stickies
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-04-27 in v0.9.0 (PR #1128, closes #1032)
 **Date**: 2026-04-26
 **Deciders**: Project maintainers
 **Target version**: v0.9.0 (P1, 1.0-blocker)

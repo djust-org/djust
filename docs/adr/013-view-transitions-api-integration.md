@@ -1,6 +1,6 @@
 # ADR-013: View Transitions API Integration in `applyPatches`
 
-**Status**: Proposed
+**Status**: Accepted — async foundation (PR-A #1099) shipped v0.8.5; opt-in wrap (PR-B #1113) shipped v0.8.6
 **Date**: 2026-04-26
 **Deciders**: Project maintainers
 **Target version**: v0.8.5 candidate

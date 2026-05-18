@@ -1,6 +1,6 @@
 # ADR-008: Auto-Generated HTTP API from `@event_handler`
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-04-21 in v0.5.1 (PR #835)
 **Date**: 2026-04-20
 **Deciders**: Project maintainers
 **Target version**: v0.7.0 (candidate; could merge with ADR-N "Server Actions" in v0.8.0 if scope allows)

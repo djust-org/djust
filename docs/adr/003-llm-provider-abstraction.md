@@ -1,6 +1,6 @@
 # ADR-003: LLM Provider Abstraction for AssistantMixin
 
-**Status**: Proposed
+**Status**: Deferred — post-1.0 (AI/server-driven arc; roadmap-committed)
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
 **Target version**: v0.5.x (lands with `AssistantMixin`)

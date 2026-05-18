@@ -1,6 +1,6 @@
 # ADR-017: Object-Level Authorization Lifecycle (`get_object` + `has_object_permission`)
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-05-06 in v0.9.5 (PR #1374, closes #1373)
 **Date**: 2026-05-06
 **Deciders**: Project maintainers
 **Target version**: v0.9.5 (P0, security)

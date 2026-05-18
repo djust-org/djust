@@ -1,6 +1,6 @@
 # ADR-006: AI-Generated UIs with Capture-and-Promote
 
-**Status**: Proposed
+**Status**: Deferred — post-1.0 (AI/server-driven arc, issue #1044; roadmap-committed)
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
 **Target version**: v0.6.x (lands after AssistantMixin, Phase 5 of ADR-002)

@@ -1,6 +1,6 @@
 # ADR-016: Transport Runtime Interface
 
-**Status**: Proposed
+**Status**: Accepted — ViewRuntime + Transport interface shipped 2026-04-30 in v0.9.2 (PR #1239, closes #1237); subsequent transport-migration PRs are non-blocking follow-ups
 **Date**: 2026-04-30
 **Target version**: v0.9.2-1 (PR-A: minimal extraction); subsequent PRs migrate the rest
 **Related**: #1237 (3 SSE bugs that motivate the refactor),
