@@ -1130,3 +1130,97 @@ class TestGuidedDeploy:
         # rotated value from a refresh attempt that never succeeded.
         sent_auth = deploy_adapter.last_request.headers.get("Authorization", "")
         assert "Bearer post-fallback-access" in sent_auth, sent_auth
+
+
+class TestCreateTarball:
+    """Regression tests for CodeQL #2330 — TARBALL_EXCLUDES wired into
+    _create_tarball as the single source of truth."""
+
+    def _build_source(self, tmp_path, layout):
+        """Create files described by ``layout`` (POSIX relative paths)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        for rel in layout:
+            target = src / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x")
+        return src
+
+    def test_create_tarball_uses_tarball_excludes_constant(self, tmp_path, monkeypatch):
+        """_create_tarball must consult TARBALL_EXCLUDES, not a hardcoded list.
+
+        Gate-off check: if _create_tarball used a hardcoded list, monkeypatching
+        the constant would have no effect and ``sentineldir/keep.py`` would still
+        appear in the second tarball.
+        """
+        import tarfile
+
+        from djust.deploy_cli import TARBALL_EXCLUDES, _create_tarball
+
+        src = self._build_source(tmp_path, ["app.py", "sentineldir/keep.py"])
+
+        # First call: real constant — sentineldir is NOT excluded.
+        out1 = tmp_path / "out1.tar.gz"
+        _create_tarball(src, out1)
+        with tarfile.open(out1, "r:gz") as tar:
+            names1 = set(tar.getnames())
+        assert "app.py" in names1
+        assert "sentineldir/keep.py" in names1
+
+        # Monkeypatch the constant to add the sentinel directory.
+        monkeypatch.setattr(
+            "djust.deploy_cli.TARBALL_EXCLUDES",
+            TARBALL_EXCLUDES + ["sentineldir"],
+        )
+
+        # Second call: sentineldir is now excluded, app.py still present.
+        out2 = tmp_path / "out2.tar.gz"
+        _create_tarball(src, out2)
+        with tarfile.open(out2, "r:gz") as tar:
+            names2 = set(tar.getnames())
+        assert "app.py" in names2
+        assert "sentineldir/keep.py" not in names2
+
+    def test_create_tarball_excludes_canonical_set(self, tmp_path):
+        """The canonical exclude set is applied — locks in the behavior-change
+        entries (.hg/.svn/logs/media/staticfiles + working .log exclusion) that
+        the old hardcoded inline lists dropped."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        layout = [
+            "keep.py",
+            ".hg/store.db",
+            ".svn/entries",
+            "logs/app.txt",
+            "media/upload.bin",
+            "staticfiles/main.css",
+            "app.log",
+            "__pycache__/mod.pyc",
+        ]
+        src = self._build_source(tmp_path, layout)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "keep.py" in names
+        for excluded in (
+            ".hg/store.db",
+            ".svn/entries",
+            "logs/app.txt",
+            "media/upload.bin",
+            "staticfiles/main.css",
+            "app.log",
+            "__pycache__/mod.pyc",
+        ):
+            assert excluded not in names, f"{excluded} should be excluded"
+
+    def test_tarball_excludes_constant_is_substring_safe(self):
+        """TARBALL_EXCLUDES is consumed via substring ``in`` matching, not glob —
+        no entry may contain a ``*`` (decision #2: normalize to substring form)."""
+        from djust.deploy_cli import TARBALL_EXCLUDES
+
+        for entry in TARBALL_EXCLUDES:
+            assert "*" not in entry, f"glob-prefixed entry would never match: {entry!r}"

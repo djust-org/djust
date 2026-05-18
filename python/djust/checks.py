@@ -3251,7 +3251,9 @@ def check_psycopg3_for_pg_notify(app_configs, **kwargs):
     try:
         psycopg2_version = getattr(psycopg2, "__version__", "")  # noqa: F821
     except Exception:
-        pass
+        # getattr already supplies a "" default; this only fires on a
+        # pathological __version__ descriptor. Keep the "unknown" fallback.
+        psycopg2_version = ""
 
     psycopg3_version: str | None = None
     try:

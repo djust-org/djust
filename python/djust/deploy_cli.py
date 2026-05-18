@@ -42,7 +42,10 @@ DJUST_CLI_CLIENT_ID = os.environ.get("DJUST_CLI_CLIENT_ID", "djust-cli")
 # a stuck test fails fast instead of wedging the suite for 5 minutes.
 _OAUTH_BROWSER_TIMEOUT_SECONDS = int(os.environ.get("DJUST_CLI_OAUTH_TIMEOUT", "300"))
 
-# Default patterns to exclude from tarball
+# Default patterns to exclude from tarball.
+# Substring-matched (Python ``in``) against directory basenames and POSIX
+# relative file paths — NOT glob. Entries must therefore be substring-correct:
+# no leading ``*`` (``.pyc`` not ``*.pyc``).
 TARBALL_EXCLUDES = [
     ".git",
     ".hg",
@@ -52,12 +55,12 @@ TARBALL_EXCLUDES = [
     ".env",
     "node_modules",
     "__pycache__",
-    "*.pyc",
-    "*.pyo",
+    ".pyc",
+    ".pyo",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
-    "*.egg-info",
+    ".egg-info",
     "dist",
     "build",
     ".idea",
@@ -65,7 +68,7 @@ TARBALL_EXCLUDES = [
     ".DS_Store",
     "Thumbs.db",
     "db.sqlite3",
-    "*.log",
+    ".log",
     "logs",
     "media",
     "staticfiles",
@@ -1020,47 +1023,17 @@ def _create_tarball(source_dir: Path, output_path: Path) -> None:
     """
     with tarfile.open(output_path, "w:gz") as tar:
         for root, dirs, files in os.walk(source_dir):
-            # Modify dirs in-place to exclude patterns
-            dirs[:] = [
-                d
-                for d in dirs
-                if not any(
-                    pattern in d
-                    for pattern in [
-                        ".git",
-                        ".venv",
-                        "venv",
-                        "node_modules",
-                        "__pycache__",
-                        ".pytest_cache",
-                        ".mypy_cache",
-                        ".ruff_cache",
-                        ".egg-info",
-                        "dist",
-                        "build",
-                        ".idea",
-                        ".vscode",
-                    ]
-                )
-            ]
+            # Modify dirs in-place to exclude patterns. TARBALL_EXCLUDES is the
+            # single source of truth — substring-matched against the basename.
+            dirs[:] = [d for d in dirs if not any(pattern in d for pattern in TARBALL_EXCLUDES)]
 
             for file in files:
                 file_path = Path(root) / file
                 relative = file_path.relative_to(source_dir)
 
-                # Skip excluded files
-                if any(
-                    pattern in str(relative)
-                    for pattern in [
-                        ".pyc",
-                        ".pyo",
-                        ".DS_Store",
-                        "Thumbs.db",
-                        "db.sqlite3",
-                        ".env",
-                        "*.log",
-                    ]
-                ):
+                # Skip excluded files — same TARBALL_EXCLUDES list,
+                # substring-matched against the relative path string.
+                if any(pattern in str(relative) for pattern in TARBALL_EXCLUDES):
                     continue
 
                 try:
