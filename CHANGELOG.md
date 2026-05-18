@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc2] - 2026-05-18
+
 ### Added
 
 - **`scripts/check-adr-status.py` — ADR status/version-line consistency audit (#1501).** A new pre-commit/CI gate that enforces an invariant the #1493 cleanup established: an ADR with `**Status**: Accepted` must record where it shipped via a `**Shipped in**: vX.Y.Z` line, *not* a forward-looking `**Target version**:` line (a `Target version` on an Accepted ADR is stale metadata — the ADR is no longer targeting, it has shipped). The script hard-fails (exit 1) on any Accepted ADR still carrying a `Target version` line, and emits a soft warning for the inverse drift (a `Proposed`/`Draft` ADR that already names a `Shipped in` version). Wired into `.pre-commit-config.yaml` (runs when any `docs/adr/` file is staged), `.github/workflows/test.yml`, and a `make check-adr-status` target. Covered by `tests/test_check_adr_status.py` — 11 tests.
