@@ -1,6 +1,6 @@
 # djust System Checks Reference
 
-Quick reference for all 37 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 39 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 Run checks with: `python manage.py check --deploy` or `python manage.py djust_check`
 
@@ -46,6 +46,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | Q003 | Quality | Info | console.log without djustDebug guard |
 | Q007 | Quality | Warning | Overlapping static_assigns and temporary_assigns |
 | Q010 | Quality | Info | Event handler sets nav state without patch() (heuristic) |
+| Y001 | Accessibility | Warning | Interactive element (icon-only `<button>`/`<a>`) missing an accessible name |
+| Y002 | Accessibility | Warning | `<img>` tag missing an `alt` attribute (WCAG 1.1.1) |
 
 ---
 
@@ -347,6 +349,32 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: An event handler assigns `self.<name>` where `<name>` looks like navigation state (tab, view, page, step, etc.) without calling `self.patch()` to update the URL
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.Q010"]` or `# noqa: Q010` inline
 - **False positives**: Low-confidence heuristic — fires on any handler that sets state variables with navigation-sounding names, even when those variables are not URL parameters
+
+---
+
+## Accessibility Checks (Y)
+
+The `Y` category (mnemonic: a11**Y**) scans project template files for
+ARIA/WCAG accessibility defects. It ships with the two lowest-ambiguity checks
+so the regex heuristics carry near-zero false positives; the category is
+extensible — `Y003`+ are single-function-body additions. Templates that show
+literal HTML inside `{% verbatim %}` blocks are skipped to avoid false
+positives. See the [Accessibility guide](website/guides/accessibility.md) for
+the full narrative.
+
+### Y001 — interactive element missing an accessible name
+- **Severity**: Warning
+- **Method**: Regex (template file scan)
+- **What it detects**: An interactive `<button>` or `<a href>` whose visible content is icon-only (an HTML entity, `<svg>`, or an `<i>`/`<span>` icon wrapper) and which has no `aria-label`, `aria-labelledby`, or `title` — a screen-reader user hears nothing for such a control
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y001']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y001"]`
+- **False positives**: Near zero — inner content containing `{{ variable }}` / `{% tag %}` is conservatively treated as "may resolve to a label" and not flagged; a bare `<a>` without `href` is treated as an anchor target, not a control
+
+### Y002 — `<img>` missing an `alt` attribute
+- **Severity**: Warning
+- **Method**: Regex (template file scan)
+- **What it detects**: An `<img>` tag with no `alt` attribute at all (WCAG 1.1.1, Level A)
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y002']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y002"]`
+- **False positives**: Near zero — `alt=""` (the WCAG-correct marker for a decorative image) is not flagged, and an `<img>` whose attributes are injected dynamically (`{% ... %}` / `{{ ... }}`) is treated as "alt may be present" and not flagged
 
 ---
 
