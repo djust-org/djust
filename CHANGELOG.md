@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **4 HTML-attribute regexes in `checks.py` re-anchored to stop false-matching `data-*` attributes (#1514).** `_ACCESSIBLE_NAME_ATTR_RE`, `_HREF_ATTR_RE`, `_IMG_HAS_ALT_RE`, and `_CONTROL_ID_RE` used a bare `\b` word-boundary anchor before the attribute name. Because `-` is a non-word character, `\b` matches *inside* a `data-` prefix (between `data-` and the attribute name), so each regex false-matched `data-*` attributes — e.g. `_IMG_HAS_ALT_RE` treated `<img data-alt=...>` as having a real `alt` (a `Y002` false negative on a genuinely alt-less image), and `_HREF_ATTR_RE` could treat `<a data-href=...>` as a real link (a `Y001` false positive). All four are now anchored with `(?<![\w-])`, which rejects both word characters and hyphens immediately before the attribute name. This is the same fix PR #1512 applied to the `Y003`/`Y004` regexes — the third occurrence of this `\b`/`data-*` defect class. Recurrence is guarded against by a new meta-check test, `TestChecksRegexHardening` in `python/djust/tests/test_accessibility_checks.py`, which introspects every compiled attribute regex in `checks.py` and fails on any bare-`\b` anchor; the four `_LIVE_RENDER_*` template-tag-kwarg regexes are allowlisted since they scan `{% %}` kwargs rather than HTML attributes (#1517). 8 new tests in `python/djust/tests/test_accessibility_checks.py`.
+
 ## [1.0.0rc2] - 2026-05-18
 
 ### Added
