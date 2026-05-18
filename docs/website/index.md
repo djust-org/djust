@@ -177,6 +177,7 @@ Rust powers the core rendering engine:
 
 ## Migrating
 
+- **[Upgrading to djust 1.0](guides/upgrade-to-1.0.md)** — what the 1.0 SemVer commitment means, the deprecated symbols, and the new accessibility checks. 1.0 is a consolidation release — no breaking changes from 0.9.7.
 - **[From standalone djust packages](guides/migration-from-standalone-packages.md)** — moving from `pip install djust-auth` / `djust-tenants` / `djust-theming` / `djust-components` / `djust-admin`? Replace with `djust[auth]` / `djust[tenants]` / etc. extras. Mechanical sed script + FAQ included. ([ADR-007](../adr/007-package-taxonomy-and-consolidation.md) Phase 4 — sunset as of v0.6.0.)
 
 ---

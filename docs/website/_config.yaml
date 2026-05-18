@@ -286,6 +286,11 @@ navigation:
         file: guides/api-stability.md
         order: 18
         level: reference
+      - title: Upgrading to djust 1.0
+        slug: upgrade-to-1.0
+        file: guides/upgrade-to-1.0.md
+        order: 18.2
+        level: reference
       - title: Accessibility (ARIA / WCAG)
         slug: accessibility
         file: guides/accessibility.md
