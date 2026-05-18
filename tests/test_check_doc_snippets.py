@@ -334,3 +334,321 @@ class TestCheckDocSnippets:
         code, out = _run()
         assert code == 0, f"real docs must pass: {out}"
         assert "OK" in out
+
+
+class TestCheckSecurityStyle:
+    """Part (c) — #1509: doc-example security/style lint.
+
+    Each `*_fails` test is tautology-guarded (Action #1200 / #254): it
+    asserts BOTH the exit code AND a substring of the verdict message, so
+    a test cannot pass because the script exited 1 for an unrelated reason.
+    """
+
+    def test_print_call_in_snippet_fails(self):
+        """A module snippet with a plain `print(...)` → exit 1, names print."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from djust import LiveView
+
+                class DebugView(LiveView):
+                    def mount(self, request, **kwargs):
+                        print("hi")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "print(" in out
+            assert "README.md:" in out
+
+    def test_fstring_print_fails(self):
+        """`print(f"...")` → exit 1, message names the f-string form."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from djust import LiveView
+
+                class DebugView(LiveView):
+                    def mount(self, request, **kwargs):
+                        print(f"mounting for {request.user}")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "f-string" in out
+
+    def test_mark_safe_fstring_fails(self):
+        """`mark_safe(f"<b>{x}</b>")` with interpolation → exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from django.utils.safestring import mark_safe
+                from djust import LiveView
+
+                class V(LiveView):
+                    def render_label(self, x):
+                        return mark_safe(f"<b>{x}</b>")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "mark_safe" in out
+
+    def test_mark_safe_constant_passes(self):
+        """`mark_safe("<b>static</b>")` — no interpolation → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from django.utils.safestring import mark_safe
+                from djust import LiveView
+
+                class V(LiveView):
+                    def render_label(self):
+                        return mark_safe("<b>static</b>")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_format_html_passes(self):
+        """`format_html("<b>{}</b>", x)` — the correct API → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from django.utils.html import format_html
+                from djust import LiveView
+
+                class V(LiveView):
+                    def render_label(self, x):
+                        return format_html("<b>{}</b>", x)
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_bare_except_pass_fails(self):
+        """A bare `except: pass` → exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from djust import LiveView
+
+                class V(LiveView):
+                    def mount(self, request, **kwargs):
+                        try:
+                            risky()
+                        except:
+                            pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "except" in out
+
+    def test_except_with_logging_passes(self):
+        """`except Exception: logger.exception(...)` → exit 0 (body handled)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                import logging
+
+                from djust import LiveView
+
+                logger = logging.getLogger(__name__)
+
+                class V(LiveView):
+                    def mount(self, request, **kwargs):
+                        try:
+                            risky()
+                        except Exception:
+                            logger.exception("risky failed")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_fstring_logging_fails(self):
+        """`logger.error(f"oops {e}")` → exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                import logging
+
+                from djust import LiveView
+
+                logger = logging.getLogger(__name__)
+
+                class V(LiveView):
+                    def mount(self, request, **kwargs):
+                        e = "boom"
+                        logger.error(f"oops {e}")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "logging" in out or "logger" in out
+
+    def test_percent_logging_passes(self):
+        """`logger.error("oops %s", e)` — the correct %s form → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                import logging
+
+                from djust import LiveView
+
+                logger = logging.getLogger(__name__)
+
+                class V(LiveView):
+                    def mount(self, request, **kwargs):
+                        e = "boom"
+                        logger.error("oops %s", e)
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_anti_pattern_marker_suppresses_style_check(self):
+        """The `anti-pattern` marker opts a block out of the style verdict.
+
+        Gate-the-change-off proof (Action #254): the SAME `print(f"...")`
+        block WITHOUT the marker exits 1, WITH the marker exits 0 — so the
+        marker is load-bearing, not a tautology.
+        """
+        block = """
+            ```python
+            from djust import LiveView
+
+            class DebugView(LiveView):
+                def mount(self, request, **kwargs):
+                    print(f"debug {request.user}")
+            ```
+            """
+        marked = "<!-- doc-snippet-check: anti-pattern -->\n" + textwrap.dedent(block).lstrip("\n")
+        # WITH marker → exit 0.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(d, readme_body=marked)
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"marked block must pass, got {code}: {out}"
+            assert "OK" in out
+        # WITHOUT marker → exit 1 (proves the marker is what suppressed it).
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(d, readme_body=block)
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"unmarked block must fail, got {code}: {out}"
+            assert "f-string" in out
+
+    def test_anti_pattern_marker_still_syntax_checks(self):
+        """An anti-pattern-marked block with a syntax error → still exit 1.
+
+        The marker suppresses only part (c) — part (a) syntax checks stay on.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                <!-- doc-snippet-check: anti-pattern -->
+                ```python
+                def broken(:
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "syntax error" in out
+
+    def test_skip_marker_suppresses_style_check_too(self):
+        """The `skip` marker drops part (c) as well — it drops everything."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                <!-- doc-snippet-check: skip -->
+                ```python
+                from djust import LiveView
+
+                class V(LiveView):
+                    def mount(self, request, **kwargs):
+                        print(f"skipped {request.user}")
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_csrf_exempt_warns_not_fails(self):
+        """A `@csrf_exempt`-decorated snippet → exit 0 + a WARNING line."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from django.views.decorators.csrf import csrf_exempt
+                from djust import LiveView
+
+                class V(LiveView):
+                    @csrf_exempt
+                    def handler(self):
+                        pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "WARNING" in out
+            assert "csrf_exempt" in out
+
+    @pytest.mark.slow
+    def test_real_docs_pass_security_style(self):
+        """Dogfood gate (Action #1060): the real README/QUICKSTART have no
+        part-(c) security/style violations → exit 0."""
+        code, out = _run()
+        assert code == 0, f"real docs must pass security/style: {out}"
+        assert "OK" in out

@@ -681,6 +681,16 @@ against the actual tests in referenced files. See the docstring in
 `scripts/check-changelog-test-counts.py`. Wired into `.pre-commit-config.yaml`
 and available as `make check-changelog`. Closes #908.
 
+### AUDIT_TEMPLATE.md
+
+Codifies the structural shape shared by the `scripts/check-*.py` audit
+family (`check-adr-status.py`, `check-doc-snippets.py`,
+`check-lockfile-versions.py`): a copy-paste script + test skeleton, the
+four mandatory wiring edits (Makefile, pre-commit, CI workflow, this
+README), and a discipline checklist. Use it as a fill-in-the-blank
+starting point when adding a new mechanical, no-network, CI-fast
+repo-invariant audit. Closes #1515.
+
 ### open_intellij.sh
 
 Opens the project in IntelliJ IDEA with proper Rust + Python configuration.
