@@ -42,37 +42,56 @@ DJUST_CLI_CLIENT_ID = os.environ.get("DJUST_CLI_CLIENT_ID", "djust-cli")
 # a stuck test fails fast instead of wedging the suite for 5 minutes.
 _OAUTH_BROWSER_TIMEOUT_SECONDS = int(os.environ.get("DJUST_CLI_OAUTH_TIMEOUT", "300"))
 
-# Default patterns to exclude from tarball.
-# Substring-matched (Python ``in``) against directory basenames and POSIX
-# relative file paths — NOT glob. Entries must therefore be substring-correct:
-# no leading ``*`` (``.pyc`` not ``*.pyc``).
-TARBALL_EXCLUDES = [
-    ".git",
-    ".hg",
-    ".svn",
-    ".venv",
-    "venv",
-    ".env",
-    "node_modules",
-    "__pycache__",
-    ".pyc",
-    ".pyo",
-    ".pytest_cache",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".egg-info",
-    "dist",
-    "build",
-    ".idea",
-    ".vscode",
-    ".DS_Store",
-    "Thumbs.db",
-    "db.sqlite3",
-    ".log",
-    "logs",
-    "media",
-    "staticfiles",
-]
+# Default patterns to exclude from tarball, classified into five kinds so the
+# matcher in ``_create_tarball`` can apply each correctly. Path-segment /
+# basename anchored — NOT substring-matched (a ``venv`` token must not exclude
+# ``venvironment.py``; see #1505).
+
+# Excluded if a directory's basename EXACTLY equals one of these. os.walk
+# pruning then drops the directory and everything beneath it.
+EXCLUDE_DIR_NAMES = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".idea",
+        ".vscode",
+        "logs",
+        "media",
+        "staticfiles",
+    }
+)
+
+# Excluded if a directory's basename ENDS WITH one of these (e.g. the
+# package-metadata dir ``mypkg.egg-info/``, whose name varies by package).
+# Declared as a tuple so ``str.endswith`` accepts it directly.
+EXCLUDE_DIR_SUFFIXES = (".egg-info",)
+
+# Excluded if a file's name ENDS WITH one of these. Tuple for ``str.endswith``.
+EXCLUDE_FILE_SUFFIXES = (".pyc", ".pyo", ".log")
+
+# Excluded if a file's name EXACTLY equals one of these. These have no
+# legitimate suffixed variants, so exact matching is correct.
+EXCLUDE_FILENAMES = frozenset({".DS_Store", "Thumbs.db"})
+
+# Excluded if a file's name equals one of these stems OR is a suffixed
+# variant of one (``stem + "."`` or ``stem + "-"``). ``.env`` and
+# ``db.sqlite3`` are filename STEMS, not exact filenames: dotenv conventions
+# produce ``.env.production`` / ``.env.local`` / ``.env-backup`` and SQLite
+# produces ``db.sqlite3-wal`` / ``db.sqlite3-journal`` / ``db.sqlite3.bak``,
+# all of which carry credentials or live data and MUST be excluded. The
+# ``.`` / ``-`` discriminator prevents the #1505 over-match: a file named
+# ``.environment`` is NOT a stem variant of ``.env`` and stays included.
+EXCLUDE_FILENAME_STEMS = frozenset({".env", "db.sqlite3"})
 
 
 # ---------------------------------------------------------------------------
@@ -1017,24 +1036,47 @@ def _create_tarball(source_dir: Path, output_path: Path) -> None:
     """
     Create a tarball of source_dir excluding unwanted patterns.
 
+    Exclusion is path-segment / basename anchored (NOT substring-matched):
+    a directory is excluded iff its basename equals an entry in
+    EXCLUDE_DIR_NAMES or ends with an EXCLUDE_DIR_SUFFIXES entry; a file is
+    excluded iff its name equals an EXCLUDE_FILENAMES entry, ends with an
+    EXCLUDE_FILE_SUFFIXES entry, or is a stem-variant of an
+    EXCLUDE_FILENAME_STEMS entry (``stem``, ``stem + "."*`` or
+    ``stem + "-"*`` — e.g. ``.env.production``, ``db.sqlite3-wal``). This
+    prevents over-exclusion such as a ``venv`` token wrongly dropping
+    ``venvironment.py`` (#1505), while still excluding suffixed credential /
+    live-database files such as ``.env.production`` and ``db.sqlite3-wal``.
+
     Args:
         source_dir: Directory to tar
         output_path: Where to write the tarball
     """
     with tarfile.open(output_path, "w:gz") as tar:
         for root, dirs, files in os.walk(source_dir):
-            # Modify dirs in-place to exclude patterns. TARBALL_EXCLUDES is the
-            # single source of truth — substring-matched against the basename.
-            dirs[:] = [d for d in dirs if not any(pattern in d for pattern in TARBALL_EXCLUDES)]
+            # Prune excluded directories in-place so os.walk does not descend
+            # into them. Matched by exact basename or basename suffix.
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in EXCLUDE_DIR_NAMES and not d.endswith(EXCLUDE_DIR_SUFFIXES)
+            ]
 
             for file in files:
+                # Skip excluded files — exact basename or basename suffix.
+                if file in EXCLUDE_FILENAMES or file.endswith(EXCLUDE_FILE_SUFFIXES):
+                    continue
+                # Skip stem-variants of sensitive filenames: the file equals
+                # the stem, or starts with ``stem + "."`` / ``stem + "-"``.
+                # The ``.`` / ``-`` discriminator keeps ``.environment`` in
+                # (it is not a ``.env`` variant) — see #1505.
+                if any(
+                    file == stem or file.startswith(stem + ".") or file.startswith(stem + "-")
+                    for stem in EXCLUDE_FILENAME_STEMS
+                ):
+                    continue
+
                 file_path = Path(root) / file
                 relative = file_path.relative_to(source_dir)
-
-                # Skip excluded files — same TARBALL_EXCLUDES list,
-                # substring-matched against the relative path string.
-                if any(pattern in str(relative) for pattern in TARBALL_EXCLUDES):
-                    continue
 
                 try:
                     tar.add(file_path, arcname=str(relative))

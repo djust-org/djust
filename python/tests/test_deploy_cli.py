@@ -1133,8 +1133,13 @@ class TestGuidedDeploy:
 
 
 class TestCreateTarball:
-    """Regression tests for CodeQL #2330 — TARBALL_EXCLUDES wired into
-    _create_tarball as the single source of truth."""
+    """Regression tests for _create_tarball exclude matching.
+
+    Exclusion is path-segment / basename anchored (NOT substring-matched):
+    the five typed exclude groups (EXCLUDE_DIR_NAMES, EXCLUDE_DIR_SUFFIXES,
+    EXCLUDE_FILE_SUFFIXES, EXCLUDE_FILENAMES, EXCLUDE_FILENAME_STEMS) replaced
+    the flat substring-matched TARBALL_EXCLUDES constant. See #1505.
+    """
 
     def _build_source(self, tmp_path, layout):
         """Create files described by ``layout`` (POSIX relative paths)."""
@@ -1146,8 +1151,8 @@ class TestCreateTarball:
             target.write_text("x")
         return src
 
-    def test_create_tarball_uses_tarball_excludes_constant(self, tmp_path, monkeypatch):
-        """_create_tarball must consult TARBALL_EXCLUDES, not a hardcoded list.
+    def test_create_tarball_uses_exclude_dir_names_constant(self, tmp_path, monkeypatch):
+        """_create_tarball must consult EXCLUDE_DIR_NAMES, not a hardcoded list.
 
         Gate-off check: if _create_tarball used a hardcoded list, monkeypatching
         the constant would have no effect and ``sentineldir/keep.py`` would still
@@ -1155,7 +1160,7 @@ class TestCreateTarball:
         """
         import tarfile
 
-        from djust.deploy_cli import TARBALL_EXCLUDES, _create_tarball
+        from djust.deploy_cli import EXCLUDE_DIR_NAMES, _create_tarball
 
         src = self._build_source(tmp_path, ["app.py", "sentineldir/keep.py"])
 
@@ -1169,8 +1174,8 @@ class TestCreateTarball:
 
         # Monkeypatch the constant to add the sentinel directory.
         monkeypatch.setattr(
-            "djust.deploy_cli.TARBALL_EXCLUDES",
-            TARBALL_EXCLUDES + ["sentineldir"],
+            "djust.deploy_cli.EXCLUDE_DIR_NAMES",
+            EXCLUDE_DIR_NAMES | {"sentineldir"},
         )
 
         # Second call: sentineldir is now excluded, app.py still present.
@@ -1183,8 +1188,7 @@ class TestCreateTarball:
 
     def test_create_tarball_excludes_canonical_set(self, tmp_path):
         """The canonical exclude set is applied — locks in the behavior-change
-        entries (.hg/.svn/logs/media/staticfiles + working .log exclusion) that
-        the old hardcoded inline lists dropped."""
+        entries (.hg/.svn/logs/media/staticfiles + working .log exclusion)."""
         import tarfile
 
         from djust.deploy_cli import _create_tarball
@@ -1217,10 +1221,204 @@ class TestCreateTarball:
         ):
             assert excluded not in names, f"{excluded} should be excluded"
 
-    def test_tarball_excludes_constant_is_substring_safe(self):
-        """TARBALL_EXCLUDES is consumed via substring ``in`` matching, not glob —
-        no entry may contain a ``*`` (decision #2: normalize to substring form)."""
-        from djust.deploy_cli import TARBALL_EXCLUDES
+    def test_exclude_groups_have_expected_kinds(self):
+        """The five typed exclude groups have the kinds the matcher requires:
+        suffix groups must be tuples (str.endswith rejects frozenset); name
+        groups are sets for O(1) membership."""
+        from djust.deploy_cli import (
+            EXCLUDE_DIR_NAMES,
+            EXCLUDE_DIR_SUFFIXES,
+            EXCLUDE_FILE_SUFFIXES,
+            EXCLUDE_FILENAME_STEMS,
+            EXCLUDE_FILENAMES,
+        )
 
-        for entry in TARBALL_EXCLUDES:
-            assert "*" not in entry, f"glob-prefixed entry would never match: {entry!r}"
+        # Suffix groups must be tuples so ``str.endswith(group)`` works.
+        assert isinstance(EXCLUDE_DIR_SUFFIXES, tuple)
+        assert isinstance(EXCLUDE_FILE_SUFFIXES, tuple)
+        # Name groups are sets/frozensets for membership tests.
+        assert isinstance(EXCLUDE_DIR_NAMES, (set, frozenset))
+        assert isinstance(EXCLUDE_FILENAMES, (set, frozenset))
+        assert isinstance(EXCLUDE_FILENAME_STEMS, (set, frozenset))
+        # All five groups are non-empty.
+        assert EXCLUDE_DIR_NAMES
+        assert EXCLUDE_DIR_SUFFIXES
+        assert EXCLUDE_FILE_SUFFIXES
+        assert EXCLUDE_FILENAMES
+        assert EXCLUDE_FILENAME_STEMS
+        # Total entry count is preserved (25 entries pre-split): splitting
+        # .env / db.sqlite3 out of EXCLUDE_FILENAMES into the new
+        # EXCLUDE_FILENAME_STEMS group moves 2 entries but keeps the total.
+        total = (
+            len(EXCLUDE_DIR_NAMES)
+            + len(EXCLUDE_DIR_SUFFIXES)
+            + len(EXCLUDE_FILE_SUFFIXES)
+            + len(EXCLUDE_FILENAMES)
+            + len(EXCLUDE_FILENAME_STEMS)
+        )
+        assert total == 25, total
+
+    def test_create_tarball_does_not_over_exclude_lookalike_names(self, tmp_path):
+        """#1505: substring matching wrongly dropped files whose names merely
+        *contained* an exclude token (``venv`` in ``venvironment.py``). Anchored
+        matching keeps every legitimately-named path."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        layout = [
+            "app.py",
+            "venvironment.py",  # contains 'venv'
+            "distance.py",  # contains 'dist'
+            "media_helper.py",  # contains 'media'
+            "mybuild_config.py",  # contains 'build'
+            "staticfiles_conf.py",  # contains 'staticfiles'
+            "logsink.py",  # contains 'logs'
+            "media_player/core.py",  # dir 'media_player' contains 'media'
+        ]
+        src = self._build_source(tmp_path, layout)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        for present in layout:
+            assert present in names, f"{present} was wrongly excluded (#1505 over-match)"
+
+    def test_create_tarball_still_excludes_genuine_artifacts(self, tmp_path):
+        """All genuine exclusions across the four typed groups still work after
+        the anchored-matching fix."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        layout = [
+            "keep.py",
+            ".git/config",
+            ".hg/store.db",
+            ".svn/entries",
+            ".venv/bin/python",
+            "node_modules/pkg/index.js",
+            "__pycache__/m.pyc",
+            ".pytest_cache/CACHEDIR.TAG",
+            ".mypy_cache/3.11/x.data.json",
+            ".ruff_cache/content",
+            ".idea/workspace.xml",
+            ".vscode/settings.json",
+            "dist/wheel.whl",
+            "build/lib/x.py",
+            "logs/app.txt",
+            "media/u.bin",
+            "staticfiles/m.css",
+            "mypkg.egg-info/PKG-INFO",  # dir-name suffix
+            "mod.pyc",  # file suffix
+            "a.pyo",  # file suffix
+            "app.log",  # file suffix
+            ".env",  # exact filename
+            ".DS_Store",  # exact filename, top-level
+            "src/.DS_Store",  # exact filename, nested
+            "Thumbs.db",  # exact filename
+            "db.sqlite3",  # exact filename
+        ]
+        src = self._build_source(tmp_path, layout)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "keep.py" in names
+        for excluded in layout:
+            if excluded == "keep.py":
+                continue
+            assert excluded not in names, f"{excluded} should be excluded"
+
+    def test_create_tarball_excludes_sensitive_filename_stem_variants(self, tmp_path):
+        """#1505 follow-up (SECURITY): ``.env`` and ``db.sqlite3`` are filename
+        STEMS, not exact filenames. Their suffixed variants — ``.env.production``,
+        ``.env.local``, ``.env.staging``, ``db.sqlite3-wal``, ``db.sqlite3.bak`` —
+        carry credentials / live data and MUST be excluded. Anchored exact-only
+        matching regressed this; the stem-match rule restores it."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        layout = [
+            "keep.py",
+            # MUST be excluded — sensitive stem variants.
+            ".env.production",
+            ".env.local",
+            ".env.staging",
+            "config/.env.production",  # stem variant in a subdir
+            "db.sqlite3-wal",
+            "db.sqlite3-journal",
+            "db.sqlite3.bak",
+            # MUST still be excluded — bare stems (no regression).
+            ".env",
+            "db.sqlite3",
+        ]
+        src = self._build_source(tmp_path, layout)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "keep.py" in names
+        for excluded in layout:
+            if excluded == "keep.py":
+                continue
+            assert excluded not in names, (
+                f"{excluded} is a sensitive stem variant and must be excluded"
+            )
+
+    def test_create_tarball_does_not_over_exclude_env_lookalikes(self, tmp_path):
+        """#1505 over-match must stay fixed: a bare ``file.startswith('.env')``
+        would wrongly drop ``.environment`` (a file whose name merely starts
+        with ``.env``). The ``stem + '.'`` / ``stem + '-'`` discriminator keeps
+        such lookalikes in the tarball."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        layout = [
+            "app.py",
+            ".environment",  # starts with '.env' but is NOT a .env variant
+            "environment_helper.py",  # normal file, contains 'environment'
+        ]
+        src = self._build_source(tmp_path, layout)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        for present in layout:
+            assert present in names, f"{present} was wrongly excluded — #1505 over-match regressed"
+
+    def test_create_tarball_empty_source(self, tmp_path):
+        """An empty source directory produces an empty tarball without crashing."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = tmp_path / "src"
+        src.mkdir()
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            assert tar.getnames() == []
+
+    def test_create_tarball_file_named_like_excluded_dir(self, tmp_path):
+        """A *file* named ``dist`` or ``logs`` at top level is now INCLUDED —
+        only directories with those basenames are pruned (#1505)."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = self._build_source(tmp_path, ["keep.py", "dist", "logs"])
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "keep.py" in names
+        assert "dist" in names
+        assert "logs" in names
