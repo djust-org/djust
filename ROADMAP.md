@@ -245,9 +245,45 @@ names and flags them — `(?<![\w-])` is the correct anchor.
 rows #271–#274); `v1.0.0rc3` cut via `/djust-release`. The 7 OUT-OF-REPO
 skill items (#1375, #1376, #1384, #1387, #1507, #1511, #1516, #1524) were
 resolved upstream in `pipeline-skills` and their Action Tracker rows closed.
-Post-rc3 follow-ups are the `v1.1.0` milestone below.
+Post-rc3 work is the `v1.0.0rc4` milestone below.
 
-## Next: v1.1.0 — Post-1.0 follow-ups
+## Next: v1.0.0rc4 — Sticky-child state persistence
+
+> Created 2026-05-18. Pulls #1471 (sticky-child `LiveView` WS-reconnect state
+> persistence) into the 1.0 line — the project decided this is a correctness
+> property the 1.0 stability commitment should include, so it ships in a
+> dedicated release candidate ahead of v1.0.0 final rather than deferring to
+> v1.1.0. Design locked by
+> [ADR-018](docs/adr/018-sticky-child-state-persistence.md).
+> Completion → `/djust-release` cuts `v1.0.0rc4`.
+
+*Goal:* Close the #1471 gap — sticky children embedded with `{% live_render %}`
+do not persist their event-driven state across a WS reconnect (or on the HTTP
+path). Implement ADR-018's three iterations, then cut rc4 as the soak vehicle
+before v1.0.0 final.
+
+| Priority | Item | Summary |
+|---|---|---|
+| **P1** | #1471 — ADR-018 iter 18a | SAVE side + stable-`sticky_id` key scheme; generalize the WS save-block gate + HTTP save; sticky-id GC index |
+| **P1** | #1471 — ADR-018 iter 18b | LOAD side — tag-driven restore at `{% live_render %}` render time, in lieu of the child's `mount()` state-init |
+| **P1** | #1471 — ADR-018 iter 18c | Opt-in enforcement (child + parent `enable_state_snapshot`), `djust check`, guide docs |
+
+**Detail:** see [ADR-018](docs/adr/018-sticky-child-state-persistence.md) —
+persist keyed on the stable `sticky_id` (not the volatile `_view_id`); restore
+tag-driven (mirroring ADR-014's precedent); the sticky-id index is a GC ledger,
+not the restore driver; child persistence requires both child and parent
+`enable_state_snapshot`.
+
+**Sequencing:** 18a → 18b → 18c as ordered PRs. 18a is the foundation — 18b's
+restore must not start until 18a is merged and its regression suite is green
+(split-foundation, Action #1122). The inter-release soak collapses into the
+rc4 cycle; rc4 itself soaks before v1.0.0 final.
+
+**Pipeline runner notes:**
+- `/pipeline-drain --milestone v1.0.0rc4` — process the 3 iterations as
+  ordered PRs, NOT `--group` (the foundation gate forbids 18a + 18b in one PR).
+
+## Planned: v1.1.0 — Post-1.0 follow-ups
 
 > Created 2026-05-18. Houses the post-1.0 follow-ups carried out of the
 > v1.0.0 → rc3 arc: the accessibility phase-2 cluster deferred from #1513,
@@ -285,14 +321,11 @@ Rust code is confirmed thread-safe. Small, contained Rust-side change.
 for import ergonomics. Explicitly deferred to the post-1.0 minor when filed.
 
 **Deferred / blocked (tracked, not in this milestone's drain):**
-- **#1471** — sticky-child `LiveView` WS-reconnect state persistence. Design
-  ADR drafted — [ADR-018](docs/adr/018-sticky-child-state-persistence.md)
-  (Proposed): persist keyed on the stable `sticky_id`, restore tag-driven at
-  `{% live_render %}` render time; split into 3 iterations (18a save side /
-  18b load side / 18c opt-in + docs). Promote the iterations to drain-ready
-  priority-matrix rows once ADR-018 is Accepted.
 - **#1434** — native async ORM (`sync_to_async(Model.objects.X)` → native
   async). Blocked on psycopg3 landing; revisit when the dependency ships.
+
+*(#1471 — sticky-child WS-reconnect persistence — was pulled forward into the
+`v1.0.0rc4` milestone above; see ADR-018.)*
 
 **Pipeline runner notes:**
 - `/pipeline-drain --milestone v1.1.0` once v1.0.0 final is cut.

@@ -3,7 +3,7 @@
 **Status**: Proposed
 **Date**: 2026-05-18
 **Deciders**: Project maintainers
-**Target version**: v1.1.0
+**Target version**: v1.0.0rc4
 **Related**:
 - [ADR-011](011-sticky-liveviews.md) — Sticky LiveViews baseline (child registry → preservation → reattach)
 - [ADR-014](014-sticky-liveview-autodetect.md) — `{% live_render %}` auto-detection of preserved stickies (tag-driven precedent)
@@ -74,7 +74,7 @@ The stable identifier for a sticky child is its **`sticky_id`** class attribute 
 
 ### Why now
 
-#1467 (v0.9.7-3) investigated a downstream report, found the gap, and closed Option C — out of scope for that bugfix, needs a design pass. #1471 was filed to track the design + implementation. It is staged for v1.1.0. It is not a 1.0 release blocker (sticky children are an advanced embedding pattern; the common case — a single top-level LiveView — already persists), so it rides in the post-1.0 minor.
+#1467 (v0.9.7-3) investigated a downstream report, found the gap, and closed Option C — out of scope for that bugfix, needs a design pass. #1471 was filed to track the design + implementation. The gap was initially staged for the post-1.0 v1.1.0 minor (sticky children are an advanced embedding pattern; the common case — a single top-level LiveView — already persists). It has since been pulled into the 1.0 line: the project decided sticky-child persistence is a correctness property the 1.0 stability commitment should include, so the implementation targets a dedicated release candidate, **v1.0.0rc4**, ahead of v1.0.0 final.
 
 ## Decision
 
@@ -143,23 +143,23 @@ A restored sticky child takes the same `_restore_*` replay path the parent alrea
 
 ## Iteration plan (split-foundation)
 
-Per Action #1122, this is a multi-phase change touching the save path, the template tag, and a system check. **Three iterations**, each soaking before the next:
+Per Action #1122, this is a multi-phase change touching the save path, the template tag, and a system check. **Three iterations**, all targeting **v1.0.0rc4** and sequenced as ordered PRs within that release candidate's drain (18a → 18b → 18c). The split-foundation discipline still applies — 18a's save semantics must be implemented and green before 18b's restore builds on them — but the inter-release soak collapses into the rc4 cycle itself: rc4 is the soak vehicle ahead of v1.0.0 final.
 
-### v1.1.0 — iter 18a — SAVE side + key scheme (foundation)
+### v1.0.0rc4 — iter 18a — SAVE side + key scheme (foundation)
 
 - Stable-key scheme (Decision 1): `liveview_<path>__sticky__<sticky_id>` helpers.
 - Generalize the WS save-block gate and the HTTP save (Decision 4).
 - Write the sticky-id index on render (Decision 3) + prune orphaned entries.
 - Regression suite: child event → child state written under the stable key; non-sticky embed NOT written; index reflects the rendered set; orphaned entry pruned.
-- **Soak through one release.** The save semantics are the foundation; restore builds on them.
+- **Foundation gate.** The save semantics are the foundation; 18b's restore must not start until 18a is merged and its regression suite green.
 
-### v1.1.0 — iter 18b — LOAD side (tag-driven restore)
+### v1.0.0rc4 — iter 18b — LOAD side (tag-driven restore)
 
 - `{% live_render %}` tag restores saved child state in lieu of `mount()` state-init (Decision 2).
 - `_restore_*` replay for the child (Decision 6).
 - Regression suite: reconnect restores child public + private state; child `mount()` state-init skipped when saved state present; round-trip (set state → reconnect → assert restored) on both WS and HTTP paths.
 
-### v1.1.0 — iter 18c — opt-in enforcement + docs
+### v1.0.0rc4 — iter 18c — opt-in enforcement + docs
 
 - `djust check` system check for the child-opts-in / parent-doesn't misconfiguration (Decision 5).
 - Runtime one-shot warning.
@@ -232,4 +232,4 @@ Have the client stash sticky-child state (like the DOM `stickyStash`) and replay
 - ADR-011, ADR-014 — Sticky LiveViews baseline + tag-driven autodetect precedent
 - ADR-017 — `_object` framework-slot-vs-user-state precedent (Decision 6)
 - v0.8.6 retro / Action #1122 — split-foundation pattern
-- ROADMAP.md milestone v1.1.0
+- ROADMAP.md milestone v1.0.0rc4
