@@ -12,6 +12,7 @@ Usage:
 
 import calendar as _calendar
 import datetime
+import itertools
 import json as _json
 import re as _re
 import uuid
@@ -421,6 +422,12 @@ def toast_container(toasts, dismiss_event="dismiss_toast"):
 # ---------------------------------------------------------------------------
 
 
+# Process-wide monotonic counter so each rendered tooltip without an
+# explicit component_id still gets a unique tip id (the WAI-ARIA tooltip
+# pattern requires a stable id to anchor aria-describedby).
+_tooltip_id_counter = itertools.count(1)
+
+
 class TooltipNode(template.Node):
     def __init__(self, nodelist, kwargs):
         self.nodelist = nodelist
@@ -436,10 +443,21 @@ class TooltipNode(template.Node):
             f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
         )
 
+        # Derive a stable, escaped tip id. When the caller supplies a
+        # component_id, anchor on it (deterministic); otherwise fall back to
+        # a process-wide counter so concurrently-rendered tooltips on one
+        # page never collide.
+        if component_id:
+            tip_id = f"{conditional_escape(component_id)}-tip"
+        else:
+            tip_id = f"dj-tooltip-tip-{next(_tooltip_id_counter)}"
+
         return mark_safe(
-            f'<span class="dj-tooltip dj-tooltip--{conditional_escape(position)}"{cid_attr}>'
+            f'<span class="dj-tooltip dj-tooltip--{conditional_escape(position)}"{cid_attr}'
+            f' aria-describedby="{tip_id}">'
             f"{content}"
-            f'<span class="dj-tooltip__text">{conditional_escape(text)}</span>'
+            f'<span class="dj-tooltip__text" id="{tip_id}" role="tooltip">'
+            f"{conditional_escape(text)}</span>"
             f"</span>"
         )
 

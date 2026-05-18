@@ -1107,6 +1107,7 @@
                 type="text"
                 class="command-palette-search"
                 id="command-palette-search"
+                aria-label="Search documentation"
                 placeholder="Search documentation..."
                 autocomplete="off"
             />
@@ -1762,7 +1763,7 @@ def handle_button_click(self):
                         <div class="code-playground-content">
                             <div class="code-playground-editor">
                                 <div class="code-playground-editor-header">EDITOR</div>
-                                <textarea class="code-playground-textarea" id="playground-code" spellcheck="false"><div class="card" style="border: 2px solid #3b82f6; border-radius: 8px; padding: 20px; max-width: 400px;">
+                                <textarea class="code-playground-textarea" id="playground-code" aria-label="HTML code editor" spellcheck="false"><div class="card" style="border: 2px solid #3b82f6; border-radius: 8px; padding: 20px; max-width: 400px;">
   <h3 style="color: #3b82f6; margin-top: 0;">Welcome to djust!</h3>
   <p style="color: #64748b; line-height: 1.6;">
     Edit the HTML on the left to see live updates here. Try changing:
