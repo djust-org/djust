@@ -910,6 +910,57 @@ doesn't repeat it.
   `\b`/`data-tabindex` regex false-match precisely because it built a
   falsifying `data-tabindex` case rather than re-reading the regex.
 
+## Process canonicalizations from v1.0.0rc3 retro arc
+
+One rule from the v1.0.0rc3 drain (PRs #1518, #1519, #1520, #1521 — the
+final pre-1.0 retro-backlog drain). The drain's defining thread —
+"verify, don't assume" — was already canonized in the v1.0.0rc2 section;
+rc3 surfaced one concrete blind spot in the existing post-commit
+verification reflex.
+
+- **`git commit --amend` verification must assert the HEAD hash CHANGED
+  (#1524, v1.0.0rc3 retro finding #2).** Action #122 prescribes a
+  `&& git log -1 --oneline` reflex after every `git commit` to detect a
+  pre-commit-hook-swallowed commit. That reflex works for the
+  create-a-new-commit case: a swallowed commit leaves the PREVIOUS
+  subject visible, which is the signal. It does **not** work for
+  `git commit --amend` — after a bounced amend the OLD commit is still
+  HEAD with its OLD subject, so a subject *is* shown and the reflex
+  passes green on a failure.
+
+  Observed in PR #1519: a fixer's `--amend` was swallowed by a
+  pre-commit reformat; HEAD stayed at the pre-fix hash `5ca016d0`,
+  `git status` showed `MM` (staged + working-tree-modified,
+  uncommitted), and the fixer agent reported "amended commit 5ca016d0"
+  — quoting the stale hash without verifying. The orchestrator caught
+  it on first principles (amend always rehashes, so an unchanged HEAD
+  after `--amend` is definitionally a bounce; a `git show HEAD:` grep
+  for the new symbol returned 0).
+
+  **The rule**: for `git commit --amend` specifically, capture the
+  pre-amend hash and assert it changed:
+  ```bash
+  PRE=$(git rev-parse HEAD)
+  git commit --amend -m "..."
+  POST=$(git rev-parse HEAD)
+  if [ "$PRE" = "$POST" ]; then
+      echo "FAIL: --amend bounced (HEAD unchanged). Re-stage and retry."
+      exit 1
+  fi
+  echo "OK: amend registered — $PRE -> $POST"
+  ```
+  Also: any agent reporting a commit hash must obtain it from a live
+  `git rev-parse HEAD` *after* the commit operation — never quote a
+  hash printed earlier or planned. The PR #1519 fixer quoted
+  `5ca016d0`, a hash that was never HEAD post-amend; sourcing the
+  reported hash from `rev-parse` would have surfaced the bounce
+  immediately. The `&& git log -1 --oneline` reflex stays correct for
+  plain `git commit`; this rule is the `--amend` companion.
+
+  The skill-prompt propagation of this rule into
+  `~/.claude/skills/pipeline-run/SKILL.md` is tracked OUT-OF-REPO in
+  #1524 (`.claude/` is gitignored repo-wide).
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

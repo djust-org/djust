@@ -301,15 +301,76 @@ issue or be explicitly closed with a reason.
 | 259 | Doc-snippet smoke test + mechanically-derivable doc-claim assertions | Retro v1.0.0 (PR #1494) | #1500 | Closed | **Resolved in v1.0.0rc2 PR #1508** — `scripts/check-doc-snippets.py` (parts a+b: AST/import-check fenced blocks + Django-floor/JS-size claim assertions). Part c (doc-example security lint) → #1509. |
 | 260 | Close the ADR-status drift loop — flip Status to Accepted when a feature ships | Retro v1.0.0 (PR #1492) | #1501 | Closed | **Resolved in v1.0.0rc2 PR #1506** — `scripts/check-adr-status.py` hard-invariant audit + 12-ADR cleanup (#1493). Skill-prompt part (b) is out-of-repo → #1507. |
 | 261 | Stage 4 plan-template — describe intent, not specific values (ARIA roles, dep constraints) | Retro v1.0.0 (PR #1491 + #1490) | #1502 | Closed | **Resolved in v1.0.0rc2 PR #1510** — two `mandatory:false` Stage-4 rules (ARIA intent not values; grep constraint tables before labeling deps) added to `feature-state.json` + `bugfix-state.json`. |
-| 262 | `_create_tarball` substring-match over-excludes legitimate paths | PR #1504 | #1505 | Open | Pre-existing; substring containment over-matches (`venv` inside `venvironment.py`). Basename-anchored or `fnmatch` follow-up. |
+| 262 | `_create_tarball` substring-match over-excludes legitimate paths | PR #1504 | #1505 | Closed | **Resolved in v1.0.0rc3 PR #1519** — `TARBALL_EXCLUDES` split into 5 typed groups (dir-names / dir-suffixes / file-suffixes / filenames / filename-stems); substring match replaced with basename/segment/suffix/stem-anchored matching. `EXCLUDE_FILENAME_STEMS` keeps `.env.production` / `db.sqlite3-wal` excluded. |
 | 263 | ADR-status-flip prompt for `djust-release` + `pipeline-run` skills | Retro v1.0.0rc2 (PR #1506, #1501 part b) | #1507 | OUT-OF-REPO | Skill-prompt component; `.claude/` gitignored repo-wide. Upstream: pipeline-skill repo. |
-| 264 | Doc-example security/style lint (part c of #1500) | PR #1508 | #1509 | Open | Custom AST walker for `print(f"...")`/`mark_safe(f"...")` etc. in fenced doc snippets + anti-pattern allowlist. |
+| 264 | Doc-example security/style lint (part c of #1500) | PR #1508 | #1509 | Closed | **Resolved in v1.0.0rc3 PR #1520** — `check_security_style()` AST walker in `scripts/check-doc-snippets.py` (5 auto-reject triggers) + `<!-- doc-snippet-check: anti-pattern -->` allowlist marker. Completed part (c) of #1500 — multi-hop closure across v1.0.0 → rc2 → rc3. |
 | 265 | Skill-prompt components of #1498 + #1499 (lockfile-verify + stacklevel-test prompts) | Retro v1.0.0rc2 (PR #1510) | #1511 | OUT-OF-REPO | `djust-release` + `pipeline-run` skill prompts; `.claude/` gitignored. Upstream: pipeline-skill repo. |
-| 266 | Accessibility long-tail remainder — P2/P3 component ARIA, keyboard JS, `djust_audit` a11y | PR #1512 | #1513 | Open | 3 of 5 #1496 sub-areas not in PR #1512's slice, + 3 genuine Y003 defects in demo templates. |
-| 267 | `_IMG_HAS_ALT_RE` (Y002) false-matches `data-alt` — same `\b` weakness fixed for Y003/Y004 | PR #1512 | #1514 | Open | Latent false-negative; apply the `(?<![\w-])` anchor as done for Y003/Y004 in PR #1512. |
-| 268 | Codify the `scripts/check-*.py` audit-shape as a scaffold/template | Retro v1.0.0rc2 (finding #2) | #1515 | Open | 3 sibling audits now exist (check-adr-status/doc-snippets/lockfile-versions); the 4th should be fill-in-the-blank. |
+| 266 | Accessibility long-tail remainder — P2/P3 component ARIA, keyboard JS, `djust_audit` a11y | PR #1512 | #1513 | Closed | **Resolved in v1.0.0rc3 PR #1521** — slice 1 (P2/P3 component ARIA + decorative-icon sweep). #1513 closed; keyboard-interaction JS → #1522, `djust_audit` a11y reporting → #1523 (post-1.0 a11y phase 2 — Action Tracker #273/#274). |
+| 267 | `_IMG_HAS_ALT_RE` (Y002) false-matches `data-alt` — same `\b` weakness fixed for Y003/Y004 | PR #1512 | #1514 | Closed | **Resolved in v1.0.0rc3 PR #1518** — `(?<![\w-])` anchor applied to all 4 `\b`-anchored HTML-attribute regexes in `checks.py` (Stage-4 artifact verification widened the cited 1 → 4). |
+| 268 | Codify the `scripts/check-*.py` audit-shape as a scaffold/template | Retro v1.0.0rc2 (finding #2) | #1515 | Closed | **Resolved in v1.0.0rc3 PR #1520** — `scripts/AUDIT_TEMPLATE.md` codifies the family shape: `run()`/`build_arg_parser()`/`main()` skeleton, exit codes 0/1/2, the 4 wiring points (Makefile, test.yml, .pre-commit-config.yaml, scripts/README.md), gate-off self-test + `@pytest.mark.slow` dogfood conventions. |
 | 269 | Reviewer-subagent prompt needs an environment-premises brief | Retro v1.0.0rc2 (finding #3) | #1516 | OUT-OF-REPO | Recurring two-commit-shape "CHANGELOG missing" false positive. Upstream: pipeline-run skill repo. |
-| 270 | Meta-check for `\b` word-boundary anchors in attribute-matching regexes | Retro v1.0.0rc2 (finding #4) | #1517 | Open | `\b`/`data-*` false-match — 3rd occurrence (Y002 latent, Y003, Y004 in PR #1512). |
+| 270 | Meta-check for `\b` word-boundary anchors in attribute-matching regexes | Retro v1.0.0rc2 (finding #4) | #1517 | Closed | **Resolved in v1.0.0rc3 PR #1518** — introspection meta-check fails on any bare-`\b`-anchored attribute regex in `checks.py`; `_LIVE_RENDER_*` allowlist guarded by a stale-entry test. A 4th `\b`/`data-*` recurrence is now structurally impossible. |
+| 271 | pipeline-run skill — `git commit --amend` must assert HEAD hash changed | Retro v1.0.0rc3 (finding #2) | #1524 | OUT-OF-REPO | In-repo half done — CLAUDE.md "Process canonicalizations from v1.0.0rc3 retro arc" section. Skill-prompt propagation to `~/.claude/skills/pipeline-run/SKILL.md`; `.claude/` gitignored repo-wide. Upstream: pipeline-skill repo. |
+| 272 | Pre-1.0-final retro-finding closeout sweep | Retro v1.0.0rc3 (finding #3) | #1525 | Open | Before tagging v1.0.0 final, grep all v1.0.0 / rc2 / rc3 retros for deferred follow-up issue numbers; confirm each closed or explicitly carried to a post-1.0 milestone. A final "no finding silently dropped" pass. |
+| 273 | Accessibility phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) | PR #1521 (#1513 follow-up) | #1522 | Open | Deferred from #1513 — highest-risk sub-area (CSP-strict client module + JSDOM / size-budget). Cluster into a post-1.0 a11y phase 2 milestone. |
+| 274 | Accessibility phase 2 — surface a11y findings in `djust_audit` | PR #1521 (#1513 follow-up) | #1523 | Open | Deferred from #1513 — `djust_audit` a11y reporting. Cluster with #1522 into post-1.0 a11y phase 2. |
+
+## v1.0.0rc3 — rc2-retro backlog drain (PRs #1518, #1519, #1520, #1521)
+
+**Date**: 2026-05-18
+**Scope**: The final pre-1.0 retro drain — four tasks closing the v1.0.0rc2 retrospective's own follow-ups (#1514, #1517, #1505, #1509, #1515) plus the accessibility long-tail (#1513) deferred during v1.0.0. Created by `/pipeline-drain`, processed by `/pipeline-run --milestone v1.0.0rc3 --all`: 6 issues across 4 PRs. Every task either fixed a bug class a guardrail found or built/extended a guardrail; 3 of the 4 closed a v1.0.0-or-rc2 retro finding. Zero post-merge fixes; all CI green.
+**Tests at close**: 7311
+
+### What We Learned
+
+**1. "Verify, don't assume" stopped being a milestone thread and became structural — the rc2 canon caught rc3 bugs before they shipped.**
+The v1.0.0rc2 retro named "verify, don't assume" as its defining thread and canonized it. In rc3 the canon *operated* — twice, as a catch. Task 1 (PR #1518): Stage-4 artifact verification took #1514's single cited regex (`_IMG_HAS_ALT_RE`) and enumerated every `\b`-anchored HTML-attribute regex in `checks.py`, surfacing FOUR of the identical bug class — all four would otherwise have shipped latent `data-*` false-matches into 1.0. Task 2 (PR #1519): the implementer's first pass narrowed sensitive-file exclusion from substring to exact-filename matching for `.env` / `db.sqlite3`; Stage 7's *inspection* checked the over-match cases it set out to check and missed that exact-match *regressed* sensitive-file exclusion (`.env.production`, `db.sqlite3-wal` would ship into deploy tarballs — credential / live-DB disclosure). Stage 8 *constructed the falsifying case* and caught the 🔴. The durable refinement: a security-surface change to an exclusion/filter rule needs the falsifying case built explicitly — enumerate every shape the OLD rule matched and confirm the NEW rule still matches each one. That left-shifts the catch from Stage-8 reviewer discretion to a checklist item.
+
+**Action taken**: Added an exclusion/filter-rule bullet to the `docs/PULL_REQUEST_CHECKLIST.md` Security Review → Data Protection section in this commit ("enumerate every shape the OLD rule matched; confirm the NEW rule still matches each one").
+
+**2. Action #122's post-commit check has a blind spot for `git commit --amend`.**
+During PR #1519's fix pass a `git commit --amend` was swallowed by a pre-commit hook reformat: HEAD stayed at the pre-fix hash `5ca016d0`, `git status` showed `MM`, and the fixer agent reported "amended commit 5ca016d0" — quoting the OLD hash without verifying. Action #122's `&& git log -1 --oneline` reflex does not catch this: after a bounced amend the OLD commit is still HEAD with its OLD subject, so a subject *is* shown and the reflex passes green. The reflex was written for the create-a-new-commit case, where a swallowed commit leaves the PREVIOUS subject visible — that signal is absent for `--amend`, whose subject is unchanged on success too. For `--amend` the verification must capture `PRE=$(git rev-parse HEAD)` before and assert `git rev-parse HEAD` differs after; an unchanged hash after amend is definitionally a bounce, because amend always rehashes.
+
+**Action taken**: Added a "Process canonicalizations from v1.0.0rc3 retro arc" section to `CLAUDE.md` in this commit (the `--amend` HEAD-hash-changed assertion + the rule that any reported commit hash must come from a live `git rev-parse`). Skill-prompt propagation to `~/.claude/skills/pipeline-run/SKILL.md` is OUT-OF-REPO — tracked in Action Tracker #271 (GitHub #1524).
+
+**3. The rc2+rc3 drains completed a deliberate guardrail-investment cycle — the one missing piece is a pre-1.0-final closeout sweep.**
+Read as a unit, rc2 and rc3 did one deliberate thing: systematically convert the v1.0.0 retrospective's findings into shipped, executable guardrails before the 1.0 API freeze. Every rc3 task either fixed a bug class a guardrail found or built/extended a guardrail, and 3 of the 4 closed a prior-retro finding — #1514/#1517 closed rc2 finding #4 (the `\b`/`data-*` meta-check); #1509 closed part (c) of #1500, a multi-hop closure spanning three milestones (v1.0.0 retro → #1500 → rc2 PR #1508 shipped a+b → #1509 follow-up → rc3 PR #1520); #1513 closed the #1496 accessibility remainder. PR #1520's #1515 was the meta-move — it codified the `scripts/check-*.py` audit-shape as `AUDIT_TEMPLATE.md`, making the next guardrail fill-in-the-blank rather than a re-derive. The cycle's payoff is the v1.0.0 retro's findings demonstrably converted into code, not notes. The missing verification: a closeout sweep before 1.0 final that greps every v1.0.0 / rc2 / rc3 retro for deferred-with-follow-up issue numbers and confirms each is closed or explicitly carried to a post-1.0 milestone — a final "no finding silently dropped" pass.
+
+**Action taken**: Open — tracked in Action Tracker #272 (GitHub #1525).
+
+### Insights
+
+- **Planning's L-effort scoping discipline is now reliable — three consecutive correct applications.** PR #1521's Planning carved a markup-only slice (P2/P3 component ARIA + decorative-icon sweep) out of the 3-sub-area L-effort #1513 and deferred the keyboard-interaction JS and `djust_audit` a11y reporting with follow-up text drafted (→ #1522, #1523). #1512 (rc2) scoped a 5-sub-area issue the same way; #1518 widened a cited regex 1→4 within a stated bound. Action #1079's deferred-with-follow-up discipline held at task scope across both drains — and the multi-hop #1500 closure proves it holds across milestone gaps too.
+- **The defense-in-depth stages each earned their keep.** PR #1519's 🔴 was caught by Stage 8 after Stage 7 missed it; the `--amend` bounce was caught by the orchestrator after the fixer agent missed it. Two independent layers, two independent catches, one PR — the redundancy is the design, not waste.
+- **Knowing what *not* to touch is a discipline too.** PR #1521 deliberately left `card` without a `role` — a generic content container with no semantic payload, where a `role` would be ARIA noise for assistive tech, not help — and said so explicitly in the PR body. Same do-the-minimum-correct-thing restraint Action #1502 codified during the rc2 drain.
+- **The drain recipe held at 5/5.** All four PRs rated 5/5; `/pipeline-drain` → `/pipeline-run --all` → per-PR retro → milestone retro produced 4 merged PRs, 6 issues closed, zero post-merge fixes, all CI green.
+- **A clean run is a scoping result, not luck.** Tasks 1–2 each fixed a real issue (scope widening; a 🔴 + an amend bounce); tasks 3–4 ran clean — because #1509 is a bounded additive AST walker and #1521 is add-only ARIA markup. Low-blast-radius, well-scoped work runs clean by design.
+
+### Review Stats
+
+| Metric | #1518 | #1519 | #1520 | #1521 | Total |
+|--------|-------|-------|-------|-------|-------|
+| Tests added | 8 | 8 | 14 | 27 | 57 |
+| 🔴 Findings | 0 | 1 | 0 | 0 | 1 |
+| 🟡 Findings | 0 | 0 | 0 | 2 | 2 |
+| Findings fixed pre-merge | — | 1 | — | 2 | 3 |
+| CI failures | 0 | 0 | 0 | 0 | 0 |
+
+PR #1519's 🔴 (exact-filename matching regressing sensitive-file exclusion) was caught by Stage 8 and fixed before the PR opened. PR #1521's 2 🟡 were non-blocking Stage-11 notes; one was corrected in-flight (CHANGELOG "no element added" wording — `badge` gained an sr-only `<span>`).
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added "Process canonicalizations from v1.0.0rc3 retro arc" — the `git commit --amend` HEAD-hash-changed assertion refining Action #122 (the `&& git log -1 --oneline` reflex cannot detect a bounced amend).
+**Pipeline template**: None this milestone.
+**Checklist**: `docs/PULL_REQUEST_CHECKLIST.md` Security Review → Data Protection gained the exclusion/filter-rule falsifying-case bullet.
+**Skills**: `/pipeline-drain` + `/pipeline-run --all` + `/pipeline-retro` exercised end-to-end; no skill files changed. The `--amend`-verification skill-prompt update is tracked OUT-OF-REPO (#1524); the reviewer environment-premises brief (#1516) carries over from rc2, still OUT-OF-REPO.
+
+### Open Items
+
+- [ ] `git commit --amend` HEAD-hash skill-prompt propagation — Action Tracker #271 (GitHub #1524, OUT-OF-REPO)
+- [ ] Pre-1.0-final retro-finding closeout sweep — Action Tracker #272 (GitHub #1525)
+- [ ] Accessibility phase 2 — keyboard-interaction JS + `djust_audit` a11y reporting — Action Tracker #273–#274 (GitHub #1522, #1523)
+- [ ] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO, carried from rc2)
 
 ## v1.0.0rc2 — Post-rc1 retro drain (PRs #1504, #1506, #1508, #1510, #1512)
 
@@ -368,10 +429,10 @@ PR #1512's Y003/Y004 used a `\b` word-boundary anchor in attribute-matching rege
 
 ### Open Items
 
-- [ ] `scripts/check-*.py` audit-shape scaffold — Action Tracker #268 (GitHub #1515)
+- [x] `scripts/check-*.py` audit-shape scaffold — Action Tracker #268 (GitHub #1515) — resolved in v1.0.0rc3 (PR #1520)
 - [ ] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO)
-- [ ] `\b`-anchor-in-attribute-regex meta-check — Action Tracker #270 (GitHub #1517)
-- [ ] 6 deferred drain follow-ups — Action Tracker #262–#267 (GitHub #1505, #1507, #1509, #1511, #1513, #1514)
+- [x] `\b`-anchor-in-attribute-regex meta-check — Action Tracker #270 (GitHub #1517) — resolved in v1.0.0rc3 (PR #1518)
+- [ ] 6 deferred drain follow-ups — Action Tracker #262–#267 (GitHub #1505, #1507, #1509, #1511, #1513, #1514) — 4 of 6 resolved in v1.0.0rc3 (#1505→PR #1519, #1509→PR #1520, #1513→PR #1521, #1514→PR #1518); #1507 + #1511 remain OUT-OF-REPO (Action Tracker #263, #265)
 
 ## v1.0.0 — Release Readiness (PRs #1486, #1488, #1490, #1491, #1492, #1494)
 

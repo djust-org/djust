@@ -209,6 +209,7 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Sensitive data handling** - No passwords/keys in logs or responses
 - [ ] **Privacy considerations** - PII handling follows regulations
 - [ ] **Secure defaults** - New features are secure by default
+- [ ] **Exclusion/filter-rule changes — enumerate the OLD rule's matches** - When a change replaces a security-relevant exclusion or filter rule (file-exclusion lists, deny patterns, sanitizer allowlists), enumerate every input shape the OLD rule matched and confirm the NEW rule still matches each one. "Does the new rule reject the over-matches" is a different question from "does the new rule still reject everything the old rule rejected." PR #1519's first pass narrowed sensitive-file exclusion from substring to exact-match, which would have shipped `.env.production` / `db.sqlite3-wal` into deploy tarballs; Stage 8 caught it by constructing the falsifying case. *Source: Retro v1.0.0rc3 / GitHub #1505.*
 
 ### CSP-Strict Defaults for New Client-Side Framework Code
 
