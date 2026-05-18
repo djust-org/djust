@@ -136,6 +136,19 @@ repos:
         files: ^docs/adr/.*\.md$
         pass_filenames: false
 
+  # Doc-snippet smoke test + claim assertions — catches doc-rot in fenced
+  # Python snippets (syntax/phantom-import) and the Django-floor / JS
+  # bundle-size claims in README/QUICKSTART. See scripts/check-doc-snippets.py
+  # and tests/test_check_doc_snippets.py. Closes #1500 (parts a+b).
+  - repo: local
+    hooks:
+      - id: check-doc-snippets
+        name: check doc snippets + version/size claims (#1500)
+        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/check-doc-snippets.py'
+        language: system
+        files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$
+        pass_filenames: false
+
   # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:

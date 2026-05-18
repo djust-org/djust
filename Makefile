@@ -139,6 +139,10 @@ docs-lint: ## Sweep docs/**/*.md for stale .md cross-references (closes #1075)
 check-adr-status: ## Validate ADR Status/version-line consistency (closes #1501)
 	@.venv/bin/python scripts/check-adr-status.py $(if $(VERBOSE),--verbose,)
 
+.PHONY: check-doc-snippets
+check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size claims (closes #1500)
+	@.venv/bin/python scripts/check-doc-snippets.py $(if $(VERBOSE),--verbose,)
+
 .PHONY: check-bundle-init-order
 check-bundle-init-order: ## Static check: declared-late/used-early let/const across bundle concat (closes #1372)
 	@node scripts/check-bundle-init-order.mjs

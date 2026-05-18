@@ -131,6 +131,9 @@ jobs:
       - name: ADR status/version-line consistency (#1501)
         run: .venv/bin/python scripts/check-adr-status.py
 
+      - name: Doc-snippet smoke test + claim assertions (#1500)
+        run: .venv/bin/python scripts/check-doc-snippets.py
+
   # JavaScript tests - runs in parallel
   javascript-tests:
     runs-on: ubuntu-latest

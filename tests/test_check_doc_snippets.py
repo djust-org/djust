@@ -1,0 +1,336 @@
+"""Tests for scripts/check-doc-snippets.py — #1500.
+
+Mirrors tests/test_check_adr_status.py: temp-dir fixtures driven through
+the script via subprocess with path-override flags. Each `*_fails` test is
+tautology-guarded (Action #1200 / #254) — it asserts BOTH the exit code AND
+a specific substring in the message, so it cannot pass if the script merely
+exits 1 for an unrelated reason.
+"""
+
+import pathlib
+import subprocess
+import sys
+import tempfile
+import textwrap
+
+import pytest
+
+_SELF = pathlib.Path(__file__).resolve()
+_REPO = _SELF.parents[1]
+_LINTER = _REPO / "scripts" / "check-doc-snippets.py"
+
+# A 51 KB bundle stand-in — within the +/-3 KB band of a "~53 KB" claim.
+_BUNDLE_51KB = b"x" * (51 * 1024)
+# A real pyproject Django-floor line.
+_PYPROJECT_42 = 'dependencies = [\n    "Django>=4.2.29,<6",\n]\n'
+
+
+def _write(directory, name, content):
+    p = directory / name
+    p.write_text(textwrap.dedent(content).lstrip("\n"))
+    return p
+
+
+def _write_bytes(directory, name, data):
+    p = directory / name
+    p.write_bytes(data)
+    return p
+
+
+def _run(*, readme=None, quickstart=None, pyproject=None, bundle=None):
+    """Run the linter via subprocess with explicit path overrides.
+
+    Returns (exit_code, stdout).
+    """
+    args = [sys.executable, str(_LINTER)]
+    if readme is not None:
+        args += ["--readme", str(readme)]
+    if quickstart is not None:
+        args += ["--quickstart", str(quickstart)]
+    if pyproject is not None:
+        args += ["--pyproject", str(pyproject)]
+    if bundle is not None:
+        args += ["--bundle", str(bundle)]
+    result = subprocess.run(args, capture_output=True, text=True, cwd=str(_REPO))
+    return result.returncode, result.stdout
+
+
+def _minimal_fixture(d, *, readme_body="", quickstart_body=""):
+    """Write a complete passing fixture set, then return the paths.
+
+    `readme_body` / `quickstart_body` are appended after a correct Django
+    badge so callers can inject just the block under test. Each body is
+    dedented independently so callers can indent the triple-quoted string
+    to match their own code style without breaking the markdown.
+    """
+    base_readme = textwrap.dedent(
+        """
+        # Demo
+
+        [![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)](x)
+        - ~53 KB gzipped minified client JavaScript
+        """
+    ).lstrip("\n")
+    readme = _write(
+        d,
+        "README.md",
+        base_readme + "\n" + textwrap.dedent(readme_body).lstrip("\n"),
+    )
+    quickstart = _write(
+        d,
+        "QUICKSTART.md",
+        "# Quickstart\n\n- Django 4.2+\n" + textwrap.dedent(quickstart_body).lstrip("\n"),
+    )
+    pyproject = _write(d, "pyproject.toml", _PYPROJECT_42)
+    bundle = _write_bytes(d, "client.min.js.gz", _BUNDLE_51KB)
+    return readme, quickstart, pyproject, bundle
+
+
+class TestCheckDocSnippets:
+    """Core checks for the doc-snippet smoke test + claim assertions."""
+
+    def test_valid_module_snippet_passes(self):
+        """A complete `from djust import LiveView` module → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from djust import LiveView, event_handler
+
+                class CounterView(LiveView):
+                    def mount(self, request, **kwargs):
+                        self.count = 0
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_fragment_snippet_passes(self):
+        """A bare method (no import, no enclosing class) → fragment →
+        AST-only → exit 0 even though it references undefined names."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                @event_handler
+                def add_todo(self, text):
+                    self.todos.append({'text': text})
+                    Product.objects.filter(active=True)
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_syntax_error_snippet_fails(self):
+        """A ```python block that is not valid Python → exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                def broken(:
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "syntax error" in out
+            assert "README.md:" in out
+
+    def test_phantom_import_fails(self):
+        """A module snippet importing a nonexistent djust symbol → exit 1
+        naming the missing symbol."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                from djust import nonexistent_thing
+
+                class V:
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "nonexistent_thing" in out
+
+    def test_phantom_module_import_fails(self):
+        """A module snippet importing a nonexistent module → exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                ```python
+                import djust.totally_not_a_real_module
+
+                def f():
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "totally_not_a_real_module" in out
+
+    def test_django_version_match_passes(self):
+        """A README badge `django-4.2+` against a `Django>=4.2` floor → 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(d)
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_django_version_mismatch_fails(self):
+        """A README badge `django-3.2+` against a `Django>=4.2` floor →
+        exit 1, naming both versions."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            readme = _write(
+                d,
+                "README.md",
+                """
+                # Demo
+
+                [![Django 3.2+](https://img.shields.io/badge/django-3.2+-green.svg)](x)
+                """,
+            )
+            quickstart = _write(d, "QUICKSTART.md", "# Quickstart\n")
+            pyproject = _write(d, "pyproject.toml", _PYPROJECT_42)
+            bundle = _write_bytes(d, "client.min.js.gz", _BUNDLE_51KB)
+            code, out = _run(
+                readme=readme,
+                quickstart=quickstart,
+                pyproject=pyproject,
+                bundle=bundle,
+            )
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "Django" in out
+            assert "3.2" in out
+            assert "4.2" in out
+
+    def test_django_prose_mismatch_fails(self):
+        """A QUICKSTART prose claim `Django 3.2+` against a 4.2 floor →
+        exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            readme = _write(d, "README.md", "# Demo\n")
+            quickstart = _write(d, "QUICKSTART.md", "# Quickstart\n\n- Django 3.2+\n")
+            pyproject = _write(d, "pyproject.toml", _PYPROJECT_42)
+            bundle = _write_bytes(d, "client.min.js.gz", _BUNDLE_51KB)
+            code, out = _run(
+                readme=readme,
+                quickstart=quickstart,
+                pyproject=pyproject,
+                bundle=bundle,
+            )
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "QUICKSTART.md:" in out
+            assert "3.2" in out
+
+    def test_js_size_within_tolerance_passes(self):
+        """A 51 KB bundle + README `~53 KB` claim → within band → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(d)
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_js_size_out_of_band_fails(self):
+        """A 51 KB bundle + a stale README `~29 KB` claim → out of band →
+        exit 1."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            readme = _write(
+                d,
+                "README.md",
+                """
+                # Demo
+
+                [![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)](x)
+                - ~29 KB gzipped minified client JavaScript
+                """,
+            )
+            quickstart = _write(d, "QUICKSTART.md", "# Quickstart\n")
+            pyproject = _write(d, "pyproject.toml", _PYPROJECT_42)
+            bundle = _write_bytes(d, "client.min.js.gz", _BUNDLE_51KB)
+            code, out = _run(
+                readme=readme,
+                quickstart=quickstart,
+                pyproject=pyproject,
+                bundle=bundle,
+            )
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "29" in out
+            assert "tolerance band" in out
+
+    def test_missing_bundle_warns_not_fails(self):
+        """An absent bundle file → size sub-check skipped → exit 0 +
+        WARNING (a fresh pre-build checkout must not fail)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, _ = _minimal_fixture(d)
+            missing = d / "no-such-bundle.js.gz"
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=missing)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "WARNING" in out
+            assert "skipped" in out
+
+    def test_skip_marker_respected(self):
+        """A block preceded by the skip marker that would otherwise fail
+        (syntax error) → skipped → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = _minimal_fixture(
+                d,
+                readme_body="""
+                <!-- doc-snippet-check: skip -->
+                ```python
+                def broken(:
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+            assert code == 0, f"expected exit 0, got {code}: {out}"
+            assert "OK" in out
+
+    def test_missing_input_file_usage_error(self):
+        """An explicitly-passed --readme that does not exist → exit 2."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            quickstart = _write(d, "QUICKSTART.md", "# Quickstart\n")
+            pyproject = _write(d, "pyproject.toml", _PYPROJECT_42)
+            code, out = _run(
+                readme=d / "nonexistent-readme.md",
+                quickstart=quickstart,
+                pyproject=pyproject,
+            )
+            assert code == 2, f"expected exit 2, got {code}: {out}"
+            assert "not found" in out
+
+    @pytest.mark.slow
+    def test_real_docs_pass(self):
+        """Dogfood gate (Action #1060): the real README/QUICKSTART pass.
+
+        This is the assertion that #1497's snippet/claim cleanup is
+        complete — parts (a) and (b) must be green against the real repo.
+        """
+        code, out = _run()
+        assert code == 0, f"real docs must pass: {out}"
+        assert "OK" in out
