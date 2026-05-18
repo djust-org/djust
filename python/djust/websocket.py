@@ -3275,6 +3275,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                 """
                                 parent = self.view_instance
                                 mount_request = getattr(parent, "_djust_mount_request", None)
+                                # Precedence: the mount request's session is
+                                # authoritative (it carries the parent's
+                                # save key namespace); the scope session is
+                                # the fallback when the parent never stashed
+                                # a mount request.
                                 save_session = getattr(
                                     mount_request, "session", None
                                 ) or self.scope.get("session")

@@ -229,6 +229,98 @@ def write_sticky_index_and_prune_sync(parent: Any, session: Any, parent_path: st
     session[sticky_ids_index_key(parent_path)] = new_ids
 
 
+# ---------------------------------------------------------------------------
+# ADR-018 iter 18b — sticky-child state persistence (LOAD/restore side).
+#
+# The SAVE side (18a, above) writes a sticky child's state under the stable
+# ``liveview_<path>__sticky__<sticky_id>`` key on every child event. The LOAD
+# side restores it: when ``{% live_render sticky=True %}`` constructs a sticky
+# child during the parent's template render, the tag — BEFORE calling the
+# child's ``mount()`` — invokes :func:`restore_sticky_child_state`. If saved
+# state exists and the both-opt-in gate holds (Decision 5), the saved public +
+# private state is applied to the child IN LIEU OF ``mount()`` state-init, and
+# the ``_restore_*`` side-effect replay runs (Decision 6) — exactly mirroring
+# the parent's own skip-``mount()``-on-saved-state path at
+# ``websocket.py`` ``handle_mount`` (the ``saved_state`` restore region).
+# ---------------------------------------------------------------------------
+
+
+def restore_sticky_child_state(child: Any, parent: Any, session: Any, parent_path: str) -> bool:
+    """Restore a sticky child's saved state in lieu of its ``mount()``.
+
+    ADR-018 Decisions 2 + 6. Reads the 18a SAVE-side keys
+    (:func:`sticky_child_session_key` + its ``__private`` sibling) and applies
+    the saved public + private state to a freshly-constructed (but not yet
+    ``mount()``-ed) sticky ``child``. Returns ``True`` when state was restored
+    — the caller then SKIPS ``mount()`` — and ``False`` otherwise (the caller
+    runs ``mount()`` fresh).
+
+    Mirrors the parent's own restore path (``websocket.py`` ``handle_mount``,
+    the ``saved_state``/``safe_setattr``/``_restore_private_state`` region):
+
+    1. Decision 5 both-opt-in gate (:func:`sticky_child_should_persist`) — a
+       child only restores when BOTH it and ``parent`` opt into
+       ``enable_state_snapshot``, keeping the reconnect-restored subtree
+       tree-consistent.
+    2. ``session.get`` the public state under the stable key; absent → fresh
+       ``mount()``.
+    3. ``safe_setattr`` each public attr (``allow_private=False``).
+    4. ``_restore_private_state`` for the ``__private`` sibling key.
+    5. ``_restore_*`` side-effect replay (Decision 6), each ``hasattr``-guarded:
+       ``_restore_upload_configs`` / ``_restore_presence`` /
+       ``_restore_listen_channels``.
+    6. ``_initialize_temporary_assigns`` (idempotent).
+
+    Synchronous: the ``{% live_render %}`` eager branch is fully synchronous on
+    both transports (WS render runs under ``sync_to_async``, HTTP render is
+    sync), so the sync session dict API is correct in both contexts. Returns
+    ``False`` (the caller mounts fresh) when ``session`` is ``None``, the gate
+    fails, or no saved state exists.
+
+    This helper assumes a **well-formed** saved entry (a dict, as written by
+    the 18a save path). A corrupt non-dict session value will raise
+    (e.g. ``AttributeError`` from ``.items()``); the ``{% live_render %}`` tag
+    wraps the call in ``try/except`` and falls through to a fresh ``mount()``
+    — the tag wrapper, not this helper, is the render-safety boundary.
+    """
+    if session is None:
+        return False
+    if not sticky_child_should_persist(child, parent):
+        return False
+
+    key = sticky_child_session_key(parent_path, child.sticky_id)
+    saved = session.get(key)
+    if not saved:
+        return False
+
+    # Lazy import to avoid a circular import (security -> live_view -> mixins).
+    from ..security import safe_setattr
+
+    for attr, value in saved.items():
+        safe_setattr(child, attr, value, allow_private=False)
+
+    private = session.get(f"{key}__private")
+    if private and hasattr(child, "_restore_private_state"):
+        child._restore_private_state(private)
+
+    # Decision 6 — replay process-wide side effects mount() would have
+    # re-issued. Each method is provided by a mixin the child may or may
+    # not compose, so each is hasattr-guarded.
+    if hasattr(child, "_restore_upload_configs"):
+        child._restore_upload_configs()
+    if hasattr(child, "_restore_presence"):
+        child._restore_presence()
+    if hasattr(child, "_restore_listen_channels"):
+        child._restore_listen_channels()
+
+    # Mirrors the parent restore path's post-restore ordering; idempotent
+    # via the ``_temporary_assigns_initialized`` guard.
+    if hasattr(child, "_initialize_temporary_assigns"):
+        child._initialize_temporary_assigns()
+
+    return True
+
+
 class StickyChildRegistry:
     """Per-LiveView registry of embedded child LiveViews.
 
