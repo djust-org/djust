@@ -1,6 +1,6 @@
 # djust System Checks Reference
 
-Quick reference for all 39 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 41 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 Run checks with: `python manage.py check --deploy` or `python manage.py djust_check`
 
@@ -48,6 +48,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | Q010 | Quality | Info | Event handler sets nav state without patch() (heuristic) |
 | Y001 | Accessibility | Warning | Interactive element (icon-only `<button>`/`<a>`) missing an accessible name |
 | Y002 | Accessibility | Warning | `<img>` tag missing an `alt` attribute (WCAG 1.1.1) |
+| Y003 | Accessibility | Warning | Form control (`<input>`/`<select>`/`<textarea>`) with no associated label (WCAG 1.3.1 / 3.3.2) |
+| Y004 | Accessibility | Warning | Positive `tabindex` value — a focus-order anti-pattern (WCAG 2.4.3) |
 
 ---
 
@@ -355,9 +357,9 @@ console.log("debug info"); // noqa: Q003
 ## Accessibility Checks (Y)
 
 The `Y` category (mnemonic: a11**Y**) scans project template files for
-ARIA/WCAG accessibility defects. It ships with the two lowest-ambiguity checks
-so the regex heuristics carry near-zero false positives; the category is
-extensible — `Y003`+ are single-function-body additions. Templates that show
+ARIA/WCAG accessibility defects. The regex heuristics are deliberately
+conservative so they carry near-zero false positives; the category is
+extensible — each check is a single-function-body addition. Templates that show
 literal HTML inside `{% verbatim %}` blocks are skipped to avoid false
 positives. See the [Accessibility guide](website/guides/accessibility.md) for
 the full narrative.
@@ -375,6 +377,20 @@ the full narrative.
 - **What it detects**: An `<img>` tag with no `alt` attribute at all (WCAG 1.1.1, Level A)
 - **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y002']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y002"]`
 - **False positives**: Near zero — `alt=""` (the WCAG-correct marker for a decorative image) is not flagged, and an `<img>` whose attributes are injected dynamically (`{% ... %}` / `{{ ... }}`) is treated as "alt may be present" and not flagged
+
+### Y003 — form control missing an associated label
+- **Severity**: Warning
+- **Method**: Regex (template file scan)
+- **What it detects**: An `<input>`, `<select>`, or `<textarea>` form control with no associated label (WCAG 1.3.1 / 3.3.2, Level A). A control is considered labelled if it has a `<label for>` referencing its `id`, a wrapping `<label>`, an `aria-label`, or an `aria-labelledby` — a screen-reader user cannot identify an unlabelled field
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y003']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y003"]`
+- **False positives**: Near zero — hidden/submit/button/reset/image `<input>` types are skipped (they need no label); a control whose attributes are injected dynamically (`{% ... %}` / `{{ ... }}`) is treated conservatively as "label may be present" and not flagged; `data-type` attributes are not mistaken for the input `type`
+
+### Y004 — positive `tabindex` value
+- **Severity**: Warning
+- **Method**: Regex (template file scan)
+- **What it detects**: A `tabindex` attribute with a positive value (`tabindex="1"`+), which overrides the natural DOM focus order (WCAG 2.4.3, Level A). `tabindex="0"` (focusable in natural order) and `tabindex="-1"` (focusable only programmatically) are valid and not flagged
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y004']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y004"]`
+- **False positives**: Near zero — `tabindex="0"` / `tabindex="-1"` are valid and not flagged; an interpolated value (`tabindex="{{ ... }}"` / `{% ... %}`) is treated conservatively and not flagged; a `data-tabindex` attribute is not mistaken for `tabindex`
 
 ---
 

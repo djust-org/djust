@@ -33,8 +33,8 @@ doesn't*). Concretely, for 1.0:
   element was added, removed, or reparented, so your existing CSS and JS
   selectors are unaffected.
 - A new **`Y` system-check category** scans *your* project templates for the
-  two highest-value, lowest-false-positive accessibility defects and reports
-  them at `manage.py check` time.
+  highest-value, lowest-false-positive accessibility defects and reports them
+  at `manage.py check` time.
 - **Theming color-contrast validation** (shipped earlier) checks every theme
   combination against WCAG 2.1 contrast, focus-visibility, and motion-safety
   requirements.
@@ -87,11 +87,10 @@ startup. The new **`Y` category** (mnemonic: a11**Y**) scans your project's
 template files for accessibility defects. The checks run automatically as part
 of `manage.py check` and `manage.py djust_check`.
 
-The category ships with two checks — deliberately the two lowest-ambiguity
+The category ships with four checks — deliberately the lowest-ambiguity
 defects, so the regex heuristics carry near-zero false positives. The category
-is extensible by design: adding `Y003`+ later (heading order, form-label
-association, `lang` attribute, redundant `role`) is a single-function-body
-change.
+is extensible by design: adding more checks later (heading order, missing
+`lang` attribute, redundant `role`) is a single-function-body change.
 
 ### Y001 — interactive element missing an accessible name
 
@@ -140,7 +139,63 @@ flagged — only a complete absence of the `alt` token is.
 An `<img>` whose attributes are injected dynamically (`{% ... %}` / `{{ ... }}`)
 is treated as *`alt` may be present* and is not flagged.
 
-Both checks emit a `DjustWarning` (not an error) with the file path and line
+### Y003 — form control missing an associated label
+
+**Severity:** Warning
+
+Flags an `<input>`, `<select>`, or `<textarea>` form control that has no
+associated label (WCAG 1.3.1 / 3.3.2, Level A). A screen-reader user cannot
+identify an unlabelled field. A control counts as labelled if any of the
+following is true: a `<label for>` references its `id`, the control is wrapped
+in a `<label>`, or it carries an `aria-label` or `aria-labelledby`.
+
+```html
+<!-- Flagged by Y003 — no label of any kind -->
+<input type="text" name="email">
+
+<!-- Not flagged — label references the id -->
+<label for="email">Email</label>
+<input type="text" name="email" id="email">
+
+<!-- Not flagged — wrapping label -->
+<label>Email <input type="text" name="email"></label>
+
+<!-- Not flagged — explicit accessible name -->
+<input type="text" name="email" aria-label="Email address">
+```
+
+Form controls that need no label are skipped: `hidden`, `submit`, `button`,
+`reset`, and `image` `<input>` types. A control whose attributes are injected
+dynamically (`{% ... %}` / `{{ ... }}`) is treated conservatively as *a label
+may be present* and is **not** flagged, and a `data-type` attribute is not
+mistaken for the input `type`.
+
+### Y004 — positive `tabindex` value
+
+**Severity:** Warning
+
+Flags a `tabindex` attribute with a *positive* value (`tabindex="1"` or higher).
+A positive `tabindex` overrides the natural DOM focus order, producing a
+focus sequence that no longer matches the visual or reading order — a WCAG
+2.4.3 (Level A) focus-order anti-pattern.
+
+```html
+<!-- Flagged by Y004 — positive value distorts focus order -->
+<button tabindex="3">Save</button>
+
+<!-- Not flagged — focusable in natural DOM order -->
+<div tabindex="0" role="button">Custom control</div>
+
+<!-- Not flagged — focusable only programmatically -->
+<div tabindex="-1">Skip target</div>
+```
+
+Only `tabindex="0"` and `tabindex="-1"` are valid; both are not flagged. An
+interpolated value (`tabindex="{{ ... }}"` / `{% ... %}`) is treated
+conservatively and not flagged, and a `data-tabindex` attribute is not mistaken
+for `tabindex`.
+
+All four checks emit a `DjustWarning` (not an error) with the file path and line
 number, so a stray false positive never fails `manage.py check`. Templates that
 show literal HTML examples inside `{% verbatim %}` blocks are skipped, so docs
 and marketing pages don't false-positive.
@@ -173,13 +228,14 @@ DJUST_CONFIG = {
 }
 ```
 
-Suppressing `Y001` silences the icon-only-button scan; suppressing `Y002`
-silences the `<img>` scan. Prefer suppressing the most specific id, and leave a
+Suppressing `Y001` silences the icon-only-button scan; `Y002` silences the
+`<img>` scan; `Y003` silences the form-label scan; `Y004` silences the
+positive-`tabindex` scan. Prefer suppressing the most specific id, and leave a
 comment explaining *why* the suppression is intentional.
 
 > `DJUST_CONFIG['suppress_checks']` is djust's own suppression list and is what
 > the `Y` checks honor. Django's built-in `SILENCED_SYSTEM_CHECKS` also works
-> for the `djust.Y001` / `djust.Y002` ids if you prefer the standard Django
+> for the `djust.Y001` – `djust.Y004` ids if you prefer the standard Django
 > mechanism.
 
 ## Theming color-contrast WCAG validation
@@ -247,9 +303,9 @@ technology*.
   scattered minor gaps — mostly decorative icons that should be
   `aria-hidden="true"`. This mechanical, low-severity sweep is a separate
   follow-up.
-- **More `Y` checks.** The `Y` category ships with two checks. Heading-order
-  validation, form-label association, missing `lang` attribute, and redundant
-  `role` detection are natural `Y003`+ additions, tracked for a future release.
+- **More `Y` checks.** The `Y` category ships with four checks. Heading-order
+  validation, missing `lang` attribute, and redundant `role` detection are
+  natural further additions, tracked for a future release.
 
 If full keyboard operability or one of the deferred items is a hard requirement
 for your app today, you can add the keyboard handling yourself with a
