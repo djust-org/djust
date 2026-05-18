@@ -2,9 +2,9 @@
   {% if src %}
     <img class="dj-avatar__img" src="{{ src }}" alt="{{ alt }}">
   {% else %}
-    <span class="dj-avatar__initials">{{ initials }}</span>
+    <span class="dj-avatar__initials" role="img" aria-label="{{ alt|default:initials }}">{{ initials }}</span>
   {% endif %}
   {% if status %}
-    <span class="dj-avatar__status dj-avatar__status--{{ status }}"></span>
+    <span class="dj-avatar__status dj-avatar__status--{{ status }}" aria-hidden="true"></span>
   {% endif %}
 </div>

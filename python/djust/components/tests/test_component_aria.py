@@ -10,6 +10,11 @@ Components covered (the 8 P0+P1 interactive components from the
 Stage-4 audit): modal, tabs, accordion, dropdown (Python f-string
 renderers); pagination, data_table, toast (inclusion templates);
 alert (Python f-string renderer).
+
+The P2/P3 component set (#1513): progress, badge, avatar (inclusion
+templates) and tooltip (Python f-string renderer). `card` is a
+generic content container — a plain `<div>` is the correct semantic,
+so it intentionally gets no ARIA role (documented decision).
 """
 
 from pathlib import Path
@@ -447,3 +452,239 @@ class TestToastAria:
             )
         )
         assert 'aria-hidden="true"' in out
+
+
+# ---------------------------------------------------------------------------
+# 9. Progress (inclusion template) — P2/P3 (#1513)
+# ---------------------------------------------------------------------------
+
+
+def _progress_ctx(**overrides):
+    base = {
+        "value": 40,
+        "label": "",
+        "size": "md",
+        "color": "primary",
+        "show_label": True,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestProgressAria:
+    def test_track_has_progressbar_role(self):
+        """The progress track is exposed to AT as a progressbar."""
+        out = _engine_template("progress.html").render(Context(_progress_ctx()))
+        assert 'role="progressbar"' in out
+
+    def test_current_value_is_aria_valuenow(self):
+        """The fill percentage is reflected in aria-valuenow."""
+        out = _engine_template("progress.html").render(Context(_progress_ctx(value=40)))
+        assert 'aria-valuenow="40"' in out
+
+    def test_min_max_bounds_are_exposed(self):
+        """min/max bounds default to the 0-100 the renderer clamps to."""
+        out = _engine_template("progress.html").render(Context(_progress_ctx()))
+        assert 'aria-valuemin="0"' in out
+        assert 'aria-valuemax="100"' in out
+
+    def test_value_zero_boundary(self):
+        out = _engine_template("progress.html").render(Context(_progress_ctx(value=0)))
+        assert 'aria-valuenow="0"' in out
+
+    def test_value_full_boundary(self):
+        out = _engine_template("progress.html").render(Context(_progress_ctx(value=100)))
+        assert 'aria-valuenow="100"' in out
+
+    def test_label_is_accessible_name(self):
+        """A visible label becomes the progressbar's accessible name."""
+        out = _engine_template("progress.html").render(
+            Context(_progress_ctx(label="Upload progress"))
+        )
+        assert 'aria-label="Upload progress"' in out
+
+    def test_no_aria_label_when_no_label(self):
+        """No label kwarg -> no aria-label attribute (nothing to name with)."""
+        out = _engine_template("progress.html").render(Context(_progress_ctx(label="")))
+        assert "aria-label" not in out
+
+    def test_hostile_label_does_not_break_out(self):
+        out = _engine_template("progress.html").render(
+            Context(_progress_ctx(label='"><script>alert(1)</script>'))
+        )
+        assert "<script>alert(1)</script>" not in out
+
+
+# ---------------------------------------------------------------------------
+# 10. Badge (inclusion template) — P2/P3 (#1513)
+# ---------------------------------------------------------------------------
+
+
+def _badge_ctx(**overrides):
+    base = {"label": "Server", "status": "default", "pulse": False}
+    base.update(overrides)
+    return base
+
+
+class TestBadgeAria:
+    def test_decorative_dot_is_aria_hidden(self):
+        """The status dot is a color-only decoration -> hidden from AT."""
+        out = _engine_template("badge.html").render(Context(_badge_ctx()))
+        assert 'aria-hidden="true"' in out
+
+    def test_online_status_is_conveyed_to_at(self):
+        """status=online is announced as text, not color alone (WCAG 1.4.1)."""
+        out = _engine_template("badge.html").render(Context(_badge_ctx(status="online")))
+        assert "sr-only" in out
+        assert "online" in out.lower()
+
+    def test_offline_status_is_conveyed_to_at(self):
+        out = _engine_template("badge.html").render(Context(_badge_ctx(status="offline")))
+        assert "sr-only" in out
+        assert "offline" in out.lower()
+
+    def test_warning_status_is_conveyed_to_at(self):
+        out = _engine_template("badge.html").render(Context(_badge_ctx(status="warning")))
+        assert "sr-only" in out
+        assert "warning" in out.lower()
+
+    def test_error_status_is_conveyed_to_at(self):
+        out = _engine_template("badge.html").render(Context(_badge_ctx(status="error")))
+        assert "sr-only" in out
+        assert "error" in out.lower()
+
+    def test_default_status_emits_no_status_text(self):
+        """A `default` badge has no meaningful status -> no sr-only text."""
+        out = _engine_template("badge.html").render(Context(_badge_ctx(status="default")))
+        assert "sr-only" not in out
+
+    def test_visible_label_not_regressed(self):
+        """The visible label text is preserved alongside the status text."""
+        out = _engine_template("badge.html").render(
+            Context(_badge_ctx(label="API", status="online"))
+        )
+        assert "API" in out
+
+
+# ---------------------------------------------------------------------------
+# 11. Tooltip (Python f-string renderer) — P2/P3 (#1513)
+# ---------------------------------------------------------------------------
+
+
+class TestTooltipAria:
+    def test_tip_has_tooltip_role(self):
+        """The tip text container is identifiable to AT as a tooltip."""
+        out = render_tag('{% load djust_components %}{% tooltip text="Help" %}?{% endtooltip %}')
+        assert 'role="tooltip"' in out
+
+    def test_tip_is_associated_with_trigger(self):
+        """The tip carries an id and the wrapper aria-describedby points at it."""
+        out = render_tag('{% load djust_components %}{% tooltip text="Help" %}?{% endtooltip %}')
+        # The describedby target id and the tip's id must pair up.
+        assert "aria-describedby=" in out
+        import re
+
+        m = re.search(r'aria-describedby="([^"]+)"', out)
+        assert m is not None
+        tip_id = m.group(1)
+        assert f'id="{tip_id}"' in out
+
+    def test_two_tooltips_get_distinct_ids(self):
+        """Each tooltip render derives a unique tip id (no collisions)."""
+        out = render_tag(
+            "{% load djust_components %}"
+            '{% tooltip text="One" %}a{% endtooltip %}'
+            '{% tooltip text="Two" %}b{% endtooltip %}'
+        )
+        import re
+
+        ids = re.findall(r'aria-describedby="([^"]+)"', out)
+        assert len(ids) == 2
+        assert ids[0] != ids[1]
+
+    def test_explicit_component_id_used_for_tip_id(self):
+        """When component_id is supplied it anchors the derived tip id."""
+        out = render_tag(
+            '{% load djust_components %}{% tooltip text="Help" component_id="tt7" %}'
+            "?{% endtooltip %}"
+        )
+        assert 'aria-describedby="tt7-tip"' in out
+        assert 'id="tt7-tip"' in out
+
+    def test_hostile_text_does_not_break_out(self):
+        out = render_tag(
+            "{% load djust_components %}{% tooltip text=evil %}?{% endtooltip %}",
+            {"evil": '"><script>alert(1)</script>'},
+        )
+        assert "<script>alert(1)</script>" not in out
+
+    def test_hostile_component_id_does_not_break_out(self):
+        out = render_tag(
+            '{% load djust_components %}{% tooltip text="Help" component_id=evil %}'
+            "?{% endtooltip %}",
+            {"evil": '"><script>alert(1)</script>'},
+        )
+        assert "<script>alert(1)</script>" not in out
+
+
+# ---------------------------------------------------------------------------
+# 12. Avatar (inclusion template) — P2/P3 (#1513)
+# ---------------------------------------------------------------------------
+
+
+def _avatar_ctx(**overrides):
+    base = {"src": "", "alt": "", "initials": "", "size": "md", "status": ""}
+    base.update(overrides)
+    return base
+
+
+class TestAvatarAria:
+    def test_image_alt_preserved(self):
+        """The image path keeps the caller-supplied alt as accessible name."""
+        out = _engine_template("avatar.html").render(
+            Context(_avatar_ctx(src="/u.png", alt="Jane Tipton"))
+        )
+        assert 'alt="Jane Tipton"' in out
+
+    def test_initials_path_has_accessible_name(self):
+        """The initials fallback gets an accessible name (not bare 'JT')."""
+        out = _engine_template("avatar.html").render(
+            Context(_avatar_ctx(initials="JT", alt="Jane Tipton"))
+        )
+        assert 'role="img"' in out
+        assert 'aria-label="Jane Tipton"' in out
+
+    def test_initials_path_falls_back_to_initials_for_name(self):
+        """No alt -> the initials text still serves as the accessible name."""
+        out = _engine_template("avatar.html").render(Context(_avatar_ctx(initials="JT")))
+        assert 'role="img"' in out
+        assert 'aria-label="JT"' in out
+
+    def test_decorative_status_is_aria_hidden(self):
+        """The presence-status indicator is color-only -> hidden from AT."""
+        out = _engine_template("avatar.html").render(
+            Context(_avatar_ctx(initials="JT", status="online"))
+        )
+        assert 'aria-hidden="true"' in out
+
+    def test_hostile_alt_does_not_break_out(self):
+        out = _engine_template("avatar.html").render(
+            Context(_avatar_ctx(initials="JT", alt='"><script>alert(1)</script>'))
+        )
+        assert "<script>alert(1)</script>" not in out
+
+
+# ---------------------------------------------------------------------------
+# 13. Card — P2/P3 (#1513): deliberate "no ARIA role" decision
+# ---------------------------------------------------------------------------
+
+
+class TestCardAria:
+    def test_card_is_a_plain_container_no_role(self):
+        """A `card` is a generic content container; a plain <div> is the
+        correct semantic. Forcing a role onto a generic container is the
+        exact PR #1491 mistake (role on <th> stripped native semantics).
+        This test documents the deliberate "card: no change" decision."""
+        out = render_tag('{% load djust_components %}{% card title="T" %}body{% endcard %}')
+        assert "dj-card" in out
+        assert 'role="' not in out
