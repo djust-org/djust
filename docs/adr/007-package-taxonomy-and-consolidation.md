@@ -3,7 +3,7 @@
 **Status**: Accepted — Phase 4 (sunset) shipped 2026-04-23 in v0.6.0
 **Date**: 2026-04-11 (proposed) · 2026-04-23 (Phase 4 closure)
 **Deciders**: Project maintainers
-**Target version**: v0.5.0+ (rules apply going forward; existing packages stay where they are)
+**Shipped in**: v0.6.0 (Phase 4 sunset); taxonomy rules apply from v0.5.0+
 **Related**: [ADR-002](002-backend-driven-ui-automation.md), [ADR-003](003-llm-provider-abstraction.md), [ADR-006](006-ai-generated-uis-with-capture-and-promote.md)
 
 ## Phase 4 closure note (2026-04-23)

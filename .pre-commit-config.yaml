@@ -123,6 +123,19 @@ repos:
         files: ^CHANGELOG\.md$
         pass_filenames: false
 
+  # ADR status/version-line consistency — catches the drift class #1492
+  # reconciled by hand (Accepted ADR still has a `Target version:` line).
+  # See scripts/check-adr-status.py and tests/test_check_adr_status.py.
+  # Closes #1501.
+  - repo: local
+    hooks:
+      - id: check-adr-status
+        name: check ADR status/version-line consistency (#1501)
+        entry: python scripts/check-adr-status.py
+        language: python
+        files: ^docs/adr/.*\.md$
+        pass_filenames: false
+
   # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:

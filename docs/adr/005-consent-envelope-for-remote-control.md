@@ -3,7 +3,7 @@
 **Status**: Deferred — post-1.0 (AI/server-driven arc; roadmap-committed)
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
-**Target version**: v0.5.x (lands with multi-user `broadcast_commands`)
+**Target version**: post-1.0 (deferred — lands with multi-user `broadcast_commands`; see Status)
 **Related**: [ADR-002](002-backend-driven-ui-automation.md), [ADR-003](003-llm-provider-abstraction.md), [ADR-004](004-undo-for-llm-driven-actions.md)
 
 ---

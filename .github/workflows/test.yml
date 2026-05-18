@@ -128,6 +128,9 @@ jobs:
       - name: Run Python linter
         run: uv run ruff check python/
 
+      - name: ADR status/version-line consistency (#1501)
+        run: .venv/bin/python scripts/check-adr-status.py
+
   # JavaScript tests - runs in parallel
   javascript-tests:
     runs-on: ubuntu-latest

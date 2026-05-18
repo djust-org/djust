@@ -3,7 +3,7 @@
 **Status**: Deferred — post-1.0 (AI/server-driven arc, issue #1044; roadmap-committed)
 **Date**: 2026-04-11
 **Deciders**: Project maintainers
-**Target version**: v0.6.x (lands after AssistantMixin, Phase 5 of ADR-002)
+**Target version**: post-1.0 (deferred — lands after AssistantMixin, Phase 5 of ADR-002; see Status)
 **Related**: [ADR-002](002-backend-driven-ui-automation.md), [ADR-003](003-llm-provider-abstraction.md), [ADR-004](004-undo-for-llm-driven-actions.md), [ADR-005](005-consent-envelope-for-remote-control.md)
 
 ---
