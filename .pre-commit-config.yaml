@@ -149,6 +149,21 @@ repos:
         files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$
         pass_filenames: false
 
+  # Lockfile self-entry version sync — catches the drift class #1487 cited
+  # (`make version` bumps the manifests but a lockfile self-entry stays
+  # pinned at the old version). Scoped to manifests/lockfiles so a routine
+  # third-party `uv add` does not trigger it. See
+  # scripts/check-lockfile-versions.py and
+  # tests/test_check_lockfile_versions.py. Closes #1498.
+  - repo: local
+    hooks:
+      - id: check-lockfile-versions
+        name: check lockfile self-entry version sync (#1498)
+        entry: python scripts/check-lockfile-versions.py
+        language: python
+        files: ^(pyproject\.toml|Cargo\.toml|uv\.lock|Cargo\.lock)$
+        pass_filenames: false
+
   # Pre-push hooks (slower checks that run before git push)
   - repo: local
     hooks:

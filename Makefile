@@ -143,6 +143,10 @@ check-adr-status: ## Validate ADR Status/version-line consistency (closes #1501)
 check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size claims (closes #1500)
 	@.venv/bin/python scripts/check-doc-snippets.py $(if $(VERBOSE),--verbose,)
 
+.PHONY: check-lockfile-versions
+check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries match manifests (closes #1498)
+	@.venv/bin/python scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)
+
 .PHONY: check-bundle-init-order
 check-bundle-init-order: ## Static check: declared-late/used-early let/const across bundle concat (closes #1372)
 	@node scripts/check-bundle-init-order.mjs
@@ -489,7 +493,14 @@ endif
 	@echo "$(GREEN)Updated versions:$(NC)"
 	@echo "  pyproject.toml: $(VERSION)"
 	@grep 'version = ' Cargo.toml | head -1
+	@# Refresh lockfile self-entries so uv.lock/Cargo.lock match the new
+	@# manifest versions (closes #1498 — `make version` previously left
+	@# the editable `djust` self-entry in uv.lock pinned at the old version).
+	@echo "$(GREEN)Refreshing lockfile self-entries...$(NC)"
+	@uv lock
+	@cargo update --workspace --offline 2>/dev/null || cargo update --workspace
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
+	@echo "$(YELLOW)Commit uv.lock + Cargo.lock alongside the manifest bump.$(NC)"
 
 .PHONY: version-check
 version-check: ## Check current version in all files
@@ -498,6 +509,8 @@ version-check: ## Check current version in all files
 	@echo "  Cargo.toml:     $$(grep '^version = ' Cargo.toml | head -1)"
 	@echo "  __init__.py:    $$(grep '^__version__' python/djust/__init__.py | head -1)"
 	@echo "  components:     $$(grep '^__version__' python/djust/components/__init__.py | head -1)"
+	@echo "  uv.lock djust:  $$(grep -A1 '^name = "djust"' uv.lock | grep version)"
+	@echo "  Cargo.lock:     $$(grep -A1 '^name = "djust_core"' Cargo.lock | grep version)"
 
 .PHONY: release
 release: ## Create and push a release tag (usage: make release VERSION=0.2.0a1)
@@ -526,6 +539,9 @@ endif
 		echo "Run: make version VERSION=$(VERSION)"; \
 		exit 1; \
 	fi
+	@# Verify lockfile self-entries are in sync (closes #1498)
+	@.venv/bin/python scripts/check-lockfile-versions.py || \
+		{ echo "$(RED)ERROR: lockfile self-entries stale — run 'make version VERSION=$(VERSION)'$(NC)"; exit 1; }
 	@# Create and push tag
 	@git tag -a v$(VERSION) -m "Release v$(VERSION)"
 	@git push origin v$(VERSION)

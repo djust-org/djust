@@ -92,6 +92,16 @@
           "mandatory": true
         },
         {
+          "action": "PLAN INTENT, NOT ARIA VALUES (#1502, v1.0.0 retro): for accessibility work, the plan must describe the ARIA *intent* (\"the sortable header must announce its sort state to assistive tech\", \"the control must be keyboard-focusable and expose its pressed state\") — NOT pin a specific `role=\"...\"` / `aria-*` literal. The correct ARIA primitive depends on the final element + native semantics, which the implementer determines. Pattern from PR #1491: the plan pinned `role=\"button\"` on a sortable `<th>`; the implementation correctly diverged (a native `<th>` with `aria-sort` is the right primitive, and `role=\"button\"` would have stripped the table-header semantics). Plan the user-observable behavior; let implementation pick the markup.",
+          "done": false,
+          "mandatory": false
+        },
+        {
+          "action": "GREP CONSTRAINT TABLES BEFORE LABELING DEPS (#1502, v1.0.0 retro): for any dependency sweep / audit, do NOT label a dependency \"transitive\" or \"unpinned\" from memory or assumption. Grep the actual constraint tables — `pyproject.toml` `[project] dependencies` / `[project.optional-dependencies]`, `uv.lock`, `Cargo.toml` `[dependencies]` / `[workspace.dependencies]`, `Cargo.lock` — and record constrained-vs-unpinned per target with the file:line it was found at. Pattern from PR #1490: the plan mislabeled deps that WERE constrained as \"transitive, unpinned\"; a 30-second grep of the constraint tables would have corrected it. A dep is \"unpinned\" only if no constraint table names it.",
+          "done": false,
+          "mandatory": false
+        },
+        {
           "action": "read codebase for current state",
           "done": false
         },
