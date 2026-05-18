@@ -54,9 +54,19 @@ pip install djust==0.2.0a1  # Specific pre-release
    make version VERSION=0.2.0a1
    ```
 
+   `make version` also refreshes the lockfile self-entries — it runs
+   `uv lock` (updates the editable `djust` entry in `uv.lock`) and
+   `cargo update --workspace` (updates the workspace-crate entries in
+   `Cargo.lock`). **Commit the resulting `uv.lock` and `Cargo.lock`
+   changes alongside the manifest bump** — a release tag cut from a tree
+   with a stale lockfile self-entry will fail the `make release`
+   verification gate (see #1498).
+
    Or manually update:
    - `pyproject.toml`: `version = "0.2.0a1"`
    - `Cargo.toml`: `version = "0.2.0-alpha.1"` (workspace.package)
+   - then run `uv lock` and `cargo update --workspace` to refresh the
+     lockfile self-entries, and verify with `make check-lockfile-versions`.
 
 3. **Update CHANGELOG.md**:
    ```markdown
@@ -135,14 +145,18 @@ main ─── v0.1.8 (stable)
 ## Makefile Commands
 
 ```bash
-# Bump version (updates pyproject.toml and Cargo.toml)
+# Bump version (updates pyproject.toml, Cargo.toml, __init__.py files,
+# and refreshes the uv.lock + Cargo.lock self-entries)
 make version VERSION=0.2.0a1
 
-# Create and push a release tag
+# Create and push a release tag (verifies lockfile self-entries are in sync)
 make release VERSION=0.2.0a1
 
-# Check current version
+# Check current version (includes the uv.lock + Cargo.lock self-entries)
 make version-check
+
+# Verify lockfile self-entries match the manifests (#1498)
+make check-lockfile-versions
 ```
 
 ## Hotfix Releases
@@ -183,6 +197,16 @@ If the GitHub Actions build fails:
 
 If versions get out of sync:
 ```bash
-# Check all version files
-grep -r "version" pyproject.toml Cargo.toml | grep -E "[0-9]+\.[0-9]+"
+# Check all version files (manifests + lockfile self-entries)
+make version-check
+
+# Verify the lockfile self-entries specifically (#1498)
+make check-lockfile-versions
+
+# Or grep the manifests + lockfiles directly
+grep -r "version" pyproject.toml Cargo.toml uv.lock Cargo.lock | grep -E "[0-9]+\.[0-9]+"
 ```
+
+If `make check-lockfile-versions` reports drift, re-run
+`make version VERSION=<current>` (it refreshes `uv.lock` + `Cargo.lock`)
+and commit the lockfile changes.

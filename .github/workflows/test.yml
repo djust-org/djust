@@ -134,6 +134,9 @@ jobs:
       - name: Doc-snippet smoke test + claim assertions (#1500)
         run: .venv/bin/python scripts/check-doc-snippets.py
 
+      - name: Lockfile self-entry version sync (#1498)
+        run: .venv/bin/python scripts/check-lockfile-versions.py
+
   # JavaScript tests - runs in parallel
   javascript-tests:
     runs-on: ubuntu-latest
