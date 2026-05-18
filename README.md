@@ -12,7 +12,7 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 [![CI](https://github.com/djust-org/djust/actions/workflows/test.yml/badge.svg)](https://github.com/djust-org/djust/actions/workflows/test.yml)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Django 3.2+](https://img.shields.io/badge/django-3.2+-green.svg)](https://www.djangoproject.com/)
+[![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)](https://www.djangoproject.com/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/djust.svg)](https://pypi.org/project/djust/)
 
 ## ✨ Features
@@ -20,7 +20,7 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 - ⚡ **10-100x Faster** - Rust-powered template engine and Virtual DOM diffing
 - 🔄 **Reactive Components** - Phoenix LiveView-style server-side reactivity
 - 🔌 **Django Compatible** - Works with existing Django templates and components
-- 📦 **Zero Build Step** - ~29KB gzipped client JavaScript, no bundling needed
+- 📦 **Zero Build Step** - ~53 KB gzipped minified client JavaScript, no bundling needed
 - 🌐 **WebSocket Updates** - Real-time DOM patches over WebSocket (with HTTP fallback)
 - 🎯 **Minimal Client Code** - Smart diffing sends only what changed
 - 🔒 **Type Safe** - Rust guarantees for core performance-critical code
@@ -70,7 +70,7 @@ djust uses a Rust-powered Virtual DOM (VDOM) to diff server-rendered HTML and se
 <!DOCTYPE html>
 <html>
 <head>
-    {% djust_scripts %}              {# Loads ~5KB client JavaScript #}
+    {% djust_scripts %}              {# Loads the client runtime #}
 </head>
 <body dj-view="{{ dj_view_id }}">   {# Identifies the WebSocket session #}
     <div dj-root>                    {# Reactive boundary — only this is diffed #}
@@ -191,7 +191,7 @@ from django.urls import path
 from myapp.views import CounterView
 
 urlpatterns = [
-    path('counter/', CounterView.as_live_view(), name='counter'),
+    path('counter/', CounterView.as_view(), name='counter'),
 ]
 ```
 
@@ -270,7 +270,7 @@ python benchmark.py
 
 - Python 3.10+
 - Rust 1.70+ (for building from source)
-- Django 3.2+
+- Django 4.2+
 
 ### Install from PyPI
 
@@ -578,7 +578,7 @@ class Button(Component):
     @event_handler
     def on_click(self):
         self.clicks += 1
-        print(f"Clicked {self.clicks} times!")
+        # self.clicks is auto-exposed to the template (public attribute)
 ```
 
 ### Decorators
@@ -702,7 +702,7 @@ class ProductSearchView(LiveView):
 
 - ✅ **Zero JavaScript Required** - Common patterns work without writing any JS
 - ✅ **87% Code Reduction** - Decorators replace hundreds of lines of manual JavaScript
-- ✅ **Lightweight Bundle** - ~29KB gzipped client.js (vs Livewire ~50KB)
+- ✅ **Lightweight Bundle** - ~53 KB gzipped minified client.js, no npm dependencies
 - ✅ **Competitive DX** - Matches Phoenix LiveView and Laravel Livewire developer experience
 
 #### Available Decorators
@@ -945,7 +945,7 @@ def search(self, query: str = "", **kwargs):
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── Client.js (~29KB gz) - Events & DOM   │
+│  ├── Client.js (~53 KB gz) - Events & DOM  │
 │  └── WebSocket Connection                   │
 └─────────────────────────────────────────────┘
            ↕️ WebSocket (Binary/JSON)
@@ -1063,7 +1063,7 @@ Areas we'd love help with:
 - [x] Reusable component library (`djust_components` crate)
 - [x] JIT pipeline improvements and stale-closure fixes
 - [x] Authentication & authorization (view-level + handler-level)
-- [ ] File upload handling
+- [x] File upload handling
 - [x] Server-sent events (SSE) fallback
 - [ ] React/Vue component compatibility
 - [x] TypeScript definitions (`djust.d.ts` shipped with the package)

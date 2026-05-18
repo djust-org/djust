@@ -15,8 +15,10 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Template Requirements](guides/template-requirements.md)** - Required template attributes (dj-view, dj-root)
 - **[Working with External Services](guides/services.md)** - AWS, REST APIs, Redis integration patterns
 - **[Error Code Reference](guides/error-codes.md)** - Complete error code guide with fixes
-- **[System Checks Reference](system-checks.md)** - All 37 check IDs (C/V/S/T/Q), severities, suppression patterns, and false positives
+- **[System Checks Reference](system-checks.md)** - Check IDs across the C/V/S/T/Q/Y categories, severities, suppression patterns, and false positives
 - **[API Stability & Deprecation Policy](API_STABILITY.md)** - What the djust 1.0 SemVer commitment covers, the deprecation process, and the support window
+- **[Upgrading to djust 1.0](website/guides/upgrade-to-1.0.md)** - What the 1.0 SemVer commitment means for a 0.9.x app, the deprecated symbols, and the new accessibility checks
+- **[Accessibility (ARIA / WCAG)](website/guides/accessibility.md)** - Built-in component ARIA, the `Y` accessibility system checks, and theming color-contrast WCAG validation
 - **[Scaffolding Generator](guides/scaffolding.md)** - Generate CRUD LiveView scaffolds from model definitions
 
 ### 🔌 Real-Time Features

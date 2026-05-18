@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**v1.0.0 — the stability milestone.** After the v0.9.x audit-driven bake,
+djust 1.0 makes its SemVer commitment: code written against the public API
+keeps working across every 1.x release. 1.0 is a *consolidation* release —
+there are **no breaking changes from 0.9.7**; an app that runs on 0.9.7 runs
+on 1.0 unchanged. The milestone shipped in six units: the Rust template-engine
+`is` / `is not` fix, the published API-stability + deprecation policy, a
+pre-1.0 dependency security sweep, framework-wide accessibility (the new `Y`
+system-check category plus built-in component ARIA), an ADR reconciliation
+pass, and this 1.0 documentation pass.
+
 ### Added
 
 - **API-stability + deprecation policy published — `docs/API_STABILITY.md` (v1.0.0 milestone, unit 2).** The canonical, authoritative statement of djust's 1.0 SemVer commitment. Defines the **public API surface** SemVer covers (top-level `djust` exports, the `djust.decorators` decorators, public `LiveView` / `LiveComponent` / `Component` methods, the mixins re-exported from the top-level package, registered template tags/filters, documented config keys, and the snapshot-pinned WebSocket wire protocol) and what is explicitly **not** covered (underscore-prefixed names, `djust.mixins.*` internal-composition mixins, Rust crate internals, debug/dev-server/hot-reload internals). Documents the deprecation process — `DeprecationWarning` announcement, `.. deprecated::` docstring marker, `### Deprecated` CHANGELOG entry, mandatory migration path — and the support window: a symbol deprecated in `1.Y` is removed no earlier than `2.0.0`, with a `>= 1.1.0` removal floor for the three pre-1.0 legacy symbols (`@event`, `LiveViewForm`, the `_legacy` theming module). A user-facing companion guide ships at `docs/website/guides/api-stability.md`, linked from the docs-site nav. This is unit 2 of the 6-unit v1.0.0 (Release Readiness) milestone — the policy is foundational and gates what the 1.0 docs pass documents.
