@@ -27,14 +27,16 @@
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 /// Global registry mapping tag names to Python handler objects.
 ///
-/// Thread-safe via Mutex. Handlers must implement a `render(args, context)` method
+/// Thread-safe via `RwLock`. Registration is one-time bootstrap; lookup is
+/// read-only and happens on every render, so concurrent renders share the
+/// read lock. Handlers must implement a `render(args, context)` method
 /// that returns a string.
-static TAG_HANDLERS: Lazy<Mutex<HashMap<String, Py<PyAny>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static TAG_HANDLERS: Lazy<RwLock<HashMap<String, Py<PyAny>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Block handler entry: (end_tag_name, Python handler object).
 type BlockHandlerEntry = (String, Py<PyAny>);
@@ -46,16 +48,16 @@ type BlockHandlerEntry = (String, Py<PyAny>);
 /// - `args`: list of strings from the opening tag
 /// - `content`: pre-rendered HTML string of the block body
 /// - `context`: dict of template context variables
-static BLOCK_TAG_HANDLERS: Lazy<Mutex<HashMap<String, BlockHandlerEntry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static BLOCK_TAG_HANDLERS: Lazy<RwLock<HashMap<String, BlockHandlerEntry>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Global registry for assign tag handlers (context-mutating tags).
 ///
 /// Handlers implement `render(args, context) -> dict[str, Any]`. The
 /// returned dict is merged into the template context for siblings
 /// following the tag in the same render iteration.
-static ASSIGN_TAG_HANDLERS: Lazy<Mutex<HashMap<String, Py<PyAny>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static ASSIGN_TAG_HANDLERS: Lazy<RwLock<HashMap<String, Py<PyAny>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Register a Python tag handler for a custom template tag.
 ///
@@ -91,7 +93,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         ));
     }
 
-    let mut registry = TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -104,7 +106,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
 /// Returns true if a handler was removed, false if no handler existed for the name.
 #[pyfunction]
 pub fn unregister_tag_handler(name: &str) -> PyResult<bool> {
-    let mut registry = TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -114,7 +116,7 @@ pub fn unregister_tag_handler(name: &str) -> PyResult<bool> {
 /// Check if a handler is registered for a tag name.
 #[pyfunction]
 pub fn has_tag_handler(name: &str) -> PyResult<bool> {
-    let registry = TAG_HANDLERS.lock().map_err(|e| {
+    let registry = TAG_HANDLERS.read().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -124,7 +126,7 @@ pub fn has_tag_handler(name: &str) -> PyResult<bool> {
 /// Get a list of all registered tag names.
 #[pyfunction]
 pub fn get_registered_tags() -> PyResult<Vec<String>> {
-    let registry = TAG_HANDLERS.lock().map_err(|e| {
+    let registry = TAG_HANDLERS.read().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -134,7 +136,7 @@ pub fn get_registered_tags() -> PyResult<Vec<String>> {
 /// Clear all registered handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_tag_handlers() -> PyResult<()> {
-    let mut registry = TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -194,7 +196,7 @@ pub fn register_block_tag_handler(
         ));
     }
 
-    let mut registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -205,7 +207,7 @@ pub fn register_block_tag_handler(
 /// Unregister a block tag handler.
 #[pyfunction]
 pub fn unregister_block_tag_handler(name: &str) -> PyResult<bool> {
-    let mut registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -215,7 +217,7 @@ pub fn unregister_block_tag_handler(name: &str) -> PyResult<bool> {
 /// Check if a block tag handler is registered.
 #[pyfunction]
 pub fn has_block_tag_handler(name: &str) -> PyResult<bool> {
-    let registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+    let registry = BLOCK_TAG_HANDLERS.read().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -225,7 +227,7 @@ pub fn has_block_tag_handler(name: &str) -> PyResult<bool> {
 /// Clear all block tag handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_block_tag_handlers() -> PyResult<()> {
-    let mut registry = BLOCK_TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = BLOCK_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -242,7 +244,7 @@ pub fn clear_block_tag_handlers() -> PyResult<()> {
 /// Returns `Some(end_tag_name)` if a block handler is registered, `None` otherwise.
 pub fn block_handler_exists(name: &str) -> Option<String> {
     BLOCK_TAG_HANDLERS
-        .lock()
+        .read()
         .map(|registry| registry.get(name).map(|(end_tag, _)| end_tag.clone()))
         .unwrap_or(None)
 }
@@ -284,7 +286,7 @@ pub fn call_block_handler_with_py_sidecar(
 ) -> Result<String, String> {
     let handler = {
         let registry = BLOCK_TAG_HANDLERS
-            .lock()
+            .read()
             .map_err(|e| format!("Registry lock error: {e}"))?;
 
         let (_, handler_ref) = registry
@@ -354,7 +356,7 @@ pub fn call_block_handler_with_py_sidecar(
 /// This is used by the parser to decide whether to create a CustomTag node.
 pub fn handler_exists(name: &str) -> bool {
     TAG_HANDLERS
-        .lock()
+        .read()
         .map(|registry| registry.contains_key(name))
         .unwrap_or(false)
 }
@@ -407,7 +409,7 @@ pub fn call_handler_with_py_sidecar(
     // Get handler from registry
     let handler = {
         let registry = TAG_HANDLERS
-            .lock()
+            .read()
             .map_err(|e| format!("Registry lock error: {e}"))?;
 
         // Clone the Py<PyAny> using Python::with_gil
@@ -508,7 +510,7 @@ pub fn register_assign_tag_handler(
         ));
     }
 
-    let mut registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
 
@@ -519,7 +521,7 @@ pub fn register_assign_tag_handler(
 /// Unregister an assign tag handler.
 #[pyfunction]
 pub fn unregister_assign_tag_handler(name: &str) -> PyResult<bool> {
-    let mut registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
     Ok(registry.remove(name).is_some())
@@ -528,7 +530,7 @@ pub fn unregister_assign_tag_handler(name: &str) -> PyResult<bool> {
 /// Check if an assign tag handler is registered.
 #[pyfunction]
 pub fn has_assign_tag_handler(name: &str) -> PyResult<bool> {
-    let registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+    let registry = ASSIGN_TAG_HANDLERS.read().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
     Ok(registry.contains_key(name))
@@ -537,7 +539,7 @@ pub fn has_assign_tag_handler(name: &str) -> PyResult<bool> {
 /// Clear all registered assign tag handlers (primarily for testing).
 #[pyfunction]
 pub fn clear_assign_tag_handlers() -> PyResult<()> {
-    let mut registry = ASSIGN_TAG_HANDLERS.lock().map_err(|e| {
+    let mut registry = ASSIGN_TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
     })?;
     registry.clear();
@@ -547,7 +549,7 @@ pub fn clear_assign_tag_handlers() -> PyResult<()> {
 /// Internal Rust API — does an assign tag handler exist for this name?
 pub fn assign_handler_exists(name: &str) -> bool {
     ASSIGN_TAG_HANDLERS
-        .lock()
+        .read()
         .map(|registry| registry.contains_key(name))
         .unwrap_or(false)
 }
@@ -588,7 +590,7 @@ pub fn call_assign_handler_with_py_sidecar(
 ) -> Result<HashMap<String, djust_core::Value>, String> {
     let handler = {
         let registry = ASSIGN_TAG_HANDLERS
-            .lock()
+            .read()
             .map_err(|e| format!("Registry lock error: {e}"))?;
         let handler_ref = registry
             .get(name)

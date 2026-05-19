@@ -43,7 +43,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 /// Per-filter metadata mirroring Django's filter object attributes.
 #[derive(Debug, Clone, Default)]
@@ -64,8 +64,12 @@ struct FilterEntry {
 }
 
 /// Global registry mapping filter names to Python callables + metadata.
-static FILTER_REGISTRY: Lazy<Mutex<HashMap<String, FilterEntry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+///
+/// `RwLock` (not `Mutex`): registration is one-time bootstrap; lookup is
+/// read-only and on the hot render path, so concurrent renders share the
+/// read lock.
+static FILTER_REGISTRY: Lazy<RwLock<HashMap<String, FilterEntry>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Hot-path short-circuit guard: ``true`` once any custom filter has been
 /// registered in this process (ever).
@@ -73,13 +77,13 @@ static FILTER_REGISTRY: Lazy<Mutex<HashMap<String, FilterEntry>>> =
 /// The renderer consults [`is_custom_filter_safe`] inside the
 /// ``filter_specs.iter().any(|name| ...)`` loop on every variable
 /// expansion. For the common case — no project-level custom filters —
-/// the Mutex acquire on every name was wasted work. This `AtomicBool`
-/// is checked first; the Mutex is only touched when at least one filter
+/// the read-lock acquire on every name was wasted work. This `AtomicBool`
+/// is checked first; the lock is only touched when at least one filter
 /// has actually been registered.
 ///
 /// Once flipped to ``true`` it stays that way for the process lifetime
 /// even if ``clear_custom_filters`` empties the registry. That's
-/// intentional: clearing is rare (test teardown) and the Mutex path
+/// intentional: clearing is rare (test teardown) and the read-lock path
 /// then handles the "name not in map" case correctly anyway. The
 /// alternative — toggling the flag on clear — would race with another
 /// thread that's mid-render.
@@ -105,7 +109,7 @@ pub fn register_custom_filter(
     is_safe: bool,
     needs_autoescape: bool,
 ) -> PyResult<()> {
-    let mut registry = FILTER_REGISTRY.lock().map_err(|e| {
+    let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
     registry.insert(
@@ -121,8 +125,8 @@ pub fn register_custom_filter(
     // Flip the hot-path guard so renderer's ``is_custom_filter_safe`` stops
     // short-circuiting and starts consulting the registry. ``Release``
     // pairs with the renderer's ``Acquire`` load to ensure registry
-    // visibility, though in practice the Mutex acquisition that follows
-    // already provides that ordering. Belt + suspenders.
+    // visibility, though in practice the write-lock acquisition that
+    // precedes this already provides that ordering. Belt + suspenders.
     ANY_CUSTOM_FILTERS_REGISTERED.store(true, Ordering::Release);
     Ok(())
 }
@@ -130,7 +134,7 @@ pub fn register_custom_filter(
 /// Unregister a custom filter (returns ``true`` if a filter was removed).
 #[pyfunction]
 pub fn unregister_custom_filter(name: &str) -> PyResult<bool> {
-    let mut registry = FILTER_REGISTRY.lock().map_err(|e| {
+    let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
     Ok(registry.remove(name).is_some())
@@ -139,7 +143,7 @@ pub fn unregister_custom_filter(name: &str) -> PyResult<bool> {
 /// Check if a custom filter is registered (intended for tests + diagnostics).
 #[pyfunction]
 pub fn has_custom_filter(name: &str) -> PyResult<bool> {
-    let registry = FILTER_REGISTRY.lock().map_err(|e| {
+    let registry = FILTER_REGISTRY.read().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
     Ok(registry.contains_key(name))
@@ -148,7 +152,7 @@ pub fn has_custom_filter(name: &str) -> PyResult<bool> {
 /// Clear all registered custom filters (primarily for tests).
 #[pyfunction]
 pub fn clear_custom_filters() -> PyResult<()> {
-    let mut registry = FILTER_REGISTRY.lock().map_err(|e| {
+    let mut registry = FILTER_REGISTRY.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
     registry.clear();
@@ -158,7 +162,7 @@ pub fn clear_custom_filters() -> PyResult<()> {
 /// List all registered custom filter names (for diagnostics).
 #[pyfunction]
 pub fn get_registered_custom_filters() -> PyResult<Vec<String>> {
-    let registry = FILTER_REGISTRY.lock().map_err(|e| {
+    let registry = FILTER_REGISTRY.read().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Filter registry lock: {e}"))
     })?;
     Ok(registry.keys().cloned().collect())
@@ -177,14 +181,14 @@ pub fn get_registered_custom_filters() -> PyResult<Vec<String>> {
 /// ``filter_specs.iter().any(...)`` loop on every variable expansion.
 /// We short-circuit on the [`ANY_CUSTOM_FILTERS_REGISTERED`]
 /// `AtomicBool` so projects that never register custom filters pay
-/// only an atomic load, not a Mutex acquisition. ``Acquire`` ordering
+/// only an atomic load, not a lock acquisition. ``Acquire`` ordering
 /// pairs with the ``Release`` store in [`register_custom_filter`].
 pub fn is_custom_filter_safe(name: &str) -> bool {
     if !ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire) {
         return false;
     }
     FILTER_REGISTRY
-        .lock()
+        .read()
         .map(|reg| reg.get(name).map(|e| e.meta.is_safe).unwrap_or(false))
         .unwrap_or(false)
 }
@@ -217,13 +221,13 @@ pub fn apply_custom_filter(
     arg_was_quoted: bool,
     autoescape: bool,
 ) -> Option<Result<Value, String>> {
-    // Hot-path short-circuit: skip the Mutex when no filter has ever
+    // Hot-path short-circuit: skip the lock when no filter has ever
     // been registered. Mirrors the guard in ``is_custom_filter_safe``.
     if !ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire) {
         return None;
     }
     let (callable, meta) = {
-        let registry = FILTER_REGISTRY.lock().ok()?;
+        let registry = FILTER_REGISTRY.read().ok()?;
         let entry = registry.get(name)?;
         // clone_ref under the GIL; meta is plain Copy-ish.
         let callable = Python::with_gil(|py| entry.callable.clone_ref(py));

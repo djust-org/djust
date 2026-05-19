@@ -137,6 +137,40 @@ jobs:
       - name: Lockfile self-entry version sync (#1498)
         run: .venv/bin/python scripts/check-lockfile-versions.py
 
+  # Free-threaded (no-GIL) smoke leg - #1534 / follow-up to #1432.
+  # Targeted, NOT a full suite run: a 3.14t runner can hit unrelated
+  # free-threaded-ecosystem gaps. continue-on-error keeps it non-blocking
+  # until it has soaked; promote to blocking in a follow-up once green.
+  # NOT wired into the test-summary aggregate gate.
+  python-free-threaded:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    name: python-tests (py3.14t free-threaded)
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install free-threaded Python 3.14t
+        run: uv python install 3.14t
+
+      - name: Build extension + install deps (3.14t)
+        run: |
+          uv sync --extra dev --python 3.14t
+          uv run --python 3.14t maturin develop --release
+
+      - name: Free-threaded smoke test (no-GIL assertion)
+        run: |
+          uv run --python 3.14t python -m pytest \
+            python/djust/tests/test_rust_module_thread_safety.py -v
+
   # JavaScript tests - runs in parallel
   javascript-tests:
     runs-on: ubuntu-latest

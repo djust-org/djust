@@ -12,8 +12,6 @@ Provides a component system similar to JustPy/NiceGUI but with:
 
 use ahash::AHashMap as HashMap;
 use djust_core::Value;
-use once_cell::sync::Lazy;
-use std::sync::RwLock;
 
 pub mod complex;
 pub mod html;
@@ -89,29 +87,6 @@ pub enum ComponentError {
 
     #[error("Unknown framework")]
     UnknownFramework,
-}
-
-/// Global component registry
-static COMPONENT_REGISTRY: Lazy<RwLock<HashMap<String, Box<dyn Component>>>> =
-    Lazy::new(|| RwLock::new(HashMap::default()));
-
-/// Register a component instance
-pub fn register_component(id: String, component: Box<dyn Component>) {
-    COMPONENT_REGISTRY.write().unwrap().insert(id, component);
-}
-
-/// Get a component by ID
-pub fn get_component(id: &str) -> Option<Box<dyn Component>> {
-    COMPONENT_REGISTRY.read().unwrap().get(id).map(|_c| {
-        // This is a workaround since we can't clone trait objects directly
-        // In practice, we'll need to implement a better cloning mechanism
-        unimplemented!("Component cloning not yet implemented")
-    })
-}
-
-/// Remove a component from the registry
-pub fn unregister_component(id: &str) -> Option<Box<dyn Component>> {
-    COMPONENT_REGISTRY.write().unwrap().remove(id)
 }
 
 /// Builder pattern helper trait

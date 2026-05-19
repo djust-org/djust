@@ -1091,7 +1091,7 @@ use pyo3_async_runtimes::tokio::future_into_py;
 /// Python wrapper for SessionActorHandle
 ///
 /// This class provides async methods that can be called from Python's asyncio.
-#[pyclass(name = "SessionActorHandle")]
+#[pyclass(frozen, name = "SessionActorHandle")]
 pub struct SessionActorHandlePy {
     handle: SessionActorHandle,
 }
@@ -1409,7 +1409,7 @@ pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Boun
 }
 
 /// Supervisor statistics exposed to Python
-#[pyclass]
+#[pyclass(frozen)]
 #[derive(Debug, Clone)]
 pub struct SupervisorStatsPy {
     /// Number of active sessions
