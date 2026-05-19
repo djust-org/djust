@@ -99,6 +99,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "kwargs",
         "response_class",
         "content_type",
+        # Request handle — reassigned per HTTP/WS event (#1545)
+        "request",
         # djust LiveView base config
         "sync_safe",
         "use_actors",
@@ -511,6 +513,19 @@ class LiveView(
         # state, so post-restore the cache is reset and get_object() runs
         # fresh (handles "object reassigned during disconnect").
         self._object: Any = None
+
+        # Current Django/Channels request (#1545). Reassigned to the live
+        # request by the HTTP post() path (mixins/request.py:489) and by
+        # the WS path (websocket.py:1940); this placeholder exists only so
+        # the attribute is captured in `_framework_attrs` BELOW — treating
+        # it as framework state, not user state. Without this line `request`
+        # falls outside `_framework_attrs`, and the state snapshot writes
+        # the (non-msgpack-serializable) `ASGIRequest` through the
+        # `serialization.py:557` non-serializable fallback, logging a
+        # "non-serializable value: ASGIRequest" warning on every mount /
+        # event for every LiveView (cosmetic but noisy; also dilutes the
+        # warning's signal when it catches a genuine app-author bug).
+        self.request: Any = None
 
         # Snapshot framework-set attrs so we can distinguish them from
         # user-defined _private attrs set in mount() or event handlers.
