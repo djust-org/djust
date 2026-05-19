@@ -395,8 +395,10 @@ measures ~60 µs per crossing; the ORM/cache-migratable fraction of per-event
 latency is **0%**, well below #1434's 5% deprioritize gate. Recommendation:
 close or radically de-scope #1434.
 
-**Status (2026-05-19):** audit + benchmark shipped this milestone; the #1434
-recommendation is posted on the issue. rc5 cut via `/djust-release`.
+**Status (2026-05-19):** audit + benchmark shipped via PR #1544 (merged,
+`70ff4a25`); #1434 closed as `not planned` (audit found no migration
+surface). The `v1.0.0rc5` release tag is not yet cut — run
+`/djust-release 1.0.0rc5` when ready.
 
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
