@@ -1046,6 +1046,30 @@ repeat the failure mode.
   the first commit. Keep such jobs `continue-on-error: true` until they
   have shipped green at least once.
 
+## Process canonicalizations from v1.0.0rc6 retro arc
+
+Two rules from the v1.0.0rc6 open-issue drain (PRs #1546 / #1547 / #1548 / #1549). Each was a milestone retro finding; canonicalized here so the next serde-fix and the next security-PR don't repeat the failure mode.
+
+- **Serde fix-shape generalization requires field-position verification (#1541 / PR #1546, sibling of #1538 / PR #1542).** When mirroring a serde annotation fix from one struct to another — particularly `#[serde(default, skip_serializing_if = "Option::is_none")]` and similar shape-sensitive annotations — verify that the field POSITION (leading vs trailing) matches between the source and target struct before assuming the fix generalizes. The empirical fact: `serde + rmp-serde` encodes a plain `#[derive(Serialize, Deserialize)]` struct as a *positional array*. `skip_serializing_if` on a STRICTLY TRAILING optional drops the trailing element on serialize; `#[serde(default)]` then fills it back on deserialize → round-trip works (the #1538 / `VNode.djust_id` case, where `djust_id` is the 6th and last field). `skip_serializing_if` on a LEADING optional shifts later array elements into the wrong positional slot on deserialize; `#[serde(default)]` does NOT help because the deserializer isn't running out of elements, it's reading wrong-typed values at the wrong positions (the #1541 / `PatchResponse.{patches, html}` case, where `patches` and `html` are fields 0 and 1, followed by `version: u64`). The correct fix for leading-optional or interior-optional shapes is to remove `skip_serializing_if` entirely — `None` is serialized as msgpack `nil` (1 byte) and positional slots stay aligned.
+
+  **How to apply at Stage 4 plan time**: when the plan calls for mirroring a serde-annotation fix from a prior PR, the plan must include (a) the source-struct field ordering with the fixed field's position, (b) the target-struct field ordering with the analogous field's position, and (c) a one-line statement that the positions are equivalent (both trailing) OR that the target requires a different fix shape (remove `skip_serializing_if`). If the implementer at Stage 5 cannot trivially restate (c), the Stage 4 reproducer-first gate (Action #1210) must fire — write the failing reproducer and run a candidate-fix probe (the standalone `/tmp/<probe>.rs` pattern from the v1.0.0rc6 drain is fast — small `cargo` project with the candidate `serde` annotations, dump bytes + attempt round-trip across all None/Some combinations).
+
+  **Where this lives now**: this CLAUDE.md section + the inline doc-comment on `PatchResponse` at `crates/djust_live/src/actors/messages.rs:96-114` + the three structural witness tests in `crates/djust_vdom/tests/wire_protocol_snapshot.rs::msgpack_skip_without_default_fails` / `_skip_with_default_works_for_trailing_optional_only` / `_no_skip_round_trips_in_all_positions`. Future maintainers grepping for "skip_serializing_if" or "msgpack" should find all three.
+
+- **Security / lockfile-only Dependabot PRs may post a minimal 3-line Stage 14 retro (#1549).** The pipeline-run mandatory retro-artifact gate (filed in the v0.9.x retro arcs; codified in `pipeline-run/SKILL.md`) requires every PR to carry a Stage 14 retro before `completed_at` is set. PR #1549 (idna 3.11 → 3.15 / CVE-2026-45409 / Dependabot #101) was a one-line lockfile bump that shipped without a per-PR retro posted to the PR — the security path skipped the ceremony, and the v1.0.0rc6 milestone retro Stage 2 caught it as a `RETRO_GATE_VIOLATION`. The honest accounting is that a lockfile-only Dependabot bump genuinely has nothing useful to retrospect on at the per-PR level (the milestone retro is the right place to surface the gate violation).
+
+  **The rule**: a security PR whose entire diff is a lockfile bump (`uv.lock`, `Cargo.lock`, `package-lock.json`, etc.) plus a `CHANGELOG.md` `### Security` entry — and which does NOT touch any code path — may post a minimal Stage 14 retro of the form:
+
+  > ## Stage 14 retro — PR #NNNN (Dependabot #M)
+  > - Advisory followed: [GHSA-…] / CVE-….
+  > - Full regression suite ran clean: N passed, 0 failed.
+  > - No API surface change; no behavioral change.
+  > `RETRO_COMPLETE`
+
+  Any PR that *touches code* in response to a security advisory (a guard-rail patch, a CVE that exposes a design weakness, a workaround for a vulnerability the upstream hasn't patched) gets a full Stage 14 retro per the existing gate — the minimal form is reserved for pure dependency-version bumps.
+
+  **Where this lives now**: this CLAUDE.md section + the milestone retro entry under "Process Improvements Applied" in `RETRO.md` v1.0.0rc6. Future Dependabot PRs that ship clean lockfile-only diffs may use the minimal form; the milestone retro Stage 2 gate is preserved as a backstop in case the minimal form is forgotten.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

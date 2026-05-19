@@ -314,8 +314,78 @@ issue or be explicitly closed with a reason.
 | 272 | Pre-1.0-final retro-finding closeout sweep | Retro v1.0.0rc3 (finding #3) | #1525 | Closed | **Sweep run 2026-05-18** — all 24 v1.0.0-arc follow-up issues CLOSED; the 5 open ones (#1522, #1523, #1432, #1489 in the priority matrix; #1471, #1434 in the deferred/blocked note) carried to ROADMAP milestone `v1.1.0`. No finding silently dropped. |
 | 273 | Accessibility phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) | PR #1521 (#1513 follow-up) | #1522 | Closed | **Resolved in v1.0.0rc4 PR #1532** — CSP-strict keyboard-nav client module shipped (focus trap, Esc-to-close, roving tabindex). Pulled forward from `v1.1.0` into the rc4 drain. |
 | 274 | Accessibility phase 2 — surface a11y findings in `djust_audit` | PR #1521 (#1513 follow-up) | #1523 | Closed | **Resolved in v1.0.0rc4 PR #1532** — `djust_audit --a11y` mode shipped. Pulled forward from `v1.1.0` into the rc4 drain. |
-| 275 | `djust_live` cannot be `cargo test`'d — gate the `extension-module` feature behind a Cargo flag | Retro v1.0.0rc4 (finding #4) | #1543 | Open | Recurred twice in the rc4 drain (PR #1530 #1529 fix, PR #1535 free-threaded tests) — `_rust`-surface Rust tests cannot live on the entry-point crate. |
-| 276 | Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` | PR #1542 (#1538 sibling) | #1541 | Open | Found while fixing #1538's `VNode` msgpack asymmetry — same serde-shape class, separate crate; filed per Action #1079 scope discipline. |
+| 275 | `djust_live` cannot be `cargo test`'d — gate the `extension-module` feature behind a Cargo flag | Retro v1.0.0rc4 (finding #4) | #1543 | Closed | **Resolved in v1.0.0rc6 PR #1547** — `extension-module` gated behind a default-on Cargo feature; `cargo test -p djust_live --no-default-features` runs 37 tests. Makefile `test-rust` + parallel `test` + CI workflow gained a Phase 2 invocation. Retroactively unlocked the 4 `msgpack_round_trip_patch_response_*` tests shipped in PR #1546. Maturin build path verified end-to-end. |
+| 276 | Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` | PR #1542 (#1538 sibling) | #1541 | Closed | **Resolved in v1.0.0rc6 PR #1546** — but NOT via the planned fix shape. Stage 5 reproducer-first TDD proved that `#[serde(default, skip_serializing_if = ...)]` does NOT generalize from `VNode` (trailing optional) to `PatchResponse` (leading optionals). The correct fix removes `skip_serializing_if` entirely; canonicalized as the new "leading-vs-trailing serde" rule in CLAUDE.md's "Process canonicalizations from v1.0.0rc6 retro arc" section. |
+
+## v1.0.0rc6 — Open-issue drain + idna CVE (PRs #1546, #1547, #1548, #1549)
+
+**Date**: 2026-05-19
+**Scope**: Three-issue post-rc4/rc5 backlog drain (#1541 PatchResponse msgpack, #1543 djust_live cargo-test gate, #1545 LiveView.request snapshot warning) plus an in-flight medium-severity Dependabot alert (#101 — idna CVE-2026-45409). Three independent subsystems (Rust serde, Rust build-infra, Python `LiveView` lifecycle) processed as separate PRs, plus one lockfile bump. 4 PRs total; all 14 pipeline stages green per PR; 0 🔴 findings across the milestone.
+**Tests at close**: ~7411 (rc4 closed at ~7420 — the rc5 audit PR #1544 was docs-only and added no tests; rc6 added 5 cases in `test_liveview_request_framework_attr_1545.py` and 4 + 3 = 7 Rust cases in `actors/messages.rs` / `wire_protocol_snapshot.rs` for a +12 net; the ~9 delta vs rc4's number is from rc4-era tests that consolidated mid-drain).
+
+### What We Learned
+
+**1. Reproducer-first TDD (Action #1210) caught the planner's wrong fix shape in Stage 5, not Stage 11 — a no-op patch with green CI would have shipped otherwise.**
+PR #1546 (#1541, leading-optional `PatchResponse` msgpack) is the canonical case study. The Stage 4 plan called for mirroring PR #1542's #1538 fix verbatim — add `#[serde(default)]` alongside the existing `skip_serializing_if`. That fix worked for `VNode.djust_id` because `djust_id` is the **strictly trailing** optional in a 6-field struct: `skip` drops the trailing array element, `default` fills it back on deserialize. `PatchResponse.patches` and `PatchResponse.html` are **leading** optionals, and the empirical probe (3 candidate fixes × 4 None/Some combinations, run as a standalone Rust binary in `/tmp` to bypass workspace-level constraints) proved that `default` does NOT repair the bug class for leading-optional shapes — `skip_serializing_if` shifts later array elements into the wrong positional slot and `default` cannot help because the deserializer isn't running out of elements, it's reading wrong-typed values at the wrong positions. The correct fix for `PatchResponse` is to remove `skip_serializing_if` entirely (`None` becomes msgpack `nil`, 1 byte, positional slots stay aligned). Without Stage 5's mandatory "VERIFY ARTIFACT BEFORE PLANNING" gate, this PR would have compiled cleanly, passed all 14 CI checks, merged green, and shipped a patch that did exactly nothing to fix the bug class on the cited struct — the discipline was load-bearing in the strongest possible sense. The downstream consequence is a new canon rule: **a fix-shape mirrored from one struct does not automatically generalize to a sibling struct without verifying that the field POSITION matches.** For `serde + msgpack` positional encoding, `skip_serializing_if` is safe only on strictly trailing optionals; for leading or interior optionals, remove `skip_serializing_if` entirely.
+
+**Action taken**: diff — "Process canonicalizations from v1.0.0rc6 retro arc" section added to `djust/CLAUDE.md` in this commit (rule: serde-fix-shape generalization requires field-position verification; mirror-verbatim-from-prior-PR is unsafe across structs with different field orders).
+
+**2. Symbol-migration grep canon (Action #1391 / #1400) caught a second filter the issue body didn't mention — visible reinforcement of existing canon.**
+PR #1548 (#1545, `LiveView.request` snapshot warning) is the case study. The issue body cited the `_framework_attrs` instance-level snapshot at `live_view.py:526` and proposed a one-line fix (assign `self.request = None` in `__init__` BEFORE the snapshot line). The fix landed and the new regression tests passed. The full Python suite then surfaced that **`_FRAMEWORK_INTERNAL_ATTRS`** — a class-level hard-coded frozenset at `live_view.py:94-125` used by `_debug_state_sizes` and the debug-toolbar observability path — ALSO required `"request"` added; without that second update, 2 `test_debug_state_sizes_*` tests started reporting `request` as user state and the fix was incomplete. Action #1391 / #1400 ("symbol-migration grep canon") was filed in earlier milestones for exactly this class of issue: when changing a filter convention or removing a top-level symbol, grep the codebase for the OLD filter reference / OLD symbol name across all consumer directories. The rule fired here; the full regression suite acted as the secondary grep that surfaced the missed filter. No new canon needed — this is an existing rule exercising visibly.
+
+**Action taken**: closed — covered by existing Action #1391 / #1400 ("symbol-migration grep canon") canonicalized in CLAUDE.md under "Process canonicalizations from v0.9.3-4 retro arc"; no new rule needed, just visible reinforcement.
+
+**3. Cross-task sequencing inside a drain bucket has compounding value — process the smallest design-novel iter first (Action #1056) so later iters can verify against it.**
+The v1.0.0rc6 drain processed three independent issues in this order: #1541 (#1546) → #1543 (#1547) → #1545 (#1548). #1546 introduced 4 `msgpack_round_trip_patch_response_*` tests that compile-checked only — the crate couldn't be `cargo test`'d under the pre-#1543 build constraint. #1547 then gated `extension-module` behind a Cargo feature, and as a no-cost side benefit retroactively activated those 4 tests as real, runnable regression coverage. The Stage 11 reviewer for #1547 ran `cargo test -p djust_live --no-default-features` empirically (Action #252's "empirical canary") and confirmed 37 tests pass, including the 4 from #1546. If the order had been reversed — #1543 first, then #1541 — the gate would have landed against an empty test surface and its load-bearing claim ("retroactively unlocks regression coverage") would have lacked an immediate witness. The drain composition exercised Action #1056 (smallest-design-novel-iter first) at the drain-bucket scale, not just the multi-PR milestone scale.
+
+**Action taken**: closed — covered by existing Action #1056 ("smallest design-novel iter first"); visible reinforcement at the drain-bucket scope.
+
+**4. Security / Dependabot PRs need a retro too — PR #1549's retro-gate violation surfaced a fast-track-path gap.**
+The pipeline-run skill's "mandatory retro-artifact gate" (filed in the v0.9.x retro arcs as Actions #946 / #955 / #956 era process notes; codified in pipeline-run/SKILL.md) requires every PR to carry a Stage 14 retro before `completed_at` is set. PR #1549 (idna 3.11 → 3.15 / CVE-2026-45409 / Dependabot #101) was processed as a security-class lockfile bump and shipped without a per-PR retro posted to the PR — the security path skipped the ceremony. The milestone-retro Stage 2 caught this as a `RETRO_GATE_VIOLATION` and the backfill is part of this Stage 4. Two interpretations are defensible: (a) the retro gate applies uniformly regardless of PR class, in which case the security path needs the retro; (b) a one-line lockfile bump genuinely has nothing useful to retrospect on and the gate should explicitly allow a minimal "no findings; CVE patched per advisory; full regression green" retro. This milestone takes interpretation (a) — backfill the #1549 retro as part of this Stage 4 — and proposes a canon update in interpretation-(b) spirit: security/lockfile-only PRs may post a 3-line minimal retro that confirms (1) the CVE advisory was followed, (2) the full regression passed, and (3) no API surface changed. Anything else (a code-touching security patch, a CVE that requires guard-rail logic, a vulnerability that exposes a design weakness) gets a full retro.
+
+**Action taken**: diff — backfilled the #1549 retro via `gh pr comment` as part of this Stage 4; CLAUDE.md addition explicitly allows a 3-line minimal retro for lockfile-only security/dependabot PRs while preserving the gate for code-touching ones.
+
+**5. Two small Stage-5 process slips, both caught by existing gates — no new canon needed, but the cost of each slip was measurable.**
+**Slip A (PR #1547):** the implementer created a `*-plan.md` file directly without first running `/pipeline-next`, so the corresponding `*.json` state file did not exist. Caught by the **branch-verify reflex** (pipeline-run skill, "Pre-Commit Checklist" subsection) returning an empty match for the active HEAD. Recovered by filing the state file retroactively before commit. No code reached the wrong branch. **Slip B (PR #1548):** the first Stage-5 `git commit` was bounced by the pre-commit ruff hook (F841 unused-local), and the post-commit `git rev-parse HEAD` PRE/POST hash comparison (Action #122 + its `--amend` companion canonicalized in v1.0.0rc3) caught it. Cost: ~1 extra cycle — run `ruff check <staged-files>` explicitly, fix, re-stage, retry. Both slips are exactly the failure modes the existing canon was designed to catch; neither escaped to merge; reinforces the value of the gates without requiring new ones.
+
+**Action taken**: closed — both slips covered by existing canon (branch-verify reflex; post-commit hash verification + its `--amend` companion). No new rule needed; this is the canon working.
+
+### Insights
+
+- **Drain composition pays off when subsystems are uncorrelated.** This milestone's 3 issues touched 3 independent subsystems (Rust serde, Rust build-infra, Python `LiveView` lifecycle). The independence let each PR run a clean 14-stage pipeline without cross-PR rebase work, and the sequencing produced the #1547 → #1546 retroactivity payoff. Drain buckets with strongly-correlated subsystem touches (e.g., v1.0.0rc4 Phase 2's mid-drain bug discoveries) need more sequencing care.
+- **Process slips converged to zero across the drain.** Slip A (state-file near-miss) happened on PR #1547 (drain task 2). Slip B (ruff-bounce) happened on PR #1548 (drain task 3). PR #1549 had no slips. The drain ended cleaner than it started — the operator's discipline improved task-over-task as the existing gates fired and corrected.
+- **The reviewer subagent's empirical canary (Action #252) carries side-effect risk on the local working tree.** PR #1548's Stage 11 reviewer ran a gate-off self-test by stashing the fix, re-running tests, and restoring — and left `Cargo.lock` in `UU` (unmerged) state on the local tree. The reviewer's subagent's stash/restore semantics under git-checkout-driven test runs is fragile (related to Action #180 / #1172's parallel-agent observations). Recovered cleanly via `git checkout HEAD -- Cargo.lock`. Not worth a new tracker row — known fragility class.
+- **The "leading vs trailing" serde generalization is genuinely surprising.** Most serde annotations are documented as "works for any field with this signature"; the positional-array constraint for msgpack-flavored `skip_serializing_if` is a *transport*-specific constraint, not a *serde*-specific one. Engineers familiar with the JSON-serializer side of serde would reasonably assume the same annotation pattern works under msgpack — and would be wrong. The CLAUDE.md canon addition above tries to surface this distinction.
+- **Dependabot fix-detection latency is ~90 seconds post-merge.** PR #1549 merged at 22:40:32Z; Dependabot transitioned the alert from `open` to `fixed` at 22:41:41Z. Two 30-second polls were "still open" before the third confirmed the close. Useful for any future Dependabot-driven retro that needs to confirm closure: budget 60-120s polling.
+
+### Review Stats
+
+| Metric | #1546 | #1547 | #1548 | #1549 | Total |
+|---|---|---|---|---|---|
+| Tests added (Rust + Python) | 3 + 4 | 0 | 5 | 0 | 12 |
+| Lines added (impl + tests) | +297 / -4 | +27 / -3 | +148 / 0 | +6 / -3 | +478 / -10 |
+| Stage 11 verdict | APPROVE (1 🟡) | APPROVE (1 ❓) | APPROVE (1 ❓) | n/a (security path, no review subagent) | — |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 1 (doc nit) | 0 | 0 | 0 | 1 |
+| CI failures pre-merge | 0 | 0 | 0 | 0 | 0 |
+| Process slips | 0 | 1 (state-file near-miss) | 1 (ruff bounce) | 0 | 2 |
+| Admin-merge required | yes (branch protection) | yes | yes | yes | 4/4 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New "Process canonicalizations from v1.0.0rc6 retro arc" section appended in the commit landing this retro entry. Two rules:
+- Serde fix-shape generalization requires field-position verification (#1541 case study); mirror-verbatim-from-prior-PR is unsafe across structs with different field orders.
+- Security / lockfile-only Dependabot PRs may post a 3-line minimal retro that confirms (1) advisory followed, (2) full regression green, (3) no API surface change. Code-touching security PRs get a full retro per the existing mandatory gate.
+
+**Pipeline template**: no changes this milestone.
+
+**Checklist** (`docs/PULL_REQUEST_CHECKLIST.md`): no changes this milestone — existing canon proved sufficient.
+
+**Skills**: no in-repo skill changes (the broader pipeline-run / pipeline-retro skill updates live OUT-OF-REPO in the pipeline-skills repository).
+
+### Open Items
+
+None — Action Tracker rows #275 (`djust_live` cargo-test gate) and #276 (sibling serde asymmetry in `actors/messages.rs`) both closed in this milestone (see updates above). No new tracker rows. Zero open issues remain in the repo; zero open Dependabot alerts.
 
 ## v1.0.0rc4 — Sticky-child state persistence + final pre-1.0 backlog drain (PRs #1526–#1542)
 
@@ -380,9 +450,9 @@ From PR #1540 (#1534): the new `python3.14t` free-threaded CI job failed twice o
 
 ### Open Items
 
-- [ ] `djust_live` cannot be `cargo test`'d — gate `extension-module` behind a Cargo feature — Action Tracker #275 (GitHub #1543)
-- [ ] Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` — Action Tracker #276 (GitHub #1541)
-- [ ] #1434 native async ORM — not a tracker row; parked in ROADMAP milestone `v1.1.0`, hard-blocked on the psycopg3 free-threaded ecosystem
+- [x] ~~`djust_live` cannot be `cargo test`'d — gate `extension-module` behind a Cargo feature — Action Tracker #275 (GitHub #1543)~~ — resolved in v1.0.0rc6 (PR #1547)
+- [x] ~~Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` — Action Tracker #276 (GitHub #1541)~~ — resolved in v1.0.0rc6 (PR #1546)
+- [x] ~~#1434 native async ORM~~ — resolved in v1.0.0rc5 (PR #1544 audit found premise didn't hold; issue closed as `not planned`)
 
 ## v1.0.0rc3 — rc2-retro backlog drain (PRs #1518, #1519, #1520, #1521)
 
