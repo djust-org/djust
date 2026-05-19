@@ -169,13 +169,19 @@ jobs:
           # fallback), so install only djust core (via maturin develop, which
           # builds the extension and installs the package + its core deps)
           # plus the test runner -- never the full [dev] extra.
+          # NOTE: do not use `uv run` here -- it re-manages the project env
+          # from pyproject.toml with the default interpreter and would wipe
+          # this hand-built 3.14t venv. Activate the venv and call tools
+          # directly instead.
           uv venv --python 3.14t
+          source .venv/bin/activate
           uv pip install maturin pytest pytest-asyncio
-          uv run maturin develop --release
+          maturin develop --release
 
       - name: Free-threaded smoke test (no-GIL assertion)
         run: |
-          uv run python -m pytest \
+          source .venv/bin/activate
+          python -m pytest \
             python/djust/tests/test_rust_module_thread_safety.py -v
 
   # JavaScript tests - runs in parallel
