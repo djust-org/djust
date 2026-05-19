@@ -369,6 +369,35 @@ asymmetry in `actors/messages.rs`). The only remaining open issue is #1434
 free-threaded-ecosystem gate. Next: `/pipeline-retro --milestone v1.0.0rc4`
 and `/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`).
 
+## Next: v1.0.0rc5 — #1434 native-async-ORM audit
+
+> Created 2026-05-19. #1434 (native async ORM) was the last open issue parked
+> in v1.1.0. Its stated blocker — #1433, the psycopg2-without-psycopg3 system
+> check — is now closed, and djust requires `psycopg[binary]>=3.1,<4`, so the
+> work is unblocked. Rather than commit to a multi-PR migration on the issue's
+> ~150-site estimate, rc5 runs the audit + benchmark the issue itself calls
+> for, to decide whether the migration is worth doing.
+
+*Goal:* Classify every `sync_to_async` call site in framework code, measure
+the per-crossing overhead, and answer #1434's own <5% acceptance gate.
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P2** | #1434 | Audit + benchmark the `sync_to_async` → native-async-ORM migration surface |
+
+**Detail:** see [docs/audits/async-orm-2026-05.md](docs/audits/async-orm-2026-05.md).
+The audit found #1434's premise does not hold: of **126** `sync_to_async`
+call sites (not the ~150 the issue's `rg` line-count suggested), **zero** wrap
+a literal `Model.objects.X` expression and only **3** are ORM-category at all
+— all indirect auth/tenant helpers that fire once per connection at mount,
+never per event. The benchmark (`scripts/bench_sync_to_async_overhead.py`)
+measures ~60 µs per crossing; the ORM/cache-migratable fraction of per-event
+latency is **0%**, well below #1434's 5% deprioritize gate. Recommendation:
+close or radically de-scope #1434.
+
+**Status (2026-05-19):** audit + benchmark shipped this milestone; the #1434
+recommendation is posted on the issue. rc5 cut via `/djust-release`.
+
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
 > Created 2026-05-18, rescoped 2026-05-18. The accessibility-phase-2 cluster
@@ -378,24 +407,24 @@ and `/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`)
 > post-rc3 backlog drained. This milestone now holds only the work that
 > genuinely cannot land in the 1.0 line.
 
-*Goal:* Track the single post-1.0 follow-up that is dependency-blocked, so it
-is not silently dropped when v1.0.0 final is cut.
+*Goal:* Track post-1.0 follow-ups. As of the v1.0.0rc5 audit, the one issue
+that was parked here (#1434) has been audited and is recommended for closure
+— this milestone is currently empty pending that decision.
 
 | Priority | Issue | Summary |
 |---|---|---|
-| **P2** | #1434 | Native async ORM — replace `sync_to_async(Model.objects.X)` with native async |
+| ~~**P2**~~ | ~~#1434~~ | ~~Native async ORM — replace `sync_to_async(Model.objects.X)` with native async~~ — audited in v1.0.0rc5; recommended for closure |
 
 **Detail:**
 
-**#1434 — native async ORM.** Replace `sync_to_async(Model.objects.X)`
-wrapping with Django's native async ORM. Hard-blocked: requires the psycopg3
-async driver migration to land upstream first. Cannot be worked or closed
-until the dependency ships — revisit when it does.
-
-**Pipeline runner notes:**
-- `/pipeline-drain --milestone v1.1.0` once v1.0.0 final is cut **and**
-  psycopg3 async support has shipped. Until then this milestone has no
-  drainable work.
+**#1434 — native async ORM (audited, recommended for closure).** The
+v1.0.0rc5 audit ([docs/audits/async-orm-2026-05.md](docs/audits/async-orm-2026-05.md))
+found the issue's premise does not hold — there are no `sync_to_async(Model.objects.X)`
+call sites to migrate (0 direct, 3 indirect connection-scoped auth/tenant
+helpers out of 126 total), and the measured migratable win is 0% of
+per-event latency, below the issue's own 5% deprioritize gate. The audit is
+the resolution artifact; #1434 should be closed (see the recommendation
+posted on the issue). No drainable work remains in this milestone.
 
 ## Released: v0.9.1 (2026-04-30)
 
