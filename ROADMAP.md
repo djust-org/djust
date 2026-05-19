@@ -456,6 +456,15 @@ state and excluded from the user-state snapshot — matching the
 - Completion → `/pipeline-retro --milestone v1.0.0rc6` then
   `/djust-release 1.0.0rc6`.
 
+**Status (2026-05-19):** **v1.0.0rc6 drain COMPLETE.** All 3 issues drained
+through their own PRs and merged:
+- #1541 → PR #1546 (`fix(actors): remove skip_serializing_if on PatchResponse`)
+- #1543 → PR #1547 (`fix(build): gate djust_live extension-module behind a Cargo feature`)
+- #1545 → PR #1548 (`fix(live_view): assign request=None in __init__`)
+
+Zero open tracked issues remain. Next: `/pipeline-retro --milestone v1.0.0rc6`
+and `/djust-release 1.0.0rc6`.
+
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
 > Created 2026-05-18, rescoped 2026-05-18. The accessibility-phase-2 cluster
