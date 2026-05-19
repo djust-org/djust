@@ -478,3 +478,163 @@ describe('keyboard-nav — dropdown menu roving', () => {
         expect(dom.window.document.activeElement).toBe(m0);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Dropdown nested inside a dialog (#1533)
+// ---------------------------------------------------------------------------
+//
+// A `.dj-dropdown` rendered inside a `role="dialog"` / `.dj-modal` previously
+// never reached the dropdown branch of _handleKeydown — the dialog branch
+// returned unconditionally. These cases pin the fix: arrow roving routes to
+// the nested dropdown, Esc closes the inner (open) dropdown first, and the
+// dialog focus trap stays intact.
+
+describe('keyboard-nav — dropdown nested in dialog', () => {
+    // `.dj-dropdown` carries a bare `data-open` attribute when open
+    // (djust_components.py:368/386); `data-open="true"` is also accepted by
+    // hasAttribute. Trigger's dj-click is `toggle_dropdown`; the dialog's
+    // close button's dj-click is `close_dialog`.
+    function dialogWith(dropdownOpenAttr) {
+        return `
+          <div class="dj-modal" role="dialog" aria-modal="true" id="dlg">
+            <button id="before">Before</button>
+            <div class="dj-dropdown"${dropdownOpenAttr}>
+              <button class="dj-dropdown__trigger" id="trig" aria-haspopup="menu"
+                      aria-controls="nd-menu" dj-click="toggle_dropdown">Menu</button>
+              <div role="menu" id="nd-menu">
+                <button role="menuitem" id="n0">N0</button>
+                <button role="menuitem" id="n1">N1</button>
+                <button role="menuitem" id="n2">N2</button>
+              </div>
+            </div>
+            <button class="dj-modal__close" id="closebtn" dj-click="close_dialog">x</button>
+          </div>`;
+    }
+
+    function nodes(dom, ids) {
+        return ids.map((id) => dom.window.document.getElementById(id));
+    }
+
+    it('1. ArrowDown/ArrowUp rove within the nested dropdown menu', () => {
+        const dom = createDom(dialogWith(' data-open="true"'));
+        const [n0, n1] = nodes(dom, ['n0', 'n1']);
+        n0.focus();
+        press(dom, n0, 'ArrowDown');
+        expect(dom.window.document.activeElement).toBe(n1);
+        press(dom, n1, 'ArrowUp');
+        expect(dom.window.document.activeElement).toBe(n0);
+    });
+
+    it('2. first ArrowDown from the trigger focuses the first menu item', () => {
+        const dom = createDom(dialogWith(' data-open="true"'));
+        const [trig, n0] = nodes(dom, ['trig', 'n0']);
+        trig.focus();
+        press(dom, trig, 'ArrowDown');
+        expect(dom.window.document.activeElement).toBe(n0);
+    });
+
+    it('3. Home/End rove within the nested dropdown menu', () => {
+        const dom = createDom(dialogWith(' data-open="true"'));
+        const [n0, n1, n2] = nodes(dom, ['n0', 'n1', 'n2']);
+        n1.focus();
+        press(dom, n1, 'End');
+        expect(dom.window.document.activeElement).toBe(n2);
+        press(dom, n2, 'Home');
+        expect(dom.window.document.activeElement).toBe(n0);
+    });
+
+    it('4. Esc closes the inner dropdown (not the dialog) when the dropdown is open', () => {
+        const dom = createDom(dialogWith(' data-open="true"'));
+        installHandleEventSpy(dom);
+        const [n0, trig] = nodes(dom, ['n0', 'trig']);
+        n0.focus();
+        const ev = press(dom, n0, 'Escape');
+        expect(ev.defaultPrevented).toBe(true);
+        const calls = dom.window._handleEventCalls;
+        expect(calls.length).toBe(1);
+        expect(calls[0].name).toBe('toggle_dropdown');
+        expect(dom.window.document.activeElement).toBe(trig);
+    });
+
+    it('5. Esc closes the dialog when the inner dropdown is closed', () => {
+        // `.dj-dropdown` WITHOUT data-open — Esc bubbles past it to the dialog.
+        const dom = createDom(dialogWith(''));
+        installHandleEventSpy(dom);
+        const n0 = dom.window.document.getElementById('n0');
+        n0.focus();
+        const ev = press(dom, n0, 'Escape');
+        expect(ev.defaultPrevented).toBe(true);
+        const calls = dom.window._handleEventCalls;
+        expect(calls.length).toBe(1);
+        expect(calls[0].name).toBe('close_dialog');
+    });
+
+    it('6. Esc closes the dialog when focus is in the dialog but not in any dropdown', () => {
+        const dom = createDom(dialogWith(' data-open="true"'));
+        installHandleEventSpy(dom);
+        const before = dom.window.document.getElementById('before');
+        before.focus();
+        const ev = press(dom, before, 'Escape');
+        expect(ev.defaultPrevented).toBe(true);
+        const calls = dom.window._handleEventCalls;
+        expect(calls.length).toBe(1);
+        expect(calls[0].name).toBe('close_dialog');
+    });
+
+    it('7. Tab is still trapped within the dialog (focus trap untouched)', () => {
+        const dom = createDom(dialogWith(' data-open="true"'));
+        const [before, closebtn] = nodes(dom, ['before', 'closebtn']);
+        // Forward Tab from the last focusable element wraps to the first.
+        closebtn.focus();
+        const ev1 = press(dom, closebtn, 'Tab');
+        expect(ev1.defaultPrevented).toBe(true);
+        expect(dom.window.document.activeElement).toBe(before);
+        // Shift+Tab from the first focusable element wraps to the last.
+        const ev2 = press(dom, before, 'Tab', { shiftKey: true });
+        expect(ev2.defaultPrevented).toBe(true);
+        expect(dom.window.document.activeElement).toBe(closebtn);
+    });
+
+    it('8. plain dropdown (not in a dialog) still roves and Esc-closes', () => {
+        const dom = createDom(`
+          <div class="dj-dropdown" data-open="true">
+            <button class="dj-dropdown__trigger" id="pt" aria-haspopup="menu"
+                    aria-controls="pd-menu" dj-click="toggle_dropdown">Menu</button>
+            <div role="menu" id="pd-menu">
+              <button role="menuitem" id="p0">P0</button>
+              <button role="menuitem" id="p1">P1</button>
+            </div>
+          </div>`);
+        installHandleEventSpy(dom);
+        const [p0, p1, pt] = nodes(dom, ['p0', 'p1', 'pt']);
+        p0.focus();
+        press(dom, p0, 'ArrowDown');
+        expect(dom.window.document.activeElement).toBe(p1);
+        const ev = press(dom, p1, 'Escape');
+        expect(ev.defaultPrevented).toBe(true);
+        const calls = dom.window._handleEventCalls;
+        expect(calls.length).toBe(1);
+        expect(calls[0].name).toBe('toggle_dropdown');
+        expect(dom.window.document.activeElement).toBe(pt);
+    });
+
+    it('9. plain dialog (no dropdown) still Esc-closes and Tab-traps', () => {
+        const dom = createDom(`
+          <div class="dj-modal" role="dialog" aria-modal="true">
+            <button class="dj-modal__close" id="pc" dj-click="close_modal">x</button>
+            <button id="pb">body</button>
+          </div>`);
+        installHandleEventSpy(dom);
+        const [pb, pc] = nodes(dom, ['pb', 'pc']);
+        // Esc closes the dialog.
+        const evEsc = press(dom, pb, 'Escape');
+        expect(evEsc.defaultPrevented).toBe(true);
+        expect(dom.window._handleEventCalls.length).toBe(1);
+        expect(dom.window._handleEventCalls[0].name).toBe('close_modal');
+        // Tab still traps (last -> first wrap).
+        pb.focus();
+        const evTab = press(dom, pb, 'Tab');
+        expect(evTab.defaultPrevented).toBe(true);
+        expect(dom.window.document.activeElement).toBe(pc);
+    });
+});

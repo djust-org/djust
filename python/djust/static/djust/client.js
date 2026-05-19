@@ -15595,6 +15595,14 @@ globalThis.djust.djTransitionGroup = {
         return false;
     }
 
+    // True when a dropdown is in its open state. The dropdown templatetag
+    // emits a bare `data-open` attribute when open
+    // (djust_components.py:368/386); `hasAttribute` also matches the
+    // `data-open="true"` form used by other component variants.
+    function _dropdownOpen(dropdown) {
+        return !!dropdown && dropdown.hasAttribute('data-open');
+    }
+
     const _MENUITEM_SELECTOR =
         '[role="menuitem"], a[href], button:not([disabled])';
 
@@ -15646,15 +15654,38 @@ globalThis.djust.djTransitionGroup = {
         if (dialog && _isDialog(dialog)) {
             // With nested dialogs the trap always acts on the TOP dialog.
             const top = _topDialog() || dialog;
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                _closeModal(top);
-                return;
-            }
+            // A dropdown nested INSIDE this dialog still needs arrow roving
+            // and Esc-to-close (#1533). `closest` matches a dropdown that is
+            // a descendant of the dialog; `dialog.contains` makes the intent
+            // explicit (and guards a dropdown outside the dialog subtree).
+            const innerDropdown = target.closest('.dj-dropdown');
+            const dropdownInDialog =
+                innerDropdown && dialog.contains(innerDropdown);
+            // Tab is handled FIRST and returned — the focus trap is always
+            // dialog-scoped and must never fall through to the dropdown.
             if (e.key === 'Tab') {
                 _trapFocus(top, e);
                 return;
             }
+            if (e.key === 'Escape') {
+                // An open inner dropdown consumes Esc first (close the
+                // dropdown, refocus its trigger); a closed/absent dropdown
+                // lets Esc close the dialog as before.
+                if (dropdownInDialog && _dropdownOpen(innerDropdown)) {
+                    e.preventDefault();
+                    _handleDropdown(innerDropdown, target, e);
+                    return;
+                }
+                e.preventDefault();
+                _closeModal(top);
+                return;
+            }
+            // Arrow / Home / End — route to a nested dropdown if present.
+            if (dropdownInDialog &&
+                _handleDropdown(innerDropdown, target, e)) {
+                return;
+            }
+            // The dialog still swallows non-dropdown arrow keys (unchanged).
             return;
         }
 
