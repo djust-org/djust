@@ -314,7 +314,7 @@ and its only remaining open issue is the one genuinely blocked upstream.
 | ~~**P2**~~ | ~~#1523~~ ✅ PR #1532 | a11y phase 2 — surface accessibility findings in `djust_audit` |
 | ~~**P2**~~ | ~~#1432~~ ✅ PR #1535 | Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL |
 | ~~**P3**~~ | ~~#1489~~ ✅ PR #1536 | Re-export optimistic/cache/client_state/background from top-level `djust.__all__` |
-| **P1** | #1531 | bug — `ThemeMixin._setup_theme_context()` renders `theme_head.html` with incomplete context (drops `components.css` link, emits invalid anti-FOUC JS) |
+| ~~**P1**~~ | ~~#1531~~ ✅ PR #1537 | bug — `ThemeMixin._setup_theme_context()` renders `theme_head.html` with incomplete context (drops `components.css` link, emits invalid anti-FOUC JS) |
 
 **Detail:**
 
@@ -352,14 +352,15 @@ final at GA rather than growing in the first minor.
   #1529 is a standalone bugfix pipeline and drains first (P0). #1522 + #1523
   cluster as the a11y-phase-2 group; #1432 and #1489 are solo small PRs.
 
-**Status (2026-05-19):** Phase 1 — 3 ADR-018 iterations (#1526/#1527/#1528),
-all merged. Phase 2 — 4 PRs merged: #1530 (#1529 VDOM diff fix), #1532 (#1522
-+ #1523 a11y phase 2), #1535 (#1432 free-threaded-safe), #1536 (#1489
-top-level re-exports). **#1531 added 2026-05-19** — a `ThemeMixin` theme-head
-context bug (invalid JS + dropped `components.css`) filed mid-drain; draining
-now as a 5th Phase-2 fix. Follow-ups filed during the drain: #1533
-(dropdown-in-dialog keyboard routing), #1534 (free-threading hardening +
-`3.14t` CI leg). On completion: `/pipeline-retro --milestone v1.0.0rc4` and
+**Status (2026-05-19):** **v1.0.0rc4 drain complete.** Phase 1 — 3 ADR-018
+iterations (#1526/#1527/#1528). Phase 2 — 5 PRs merged: #1530 (#1529 VDOM
+diff fix), #1532 (#1522 + #1523 a11y phase 2), #1535 (#1432 free-threaded-safe),
+#1536 (#1489 top-level re-exports), #1537 (#1531 `ThemeMixin` theme-head
+context bug — filed mid-drain, folded in as a 5th fix). All 6 Phase-2 issues
+closed; all 14 pipeline stages + all CI green per PR; 3 🟡 review findings
+total (one fixed in-pipeline, two non-blocking). Follow-ups filed during the
+drain: #1533 (dropdown-in-dialog keyboard routing), #1534 (free-threading
+hardening + `3.14t` CI leg). On completion: `/pipeline-retro --milestone v1.0.0rc4` and
 `/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`).
 
 ## Planned: v1.1.0 — Post-1.0 follow-ups
