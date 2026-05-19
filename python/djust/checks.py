@@ -1477,6 +1477,171 @@ def _check_tutorial_mixin_mro(errors, LiveView):
             )
 
 
+# First-positional-arg extraction for a ``{% live_render %}`` tag body. The
+# ``_LIVE_RENDER_TAG_RE`` capture group holds everything after ``live_render``;
+# the first positional arg (the quoted dotted child path) is at the START.
+# A bare-identifier first arg (``{% live_render some_var %}``) yields no match
+# and is skipped — a dynamic path is unresolvable statically.
+_LIVE_RENDER_FIRST_ARG_RE = re.compile(r"""^\s*["']([^"']+)["']""")
+
+
+@register("djust")
+def check_sticky_child_optin(app_configs, **kwargs):
+    """V011 (Warning): sticky child opts into ``enable_state_snapshot`` but its
+    embedding parent does not — ADR-018 Decision 5 enforcement.
+
+    A sticky child is persisted across a WebSocket reconnect only when BOTH
+    the child class AND its embedding parent class set
+    ``enable_state_snapshot = True`` (the ``sticky_child_should_persist``
+    both-opt-in gate). A child that opts in under a parent that does not gets
+    silently-incomplete persistence — its save is skipped, its state is lost
+    on reconnect. V011 surfaces that misconfiguration at ``manage.py check``
+    time.
+
+    Discovery (mirrors the A075 template scanner):
+
+    1. Walk ``LiveView`` subclasses, build a ``template_name -> [parent cls]``
+       map (a child template may be embedded under several parents).
+    2. Walk every template file, for each ``{% live_render ... sticky=True %}``
+       tag resolve the child class via ``import_string``.
+    3. If the child opts in (``enable_state_snapshot`` + truthy ``sticky_id``)
+       and a matched parent does NOT opt in → emit V011.
+
+    Conservative skips (no false positives): unresolvable dynamic view paths,
+    ``import_string`` failures, templates with no matching parent class, and
+    children that themselves don't opt in are all skipped silently — the
+    runtime one-shot warning (``warn_sticky_child_optin_skip``) is the safety
+    net for cases the static scan can't see.
+    """
+    errors = []
+
+    if _is_check_suppressed("djust.V011"):
+        return errors
+
+    try:
+        from djust.live_view import LiveView
+    except ImportError:
+        return errors
+
+    from django.utils.module_loading import import_string
+
+    # Build template_name -> [parent LiveView class, ...]. Mirrors
+    # check_liveviews' internal-class skip: djust-internal classes are
+    # skipped UNLESS the module is a test/example module.
+    parent_map = {}
+    for cls in _walk_subclasses(LiveView):
+        module = getattr(cls, "__module__", "") or ""
+        if module.startswith("djust.") or module.startswith("djust_"):
+            if "test" not in module and "example" not in module:
+                continue
+        tpl = cls.__dict__.get("template_name")
+        if not tpl:
+            continue
+        parent_map.setdefault(tpl, []).append(cls)
+
+    for filepath in _iter_template_files(_get_template_dirs()):
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError:
+            continue
+
+        # The template's path RELATIVE to its template dir is what
+        # ``template_name`` holds (e.g. ``parent_page.html`` or
+        # ``app/parent.html``). Resolve against each configured dir.
+        relname = None
+        for tpl_dir in _get_template_dirs():
+            try:
+                candidate = os.path.relpath(filepath, tpl_dir)
+            except ValueError:
+                continue
+            if not candidate.startswith(".."):
+                relname = candidate
+                break
+        if relname is None:
+            continue
+
+        scan_source = _strip_verbatim_blocks(content)
+        for match in _LIVE_RENDER_TAG_RE.finditer(scan_source):
+            args = match.group(1)
+
+            # Only sticky embeds are persistable (Decision 1) — a non-sticky
+            # ``{% live_render %}`` is explicitly unsupported, not flagged.
+            sticky_falsy = bool(_LIVE_RENDER_STICKY_FALSY_RE.search(args))
+            sticky_truthy = bool(_LIVE_RENDER_STICKY_TRUTHY_RE.search(args)) and not sticky_falsy
+            if not sticky_truthy:
+                continue
+
+            arg_match = _LIVE_RENDER_FIRST_ARG_RE.match(args)
+            if not arg_match:
+                # Dynamic (bare-identifier) child path — unresolvable
+                # statically; the runtime warning covers it.
+                continue
+            child_path = arg_match.group(1)
+
+            try:
+                child_cls = import_string(child_path)
+            except (ImportError, AttributeError, ModuleNotFoundError, ValueError):
+                # A broken path is A075/runtime's problem, not V011's.
+                continue
+
+            # Child opt-in test: only an opted-in sticky child can be a
+            # Decision-5 misconfiguration. "Neither opts in" is silent.
+            child_opts_in = bool(getattr(child_cls, "enable_state_snapshot", False)) and bool(
+                getattr(child_cls, "sticky_id", None)
+            )
+            if not child_opts_in:
+                continue
+
+            matched_parents = parent_map.get(relname, [])
+            if not matched_parents:
+                # No parent class maps to this template — can't statically
+                # determine the parent. Skip conservatively.
+                continue
+
+            for parent_cls in matched_parents:
+                if getattr(parent_cls, "enable_state_snapshot", False):
+                    continue  # this parent opts in — tree-consistent restore
+
+                child_label = "%s.%s" % (child_cls.__module__, child_cls.__qualname__)
+                parent_label = "%s.%s" % (parent_cls.__module__, parent_cls.__qualname__)
+
+                child_file = ""
+                child_line = None
+                try:
+                    child_file = inspect.getfile(child_cls)
+                    child_line = inspect.getsourcelines(child_cls)[1]
+                except (OSError, TypeError):
+                    pass  # Source introspection may fail for some classes.
+
+                errors.append(
+                    DjustWarning(
+                        "%s: used as a sticky child with enable_state_snapshot=True, "
+                        "but embedding parent %s does not opt in — the child's state "
+                        "will be silently dropped on reconnect." % (child_label, parent_label),
+                        hint=(
+                            "ADR-018 Decision 5: a sticky child is persisted across a "
+                            "WebSocket reconnect only when BOTH the child class and its "
+                            "embedding parent class set enable_state_snapshot = True. "
+                            "Requiring the parent too keeps the reconnect-restored "
+                            "subtree tree-consistent — a child must not restore to "
+                            "saved state while its parent re-mounts fresh. Suppress "
+                            "with DJUST_CONFIG = {'suppress_checks': ['V011']} if you "
+                            "have a deliberate reason."
+                        ),
+                        id="djust.V011",
+                        fix_hint=(
+                            "Add `enable_state_snapshot = True` to `%s`, or remove it "
+                            "from `%s`." % (parent_cls.__qualname__, child_cls.__qualname__)
+                        ),
+                        file_path=child_file,
+                        line_number=child_line,
+                    )
+                )
+
+    return errors
+
+
 def _check_service_instances_in_mount(errors):
     """V006 (Warning): Detect service/client/session instantiation in mount() methods via AST.
 

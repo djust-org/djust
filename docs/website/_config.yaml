@@ -181,6 +181,11 @@ navigation:
         file: guides/sticky-liveviews.md
         order: 6.8
         level: intermediate
+      - title: Sticky-Child State Persistence
+        slug: sticky-child-persistence
+        file: guides/sticky-child-persistence.md
+        order: 6.85
+        level: intermediate
       - title: Model Binding
         slug: model-binding
         file: guides/model-binding.md

@@ -3260,6 +3260,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         from .mixins.sticky import (
                             save_sticky_child_state,
                             sticky_child_should_persist,
+                            warn_sticky_child_optin_skip,
                             write_sticky_index_and_prune,
                         )
 
@@ -3314,6 +3315,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     "Failed to save sticky-child state after WS event %r",
                                     sanitize_for_log(event_name or ""),
                                 )
+                        elif target_view is not self.view_instance:
+                            # ADR-018 iter 18c — the gate above was False for a
+                            # CHILD event. ``warn_sticky_child_optin_skip`` is a
+                            # no-op UNLESS this is the Decision-5 opt-in mismatch
+                            # (child opted in, parent did not); when it is, it
+                            # emits a one-shot warning so the silent
+                            # persistence gap is observable. Safe to call for
+                            # every non-parent target_view — the helper
+                            # re-checks the misconfiguration itself.
+                            warn_sticky_child_optin_skip(target_view, self.view_instance)
 
                         # Auto-detect unchanged state: if no public assigns were
                         # reassigned, auto-skip the render (eliminates DJE-053).

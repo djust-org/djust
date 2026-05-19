@@ -1740,6 +1740,18 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         from ..mixins.sticky import restore_sticky_child_state
 
         try:
+            # ADR-018 iter 18c — path-derivation invariant. ``parent_path``
+            # (the 4th arg) MUST match the path used at SAVE time: the WS save
+            # uses ``_djust_mount_request.path`` (websocket.py), the HTTP save
+            # uses ``request.path`` (mixins/request.py). On all current
+            # transports the restore-time ``request.path`` and the save-time
+            # parent mount-request path coincide — the parent is re-mounted on
+            # the same URL it was saved on. If a future transport makes the
+            # restore-time request path differ from the parent's original
+            # mount path, this key derivation breaks SILENTLY: the restore
+            # looks under the wrong ``liveview_<path>__sticky__<id>`` key and
+            # falls through to a fresh ``mount()``. Keep save and restore
+            # path-derivation in lockstep.
             restored = restore_sticky_child_state(
                 child,
                 parent,
