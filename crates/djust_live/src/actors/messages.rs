@@ -94,13 +94,29 @@ pub struct MountResponse {
 }
 
 /// Response from handling an event
+///
+/// `patches` and `html` are intentionally NOT marked `skip_serializing_if`
+/// (#1541, sibling of #1538). The structurally-similar #1538 (`VNode.djust_id`)
+/// was fixed by adding `#[serde(default)]` alongside `skip_serializing_if`,
+/// but that fix only works for STRICTLY TRAILING optionals: under msgpack a
+/// plain `#[derive(Serialize, Deserialize)]` struct is a positional array,
+/// and `skip_serializing_if` on a LEADING optional shifts later elements
+/// into the wrong positional slot on deserialize (`default` doesn't help
+/// because the deserializer isn't running out of elements — it's reading
+/// wrong-type values at the wrong positions). Empirically verified — see
+/// `crates/djust_vdom/tests/wire_protocol_snapshot.rs ::
+/// msgpack_skip_with_default_works_for_trailing_optional_only`.
+///
+/// Defense-in-depth: the outer `PatchResponse` is not currently
+/// `rmp_serde::to_vec`'d on any path (only the inner `Vec<Patch>` is at
+/// `lib.rs:679`), but future cross-process actor transport could exercise
+/// the round-trip. Cost of always serializing both optionals is 1 byte each
+/// when `None` (msgpack `nil`) — negligible.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchResponse {
     /// VDOM patches (if available)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub patches: Option<Vec<Patch>>,
     /// Full HTML (fallback if no VDOM)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub html: Option<String>,
     /// Version number for ordering
     pub version: u64,
@@ -275,9 +291,16 @@ mod tests {
             version: 3,
         };
 
-        // Patches should be present, html should be omitted in JSON
+        // Both fields are now always serialized (#1541 — `skip_serializing_if`
+        // was removed because it breaks the msgpack positional round-trip
+        // for leading optionals; the empirical proof is in
+        // `crates/djust_vdom/tests/wire_protocol_snapshot.rs ::
+        // msgpack_skip_with_default_works_for_trailing_optional_only`).
+        // Verify the JSON now carries `html: null` rather than omitting it.
         let json = serde_json::to_string(&response).unwrap();
-        assert!(!json.contains("\"html\""));
+        assert!(json.contains("\"html\":null"));
+        assert!(json.contains("\"patches\":[]"));
+        assert!(json.contains("\"version\":3"));
     }
 
     #[test]
@@ -291,5 +314,100 @@ mod tests {
         let cloned = result.clone();
         assert_eq!(cloned.html, result.html);
         assert_eq!(cloned.version, result.version);
+    }
+
+    // ========================================================================
+    // MessagePack round-trip regression tests (#1541, sibling of #1538)
+    //
+    // `PatchResponse` is a plain `#[derive(Serialize, Deserialize)]` struct
+    // (no `#[serde(tag = ...)]`), so under MessagePack it serializes as a
+    // positional array. `patches` and `html` are LEADING optionals — the
+    // `#[serde(default, skip_serializing_if = "Option::is_none")]` shape
+    // that fixes #1538 (VNode trailing optional) does NOT work here, because
+    // `skip_serializing_if` on a leading field shifts later elements into
+    // the wrong positional slot on deserialize. The fix for #1541 is to
+    // remove `skip_serializing_if` entirely; `None` is then serialized as
+    // msgpack `nil` (1 byte) and positional slots stay aligned.
+    //
+    // See the structural witnesses in
+    // `crates/djust_vdom/tests/wire_protocol_snapshot.rs ::
+    // msgpack_skip_with_default_works_for_trailing_optional_only` for the
+    // empirical proof of why `default` alone does not generalize.
+    //
+    // These tests cannot run today under `cargo test -p djust_live` because
+    // the crate hard-sets pyo3's `extension-module` feature, breaking the
+    // libpython link (#1543). They DO compile-check via `cargo build -p
+    // djust_live --tests`, and will exercise once #1543 lands.
+    // ========================================================================
+
+    // `Patch` (in djust_vdom) does not derive `PartialEq`, so these tests
+    // assert structural properties (is_some / len / inner value) rather
+    // than `assert_eq!` on `Option<Vec<Patch>>`.
+
+    #[test]
+    fn msgpack_round_trip_patch_response_both_none() {
+        let original = PatchResponse {
+            patches: None,
+            html: None,
+            version: 1,
+        };
+        let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
+        let restored: PatchResponse = rmp_serde::from_slice(&bytes)
+            .expect("msgpack deserialize must not fail when both optionals are None (#1541)");
+        assert!(restored.patches.is_none());
+        assert!(restored.html.is_none());
+        assert_eq!(restored.version, 1);
+    }
+
+    #[test]
+    fn msgpack_round_trip_patch_response_patches_none() {
+        // Only `patches` is None; `html` is present. This is exactly the
+        // shape #1541 was hitting that the #1538 fix couldn't repair.
+        let original = PatchResponse {
+            patches: None,
+            html: Some("<div>updated</div>".to_string()),
+            version: 2,
+        };
+        let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
+        let restored: PatchResponse =
+            rmp_serde::from_slice(&bytes).expect("msgpack deserialize (#1541)");
+        assert!(restored.patches.is_none());
+        assert_eq!(restored.html.as_deref(), Some("<div>updated</div>"));
+        assert_eq!(restored.version, 2);
+    }
+
+    #[test]
+    fn msgpack_round_trip_patch_response_html_none() {
+        // Only `html` is None; `patches` is present (empty list).
+        let original = PatchResponse {
+            patches: Some(Vec::new()),
+            html: None,
+            version: 3,
+        };
+        let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
+        let restored: PatchResponse =
+            rmp_serde::from_slice(&bytes).expect("msgpack deserialize (#1541)");
+        let patches = restored.patches.expect("patches preserved as Some");
+        assert!(patches.is_empty(), "empty patch list preserved");
+        assert!(restored.html.is_none());
+        assert_eq!(restored.version, 3);
+    }
+
+    #[test]
+    fn msgpack_round_trip_patch_response_both_some() {
+        // Happy-path control: must succeed both before AND after the #1541
+        // fix. Pins that removing `skip_serializing_if` doesn't perturb the
+        // all-Some path (the only path that worked pre-fix).
+        let original = PatchResponse {
+            patches: Some(Vec::new()),
+            html: Some("<div/>".to_string()),
+            version: 4,
+        };
+        let bytes = rmp_serde::to_vec(&original).expect("msgpack serialize");
+        let restored: PatchResponse = rmp_serde::from_slice(&bytes).expect("msgpack deserialize");
+        let patches = restored.patches.expect("patches preserved as Some");
+        assert!(patches.is_empty());
+        assert_eq!(restored.html.as_deref(), Some("<div/>"));
+        assert_eq!(restored.version, 4);
     }
 }
