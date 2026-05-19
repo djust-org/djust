@@ -27,6 +27,10 @@ from .decorators import (
     debounce,
     throttle,
     on_mount,
+    optimistic,
+    cache,
+    client_state,
+    background,
 )
 from .auth import LoginRequiredMixin, PermissionRequiredMixin
 from .react import react_components, register_react_component, ReactMixin
@@ -303,6 +307,11 @@ __all__ = [
     "PermissionRequiredMixin",
     # on_mount hooks
     "on_mount",
+    # Optimistic UI / caching / client-state / background-work decorators
+    "optimistic",
+    "cache",
+    "client_state",
+    "background",
     # Rust components (optional)
     "rust_components",
     # Database change notifications (pg_notify bridge)
