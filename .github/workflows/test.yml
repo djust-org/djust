@@ -161,14 +161,21 @@ jobs:
       - name: Install free-threaded Python 3.14t
         run: uv python install 3.14t
 
-      - name: Build extension + install deps (3.14t)
+      - name: Build extension + install test deps (3.14t)
         run: |
-          uv sync --extra dev --python 3.14t
-          uv run --python 3.14t maturin develop --release
+          # The [dev] extra pulls orjson, which has no free-threaded build
+          # yet (orjson upstream does not support free-threaded Python).
+          # orjson is optional for djust at runtime (find_spec + stdlib json
+          # fallback), so install only djust core (via maturin develop, which
+          # builds the extension and installs the package + its core deps)
+          # plus the test runner -- never the full [dev] extra.
+          uv venv --python 3.14t
+          uv pip install maturin pytest pytest-asyncio
+          uv run maturin develop --release
 
       - name: Free-threaded smoke test (no-GIL assertion)
         run: |
-          uv run --python 3.14t python -m pytest \
+          uv run python -m pytest \
             python/djust/tests/test_rust_module_thread_safety.py -v
 
   # JavaScript tests - runs in parallel
