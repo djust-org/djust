@@ -245,3 +245,76 @@ class TestDictRoundTrip:
         # The real test: render with the restored state and verify output
         html = restored.render()
         assert "test" in html
+
+
+class TestVNodeMsgpackRoundTrip:
+    """#1538: VNode with djust_id=None must survive Rust msgpack round-trip.
+
+    `VNode.djust_id` is serialized with `skip_serializing_if = Option::is_none`.
+    Under MessagePack (positional-array struct encoding) a `None` djust_id
+    drops the trailing array element, so the derived deserializer used to
+    reject the short array with
+    `invalid length 5, expected struct VNode with 6 elements`.
+
+    Text nodes always carry `djust_id: None`, so any template containing
+    text produces a `last_vdom` tree that hits this path. This reproduces
+    the user-observed failure: `InMemoryStateBackend.get` does
+    `serialize_msgpack()` -> `deserialize_msgpack()` and discards the cache
+    entry on the exception, losing cross-reconnect state continuity.
+    """
+
+    @pytest.mark.skipif(
+        not _rust_available(),
+        reason="Rust extensions not built",
+    )
+    def test_vnode_djust_id_none_survives_msgpack_roundtrip(self):
+        """A view whose last_vdom has djust_id-less text nodes must round-trip."""
+        from djust._rust import RustLiveView
+
+        # Template contains literal text -> parsed last_vdom has text nodes
+        # with djust_id=None alongside element nodes with djust_id=Some.
+        view = RustLiveView("<div>Hello {{ name }}, welcome!</div>", [])
+        view.set_template_dirs([])
+        view.update_state({"name": "world"})
+
+        # render_with_diff() populates last_vdom (render() does not).
+        html, _patches, _version = view.render_with_diff()
+        assert "Hello" in html and "world" in html
+
+        # The #1538 path: serialize the (text-node-containing) last_vdom
+        # to msgpack and deserialize it back. This used to raise
+        # PyValueError("...invalid length 5, expected struct VNode with
+        # 6 elements").
+        serialized = view.serialize_msgpack()
+        restored = RustLiveView.deserialize_msgpack(serialized)
+
+        # Restored view's last_vdom must be intact — re-render and confirm.
+        restored.set_template_dirs([])
+        restored_html, _p, _v = restored.render_with_diff()
+        assert "Hello" in restored_html
+        assert "world" in restored_html
+
+    @pytest.mark.skipif(
+        not _rust_available(),
+        reason="Rust extensions not built",
+    )
+    def test_vnode_text_only_template_survives_msgpack_roundtrip(self):
+        """A nested template with multiple text nodes must round-trip."""
+        from djust._rust import RustLiveView
+
+        view = RustLiveView("<ul><li>one</li><li>{{ item }}</li><li>three</li></ul>", [])
+        view.set_template_dirs([])
+        view.update_state({"item": "two"})
+
+        view.render_with_diff()  # populate last_vdom
+
+        # Must not raise — the tree mixes element nodes (djust_id=Some) and
+        # text-node children (djust_id=None).
+        serialized = view.serialize_msgpack()
+        restored = RustLiveView.deserialize_msgpack(serialized)
+
+        restored.set_template_dirs([])
+        restored_html, _p, _v = restored.render_with_diff()
+        assert "one" in restored_html
+        assert "two" in restored_html
+        assert "three" in restored_html

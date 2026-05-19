@@ -123,7 +123,13 @@ pub struct VNode {
     pub key: Option<String>,
     /// Compact unique identifier for reliable patch targeting (e.g., "0", "1a", "2b")
     /// Stored in DOM as data-d attribute for O(1) querySelector lookup
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// `default` is REQUIRED alongside `skip_serializing_if` (#1538): under
+    /// MessagePack a struct serializes as a positional array, so a `None`
+    /// `djust_id` (every text node) drops the trailing element. Without
+    /// `default` the sequence-visitor deserializer rejects the short array
+    /// with `invalid length 5, expected struct VNode with 6 elements`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub djust_id: Option<String>,
     /// Cached HTML string for to_html() — set on dj-update="ignore" subtrees
     /// to avoid re-serializing unchanged content on every render.

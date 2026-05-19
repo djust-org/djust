@@ -246,6 +246,88 @@ fn snapshot_patch_remove_subtree() {
     assert_eq!(json, r#"{"type":"RemoveSubtree","id":"if-a3b1c2d4-0"}"#);
 }
 
+// ============================================================================
+// MessagePack round-trip tests (#1538)
+//
+// The snapshot tests above use `serde_json`, which encodes a struct as a
+// *map* of named fields — a missing optional key deserializes fine. That map
+// encoding is why the #1448 snapshot suite never caught #1538.
+//
+// `rmp_serde` (MessagePack) encodes a struct as a *positional array* for
+// compactness. `VNode.djust_id` has `skip_serializing_if = "Option::is_none"`,
+// so a `None` `djust_id` (every text node — see `parser.rs`) drops the
+// trailing array element, yielding a 5-element array. Without
+// `#[serde(default)]` the derived sequence-visitor `Deserialize` impl rejects
+// it: `invalid length 5, expected struct VNode with 6 elements`.
+//
+// These tests round-trip `VNode` through the EXACT msgpack path used by
+// `RustLiveView::serialize_msgpack` / `deserialize_msgpack`.
+// ============================================================================
+
+#[test]
+fn msgpack_round_trip_vnode_djust_id_none() {
+    // The #1538 case: a VNode with `djust_id: None` (every text node).
+    let v = elem("div");
+    assert_eq!(v.djust_id, None);
+    let bytes = rmp_serde::to_vec(&v).expect("msgpack serialize");
+    let restored: VNode = rmp_serde::from_slice(&bytes)
+        .expect("msgpack deserialize of djust_id-None VNode must not fail (#1538)");
+    assert_eq!(
+        restored, v,
+        "djust_id-None VNode must survive msgpack round-trip"
+    );
+}
+
+#[test]
+fn msgpack_round_trip_vnode_djust_id_some() {
+    // The control case: a VNode with `djust_id: Some(...)` (6-element array).
+    let v = elem_with_id("span", "1a");
+    assert_eq!(v.djust_id, Some("1a".to_string()));
+    let bytes = rmp_serde::to_vec(&v).expect("msgpack serialize");
+    let restored: VNode = rmp_serde::from_slice(&bytes).expect("msgpack deserialize");
+    assert_eq!(
+        restored, v,
+        "djust_id-Some VNode must survive msgpack round-trip"
+    );
+}
+
+#[test]
+fn msgpack_round_trip_nested_tree_mixed_djust_id() {
+    // A realistic tree: an element node (`djust_id: Some`) whose children
+    // mix an element child (`Some`) and text-node children (`None`) — the
+    // exact shape the HTML parser produces for any template containing text.
+    let text_child = VNode {
+        tag: "#text".to_string(),
+        attrs: HashMap::new(),
+        children: Vec::new(),
+        text: Some("hello".to_string()),
+        key: None,
+        djust_id: None,
+        cached_html: None,
+    };
+    assert_eq!(text_child.djust_id, None);
+
+    let elem_child = elem_with_id("strong", "2b");
+
+    let mut second_text = text_child.clone();
+    second_text.text = Some(" world".to_string());
+
+    let mut root = elem_with_id("p", "1a");
+    root.children = vec![text_child.clone(), elem_child, second_text];
+
+    let bytes = rmp_serde::to_vec(&root).expect("msgpack serialize");
+    let restored: VNode = rmp_serde::from_slice(&bytes)
+        .expect("msgpack deserialize of mixed-djust_id tree must not fail (#1538)");
+    assert_eq!(
+        restored, root,
+        "nested tree with mixed djust_id presence must survive msgpack round-trip"
+    );
+    // Sanity: the text-node children really did carry `djust_id: None`.
+    assert_eq!(restored.children[0].djust_id, None);
+    assert_eq!(restored.children[2].djust_id, None);
+    assert_eq!(restored.children[1].djust_id, Some("2b".to_string()));
+}
+
 #[test]
 fn snapshot_all_variants_round_trip_via_serde() {
     // Sanity: every variant we emit must also DESERIALIZE cleanly via
