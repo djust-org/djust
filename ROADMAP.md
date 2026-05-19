@@ -309,11 +309,11 @@ and its only remaining open issue is the one genuinely blocked upstream.
 
 | Priority | Issue | Summary |
 |---|---|---|
-| **P0** | #1529 | bug — VDOM incremental diff mis-paths `SetText` patches when 2+ `{{ }}` text values change in one update |
-| **P2** | #1522 | a11y phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) |
-| **P2** | #1523 | a11y phase 2 — surface accessibility findings in `djust_audit` |
-| **P2** | #1432 | Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL |
-| **P3** | #1489 | Re-export optimistic/cache/client_state/background from top-level `djust.__all__` |
+| ~~**P0**~~ | ~~#1529~~ ✅ PR #1530 | bug — VDOM incremental diff mis-paths `SetText` patches when 2+ `{{ }}` text values change in one update |
+| ~~**P2**~~ | ~~#1522~~ ✅ PR #1532 | a11y phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) |
+| ~~**P2**~~ | ~~#1523~~ ✅ PR #1532 | a11y phase 2 — surface accessibility findings in `djust_audit` |
+| ~~**P2**~~ | ~~#1432~~ ✅ PR #1535 | Declare `djust._rust` free-threaded-safe so 3.13t/3.14t users keep no-GIL |
+| ~~**P3**~~ | ~~#1489~~ ✅ PR #1536 | Re-export optimistic/cache/client_state/background from top-level `djust.__all__` |
 
 **Detail:**
 
@@ -351,8 +351,15 @@ final at GA rather than growing in the first minor.
   #1529 is a standalone bugfix pipeline and drains first (P0). #1522 + #1523
   cluster as the a11y-phase-2 group; #1432 and #1489 are solo small PRs.
 
-**Status (2026-05-19):** Phase 2 staged (#1529 added as a release-blocking
-bugfix). Phase 1 complete (#1526/#1527/#1528 merged). Drain in progress.
+**Status (2026-05-19):** **v1.0.0rc4 drain complete.** Phase 1 — 3 ADR-018
+iterations (#1526/#1527/#1528). Phase 2 — 4 PRs: #1530 (#1529 VDOM diff fix),
+#1532 (#1522 + #1523 a11y phase 2), #1535 (#1432 free-threaded-safe), #1536
+(#1489 top-level re-exports). All 5 Phase-2 issues closed; all 14 pipeline
+stages + all CI green per PR; 2 🟡 review findings total (one fixed
+in-pipeline, one filed as #1533). Follow-ups filed during the drain: #1533
+(dropdown-in-dialog keyboard routing), #1534 (free-threading hardening +
+`3.14t` CI leg). Pending: `/pipeline-retro --milestone v1.0.0rc4` and
+`/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`).
 
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
