@@ -33,7 +33,7 @@ the audit of every call site shows there is almost nothing to migrate:
   `check_object_permission`, `_ensure_tenant`) that touch the DB internally.
   All three fire **once per WebSocket connection at mount**, never per event.
 - The remaining **123** sites wrap Rust-extension calls (58), user-supplied
-  callbacks (29), framework state-plumbing (27), Channels group ops (5), and
+  callbacks (31), framework state-plumbing (25), Channels group ops (5), and
   Django session-store ops (4) — none of which the native async ORM touches.
 
 The native-async-ORM migration #1434 envisioned has **no hot-path surface**
@@ -75,8 +75,8 @@ Counts, per file:
 | `websocket.py` | 3 | 0 | 2 | 32 | 17 | 0 | 17 | 71 |
 | `sse.py` | 0 | 0 | 0 | 10 | 4 | 0 | 2 | 16 |
 | `runtime.py` | 0 | 0 | 0 | 10 | 3 | 0 | 2 | 15 |
-| `streaming.py` | 0 | 0 | 0 | 5 | 0 | 0 | 1 | 6 |
-| `mixins/sticky.py` | 0 | 0 | 2 | 0 | 0 | 0 | 2 | 4 |
+| `streaming.py` | 0 | 0 | 0 | 5 | 1 | 0 | 0 | 6 |
+| `mixins/sticky.py` | 0 | 0 | 2 | 0 | 1 | 0 | 1 | 4 |
 | `mixins/notifications.py` | 0 | 0 | 0 | 0 | 0 | 3 | 0 | 3 |
 | `mixins/request.py` | 0 | 0 | 0 | 0 | 0 | 0 | 2 | 2 |
 | `websocket_utils.py` | 0 | 0 | 0 | 0 | 2 | 0 | 0 | 2 |
@@ -86,7 +86,7 @@ Counts, per file:
 | `push.py` | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 1 |
 | `presence.py` | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 1 |
 | `testing.py` | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 1 |
-| **Total** | **3** | **0** | **4** | **58** | **29** | **5** | **27** | **126** |
+| **Total** | **3** | **0** | **4** | **58** | **31** | **5** | **25** | **126** |
 
 `CACHE` is zero: the issue speculated `sync_to_async(cache.get)` sites might
 be replaceable with `await cache.aget()`. There are none — djust does not
@@ -126,7 +126,7 @@ Three observations make even these poor migration candidates:
   extension; the extension releases the GIL during the work, so the
   `sync_to_async` thread hop is correct. Migrating them needs an async Rust
   surface — explicitly out of scope per #1434 and a much larger effort.
-- **CALLBACK — 29 sites.** User-supplied lifecycle methods and handlers
+- **CALLBACK — 31 sites.** User-supplied lifecycle methods and handlers
   (`mount`, `handle_params`, `get_context_data`, `handle_tick`, `handle_info`,
   `@event_handler` methods, `start_async` callbacks, `handle_async_result`).
   The framework cannot rewrite user code. djust *already* offers the escape
@@ -141,7 +141,7 @@ Three observations make even these poor migration candidates:
   native async (`aget`/`aset`/`apop`). Session store, not Model ORM.
 - **CHANNELS — 5 sites.** `channel_layer.group_send` and the Postgres
   `LISTEN` listener coroutine. Not ORM.
-- **OTHER — 27 sites.** Framework state-plumbing (`_restore_*`,
+- **OTHER — 25 sites.** Framework state-plumbing (`_restore_*`,
   `_capture_snapshot_state`, `_assign_component_ids`, time-travel restore),
   presence-backend ops, `get_template` (template-loader *filesystem* I/O,
   wrapped with `database_sync_to_async` despite the name), and composite view
@@ -195,7 +195,7 @@ measured win for framework code is **0%**. The gate says deprioritize.
    Model.objects.aget()`" — a guide note, not a framework change.
 5. **`scripts/bench_sync_to_async_overhead.py` stays** as the re-runnable
    measurement if the question resurfaces (e.g. after an async Rust surface
-   exists, which would convert the 61 RUST sites — a separate, much larger
+   exists, which would convert the 58 RUST sites — a separate, much larger
    effort with its own issue if ever pursued).
 
 ## Appendix A — full classification (126 sites)
@@ -329,7 +329,7 @@ SSE path is not the per-event hot path #1434 targets.
 | 273 | `render_with_diff` | RUST |
 | 285 | `_strip_comments_and_whitespace` | RUST |
 | 286 | `_extract_liveview_content` | RUST |
-| 306 | `get_context_data` | OTHER |
+| 306 | `get_context_data` | CALLBACK |
 | 309 | `render_to_string` | RUST |
 | 314 | `tmpl.render` | RUST |
 
@@ -339,7 +339,7 @@ SSE path is not the per-event hot path #1434 targets.
 |---|---|---|
 | 181 | `_get_private_state` | OTHER |
 | 189 | `save_session.pop` | SESSION |
-| 196 | `get_context_data` | OTHER |
+| 196 | `get_context_data` | CALLBACK |
 | 263 | `save_session.pop` | SESSION |
 
 ### `mixins/notifications.py` (3)
