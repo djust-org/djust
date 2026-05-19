@@ -247,20 +247,24 @@ skill items (#1375, #1376, #1384, #1387, #1507, #1511, #1516, #1524) were
 resolved upstream in `pipeline-skills` and their Action Tracker rows closed.
 Post-rc3 work is the `v1.0.0rc4` milestone below.
 
-## Shipped: v1.0.0rc4 — Sticky-child state persistence
+## Next: v1.0.0rc4 — Sticky-child state persistence + final pre-1.0 cleanup
 
-> Created 2026-05-18. Pulls #1471 (sticky-child `LiveView` WS-reconnect state
-> persistence) into the 1.0 line — the project decided this is a correctness
-> property the 1.0 stability commitment should include, so it ships in a
-> dedicated release candidate ahead of v1.0.0 final rather than deferring to
-> v1.1.0. Design locked by
-> [ADR-018](docs/adr/018-sticky-child-state-persistence.md).
+> Created 2026-05-18, scope-extended 2026-05-18. **Phase 1** pulled #1471
+> (sticky-child `LiveView` WS-reconnect state persistence) into the 1.0 line —
+> a correctness property the 1.0 stability commitment should include, design
+> locked by [ADR-018](docs/adr/018-sticky-child-state-persistence.md).
+> **Phase 2** folds the remaining tracked post-rc3 issues (#1432, #1489,
+> #1522, #1523) into rc4 rather than deferring them to v1.1.0, so v1.0.0 final
+> ships with the post-1.0 follow-up backlog drained. #1434 (native async ORM)
+> is the sole exception — hard-blocked on psycopg3 and kept in v1.1.0.
 > Completion → `/djust-release` cuts `v1.0.0rc4`.
 
 *Goal:* Close the #1471 gap — sticky children embedded with `{% live_render %}`
 do not persist their event-driven state across a WS reconnect (or on the HTTP
 path). Implement ADR-018's three iterations, then cut rc4 as the soak vehicle
 before v1.0.0 final.
+
+### Phase 1 — sticky-child state persistence (ADR-018) — ✅ SHIPPED
 
 | Priority | Item | Summary |
 |---|---|---|
@@ -290,15 +294,18 @@ CI green, 0 🔴 across the milestone. #1471 closed by #1528. Pending:
 `/pipeline-retro --milestone v1.0.0rc4` (milestone retrospective) and
 `/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`).
 
-## Planned: v1.1.0 — Post-1.0 follow-ups
+### Phase 2 — final pre-1.0 cleanup (#1432, #1489, #1522, #1523)
 
-> Created 2026-05-18. Houses the post-1.0 follow-ups carried out of the
-> v1.0.0 → rc3 arc: the accessibility phase-2 cluster deferred from #1513,
-> the free-threaded-Python safety declaration, and the top-level re-export
-> polish. None are release-blockers for v1.0.0 final.
+> Added 2026-05-18. The four remaining tracked post-rc3 issues, pulled out of
+> the v1.1.0 follow-up bucket so v1.0.0 final ships with the post-1.0 backlog
+> drained instead of carrying it into the first minor. #1434 (native async
+> ORM) is **not** included — it is hard-blocked on psycopg3 landing async
+> support and cannot be closed until that dependency ships; it stays in the
+> `v1.1.0` milestone below.
 
-*Goal:* Land the deferred-but-tracked post-1.0 work so the v1.0.0-arc retros
-close with nothing silently dropped.
+*Goal:* Drain every closeable post-rc3 follow-up into rc4, so v1.0.0 final's
+only remaining open issue is the one genuinely blocked on an upstream
+dependency.
 
 | Priority | Issue | Summary |
 |---|---|---|
@@ -315,7 +322,7 @@ deferred the two highest-complexity sub-areas. #1522 is a CSP-strict
 client-JS module (focus trap, Esc-to-close, roving tabindex) — it carries
 JSDOM-test + client-size-budget constraints and deserves a coherent design
 slice. #1523 adds accessibility findings to the `djust_audit` management
-command. Cluster both into one drain.
+command. Cluster both into one drain group.
 
 **#1432 — free-threaded-safe `djust._rust`.** Importing `djust._rust` into a
 free-threaded CPython (`python3.13t`/`3.14t`) currently auto-re-enables the
@@ -323,21 +330,47 @@ GIL with a `RuntimeWarning`, silently downgrading no-GIL users. Declare the
 PyO3 module free-threaded-safe (`gil_used = false` or equivalent) once the
 Rust code is confirmed thread-safe. Small, contained Rust-side change.
 
-**#1489 — top-level re-exports.** Consider re-exporting `optimistic` /
-`cache` / `client_state` / `background` from the top-level `djust.__all__`
-for import ergonomics. Explicitly deferred to the post-1.0 minor when filed.
-
-**Deferred / blocked (tracked, not in this milestone's drain):**
-- **#1434** — native async ORM (`sync_to_async(Model.objects.X)` → native
-  async). Blocked on psycopg3 landing; revisit when the dependency ships.
-
-*(#1471 — sticky-child WS-reconnect persistence — was pulled forward into the
-`v1.0.0rc4` milestone above; see ADR-018.)*
+**#1489 — top-level re-exports.** Re-export `optimistic` / `cache` /
+`client_state` / `background` from the top-level `djust.__all__` for import
+ergonomics (~15-line change). Lands in rc4 so the 1.0 public-API surface is
+final at GA rather than growing in the first minor.
 
 **Pipeline runner notes:**
-- `/pipeline-drain --milestone v1.1.0` once v1.0.0 final is cut.
-- #1522 + #1523 cluster as the a11y-phase-2 group; #1432 + #1489 are solo
-  small.
+- `/pipeline-drain --milestone v1.0.0rc4 --group` — Phase 1's three ADR-018
+  iterations are already merged; the drain picks up the four Phase-2 issues.
+  #1522 + #1523 cluster as the a11y-phase-2 group; #1432 and #1489 are solo
+  small PRs.
+
+**Status (2026-05-18):** Phase 2 staged. Phase 1 complete (#1526/#1527/#1528
+merged). Drain pending.
+
+## Planned: v1.1.0 — Post-1.0 follow-ups
+
+> Created 2026-05-18, rescoped 2026-05-18. The accessibility-phase-2 cluster
+> (#1522/#1523), the free-threaded-safe declaration (#1432), and the
+> top-level re-export polish (#1489) were pulled forward into the
+> `v1.0.0rc4` milestone above (Phase 2) so v1.0.0 final ships with the
+> post-rc3 backlog drained. This milestone now holds only the work that
+> genuinely cannot land in the 1.0 line.
+
+*Goal:* Track the single post-1.0 follow-up that is dependency-blocked, so it
+is not silently dropped when v1.0.0 final is cut.
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P2** | #1434 | Native async ORM — replace `sync_to_async(Model.objects.X)` with native async |
+
+**Detail:**
+
+**#1434 — native async ORM.** Replace `sync_to_async(Model.objects.X)`
+wrapping with Django's native async ORM. Hard-blocked: requires the psycopg3
+async driver migration to land upstream first. Cannot be worked or closed
+until the dependency ships — revisit when it does.
+
+**Pipeline runner notes:**
+- `/pipeline-drain --milestone v1.1.0` once v1.0.0 final is cut **and**
+  psycopg3 async support has shipped. Until then this milestone has no
+  drainable work.
 
 ## Released: v0.9.1 (2026-04-30)
 
