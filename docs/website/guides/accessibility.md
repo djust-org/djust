@@ -17,8 +17,8 @@ regressions in your own templates with the `Y` system checks, and — honestly �
 what is not yet covered.
 
 There is nothing to install or enable. The component ARIA support is built into
-the component library; the `Y` checks run automatically as part of
-`manage.py check`.
+the component library, the keyboard-interaction layer ships in `client.js`, and
+the `Y` checks run automatically as part of `manage.py check`.
 
 ## djust's 1.0 accessibility posture
 
@@ -238,6 +238,105 @@ comment explaining *why* the suppression is intentional.
 > for the `djust.Y001` – `djust.Y004` ids if you prefer the standard Django
 > mechanism.
 
+## Keyboard interaction
+
+The built-in component ARIA covers *roles and states* — it makes components
+correct to assistive technology. Keyboard *operability* is the other half: a
+keyboard-only user must be able to drive a modal, tablist, accordion, or
+dropdown without a mouse. djust ships that operability layer in `client.js` —
+the same bundle every djust page already loads. There is **nothing to install,
+enable, or wire up**; the keyboard handlers attach themselves at page load and
+follow the [W3C ARIA Authoring Practices](https://www.w3.org/WAI/ARIA/apg/)
+keyboard patterns.
+
+The keyboard layer hooks the ARIA roles and `dj-*` classes the component
+library already emits — there are no template changes, and it works for
+components morphed in by a VDOM re-render just as well as for components present
+at page load. It is implemented with a single delegated `keydown` listener on
+`document` plus one `MutationObserver`, so it is [CSP-strict](hooks.md) (no
+inline scripts) and has no per-component setup cost.
+
+It applies to the **djust-native templatetag components** — the `dj-*` class
+family emitted by `{% modal %}`, `{% tabs %}`, `{% accordion %}`, and
+`{% dropdown %}`. The Bootstrap-flavoured "simple" component variants
+(`data-bs-toggle` markup) are driven by Bootstrap's own JavaScript and are not
+in scope for this layer.
+
+### `{% modal %}` — focus trap and `Esc`-to-close
+
+While a `role="dialog"` modal is on the page:
+
+- **Focus is trapped inside the dialog.** Tab from the last focusable control
+  wraps to the first; Shift+Tab from the first wraps to the last. Focus cannot
+  leave the dialog with the keyboard.
+- **Focus moves into the dialog when it opens.** The first focusable control
+  receives focus (or the dialog container itself if the dialog has no focusable
+  children — Tab is then a no-op).
+- **Focus is restored when the dialog closes.** The element that was focused
+  before the dialog opened gets focus back.
+- **`Esc` closes the modal.** It dispatches the modal's configured close event
+  to the server (the same event the backdrop and close button fire), so the
+  server's `open` state stays in sync — closing client-side only would desync
+  it.
+- **Nested dialogs** are handled with a stack: the focus trap and `Esc` always
+  act on the top-most (most recently opened) dialog, and `Esc` pops one level.
+
+### `{% tabs %}` — arrow-key roving navigation
+
+A `role="tablist"` uses **roving `tabindex`**: exactly one tab is in the page
+tab order at a time.
+
+- **ArrowRight / ArrowLeft** move focus to the next / previous tab and wrap
+  around at the ends.
+- **Home / End** jump to the first / last tab.
+- Activation is **manual** — arrows move focus only; Enter or Space activates
+  the focused tab. (Manual activation is the safer choice because activating a
+  tab triggers a server round-trip.)
+
+### `{% accordion %}` — arrow-key focus movement
+
+- **ArrowDown / ArrowUp** move focus between accordion header buttons and wrap
+  around at the ends.
+- **Home / End** jump to the first / last header.
+
+Accordion headers keep their native tab order — each header is independently
+Tab-reachable (per the W3C APG, accordion headers are not a roving-`tabindex`
+widget). The arrow keys are an enhancement on top of that.
+
+### `{% dropdown %}` — arrow-key roving and `Esc`-to-close
+
+When a `role="menu"` dropdown is open:
+
+- **ArrowDown / ArrowUp** move focus between menu items and wrap; the first
+  ArrowDown after the menu opens focuses the first item.
+- **Home / End** jump to the first / last item.
+- **`Esc`** closes the menu (dispatching the dropdown's toggle event so the
+  server flips `open` to `False`) and returns focus to the trigger.
+
+### Auditing accessibility with `djust_audit --a11y`
+
+Alongside the `Y` checks that run automatically at `manage.py check` time, the
+`djust_audit` management command has an `--a11y` mode that runs the same
+accessibility scan on demand and reports the findings as a standalone audit:
+
+```bash
+python manage.py djust_audit --a11y
+```
+
+This runs the `Y001`–`Y004` template scan and prints a grouped, per-code
+report. Two flags compose with it:
+
+- `--a11y --json` emits a machine-readable `{"a11y_findings": [...],
+  "summary": {...}}` envelope, suitable for piping into other tooling.
+- `--a11y --strict` exits with status `1` if *any* finding exists — useful as a
+  CI gate. Without `--strict`, the mode always exits `0`: every `Y` finding is
+  a warning (there is no error tier), so a stray false positive never breaks a
+  build. This matches the exit-code behavior of the `--ast` security audit.
+
+`--a11y` sits alongside the existing `--ast` (security anti-patterns) and
+`--live` (runtime probe) audit modes, bringing accessibility into the same
+`djust_audit` workflow.
+
 ## Theming color-contrast WCAG validation
 
 Color contrast is the other half of accessibility djust validates — and it
@@ -283,16 +382,15 @@ deferred follow-up — tracked, not forgotten — and none of them block the 1.0
 accessibility gate, which is *interactive components are correct to assistive
 technology*.
 
-- **Keyboard interaction (client JS).** The 1.0 component ARIA pass ships
-  *roles and states* — it makes components *correct* to assistive technology.
-  It does **not** ship the client-side keyboard *operability* layer: a focus
-  trap and `Esc`-to-close for `modal`/`sheet`, arrow-key roving `tabindex` for
-  `tabs` and menus, and type-ahead for menus. This is client JavaScript work
-  (new modules under `static/djust/src/`) and is deferred to a dedicated
-  follow-up. The markup must land first regardless — roles and `aria-*` are the
-  foundation the keyboard handlers build on. Until then, mouse and screen-reader
-  users are well served; full keyboard-only operation of these specific
-  widgets is in progress.
+- **Keyboard interaction — type-ahead and `sheet` coverage.** The core
+  keyboard *operability* layer **has shipped** — see
+  [Keyboard interaction](#keyboard-interaction) above for the focus trap,
+  `Esc`-to-close, and arrow-key roving navigation that `{% modal %}`,
+  `{% tabs %}`, `{% accordion %}`, and `{% dropdown %}` get out of the box.
+  What is still deferred is the long tail: **type-ahead** for menus (jumping to
+  an item by typing its first letters) and keyboard operability for the P2/P3
+  components such as `sheet` and `command_palette`. Mouse, screen-reader, and
+  keyboard users are all well served for the core interactive components today.
 - **P2 / P3 component ARIA polish.** A second tier of components — `popover`,
   `collapsible`, `sheet`, `command_palette`, `context_menu`, `progress`, and
   `tooltip` — have the same kind of minor ARIA gaps as the interactive set but
@@ -307,10 +405,10 @@ technology*.
   validation, missing `lang` attribute, and redundant `role` detection are
   natural further additions, tracked for a future release.
 
-If full keyboard operability or one of the deferred items is a hard requirement
-for your app today, you can add the keyboard handling yourself with a
-[client-side hook](hooks.md) — the ARIA markup djust emits is already correct,
-so a hook only needs to wire up the key events.
+If one of the deferred items — menu type-ahead, or keyboard operability for a
+P2/P3 component — is a hard requirement for your app today, you can add the
+handling yourself with a [client-side hook](hooks.md): the ARIA markup djust
+emits is already correct, so a hook only needs to wire up the key events.
 
 ## See also
 
@@ -319,4 +417,4 @@ so a hook only needs to wire up the key events.
 - [CSS Frameworks](css-frameworks.md) — styling components (djust has zero
   opinions on CSS; bring your own).
 - [Hooks](hooks.md) — client-side JavaScript lifecycle hooks, the place to add
-  custom keyboard handling until the built-in layer ships.
+  any keyboard handling the built-in layer does not yet cover.
