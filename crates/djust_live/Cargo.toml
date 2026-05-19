@@ -12,8 +12,24 @@ name = "djust_live"
 # Both cdylib (for Python module _rust) and rlib (for other Rust crates)
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# `extension-module` tells PyO3 not to link libpython — symbols come from the
+# host interpreter at load time. This is correct for the maturin / runtime
+# build path, but breaks `cargo test -p djust_live` because there is no host
+# interpreter at link time (`ld: symbol(s) not found ... Py_True`).
+#
+# Gating `extension-module` behind a default-on feature (#1543) keeps the
+# maturin build path unchanged (default = ["extension-module"] reproduces
+# the prior behavior for `make build` / `cargo build`) while letting tests
+# opt out with `cargo test -p djust_live --no-default-features`. The
+# top-level `[tool.maturin]` block in `pyproject.toml` continues to pass
+# `pyo3/extension-module` explicitly, so maturin remains independent of
+# our feature default.
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
-pyo3 = { workspace = true, features = ["extension-module"] }
+pyo3 = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 rmp-serde.workspace = true

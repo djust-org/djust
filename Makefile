@@ -156,7 +156,7 @@ test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
 	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
 	PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
-	PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live -q > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
+	PYO3_PYTHON=$$(pwd)/.venv/bin/python sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
 	npm test > /tmp/djust-test-js.log 2>&1 & JS_PID=$$!; \
 	wait $$PY_PID || PY_EXIT=$$?; \
 	wait $$RS_PID || RS_EXIT=$$?; \
@@ -181,8 +181,10 @@ test-sequential: test-python test-js test-rust ## Run all tests sequentially (fa
 .PHONY: test-rust
 test-rust: ## Run Rust tests
 	@echo "$(GREEN)Running Rust tests...$(NC)"
-	@echo "$(YELLOW)Note: Excluding djust_live (PyO3 extension module - tested via Python)$(NC)"
+	@echo "$(YELLOW)Phase 1: workspace excluding djust_live (cdylib link constraint)$(NC)"
 	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live
+	@echo "$(YELLOW)Phase 2: djust_live with --no-default-features (libpython static link, #1543)$(NC)"
+	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test -p djust_live --no-default-features
 
 .PHONY: test-python
 test-python: ## Run Python tests
@@ -299,6 +301,7 @@ benchmark-rust: ## Run Rust benchmarks (Criterion)
 	@echo "$(GREEN)Running Rust benchmarks...$(NC)"
 	@echo "$(YELLOW)Note: This may take several minutes$(NC)"
 	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench --workspace --exclude djust_live 2>&1 | tee benchmark-rust.log
+	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench -p djust_live --no-default-features 2>&1 | tee -a benchmark-rust.log
 	@echo "$(GREEN)Rust benchmark results saved to benchmark-rust.log$(NC)"
 	@echo "$(YELLOW)HTML reports available in target/criterion/$(NC)"
 
