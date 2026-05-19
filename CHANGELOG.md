@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc6] - 2026-05-19
+
 ### Security
 
 - **Bumped `idna` 3.11 → 3.15 — patches CVE-2026-45409 (GHSA-65pc-fj4g-8rjx, Dependabot alert #101).** Specially crafted inputs to `idna.encode()` (`"٠" * N` or `"・" * N + "漢"`) hit the `valid_contexto` function prior to length rejection, so high values of N consumed significant resources — a ReDoS-style denial-of-service. Same class as CVE-2024-3651; the 2024 remediation was incomplete. idna 3.14 rejects long inputs early; 3.15 extends the early-reject to lesser-used per-label conversion and codec paths. `idna` is a transitive runtime dep (pulled in by `anyio` / `httpx` / `httpcore` / `requests`); the bump is a lockfile-only change via `uv lock --upgrade-package idna`, no direct-dep change in `pyproject.toml`. CVSS v4 6.9 / medium. Verified via full Python regression (7301 passed, 0 failed). Domain names cannot exceed 253 characters in normal usage, so the practical exposure surface was thin, but the fix removes the ReDoS class entirely.
