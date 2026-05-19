@@ -377,3 +377,148 @@ class TestThemeContextCache:
         # Identical bytes → no per-request leakage.
         assert ctx1["theme_head"] == ctx2["theme_head"]
         assert ctx1["theme_switcher"] == ctx2["theme_switcher"]
+
+
+def _render_mixin_theme_head():
+    """Drive ThemeMixin._setup_theme_context() and return self.theme_head.
+
+    Mirrors the reproducer (scratch/repro_1531.py): stubs ThemeManager via
+    MagicMock and patches the get_theme_manager lookup inside mixins.py.
+    """
+    from djust.theming.mixins import ThemeMixin
+
+    mgr = _make_manager()
+    with patch("djust.theming.mixins.get_theme_manager", return_value=mgr):
+        view = ThemeMixin()
+        view.mount(MagicMock())
+    return view
+
+
+class TestThemeMixinThemeHead:
+    """#1531 regression: ThemeMixin._setup_theme_context() must render
+    `theme_head.html` with the full context the template consumes.
+
+    Co-located with TestThemeContextCache.test_theme_head_context_string_
+    matches_classic_tag (the #1452 regression test) — that test pins the
+    context-processor path; these pin the third consumer, the ThemeMixin
+    path, so all three theme_head consumers agree.
+    """
+
+    def test_mixin_theme_head_includes_components_css_link(self):
+        """#1531 core symptom: ThemeMixin's theme_head MUST include the
+        components.css link.
+
+        Without `include_component_link` in the render context the
+        `{% if include_component_link %}` branch is falsy and the
+        `<link>` is dropped — theme components render unstyled.
+        """
+        view = _render_mixin_theme_head()
+        head = str(view.theme_head)
+        assert "djust_theming/css/components.css" in head, (
+            "components.css <link> missing from ThemeMixin theme_head — #1531. "
+            "ThemeMixin views render theme components unstyled.\n"
+            f"Got:\n{head}"
+        )
+
+    def test_mixin_theme_head_cookie_prefix_js_valid(self):
+        """#1531: the cookie-prefix interpolation must be valid JS.
+
+        With `cookie_prefix_js` missing from context the line renders as
+        `window.__djust_theme_cookie_prefix = ;` — a SyntaxError that
+        aborts the whole anti-FOUC <script> block.
+        """
+        view = _render_mixin_theme_head()
+        head = str(view.theme_head)
+        assert "window.__djust_theme_cookie_prefix = ;" not in head, (
+            f"cookie_prefix_js interpolation is empty — JS syntax error. #1531.\nGot:\n{head}"
+        )
+        # Positive form: the RHS must be a JSON string literal ("" or "ns_").
+        assert 'window.__djust_theme_cookie_prefix = "' in head, (
+            f"cookie_prefix_js did not render as a JSON string literal. #1531.\nGot:\n{head}"
+        )
+
+    def test_mixin_theme_head_matches_classic_tag(self):
+        """#1531 symmetry pin: ThemeMixin's theme_head must emit the same
+        component-affecting markers as `{% theme_head %}` for the
+        default-args case.
+
+        Mirrors the #1452 pin (test_theme_head_context_string_matches_
+        classic_tag) for the context-processor path. ThemeMixin is the
+        third path; the shared `build_theme_head_context()` builder keeps
+        them in lockstep. This is the structural defense — it would fail
+        again if a future template change added a 9th variable only one
+        path supplies.
+        """
+        from djust.theming.templatetags.theme_tags import theme_head as theme_head_tag
+
+        mgr = _make_manager()
+        mixin_head = str(_render_mixin_theme_head().theme_head)
+        with patch("djust.theming.templatetags.theme_tags.get_theme_manager", return_value=mgr):
+            tag_head = str(theme_head_tag({"request": MagicMock()}))
+
+        for marker in (
+            "djust_theming/css/components.css",
+            "djust_theming/css/print.css",
+            "djust_theming/js/components.js",
+            "djust_theming/js/theme.js",
+            "window.__djust_theme_cookie_prefix = ",
+            "setAttribute('dir', '",
+        ):
+            assert (marker in mixin_head) == (marker in tag_head), (
+                f"Marker {marker!r} differs between ThemeMixin theme_head and "
+                f"{{% theme_head %}} tag — #1531 path drift.\n"
+                f"mixin has it: {marker in mixin_head}; tag has it: {marker in tag_head}"
+            )
+
+    def test_mixin_theme_css_consistent_with_theme_head(self):
+        """#1531 risk-flag 5: `self.theme_css` must be sourced from the
+        shared builder's `css_block` so the standalone `{{ theme_css }}`
+        variable matches what `{{ theme_head }}` embeds — no smaller drift.
+        """
+        view = _render_mixin_theme_head()
+        assert str(view.theme_css) in str(view.theme_head), (
+            "self.theme_css is not embedded in self.theme_head — the mixin's "
+            "theme_css drifted from the builder output. #1531 risk-flag 5."
+        )
+
+    def test_build_theme_head_context_keyset(self):
+        """Builder-keyset invariant (#1123-style): build_theme_head_context()
+        must return exactly the variable set theme_head.html consumes.
+
+        A future template edit adding a `{{ new_var }}` without updating
+        the builder fails this test immediately — the cheapest guard
+        against a fourth drift.
+        """
+        from djust.theming.templatetags.theme_tags import build_theme_head_context
+
+        mgr = _make_manager()
+        ctx = build_theme_head_context(MagicMock(), manager=mgr)
+        expected = {
+            "loading_class",
+            "css_block",
+            "deferred_css_block",
+            "component_css_block",
+            "include_component_link",
+            "include_js",
+            "direction",
+            "cookie_prefix_js",
+        }
+        assert set(ctx.keys()) == expected, (
+            "build_theme_head_context() key set drifted from the variables "
+            f"theme_head.html consumes.\nexpected: {sorted(expected)}\n"
+            f"got:      {sorted(ctx.keys())}"
+        )
+
+    def test_build_theme_head_context_loading_class_param(self):
+        """The intentional loading_class divergence (#1531 risk-flag 3):
+        the tag passes loading_class=True; the mixin passes False. The
+        builder takes it as a parameter so the *intended* difference is
+        explicit and the *unintended* 5-key drift is eliminated.
+        """
+        from djust.theming.templatetags.theme_tags import build_theme_head_context
+
+        mgr = _make_manager()
+        ctx_true = build_theme_head_context(MagicMock(), manager=mgr, loading_class=True)
+        ctx_false = build_theme_head_context(MagicMock(), manager=mgr, loading_class=False)
+        assert ctx_true["loading_class"] is True
+        assert ctx_false["loading_class"] is False

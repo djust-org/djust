@@ -93,36 +93,30 @@ class ThemeMixin:
         state = self._theme_state
         presets = self._theme_manager.get_available_presets()
 
-        # Generate CSS using the central convenience function
+        # Generate raw CSS for push_event updates (client-side reactive
+        # theme changes — see _push_theme_update).
         prefix = get_css_prefix()
         css = generate_css_for_state(state, css_prefix=prefix)
 
-        # Build the CSS block (link or inline style)
-        from django.urls import reverse, NoReverseMatch
+        # Build the theme_head render context via the shared builder so the
+        # ThemeMixin path cannot drift from the {% theme_head %} tag (#1531 —
+        # the #1452 drift, repeated). loading_class=False: a LiveView mount is
+        # a reactive render, not a cold page load, so no loading-class flash.
+        from .templatetags.theme_tags import build_theme_head_context
 
-        try:
-            url = reverse("djust_theming:theme_css")
-            cache_buster = f"t={state.theme}&p={state.preset}&m={state.mode}"
-            if state.pack:
-                cache_buster += f"&pk={state.pack}"
-            css_block = f'<link rel="stylesheet" href="{url}?{cache_buster}" data-djust-theme id="djust-theme-css">'
-        except NoReverseMatch:
-            css_block = f'<style id="djust-theme-css" data-djust-theme>{css}</style>'
-
-        # Render theme_head via shared template
-        self.theme_head = mark_safe(
-            render_to_string(
-                "djust_theming/theme_head.html",
-                {
-                    "loading_class": False,
-                    "css_block": css_block,
-                    "include_js": True,
-                },
-            )
+        head_ctx = build_theme_head_context(
+            None,
+            loading_class=False,
+            manager=self._theme_manager,
         )
 
-        # Set theme_css - just the CSS (for cases where you want more control)
-        self.theme_css = css_block
+        # Render theme_head via shared template
+        self.theme_head = mark_safe(render_to_string("djust_theming/theme_head.html", head_ctx))
+
+        # Set theme_css - just the CSS block (for cases where you want more
+        # control). Sourced from the builder's css_block so the standalone
+        # {{ theme_css }} variable stays consistent with {{ theme_head }}.
+        self.theme_css = mark_safe(head_ctx["css_block"])
 
         # Raw CSS content (for push_event updates)
         self._theme_css_raw = css
