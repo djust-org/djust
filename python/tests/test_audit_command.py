@@ -663,3 +663,127 @@ class TestAuthInOutput:
         tags = _format_decorator_tags(meta)
         assert any("@permission_required" in t for t in tags)
         assert any("myapp.delete_item" in t for t in tags)
+
+
+# ---------------------------------------------------------------------------
+# --a11y mode (#1523) — accessibility (Y0xx) reporting
+# ---------------------------------------------------------------------------
+
+
+def _settings_with_tpl_dir(settings, tpl_dir):
+    """Point settings.TEMPLATES at *tpl_dir* only (DIRS-based, no APP_DIRS).
+
+    Mirrors the helper in python/djust/tests/test_accessibility_checks.py so
+    the command-integration tests can drive the same Y-check fixtures.
+    """
+    settings.TEMPLATES = [
+        {
+            "DIRS": [str(tpl_dir)],
+            "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+        }
+    ]
+
+
+class TestA11yMode:
+    """Integration tests for `djust_audit --a11y` (#1523).
+
+    The Y-check *regex* behavior is covered by
+    python/djust/tests/test_accessibility_checks.py. These tests cover only
+    the command integration layer: mode dispatch, output shape, exit codes.
+    """
+
+    def test_a11y_mode_runs(self, tmp_path, settings):
+        """`--a11y` runs and prints the accessibility-report banner."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<p>Hello</p>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        call_command("djust_audit", "--a11y", stdout=out)
+        output = out.getvalue()
+        assert "--a11y accessibility report" in output
+
+    def test_a11y_json_is_valid(self, tmp_path, settings):
+        """`--a11y --json` emits parseable JSON with the expected keys."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<p>Hello</p>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        call_command("djust_audit", "--a11y", "--json", stdout=out)
+        payload = json.loads(out.getvalue())
+        assert "a11y_findings" in payload
+        assert "summary" in payload
+        assert isinstance(payload["a11y_findings"], list)
+        assert payload["summary"]["total"] == len(payload["a11y_findings"])
+
+    def test_a11y_strict_exits_nonzero_on_findings(self, tmp_path, settings):
+        """`--a11y --strict` raises SystemExit(1) when a Y00x defect exists."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        # Icon-only button with no accessible name -> Y001.
+        (tpl_dir / "bad.html").write_text("<button class='close'>&times;</button>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        with pytest.raises(SystemExit) as excinfo:
+            call_command("djust_audit", "--a11y", "--strict", stdout=out)
+        assert excinfo.value.code == 1
+
+    def test_a11y_strict_clean_exits_zero(self, tmp_path, settings):
+        """`--a11y --strict` on a clean template dir does NOT raise."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text("<button>Close</button>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        # No exception — exit code 0.
+        call_command("djust_audit", "--a11y", "--strict", stdout=out)
+        assert "No findings" in out.getvalue()
+
+    def test_a11y_normal_mode_never_exits_nonzero(self, tmp_path, settings):
+        """Plain `--a11y` (no --strict) returns 0 even WITH Y00x findings.
+
+        Pins the all-warnings exit contract: Y001-Y004 are all warnings, so
+        normal mode never fails.
+        """
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<button class='close'>&times;</button>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        # Must NOT raise SystemExit.
+        call_command("djust_audit", "--a11y", stdout=out)
+        assert "Y001" in out.getvalue()
+
+    def test_a11y_pretty_groups_by_code(self, tmp_path, settings):
+        """Pretty output shows the Y00x code and the finding hint."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<button class='close'>&times;</button>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        call_command("djust_audit", "--a11y", stdout=out)
+        output = out.getvalue()
+        assert "Y001" in output
+        assert "accessible name" in output
+
+    def test_a11y_json_finding_shape(self, tmp_path, settings):
+        """Each JSON finding dict carries the six expected keys."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bad.html").write_text("<button class='close'>&times;</button>")
+        _settings_with_tpl_dir(settings, tpl_dir)
+
+        out = StringIO()
+        call_command("djust_audit", "--a11y", "--json", stdout=out)
+        payload = json.loads(out.getvalue())
+        assert len(payload["a11y_findings"]) >= 1
+        finding = payload["a11y_findings"][0]
+        for key in ("id", "msg", "hint", "fix_hint", "file_path", "line_number"):
+            assert key in finding

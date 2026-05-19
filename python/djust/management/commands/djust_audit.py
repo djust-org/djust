@@ -472,6 +472,19 @@ class Command(BaseCommand):
             dest="ast_no_templates",
             help="Skip template (.html) scanning in --ast mode.",
         )
+        parser.add_argument(
+            "--a11y",
+            action="store_true",
+            dest="a11y_mode",
+            help=(
+                "Run the accessibility (Y0xx) audit (#1523). Regex-scans "
+                "template files for missing accessible names, image alt "
+                "text, form-control labels, and positive tabindex. Emits "
+                "stable Y001-Y004 finding codes. All findings are warnings: "
+                "normal mode always exits 0; --strict exits 1 if any "
+                "finding exists."
+            ),
+        )
 
     def handle(self, *args, **options):
         json_output = options.get("json_output", False)
@@ -482,6 +495,7 @@ class Command(BaseCommand):
         dump_permissions = options.get("dump_permissions", False)
         live_url = options.get("live_url")
         ast_mode = options.get("ast_mode", False)
+        a11y_mode = options.get("a11y_mode", False)
 
         # --live: runtime probe (#661). Mutually informative with other modes
         # but runs independently — no LiveView collection needed.
@@ -493,6 +507,12 @@ class Command(BaseCommand):
         # LiveView introspection — walks source files on disk.
         if ast_mode:
             self._run_ast_audit(options)
+            return None
+
+        # --a11y: accessibility (Y0xx) audit (#1523). Runs the Y-check
+        # template scan independently of LiveView introspection.
+        if a11y_mode:
+            self._run_a11y_audit(options)
             return None
 
         audits = self._collect_audits(app_label, verbose)
@@ -598,6 +618,116 @@ class Command(BaseCommand):
         self.stdout.write(
             f"  Summary: {len(errors)} error(s), {len(warnings_)} warning(s), {len(infos)} info"
         )
+        self.stdout.write("")
+
+    def _run_a11y_audit(self, options):
+        """Run the accessibility (Y0xx) audit (#1523).
+
+        Mirrors :meth:`_run_ast_audit`: invokes :func:`check_accessibility`
+        directly, branches on ``--json``, and applies the strict exit-code
+        rule.
+
+        Exit-code nuance — Y001-Y004 are *all* :class:`DjustWarning`; there
+        is no error tier. So normal mode NEVER exits non-zero; ``--strict``
+        exits 1 if any finding exists. This is consistent with ``--ast``,
+        which also only fails on warnings under ``strict`` — accessibility
+        simply has no error tier to fail on outside ``strict``.
+        """
+        from djust.checks import check_accessibility
+
+        json_output = options.get("json_output", False)
+        strict = options.get("strict", False)
+
+        findings = check_accessibility(None)
+
+        if json_output:
+            self.stdout.write(json.dumps(self._a11y_findings_to_json(findings), indent=2))
+        else:
+            self._output_a11y_pretty(findings)
+
+        # All Y findings are warnings — no error tier. Normal mode never
+        # fails; --strict fails if any finding exists.
+        if strict and findings:
+            raise SystemExit(1)
+        return
+
+    @staticmethod
+    def _a11y_findings_to_json(findings):
+        """Project a list of DjustWarning findings into a JSON-safe dict.
+
+        A :class:`DjustWarning` is not natively JSON-serializable; pull the
+        six ``_DjustCheckMixin`` attributes into plain dicts. The envelope
+        ``{"a11y_findings": [...], "summary": {...}}`` mirrors the
+        ``report.to_dict()`` shape of ``--ast`` / ``--live``.
+        """
+        items = []
+        summary: Dict[str, int] = {}
+        for f in findings:
+            code = getattr(f, "id", "") or ""
+            items.append(
+                {
+                    "id": code,
+                    "msg": str(getattr(f, "msg", "")),
+                    "hint": getattr(f, "hint", "") or "",
+                    "fix_hint": getattr(f, "fix_hint", "") or "",
+                    "file_path": getattr(f, "file_path", "") or "",
+                    "line_number": getattr(f, "line_number", None),
+                }
+            )
+            summary[code] = summary.get(code, 0) + 1
+        summary["total"] = len(items)
+        return {"a11y_findings": items, "summary": summary}
+
+    def _output_a11y_pretty(self, findings):
+        """Pretty-print accessibility (Y0xx) findings to the terminal.
+
+        Mirrors :meth:`_output_ast_pretty`. Since every Y finding is a
+        warning, the output has a single "WARNINGS:" block (no "ERRORS:"
+        block) — honest and intentional.
+        """
+        line = "=" * 50
+        self.stdout.write("")
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(self.style.MIGRATE_HEADING("  djust_audit --a11y accessibility report"))
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(f"  Findings: {len(findings)}")
+        self.stdout.write("")
+
+        if findings:
+            # Group findings by stable code (Y001-Y004) for readability.
+            by_code: Dict[str, list] = {}
+            for f in findings:
+                by_code.setdefault(getattr(f, "id", "") or "", []).append(f)
+
+            self.stdout.write(self.style.WARNING("  WARNINGS:"))
+            for code in sorted(by_code):
+                for f in by_code[code]:
+                    location = getattr(f, "file_path", "") or ""
+                    line_no = getattr(f, "line_number", None)
+                    where = f" ({location}:{line_no})" if location else ""
+                    self.stdout.write(self.style.WARNING(f"  [{code}] {f.msg}{where}"))
+                    hint = getattr(f, "hint", "") or ""
+                    if hint:
+                        self.stdout.write(f"      hint: {hint}")
+                    fix_hint = getattr(f, "fix_hint", "") or ""
+                    if fix_hint:
+                        self.stdout.write(f"      fix:  {fix_hint}")
+            self.stdout.write("")
+        else:
+            self.stdout.write(
+                self.style.SUCCESS("  No findings — templates pass all accessibility checks.")
+            )
+
+        self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+        if findings:
+            by_code_counts: Dict[str, int] = {}
+            for f in findings:
+                code = getattr(f, "id", "") or ""
+                by_code_counts[code] = by_code_counts.get(code, 0) + 1
+            per_code = ", ".join(f"{code}: {n}" for code, n in sorted(by_code_counts.items()))
+            self.stdout.write(f"  Summary: {len(findings)} warning(s) — {per_code}")
+        else:
+            self.stdout.write("  Summary: 0 warning(s)")
         self.stdout.write("")
 
     def _run_live_audit(self, options):
