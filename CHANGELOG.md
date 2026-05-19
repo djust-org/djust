@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Audit: `sync_to_async` → native-async-ORM migration surface (#1434).** A new audit, [`docs/audits/async-orm-2026-05.md`](docs/audits/async-orm-2026-05.md), classifies every `sync_to_async` / `async_to_sync` call site in framework code — 126 sites across 14 files — and a companion benchmark, `scripts/bench_sync_to_async_overhead.py`, measures the per-crossing asgiref threadpool overhead empirically (~60 µs/crossing on the dev machine). The audit finds that issue #1434's premise does not hold: there are **zero** `sync_to_async(Model.objects.X)` call sites, only **3** ORM-category sites (all indirect auth/tenant helpers that fire once per connection at mount, never per event), and the ORM/cache-migratable fraction of per-event latency is **0%** — below #1434's own 5% deprioritize gate. The audit recommends closing #1434. Internal/contributor documentation and tooling; no framework behavior change.
+
 ## [1.0.0rc4] - 2026-05-19
 
 ### Added
