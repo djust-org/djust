@@ -400,6 +400,62 @@ close or radically de-scope #1434.
 surface). The `v1.0.0rc5` release tag is not yet cut — run
 `/djust-release 1.0.0rc5` when ready.
 
+## Next: v1.0.0rc6 — open-issue drain (3 tech-debt follow-ups)
+
+> Created 2026-05-19 by `/pipeline-drain`. Three issues accumulated open
+> after the v1.0.0rc4/rc5 work — two filed during the rc4 Phase-2 drain as
+> Action-#1079 scope-discipline follow-ups (#1541, #1543) and one filed
+> post-rc4 from downstream on-device usage (#1545). All P2 tech-debt; none
+> release-blocking, but draining them before v1.0.0 final keeps the post-1.0
+> backlog empty.
+> Completion → `/djust-release` cuts `v1.0.0rc6`.
+
+*Goal:* Clear the post-rc4/rc5 open-issue backlog — a serde-msgpack sibling
+audit, a Rust test-infrastructure gate, and a noisy snapshot-warning fix —
+so v1.0.0 final ships with zero open tracked issues.
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P2** | #1541 | Audit `actors/messages.rs` for `skip_serializing_if`-without-`default` msgpack asymmetry |
+| **P2** | #1543 | Gate `djust_live` `extension-module` feature behind a Cargo flag so the crate is `cargo test`-able |
+| **P2** | #1545 | `LiveView.request` triggers a non-serializable-snapshot warning on every mount/event |
+
+**Detail:**
+
+**#1541 — actors/messages.rs serde msgpack asymmetry.** Follow-up from #1538
+(`VNode.djust_id` msgpack round-trip fix). `PatchResponse.patches` and
+`PatchResponse.html` in `crates/djust_live/src/actors/messages.rs` carry
+`#[serde(skip_serializing_if = "Option::is_none")]` without `#[serde(default)]`
+— the same positional-array short-read failure class #1538 hit. Determine
+whether `PatchResponse` is round-tripped through `rmp_serde`, add
+`#[serde(default)]` as cheap insurance regardless, and consider extending the
+#1448 wire-protocol snapshot suite with `rmp_serde` coverage for all plain
+wire structs.
+
+**#1543 — djust_live cannot be cargo-tested.** `crates/djust_live` carries
+the PyO3 `extension-module` feature unconditionally, so `cargo test` fails to
+link libpython and `make test` works around it with `--exclude djust_live`.
+Gate `extension-module` behind a default-on Cargo feature so
+`cargo test -p djust_live --no-default-features` links and runs; verify
+`make build` (maturin) is unaffected and update the `make test` Rust path.
+Surfaced twice in the rc4 Phase-2 drain (PRs #1530, #1535).
+
+**#1545 — LiveView.request non-serializable snapshot warning.** `self.request`
+is assigned as a public attribute after `__init__`, so the state-snapshot
+machinery treats the `ASGIRequest` as user state and logs a non-serializable
+warning on every mount/event for every LiveView. Fix: assign
+`self.request = None` in `LiveView.__init__` before the `_framework_attrs`
+snapshot line (`live_view.py:526`) so `request` is captured as framework
+state and excluded from the user-state snapshot — matching the
+`_framework_attrs` snapshot-order invariant (#1393).
+
+**Pipeline runner notes:**
+- `/pipeline-run --milestone v1.0.0rc6 --all` — three independent subsystems
+  (Rust serde, Rust test-infra, Python serialization); processed as separate
+  PRs, not grouped.
+- Completion → `/pipeline-retro --milestone v1.0.0rc6` then
+  `/djust-release 1.0.0rc6`.
+
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
 > Created 2026-05-18, rescoped 2026-05-18. The accessibility-phase-2 cluster
