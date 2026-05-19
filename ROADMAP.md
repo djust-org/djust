@@ -317,7 +317,7 @@ and its only remaining open issue is the one genuinely blocked upstream.
 | ~~**P1**~~ | ~~#1531~~ ✅ PR #1537 | bug — `ThemeMixin._setup_theme_context()` renders `theme_head.html` with incomplete context (drops `components.css` link, emits invalid anti-FOUC JS) |
 | ~~**P2**~~ | ~~#1533~~ ✅ PR #1539 | tech-debt — dropdown nested inside a `role="dialog"` gets no arrow/Esc keyboard routing (follow-up to #1522) |
 | ~~**P2**~~ | ~~#1534~~ ✅ PR #1540 | tech-debt — free-threaded hardening: dead-code removal, `frozen` pyclasses, `RwLock` registries, `python3.14t` CI leg (follow-up to #1432) |
-| **P1** | #1538 | bug — `VNode` msgpack round-trip fails when `djust_id` is `None` (`skip_serializing_if` without `serde(default)`); breaks `InMemoryStateBackend` reconnect continuity |
+| ~~**P1**~~ | ~~#1538~~ ✅ PR #1542 | bug — `VNode` msgpack round-trip fails when `djust_id` is `None` (`skip_serializing_if` without `serde(default)`); breaks `InMemoryStateBackend` reconnect continuity |
 
 **Detail:**
 
@@ -355,17 +355,19 @@ final at GA rather than growing in the first minor.
   #1529 is a standalone bugfix pipeline and drains first (P0). #1522 + #1523
   cluster as the a11y-phase-2 group; #1432 and #1489 are solo small PRs.
 
-**Status (2026-05-19):** Phase 1 — 3 ADR-018 iterations (#1526/#1527/#1528),
-all merged. Phase 2 — 7 PRs merged closing 8 issues: #1530 (#1529 VDOM diff
-fix), #1532 (#1522 + #1523 a11y phase 2), #1535 (#1432 free-threaded-safe),
-#1536 (#1489 top-level re-exports), #1537 (#1531 `ThemeMixin` theme-head
-context bug), #1539 (#1533 dropdown-in-dialog keyboard routing), #1540 (#1534
-free-threaded hardening). **#1538 added 2026-05-19** — a `VNode` msgpack
-round-trip bug (5-vs-6-element struct) filed mid-drain; draining now as a 6th
-Phase-2 fix. The only other open issue is #1434 (native async ORM), correctly
-parked in v1.1.0 behind the psycopg3 free-threaded-ecosystem gate. On
-completion: `/pipeline-retro --milestone v1.0.0rc4` and `/djust-release 1.0.0rc4`
-(which also flips ADR-018 `Proposed → Accepted`).
+**Status (2026-05-19):** **v1.0.0rc4 drain COMPLETE.** Phase 1 — 3 ADR-018
+iterations (#1526/#1527/#1528). Phase 2 — 8 PRs merged closing 9 issues:
+#1530 (#1529 VDOM diff fix), #1532 (#1522 + #1523 a11y phase 2), #1535 (#1432
+free-threaded-safe), #1536 (#1489 top-level re-exports), #1537 (#1531
+`ThemeMixin` theme-head context bug), #1539 (#1533 dropdown-in-dialog keyboard
+routing), #1540 (#1534 free-threaded hardening), #1542 (#1538 `VNode` msgpack
+round-trip). All 14 pipeline stages + all CI green per PR. Three correctness
+bugs (#1529, #1531, #1538) surfaced mid-drain from real downstream usage and
+were folded in. Follow-ups filed during the drain: #1541 (sibling serde
+asymmetry in `actors/messages.rs`). The only remaining open issue is #1434
+(native async ORM), correctly parked in v1.1.0 behind the psycopg3
+free-threaded-ecosystem gate. Next: `/pipeline-retro --milestone v1.0.0rc4`
+and `/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`).
 
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
