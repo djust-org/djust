@@ -2572,14 +2572,25 @@ fn build_fragment_text_map(
     let mut text_nodes: Vec<(Vec<usize>, String, String)> = Vec::new(); // (path, text, djust_id)
     collect_vdom_text_nodes(vdom, &mut vec![], &mut text_nodes);
 
+    // Each VDOM text node may back AT MOST ONE fragment. Content equality
+    // is not a unique key: two template variables that render the same
+    // baseline string (e.g. `{{ a }}` and `{{ b }}` both `0` at mount)
+    // would otherwise both match the *first* matching text node and collapse
+    // onto the same path, mis-pathing the second fragment's `SetText` patch
+    // (#1529). Claiming each node once makes the map a bijection over
+    // matched fragments. Both `fragments` and `text_nodes` are in document
+    // order, so first-unclaimed-match is positionally stable.
+    let mut claimed = vec![false; text_nodes.len()];
+
     for (idx, frag) in fragments.iter().enumerate() {
         // Only map text-only fragments (no HTML tags)
         if frag.contains('<') || frag.is_empty() {
             continue;
         }
-        // Find the first matching text node
-        for (path, text, djust_id) in &text_nodes {
-            if text == frag {
+        // Find the first UNCLAIMED matching text node and claim it.
+        for (node_i, (path, text, djust_id)) in text_nodes.iter().enumerate() {
+            if !claimed[node_i] && text == frag {
+                claimed[node_i] = true;
                 map.insert(idx, (path.clone(), djust_id.clone()));
                 break;
             }
