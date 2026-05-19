@@ -302,25 +302,27 @@ audit finding **F6**.
 
 ## Known Documented Items
 
-Two items surfaced by the 1.0 public-API audit are recorded here as known,
-deliberate facts about the API surface — not bugs, not pending changes:
+Items surfaced by the 1.0 public-API audit are recorded here. F4 is a known,
+deliberate fact about the API surface; F3 was a deferred additive change that
+has since shipped (see below).
 
-### F3 — four decorators are reachable only via `djust.decorators`
+### F3 — four decorators re-exported from the top-level `djust` package ✅ resolved
 
 The decorators `optimistic`, `cache`, `client_state`, and `background` are
-**stable** and part of the public API (they are in `djust.decorators.__all__`),
-but they are **not** re-exported from the top-level `djust` package's `__all__`.
-The canonical, supported import path for these four is:
+**stable** and part of the public API. They were originally reachable only via
+`from djust.decorators import ...`; as of
+[#1489](https://github.com/djust-org/djust/issues/1489) they are also
+re-exported from the top-level `djust` package's `__all__`, so the canonical,
+supported import path is now simply:
 
 ```python
-from djust.decorators import optimistic, cache, client_state, background
+from djust import optimistic, cache, client_state, background
 ```
 
-This is intentional for the 1.0 freeze — adding them to the top-level
-namespace is an additive change that is more appropriately considered for a
-1.1 release; [issue #1489](https://github.com/djust-org/djust/issues/1489)
-tracks that consideration. Until then, the `djust.decorators` import path
-above is the stable, documented one.
+The `from djust.decorators import ...` path continues to work unchanged. The
+1.0 public-API audit originally recorded F3 as a deliberate 1.0-freeze
+deferral; the re-export is a purely additive, SemVer-safe change and was
+implemented in the v1.0.0rc4 cycle.
 
 ### F4 — `djust.mixins.*` internal-composition mixins are not public
 
