@@ -1,9 +1,9 @@
 # ADR-018: Sticky-Child LiveView State Persistence Across WS Reconnect
 
-**Status**: Proposed
+**Status**: Accepted — shipped 2026-05-19 in v1.0.0rc4 (PRs #1526, #1527, #1528)
 **Date**: 2026-05-18
 **Deciders**: Project maintainers
-**Target version**: v1.0.0rc4
+**Shipped in**: v1.0.0rc4
 **Related**:
 - [ADR-011](011-sticky-liveviews.md) — Sticky LiveViews baseline (child registry → preservation → reattach)
 - [ADR-014](014-sticky-liveview-autodetect.md) — `{% live_render %}` auto-detection of preserved stickies (tag-driven precedent)
