@@ -12,8 +12,8 @@
 //! unconditionally, so it cannot be `cargo test`'d — the workspace test
 //! run is `cargo test --workspace --exclude djust_live` for exactly that
 //! reason. `djust_templates` IS in the workspace `cargo test` run, and
-//! the genuinely-interesting shared types named in the Stage-4 audit
-//! (`.pipeline-state/feat-1432-free-threaded-safe-plan.md`) live here:
+//! the genuinely-interesting shared types named in the #1432 thread-safety
+//! audit live here:
 //!   * `Template`'s per-instance `OnceLock<ResolvedInheritance>` /
 //!     `OnceLock<FlattenedNodes>` lazy-resolve race — `Template`
 //!     instances are shared across threads behind `Arc` in

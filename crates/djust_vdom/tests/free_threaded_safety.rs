@@ -6,8 +6,8 @@
 //! the pure-Rust VDOM paths (`parse_html`, `diff`) must be sound under
 //! genuine OS-thread parallelism.
 //!
-//! The interesting `djust_vdom`-specific shared state per the Stage-4
-//! audit (`.pipeline-state/feat-1432-free-threaded-safe-plan.md`) is the
+//! The interesting `djust_vdom`-specific shared state per the #1432
+//! thread-safety audit is the
 //! `thread_local!` `ID_COUNTER` (`src/lib.rs:55`). Because it is
 //! `thread_local!`, each OS thread gets its own independent counter:
 //! `parse_html` resets the *calling thread's* counter only, and the
