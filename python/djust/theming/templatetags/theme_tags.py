@@ -41,31 +41,47 @@ from ..template_resolver import resolve_theme_template
 register = template.Library()
 
 
-@register.simple_tag(takes_context=True)
-def theme_head(context, include_js: bool = True, link_css: bool = False):
+def build_theme_head_context(
+    request,
+    include_js: bool = True,
+    link_css: bool = False,
+    loading_class: bool = True,
+    manager=None,
+) -> dict:
+    """Build the full context dict consumed by ``djust_theming/theme_head.html``.
+
+    Single source of truth for the ``theme_head`` render context. Both the
+    ``{% theme_head %}`` simple tag and ``ThemeMixin._setup_theme_context()``
+    call this so the two render paths cannot drift (#1531 — the #1452 drift,
+    repeated for the ThemeMixin path). ``theme_head.html`` consumes eight
+    variables; a hand-built sub-dict silently drops the rest.
+
+    Args:
+        request: The current request (used to resolve the theme manager when
+            ``manager`` is not supplied). May be ``None``.
+        include_js: Emit the ``theme.js`` / ``components.js`` script tags.
+        link_css: Use a ``<link>`` to the theme CSS endpoint instead of the
+            critical-CSS inline split.
+        loading_class: Add the ``loading`` class to ``documentElement`` in the
+            anti-FOUC script. The ``{% theme_head %}`` tag passes ``True``
+            (cold page load); ``ThemeMixin`` passes ``False`` — a LiveView
+            mount is a reactive render, not a cold load, so no loading-class
+            flash. This *intentional* divergence is a parameter precisely so
+            it stays explicit while the *unintended* missing-key drift cannot
+            recur.
+        manager: An already-resolved ``ThemeManager``. When ``None`` (the tag
+            path), the manager is resolved via ``get_theme_manager(request)``.
+
+    Returns:
+        A dict with keys: ``loading_class``, ``css_block``,
+        ``deferred_css_block``, ``component_css_block``,
+        ``include_component_link``, ``include_js``, ``direction``,
+        ``cookie_prefix_js`` — exactly the variables ``theme_head.html``
+        consumes.
     """
-    Render theme CSS and anti-FOUC script in the <head>.
-
-    Usage:
-        {% theme_head %}
-        {% theme_head include_js=False %}
-        {% theme_head link_css=True %}
-
-    Renders via the shared ``djust_theming/theme_head.html`` template:
-
-    - Anti-flash script (runs before page render to set correct theme)
-    - Theme CSS (either inline <style> or <link> tag)
-    - Component CSS (``components.css`` via <link> tag)
-    - Optionally, the theme.js script tag
-
-    The component CSS file contains styles for all template-tag components
-    (alert, badge, button, card, input, theme-switcher). It is loaded once
-    regardless of how many components are rendered on the page.
-    """
-    request = context.get("request")
-
     # Get current theme state
-    manager = get_theme_manager(request)
+    if manager is None:
+        manager = get_theme_manager(request)
     state = manager.get_state()
     config = get_theme_config()
     critical_css_enabled = config.get("critical_css", True)
@@ -138,20 +154,46 @@ def theme_head(context, include_js: bool = True, link_css: bool = False):
     cookie_prefix = f"{ns}_" if ns else ""
     cookie_prefix_js = json.dumps(cookie_prefix)
 
-    # Render via shared template
-    html = render_to_string(
-        "djust_theming/theme_head.html",
-        {
-            "loading_class": True,
-            "css_block": css_block,
-            "deferred_css_block": deferred_css_block,
-            "component_css_block": component_css_block,
-            "include_component_link": include_component_link,
-            "include_js": include_js,
-            "direction": direction,
-            "cookie_prefix_js": cookie_prefix_js,
-        },
-    )
+    return {
+        "loading_class": loading_class,
+        "css_block": css_block,
+        "deferred_css_block": deferred_css_block,
+        "component_css_block": component_css_block,
+        "include_component_link": include_component_link,
+        "include_js": include_js,
+        "direction": direction,
+        "cookie_prefix_js": cookie_prefix_js,
+    }
+
+
+@register.simple_tag(takes_context=True)
+def theme_head(context, include_js: bool = True, link_css: bool = False):
+    """
+    Render theme CSS and anti-FOUC script in the <head>.
+
+    Usage:
+        {% theme_head %}
+        {% theme_head include_js=False %}
+        {% theme_head link_css=True %}
+
+    Renders via the shared ``djust_theming/theme_head.html`` template:
+
+    - Anti-flash script (runs before page render to set correct theme)
+    - Theme CSS (either inline <style> or <link> tag)
+    - Component CSS (``components.css`` via <link> tag)
+    - Optionally, the theme.js script tag
+
+    The component CSS file contains styles for all template-tag components
+    (alert, badge, button, card, input, theme-switcher). It is loaded once
+    regardless of how many components are rendered on the page.
+
+    The render context is built by :func:`build_theme_head_context`, the
+    shared builder also used by ``ThemeMixin._setup_theme_context()`` so
+    the two paths cannot drift (#1531).
+    """
+    request = context.get("request")
+    head_ctx = build_theme_head_context(request, include_js=include_js, link_css=link_css)
+    html = render_to_string("djust_theming/theme_head.html", head_ctx)
     return mark_safe(html)
 
 
