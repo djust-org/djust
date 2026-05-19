@@ -247,7 +247,7 @@ skill items (#1375, #1376, #1384, #1387, #1507, #1511, #1516, #1524) were
 resolved upstream in `pipeline-skills` and their Action Tracker rows closed.
 Post-rc3 work is the `v1.0.0rc4` milestone below.
 
-## Next: v1.0.0rc4 — Sticky-child state persistence
+## Shipped: v1.0.0rc4 — Sticky-child state persistence
 
 > Created 2026-05-18. Pulls #1471 (sticky-child `LiveView` WS-reconnect state
 > persistence) into the 1.0 line — the project decided this is a correctness
@@ -264,9 +264,9 @@ before v1.0.0 final.
 
 | Priority | Item | Summary |
 |---|---|---|
-| **P1** | #1471 — ADR-018 iter 18a | SAVE side + stable-`sticky_id` key scheme; generalize the WS save-block gate + HTTP save; sticky-id GC index |
-| **P1** | #1471 — ADR-018 iter 18b | LOAD side — tag-driven restore at `{% live_render %}` render time, in lieu of the child's `mount()` state-init |
-| **P1** | #1471 — ADR-018 iter 18c | Opt-in enforcement (child + parent `enable_state_snapshot`), `djust check`, guide docs |
+| ~~**P1**~~ | ~~#1471 — ADR-018 iter 18a~~ ✅ PR #1526 | SAVE side + stable-`sticky_id` key scheme; generalize the WS save-block gate + HTTP save; sticky-id GC index |
+| ~~**P1**~~ | ~~#1471 — ADR-018 iter 18b~~ ✅ PR #1527 | LOAD side — tag-driven restore at `{% live_render %}` render time, in lieu of the child's `mount()` state-init |
+| ~~**P1**~~ | ~~#1471 — ADR-018 iter 18c~~ ✅ PR #1528 | Opt-in enforcement (child + parent `enable_state_snapshot`), `djust check`, guide docs |
 
 **Detail:** see [ADR-018](docs/adr/018-sticky-child-state-persistence.md) —
 persist keyed on the stable `sticky_id` (not the volatile `_view_id`); restore
@@ -282,6 +282,13 @@ rc4 cycle; rc4 itself soaks before v1.0.0 final.
 **Pipeline runner notes:**
 - `/pipeline-drain --milestone v1.0.0rc4` — process the 3 iterations as
   ordered PRs, NOT `--group` (the foundation gate forbids 18a + 18b in one PR).
+
+**Status (2026-05-18):** All 3 ADR-018 iterations drained as ordered PRs —
+#1526 (18a SAVE, `88cb3a98`), #1527 (18b LOAD, `b644717c`), #1528 (18c
+enforcement + guide, `4bee6a58`) — all merged, all 14 pipeline stages + all
+CI green, 0 🔴 across the milestone. #1471 closed by #1528. Pending:
+`/pipeline-retro --milestone v1.0.0rc4` (milestone retrospective) and
+`/djust-release 1.0.0rc4` (which also flips ADR-018 `Proposed → Accepted`).
 
 ## Planned: v1.1.0 — Post-1.0 follow-ups
 
