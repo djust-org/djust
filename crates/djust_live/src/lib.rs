@@ -2663,7 +2663,18 @@ fn compute_template_hash(source: &str) -> String {
     djust_templates::parser::template_hash_hex(source)
 }
 
-#[pymodule]
+// Declared free-threaded-safe (#1432). A full thread-safety audit of every
+// global (`static`/`Lazy`/`OnceLock`), `#[pyclass]`, cross-thread
+// `Py<T>`/`PyObject`, the Tokio actor system, the template registries, and
+// the recursive Python<->Rust converters found no shared mutable state
+// reachable through `_rust` that lacks correct synchronization. With
+// `gil_used = false`, CPython will NOT auto-re-enable the GIL on import
+// under free-threaded interpreters (3.13t/3.14t) -- meaning a future PR
+// that introduces unsynchronized shared mutable state silently becomes a
+// data race. `crates/djust_templates/tests/free_threaded_safety.rs` and
+// `crates/djust_vdom/tests/free_threaded_safety.rs` are the regression
+// guards. The audit checklist and findings are recorded on issue #1432.
+#[pymodule(gil_used = false)]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
