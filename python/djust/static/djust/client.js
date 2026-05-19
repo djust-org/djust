@@ -15706,8 +15706,17 @@ globalThis.djust.djTransitionGroup = {
         if (idx < 0) return;
         const entry = _dialogStack.splice(idx, 1)[0];
         if (entry.returnFocus &&
-            typeof entry.returnFocus.focus === 'function') {
+            typeof entry.returnFocus.focus === 'function' &&
+            entry.returnFocus.isConnected) {
             entry.returnFocus.focus();
+        } else if (document.body &&
+                   typeof document.body.focus === 'function') {
+            // The recorded return target was removed from the DOM while
+            // the dialog was open (e.g. a morphdom patch replaced the
+            // opener's region). Focusing a detached node is a silent
+            // no-op, which would strand keyboard focus; fall back to the
+            // document body so focus lands somewhere reachable (#1532).
+            document.body.focus();
         }
     }
 

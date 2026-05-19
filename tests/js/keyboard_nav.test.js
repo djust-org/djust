@@ -177,6 +177,28 @@ describe('keyboard-nav — focus trap', () => {
         expect(dom.window.document.activeElement).toBe(opener);
     });
 
+    it('falls back to document.body when the return target was removed while open (#1532)', async () => {
+        const dom = createDom('<div id="host"><button id="opener">Opener</button></div>');
+        const opener = dom.window.document.getElementById('opener');
+        opener.focus();
+        const host = dom.window.document.getElementById('host');
+        host.insertAdjacentHTML(
+            'beforeend',
+            '<div class="dj-modal" role="dialog" id="dlg"><button id="inner">Inner</button></div>'
+        );
+        await waitForMutation(dom);
+        // The opener's region is replaced (e.g. a morphdom patch) while the
+        // dialog is open — the recorded return target is now detached. The
+        // close handler must not call .focus() on the detached node and
+        // must leave keyboard focus somewhere reachable.
+        opener.remove();
+        dom.window.document.getElementById('dlg').remove();
+        await waitForMutation(dom);
+        const active = dom.window.document.activeElement;
+        expect(active === dom.window.document.body || active === null).toBe(true);
+        expect(active).not.toBe(opener);
+    });
+
     it('nested dialogs — Esc pops only the top dialog; trap acts on the top', async () => {
         const dom = createDom('<div id="host"></div>');
         installHandleEventSpy(dom);
