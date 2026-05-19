@@ -961,6 +961,91 @@ verification reflex.
   `~/.claude/skills/pipeline-run/SKILL.md` is tracked OUT-OF-REPO in
   #1524 (`.claude/` is gitignored repo-wide).
 
+## Process canonicalizations from v1.0.0rc4 retro arc
+
+Three rules from the v1.0.0rc4 drain (PRs #1526–#1542 — the final pre-1.0
+backlog drain: ADR-018 sticky-child persistence + an 8-PR Phase-2 drain).
+Each was a milestone retro finding; canonicalized here so the next
+coverage-suite / value-dependent-bug / cross-environment-CI PR doesn't
+repeat the failure mode.
+
+- **A coverage/pinning suite must enumerate EVERY variant of the surface
+  it covers (#1543-adjacent, v1.0.0rc4 retro finding #1).** Three
+  correctness bugs surfaced *during* the rc4 drain — #1529 (VDOM diff),
+  #1531 (`ThemeMixin` theme_head), #1538 (`VNode` msgpack) — and each had
+  a purpose-built coverage effort that *looked* complete but shared one
+  failure shape: the bug lived entirely in a variant the coverage never
+  exercised.
+
+  - The #1448 wire-protocol snapshot suite
+    (`crates/djust_vdom/tests/wire_protocol_snapshot.rs`) — a whole
+    milestone of work built to pin exactly the serde-asymmetry class
+    #1538 is — pinned only the `serde_json` (named-map) encoding and
+    never `rmp_serde` (positional array). A msgpack-only 5-vs-6-element
+    `skip_serializing_if`-without-`default` asymmetry sailed through 16
+    green tests.
+  - #1522's keyboard-nav test matrix exercised each interactive widget
+    in isolation and never *composed* two, so a dropdown-nested-in-a-
+    dialog keyboard dead zone (#1533) shipped unflagged.
+  - #1452 fixed one drift path of `theme_head.html` without enumerating
+    its other consumers, so a third consumer —
+    `ThemeMixin._setup_theme_context()` (#1531) — stayed silently broken
+    until a downstream build hit it.
+
+  **The rule**: when a suite exists to cover a bug class, it must
+  enumerate every variant the surface actually has — every wire encoding
+  a multi-encoding protocol uses, every N×N composition of N interactive
+  widgets, every parallel consumer of a shared template/contract.
+  Single-variant coverage of a multi-variant surface is false confidence,
+  not coverage — and it is *worse* than no coverage, because it makes the
+  bug class look handled. At Stage 7 self-review, for any new/modified
+  test suite ask: "what variants of this surface exist, and does the
+  suite touch each one?"
+
+- **Empirically bisect the trigger of a value-dependent bug before
+  architecting the fix (v1.0.0rc4 retro finding #2).** From PR #1530
+  (#1529): the planning subagent did not just describe the symptom — it
+  ran the bug variants and pinned the exact trigger boundary
+  (`a=0,b=0` identical baselines reproduces; `a=1,b=2` distinct
+  baselines does not; a single-value change does not). That narrowing
+  *proved* the root cause was content-based first-match (content
+  equality is not a unique key) rather than a path-accumulation bug in
+  the VDOM differ — which the trace had to clear as a suspect — and it
+  produced two regression cases for free (the distinct-baseline guard
+  and the only-second-changed sharpest-mapping assertion).
+
+  **The rule**: for any bug whose reproduction depends on input *values*
+  and not just structure, find the smallest value change that flips the
+  bug on/off *before* writing the fix. The trigger boundary is the
+  root-cause proof and seeds the regression test. Extends the
+  "Bug-report triage" section's symptom-up tracing with a value-axis
+  bisection step.
+
+- **A CI job exercising an environment the dev machine cannot reproduce
+  needs ≥1 runner-only iteration budgeted, and known ecosystem gaps
+  researched at plan time (v1.0.0rc4 retro finding #3).** From PR #1540
+  (#1534): the new `python-tests (py3.14t free-threaded)` job
+  (`.github/workflows/test.yml:145`) failed twice on its first real
+  runs. Fail 1 — `uv sync --extra dev` pulled `orjson`, which has no
+  free-threaded wheel, so dependency install failed before the smoke
+  test ran. Fail 2 — `uv run maturin develop` re-managed the project env
+  from `pyproject.toml` with the *default* 3.12 interpreter, wiping the
+  hand-built 3.14t venv. Neither was catchable by `yaml.safe_load` +
+  local reasoning; both are structural facts of the free-threaded
+  ecosystem / `uv` semantics that only surface on the actual runner.
+  Fail 1 *was* predictable at plan time — #1432's own issue body had
+  already documented that the free-threaded path works "after dropping
+  orjson/psycopg2-binary."
+
+  **The rule**: when a PR adds a CI job exercising a toolchain or
+  interpreter the dev machine cannot run, (a) treat ≥1 runner-only
+  iteration as expected, not a process failure — do not mark the PR
+  blocked on it; and (b) at plan time, grep prior issues/PRs touching
+  that environment for already-documented ecosystem gaps (wheel
+  availability, dependency-graph holes) and bake the workarounds into
+  the first commit. Keep such jobs `continue-on-error: true` until they
+  have shipped green at least once.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

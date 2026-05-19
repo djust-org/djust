@@ -312,8 +312,77 @@ issue or be explicitly closed with a reason.
 | 270 | Meta-check for `\b` word-boundary anchors in attribute-matching regexes | Retro v1.0.0rc2 (finding #4) | #1517 | Closed | **Resolved in v1.0.0rc3 PR #1518** — introspection meta-check fails on any bare-`\b`-anchored attribute regex in `checks.py`; `_LIVE_RENDER_*` allowlist guarded by a stale-entry test. A 4th `\b`/`data-*` recurrence is now structurally impossible. |
 | 271 | pipeline-run skill — `git commit --amend` must assert HEAD hash changed | Retro v1.0.0rc3 (finding #2) | #1524 | Closed | **Resolved upstream in pipeline-skills@f3203b2** (canon commit e25a213) — `pipeline-run/SKILL.md` gained a "`git commit --amend` companion" subsection: capture the pre-amend hash, assert HEAD changed. In-repo half (CLAUDE.md v1.0.0rc3 canon section) shipped in commit 99da51b8. |
 | 272 | Pre-1.0-final retro-finding closeout sweep | Retro v1.0.0rc3 (finding #3) | #1525 | Closed | **Sweep run 2026-05-18** — all 24 v1.0.0-arc follow-up issues CLOSED; the 5 open ones (#1522, #1523, #1432, #1489 in the priority matrix; #1471, #1434 in the deferred/blocked note) carried to ROADMAP milestone `v1.1.0`. No finding silently dropped. |
-| 273 | Accessibility phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) | PR #1521 (#1513 follow-up) | #1522 | Open | Deferred from #1513 — highest-risk sub-area (CSP-strict client module + JSDOM / size-budget). Carried to ROADMAP milestone `v1.1.0` (a11y-phase-2 cluster). |
-| 274 | Accessibility phase 2 — surface a11y findings in `djust_audit` | PR #1521 (#1513 follow-up) | #1523 | Open | Deferred from #1513 — `djust_audit` a11y reporting. Carried to ROADMAP milestone `v1.1.0` (a11y-phase-2 cluster with #1522). |
+| 273 | Accessibility phase 2 — keyboard-interaction client JS (focus trap, Esc-to-close, roving tabindex) | PR #1521 (#1513 follow-up) | #1522 | Closed | **Resolved in v1.0.0rc4 PR #1532** — CSP-strict keyboard-nav client module shipped (focus trap, Esc-to-close, roving tabindex). Pulled forward from `v1.1.0` into the rc4 drain. |
+| 274 | Accessibility phase 2 — surface a11y findings in `djust_audit` | PR #1521 (#1513 follow-up) | #1523 | Closed | **Resolved in v1.0.0rc4 PR #1532** — `djust_audit --a11y` mode shipped. Pulled forward from `v1.1.0` into the rc4 drain. |
+| 275 | `djust_live` cannot be `cargo test`'d — gate the `extension-module` feature behind a Cargo flag | Retro v1.0.0rc4 (finding #4) | #1543 | Open | Recurred twice in the rc4 drain (PR #1530 #1529 fix, PR #1535 free-threaded tests) — `_rust`-surface Rust tests cannot live on the entry-point crate. |
+| 276 | Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` | PR #1542 (#1538 sibling) | #1541 | Open | Found while fixing #1538's `VNode` msgpack asymmetry — same serde-shape class, separate crate; filed per Action #1079 scope discipline. |
+
+## v1.0.0rc4 — Sticky-child state persistence + final pre-1.0 backlog drain (PRs #1526–#1542)
+
+**Date**: 2026-05-19
+**Scope**: Two phases. **Phase 1** — ADR-018 sticky-child `LiveView` WS-reconnect state persistence, shipped as a 3-iteration split-foundation arc: 18a SAVE (#1526), 18b LOAD (#1527), 18c opt-in enforcement + guide (#1528), closing #1471. **Phase 2** — an 8-PR drain closing 9 issues: the planned post-rc3 backlog (#1432 free-threaded-safe, #1489 top-level re-exports, #1522+#1523 a11y phase 2) plus five mid-drain discoveries folded in at the user's request — three correctness bugs (#1529 VDOM diff, #1531 ThemeMixin theme_head, #1538 VNode msgpack) and two follow-ups (#1533 dropdown-in-dialog keyboard routing, #1534 free-threaded hardening). 11 PRs total; every PR ran all 14 pipeline stages, all CI green, 0 🔴 findings across the milestone.
+**Tests at close**: ~7420 (rc3 closed at 7311; +111 added across the 11 rc4 PRs)
+
+### What We Learned
+
+**1. Three mid-drain correctness bugs each slipped a purpose-built coverage effort that had a systematic blind spot.**
+#1529, #1531, and #1538 all surfaced *during* the drain from ad-hoc real-world usage (#1538 from an on-device iOS build) — and each had a coverage effort that *looked* complete but shared one failure shape: the bug lived entirely in a variant the coverage never exercised. The #1448 wire-protocol snapshot suite — a whole milestone of work built to pin exactly the serde-asymmetry class #1538 is — pinned only the `serde_json` (named-map) encoding and never `rmp_serde` (positional array), so a msgpack-only 5-vs-6-element bug sailed through 16 green tests. #1522's keyboard-nav test matrix exercised each interactive widget in isolation and never *composed* two, so a dropdown-nested-in-a-dialog keyboard dead zone (#1533) shipped unflagged. #1452 fixed one drift path of `theme_head.html` without enumerating its other consumers, so the third consumer — `ThemeMixin._setup_theme_context()` (#1531) — stayed silently broken until a downstream build hit it. Same meta-pattern three times: a coverage effort whose existence made a bug class *look* covered while the failure mode lived in an unexercised variant.
+
+**Action taken**: diff — "Process canonicalizations from v1.0.0rc4 retro arc" section added to `CLAUDE.md` in the Stage 6 commit (rule: a coverage/pinning suite must enumerate *every* variant the surface actually has — every wire encoding a multi-encoding protocol uses, every N×N composition of N interactive widgets, every parallel consumer of a shared template/contract; single-variant coverage of a multi-variant surface is false confidence, not coverage).
+
+**2. Empirically bisect the trigger of a value-dependent bug before architecting the fix.**
+From PR #1530 (#1529): the planning subagent did not just describe the symptom — it ran the bug variants and pinned the exact trigger boundary (`a=0,b=0` identical baselines reproduces; `a=1,b=2` distinct baselines does not; single-value change does not). That narrowing *proved* the root cause was content-based first-match (content equality is not a unique key) rather than a path-accumulation bug in the VDOM differ — which the trace had to clear as a suspect — and it produced two regression cases for free (the distinct-baseline guard and the only-second-changed sharpest-mapping assertion). For a bug whose reproduction depends on input *values* and not just structure, the trigger boundary is the root-cause proof.
+
+**Action taken**: diff — same `CLAUDE.md` section, bug-report-triage addition (for a value-dependent bug, bisect the trigger empirically — find the smallest value change that flips the bug on/off — before writing the fix; the boundary is the root-cause proof and seeds the regression test).
+
+**3. A CI job for an environment the dev machine cannot reproduce needs a runner-only iteration budgeted, and known ecosystem gaps researched at plan time.**
+From PR #1540 (#1534): the new `python3.14t` free-threaded CI job failed twice on its first real runs. Fail 1 — `uv sync --extra dev` pulled `orjson`, which has no free-threaded build, so dependency install failed before the smoke test ran. Fail 2 — `uv run maturin develop` re-managed the project env from `pyproject.toml` with the *default* 3.12 interpreter, wiping the hand-built 3.14t venv. Neither was catchable by `yaml.safe_load` + local reasoning; both are structural facts of the free-threaded ecosystem / `uv` semantics that only surface on the actual runner. Fail 1 was, in hindsight, predictable at plan time — #1432's own issue body had already documented that the free-threaded path works "after dropping orjson/psycopg2-binary." Both were caught and fixed *before* merge, so the job shipped green rather than permanently red — and the no-GIL smoke test now runs on a real free-threaded interpreter, empirically validating #1432's `gil_used = false`.
+
+**Action taken**: diff — same `CLAUDE.md` section (when a PR adds a CI job exercising a toolchain/interpreter the dev machine cannot run: treat ≥1 runner-only iteration as expected rather than a process failure, and at plan time grep prior issues/PRs touching that environment for already-documented ecosystem gaps — wheel availability, dep-graph holes — and bake the workarounds into the first commit).
+
+**4. `djust_live` cannot be `cargo test`'d — a standing structural constraint on where `_rust`-surface Rust tests can live.**
+`crates/djust_live` carries the PyO3 `extension-module` feature unconditionally, so `cargo test` fails to link and `make test` runs `--exclude djust_live`. This forced regression tests off the entry-point crate twice in one drain: PR #1530's #1529 fix lives in `djust_live` but its test had to route through the Python layer, and PR #1535's free-threaded concurrency tests had to be placed in the sibling `djust_templates` / `djust_vdom` crates. Two occurrences in a single drain make it a standing constraint, not a one-off quirk — the entry-point crate that holds the most `_rust`-surface logic has no fast Rust-native test feedback loop.
+
+**Action taken**: Open — tracked in Action Tracker #275 (GitHub #1543).
+
+### Insights
+
+- **All 11 PRs rated 5/5.** The drain was exceptionally clean: **0 🔴 findings across the entire milestone**, 11 🟡 total (mostly cosmetic — roughly half fixed in-pipeline, the rest disposed with a documented reason in the per-PR retro), and 2 CI failures (both the brand-new #1540 `python3.14t` job, both fixed pre-merge).
+- **The ADR-018 3-PR arc executed with zero contract drift.** Split-foundation (Action #1122) + ADR-as-spec + the only-correct SAVE→LOAD→enforce sequencing meant each iteration consumed a *frozen* contract the prior one set (18a froze the `liveview_<parent_path>__sticky__<sticky_id>` key shape; 18b consumed it unchanged; 18c enforced the both-opt-in gate without re-touching either). No iteration re-litigated a contract. The cost of writing ADR-018 upfront was recovered in review speed and handoff cleanliness across all three PRs — a textbook case for ADR-as-design-contract on multi-PR features.
+- **Carried-🟡 discipline worked across the arc.** 18a folded its loose `save_session` precedence comment into 18b's diff; 18b folded a soft-coupling docstring note into 18c. Cosmetic findings rode along with the next iteration that already touched the file, rather than being dropped or force-fit into a standalone cleanup PR.
+- **The drain surfaced real bugs as it ran, and the scope-check process absorbed them.** Phase 2 grew from 3 planned issues to 8 PRs because three correctness bugs (#1529, #1531, #1538) surfaced mid-drain from ad-hoc downstream usage. Each was surfaced to the user, confirmed, and folded into rc4 rather than slipped to a later milestone. A drain that finds bugs while draining — and absorbs them cleanly — is the process working, not failing.
+- **The gate-off self-test (#1468/#254) is now reflexive.** Essentially every Phase-2 PR ran the gate-off check at Stage 5 (implementer side), so Stage 11 consistently had nothing tautological to catch. The most striking instance: #1540's `RwLock` concurrency test was gate-off-verified by swapping in a `Mutex`-replica and confirming it *deadlocks to the deadline*.
+- **The Stage-9 test-count drift in #1528** (a stale "19" count, caught by the `check-changelog-test-counts` pre-push hook) is a reminder that Action #1049 exists but was not followed — the guardrail was the backstop. No new action; the hook held.
+
+### Review Stats
+
+| PR | Issue(s) | Tests added | 🔴 | 🟡 | CI failures |
+|----|----------|-------------|-----|-----|-------------|
+| #1526 | #1471 (18a) | 7 | 0 | 2 (cosmetic) | 0 |
+| #1527 | #1471 (18b) | 8 | 0 | 1 | 0 |
+| #1528 | #1471 (18c) | 18 | 0 | 1 (cosmetic) | 0 |
+| #1530 | #1529 | 6 | 0 | 0 | 0 |
+| #1532 | #1522, #1523 | 35 | 0 | 2 (1 fixed in-pipeline, 1 → #1533) | 0 |
+| #1535 | #1432 | 12 | 0 | 1 (fixed in-pipeline) | 0 |
+| #1536 | #1489 | 4 | 0 | 0 | 0 |
+| #1537 | #1531 | 6 | 0 | 1 (cosmetic) | 0 |
+| #1539 | #1533 | 9 | 0 | 1 (non-blocking) | 0 |
+| #1540 | #1534 | 1 | 0 | 1 (non-blocking) | 2 (new 3.14t job, fixed pre-merge) |
+| #1542 | #1538 | 5 | 0 | 0 | 0 |
+| **Total** | **9 issues** | **111** | **0** | **11** | **2** |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New "Process canonicalizations from v1.0.0rc4 retro arc" section — three rules (enumerate every variant in a coverage/pinning suite; empirically bisect value-dependent bug triggers; budget a runner-only iteration for CI jobs in unreproducible-locally environments).
+**Pipeline template**: None this milestone.
+**Checklist**: None this milestone.
+**Skills**: `/pipeline-drain` + `/pipeline-run --all --group` + `/pipeline-retro` exercised end-to-end across an 11-PR milestone; no skill files changed.
+
+### Open Items
+
+- [ ] `djust_live` cannot be `cargo test`'d — gate `extension-module` behind a Cargo feature — Action Tracker #275 (GitHub #1543)
+- [ ] Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` — Action Tracker #276 (GitHub #1541)
+- [ ] #1434 native async ORM — not a tracker row; parked in ROADMAP milestone `v1.1.0`, hard-blocked on the psycopg3 free-threaded ecosystem
 
 ## v1.0.0rc3 — rc2-retro backlog drain (PRs #1518, #1519, #1520, #1521)
 
@@ -369,7 +438,7 @@ PR #1519's 🔴 (exact-filename matching regressing sensitive-file exclusion) wa
 
 - [ ] `git commit --amend` HEAD-hash skill-prompt propagation — Action Tracker #271 (GitHub #1524, OUT-OF-REPO)
 - [ ] Pre-1.0-final retro-finding closeout sweep — Action Tracker #272 (GitHub #1525)
-- [ ] Accessibility phase 2 — keyboard-interaction JS + `djust_audit` a11y reporting — Action Tracker #273–#274 (GitHub #1522, #1523)
+- [x] Accessibility phase 2 — keyboard-interaction JS + `djust_audit` a11y reporting — Action Tracker #273–#274 (GitHub #1522, #1523) — resolved in v1.0.0rc4 (PR #1532)
 - [ ] Reviewer-subagent environment-premises brief — Action Tracker #269 (GitHub #1516, OUT-OF-REPO, carried from rc2)
 
 ## v1.0.0rc2 — Post-rc1 retro drain (PRs #1504, #1506, #1508, #1510, #1512)
