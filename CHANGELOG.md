@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-line `{# ... #}` comments containing template-tag syntax no longer crash Django classical (#1551).** djust ships two template renderers: the Rust engine (`crates/djust_templates/src/lexer.rs:289-305`) treats `{# ... #}` as opaque even across newlines, but Django's classical tokenizer (`django.template.base.Lexer`) uses a non-DOTALL regex — multi-line `{# ... #}` was NOT recognized as a single comment, so a `{% if %}` inside the comment body parsed as a real tag and raised `TemplateSyntaxError`. The mismatch was silent: templates rendered fine via the LiveView WebSocket path (Rust) and crashed via `client.get()` in pytest, Django's debug error renderer, or any view using `render()` directly. Follow-up to #1423. Fix: new `djust.template.loaders.FilesystemLoader` and `djust.template.loaders.AppDirectoriesLoader` — drop-in replacements for the standard Django loaders that preprocess `{# ... #}` blocks out of the template source before Django classical's tokenizer sees them. Single-line comments are stripped too (Django strips them anyway). Projects opt in by replacing the default loaders in `TEMPLATES['OPTIONS']['loaders']`. Performance: one regex pass per template load (<1ms); loaded templates are cached so this runs once per template, not per render. Covered by 10 regression cases in `python/djust/tests/test_multiline_comment_parity_1551.py`, including a control that pins the bug shape in vanilla Django classical.
+
 ## [1.0.0rc6] - 2026-05-19
 
 ### Security
