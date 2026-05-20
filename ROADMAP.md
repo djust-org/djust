@@ -480,6 +480,14 @@ threads, PyPI download patterns, GH issue inflow, downstream consumer
 reports). Then re-run `/pipeline-strategy --deep` with real data to pick the
 v1.1.x headline direction.
 
+**Post-rc6 bug reports (added 2026-05-20 — downstream consumer surfaced 3 issues against 1.0.0rc4):**
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P0** | #1552 | **VDOM diff DOUBLES subtree on `{% if %}/{% elif %}` + `{% include %}` swap** — explicit regression from 0.9.6rc2; downstream user (NYC Claims) has downgraded production. Most severe of the three. |
+| **P1** | #1550 | **VDOM diff fails to insert subtree on `{% if %}` flip** — server-driven re-render doesn't swap branches; user has a `d-none` toggle workaround. Likely related root-cause to #1552. |
+| **P1** | #1551 | **Multi-line `{# ... #}` comment handling — Rust engine vs Django classical disagree** — follow-up to #1423; templates that render via WS path crash via `client.get()` / Django's debug error renderer. Silent footgun for CI / error paths. |
+
 **Cleanup + pre-reqs (ships during soak — any 1.1 path needs these):**
 
 | Priority | Issue | Summary |
@@ -492,6 +500,14 @@ v1.1.x headline direction.
 | **P3** | (new) | **H2** — `#1545` integration-test follow-up — `RequestFactory`-driven snapshot path (reviewer's deferred Stage 11 question) |
 | **P3** | (new) | **H3** — Free-threaded ecosystem follow-up — track psycopg2/orjson/etc readiness; flip `continue-on-error: true` off the `py3.14t` CI leg when their wheels ship |
 | **P3** | (new) | **H4** — Archive 14 stale `.pipeline-state/*.json` leftovers (process hygiene; not user-visible) |
+
+**Detail — post-rc6 bug reports:**
+
+**#1552 — VDOM diff DOUBLES subtree on `{% if %}/{% elif %}` + `{% include %}` swap (REGRESSION).** Confirmed regression from 0.9.6rc2 → 1.0.0rc4. When a `{% if/elif %}` block inside a parent container swaps which `{% include %}` is emitted between renders, djust 1.0.0rc4 patches the NEW include's children into the parent but does NOT remove the previous include's children — the old subtree and new subtree coexist. Concrete observation: wizard step-1 → step-2 transition shows 4 headings (was 3) and 31 inputs (was 25 — all step-1 inputs survive + step-2 inputs appended). Step indicator + `.wizard-step.active` class update correctly, so the framework knows the step changed, but the diff fails to clear the previous include's subtree. Source: `flexion/flexion-nyc-claims`, `templates/intake/vehicular_pd_wizard_base.html`. Reporter rolled back to 0.9.6rc2 in production. **Strategy:** bisect 0.9.6rc2 → 1.0.0rc4 commits touching VDOM diff / include-related paths; the regression window is small (rc1 → rc4) so the bisect surface is bounded. Likely related to #1550's root cause but with `{% include %}` as the additional axis.
+
+**#1550 — VDOM diff fails to insert subtree on `{% if %}` flip.** When a Django template's `{% if %} ... {% else %} ... {% endif %}` block flips truthiness due to a server-driven re-render (event handler updating model state, then the template re-evaluating), djust's VDOM diff does not insert the new subtree. The page continues to show the old branch until a hard refresh. Workaround documented at the reporter's project level: replace `{% if %}/{% else %}` with two sibling divs that toggle `d-none` based on the condition. The project has worked around this since at least 2026-03 but it keeps biting new template additions. The workaround leaves both branches in the DOM (bandwidth, accessibility tree size, event-listener cost). Source: NYC Comptroller Claims project, supervisor-approval section on the investigation workflow page. **Strategy:** likely shares a code path with #1552's diff bug; process AFTER #1552 lands so fix-shape learnings inform whether this is the same bug or distinct. May or may not need a separate PR.
+
+**#1551 — Multi-line `{# ... #}` comment handling disagrees between Rust + Django classical.** Follow-up to #1423 (which fixed the Rust side but didn't normalize behavior with classical Django). A template containing a multi-line `{# ... #}` comment whose body includes template-tag-like syntax (e.g., `{% if foo %}` as prose) renders cleanly through the Rust engine (`djust._rust.render_template_with_dirs` — LiveView WS responses, prod page renders) but crashes through Django's classical renderer (`client.get()` in pytest, Django's debug error page renderer, any view using `render()` directly) with `TemplateSyntaxError: Unexpected end of expression in if tag`. Silent footgun — projects ship templates that work on the dev server (Rust path) and break in CI or on error paths (classical path). Same reporter, same project, hit this trap TWICE in 90 minutes after explicitly documenting the gotcha. **Suggested fix** (per issue body): (1) normalize comment handling at template-load time in djust's Django integration — preprocess `{# ... #}` blocks before classical parsing; (2) OR reject multi-line `{# ... #}` containing `{% ... %}` in the Rust engine so the failure mode is identical between paths; (3) OR document the asymmetry loudly. Independent subsystem from #1550/#1552; process as a separate PR.
 
 **Deferred until post-launch-soak re-strategize:** A (AI-Ready), B (DX),
 C (Hybrid), D (Debug & Time-Travel) — see strategy session doc for the
@@ -511,6 +527,10 @@ full menu. The decision between them is gated on launch-feedback data.
 
 **Acceptance for v1.1.0 final:**
 
+- [ ] **Post-rc6 bugs above (#1550, #1551, #1552) fixed and merged.** Decide
+      release-line landing: an rc7 (most likely given #1552 is a regression
+      that downstream is downgrading for), OR direct to 1.0.0 GA, OR
+      fast-follow as 1.0.1. The strategy depends on whether 1.0.0 has cut.
 - [ ] 1.0.0 GA tag cut and PyPI publish verified.
 - [ ] Launch package shipped (blog post + r/django + r/python).
 - [ ] Cleanup + pre-reqs PRs above merged.
