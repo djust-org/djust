@@ -495,6 +495,28 @@ impl RustLiveViewBackend {
                 (vdom, patches_json, parse_ms, 0.0)
             } else {
                 took_full_parse = true;
+                // dj-id collision defense (#1550 / #1552). Before
+                // `parse_html_continue` generates fresh ids for the new
+                // tree, advance the thread-local id counter past the
+                // highest id present in `last_vdom`. Without this, when
+                // the view's `last_vdom` was generated on a different
+                // thread (worker-pool handoff) OR was restored from a
+                // msgpack roundtrip on a thread whose counter is at a
+                // lower value than the saved tree's ids, the new tree's
+                // freshly-generated ids overlap with surviving old-tree
+                // ids. The resulting `InsertSubtree.html` then carries
+                // dj-ids that collide with siblings the diff plans to
+                // remove via `RemoveChild(child_d=...)`, and the
+                // client's `:scope > [dj-id=N]` querySelector returns
+                // the wrong (newer) element — the subtree-doubling
+                // symptom reported in #1552 (and the simpler "branch
+                // doesn't swap" symptom in #1550 when ids 1..k overlap
+                // with sibling counts).
+                if let Some(ref old_vdom) = self.last_vdom {
+                    if let Some(max_id) = djust_vdom::max_djust_id_in(old_vdom) {
+                        djust_vdom::ensure_id_counter_at_least(max_id + 1);
+                    }
+                }
                 // Full html5ever parse
                 let new_vdom = if self.last_vdom.is_some() {
                     parse_html_continue(&html).map_err(|e| {
@@ -643,6 +665,16 @@ impl RustLiveViewBackend {
         // Try text-only fast path: mutate old VDOM in-place if only text changed.
         // Falls back to html5ever if structural changes detected.
         let t_parse_start = Instant::now();
+        // dj-id collision defense (#1550 / #1552). See companion comment
+        // in `render_with_diff` for the full rationale. Same fix:
+        // advance the thread-local id counter past the highest id in
+        // `last_vdom` so the next parse cannot reuse ids that already
+        // appear in the surviving tree.
+        if let Some(ref old_vdom) = self.last_vdom {
+            if let Some(max_id) = djust_vdom::max_djust_id_in(old_vdom) {
+                djust_vdom::ensure_id_counter_at_least(max_id + 1);
+            }
+        }
         let mut new_vdom = if let (Some(ref old_html), Some(_)) = (&self.last_html, &self.last_vdom)
         {
             let old_html = old_html.clone();
