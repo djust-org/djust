@@ -11,6 +11,55 @@ description: "Build SaaS apps with TenantMixin, flexible resolution strategies, 
 
 djust provides comprehensive multi-tenant support for building SaaS applications with complete tenant isolation, flexible resolution strategies, and tenant-scoped data access.
 
+## Choosing Your Multi-Tenancy Strategy
+
+djust has **one supported multi-tenancy strategy**: `djust.tenants` (row-level). This guide covers it. If you're starting a new djust application, this is the path.
+
+### `djust.tenants` (row-level) — the supported ASGI-native path
+
+Every tenant-scoped row carries a `tenant_id`. Querysets filter on it. Tenant resolution at request/connection time is a single lookup, cached for the rest of the request. **No schema switching. No `SET search_path`. No per-event Postgres roundtrip.**
+
+This is the recommended and only supported multi-tenancy strategy for djust applications because:
+
+- LiveView's hot path (every WS event re-enters middleware) stays cheap — there's no DB roundtrip on entry.
+- Connection-pool pressure scales with **active sessions**, not events × tenants × middleware passes.
+- Tenant resolution is cacheable in-process or in Redis without needing to compose with database connection state.
+- Single Postgres schema is operationally simpler — one set of migrations, one backup, one set of indexes.
+- It integrates cleanly with djust's state backends, presence, and `TenantMixin` / `TenantScopedMixin`.
+
+### `django-tenants` (schema-per-tenant) — DEPRECATED under djust
+
+> **Deprecated.** Integration with the external [django-tenants](https://github.com/django-tenants/django-tenants) library (schema-per-tenant via `SET search_path`) is **deprecated** as a multi-tenancy strategy for djust applications. Existing deploys are not forcibly broken, but new applications should not adopt it, and existing applications should plan a migration to `djust.tenants`.
+
+Why deprecated:
+
+- **It is a known production footgun under ASGI + LiveView.** Every WebSocket event re-enters `TenantMainMiddleware` → `set_tenant()` → `SET search_path`. LiveView amplifies this dramatically: `tick_interval` polling (typically every 1.5–5s), `push_to_view` re-mounts across all connected sessions, presence updates, and `@notify_on_save` listener re-mounts each re-enter the middleware. Without the `TENANT_LIMIT_SET_CALLS` stopgap (below) this exhausts the Postgres connection pool. [Issue #1556](https://github.com/djust-org/djust/issues/1556) was a real production 503 incident on a djust deploy traceable to this shape.
+- **Schema-per-tenant isolation is not what most multi-tenant SaaS applications actually need.** `tenant_id` filtering at the row level satisfies the typical "users in tenant A cannot see tenant B's data" requirement, and is the model djust's own mixins, state backends, and presence layer integrate with natively.
+- **The migration path is straightforward** for typical applications: add `tenant_id` columns, write a one-time data migration to copy schema-qualified rows into the shared schema with the right `tenant_id`, swap middleware. A dedicated migration guide is tracked as a v1.1.0 documentation item (see [#1559](https://github.com/djust-org/djust/issues/1559) — placeholder until the issue is filed).
+
+#### Stopgap (until migration): required settings if you remain on django-tenants
+
+If you cannot migrate immediately and are running an existing djust + django-tenants deploy, the stopgap configuration to avoid the connection-storm class of bug is:
+
+```python
+# settings.py — stopgap only; migrate to djust.tenants for long-term support
+
+# Skip the redundant SET search_path wire trip when the connection is
+# already on the right tenant. WITHOUT THIS your deploy is one
+# tick_interval-heavy LiveView away from exhausting Postgres.
+TENANT_LIMIT_SET_CALLS = True
+```
+
+djust ships a startup system check (`djust.C014`) that warns when `django_tenants` is configured + `ASGI_APPLICATION` is set + `TENANT_LIMIT_SET_CALLS` is unset or `False`. The check's hint and `fix_hint` lead with the migration recommendation; the `TENANT_LIMIT_SET_CALLS = True` setting is described as a stopgap, not a long-term fix.
+
+Additional operational recommendations for the stopgap window:
+
+- Size Postgres `max_connections` for at least `replicas × ASGI_THREAD_LIMIT` plus headroom for Celery/admin/migrations. The default `max_connections = 100` is typically too tight for a 2-replica ASGI deploy.
+- Put a **transaction-pooling pgbouncer** in front of Postgres for any multi-replica deployment. ASGI's per-request threadpool model multiplies real Postgres connections beyond what worker-process pooling does under WSGI.
+- Plan a migration to `djust.tenants`. The longer the stopgap window, the more risk of regression as djust framework features evolve without active django-tenants integration testing in CI.
+
+The remainder of this guide covers `djust.tenants`.
+
 ## What You Get
 
 - **Automatic tenant resolution** -- From subdomain, path, headers, session, or custom logic
