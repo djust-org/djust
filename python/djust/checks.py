@@ -404,6 +404,76 @@ def _check_manual_client_js(errors):
                             pass  # Skip files that can't be read
 
 
+def _check_multi_tenant_asgi_set_calls(errors):
+    """C014 — django-tenants + ASGI without TENANT_LIMIT_SET_CALLS (closes #1556).
+
+    Under ASGI + django-tenants, every WS event handler runs through
+    TenantMainMiddleware → set_tenant() → SET search_path. LiveView amplifies
+    this: tick_interval polling, push_to_view re-mounts, and @notify_on_save
+    re-mounts each re-enter the middleware. Without TENANT_LIMIT_SET_CALLS,
+    every re-entry emits a Postgres roundtrip. Production replicas can
+    exhaust the Postgres pool and serve 503 simultaneously (#1556 captured
+    via py-spy on djustlive prod: ThreadPoolExecutor-1168_0, -1199_0,
+    -1206_0 each holding a fresh connection).
+
+    Fires when ALL of the following hold:
+    - django-tenants is configured (django_tenants in INSTALLED_APPS OR
+      TENANT_MODEL setting is set)
+    - ASGI_APPLICATION is set (the deployment is ASGI-shaped)
+    - TENANT_LIMIT_SET_CALLS is unset or False
+
+    Suppress with DJUST_CONFIG = {'suppress_checks': ['C014']} if the app
+    deliberately tolerates the per-request SET search_path cost (e.g., low
+    concurrency, no LiveView polling, or a hardened pgbouncer in front).
+
+    Tracking #1557 for the framework-level fix (per-WS-session tenant cache).
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C014"):
+        return
+
+    installed = list(getattr(settings, "INSTALLED_APPS", []))
+    has_tenants_app = "django_tenants" in installed
+    has_tenant_model = getattr(settings, "TENANT_MODEL", None) is not None
+    if not (has_tenants_app or has_tenant_model):
+        return
+
+    if not getattr(settings, "ASGI_APPLICATION", None):
+        return
+
+    if getattr(settings, "TENANT_LIMIT_SET_CALLS", False):
+        return
+
+    errors.append(
+        DjustWarning(
+            "Multi-tenant ASGI deploy without TENANT_LIMIT_SET_CALLS — "
+            "every WS event will emit a redundant `SET search_path` and "
+            "can exhaust the Postgres connection pool under LiveView load.",
+            hint=(
+                "Set `TENANT_LIMIT_SET_CALLS = True` in settings. This is a "
+                "django-tenants flag that skips the `SET search_path` wire "
+                "trip when the connection is already on the right tenant. "
+                "Under djust, every WebSocket event (tick_interval, "
+                "push_to_view, presence updates, @notify_on_save) re-enters "
+                "TenantMainMiddleware; without this flag, each re-entry "
+                "issues a Postgres roundtrip. See #1556 for the prod "
+                "incident that motivated this check, and #1557 for the "
+                "tracked framework-level fix (per-WS-session tenant cache). "
+                "Suppress with DJUST_CONFIG = {'suppress_checks': ['C014']}."
+            ),
+            id="djust.C014",
+            fix_hint=(
+                "Add `TENANT_LIMIT_SET_CALLS = True` to your Django "
+                "settings file. Also size Postgres `max_connections` for "
+                "`replicas × ASGI_THREAD_LIMIT` and consider a "
+                "transaction-pooling pgbouncer in front for any "
+                "multi-replica multi-tenant deploy."
+            ),
+        )
+    )
+
+
 def _get_project_app_dirs():
     """Return directories for project apps (excluding third-party and djust itself)."""
     from django.apps import apps
@@ -612,6 +682,9 @@ def check_configuration(app_configs, **kwargs):
 
     # C013 -- Stale collectstatic copy of client.min.js (closes #1088)
     _check_stale_collected_client(errors)
+
+    # C014 -- Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS (closes #1556)
+    _check_multi_tenant_asgi_set_calls(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
