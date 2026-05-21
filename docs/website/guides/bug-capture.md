@@ -31,9 +31,13 @@ In the reporter's local dev REPL — at the moment the broken transition happens
 from djust.bug_capture import encode_view_state, scrub_fields
 
 # `my_view` is the LiveView instance with time_travel_enabled = True
-# that just emitted the broken transition.
+# that just emitted the broken transition. Patches come straight from
+# render_with_diff() — iter A intentionally does not couple to the
+# render pipeline (iter B's debug-panel button will wire this up).
+_html, patches, _version = my_view.render_with_diff()
 blob = encode_view_state(
     my_view,
+    patches=patches,
     scrub=scrub_fields("password", "ssn", "credit_card"),
 )
 # blob is now a string like:
@@ -139,9 +143,13 @@ Encode into a `djbug1.<base64url>` string. See the security model above.
 
 Decode a `djbug1.<base64url>` string. Raises `ValueError` on any malformed input (non-string, missing version prefix, unknown version, bad base64, bad JSON, missing required fields, wrong field types).
 
-### `encode_view_state(view, event_name="", scrub=None) -> str`
+### `encode_view_state(view, patches, event_name="", scrub=None) -> str`
 
-Convenience: pulls the most recent `EventSnapshot` from a view's time-travel buffer + the most recent `_last_vdom_patches`, builds a `BugCapture`, encodes it. Requires the view to have `time_travel_enabled = True` and at least one event captured. Pass `event_name=...` to pick a specific past event rather than the latest.
+Convenience: pulls the most recent `EventSnapshot` from a view's time-travel buffer + the caller-supplied `patches`, builds a `BugCapture`, encodes it. Requires the view to have `time_travel_enabled = True` and at least one event captured.
+
+`patches` is required and must be either the JSON string `render_with_diff()` returns or an already-decoded list of patch dicts. **Why caller-supplied:** iter A intentionally does not couple to the render pipeline — djust's `render_with_diff()` returns patches into the WebSocket / SSE / runtime frame paths without stashing them on the view, so there's no framework attribute to introspect. Iter B (#1561) will add a debug-panel button that calls `render_with_diff()` + this function in one click.
+
+Pass `event_name=...` to pick a specific past event rather than the latest.
 
 ### `scrub_fields(*names) -> Callable[[BugCapture], BugCapture]`
 
@@ -154,4 +162,4 @@ Ready-made scrub callable. Removes each named field from both `state_before` and
 
 ## Strategy connection
 
-This feature lands as part of the v1.1.0 milestone after promotion from "Path D killer demo" status to load-bearing v1.1 capability. The promotion was triggered by the [#1552 reporter's data point](https://github.com/djust-org/djust/issues/1552#issuecomment-XXXXXX) about upstream-bug-velocity friction — the reporter's own words: *"the gap between 'I see it broken' and 'you can see it broken' is the full source tree."* The [v1.1 readiness session](../../strategy-sessions/2026-05-19-v1.1-readiness.md) recommended Path E (defer the headline-path decision until launch-soak data exists, with the hedge *"refuse to commit before data exists"*); the #1552 filing supplied that data.
+This feature lands as part of the v1.1.0 milestone after promotion from "Path D killer demo" status to load-bearing v1.1 capability. The promotion was triggered by the [#1552 reporter's data point](https://github.com/djust-org/djust/issues/1552) about upstream-bug-velocity friction — the reporter's own words: *"the gap between 'I see it broken' and 'you can see it broken' is the full source tree."* The [v1.1 readiness session](../../strategy-sessions/2026-05-19-v1.1-readiness.md) recommended Path E (defer the headline-path decision until launch-soak data exists, with the hedge *"refuse to commit before data exists"*); the #1552 filing supplied that data.

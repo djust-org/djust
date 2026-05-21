@@ -305,11 +305,17 @@ class _StubBuffer:
 
 
 class _StubView:
-    """Test view exposing the framework conventions encode_view_state pulls from."""
+    """Test view exposing the framework convention encode_view_state pulls from.
 
-    def __init__(self, entries, patches):
+    Iter A consciously decouples bug-capture from the render pipeline:
+    `encode_view_state` takes patches as an explicit parameter rather
+    than introspecting a non-existent framework attribute (the original
+    Action #1101 hazard caught by PR #1563's reviewer). The stub only
+    needs to expose `_time_travel_buffer`.
+    """
+
+    def __init__(self, entries):
         self._time_travel_buffer = _StubBuffer(entries)
-        self._last_vdom_patches = patches
 
 
 class TestEncodeViewState:
@@ -327,8 +333,8 @@ class TestEncodeViewState:
                 "state_after": {"x": 20},
             },
         ]
-        view = _StubView(entries, '[{"op":"replace","path":[0],"html":"<div/>"}]')
-        encoded = encode_view_state(view)
+        view = _StubView(entries)
+        encoded = encode_view_state(view, patches='[{"op":"replace","path":[0],"html":"<div/>"}]')
         decoded = BugCapture.decode(encoded)
         assert decoded.event_name == "latest"
         assert decoded.state_before == {"x": 10}
@@ -349,18 +355,15 @@ class TestEncodeViewState:
                 "state_after": {"step": "vehicle", "highlighted": True},
             },
         ]
-        view = _StubView(entries, "[]")
-        decoded = BugCapture.decode(encode_view_state(view, event_name="next_step"))
+        view = _StubView(entries)
+        decoded = BugCapture.decode(encode_view_state(view, patches="[]", event_name="next_step"))
         assert decoded.event_name == "next_step"
 
     @override_settings(DEBUG=True)
     def test_raises_when_event_name_not_in_buffer(self):
-        view = _StubView(
-            [{"event_name": "click", "state_before": {}, "state_after": {}}],
-            "[]",
-        )
+        view = _StubView([{"event_name": "click", "state_before": {}, "state_after": {}}])
         with pytest.raises(ValueError, match="no recorded event named"):
-            encode_view_state(view, event_name="never_happened")
+            encode_view_state(view, patches="[]", event_name="never_happened")
 
     @override_settings(DEBUG=True)
     def test_raises_when_view_has_no_buffer(self):
@@ -368,35 +371,41 @@ class TestEncodeViewState:
             pass
 
         with pytest.raises(ValueError, match="no time-travel buffer"):
-            encode_view_state(_NoBuffer())
+            encode_view_state(_NoBuffer(), patches="[]")
 
     @override_settings(DEBUG=True)
     def test_raises_when_buffer_is_empty(self):
-        view = _StubView([], "[]")
+        view = _StubView([])
         with pytest.raises(ValueError, match="no recorded events"):
-            encode_view_state(view)
-
-    @override_settings(DEBUG=True)
-    def test_raises_when_view_has_no_patches(self):
-        class _NoPatches:
-            def __init__(self):
-                self._time_travel_buffer = _StubBuffer(
-                    [{"event_name": "e", "state_before": {}, "state_after": {}}]
-                )
-
-        with pytest.raises(ValueError, match="no recent VDOM patches"):
-            encode_view_state(_NoPatches())
+            encode_view_state(view, patches="[]")
 
     @override_settings(DEBUG=True)
     def test_patches_as_list_works_too(self):
         """Accepts both JSON string and pre-decoded list — useful for tests
         and for any internal caller that already has the patches parsed."""
-        view = _StubView(
-            [{"event_name": "e", "state_before": {}, "state_after": {}}],
-            [{"op": "insert", "path": [0], "html": "<p/>"}],
+        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
+        decoded = BugCapture.decode(
+            encode_view_state(view, patches=[{"op": "insert", "path": [0], "html": "<p/>"}])
         )
-        decoded = BugCapture.decode(encode_view_state(view))
         assert decoded.vdom_patches == [{"op": "insert", "path": [0], "html": "<p/>"}]
+
+    @override_settings(DEBUG=True)
+    def test_raises_on_malformed_patches_json(self):
+        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
+        with pytest.raises(ValueError, match="patches is not valid JSON"):
+            encode_view_state(view, patches="not json")
+
+    @override_settings(DEBUG=True)
+    def test_raises_on_patches_decoding_to_non_list(self):
+        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
+        with pytest.raises(ValueError, match="patches JSON must be an array"):
+            encode_view_state(view, patches='{"op":"x"}')
+
+    @override_settings(DEBUG=True)
+    def test_raises_on_patches_wrong_type(self):
+        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
+        with pytest.raises(ValueError, match="patches must be a JSON string or list"):
+            encode_view_state(view, patches=42)
 
     @override_settings(DEBUG=True)
     def test_scrub_forwarded_to_encode(self):
@@ -407,9 +416,10 @@ class TestEncodeViewState:
                     "state_before": {"password": "secret", "form_id": "x"},
                     "state_after": {"password": "secret", "form_id": "x"},
                 }
-            ],
-            "[]",
+            ]
         )
-        decoded = BugCapture.decode(encode_view_state(view, scrub=scrub_fields("password")))
+        decoded = BugCapture.decode(
+            encode_view_state(view, patches="[]", scrub=scrub_fields("password"))
+        )
         assert "password" not in decoded.state_before
         assert "password" in decoded.scrubbed_fields

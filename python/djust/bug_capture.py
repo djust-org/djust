@@ -226,6 +226,7 @@ class BugCapture:
 
 def encode_view_state(
     view: Any,
+    patches: Any,
     event_name: str = "",
     scrub: Optional[Callable[[BugCapture], BugCapture]] = None,
 ) -> str:
@@ -233,13 +234,36 @@ def encode_view_state(
 
     Reads the most recent :class:`~djust.time_travel.EventSnapshot` from
     the view's time-travel buffer (the source of ``state_before`` /
-    ``state_after``) and the view's most recent VDOM patch list (the
-    source of ``vdom_patches``). Raises if either is unavailable.
+    ``state_after``) and combines it with the caller-supplied *patches*.
+
+    **Why patches are caller-supplied:** iter A intentionally does not
+    couple to the render pipeline. djust's ``render_with_diff()`` returns
+    patches into the WebSocket / SSE / runtime frame paths without
+    stashing them on the view, so there is no framework attribute to
+    introspect here. The caller is responsible for obtaining the patch
+    list — typically by calling ``render_with_diff()`` immediately
+    before this function, or by capturing patches from the framework's
+    own patch-emission signal (``djust.signals.patches_emitted``).
+
+    Iter B (#1561) will add a debug-panel button that wires up
+    ``render_with_diff()`` + this function in one click; until then,
+    the canonical pattern is::
+
+        from djust.bug_capture import encode_view_state, scrub_fields
+        html, patches_json, _version = my_view.render_with_diff()
+        blob = encode_view_state(
+            my_view,
+            patches=patches_json,
+            scrub=scrub_fields("password", "ssn"),
+        )
 
     Args:
         view: A :class:`~djust.live_view.LiveView` instance with
             ``time_travel_enabled = True`` and at least one event
-            captured.
+            captured in its time-travel buffer.
+        patches: The VDOM patches to record. Accepts either the JSON
+            string returned by ``render_with_diff()`` or an
+            already-decoded list of patch dicts.
         event_name: If provided, locates the most recent snapshot for
             that event name. Default is the latest snapshot regardless
             of event.
@@ -248,7 +272,8 @@ def encode_view_state(
     Raises:
         RuntimeError: see :meth:`BugCapture.encode`.
         ValueError: if the view has no time-travel buffer, no recorded
-            events, or no recent VDOM patches.
+            events, the named event isn't in the buffer, or *patches*
+            is malformed (not a JSON list / not a list).
     """
     buffer = getattr(view, "_time_travel_buffer", None)
     if buffer is None or len(buffer) == 0:
@@ -270,11 +295,11 @@ def encode_view_state(
     else:
         snapshot = history[-1]
 
-    patches = _extract_last_patches(view)
+    parsed_patches = _coerce_patches(patches)
     capture = BugCapture(
         state_before=snapshot["state_before"],
         state_after=snapshot["state_after"],
-        vdom_patches=patches,
+        vdom_patches=parsed_patches,
         event_name=snapshot.get("event_name", "") or "",
     )
     return capture.encode(scrub=scrub)
@@ -293,6 +318,14 @@ def scrub_fields(*field_names: str) -> Callable[[BugCapture], BugCapture]:
     held back. Field names not present in state are silently ignored
     (so the same scrub callable can be reused across views with
     different shapes).
+
+    **Scope:** ``scrub_fields`` operates on TOP-LEVEL keys only. A
+    nested field like ``state_before["user"]["password"]`` is NOT
+    removed by ``scrub_fields("password")``; only ``state_before["password"]``
+    is. For nested scrubs, supply your own callable that walks the
+    state tree. The simpler top-level form is intentional — the
+    djust public-state convention exposes state as flat attributes on
+    the view, so top-level scope matches the common case.
     """
     fields = tuple(field_names)
 
@@ -340,40 +373,25 @@ def _enforce_prod_gate() -> None:
     )
 
 
-def _extract_last_patches(view: Any) -> List[Dict[str, Any]]:
-    """Pull the most recent VDOM patches from *view* as a list of dicts.
+def _coerce_patches(patches: Any) -> List[Dict[str, Any]]:
+    """Normalize caller-supplied *patches* to a list of dicts.
 
-    djust's ``render_with_diff()`` returns patches as a JSON string. We
-    look for the most recent rendered patch list on conventional view
-    attributes; this list is what iter A captures. Raises
-    :class:`ValueError` if no patches are available.
+    Accepts the JSON string ``render_with_diff()`` returns OR an
+    already-decoded list. Raises :class:`ValueError` on anything else
+    so callers fail at the bug-capture boundary rather than producing a
+    malformed wire payload.
     """
-    # The framework keeps the last rendered patches on the view via the
-    # standard render path. Looked up in priority order so test/mock
-    # views can pre-populate any one of these.
-    for attr in ("_last_vdom_patches", "_last_patches"):
-        raw = getattr(view, attr, None)
-        if raw is None:
-            continue
-        if isinstance(raw, str):
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise ValueError("view.%s is not valid JSON: %s" % (attr, exc)) from exc
-            if not isinstance(parsed, list):
-                raise ValueError(
-                    "view.%s decoded to %s, expected JSON array" % (attr, type(parsed).__name__)
-                )
-            return parsed
-        if isinstance(raw, list):
-            return list(raw)
-        raise ValueError(
-            "view.%s must be a JSON string or list, got %s" % (attr, type(raw).__name__)
-        )
-    raise ValueError(
-        "view has no recent VDOM patches recorded; ensure at least one "
-        "event has rendered through render_with_diff() before capturing"
-    )
+    if isinstance(patches, str):
+        try:
+            parsed = json.loads(patches)
+        except json.JSONDecodeError as exc:
+            raise ValueError("patches is not valid JSON: %s" % exc) from exc
+        if not isinstance(parsed, list):
+            raise ValueError("patches JSON must be an array, decoded to %s" % type(parsed).__name__)
+        return parsed
+    if isinstance(patches, list):
+        return list(patches)
+    raise ValueError("patches must be a JSON string or list, got %s" % type(patches).__name__)
 
 
 __all__ = [
