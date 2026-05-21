@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **New system check `djust.C014` — warn at startup when multi-tenant ASGI deploys omit `TENANT_LIMIT_SET_CALLS` (#1556, option c).** Surfaces the misconfiguration that caused a production 503 on djustlive: under ASGI + django-tenants, every WebSocket event re-enters `TenantMainMiddleware` → `set_tenant()` → `SET search_path`. LiveView amplifies this — `tick_interval` polling, `push_to_view` re-mounts, presence updates, and `@notify_on_save` listener re-mounts each re-enter the middleware. Without `TENANT_LIMIT_SET_CALLS = True`, every re-entry issues a fresh Postgres roundtrip; under load the Postgres pool exhausts and pods serve 503 simultaneously. The check fires when ALL of these hold: (1) `django_tenants` is in `INSTALLED_APPS` OR `TENANT_MODEL` is set, (2) `ASGI_APPLICATION` is set, (3) `TENANT_LIMIT_SET_CALLS` is unset or `False`. Emits a `DjustWarning` with the setting name, the originating issue (#1556), and a `fix_hint` containing the copy-pasteable `TENANT_LIMIT_SET_CALLS = True` line plus `max_connections` sizing guidance. Suppressible via `DJUST_CONFIG = {'suppress_checks': ['C014']}`. The framework-level fix — caching the tenant per WS session at LiveView mount time (option a from the issue) — needs a separate threat-model + cross-tenant isolation test pass and is tracked separately in #1557 (`security-review` label) for v1.1.0. New helper `_check_multi_tenant_asgi_set_calls` in `python/djust/checks.py`. Covered by 11 regression cases in `python/djust/tests/test_c014_multi_tenant_asgi.py` across 4 classes (trigger conditions, negative cases, suppression by short and full ID, and hint quality), including a gate-off self-test (#254 / #1468) confirming 6 of 11 tests fail without the check (the 5 negative cases are intentionally tautology-safe — they assert C014 does NOT fire when conditions aren't met).
+
 ## [1.0.0rc7] - 2026-05-20
 
 ### Fixed
