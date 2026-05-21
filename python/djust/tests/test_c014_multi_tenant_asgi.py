@@ -202,3 +202,39 @@ class TestC014HintQuality:
 
     def test_fix_hint_provides_copy_pasteable_line(self):
         assert "TENANT_LIMIT_SET_CALLS = True" in self._fire().fix_hint
+
+    def test_hint_points_at_djust_tenants_alternative(self):
+        """C014 must steer users toward djust.tenants — closing the
+        docs/check gap so users land on the right strategy rather than
+        just patching django-tenants."""
+        assert "djust.tenants" in self._fire().hint
+
+    def test_hint_links_strategy_guide(self):
+        """The strategy-choice section is the source of truth for the
+        row-level vs. schema-per-tenant decision; the hint must point
+        readers there."""
+        assert "multi-tenant.md" in self._fire().hint
+
+    def test_hint_marks_django_tenants_deprecated(self):
+        """django-tenants integration is deprecated under djust. The
+        hint must say so explicitly — soft 'consider' language was
+        upgraded to hard deprecation framing."""
+        hint = self._fire().hint
+        assert "DEPRECATED" in hint or "deprecated" in hint
+        assert "django-tenants" in hint
+
+    def test_fix_hint_leads_with_migration(self):
+        """fix_hint should lead with 'migrate to djust.tenants' and
+        treat TENANT_LIMIT_SET_CALLS = True as a stopgap, not a
+        long-term fix."""
+        fix = self._fire().fix_hint
+        assert "djust.tenants" in fix
+        assert "TENANT_LIMIT_SET_CALLS = True" in fix
+        assert "stopgap" in fix.lower() or "deprecated" in fix.lower()
+
+    def test_message_flags_django_tenants_deprecation(self):
+        """The Warning's primary message (not just the hint) should
+        surface the deprecation so a developer skimming `manage.py check`
+        output sees it without expanding hints."""
+        c014 = self._fire()
+        assert "deprecated" in c014.msg.lower() or "DEPRECATED" in c014.msg
