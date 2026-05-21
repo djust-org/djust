@@ -316,6 +316,11 @@ navigation:
         file: guides/time-travel-debugging.md
         order: 32
         level: intermediate
+      - title: Bug Capture — Share a Broken Transition (v1.1)
+        slug: bug-capture
+        file: guides/bug-capture.md
+        order: 33
+        level: intermediate
 
   - title: Testing
     slug: testing
