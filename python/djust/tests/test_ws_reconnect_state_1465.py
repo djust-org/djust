@@ -109,22 +109,26 @@ def test_load_gate_loosened_fires_on_saved_state_without_has_prerendered():
         "so plain WS reconnect can restore state from session."
     )
 
-    # The aget must be guarded for the no-session case (tests without sessions).
-    assert "if request.session else {}" in source, (
-        "aget must short-circuit when request.session is None — otherwise "
-        "tests/contexts without session middleware blow up on the new path."
+    # The aget must be guarded for the no-session case (tests without sessions)
+    # AND for views without ``enable_state_snapshot`` (#1552 fix). Pre-#1552
+    # the guard was just ``if request.session else {}``; #1552 widened it to
+    # also require the view to opt in, so non-opt-in views don't get their
+    # state restored from session on every WS mount (which produced patches
+    # the client's DOM couldn't resolve — the wizard step-leak bug). Refs
+    # #1466 (introduced the unconditional load) and #1552 (gated it).
+    assert "request.session" in source and "enable_state_snapshot" in source, (
+        "aget must short-circuit when request.session is None AND when "
+        "the view doesn't opt in via enable_state_snapshot (#1552)."
     )
 
     # And the OLD gate text MUST NOT remain — otherwise the boolean is broken.
-    # We allow the substring to appear in comments / docstrings (the comment
-    # explicitly mentions the old shape for context); pin only that the
-    # executable line shape was changed.
-    # The pre-change executable line read:
-    #     `if has_prerendered:` followed by `view_key = f"liveview_{page_url}"`
-    # The post-change shape unconditionally builds view_key BEFORE the gate.
-    # Assert the new shape:
-    new_shape_idx = source.find('view_key = f"liveview_{page_url}"')
-    gate_idx = source.find("if has_prerendered or saved_state:")
+    # The executable line should still build view_key before the gate.
+    # #1552's comment block mentions the gate phrase for context, so we
+    # find the LAST occurrence of each fragment (the actual code) rather
+    # than the first. Both must be present and view_key must precede the
+    # executable gate line.
+    new_shape_idx = source.rfind('view_key = f"liveview_{page_url}"')
+    gate_idx = source.rfind("if has_prerendered or saved_state:")
     assert new_shape_idx != -1 and gate_idx != -1
     assert new_shape_idx < gate_idx, (
         "view_key must be assigned BEFORE the (widened) gate, not inside it."

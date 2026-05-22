@@ -1989,9 +1989,29 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # reconnect when saved state exists in the session. Pairs with
             # the WS-event-handler save in handle_event so state survives
             # reconnects (page refresh, network blip, snapshot/restore).
+            #
+            # #1552 fix: gate the saved_state read on
+            # ``enable_state_snapshot`` to mirror the SAVE-block gate added
+            # in #1475 (commit 066d7f05). PR #1466 widened this read from
+            # ``if has_prerendered:`` to ``if has_prerendered or saved_state:``
+            # AND made the ``aget`` itself unconditional — so views that
+            # DIDN'T opt in were still getting state restored from the
+            # HTTP-path session save onto every WS mount, AFTER mount()
+            # had already initialized the view. The next render_with_diff
+            # then diffed against that clobbered baseline, producing
+            # patches the client's DOM couldn't resolve. Bisect confirmed:
+            # 0.9.7rc1 (pre-#1466) → no bug. 0.9.7rc2 (post-#1466) → bug
+            # reproduces. Gating the LOAD symmetrically with the SAVE
+            # restores 0.9.7rc1 behavior for non-opt-in views while
+            # preserving #1466's reconnect-resume capability for opt-in
+            # views (``enable_state_snapshot = True``).
             mounted = False
             view_key = f"liveview_{page_url}"
-            saved_state = await request.session.aget(view_key, {}) if request.session else {}
+            saved_state = (
+                await request.session.aget(view_key, {})
+                if request.session and getattr(self.view_instance, "enable_state_snapshot", False)
+                else {}
+            )
             if has_prerendered or saved_state:
                 if saved_state:
                     from .security import safe_setattr
