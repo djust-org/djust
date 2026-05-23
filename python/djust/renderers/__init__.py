@@ -21,16 +21,31 @@ from typing import Optional, Type
 
 from .base import Renderer
 from .html import HtmlRenderer
+from .native import ComposeRenderer, NativeRenderer, SwiftUIRenderer
 
-__all__ = ["Renderer", "HtmlRenderer", "RENDERERS", "get_renderer_factory"]
+__all__ = [
+    "Renderer",
+    "HtmlRenderer",
+    "NativeRenderer",
+    "SwiftUIRenderer",
+    "ComposeRenderer",
+    "RENDERERS",
+    "get_renderer_factory",
+]
 
-# LVN-I PR-3: Renderer registry. Keys match the ``output_format`` Protocol
-# attribute and the ``?platform=`` WebSocket handshake param. Today only
-# ``html`` is populated; ``NativeRenderer`` lands in LVN-II (#1578) and
-# will register ``swiftui`` and ``compose``. Third-party renderers can
-# register by appending to this dict at import time.
+# Renderer registry. Keys match the ``output_format`` Protocol attribute
+# and the ``?platform=`` WebSocket handshake param. Third-party renderers
+# can register by appending to this dict at import time.
+#
+# LVN-I PR-3 added ``html``. LVN-II PR-2 (this PR) registers ``swiftui``
+# and ``compose`` — the body is a scaffold today (raises NotImplementedError);
+# LVN-II PR-3 ships the actual widget-tree walker. Registering them here
+# so the handshake routes ?platform=swiftui to a defined error rather than
+# silently falling through to HTML (which masks client-side misconfigs).
 RENDERERS: dict[str, Type[Renderer]] = {
     "html": HtmlRenderer,
+    "swiftui": SwiftUIRenderer,
+    "compose": ComposeRenderer,
 }
 
 
