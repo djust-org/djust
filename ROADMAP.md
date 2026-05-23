@@ -511,12 +511,17 @@ v1.1.x headline direction.
 
 **Parallel work track — LiveView Native (ADR-019, 2026-05-23):**
 
-| Priority | Issue | Summary |
-|---|---|---|
-| **P1** | (new) | **LVN-I** — Renderer abstraction in djust core (`python/djust/renderers/`); `HtmlRenderer` extracted from existing pipeline; `ViewRuntime` plumbing. HTML stays default. No external behavior change. See [ADR-019 Iter I](docs/adr/019-liveview-native.md#iter-i--renderer-abstraction-in-djust-core). |
-| **P2** | (new) | **LVN-II** — Baseline 12-widget vocabulary + `NativeRenderer` emitting widget-shaped VNodes from `.swiftui.html` / `.compose.html` template variants. See [ADR-019 Iter II](docs/adr/019-liveview-native.md#iter-ii--widget-vocabulary--nativerenderer). |
-| **P2** | (new) | **LVN-III/IV** — `djust-native-ios` Swift Package v0.1 + `djust-native-android` Kotlin library v0.1 in separate repos. MAX Companion `HomeView` as the pilot. |
-| **P3** | (new) | **LVN-V** — Author guide + migration guide + v1.0 widget-vocabulary lock. |
+Filter by [`liveview-native` label](https://github.com/djust-org/djust/issues?q=is%3Aissue+label%3Aliveview-native) — five tracking issues with per-PR checklists + acceptance criteria.
+
+| Priority | Issue | Summary | Blocks |
+|---|---|---|---|
+| **P1** | #1577 | **LVN-I** — Renderer abstraction in djust core (`python/djust/renderers/`); `HtmlRenderer` extracted from existing pipeline; `ViewRuntime` plumbing. HTML stays default. No external behavior change. | II, III, IV, V |
+| **P2** | #1578 | **LVN-II** — Baseline 12-widget vocabulary + `NativeRenderer` emitting widget-shaped VNodes from `.swiftui.html` / `.compose.html` template variants. | III, IV |
+| **P2** | #1579 | **LVN-III** — `djust-native-ios` Swift Package v0.1 (separate repo `djust-org/djust-native-ios`). MAX Companion `HomeView` as the pilot. | V |
+| **P2** | #1580 | **LVN-IV** — `djust-native-android` Kotlin library v0.1 (separate repo `djust-org/djust-native-android`). Mirrors LVN-III on Android. | V |
+| **P3** | #1581 | **LVN-V** — Author guide + migration guide for `djust-mobile-toga` users + v1.0 widget-vocabulary lock. | — |
+
+Sequencing: I → II → (III ∥ IV) → V. `/pipeline-drain --milestone v1.1.0` will pick these up by ID once LVN-I is unblocked; III + IV are parallelizable.
 
 > Sub-milestone, not the v1.1 headline. Path E (defer to launch soak) stays
 > the chosen headline direction per the 2026-05-19 strategy session; LiveView
