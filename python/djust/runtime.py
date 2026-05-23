@@ -185,12 +185,20 @@ class ViewRuntime:
         *,
         scope: Optional[Dict[str, Any]] = None,
         rate_limiter: Optional[ConnectionRateLimiter] = None,
+        renderer_factory: Optional[Any] = None,
     ) -> None:
         self.transport = transport
         self.view_instance: Optional[Any] = None
         self.scope = scope
         self._rate_limiter = rate_limiter or ConnectionRateLimiter()
         self._render_lock = asyncio.Lock()
+        # ADR-019 LVN-I PR-2: Renderer factory plumbed through. Stored
+        # for PR-3 (handshake) to set based on ``?platform=`` selection;
+        # ``None`` means "use the default ``HtmlRenderer``" which the
+        # dispatch site (``TemplateMixin.render_with_diff:942``) already
+        # constructs inline. Type kept ``Any`` to avoid circular import
+        # with ``djust.renderers``; runtime use-site will cast.
+        self.renderer_factory = renderer_factory
 
     # ------------------------------------------------------------------ #
     # Public properties
