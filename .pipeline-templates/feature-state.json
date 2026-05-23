@@ -2,7 +2,7 @@
   "pipeline_type": "feature",
   "task_description": "",
   "branch_name": "",
-  "pr_target_branch": "main",
+  "pr_target_branch": "1.1",
   "project_path": "",
   "started_at": "",
   "completed_at": null,
