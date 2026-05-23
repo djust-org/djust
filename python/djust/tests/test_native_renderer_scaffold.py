@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 
 class TestRegistryHasNativeEntries:
     def test_swiftui_registered(self):
@@ -55,28 +53,6 @@ class TestNativeRendererConformance:
         assert ComposeRenderer.output_format == "compose"
 
 
-class TestScaffoldRaises:
-    """The scaffold raises with a clear pointer to the tracking issue."""
-
-    def test_swiftui_render_with_diff_raises_with_clear_message(self):
-        from djust.renderers import SwiftUIRenderer
-
-        r = SwiftUIRenderer(view=MagicMock())
-        with pytest.raises(NotImplementedError) as exc_info:
-            r.render_with_diff()
-        msg = str(exc_info.value)
-        assert "walker" in msg
-        assert "1578" in msg
-        assert "swiftui" in msg
-
-    def test_compose_render_with_diff_raises(self):
-        from djust.renderers import ComposeRenderer
-
-        r = ComposeRenderer(view=MagicMock())
-        with pytest.raises(NotImplementedError):
-            r.render_with_diff()
-
-
 class TestNativeRendererResolverWiring:
     """LVN-II PR-4: NativeRenderer wires the template variant resolver."""
 
@@ -89,16 +65,15 @@ class TestNativeRendererResolverWiring:
         assert r.resolve_template("definitely-not-real.html") == "definitely-not-real.html"
 
     def test_error_message_includes_resolved_template_name(self):
+        # POC superseded: NativeRenderer no longer raises NotImplementedError;
+        # it actually renders. See test_native_renderer_poc.py for the
+        # current render behavior; resolve_template is still tested above.
         from unittest.mock import MagicMock
         from djust.renderers import SwiftUIRenderer
 
         view = MagicMock()
         view.template_name = "medicare/home.html"
         r = SwiftUIRenderer(view=view)
-        try:
-            r.render_with_diff()
-        except NotImplementedError as exc:
-            msg = str(exc)
-            # Resolver picked the base (variant doesn't exist in test loaders)
-            assert "medicare/home.html" in msg
-            assert "swiftui" in msg
+        # Test now only confirms resolve_template's fallback shape; the
+        # render path itself is exercised in test_native_renderer_poc.py.
+        assert r.resolve_template("medicare/home.html") == "medicare/home.html"
