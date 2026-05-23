@@ -65,7 +65,7 @@ class TestScaffoldRaises:
         with pytest.raises(NotImplementedError) as exc_info:
             r.render_with_diff()
         msg = str(exc_info.value)
-        assert "scaffold" in msg
+        assert "walker" in msg
         assert "1578" in msg
         assert "swiftui" in msg
 
@@ -75,3 +75,30 @@ class TestScaffoldRaises:
         r = ComposeRenderer(view=MagicMock())
         with pytest.raises(NotImplementedError):
             r.render_with_diff()
+
+
+class TestNativeRendererResolverWiring:
+    """LVN-II PR-4: NativeRenderer wires the template variant resolver."""
+
+    def test_resolve_template_uses_per_renderer_output_format(self):
+        from unittest.mock import MagicMock
+        from djust.renderers import SwiftUIRenderer
+
+        r = SwiftUIRenderer(view=MagicMock())
+        # Unknown template → variant doesn't exist → falls back to base.
+        assert r.resolve_template("definitely-not-real.html") == "definitely-not-real.html"
+
+    def test_error_message_includes_resolved_template_name(self):
+        from unittest.mock import MagicMock
+        from djust.renderers import SwiftUIRenderer
+
+        view = MagicMock()
+        view.template_name = "medicare/home.html"
+        r = SwiftUIRenderer(view=view)
+        try:
+            r.render_with_diff()
+        except NotImplementedError as exc:
+            msg = str(exc)
+            # Resolver picked the base (variant doesn't exist in test loaders)
+            assert "medicare/home.html" in msg
+            assert "swiftui" in msg
