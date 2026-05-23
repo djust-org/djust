@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`djust.renderers` package — pluggable `Renderer` Protocol + default `HtmlRenderer` (LVN-I PR-1; ADR-019; #1577).** Foundation iteration of the LiveView Native track. Introduces a structurally narrow `Renderer` Protocol (`@runtime_checkable`; `output_format: str`; `render_with_diff(...) -> tuple[str, Optional[str], int]`) so the server-side reactive lifecycle can dispatch to non-HTML targets (SwiftUI, Compose — LVN-II onward in #1578). `HtmlRenderer` wraps the existing Django-template + Rust VDOM pipeline; behavior is byte-identical to the pre-refactor inline call. `TemplateMixin.render_with_diff` at `python/djust/mixins/template.py:942` now dispatches through `HtmlRenderer(self).render_with_diff(...)` instead of inlining `self._rust_view.render_with_diff()`. **What's explicitly NOT in this PR**: `ViewRuntime` plumbing (PR-2 of LVN-I) and `?platform=` handshake parsing (PR-3); `NativeRenderer` + widget vocabulary (LVN-II / #1578); `crates/djust_vdom` (wire format unchanged); `static/djust/client.js` (browser client byte-identical). New tests: `python/djust/tests/test_renderer_protocol.py` (11 cases covering package imports, Protocol shape, `HtmlRenderer` conformance via `@runtime_checkable` isinstance, delegation to `_rust_view`, and the dispatch gate that the mixin routes through `HtmlRenderer` instead of the inline call). Full djust test suite: 2991 pass / 3 skipped / 0 fail (no regression). Prior art: ADR-016 (`ViewRuntime` + `Transport` — this is the third pluggability axis on the same refactor).
+
 ## [1.0.0rc9] - 2026-05-22
 
 ### Fixed
