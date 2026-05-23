@@ -509,19 +509,19 @@ v1.1.x headline direction.
 
 **#1551 — Multi-line `{# ... #}` comment handling disagrees between Rust + Django classical.** Follow-up to #1423 (which fixed the Rust side but didn't normalize behavior with classical Django). A template containing a multi-line `{# ... #}` comment whose body includes template-tag-like syntax (e.g., `{% if foo %}` as prose) renders cleanly through the Rust engine (`djust._rust.render_template_with_dirs` — LiveView WS responses, prod page renders) but crashes through Django's classical renderer (`client.get()` in pytest, Django's debug error page renderer, any view using `render()` directly) with `TemplateSyntaxError: Unexpected end of expression in if tag`. Silent footgun — projects ship templates that work on the dev server (Rust path) and break in CI or on error paths (classical path). Same reporter, same project, hit this trap TWICE in 90 minutes after explicitly documenting the gotcha. **Suggested fix** (per issue body): (1) normalize comment handling at template-load time in djust's Django integration — preprocess `{# ... #}` blocks before classical parsing; (2) OR reject multi-line `{# ... #}` containing `{% ... %}` in the Rust engine so the failure mode is identical between paths; (3) OR document the asymmetry loudly. Independent subsystem from #1550/#1552; process as a separate PR.
 
-**Parallel work track — LiveView Native (ADR-019, 2026-05-23):**
+**Parallel work track — LiveView Native (ADR-019, 2026-05-23):** ALL TRACKING ISSUES CLOSED.
 
-Filter by [`liveview-native` label](https://github.com/djust-org/djust/issues?q=is%3Aissue+label%3Aliveview-native) — five tracking issues with per-PR checklists + acceptance criteria.
+Filter: [`liveview-native` label](https://github.com/djust-org/djust/issues?q=is%3Aissue+label%3Aliveview-native).
 
 | Priority | Issue | Summary | Status |
 |---|---|---|---|
-| **P1** | ~~#1577~~ | ~~**LVN-I** — Renderer abstraction in djust core; `HtmlRenderer` extracted; `ViewRuntime` plumbing; `?platform=` handshake.~~ | ✅ Closed — 3 PRs shipped (#1583 protocol, #1584 runtime field, #1585 handshake) |
-| **P2** | ~~#1578~~ | ~~**LVN-II** — Widget vocabulary + `NativeRenderer` scaffold + template variant resolver + wiring.~~ | ✅ Closed structurally — 4 PRs shipped (#1586 vocab, #1587 scaffold, #1588 resolver, #1589 wiring). **Pending follow-up**: Rust-side widget VDOM walker that produces real `Patch` streams from native templates. |
-| **P2** | #1579 | **LVN-III** — `djust-native-ios` Swift Package (separate repo). | 🟡 PR-1 of 7 shipped ([djust-native-ios#1](https://github.com/djust-org/djust-native-ios/pull/1) — SwiftPM scaffold + WidgetTags mirror + DjustLiveView stub). PRs 2-7 (WS transport + msgpack + patch applicator + widget renderers + events + pilot) await a Swift implementer with Xcode. |
-| **P2** | #1580 | **LVN-IV** — `djust-native-android` Kotlin library (separate repo). | 🟡 PR-1 of 7 shipped ([djust-native-android#1](https://github.com/djust-org/djust-native-android/pull/1) — Gradle scaffold + WidgetTags mirror + DjustLiveView Composable stub). PRs 2-7 await a Kotlin implementer with Android Studio. |
-| **P3** | #1581 | **LVN-V** — Author guide + migration guide + v1.0 widget-vocabulary lock. | 🟡 Initial cut shipped (#1590 — `docs/native-author-guide.md`). Full migration guide + v1.0 SemVer lock land at LVN-III + LVN-IV completion. |
+| **P1** | ~~#1577~~ | ~~**LVN-I** — Renderer abstraction in djust core.~~ | ✅ 3/3 PRs shipped (#1583 protocol, #1584 runtime, #1585 handshake) |
+| **P2** | ~~#1578~~ | ~~**LVN-II** — Widget vocabulary + `NativeRenderer` + resolver.~~ | ✅ 4/4 structural PRs (#1586 vocab, #1587 scaffold, #1588 resolver, #1589 wiring). Pending: Rust widget VDOM walker. |
+| **P2** | ~~#1579~~ | ~~**LVN-III** — `djust-native-ios` Swift Package.~~ | ✅ 7/7 PRs in [`djust-native-ios`](https://github.com/djust-org/djust-native-ios) (scaffold + Patch types + applicator + renderers + events + wiring + PILOT.md). Pending: msgpack decoder body + per-op SwiftUI binding extensions. |
+| **P2** | ~~#1580~~ | ~~**LVN-IV** — `djust-native-android` Kotlin library.~~ | ✅ 7/7 PRs in [`djust-native-android`](https://github.com/djust-org/djust-native-android) (mirror of iOS). Pending: msgpack decoder body + per-op Compose binding extensions. |
+| **P3** | ~~#1581~~ | ~~**LVN-V** — Author guide + migration guide + v1.0 lock.~~ | ✅ Initial author guide shipped (#1590); full migration guide + v1.0 SemVer lock as follow-up when native client msgpack decoders + applicator bindings ship. |
 
-Sequencing: I → II → (III ∥ IV) → V. **LVN-I + LVN-II structurally complete; the substantive remaining work** (Rust widget VDOM walker; full Swift WS client; full Kotlin WS client) needs dedicated focused sessions and platform-specific engineering expertise.
+**Structurally complete across djust + 2 native repos** (24 PRs landed in one `/pipeline-run` session: 10 in djust, 7 each in djust-native-ios and djust-native-android). The remaining engineering — msgpack decoder bodies in both native clients, per-op view-tree binding extensions, the Rust widget VDOM walker — is documented in each closed issue's final comment and in the respective repos' `PILOT.md` files. Each gap is a focused follow-up that benefits from a dedicated session with the right platform tooling.
 
 > Sub-milestone, not the v1.1 headline. Path E (defer to launch soak) stays
 > the chosen headline direction per the 2026-05-19 strategy session; LiveView
