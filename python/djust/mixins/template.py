@@ -954,7 +954,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             )
         self._sync_done_this_cycle = False  # Reset for next cycle
 
-        result = self._rust_view.render_with_diff()
+        # ADR-019: dispatch through the renderer abstraction. HtmlRenderer
+        # is the default; future PR-3 of LVN-I will let the connection
+        # handshake pick a different renderer. Local import — renderers
+        # has no djust deps, but the local form matches the file's
+        # existing convention for cycle-safe imports.
+        from ..renderers import HtmlRenderer
+
+        result = HtmlRenderer(self).render_with_diff(
+            request=None,
+            extract_liveview_root=False,
+            preloaded_context=None,
+        )
         html, patches_json, version = result
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
