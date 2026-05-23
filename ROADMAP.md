@@ -509,6 +509,25 @@ v1.1.x headline direction.
 
 **#1551 — Multi-line `{# ... #}` comment handling disagrees between Rust + Django classical.** Follow-up to #1423 (which fixed the Rust side but didn't normalize behavior with classical Django). A template containing a multi-line `{# ... #}` comment whose body includes template-tag-like syntax (e.g., `{% if foo %}` as prose) renders cleanly through the Rust engine (`djust._rust.render_template_with_dirs` — LiveView WS responses, prod page renders) but crashes through Django's classical renderer (`client.get()` in pytest, Django's debug error page renderer, any view using `render()` directly) with `TemplateSyntaxError: Unexpected end of expression in if tag`. Silent footgun — projects ship templates that work on the dev server (Rust path) and break in CI or on error paths (classical path). Same reporter, same project, hit this trap TWICE in 90 minutes after explicitly documenting the gotcha. **Suggested fix** (per issue body): (1) normalize comment handling at template-load time in djust's Django integration — preprocess `{# ... #}` blocks before classical parsing; (2) OR reject multi-line `{# ... #}` containing `{% ... %}` in the Rust engine so the failure mode is identical between paths; (3) OR document the asymmetry loudly. Independent subsystem from #1550/#1552; process as a separate PR.
 
+**Parallel work track — LiveView Native (ADR-019, 2026-05-23):**
+
+| Priority | Issue | Summary |
+|---|---|---|
+| **P1** | (new) | **LVN-I** — Renderer abstraction in djust core (`python/djust/renderers/`); `HtmlRenderer` extracted from existing pipeline; `ViewRuntime` plumbing. HTML stays default. No external behavior change. See [ADR-019 Iter I](docs/adr/019-liveview-native.md#iter-i--renderer-abstraction-in-djust-core). |
+| **P2** | (new) | **LVN-II** — Baseline 12-widget vocabulary + `NativeRenderer` emitting widget-shaped VNodes from `.swiftui.html` / `.compose.html` template variants. See [ADR-019 Iter II](docs/adr/019-liveview-native.md#iter-ii--widget-vocabulary--nativerenderer). |
+| **P2** | (new) | **LVN-III/IV** — `djust-native-ios` Swift Package v0.1 + `djust-native-android` Kotlin library v0.1 in separate repos. MAX Companion `HomeView` as the pilot. |
+| **P3** | (new) | **LVN-V** — Author guide + migration guide + v1.0 widget-vocabulary lock. |
+
+> Sub-milestone, not the v1.1 headline. Path E (defer to launch soak) stays
+> the chosen headline direction per the 2026-05-19 strategy session; LiveView
+> Native is a parallel work track that can land during the launch-soak
+> window without competing for the headline-direction decision. The ADR's
+> renderer abstraction is intentionally additive (HTML stays default) so
+> LVN-I can land without forcing a launch-soak re-strategize. If LVN-III/IV
+> happen to land in the same release window, the post-soak re-strategize
+> picks whether to *promote* LiveView Native to the v1.1 headline (vs the
+> A/B/C/D menu) — the ADR doesn't pre-decide that.
+
 **Deferred until post-launch-soak re-strategize:** A (AI-Ready), B (DX),
 C (Hybrid), D (Debug & Time-Travel) — see strategy session doc for the
 full menu. The decision between them is gated on launch-feedback data.
