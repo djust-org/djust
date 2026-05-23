@@ -4262,12 +4262,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         verbs through the runtime.
         """
         if getattr(self, "_runtime", None) is None:
+            from .renderers import get_renderer_factory
             from .runtime import WSConsumerTransport, ViewRuntime
+
+            # ADR-019 LVN-I PR-3: handshake selects renderer factory by
+            # ``?platform=html|swiftui|compose``. Unknown / missing values
+            # return None → runtime defaults to HtmlRenderer at dispatch.
+            # ``scope["query_string"]`` is bytes per ASGI spec.
+            from urllib.parse import parse_qs
+
+            qs = parse_qs(self.scope.get("query_string", b"").decode("utf-8", errors="ignore"))
+            platform = (qs.get("platform") or [None])[0]
+            renderer_factory = get_renderer_factory(platform)
 
             self._runtime = ViewRuntime(
                 WSConsumerTransport(self),
                 scope=self.scope,
                 rate_limiter=self._rate_limiter,
+                renderer_factory=renderer_factory,
             )
         return self._runtime
 
