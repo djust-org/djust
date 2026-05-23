@@ -10,6 +10,28 @@ skill's §"State file templates" for the precedence logic.
 
 ## What's customized vs. the upstream templates
 
+### PR target branch — `1.1` (not `main`)
+
+All three templates set `"pr_target_branch": "1.1"`. After the 2026-05-23
+release-branch cut (1.0 stabilization + 1.1 active dev, per ADR-019 and
+ROADMAP §v1.1.0), pipeline-{run, next, ship} target `1.1` so feature/bugfix
+PRs land on the active-dev line, not on `main`.
+
+**Why not `main`?** With the release-branch model in place, `main` becomes
+the trunk that next-major (v1.2+) work eventually targets. Until v1.2
+planning starts, `main` carries no active dev — every feature/bugfix
+intended for v1.1 belongs on `1.1`.
+
+**When v1.1 ships** (final tag cut, post-soak re-strategize complete):
+flip `pr_target_branch` to `"1.2"` and cut a `1.2` release branch from
+main. Same template, same workflow — just the target moves forward one
+version. (Suggested PR title: `chore(pipeline): flip pr_target_branch to 1.2`.)
+
+**WebView-mode escape hatch.** If a bugfix MUST land on `1.0` (the
+stabilization line — e.g., a P0 regression before GA cuts), override per
+pipeline-run by passing `--target 1.0` (see pipeline-run §Arguments) or
+edit the state file's `pr_target_branch` after `/pipeline-next` creates it.
+
 ### Stage 7 (feature-state.json) / Stage 3 (ship-state.json) Self-Review
 
 Adds one extra mandatory checklist item (djust-specific):
