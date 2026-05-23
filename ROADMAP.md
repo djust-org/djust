@@ -513,15 +513,15 @@ v1.1.x headline direction.
 
 Filter by [`liveview-native` label](https://github.com/djust-org/djust/issues?q=is%3Aissue+label%3Aliveview-native) — five tracking issues with per-PR checklists + acceptance criteria.
 
-| Priority | Issue | Summary | Blocks |
+| Priority | Issue | Summary | Status |
 |---|---|---|---|
-| **P1** | #1577 | **LVN-I** — Renderer abstraction in djust core (`python/djust/renderers/`); `HtmlRenderer` extracted from existing pipeline; `ViewRuntime` plumbing. HTML stays default. No external behavior change. | II, III, IV, V |
-| **P2** | #1578 | **LVN-II** — Baseline 12-widget vocabulary + `NativeRenderer` emitting widget-shaped VNodes from `.swiftui.html` / `.compose.html` template variants. | III, IV |
-| **P2** | #1579 | **LVN-III** — `djust-native-ios` Swift Package v0.1 (separate repo `djust-org/djust-native-ios`). MAX Companion `HomeView` as the pilot. | V |
-| **P2** | #1580 | **LVN-IV** — `djust-native-android` Kotlin library v0.1 (separate repo `djust-org/djust-native-android`). Mirrors LVN-III on Android. | V |
-| **P3** | #1581 | **LVN-V** — Author guide + migration guide for `djust-mobile-toga` users + v1.0 widget-vocabulary lock. | — |
+| **P1** | ~~#1577~~ | ~~**LVN-I** — Renderer abstraction in djust core; `HtmlRenderer` extracted; `ViewRuntime` plumbing; `?platform=` handshake.~~ | ✅ Closed — 3 PRs shipped (#1583 protocol, #1584 runtime field, #1585 handshake) |
+| **P2** | ~~#1578~~ | ~~**LVN-II** — Widget vocabulary + `NativeRenderer` scaffold + template variant resolver + wiring.~~ | ✅ Closed structurally — 4 PRs shipped (#1586 vocab, #1587 scaffold, #1588 resolver, #1589 wiring). **Pending follow-up**: Rust-side widget VDOM walker that produces real `Patch` streams from native templates. |
+| **P2** | #1579 | **LVN-III** — `djust-native-ios` Swift Package (separate repo). | 🟡 PR-1 of 7 shipped ([djust-native-ios#1](https://github.com/djust-org/djust-native-ios/pull/1) — SwiftPM scaffold + WidgetTags mirror + DjustLiveView stub). PRs 2-7 (WS transport + msgpack + patch applicator + widget renderers + events + pilot) await a Swift implementer with Xcode. |
+| **P2** | #1580 | **LVN-IV** — `djust-native-android` Kotlin library (separate repo). | 🟡 PR-1 of 7 shipped ([djust-native-android#1](https://github.com/djust-org/djust-native-android/pull/1) — Gradle scaffold + WidgetTags mirror + DjustLiveView Composable stub). PRs 2-7 await a Kotlin implementer with Android Studio. |
+| **P3** | #1581 | **LVN-V** — Author guide + migration guide + v1.0 widget-vocabulary lock. | 🟡 Initial cut shipped (#1590 — `docs/native-author-guide.md`). Full migration guide + v1.0 SemVer lock land at LVN-III + LVN-IV completion. |
 
-Sequencing: I → II → (III ∥ IV) → V. `/pipeline-drain --milestone v1.1.0` will pick these up by ID once LVN-I is unblocked; III + IV are parallelizable.
+Sequencing: I → II → (III ∥ IV) → V. **LVN-I + LVN-II structurally complete; the substantive remaining work** (Rust widget VDOM walker; full Swift WS client; full Kotlin WS client) needs dedicated focused sessions and platform-specific engineering expertise.
 
 > Sub-milestone, not the v1.1 headline. Path E (defer to launch soak) stays
 > the chosen headline direction per the 2026-05-19 strategy session; LiveView
