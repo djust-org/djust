@@ -59,8 +59,11 @@ class TestRendererRegistry:
         """
         from djust.renderers import get_renderer_factory
 
-        assert get_renderer_factory("swiftui") is None  # LVN-II adds this
+        # NOTE: ``swiftui`` and ``compose`` ARE registered as of LVN-II
+        # PR-2 (scaffold). See test_native_renderer_scaffold.py for
+        # those positive cases.
         assert get_renderer_factory("not-a-real-platform") is None
+        assert get_renderer_factory("react-native") is None  # never registered
 
 
 class TestRegistryFactoryParameterShape:
