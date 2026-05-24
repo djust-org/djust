@@ -1771,6 +1771,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         try:
             self.view_instance = view_class()
 
+            # ADR-019 LVN-I PR-3: if the handshake selected a non-HTML
+            # renderer (?platform=swiftui|compose), bind it to the view
+            # so TemplateMixin.render_with_diff dispatches through it.
+            # Reads scope's query_string AT MOUNT TIME (per-mount in
+            # this code path, vs runtime.py's per-connect for the
+            # ViewRuntime path).
+            try:
+                from urllib.parse import parse_qs
+
+                from .renderers import get_renderer_factory
+
+                qs = parse_qs(self.scope.get("query_string", b"").decode("utf-8", errors="ignore"))
+                platform = (qs.get("platform") or [None])[0]
+                factory = get_renderer_factory(platform)
+                if factory is not None:
+                    self.view_instance._djust_renderer = factory(self.view_instance)
+            except Exception:
+                # Never fail mount because of renderer selection — fall
+                # back to HtmlRenderer if anything goes wrong.
+                pass
+
             # Store reference to WS consumer for streaming support
             self.view_instance._ws_consumer = self
 
@@ -2350,6 +2371,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # not "data-dj-id"). Mirrors the equivalent check in sse.py.
             has_ids = "dj-id=" in html
             response["has_ids"] = has_ids
+
+        # ADR-019 LVN: for native renderers (NativeRenderer), html is
+        # empty and the wire payload is patches. Ship them in the mount
+        # frame so the native client can bootstrap its widget tree on
+        # connect (the browser path needs html only — patches arrive on
+        # subsequent updates). The `patches` variable was captured at
+        # the render call above; include it when present + non-empty.
+        if getattr(self.view_instance, "_djust_renderer", None) is not None and locals().get(
+            "patches"
+        ):
+            response["patches"] = locals()["patches"]
         elif skip_html_for_resume:
             logger.info(
                 "Skipping mount HTML for resume of %s — client already has DOM",

@@ -939,14 +939,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             )
         self._sync_done_this_cycle = False  # Reset for next cycle
 
-        # ADR-019: dispatch through the renderer abstraction. HtmlRenderer
-        # is the default; future PR-3 of LVN-I will let the connection
-        # handshake pick a different renderer. Local import — renderers
-        # has no djust deps, but the local form matches the file's
-        # existing convention for cycle-safe imports.
+        # ADR-019: dispatch through the renderer abstraction. ViewRuntime
+        # binds ``_djust_renderer`` to the view after mount when the
+        # handshake selected a non-HTML renderer (LVN-I PR-3 / runtime.py).
+        # Default fallback is a fresh HtmlRenderer per render — byte-
+        # identical to the pre-LVN behavior.
         from ..renderers import HtmlRenderer
 
-        result = HtmlRenderer(self).render_with_diff(
+        renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
+        result = renderer.render_with_diff(
             request=None,
             extract_liveview_root=False,
             preloaded_context=None,
