@@ -306,6 +306,13 @@ class ViewRuntime:
 
         self.view_instance = view_instance
 
+        # ADR-019 LVN-I: if the handshake selected a renderer (factory
+        # passed in via __init__), bind it to the view so
+        # TemplateMixin.render_with_diff can dispatch through it
+        # instead of always constructing HtmlRenderer inline.
+        if self.renderer_factory is not None:
+            view_instance._djust_renderer = self.renderer_factory(view_instance)
+
         # Stash transport identity on the view (used by VDOM caching).
         view_instance._websocket_session_id = self.session_id
         view_instance._websocket_path = page_url
