@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Theming registry/static-dict divergence — runtime-registered presets now reach the CSS generator (#1595).** `register_preset()` adds to a runtime `Registry._presets` dict that the theme manager, theme switcher, and introspection APIs all consult; but `presets.get_preset()` — the function the CSS generator path ultimately calls to render `--primary` etc. into `:root` — read only from the static `THEME_PRESETS` module dict, blind to runtime registration. Result: any consumer following the documented `register_preset()` API in `AppConfig.ready()` got their custom palette silently replaced with the default slate-black `THEME_PRESETS["default"]` in the actual rendered CSS, while the manager/switcher/`gh-pr-checks`-style introspection correctly reported the registered preset as active — exactly the kind of API-says-X-but-renderer-uses-Y divergence that costs an hour of debugging. Fix mirrors the registry-first-OR-static-fallback dispatch already established in `theme_packs.get_theme_pack()` (`python/djust/theming/theme_packs.py:1216-1222`): `get_preset()` now consults `get_registry().get_preset(name)` first, then falls back to `THEME_PRESETS.get(name, DEFAULT_THEME)`. Same shape, same `import .registry` inside the function to avoid the circular import that bites if registry imports back from presets. Covered by 3 new regression tests in `python/djust/tests/test_theming_presets.py` (`test_get_preset_consults_runtime_registry_first_1595` + 2 companions locking in the second half of the contract: static-dict fallback for built-in names + `DEFAULT_THEME` fallback for unknown names). Gate-the-fix-off self-test passes (Action #1200/#1468): with the fix reverted, exactly 1 of the 3 new tests fails — the registry-first regression case — and the other 2 pass, confirming no tautology. Removes the need for the documented workaround (`_presets.THEME_PRESETS[name] = preset`) — consumers can now use the public `register_preset()` API alone.
+
 ## [1.0.0rc9] - 2026-05-22
 
 ### Fixed
