@@ -49,6 +49,21 @@
             }
         }
 
+        // pushState forbids cross-origin URLs (the browser throws
+        // SecurityError). When data.path is an absolute URL whose origin
+        // differs from the current page, fall back to a full-page
+        // navigation — that's the caller's intent. (#1599)
+        if (newUrl.origin !== window.location.origin) {
+            if (globalThis.djustDebug) {
+                console.log(
+                    '[LiveView] live_patch cross-origin → full-page nav: %s',
+                    newUrl.toString(),
+                );
+            }
+            window.location.href = newUrl.toString();
+            return;
+        }
+
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true }, '', newUrl.toString());
@@ -74,6 +89,26 @@
                     newUrl.searchParams.set(key, String(value));
                 }
             }
+        }
+
+        // pushState forbids cross-origin URLs (the browser throws
+        // SecurityError). When data.path is an absolute URL whose origin
+        // differs from the current page (e.g. a dj-navigate link pointing
+        // at a sister site), fall back to a full-page navigation. (#1599)
+        if (newUrl.origin !== window.location.origin) {
+            if (globalThis.djustDebug) {
+                console.log(
+                    '[LiveView] live_redirect cross-origin → full-page nav: %s',
+                    newUrl.toString(),
+                );
+            }
+            // Stop the page-loading bar we started above; the full nav
+            // will trigger the browser's own progress indicator.
+            if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+                window.djust.pageLoading.stop?.();
+            }
+            window.location.href = newUrl.toString();
+            return;
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';

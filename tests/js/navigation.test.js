@@ -375,4 +375,77 @@ describe('navigation', () => {
             expect(typeof window.djust.navigation.resolveViewPath).toBe('function');
         });
     });
+
+    describe('issue #1599 — cross-origin pushState guard', () => {
+        // Reported in production djust.org: clicking <a dj-navigate="https://djustlive.com/">
+        // triggered `Uncaught SecurityError: Failed to execute 'pushState' on 'History':
+        // A history state object with URL 'https://djustlive.com/' cannot be created in a
+        // document with origin 'https://djust.org'`. Browser correctly refuses cross-origin
+        // pushState; the framework must detect and fall back to a full-page nav instead
+        // of crashing the JS runtime.
+        //
+        // The load-bearing assertion is: pushState MUST NOT be called with a cross-origin
+        // URL. The fix sets `window.location.href = newUrl.toString()` and returns, so
+        // the function may throw in JSDOM (which forbids navigation) but in a real browser
+        // it does the full-page nav. The pushState-not-called invariant is what matters
+        // for the actual bug (the SecurityError happened because pushState WAS called).
+
+        it('handleLiveRedirect with cross-origin path does NOT call pushState with cross-origin URL', () => {
+            const { window, historyCalls } = createEnv();
+
+            try {
+                window.djust.navigation.handleNavigation({
+                    type: 'live_redirect',
+                    path: 'https://djustlive.com/',
+                });
+            } catch (_e) {
+                // JSDOM may throw on window.location.href assignment; harmless here.
+            }
+
+            // pushState/replaceState MUST NOT have been called with the cross-origin URL.
+            const crossOriginPush = historyCalls.find(
+                (c) => c.url && c.url.includes('djustlive.com'),
+            );
+            expect(crossOriginPush).toBeUndefined();
+        });
+
+        it('handleLivePatch with cross-origin path does NOT call pushState with cross-origin URL', () => {
+            const { window, historyCalls } = createEnv();
+
+            try {
+                window.djust.navigation.handleNavigation({
+                    type: 'live_patch',
+                    path: 'https://djustlive.com/',
+                });
+            } catch (_e) {
+                // JSDOM may throw on window.location.href assignment; harmless here.
+            }
+
+            const crossOriginPush = historyCalls.find(
+                (c) => c.url && c.url.includes('djustlive.com'),
+            );
+            expect(crossOriginPush).toBeUndefined();
+        });
+
+        it('same-origin paths still use pushState (regression backstop for guard breadth)', () => {
+            // If the cross-origin guard accidentally widens to reject same-origin
+            // navigations, this test catches it. Same-origin live_redirect must
+            // continue to use pushState as before.
+            const { window, historyCalls } = createEnv(
+                '<div dj-view="myapp.views.DashboardView"></div>',
+            );
+            window.djust._routeMap = { '/dashboard/': 'myapp.views.DashboardView' };
+
+            window.djust.navigation.handleNavigation({
+                type: 'live_redirect',
+                path: '/dashboard/',
+            });
+
+            // At least one same-origin pushState/replaceState should have occurred.
+            const sameOriginCall = historyCalls.find(
+                (c) => c.url && c.url.includes('/dashboard/'),
+            );
+            expect(sameOriginCall).toBeDefined();
+        });
+    });
 });
