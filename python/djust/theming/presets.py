@@ -156,8 +156,21 @@ THEME_PRESETS: dict[str, ThemePreset] = {
 
 
 def get_preset(name: str) -> ThemePreset:
-    """Get a theme preset by name, with fallback to default."""
-    return THEME_PRESETS.get(name, DEFAULT_THEME)
+    """Get a theme preset by name.
+
+    Resolution order, matching ``theme_packs.get_theme_pack()``:
+
+    1. Runtime registry (presets added via ``register_preset()``).
+    2. Built-in static ``THEME_PRESETS`` dict.
+    3. ``DEFAULT_THEME`` fallback.
+
+    Before #1595 only step 2 + 3 ran, so user-registered presets were visible
+    to the manager/registry/introspection but invisible to the CSS generator
+    that ultimately renders ``--primary`` etc. into ``:root``.
+    """
+    from .registry import get_registry
+
+    return get_registry().get_preset(name) or THEME_PRESETS.get(name, DEFAULT_THEME)
 
 
 def list_presets() -> list[dict]:
