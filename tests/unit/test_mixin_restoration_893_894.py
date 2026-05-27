@@ -40,8 +40,15 @@ class _PresenceView(PresenceMixin):
     presence_key = "doc:{doc_id}"
 
 
+@patch("djust.presence.push_to_view")
 class TestPresenceRestoration:
-    def test_restore_with_tracked_true_calls_join_presence(self):
+    """All tests in this class auto-receive a ``mock_push`` arg because
+    ``_restore_presence`` now also calls ``_broadcast_presence_change``
+    (#1614), which routes through ``djust.presence.push_to_view``. We
+    don't assert on push here — that's #1614's reproducer suite — we
+    just neutralize it so the existing assertions keep passing."""
+
+    def test_restore_with_tracked_true_calls_join_presence(self, mock_push):
         v = _PresenceView()
         v.doc_id = 42
         v._presence_tracked = True
@@ -53,7 +60,7 @@ class TestPresenceRestoration:
 
         mock_join.assert_called_once_with("doc:42", "user-7", {"name": "Ada", "color": "#f00"})
 
-    def test_restore_when_not_tracked_is_noop(self):
+    def test_restore_when_not_tracked_is_noop(self, mock_push):
         v = _PresenceView()
         v.doc_id = 1
         v._presence_tracked = False
@@ -65,7 +72,7 @@ class TestPresenceRestoration:
 
         mock_join.assert_not_called()
 
-    def test_restore_with_missing_user_id_is_noop(self):
+    def test_restore_with_missing_user_id_is_noop(self, mock_push):
         """Defensive: if the session round-trip somehow dropped the
         user_id but kept the ``_presence_tracked=True`` flag, restoring
         without a user_id would call ``join_presence(key, None, meta)``
@@ -82,7 +89,7 @@ class TestPresenceRestoration:
 
         mock_join.assert_not_called()
 
-    def test_restore_with_missing_meta_uses_empty_dict(self):
+    def test_restore_with_missing_meta_uses_empty_dict(self, mock_push):
         v = _PresenceView()
         v.doc_id = 1
         v._presence_tracked = True
@@ -94,7 +101,7 @@ class TestPresenceRestoration:
 
         mock_join.assert_called_once_with("doc:1", "user-1", {})
 
-    def test_restore_swallows_backend_exceptions(self, caplog):
+    def test_restore_swallows_backend_exceptions(self, mock_push, caplog):
         """The WS must not die if the presence backend is temporarily
         unavailable. Log a warning and move on.
         """
@@ -287,12 +294,15 @@ class TestEndToEndSessionRoundTrip:
         mock_listener = MagicMock()
         mock_listener.ensure_listening = _fake_listen
 
-        with patch("djust.presence.PresenceManager.join_presence") as mock_join:
-            with patch("djust.db.notifications.PostgresNotifyListener.instance") as mock_instance:
-                mock_instance.return_value = mock_listener
-                mock_join.side_effect = lambda *a, **kw: presence_calls.append(a)
-                ws_view._restore_presence()
-                ws_view._restore_listen_channels()
+        with patch("djust.presence.push_to_view"):
+            with patch("djust.presence.PresenceManager.join_presence") as mock_join:
+                with patch(
+                    "djust.db.notifications.PostgresNotifyListener.instance"
+                ) as mock_instance:
+                    mock_instance.return_value = mock_listener
+                    mock_join.side_effect = lambda *a, **kw: presence_calls.append(a)
+                    ws_view._restore_presence()
+                    ws_view._restore_listen_channels()
 
         assert presence_calls == [("doc:7", "u-7", {"name": "Grace"})]
         assert listen_calls == ["doc:7"]

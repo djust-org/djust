@@ -43,6 +43,9 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
 
+from .decorators import event_handler
+from .push import push_to_view
+
 logger = logging.getLogger(__name__)
 
 # Cache keys
@@ -142,11 +145,49 @@ class PresenceMixin:
 
     presence_key: Optional[str] = None
 
+    # When True, anonymous users get a per-WebSocket-connection unique id
+    # (``anon_conn_<ws_session_id>``) instead of one collapsing across tabs of
+    # the same browser session. Authenticated users are unaffected — they
+    # always collapse to ``str(user.id)`` so multi-tab counts as a single
+    # presence. See issue #1613.
+    presence_unique_per_connection: bool = False
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._presence_tracked = False
         self._presence_user_id = None
         self._presence_meta = None
+
+    def _refresh_online_count(self) -> None:
+        """Recompute ``self.online_count`` from the backend.
+
+        Set as an instance attribute (not a method or property) so djust's
+        diff dirty-tracking emits a patch when the value changes. Templates
+        can reference ``{{ online_count }}`` with zero scaffolding (#1611).
+
+        Defensive: if ``presence_key`` is unset or the backend raises, leaves
+        ``online_count`` at its current value (or 0 if never set).
+        """
+        try:
+            self.online_count = len(self.list_presences())
+        except Exception as exc:  # noqa: BLE001 — backend errors must not break track/untrack
+            logger.debug("PresenceMixin._refresh_online_count: %s", exc)
+            self.online_count = getattr(self, "online_count", 0)
+
+    def _broadcast_presence_change(self) -> None:
+        """Fire ``push_to_view`` to ``_on_presence_change`` on every active session
+        of this view class.
+
+        Failures are swallowed (logged at debug) so a misconfigured channel
+        layer, an invalid view-path regex (test-local class paths often fail
+        the ``_VIEW_PATH_RE`` check), or any other transient backend error
+        never breaks ``track_presence`` / ``untrack_presence`` (#1614).
+        """
+        view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        try:
+            push_to_view(view_path, handler="_on_presence_change", payload={})
+        except Exception as exc:  # noqa: BLE001 — broadcast must never kill track/untrack
+            logger.debug("PresenceMixin._broadcast_presence_change: push_to_view failed: %s", exc)
 
     def get_presence_key(self) -> str:
         """
@@ -178,13 +219,35 @@ class PresenceMixin:
         """
         Get the unique user identifier for presence tracking.
 
-        Override this method to customize user identification.
+        Override this method to customize user identification. The default
+        prefers (in order):
+
+        1. Authenticated users → ``str(request.user.id)``. ALWAYS collapses
+           across tabs to one presence; ``presence_unique_per_connection``
+           does NOT affect authenticated users — multi-tab same-user is a
+           single online presence by design.
+        2. Anonymous + ``presence_unique_per_connection=True`` →
+           ``f"anon_conn_{_websocket_session_id}"`` so each tab counts as
+           a distinct presence. Falls back to ``f"anon_{id(self)}"`` if
+           the WS-session attribute is missing (only happens when the
+           #1612 guard didn't catch us first; defensive).
+        3. Anonymous (default flag=False) → ``f"anon_{session_key}"``
+           (collapses across tabs of the same browser session).
+        4. No request/session → ``"unknown_user"``.
 
         Returns:
             Unique user identifier
         """
         if hasattr(self, "request") and self.request.user.is_authenticated:
             return str(self.request.user.id)
+
+        if getattr(self, "presence_unique_per_connection", False):
+            ws_sid = getattr(self, "_websocket_session_id", None)
+            if ws_sid:
+                return f"anon_conn_{ws_sid}"
+            # Defensive fallback — should not normally hit because #1612
+            # guard returns early when _websocket_session_id is absent.
+            return f"anon_{id(self)}"
 
         # Fallback to session key for anonymous users
         if hasattr(self, "request") and hasattr(self.request, "session"):
@@ -201,6 +264,19 @@ class PresenceMixin:
             meta: Metadata to associate with the user (name, color, avatar, etc.)
         """
         if self._presence_tracked:
+            return
+
+        # #1612 — HTTP-mount guard. The throwaway HTTP-mount view instance
+        # does not have ``_websocket_session_id`` set (that attribute is
+        # assigned only on the WS-mount path at websocket.py:1797). If we
+        # registered presence here, no untrack would fire on instance
+        # disposal and an orphan presence record would linger for ~60s
+        # until ``PRESENCE_TIMEOUT`` cleanup.
+        if not hasattr(self, "_websocket_session_id"):
+            logger.debug(
+                "PresenceMixin.track_presence: skipping — no _websocket_session_id "
+                "(HTTP-mount context). Presence only registers under WebSocket."
+            )
             return
 
         presence_key = self.get_presence_key()
@@ -225,6 +301,16 @@ class PresenceMixin:
         presence_data = PresenceManager.join_presence(presence_key, user_id, meta)
 
         self._presence_tracked = True
+
+        # #1611 — refresh online_count after the backend join so this user's
+        # own join is included.
+        self._refresh_online_count()
+
+        # #1614 — broadcast to peer sessions of this view class so they
+        # refresh their own online_count. Default _on_presence_change
+        # handler is exclusively a count refresh (no track_presence call),
+        # so the broadcast terminates after one hop.
+        self._broadcast_presence_change()
 
         # Call presence join handler if it exists
         if hasattr(self, "handle_presence_join"):
@@ -258,6 +344,11 @@ class PresenceMixin:
         try:
             presence_key = self.get_presence_key()
             PresenceManager.join_presence(presence_key, user_id, meta)
+            # #1611 / #1614 — also refresh local count and broadcast so the
+            # reconnected session has online_count set for its first
+            # post-restore patch, and peer sessions learn the user came back.
+            self._refresh_online_count()
+            self._broadcast_presence_change()
         except Exception as exc:  # noqa: BLE001 — restoration must never kill the WS
             logger.warning(
                 "PresenceMixin._restore_presence: failed to re-register presence "
@@ -287,6 +378,28 @@ class PresenceMixin:
         self._presence_tracked = False
         self._presence_user_id = None
         self._presence_meta = None
+
+        # #1611 / #1614 — refresh local count (now excludes the leaving user)
+        # and broadcast to peer sessions.
+        self._refresh_online_count()
+        self._broadcast_presence_change()
+
+    @event_handler
+    def _on_presence_change(self, **kwargs):
+        """Default handler invoked when another session's track/untrack broadcasts.
+
+        Refreshes ``self.online_count`` from the backend. The body MUST NOT
+        call ``track_presence`` / ``untrack_presence`` (would create an
+        unbounded broadcast loop). Subclasses overriding this method should
+        either preserve this invariant or call
+        ``super()._on_presence_change(**kwargs)`` to keep the count refresh.
+
+        Decorated with ``@event_handler`` so the WS consumer's handler-name
+        gate (``websocket.py:4954``) accepts it — the gate only allows
+        ``handle_*``-prefixed names OR explicitly-decorated handlers, and
+        the underscore-prefixed name needs the explicit signal (#1614).
+        """
+        self._refresh_online_count()
 
     def list_presences(self) -> List[Dict[str, Any]]:
         """Get all active presences for this view's presence group."""
