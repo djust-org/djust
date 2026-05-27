@@ -71,11 +71,16 @@ class FakeRequest:
 class FakeView:
     """Fake view for testing mixins"""
 
-    def __init__(self):
+    def __init__(self, ws_session_id: str = "test_ws"):
         # Call parent __init__ methods if they exist
         if hasattr(super(), "__init__"):
             super().__init__()
         self.request = FakeRequest()
+        # #1612 — PresenceMixin.track_presence no-ops without
+        # _websocket_session_id. Default to a non-None value so existing
+        # tests (which pre-date the guard) keep proceeding through track.
+        if ws_session_id is not None:
+            self._websocket_session_id = ws_session_id
 
 
 # Mock cache globally for tests

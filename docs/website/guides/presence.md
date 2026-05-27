@@ -20,7 +20,44 @@ djust provides a presence system for tracking which users are currently viewing 
 
 ## Quick Start
 
-### 1. Add PresenceMixin to Your View
+### Minimal (v1.0.0rc12+): zero-config online count
+
+For just an online-user counter, you don't need any custom context or
+handlers — `PresenceMixin` auto-maintains `self.online_count` and
+auto-broadcasts join/leave to all sessions of the same view:
+
+```python
+from djust import LiveView
+from djust.presence import PresenceMixin
+
+class DemoView(PresenceMixin, LiveView):
+    template_name = 'demo.html'
+    presence_key = "demo"
+    # For anonymous-tab demos where two browser tabs of one user should
+    # count as two presences (not collapse to one), opt in below:
+    # presence_unique_per_connection = True
+
+    def mount(self, request, **kwargs):
+        self.track_presence()
+```
+
+```html
+<span class="presence-chip">{{ online_count }} online</span>
+```
+
+That's the entire surface. `online_count` is set as an instance attribute
+(so djust's diff dirty-tracking emits patches when it changes) and the
+broadcast fans out to other sessions automatically. Open the page in two
+browser tabs — both chips show `2 online`. Close one — the other drops to
+`1 online` within the heartbeat window.
+
+> **Note: HTTP vs WebSocket mounts.** `track_presence()` is a no-op
+> during the HTTP-prerender phase of the page load — presence only
+> registers when the WebSocket consumer mounts the view. This prevents
+> orphan presence records on the throwaway HTTP view instance. No
+> caller action is required; it's transparent.
+
+### Full: presence with metadata and per-user avatars
 
 ```python
 from djust import LiveView
@@ -40,15 +77,16 @@ class DocumentView(PresenceMixin, LiveView):
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         ctx["presences"] = self.list_presences()
-        ctx["presence_count"] = self.presence_count()
+        # `online_count` is already on `self` (v1.0.0rc12+); the
+        # imperative `presence_count()` method is still available too.
         return ctx
 ```
 
-### 2. Display Presence in Templates
+### Display Presence in Templates
 
 ```html
 <div class="presence-bar">
-    {{ presence_count }} users online
+    {{ online_count }} users online
     {% for p in presences %}
         <span class="avatar" style="background: {{ p.color }}">
             {{ p.name.0 }}
@@ -56,6 +94,26 @@ class DocumentView(PresenceMixin, LiveView):
     {% endfor %}
 </div>
 ```
+
+### Anonymous tabs (`presence_unique_per_connection`)
+
+By default, two browser tabs of the same anonymous user share a Django
+session and therefore one presence id (`anon_<session_key>`) — the live
+count stays at "1 online" no matter how many tabs you open. This is the
+right semantics for an authenticated user collaborating with themselves
+(same person, one identity), but wrong for a demo or a counter where
+each tab should be counted independently.
+
+Opt in to per-connection uniqueness for the anonymous path:
+
+```python
+class DemoView(PresenceMixin, LiveView):
+    presence_key = "demo"
+    presence_unique_per_connection = True   # anonymous tabs count distinctly
+```
+
+Authenticated users always use `request.user.id` regardless of the flag
+— logged-in tabs still collapse to one identity (intentional).
 
 ### 3. Handle Join/Leave Events
 
@@ -79,17 +137,24 @@ class DocumentView(PresenceMixin, LiveView):
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `presence_key` | `str` or `None` | `None` | Group identifier. Supports format variables from view attributes (e.g., `"doc:{doc_id}"`). |
+| `presence_unique_per_connection` *(v1.0.0rc12+)* | `bool` | `False` | When `True`, anonymous users get a per-WebSocket-connection unique id (`anon_conn_<ws_session_id>`) instead of a per-session id. Authenticated users always use `user.id` regardless. Use for anonymous-tab demos. |
+
+### Instance Attributes (auto-maintained)
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `online_count` *(v1.0.0rc12+)* | `int` | Number of active presences in the group. Auto-set by `track_presence`, `untrack_presence`, `_restore_presence`, and `_on_presence_change`. Use directly in templates: `{{ online_count }}`. |
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
-| `track_presence(meta=None)` | Start tracking this user. Meta dict can include name, color, avatar, etc. |
+| `track_presence(meta=None)` | Start tracking this user. Meta dict can include name, color, avatar, etc. No-op during HTTP-prerender (registers only under WebSocket). |
 | `untrack_presence()` | Stop tracking. Called automatically on disconnect. |
 | `list_presences()` | Returns all active presences in the group as a list of dicts. |
-| `presence_count()` | Returns count of active users. |
+| `presence_count()` | Returns count of active users (imperative method; for template binding prefer `{{ online_count }}`). |
 | `get_presence_key()` | Returns formatted presence key. Override for dynamic keys. |
-| `get_presence_user_id()` | Returns unique user ID. Defaults to `request.user.id` or `anon_{session_key}`. |
+| `get_presence_user_id()` | Returns unique user ID. Defaults to `request.user.id` for authenticated users, `anon_conn_<ws_session_id>` if `presence_unique_per_connection=True`, else `anon_<session_key>`. |
 | `broadcast_to_presence(event, payload)` | Broadcast a custom event to all users in the group. |
 
 ### Callbacks
@@ -98,6 +163,7 @@ class DocumentView(PresenceMixin, LiveView):
 |----------|------------|
 | `handle_presence_join(presence)` | A user joins the group |
 | `handle_presence_leave(presence)` | A user leaves the group |
+| `_on_presence_change(**kwargs)` *(v1.0.0rc12+)* | Auto-fires on every other session when this view's `track`/`untrack` runs. Default body refreshes `online_count`. Override to do additional work; call `super()._on_presence_change(**kwargs)` to preserve the count refresh. |
 
 ## CursorTracker
 
