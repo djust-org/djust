@@ -1011,6 +1011,23 @@ def do_alert(parser, token):
 # ---------------------------------------------------------------------------
 
 
+# Variant keyword → CSS class name (#1619). djust-theming's components.css
+# ships rules only for .btn-primary / .btn-secondary / .btn-destructive /
+# .btn-ghost / .btn-link, so the variant keyword has to map to those
+# canonical class names. `danger` is kept as a back-compat alias for
+# `destructive` (matching shadcn/Tailwind convention). Variants not in
+# this map pass through as `btn-<variant>` with conditional_escape so
+# user-defined theme classes still work.
+_DJ_BUTTON_VARIANT_CLASS_MAP = {
+    "primary": "btn-primary",
+    "secondary": "btn-secondary",
+    "destructive": "btn-destructive",
+    "danger": "btn-destructive",  # back-compat alias (#1619)
+    "ghost": "btn-ghost",
+    "link": "btn-link",
+}
+
+
 @register.simple_tag
 def dj_button(
     label="",
@@ -1026,7 +1043,11 @@ def dj_button(
 
     Args:
         label: button text
-        variant: primary, secondary, danger, ghost, link, success, warning
+        variant: one of ``primary``, ``secondary``, ``destructive``,
+            ``ghost``, ``link``. ``danger`` is accepted as a back-compat
+            alias for ``destructive`` (#1619). Any other string is passed
+            through verbatim as ``btn-<variant>`` so user-defined theme
+            classes still work.
         event: dj-click event name
         icon: optional icon HTML/text prepended to label
         disabled: disables the button
@@ -1069,7 +1090,10 @@ def dj_button(
     if isinstance(loading, str):
         loading = loading.lower() not in ("false", "0", "")
 
-    classes = f"btn btn-{conditional_escape(variant)}"
+    # Map well-known variants to their canonical CSS class names; for
+    # everything else, pass through with conditional_escape (#1619).
+    variant_class = _DJ_BUTTON_VARIANT_CLASS_MAP.get(variant, f"btn-{conditional_escape(variant)}")
+    classes = f"btn {variant_class}"
     if size and size != "md":
         classes += f" btn-{conditional_escape(size)}"
     if loading:
