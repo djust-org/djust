@@ -1033,6 +1033,7 @@ def dj_button(
     label="",
     variant="primary",
     event="",
+    confirm="",
     icon="",
     disabled=False,
     loading=False,
@@ -1049,6 +1050,10 @@ def dj_button(
             through verbatim as ``btn-<variant>`` so user-defined theme
             classes still work.
         event: dj-click event name
+        confirm: optional JS ``confirm()`` dialog message shown before
+            firing the event. Emits the standard ``dj-confirm`` attribute
+            consumed by djust's client.js (#1621). Empty string (default)
+            emits no attribute and no dialog.
         icon: optional icon HTML/text prepended to label
         disabled: disables the button
         loading: shows spinner and disables button
@@ -1065,6 +1070,7 @@ def dj_button(
             _defaults = {
                 "variant": "primary",
                 "event": "",
+                "confirm": "",
                 "icon": "",
                 "disabled": False,
                 "loading": False,
@@ -1076,6 +1082,8 @@ def dj_button(
                 variant = preset_params["variant"]
             if event == _defaults["event"] and "event" in preset_params:
                 event = preset_params["event"]
+            if confirm == _defaults["confirm"] and "confirm" in preset_params:
+                confirm = preset_params["confirm"]
             if icon == _defaults["icon"] and "icon" in preset_params:
                 icon = preset_params["icon"]
             if disabled == _defaults["disabled"] and "disabled" in preset_params:
@@ -1102,6 +1110,13 @@ def dj_button(
     attrs = f'class="{classes}"'
     if event:
         attrs += f' dj-click="{conditional_escape(event)}"'
+    if confirm:
+        # #1621: emit djust's standard dj-confirm attribute so client.js
+        # shows a JS confirm() dialog before firing the event. Independent
+        # of `event` — client.js handles dj-confirm across multiple
+        # directives (dj-click, dj-submit, etc.), so the attr is useful
+        # on event-less buttons users have wired up via other directives.
+        attrs += f' dj-confirm="{conditional_escape(confirm)}"'
     if disabled or loading:
         attrs += " disabled"
 
