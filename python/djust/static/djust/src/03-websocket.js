@@ -354,13 +354,32 @@ class LiveViewWebSocket {
                 const hasDataDjAttrs = data.has_ids === true;
                 if (this.skipMountHtml) {
                     // Content already rendered by HTTP GET - don't replace innerHTML
-                    // If server HTML has dj-id attributes, stamp them onto existing DOM
-                    // This preserves whitespace (e.g. in code blocks) that innerHTML would destroy
+                    // #1610: morph the prerender DOM against the WS-mount HTML so
+                    // any WS-context-divergent state (presence count,
+                    // _websocket_session_id-keyed values, per-connection state)
+                    // reaches the user. morphChildren preserves keyed nodes by
+                    // id, so the dj-id stamp pass is folded into the morph.
+                    // morphChildren is the same helper used by
+                    // handleEmbeddedUpdate (~line 1127) and the html_recovery
+                    // path (~line 641).
                     if (hasDataDjAttrs && data.html) {
-                        if (globalThis.djustDebug) console.log('[LiveView] Stamping dj-id attributes onto pre-rendered DOM');
-                        _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        const _morphContainer = document.querySelector('[dj-view]:not([dj-sticky-root])')
+                                            || document.querySelector('[dj-root]');
+                        if (_morphContainer) {
+                            const _morphTemp = document.createElement('div');
+                            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                            _morphTemp.innerHTML = data.html;
+                            morphChildren(_morphContainer, _morphTemp);
+                            if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
+                        } else {
+                            // Fallback: no [dj-view]/[dj-root] container found
+                            // (unusual). Stamp dj-ids so subsequent ID-based
+                            // patches still resolve.
+                            _stampDjIds(data.html); // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                            if (globalThis.djustDebug) console.log('[LiveView] No dj-view container — fell back to dj-id stamp');
+                        }
                     } else {
-                        if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - using pre-rendered content');
+                        if (globalThis.djustDebug) console.log('[LiveView] Skipping mount HTML - no dj-id attrs to apply');
                     }
                     this.skipMountHtml = false;
                     // Sticky LiveViews (Phase C Fix F1): the skipMountHtml
