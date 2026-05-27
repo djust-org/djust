@@ -139,12 +139,44 @@ console.log("debug info"); // noqa: Q003
 
 ## LiveView Checks (V)
 
+### Abstract base LiveView classes
+
+A common pattern is to define an abstract base view that subclasses extend for shared boilerplate — common mount logic, authorisation rules, helper methods. The base typically has no `template_name` and is never mounted directly. Mark such classes with `abstract = True`:
+
+```python
+from djust import LiveView
+
+class BaseLiveView(LiveView):
+    """Abstract base — provides shared mount + auth boilerplate."""
+    abstract = True   # skip V001 / V005 / V002 / V003 / V004 / V007 / Q007
+    login_required = True
+
+    def mount(self, request, **kwargs):
+        # Shared mount steps for all child views
+        ...
+
+class DashboardView(BaseLiveView):
+    template_name = "dashboard.html"
+    # Concrete view — V001/V005 still apply normally
+```
+
+Semantics (mirrors Django's `Meta.abstract` for models):
+- `abstract = True` skips the per-class V/Q system checks for that class only.
+- The marker is **not** inherited. Subclasses are validated as concrete unless they also redeclare `abstract = True`.
+- Setting `abstract = False` explicitly is the same as not setting it — the class is concrete.
+
+Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_CONFIG['suppress_checks']`) still works and is the right choice if you want to suppress a check **globally** across all classes rather than mark a specific class as abstract.
+
 ### V001 — LiveView missing template_name
 - **Severity**: Warning
 - **Method**: Runtime (class inspection)
 - **What it detects**: A LiveView subclass has no `template_name` attribute
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.V001"]` or `# noqa: V001` on the class
-- **False positives**: Abstract base classes that are never rendered directly
+- **Suppression** (any of):
+  - `abstract = True` class attribute on the LiveView subclass — preferred for abstract base classes (skips all per-class V/Q checks for that class only; not inherited). See [Abstract base LiveView classes](#abstract-base-liveview-classes) below.
+  - `DJUST_CONFIG = {"suppress_checks": ["V001"]}` — global, matches the C003-style mechanism (fixed in #1604)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.V001"]` — Django's own global suppression
+  - `# noqa: V001` on the class — per-class inline
+- **False positives**: Abstract base classes that are never rendered directly — use `abstract = True` (the per-class opt-out is intent-revealing and doesn't require modifying settings)
 
 ### V002 — LiveView missing mount() method
 - **Severity**: Info
@@ -171,8 +203,12 @@ console.log("debug info"); // noqa: Q003
 - **Severity**: Warning
 - **Method**: Runtime (settings inspection)
 - **What it detects**: A LiveView class is discovered in a module not listed in `LIVEVIEW_ALLOWED_MODULES`
-- **Suppression**: Add the module to `LIVEVIEW_ALLOWED_MODULES`, or `SILENCED_SYSTEM_CHECKS = ["djust.V005"]`
-- **False positives**: Newly created view modules not yet added to the allowlist
+- **Suppression** (any of):
+  - Add the module to `LIVEVIEW_ALLOWED_MODULES` (the real fix)
+  - `abstract = True` class attribute on an abstract base — see [Abstract base LiveView classes](#abstract-base-liveview-classes) below
+  - `DJUST_CONFIG = {"suppress_checks": ["V005"]}` — global (fixed in #1604)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.V005"]`
+- **False positives**: Newly created view modules not yet added to the allowlist; abstract base classes that are never mounted directly
 
 ### V006 — Service instance assigned in mount() (AST)
 - **Severity**: Warning

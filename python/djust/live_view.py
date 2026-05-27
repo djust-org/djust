@@ -289,6 +289,16 @@ class LiveView(
     use_actors: bool = False  # Enable Tokio actor-based state management (Phase 5+)
     tick_interval: Optional[int] = None  # Periodic tick in ms (e.g. 2000 for 2s)
 
+    # Class-level marker for abstract base LiveView classes (#1605).
+    # When a subclass sets ``abstract = True`` on its own class body, the djust
+    # system checks (V001 missing template_name, V005 not in allowed modules,
+    # and the other per-class V/Q checks) skip that class.
+    # Not inherited: the check consults ``cls.__dict__.get("abstract")``, so
+    # subclasses of an abstract base are still validated as concrete unless
+    # they redeclare ``abstract = True`` themselves. Mirrors Django's
+    # ``Meta.abstract`` model semantics.
+    abstract: bool = False
+
     # Memory optimization: assigns to clear after each render
     # Format: {'assign_name': default_value, ...}
     # Example: {'messages': [], 'feed_items': [], 'notifications': []}

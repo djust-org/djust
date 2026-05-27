@@ -218,6 +218,21 @@ class MyView(LiveView):
     template_name = "myapp/my_template.html"  # Add this
 ```
 
+**Abstract base classes**: if the class is an abstract base never mounted directly (no `template_name` by design), mark it explicitly:
+
+```python
+class BaseLiveView(LiveView):
+    abstract = True   # skips V001/V005 for this class (not inherited)
+    login_required = True
+```
+
+**Global suppression** (less preferred — turns the check off everywhere):
+
+```python
+# settings.py
+DJUST_CONFIG = {"suppress_checks": ["V001"]}  # honored as of #1604
+```
+
 ---
 
 ### V002: Missing mount() method
@@ -307,6 +322,15 @@ LIVEVIEW_ALLOWED_MODULES = [
 ```
 
 Or remove `LIVEVIEW_ALLOWED_MODULES` entirely to allow all modules.
+
+**Abstract base classes**: mark abstract base views with `abstract = True` to skip V005 for that specific class:
+
+```python
+class BaseLiveView(LiveView):
+    abstract = True   # skips V001/V005 for this class
+```
+
+**Global suppression**: `DJUST_CONFIG = {"suppress_checks": ["V005"]}` (honored as of #1604).
 
 ---
 
