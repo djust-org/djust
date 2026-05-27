@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc12] - 2026-05-27
+
 ### Added
 
 - **`LiveView.abstract: bool = False` class-attribute marker — opt out abstract base classes from per-class V/Q system checks (#1605).** A common pattern is to define an abstract `BaseLiveView(LiveView)` that subclasses extend for shared mount/auth boilerplate. The base typically has no `template_name` and is never mounted directly, but V001 (missing template_name) and V005 (not in `LIVEVIEW_ALLOWED_MODULES`) still fired on it because the per-class check loop in `python/djust/checks.py:check_liveviews` had no abstract opt-out. The new `abstract = True` class attribute mirrors Django's `Meta.abstract` semantics: setting it on a subclass skips that class's per-class V/Q checks (V001/V005/V002/V003/V004/V007/Q007), and the marker is consulted via `cls.__dict__.get("abstract")` so it is NOT inherited — subclasses of an abstract base are still validated as concrete unless they redeclare `abstract = True` themselves. Both the abstract opt-out and the global `suppress_checks` mechanism (see ### Fixed below) work; choose abstract when the intent is "this specific class is boilerplate" and `suppress_checks` when the intent is "this check is the wrong shape for our codebase." Documented in `docs/system-checks.md` (new "Abstract base LiveView classes" section) and `docs/guides/error-codes.md` (V001 + V005 entries). Behavior change: NEW public API — `LiveView` gains an `abstract: bool = False` class attribute. Existing user code sees no change unless it opts in.
