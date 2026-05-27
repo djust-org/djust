@@ -582,10 +582,16 @@ impl RustLiveViewBackend {
         self.version += 1;
 
         // Build fragment→VDOM text node map for text-fast-path on subsequent renders.
-        // Match each plain-text fragment to a VDOM text node by content.
+        // Match each plain-text fragment to a VDOM text node by BYTE POSITION
+        // in the assembled HTML (#1617 — content equality is insufficient when
+        // a variable is adjacent to literal template text).
         if self.fragment_text_map.is_none() && !self.node_html_cache.is_empty() {
-            if let Some(ref vdom) = self.last_vdom {
-                self.fragment_text_map = Some(build_fragment_text_map(&self.node_html_cache, vdom));
+            if let (Some(ref vdom), Some(ref full_html)) = (&self.last_vdom, &self.last_html) {
+                self.fragment_text_map = Some(build_fragment_text_map(
+                    &self.node_html_cache,
+                    vdom,
+                    full_html,
+                ));
             }
         }
 
@@ -2597,6 +2603,7 @@ fn build_text_node_index(html: &str, vdom: &VNode) -> Vec<TextNodeEntry> {
 fn build_fragment_text_map(
     fragments: &[String],
     vdom: &VNode,
+    full_html: &str,
 ) -> HashMap<usize, (Vec<usize>, String)> {
     let mut map = HashMap::new();
 
@@ -2604,26 +2611,80 @@ fn build_fragment_text_map(
     let mut text_nodes: Vec<(Vec<usize>, String, String)> = Vec::new(); // (path, text, djust_id)
     collect_vdom_text_nodes(vdom, &mut vec![], &mut text_nodes);
 
-    // Each VDOM text node may back AT MOST ONE fragment. Content equality
-    // is not a unique key: two template variables that render the same
-    // baseline string (e.g. `{{ a }}` and `{{ b }}` both `0` at mount)
-    // would otherwise both match the *first* matching text node and collapse
-    // onto the same path, mis-pathing the second fragment's `SetText` patch
-    // (#1529). Claiming each node once makes the map a bijection over
-    // matched fragments. Both `fragments` and `text_nodes` are in document
-    // order, so first-unclaimed-match is positionally stable.
-    let mut claimed = vec![false; text_nodes.len()];
+    // Position-aware fragment→text-node matching (#1617).
+    //
+    // Content equality is fundamentally insufficient as a key: a fragment
+    // adjacent to literal template text (e.g. `{{ x }} online`) renders as
+    // `"1"`, but html5ever's parse of `<span>1 online</span>` produces ONE
+    // text node with content `"1 online"`. The fragment `"1"` does not
+    // equal `"1 online"`, so a content-equality loop walks past the chip
+    // and matches an unrelated sibling text node whose content happens to
+    // equal `"1"`. The `SetText` patch then lands on the wrong path.
+    //
+    // The fix maps each fragment by its byte position in the assembled HTML
+    // (`fragments.concat() == full_html` by construction in
+    // render_nodes_collecting) to the text node whose HTML range CONTAINS
+    // the fragment, claiming the map entry only when the fragment IS the
+    // entire text node (full coverage). Partial-overlap fragments
+    // (variable + adjacent literal) intentionally omit the entry; the
+    // caller falls through to the byte-level `text_region_fast_path`,
+    // which is already sound for that scenario.
+    //
+    // The #1529 collapse (two variables with identical baselines mapping
+    // onto the same text node) is also defeated by position-aware lookup
+    // — distinct fragments live at distinct byte positions, so there is
+    // no need for a separate `claimed` tracker.
+
+    // Compute each fragment's byte offset in the assembled HTML.
+    let mut frag_starts: Vec<usize> = Vec::with_capacity(fragments.len());
+    let mut cursor = 0;
+    for f in fragments {
+        frag_starts.push(cursor);
+        cursor += f.len();
+    }
+
+    // Build a text-node byte-range index using the same primitive as
+    // build_text_node_index (above) — scan_html_text_runs restricted to
+    // the dj-root interior.
+    let (root_start, root_end) =
+        find_dj_root_content_range(full_html).unwrap_or((0, full_html.len()));
+    let runs = match scan_html_text_runs(&full_html[root_start..root_end]) {
+        Some(r) => r,
+        // Unparseable — return empty map; caller falls through to the
+        // text_region_fast_path or full html5ever parse.
+        None => return map,
+    };
+    let runs: Vec<(usize, usize)> = runs
+        .into_iter()
+        .map(|(s, e)| (s + root_start, e + root_start))
+        .collect();
+
+    // Defensive: if scanner and VDOM walker disagree on count, the 1:1
+    // mapping isn't trustworthy. Same fallback as build_text_node_index.
+    if runs.len() != text_nodes.len() {
+        return map;
+    }
 
     for (idx, frag) in fragments.iter().enumerate() {
-        // Only map text-only fragments (no HTML tags)
+        // Only map text-only fragments (no HTML tags).
         if frag.contains('<') || frag.is_empty() {
             continue;
         }
-        // Find the first UNCLAIMED matching text node and claim it.
-        for (node_i, (path, text, djust_id)) in text_nodes.iter().enumerate() {
-            if !claimed[node_i] && text == frag {
-                claimed[node_i] = true;
-                map.insert(idx, (path.clone(), djust_id.clone()));
+        let frag_start = frag_starts[idx];
+        let frag_end = frag_start + frag.len();
+        // Locate the text node whose HTML byte range contains this
+        // fragment. Linear scan is fine — text-node counts per render
+        // are O(dozens) in practice, and `runs` is in document order.
+        for (i, &(rs, re)) in runs.iter().enumerate() {
+            if rs <= frag_start && frag_end <= re {
+                // Only claim when the fragment IS the entire text node.
+                // Partial-overlap cases (e.g. `{{ x }} online`) fall
+                // through to text_region_fast_path, which is byte-level
+                // correct for them.
+                if rs == frag_start && re == frag_end {
+                    let (path, _text, djust_id) = &text_nodes[i];
+                    map.insert(idx, (path.clone(), djust_id.clone()));
+                }
                 break;
             }
         }
