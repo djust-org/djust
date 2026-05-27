@@ -182,21 +182,32 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Info
 - **Method**: Runtime (class inspection)
 - **What it detects**: A LiveView subclass does not define `mount()`
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.V002"]`
+- **Suppression** (any of):
+  - `abstract = True` class attribute on the LiveView subclass (skips all per-class checks)
+  - `DJUST_CONFIG = {"suppress_checks": ["V002"]}` — global (fixed in #1607)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.V002"]`
 - **False positives**: Views that require no state initialisation
 
 ### V003 — mount() has wrong signature
 - **Severity**: Error
 - **Method**: Runtime (introspection)
 - **What it detects**: `mount()` signature does not include `request` as the second positional parameter; the valid signature is `mount(self, request, **kwargs)`
-- **Suppression**: Fix the signature rather than suppress
+- **Suppression** (any of):
+  - Fix the signature (the real fix)
+  - `abstract = True` class attribute on an abstract base
+  - `DJUST_CONFIG = {"suppress_checks": ["V003"]}` — global (fixed in #1607)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.V003"]`
 - **False positives**: None
 
 ### V004 — Public method looks like event handler but missing @event_handler
 - **Severity**: Info
 - **Method**: AST (method name heuristic — `handle_*` prefix and similar)
 - **What it detects**: Public methods whose names match the event-handler naming pattern but lack the `@event_handler` decorator
-- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.V004"]` (global) or `# noqa: V004` on the method
+- **Suppression** (any of):
+  - `abstract = True` class attribute on an abstract base
+  - `DJUST_CONFIG = {"suppress_checks": ["V004"]}` — global (fixed in #1607)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.V004"]`
+  - `# noqa: V004` on the method
 - **False positives**: `handle_params()`, `handle_disconnect()`, `handle_connect()`, and `handle_event()` are djust lifecycle methods, not event handlers — the `handle_*` heuristic fires on them incorrectly
 
 ### V005 — Module not in LIVEVIEW_ALLOWED_MODULES
@@ -222,7 +233,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Warning
 - **Method**: AST (inspects `@event_handler` decorated methods)
 - **What it detects**: An event handler method does not accept `**kwargs`, which causes a `TypeError` when djust passes extra keyword arguments
-- **Suppression**: `# noqa: V007` inline or fix the signature
+- **Suppression** (any of):
+  - Fix the signature (the real fix)
+  - `abstract = True` class attribute on an abstract base
+  - `DJUST_CONFIG = {"suppress_checks": ["V007"]}` — global (fixed in #1607)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.V007"]`
+  - `# noqa: V007` inline
 - **False positives**: None
 
 ### V008 — Non-primitive type assigned in mount() (AST)
@@ -378,7 +394,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Warning
 - **Method**: Runtime (class inspection)
 - **What it detects**: A key appears in both `static_assigns` and `temporary_assigns` on the same LiveView
-- **Suppression**: Fix the overlap; or `SILENCED_SYSTEM_CHECKS = ["djust.Q007"]`
+- **Suppression** (any of):
+  - Fix the overlap (the real fix; this almost always indicates a logic error)
+  - `abstract = True` class attribute on an abstract base
+  - `DJUST_CONFIG = {"suppress_checks": ["Q007"]}` — global (fixed in #1607)
+  - `SILENCED_SYSTEM_CHECKS = ["djust.Q007"]`
 - **False positives**: None; overlapping keys indicate a logic error
 
 ### Q010 — Event handler sets nav state without patch()

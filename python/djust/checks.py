@@ -1266,7 +1266,7 @@ def check_liveviews(app_configs, **kwargs):
                 if "mount" in parent.__dict__:
                     has_mount = True
                     break
-            if not has_mount:
+            if not has_mount and not _is_check_suppressed("djust.V002"):
                 cls_file = ""
                 cls_line = None
                 try:
@@ -1294,7 +1294,9 @@ def check_liveviews(app_configs, **kwargs):
             sig = inspect.signature(mount_method)
             params = list(sig.parameters.keys())
             # Should be (self, request, **kwargs) at minimum
-            if len(params) < 2 or params[1] != "request":
+            if (len(params) < 2 or params[1] != "request") and not _is_check_suppressed(
+                "djust.V003"
+            ):
                 cls_file = ""
                 cls_line = None
                 try:
@@ -1339,7 +1341,7 @@ def check_liveviews(app_configs, **kwargs):
                 continue
             if is_event_handler(method):
                 continue
-            if _EVENT_HANDLER_LIKE_NAMES.match(name):
+            if _EVENT_HANDLER_LIKE_NAMES.match(name) and not _is_check_suppressed("djust.V004"):
                 method_file = ""
                 method_line = None
                 try:
@@ -1366,7 +1368,7 @@ def check_liveviews(app_configs, **kwargs):
         static = set(getattr(cls, "static_assigns", []))
         temporary = set(getattr(cls, "temporary_assigns", {}).keys())
         overlap = static & temporary
-        if overlap:
+        if overlap and not _is_check_suppressed("djust.Q007"):
             cls_file = ""
             cls_line = None
             try:
@@ -1430,7 +1432,7 @@ def check_liveviews(app_configs, **kwargs):
             has_var_keyword = any(
                 p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
             )
-            if not has_var_keyword:
+            if not has_var_keyword and not _is_check_suppressed("djust.V007"):
                 method_file = ""
                 method_line = None
                 try:
