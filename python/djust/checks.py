@@ -1205,6 +1205,14 @@ def check_liveviews(app_configs, **kwargs):
             if "test" not in module and "example" not in module:
                 continue
 
+        # User-declared abstract base classes opt out of all per-class V/Q checks
+        # by setting `abstract = True` on the class body (#1605). Consulted via
+        # __dict__ so the marker is NOT inherited: subclasses of an abstract base
+        # are validated as concrete unless they also redeclare abstract = True.
+        # Mirrors Django's Meta.abstract semantics.
+        if cls.__dict__.get("abstract") is True:
+            continue
+
         cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
 
         # V001 -- missing template_name
@@ -1221,7 +1229,7 @@ def check_liveviews(app_configs, **kwargs):
                 if parent.__dict__.get("template_name") or parent.__dict__.get("template"):
                     found_in_parent = True
                     break
-            if not found_in_parent:
+            if not found_in_parent and not _is_check_suppressed("djust.V001"):
                 cls_file = ""
                 cls_line = None
                 try:
@@ -1232,7 +1240,12 @@ def check_liveviews(app_configs, **kwargs):
                 errors.append(
                     DjustWarning(
                         "%s: missing 'template_name' attribute." % cls_label,
-                        hint="Set template_name on your LiveView class.",
+                        hint=(
+                            "Set template_name on your LiveView class. "
+                            "Mark abstract base classes with `abstract = True` to skip this check, "
+                            "or suppress globally with "
+                            "DJUST_CONFIG = {'suppress_checks': ['V001']}."
+                        ),
                         id="djust.V001",
                         fix_hint=(
                             "Add `template_name = 'your_template.html'` as a class "
@@ -1378,12 +1391,17 @@ def check_liveviews(app_configs, **kwargs):
 
         # V005 -- module not in LIVEVIEW_ALLOWED_MODULES
         allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
-        if allowed is not None and module not in allowed:
+        if allowed is not None and module not in allowed and not _is_check_suppressed("djust.V005"):
             errors.append(
                 DjustWarning(
                     "%s is not in LIVEVIEW_ALLOWED_MODULES. "
                     "WebSocket mount will silently fail." % cls_label,
-                    hint="Add '%s' to LIVEVIEW_ALLOWED_MODULES in settings." % module,
+                    hint=(
+                        "Add '%s' to LIVEVIEW_ALLOWED_MODULES in settings. "
+                        "Mark abstract base classes with `abstract = True` to skip this check, "
+                        "or suppress globally with "
+                        "DJUST_CONFIG = {'suppress_checks': ['V005']}." % module
+                    ),
                     id="djust.V005",
                     fix_hint=(
                         "Add `'%s'` to the `LIVEVIEW_ALLOWED_MODULES` list in your "
