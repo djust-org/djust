@@ -499,6 +499,7 @@ class TestThemeMixinThemeHead:
             "deferred_css_block",
             "component_css_block",
             "include_component_link",
+            "include_components_app_link",
             "include_js",
             "direction",
             "cookie_prefix_js",

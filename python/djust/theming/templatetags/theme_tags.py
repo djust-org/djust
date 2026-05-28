@@ -144,6 +144,19 @@ def build_theme_head_context(
         component_css_block = f"<style data-djust-components>{component_css}</style>"
         include_component_link = False
 
+    # #1624: auto-include djust-components's components.css when the app is
+    # installed. Layout rules for {% code_block %}, {% card %}, {% dj_button %}
+    # spinners and other component tags live there. Detection is defensive —
+    # apps.is_installed() raises if the app registry isn't populated (e.g.
+    # before Django setup), so the call is wrapped in try/except and falls
+    # back to no link.
+    try:
+        from django.apps import apps as django_apps
+
+        include_components_app_link = django_apps.is_installed("djust.components")
+    except Exception:  # noqa: BLE001 — defensive: never break theme_head
+        include_components_app_link = False
+
     # Resolve text direction
     direction = get_direction()
 
@@ -160,6 +173,7 @@ def build_theme_head_context(
         "deferred_css_block": deferred_css_block,
         "component_css_block": component_css_block,
         "include_component_link": include_component_link,
+        "include_components_app_link": include_components_app_link,
         "include_js": include_js,
         "direction": direction,
         "cookie_prefix_js": cookie_prefix_js,
