@@ -3,8 +3,24 @@ name: Tests
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+
+# Cancel superseded runs when commits push rapidly to a branch or PR.
+# Force-pushes, dependabot rebases, and quick fixup commits otherwise burn
+# the full ~30 compute-min suite on every intermediate revision. Mirrors
+# the block in codeql.yml (which has had this since #1340).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # Rust tests - runs in parallel
