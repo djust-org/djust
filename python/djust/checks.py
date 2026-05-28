@@ -1850,20 +1850,56 @@ def _check_non_primitive_assignments_in_mount(errors):
     if not app_dirs:
         return
 
-    # Primitive types that are always serializable
+    # Primitive type constructors AND stdlib builtins that always return
+    # JSON-serializable primitives. The check fires only when the bare
+    # call name is NOT in this set.
     SAFE_TYPES = {
+        # Container/collection constructors. Element JSON-serializability is
+        # the user's responsibility — same trust contract for every entry here.
         "list",
         "dict",
         "set",
         "tuple",
-        "str",
-        "int",
-        "float",
-        "bool",
+        "frozenset",
         "List",
         "Dict",
         "Set",
         "Tuple",
+        # Scalar primitive constructors.
+        "str",
+        "int",
+        "float",
+        "bool",
+        "bytes",
+        # Stdlib builtins that always return JSON-serializable primitives (#1609).
+        # Numeric → int/float/tuple-of-ints:
+        "max",
+        "min",
+        "sum",
+        "abs",
+        "round",
+        "pow",
+        "divmod",
+        "len",
+        "ord",
+        "hash",
+        "id",
+        # Conversion → str:
+        "bin",
+        "oct",
+        "hex",
+        "repr",
+        "chr",
+        "ascii",
+        "format",
+        # Container builtin returning list. Same element-serializability
+        # contract as `list()` above.
+        "sorted",
+        # Iterator-returning builtins (reversed, enumerate, zip, map, filter,
+        # range, iter) are INTENTIONALLY EXCLUDED — they return iterator/
+        # generator objects that are not directly JSON-serializable when
+        # stored on a view; the user must materialize via `list()` first.
+        # `complex` and `slice` are also excluded — not JSON-serializable.
     }
 
     for filepath in _iter_python_files(app_dirs):
