@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc13] - 2026-05-28
+
 ### Added
 
 - **`dj_button` accepts a `confirm=""` kwarg (#1621).** When non-empty, emits the standard `dj-confirm="<message>"` attribute consumed by djust's client.js (`python/djust/static/djust/src/09-event-binding.js:7`) — clicking the button shows a JS `confirm()` dialog with the message; on OK the event fires, on Cancel nothing happens. Closes a small DX gap where users wanting the dialog had to either skip `dj_button` (losing the theme integration / variant→class mapping from #1619) or wrap the tag in ad-hoc JS. The underlying `dj-confirm` primitive was already wired in client.js across multiple directives (`dj-click`, `dj-submit`, etc.); this PR just exposes it through the component tag. Emission is independent of `event=` value — the attribute is useful on event-less buttons users have wired up via other directives. `conditional_escape` neutralizes XSS surface, matching the existing `event` attr escaping. Preset override supported via the existing preset-priority pattern (preset values fill defaults; explicit kwargs win). Discovered building `djust-org/djust-start`'s reset-demo button on djust 1.0.0rc12. 5 new regression cases in `python/djust/components/tests/test_dj_button_confirm_1621.py`; gate-the-fix-off self-test (Action #1200/#1468) passes.
