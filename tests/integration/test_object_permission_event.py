@@ -34,6 +34,7 @@ Stage 5 implementation:
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import PermissionDenied
 
@@ -520,6 +521,75 @@ async def test_per_event_fails_closed_when_request_missing_with_custom_get_objec
     assert _DenyEventView._handler_ran is False, (
         "handler body must NOT execute when per-event check fails closed"
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+async def test_per_event_sync_orm_get_object_does_not_raise_sync_only(rf):
+    """#1638 (P0): the per-event object-permission check must wrap
+    ``check_object_permission`` in ``sync_to_async`` (mirroring the mount path)
+    so a canonical sync-ORM ``get_object()`` doesn't raise
+    ``SynchronousOnlyOperation`` inside the ``async def`` validator.
+
+    Pre-fix, the bare sync call ran the developer's ``Model.objects.get(...)``
+    directly in the event loop → ``SynchronousOnlyOperation`` → the fail-closed
+    ``except Exception`` mistranslated it into a spurious ``permission_denied``
+    frame on the FIRST event of every URL-bound LiveView following ADR-017.
+
+    The existing object-permission tests all use an in-memory ``_StubDocument``,
+    so none exercised the sync-ORM path that actually trips the bug.
+    """
+    from django.contrib.auth.models import User
+
+    from djust.websocket_utils import _validate_event_security
+
+    user = await sync_to_async(User.objects.create)(username="objperm-1638")
+
+    class _SyncORMObjectView(LiveView):
+        template = "<div>{{ value }}</div>"
+
+        def mount(self, request, **kwargs):
+            self.value = "v"
+            type(self)._handler_ran = False
+
+        def get_object(self):
+            # Canonical ADR-017 sync pattern: a real sync ORM read.
+            return User.objects.get(pk=self._oid)
+
+        def has_object_permission(self, request, obj):
+            return True
+
+        @event_handler()
+        def open_item(self, **kwargs):
+            type(self)._handler_ran = True
+
+    request = rf.get("/")
+    request.user = AnonymousUser()
+    _SyncORMObjectView._handler_ran = False
+    view = _SyncORMObjectView()
+    view.request = request
+    view.mount(request)
+    view._oid = user.pk
+
+    ws = _mock_ws()
+    rl = MagicMock()
+    rl.check_handler = MagicMock(return_value=True)
+    rl.should_disconnect = MagicMock(return_value=False)
+
+    handler = await _validate_event_security(ws, "open_item", view, rl)
+
+    assert handler is not None, (
+        "sync-ORM get_object() on the per-event path must not raise "
+        "SynchronousOnlyOperation; got a fail-closed denial instead. "
+        f"send_error calls: {ws.send_error.call_args_list}"
+    )
+    assert not ws.send_error.called, (
+        "an allowed object must not produce a permission_denied frame; "
+        f"send_error calls: {ws.send_error.call_args_list}"
+    )
+    # Sanity: the object was actually resolved + cached via the wrapped call.
+    assert getattr(view, "_object", None) is not None
+    assert view._object.pk == user.pk
 
 
 @pytest.mark.asyncio
