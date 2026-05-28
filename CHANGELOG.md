@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`start_async` completion now refreshes the VDOM recovery baseline (#1636).** When a client VDOM patch fails (e.g. an `{% if %}` block that adds a sibling), the client requests `html_recovery` and the server serves — then clears — `_recovery_html` (one-time use). `LiveViewConsumer._run_async_work` re-renders and sends patches when a `start_async` background callback completes, but — unlike `handle_event` and `server_push` (the #1202 fix) — it never updated `_recovery_html` / `_recovery_version`. After a recovery had consumed the baseline, an async-triggered patch that also failed on the client found `_recovery_html=None`, got back "Recovery HTML unavailable", and the view froze at the transitional state (e.g. `Status: fetching`) even though the backend pipeline had advanced. `_run_async_work` now sets the recovery baseline after `render_with_diff()` in both the patches branch and the full-HTML fallback branch, mirroring the other two render paths, so async-callback state pushes keep reaching the client across patch-failure/recovery cycles.
+
 ## [1.0.0rc13] - 2026-05-28
 
 ### Added

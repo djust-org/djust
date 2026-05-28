@@ -929,6 +929,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             if patches is not None:
                 patch_list = fast_json_loads(patches) if patches else []
+                # Refresh the recovery baseline so a later request_html (e.g.
+                # an async-triggered patch that fails on the client) has fresh
+                # HTML to serve. Mirrors handle_event and server_push (#1202).
+                # Without this, an html_recovery that already consumed
+                # _recovery_html leaves it None, the next request_html returns
+                # "Recovery HTML unavailable", and the client freezes at the
+                # transitional state even though the backend advanced (#1636).
+                self._recovery_html = html
+                self._recovery_version = version
                 await self._send_update(
                     patches=patch_list,
                     version=version,
@@ -945,6 +954,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         ),
                     )
                 )(html)
+                # The fallback sends the full render to the client, so the
+                # recovery baseline must track it too (#1636).
+                self._recovery_html = html
+                self._recovery_version = version
                 await self._send_update(
                     html=html_content,
                     version=version,
