@@ -6453,9 +6453,17 @@ function getSignificantChildren(node) {
             // Only filter out ASCII whitespace-only text nodes.
             return (/[^ \t\n\r\f]/.test(child.textContent));
         }
-        // Include comment nodes — the Rust VDOM parser preserves <!--dj-if-->
-        // placeholders and counts them in child indices (#559).
-        if (child.nodeType === Node.COMMENT_NODE) return true;
+        // Count ONLY dj-if-family comments — the Rust VDOM parser preserves
+        // <!--dj-if-->/<!--/dj-if--> boundary markers and counts them in child
+        // indices (#559), but DROPS all other HTML comments. Counting regular
+        // comments here made index-based patches (InsertChild/RemoveChild/
+        // MoveChild) disagree with getNodeByPath (which is dj-if-only) and with
+        // the server's VDOM indices whenever a template had a plain
+        // <!-- comment --> among siblings (#1640). Predicate mirrors
+        // getNodeByPath and crates/djust_vdom/src/parser.rs.
+        if (child.nodeType === Node.COMMENT_NODE) {
+            return isDjIfComment(child.textContent);
+        }
         return false;
     });
 }
