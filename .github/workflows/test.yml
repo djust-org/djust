@@ -36,16 +36,13 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      # Swatinem/rust-cache keys on rustc version + Cargo.lock + the job
+      # context (so rust-tests and python-tests don't poison each other's
+      # caches — python-tests builds the PyO3 cdylib, rust-tests builds
+      # the workspace libs). Already in use in release.yml:102. Previously
+      # this was a hand-rolled actions/cache keyed only on Cargo.lock,
+      # which suffered cache misses on rustc bumps and dependency changes.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Set up Python (for PyO3)
         uses: actions/setup-python@v6
@@ -104,16 +101,10 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      # Matrix-aware: Swatinem/rust-cache automatically scopes the cache
+      # to the python-version matrix dimension, so 3.12 / 3.13 / 3.14
+      # builds keep separate caches and don't invalidate each other.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
