@@ -1836,13 +1836,38 @@ def code_block(
 
     highlight_html = ""
     if highlight:
+        # The per-instance inline <script> runs on initial HTTP page load and
+        # highlights this code block. After hljs is loaded, we ALSO install a
+        # MutationObserver ONCE per page (gated by __djcHljsObserverInstalled)
+        # so any <code class="language-*"> element that arrives via a djust
+        # WS patch — which doesn't execute its own inline <script> in modern
+        # browsers — still gets highlighted (#1625).
         highlight_html = (
             f"<script>"
             f"(function(){{"
             f'var el=document.currentScript.previousElementSibling.querySelector("code");'
             f"if(el.dataset.highlighted)return;"
             f'function doHL(){{if(window.hljs){{hljs.highlightElement(el);el.dataset.highlighted="true";}}}}'
-            f"if(window.hljs){{doHL();return;}}"
+            # #1625: MutationObserver installer — idempotent via the
+            # __djcHljsObserverInstalled flag. Watches the whole document
+            # for added <pre><code class="language-*"> elements (typical
+            # WS-patch insertion point) and highlights any unmarked ones.
+            f"function installObserver(){{"
+            f"if(window.__djcHljsObserverInstalled)return;"
+            f"if(typeof MutationObserver==='undefined')return;"
+            f"window.__djcHljsObserverInstalled=true;"
+            f"var hl=function(root){{if(!window.hljs)return;"
+            f'var sel="pre code[class^=language-]";'
+            f"var nodes=root.matches&&root.matches(sel)?[root]:"
+            f"(root.querySelectorAll?root.querySelectorAll(sel):[]);"
+            f"Array.prototype.forEach.call(nodes,function(n)"
+            f'{{if(!n.dataset.highlighted){{hljs.highlightElement(n);n.dataset.highlighted="true";}}}});}};'
+            f"new MutationObserver(function(records){{"
+            f"records.forEach(function(r){{r.addedNodes&&Array.prototype.forEach.call(r.addedNodes,function(n)"
+            f"{{if(n.nodeType===1)hl(n);}});}});"
+            f"}}).observe(document.body,{{childList:true,subtree:true}});"
+            f"}}"
+            f"if(window.hljs){{doHL();installObserver();return;}}"
             f"if(!window.__djcHljsLoading){{"
             f"window.__djcHljsLoading=true;"
             f'var lnk=document.createElement("link");lnk.rel="stylesheet";'
@@ -1851,9 +1876,10 @@ def code_block(
             f'var s=document.createElement("script");'
             f's.src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11/build/highlight.min.js";'
             f's.onload=function(){{document.querySelectorAll("pre code[class^=language-]").forEach(function(b)'
-            f'{{if(!b.dataset.highlighted){{hljs.highlightElement(b);b.dataset.highlighted="true";}}}});}};'
+            f'{{if(!b.dataset.highlighted){{hljs.highlightElement(b);b.dataset.highlighted="true";}}}});'
+            f"installObserver();}};"
             f"document.head.appendChild(s);"
-            f"}}else{{var iv=setInterval(function(){{if(window.hljs){{clearInterval(iv);doHL();}}}},50);}}"
+            f"}}else{{var iv=setInterval(function(){{if(window.hljs){{clearInterval(iv);doHL();installObserver();}}}},50);}}"
             f"}})();"
             f"</script>"
         )
