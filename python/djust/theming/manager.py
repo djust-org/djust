@@ -12,7 +12,12 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest
 
-from .presets import ThemePreset, get_preset
+from ._types import ThemePreset
+
+# NOTE: ``get_preset`` is imported lazily inside ``ThemeManager.get_preset``
+# (the only call site) to avoid the
+# ``presets → registry → manager → presets`` cyclic-import SCC that
+# CodeQL flagged in alert #2352.
 
 # #1169(b) — cookie_namespace is interpolated directly into cookie names. RFC
 # 6265 forbids whitespace, control chars, '=' and ';' inside cookie names;
@@ -510,6 +515,8 @@ class ThemeManager:
 
     def get_preset(self) -> ThemePreset:
         """Get current theme preset object."""
+        from .presets import get_preset
+
         state = self.get_state()
         return get_preset(state.preset)
 
