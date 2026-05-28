@@ -319,9 +319,23 @@ jobs:
             rm examples/demo_project/server.pid
           fi
 
-  # Security scanning job - runs in parallel
+  # Security scanning job — bandit + safety + cargo-audit + npm-audit.
+  # Runs on push to main, schedule, and manual dispatch; SKIPPED on PRs.
+  #
+  # Rationale: this job duplicates the heavier audit that
+  # ``pre-release-security-audit.yml`` runs on every tag push — at PR time
+  # it was the single longest job in the workflow (~8 min observed) and
+  # produced findings ``security-tests`` (pytest-cov) had already gated.
+  # Keeping it on push-to-main catches main-branch regressions in
+  # security-relevant dependencies the moment they land, without paying
+  # the cost on every dependabot rebase / fixup commit.
+  #
+  # ``security-tests`` (further down) stays on the PR path — it is the
+  # pytest-cov leg with the ``--cov-fail-under=75`` gate, which is a real
+  # PR-time signal we don't want to drop.
   security-scan:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v6
 
@@ -476,7 +490,10 @@ jobs:
             if [ "${{ needs.playwright-tests.result }}" != "success" ]; then
               echo "WARNING: Playwright tests failed (optional, not blocking)"
             fi
-            if [ "${{ needs.security-scan.result }}" != "success" ]; then
+            # ``skipped`` is the expected result on PR runs (security-scan
+            # is push/schedule/dispatch only) — only warn on a true failure.
+            if [ "${{ needs.security-scan.result }}" != "success" ] && \
+               [ "${{ needs.security-scan.result }}" != "skipped" ]; then
               echo "WARNING: Security scan had warnings (review recommended)"
             fi
             exit 0
