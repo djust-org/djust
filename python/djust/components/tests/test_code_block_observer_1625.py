@@ -56,7 +56,15 @@ class TestCodeBlockObserverBootstrap1625:
         assert "__djcHljsObserverInstalled" not in html
 
     def test_existing_lazy_loader_path_preserved(self):
-        """Regression backstop: __djcHljsLoading + the lazy CDN URLs remain."""
+        """Regression backstop: __djcHljsLoading + the lazy CDN URL remain.
+
+        The CDN URL assertion uses a path-specific substring rather than just
+        the host name — CodeQL flags bare-host substring checks as the
+        ``js/incomplete-url-substring-sanitization`` anti-pattern (false-positive
+        for test assertions, but a real concern for runtime sanitization), so
+        the longer slice keeps the assertion unambiguous AND silences the
+        rule.
+        """
         html = code_block(code="print(1)", language="python")
         assert "__djcHljsLoading" in html
-        assert "cdn.jsdelivr.net" in html
+        assert "highlightjs/cdn-release" in html
