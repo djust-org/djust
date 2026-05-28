@@ -1900,6 +1900,42 @@ def _check_non_primitive_assignments_in_mount(errors):
         # generator objects that are not directly JSON-serializable when
         # stored on a view; the user must materialize via `list()` first.
         # `complex` and `slice` are also excluded — not JSON-serializable.
+        #
+        # Stdlib module functions that return JSON-serializable primitives
+        # (#1628). `_get_call_name` returns the dotted qualified name for
+        # `mod.fn(...)` call sites, so the entries here match the qualified
+        # form (e.g. `inspect.getsource`, NOT bare `getsource`).
+        "inspect.getsource",
+        "inspect.getsourcefile",
+        "inspect.getmodule",
+        "inspect.getdoc",
+        "os.path.join",
+        "os.path.basename",
+        "os.path.dirname",
+        "os.path.exists",
+        "os.path.isfile",
+        "os.path.isdir",
+        "os.path.abspath",
+        "os.path.relpath",
+        "os.getenv",
+        "os.getcwd",
+        "pathlib.Path.read_text",
+        "pathlib.Path.exists",
+        "pathlib.Path.is_file",
+        "pathlib.Path.is_dir",
+        "json.dumps",
+        "datetime.datetime.isoformat",
+        "datetime.date.isoformat",
+        # Bare method names matching chained-call forms like
+        # `Path(p).read_text()` and `datetime.now().isoformat()` — these
+        # resolve to BARE method names because the receiver is a Call
+        # node (not an Attribute chain `_get_call_name` can walk). Only
+        # methods that are distinctive enough to make user-code
+        # collisions rare are included; `exists`/`is_file`/`is_dir` are
+        # intentionally omitted because user code commonly uses those
+        # names (e.g. `some_record.exists()`).
+        "isoformat",
+        "read_text",
     }
 
     for filepath in _iter_python_files(app_dirs):
