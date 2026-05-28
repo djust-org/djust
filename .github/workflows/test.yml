@@ -85,12 +85,20 @@ jobs:
         run: cargo fmt --check
 
   # Python tests - runs in parallel with pytest-xdist
+  #
+  # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
+  # On PR we run only the canonical interpreter (3.12); on push to main
+  # we run the full matrix (3.12/3.13/3.14). 3.13 / 3.14 regressions are
+  # caught on the merge commit instead of at PR time — one merge later,
+  # not "never". Historical evidence the matrix has value: PRs #450 / #452
+  # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
+  # cost (~8 min/PR × dependabot volume) outweighed the latency.
   python-tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12', '3.13', '3.14']
+        python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     name: python-tests (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v6
