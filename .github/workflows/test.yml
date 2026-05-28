@@ -36,16 +36,13 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      # Swatinem/rust-cache keys on rustc version + Cargo.lock + the job
+      # context (so rust-tests and python-tests don't poison each other's
+      # caches — python-tests builds the PyO3 cdylib, rust-tests builds
+      # the workspace libs). Already in use in release.yml:102. Previously
+      # this was a hand-rolled actions/cache keyed only on Cargo.lock,
+      # which suffered cache misses on rustc bumps and dependency changes.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Set up Python (for PyO3)
         uses: actions/setup-python@v6
@@ -88,12 +85,20 @@ jobs:
         run: cargo fmt --check
 
   # Python tests - runs in parallel with pytest-xdist
+  #
+  # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
+  # On PR we run only the canonical interpreter (3.12); on push to main
+  # we run the full matrix (3.12/3.13/3.14). 3.13 / 3.14 regressions are
+  # caught on the merge commit instead of at PR time — one merge later,
+  # not "never". Historical evidence the matrix has value: PRs #450 / #452
+  # shipped real 3.14-support fixes. Tradeoff accepted because the absolute
+  # cost (~8 min/PR × dependabot volume) outweighed the latency.
   python-tests:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12', '3.13', '3.14']
+        python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     name: python-tests (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v6
@@ -104,16 +109,10 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Cache Rust dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      # Matrix-aware: Swatinem/rust-cache automatically scopes the cache
+      # to the python-version matrix dimension, so 3.12 / 3.13 / 3.14
+      # builds keep separate caches and don't invalidate each other.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -320,9 +319,23 @@ jobs:
             rm examples/demo_project/server.pid
           fi
 
-  # Security scanning job - runs in parallel
+  # Security scanning job — bandit + safety + cargo-audit + npm-audit.
+  # Runs on push to main, schedule, and manual dispatch; SKIPPED on PRs.
+  #
+  # Rationale: this job duplicates the heavier audit that
+  # ``pre-release-security-audit.yml`` runs on every tag push — at PR time
+  # it was the single longest job in the workflow (~8 min observed) and
+  # produced findings ``security-tests`` (pytest-cov) had already gated.
+  # Keeping it on push-to-main catches main-branch regressions in
+  # security-relevant dependencies the moment they land, without paying
+  # the cost on every dependabot rebase / fixup commit.
+  #
+  # ``security-tests`` (further down) stays on the PR path — it is the
+  # pytest-cov leg with the ``--cov-fail-under=75`` gate, which is a real
+  # PR-time signal we don't want to drop.
   security-scan:
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v6
 
@@ -477,7 +490,10 @@ jobs:
             if [ "${{ needs.playwright-tests.result }}" != "success" ]; then
               echo "WARNING: Playwright tests failed (optional, not blocking)"
             fi
-            if [ "${{ needs.security-scan.result }}" != "success" ]; then
+            # ``skipped`` is the expected result on PR runs (security-scan
+            # is push/schedule/dispatch only) — only warn on a true failure.
+            if [ "${{ needs.security-scan.result }}" != "success" ] && \
+               [ "${{ needs.security-scan.result }}" != "skipped" ]; then
               echo "WARNING: Security scan had warnings (review recommended)"
             fi
             exit 0
