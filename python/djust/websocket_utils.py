@@ -259,7 +259,14 @@ async def _validate_event_security(
         from .auth.core import check_object_permission
 
         try:
-            check_object_permission(owner_instance, owner_request)
+            # Wrap in sync_to_async to mirror the mount path
+            # (websocket.py handle_mount). check_object_permission calls the
+            # developer's sync get_object(), which per the canonical ADR-017
+            # pattern does a sync ORM read; calling it bare from this async def
+            # raised SynchronousOnlyOperation, which the fail-closed catch below
+            # mistranslated into a spurious "Access denied" on the first event
+            # of every URL-bound LiveView (#1638).
+            await sync_to_async(check_object_permission)(owner_instance, owner_request)
         except PermissionDenied:
             await ws.send_error(
                 "Access denied for this object.",
