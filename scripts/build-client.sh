@@ -69,10 +69,26 @@ minify_and_compress() {
 }
 
 # Build client.js
+#
+# The concatenated modules are wrapped in a single IIFE so EVERY top-level
+# `const`/`let`/`class` is function-scoped, not bound in the shared global
+# lexical environment. Without the wrapper, re-executing the bundle in the
+# same document — morphdom re-attaching the <script> after live_redirect, or
+# a bfcache `pageshow` re-init — re-declared those identifiers at PARSE time
+# and threw `Identifier '_TEXT_INPUT_TYPES' has already been declared` before
+# the runtime `window._djustClientLoaded` guard could run (#1635). Inside the
+# IIFE a second execution just builds a fresh function scope and the runtime
+# guard short-circuits the re-init. Modules export their public API via
+# explicit `window.*` / `globalThis.djust.*` assignments, which still run
+# inside the IIFE, so nothing observable changes.
 CLIENT_OUT="$STATIC_DIR/client.js"
 if ls "$SRC_DIR"/[0-9]*.js 1>/dev/null 2>&1; then
-    cat "$SRC_DIR"/[0-9]*.js > "$CLIENT_OUT"
-    echo "Built client.js from $(ls "$SRC_DIR"/[0-9]*.js | wc -l | tr -d ' ') modules ($(wc -c < "$CLIENT_OUT" | tr -d ' ') bytes)"
+    {
+        printf ';(function () {\n'
+        cat "$SRC_DIR"/[0-9]*.js
+        printf '\n})();\n'
+    } > "$CLIENT_OUT"
+    echo "Built client.js from $(ls "$SRC_DIR"/[0-9]*.js | wc -l | tr -d ' ') modules ($(wc -c < "$CLIENT_OUT" | tr -d ' ') bytes, IIFE-wrapped)"
     # Guardrail (#953): tests/js/_helpers.js is a TEST-ONLY shim. If any
     # of its signatures ever leak into the production bundle, terser
     # still happily ships the code — but it bloats the client + exposes
