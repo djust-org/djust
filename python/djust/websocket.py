@@ -733,6 +733,25 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+    async def _flush_all_pending(self) -> None:
+        """Flush every queued client side-effect at the end of a WS turn, in
+        canonical order. Single source of truth: every turn-end path (event,
+        skip-render noop, broadcast, db-notify, async completion) calls this so
+        no path can silently drop a queued command. Each ``_flush_*`` drains and
+        clears its own queue, so calling this twice in one turn is a harmless
+        no-op. Regression context: skip-render and broadcast paths used to flush
+        only push_events/flash/page_metadata/pending_layout/deferred and dropped
+        queued navigation/accessibility/i18n — so ``live_redirect()`` from a
+        state-unchanging handler never reached the client (#1643)."""
+        await self._flush_push_events()
+        await self._flush_flash()
+        await self._flush_page_metadata()
+        await self._flush_pending_layout()
+        await self._flush_deferred()
+        await self._flush_navigation()
+        await self._flush_accessibility()
+        await self._flush_i18n()
+
     async def _flush_accessibility(self) -> None:
         """
         Send any pending accessibility commands (announcements, focus)
@@ -965,11 +984,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     source="async",
                 )
 
-            await self._flush_push_events()
-            await self._flush_flash()
-            await self._flush_page_metadata()
-            await self._flush_pending_layout()
-            await self._flush_deferred()
+            await self._flush_all_pending()
 
         except Exception as e:
             error = e
@@ -1126,14 +1141,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     response["ref"] = ref
                 self._attach_debug_payload(response, event_name, performance)
                 await self.send_json(response)
-                await self._flush_push_events()
-                await self._flush_flash()
-                await self._flush_page_metadata()
-                await self._flush_pending_layout()
-                await self._flush_deferred()
-                await self._flush_navigation()
-                await self._flush_accessibility()
-                await self._flush_i18n()
+                await self._flush_all_pending()
         else:
             response = {
                 "type": "html_update",
@@ -1154,14 +1162,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 response["ref"] = ref
             self._attach_debug_payload(response, event_name)
             await self.send_json(response)
-            await self._flush_push_events()
-            await self._flush_flash()
-            await self._flush_page_metadata()
-            await self._flush_pending_layout()
-            await self._flush_deferred()
-            await self._flush_navigation()
-            await self._flush_accessibility()
-            await self._flush_i18n()
+            await self._flush_all_pending()
 
     async def _dispatch_single_event(
         self,
@@ -1255,11 +1256,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if skip_render:
             self.view_instance._skip_render = False
             has_async = getattr(self.view_instance, "_async_pending", None) is not None
-            await self._flush_push_events()
-            await self._flush_flash()
-            await self._flush_page_metadata()
-            await self._flush_pending_layout()
-            await self._flush_deferred()
+            await self._flush_all_pending()
             await self._send_noop(async_pending=has_async, ref=event_ref)
             if has_async:
                 await self._dispatch_async_work()
@@ -3412,11 +3409,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             has_async = (
                                 getattr(self.view_instance, "_async_pending", None) is not None
                             )
-                            await self._flush_push_events()
-                            await self._flush_flash()
-                            await self._flush_page_metadata()
-                            await self._flush_pending_layout()
-                            await self._flush_deferred()
+                            await self._flush_all_pending()
                             await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
                                 await self._dispatch_async_work()
@@ -3539,13 +3532,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             "event_name": event_name,
                         }
                     )
-                    await self._flush_push_events()
-                    await self._flush_flash()
-                    await self._flush_page_metadata()
-                    await self._flush_pending_layout()
-                    await self._flush_deferred()
-                    await self._flush_navigation()
-                    await self._flush_i18n()
+                    await self._flush_all_pending()
                 else:
                     # For component events, send full HTML instead of patches
                     # Component VDOM is separate from parent VDOM, causing path mismatches
@@ -4978,11 +4965,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # suppress the re-render cycle (e.g. sender ignoring its own broadcast).
                 if getattr(self.view_instance, "_skip_render", False):
                     self.view_instance._skip_render = False
-                    await self._flush_push_events()
-                    await self._flush_flash()
-                    await self._flush_page_metadata()
-                    await self._flush_pending_layout()
-                    await self._flush_deferred()
+                    await self._flush_all_pending()
                     await self._send_noop()
                     return
 
@@ -5010,11 +4993,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     )
                 else:
                     # Even if no patches, flush any push_events and flash messages
-                    await self._flush_push_events()
-                    await self._flush_flash()
-                    await self._flush_page_metadata()
-                    await self._flush_pending_layout()
-                    await self._flush_deferred()
+                    await self._flush_all_pending()
             finally:
                 self._render_lock.release()
 
@@ -5103,11 +5082,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                 if getattr(self.view_instance, "_skip_render", False):
                     self.view_instance._skip_render = False
-                    await self._flush_push_events()
-                    await self._flush_flash()
-                    await self._flush_page_metadata()
-                    await self._flush_pending_layout()
-                    await self._flush_deferred()
+                    await self._flush_all_pending()
                     await self._send_noop()
                     return
 
@@ -5126,11 +5101,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         source="broadcast",
                     )
                 else:
-                    await self._flush_push_events()
-                    await self._flush_flash()
-                    await self._flush_page_metadata()
-                    await self._flush_pending_layout()
-                    await self._flush_deferred()
+                    await self._flush_all_pending()
 
                 # v0.7.0 — If handle_info flipped an activity to visible,
                 # drain its queue in the same round-trip. The flush is
