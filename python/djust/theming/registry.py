@@ -124,7 +124,10 @@ class ThemeRegistry:
     def _do_discover(self):
         """Internal: load from built-in dicts, DJUST_THEMES setting, themes_dir."""
         # 1. Built-in presets
-        from .presets import THEME_PRESETS
+        # Import from _builtin_presets, NOT .presets — the latter would
+        # re-introduce the presets ↔ registry cycle (CodeQL alerts
+        # #2352/#2351/#1900/#1883).
+        from ._builtin_presets import THEME_PRESETS
 
         for name, preset in THEME_PRESETS.items():
             self._presets[name] = preset

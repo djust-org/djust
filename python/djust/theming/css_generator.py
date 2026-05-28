@@ -12,8 +12,13 @@ from .design_tokens import (
     generate_design_tokens_css,
     generate_design_tokens_root_css,
 )
-from .manager import get_theme_config
-from .presets import ThemeTokens, get_preset
+from ._types import ThemeTokens
+
+# NOTE: ``get_theme_config`` (from ``.manager``) and ``get_preset``
+# (from ``.presets``) are imported lazily at their call sites to avoid
+# the ``manager → theme_css_generator → css_generator → manager`` and
+# ``presets → registry → ... → css_generator → presets`` cyclic-import
+# SCCs that CodeQL flagged in alert #1883.
 
 
 class ThemeCSSGenerator:
@@ -37,6 +42,8 @@ class ThemeCSSGenerator:
             include_utilities: Include utility classes
             include_design_tokens: Include design system tokens (spacing, typography, etc.)
         """
+        from .presets import get_preset
+
         self.preset = get_preset(preset_name)
         self.custom_tokens = custom_tokens or {}
         self.include_base_styles = include_base_styles
@@ -534,6 +541,8 @@ pre code {
 
     def generate_css(self) -> str:
         """Generate complete CSS for the theme."""
+        from .manager import get_theme_config
+
         config = get_theme_config()
         use_layers = config.get("use_css_layers", True)
         layer_order = config.get("css_layer_order", "base, tokens, components, theme")
@@ -604,6 +613,8 @@ pre code {
         Returns:
             CSS string suitable for inlining in a <style> tag.
         """
+        from .manager import get_theme_config
+
         config = get_theme_config()
         use_layers = config.get("use_css_layers", True)
         layer_order = config.get("css_layer_order", "base, tokens, components, theme")
@@ -647,6 +658,8 @@ pre code {
         Returns:
             CSS string suitable for serving from a <link> tag.
         """
+        from .manager import get_theme_config
+
         config = get_theme_config()
         use_layers = config.get("use_css_layers", True)
 
@@ -691,6 +704,8 @@ pre code {
 
     def generate_for_preset(self, preset_name: str) -> str:
         """Generate CSS for a specific preset."""
+        from .presets import get_preset
+
         old_preset = self.preset
         self.preset = get_preset(preset_name)
         css = self.generate_css()
