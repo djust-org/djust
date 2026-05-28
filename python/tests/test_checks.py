@@ -196,18 +196,26 @@ class TestC003DaphneOrdering:
         c003 = [e for e in errors if e.id == "djust.C003"]
         assert len(c003) == 0
 
-    def test_c003_daphne_missing_info(self, settings):
-        """C003 Info when daphne is missing entirely."""
+    def test_c003_daphne_missing_info(self, settings, monkeypatch):
+        """C003 Info when daphne is missing AND no other ASGI server detected (#1630)."""
         settings.ASGI_APPLICATION = "myproject.asgi.application"
         settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
         settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
+
+        # Force the "no ASGI server" branch — pretend uvicorn/hypercorn are
+        # not importable either. Without this stub the test env's installed
+        # uvicorn would short-circuit and C003 (correctly, post-#1630) wouldn't fire.
+        from djust import checks
+
+        monkeypatch.setattr(checks, "_has_asgi_server", lambda: False)
 
         from djust.checks import check_configuration
 
         errors = check_configuration(None)
         c003 = [e for e in errors if e.id == "djust.C003"]
         assert len(c003) == 1
-        assert "not in INSTALLED_APPS" in c003[0].msg
+        assert "No ASGI server detected" in c003[0].msg
+        assert "uvicorn" in c003[0].hint.lower()
 
 
 class TestC004DjustInstalled:
@@ -4048,8 +4056,13 @@ class TestSuppressChecks:
         v008 = [e for e in errors if e.id == "djust.V008"]
         assert len(v008) == 0, "V008 should be suppressed"
 
-    def test_no_suppress_by_default(self, settings):
-        """Without suppress_checks, noisy checks still fire (backward compat)."""
+    def test_no_suppress_by_default(self, settings, monkeypatch):
+        """Without suppress_checks, noisy checks still fire (backward compat).
+
+        #1630: C003 also requires no ASGI server detected; we stub
+        ``_has_asgi_server`` so the test isolates the suppression-default
+        contract from the ASGI-server-presence broadening.
+        """
         settings.ASGI_APPLICATION = "myproject.asgi.application"
         settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
         settings.INSTALLED_APPS = ["django.contrib.staticfiles", "djust"]
@@ -4059,7 +4072,10 @@ class TestSuppressChecks:
         if hasattr(settings, "LIVEVIEW_CONFIG"):
             delattr(settings, "LIVEVIEW_CONFIG")
 
+        from djust import checks
         from djust.checks import check_configuration
+
+        monkeypatch.setattr(checks, "_has_asgi_server", lambda: False)
 
         errors = check_configuration(None)
         c003 = [e for e in errors if e.id == "djust.C003"]

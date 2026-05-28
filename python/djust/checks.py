@@ -113,6 +113,29 @@ def _is_check_suppressed(check_id: str) -> bool:
     return check_id.lower() in normalised
 
 
+def _has_asgi_server() -> bool:
+    """Return True if a recognized ASGI server is importable.
+
+    djust's README + ``djust-start`` canonical example use ``uvicorn``;
+    ``daphne`` is the Channels default; ``hypercorn`` is the third common
+    choice. C003 only fires when *none* is installed — telling a
+    uvicorn-based project to ``pip install daphne`` is incorrect guidance
+    (see #1630).
+
+    Probed via ``importlib.util.find_spec`` (no actual import) so a
+    detection failure can't ImportError-break ``manage.py check``.
+    """
+    import importlib.util
+
+    for name in ("daphne", "uvicorn", "hypercorn"):
+        try:
+            if importlib.util.find_spec(name) is not None:
+                return True
+        except (ImportError, ValueError):
+            continue
+    return False
+
+
 def _has_multiple_permission_groups(settings) -> bool:
     """Return True if the project appears to use a role/group-based auth model.
 
@@ -665,15 +688,21 @@ def check_configuration(app_configs, **kwargs):
                 )
             )
     elif not has_daphne and not _is_check_suppressed("djust.C003"):
-        errors.append(
-            DjustInfo(
-                "'daphne' is not in INSTALLED_APPS.",
-                hint="Consider adding 'daphne' to INSTALLED_APPS for ASGI support. "
-                "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['C003']}.",
-                id="djust.C003",
-                fix_hint="Add `'daphne'` to the beginning of INSTALLED_APPS in your Django settings file.",
+        # #1630: only fire C003 when NO ASGI server is detected. djust's
+        # canonical recommendation is uvicorn (README + djust-start), not
+        # daphne — so projects with uvicorn or hypercorn installed should
+        # not get nagged to install daphne.
+        if not _has_asgi_server():
+            errors.append(
+                DjustInfo(
+                    "No ASGI server detected (daphne, uvicorn, or hypercorn).",
+                    hint="Install one — uvicorn is recommended: "
+                    "`pip install 'uvicorn[standard]'`. "
+                    "Suppress this check with DJUST_CONFIG = {'suppress_checks': ['C003']}.",
+                    id="djust.C003",
+                    fix_hint="Install uvicorn: `uv pip install 'uvicorn[standard]'`.",
+                )
             )
-        )
 
     # C004 -- djust not in INSTALLED_APPS
     if "djust" not in installed:
