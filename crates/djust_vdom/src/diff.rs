@@ -345,39 +345,25 @@ fn diff_children(
         .map(|(i, n)| (new_off + i, n))
         .collect();
 
-    reconcile_siblings(&old_nb, &new_nb, old, new_off, ppath, pid, out);
+    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out);
 }
 
 /// Reconcile two lists of non-boundary siblings (each carrying its parent-
 /// absolute index). Chooses keyed reconciliation if any NEW sibling is keyed,
 /// otherwise positional/indexed.
-#[allow(clippy::too_many_arguments)]
 fn reconcile_siblings(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
-    old_slice: &[VNode],
-    new_off: usize,
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
 ) {
     let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
     if any_new_keyed {
-        reconcile_keyed(old_nb, new_nb, old_slice, new_off, ppath, pid, out);
+        reconcile_keyed(old_nb, new_nb, ppath, pid, out);
     } else {
-        reconcile_indexed(old_nb, new_nb, old_slice, new_off, ppath, pid, out);
+        reconcile_indexed(old_nb, new_nb, ppath, pid, out);
     }
-}
-
-/// `ref_d` heuristic: the djust_id of the OLD node occupying the new node's
-/// local slot — the reference sibling the client `insertBefore`s. Always
-/// resolves to a node present in the OLD tree (or is `None`), honoring the
-/// #1408 invariant. Mirrors the original's `old.get(new_idx)`.
-fn ref_d_for(old_slice: &[VNode], new_abs: usize, new_off: usize) -> Option<String> {
-    new_abs
-        .checked_sub(new_off)
-        .and_then(|local| old_slice.get(local))
-        .and_then(|n| n.djust_id.clone())
 }
 
 /// Positional reconciliation: pair the i-th old non-boundary sibling with the
@@ -385,12 +371,9 @@ fn ref_d_for(old_slice: &[VNode], new_abs: usize, new_off: usize) -> Option<Stri
 /// comment-vs-noncomment pair is remove+insert; surplus old -> RemoveChild,
 /// surplus new -> InsertChild. Used for fully-unkeyed lists; intentionally
 /// positional (no moves) — matches the original's indexed-diff behavior.
-#[allow(clippy::too_many_arguments)]
 fn reconcile_indexed(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
-    old_slice: &[VNode],
-    new_off: usize,
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
@@ -406,14 +389,7 @@ fn reconcile_indexed(
         } else {
             // Incompatible kind: remove old, insert new.
             push_remove_child(old_abs, old_node, ppath, pid, out);
-            push_insert_child(
-                new_abs,
-                new_node,
-                ppath,
-                pid,
-                ref_d_for(old_slice, new_abs, new_off),
-                out,
-            );
+            push_insert_child(new_abs, new_node, ppath, pid, out);
         }
     }
     // Surplus old -> remove (descending order so apply-index fallback is safe).
@@ -423,14 +399,7 @@ fn reconcile_indexed(
     }
     // Surplus new -> insert (ascending order).
     for &(new_abs, new_node) in new_nb.iter().skip(common) {
-        push_insert_child(
-            new_abs,
-            new_node,
-            ppath,
-            pid,
-            ref_d_for(old_slice, new_abs, new_off),
-            out,
-        );
+        push_insert_child(new_abs, new_node, ppath, pid, out);
     }
 }
 
@@ -445,12 +414,9 @@ fn reconcile_indexed(
 ///   MoveChild (#1260) — AND every effectively-unkeyed sibling that carries a
 ///   djust_id and changed absolute position also gets a MoveChild, so it is not
 ///   stranded by the keyed reorder.
-#[allow(clippy::too_many_arguments)]
 fn reconcile_keyed(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
-    old_slice: &[VNode],
-    new_off: usize,
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
@@ -541,14 +507,7 @@ fn reconcile_keyed(
             diff_node_into(old_node, new_node, &child_path, out);
         } else {
             push_remove_child(old_abs, old_node, ppath, pid, out);
-            push_insert_child(
-                new_abs,
-                new_node,
-                ppath,
-                pid,
-                ref_d_for(old_slice, new_abs, new_off),
-                out,
-            );
+            push_insert_child(new_abs, new_node, ppath, pid, out);
         }
     }
     for i in (common..old_pos.len()).rev() {
@@ -556,14 +515,7 @@ fn reconcile_keyed(
         push_remove_child(old_abs, old_node, ppath, pid, out);
     }
     for &(new_abs, new_node) in new_pos.iter().skip(common) {
-        push_insert_child(
-            new_abs,
-            new_node,
-            ppath,
-            pid,
-            ref_d_for(old_slice, new_abs, new_off),
-            out,
-        );
+        push_insert_child(new_abs, new_node, ppath, pid, out);
     }
 
     // 3) Recurse into matched effective-keyed pairs.
@@ -579,14 +531,7 @@ fn reconcile_keyed(
     for (new_abs, new_node) in new_nb.iter() {
         if let Some(k) = eff_key(new_node) {
             if !old_eff.contains_key(&k) {
-                push_insert_child(
-                    *new_abs,
-                    new_node,
-                    ppath,
-                    pid,
-                    ref_d_for(old_slice, *new_abs, new_off),
-                    out,
-                );
+                push_insert_child(*new_abs, new_node, ppath, pid, out);
             }
         }
     }
@@ -670,7 +615,6 @@ fn push_insert_child(
     new_node: &VNode,
     ppath: &[usize],
     pid: Option<&str>,
-    ref_d: Option<String>,
     out: &mut Vec<Patch>,
 ) {
     out.push(Patch::InsertChild {
@@ -678,7 +622,7 @@ fn push_insert_child(
         d: pid.map(|s| s.to_string()),
         index: new_abs,
         node: new_node.clone(),
-        ref_d,
+        ref_d: None,
     });
 }
 

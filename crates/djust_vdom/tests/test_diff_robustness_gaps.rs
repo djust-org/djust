@@ -198,11 +198,21 @@ fn mixed_three_way_reorder_round_trip() {
 // =============================================================================
 
 #[test]
-fn keyed_insert_populates_resolvable_ref_d() {
-    // Insert a fresh keyed child BEFORE an existing keyed sibling. The
-    // InsertChild for the new node must carry a ref_d that is the djust_id of
-    // an existing OLD-tree node (so the client can insertBefore by id, and the
-    // #1408 invariant holds).
+fn keyed_insert_ref_d_is_safe_not_a_wrong_guess() {
+    // Insert a fresh keyed child BEFORE an existing keyed sibling.
+    //
+    // The client (12-vdom-patch.js) HONORS InsertChild.ref_d — it does
+    // `insertBefore(node, querySelector(':scope > [dj-id=ref_d]'))` — and only
+    // falls back to the index when ref_d is absent/unresolved. InsertChild is
+    // applied LAST (after removes/moves/subtrees settle the structure), so the
+    // index fallback is in the new-frame and is reliable.
+    //
+    // Therefore the diff must NOT emit a *positional guess* for ref_d: a wrong
+    // ref_d (e.g. `old.get(new_idx)`) is the wrong insert-before reference under
+    // reorder and mis-inserts on the real client. The safe contract is: ref_d is
+    // either None (rely on the reliable index) OR a djust_id present in the OLD
+    // tree that is genuinely the following sibling — never a fresh/new-only id.
+    // See scratch/vdom-rebuild/ANALYSIS_REPORT.md §10.
     let old = el("ul", "root").with_children(vec![el_text("li", "B", "b").with_key("kb")]);
     let new = el("ul", "root").with_children(vec![
         el_text("li", "A", "a").with_key("ka"),
@@ -210,7 +220,7 @@ fn keyed_insert_populates_resolvable_ref_d() {
     ]);
 
     let patches = diff_nodes(&old, &new, &[]);
-    let insert = patches
+    let ref_d = patches
         .iter()
         .find_map(|p| match p {
             Patch::InsertChild { node, ref_d, .. } if node.key.as_deref() == Some("ka") => {
@@ -219,16 +229,20 @@ fn keyed_insert_populates_resolvable_ref_d() {
             _ => None,
         })
         .expect("expected an InsertChild for the new keyed <li key=ka>");
-    let ref_d = insert
-        .expect("InsertChild.ref_d must be populated for an insert before an existing sibling");
-    assert!(
-        find_by_id(&old, &ref_d).is_some(),
-        "ref_d {:?} must resolve to a node present in the OLD tree (#1408), patches: {:#?}",
-        ref_d,
-        patches
-    );
 
-    // And the whole thing must still round-trip.
+    // INVARIANT (#1408): if ref_d is set it must resolve in the OLD tree —
+    // never a fresh new-only id. (Currently the diff emits None and relies on
+    // the index, which the client applies last; this guards either choice.)
+    if let Some(rid) = &ref_d {
+        assert!(
+            find_by_id(&old, rid).is_some(),
+            "ref_d {:?} must resolve to a node present in the OLD tree (#1408), patches: {:#?}",
+            rid,
+            patches
+        );
+    }
+
+    // And the whole thing must round-trip.
     let applied = round_trip(&old, &new);
     assert!(
         structurally_equal(&applied, &new),

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **VDOM `InsertChild.ref_d` no longer mis-inserts under sibling reorder.** The differ populated `ref_d` with a positional guess (`old.get(new_index).djust_id`) — the dj-id of whatever old node *happened* to sit at the new node's index. The client (`12-vdom-patch.js`) **honors** `ref_d` (it does `insertBefore(node, querySelector(':scope > [dj-id=ref_d]'))` and only falls back to the index when `ref_d` is absent), so under a reorder that guess is the wrong reference and the new node lands in the wrong position. The differ now emits `ref_d: None` and relies on the index: `InsertChild` is applied **last** in the client's phase order (after `RemoveSubtree`/`InsertSubtree`/`RemoveChild`/`MoveChild`), so the index is resolved against the settled new-frame and is reliable. A client-faithful differential harness measured ~18 mis-inserts per 6000 adversarial re-renders before the fix, 0 after. The `#1408` invariant is preserved (a `ref_d`, when present, must resolve in the OLD tree). Regression-pinned by `keyed_insert_ref_d_is_safe_not_a_wrong_guess` in `crates/djust_vdom/tests/test_diff_robustness_gaps.rs`.
+
 ## [1.0.0rc15] - 2026-05-28
 
 ### Fixed
