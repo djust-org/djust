@@ -5362,6 +5362,36 @@ function isDjIfComment(text) {
 }
 
 /**
+ * Single source of truth for "does this child node count toward VDOM child
+ * indices" (#1655). Both the path walker (``getNodeByPath``) and the index
+ * resolver (``getSignificantChildren``) MUST agree, or index-based patches
+ * (InsertChild/RemoveChild/MoveChild) land on the wrong node — the #1640 bug,
+ * which existed because the two had independently-written copies of this rule
+ * that drifted. Mirrors `crates/djust_vdom/src/parser.rs`:
+ *   - elements always count;
+ *   - text nodes count unless ASCII-whitespace-only (NBSP   is
+ *     significant), except inside whitespace-preserving elements
+ *     (<pre>/<code>/<textarea>) where ALL text counts (preserveWhitespace=true);
+ *   - ONLY dj-if-family boundary comments count; the Rust parser drops every
+ *     other HTML comment, so a plain <!-- comment --> must NOT shift indices.
+ *
+ * @param {Node} child
+ * @param {boolean} [preserveWhitespace=false] — true inside pre/code/textarea.
+ * @returns {boolean}
+ */
+function isSignificantChild(child, preserveWhitespace = false) {
+    if (child.nodeType === Node.ELEMENT_NODE) return true;
+    if (child.nodeType === Node.TEXT_NODE) {
+        if (preserveWhitespace) return true;
+        return (/[^ \t\n\r\f]/.test(child.textContent));
+    }
+    if (child.nodeType === Node.COMMENT_NODE) {
+        return isDjIfComment(child.textContent);
+    }
+    return false;
+}
+
+/**
  * Save the current focus state (active element, selection, scroll position).
  * Call before DOM mutations that may destroy focus. Pairs with restoreFocusState().
  *
@@ -5516,25 +5546,12 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
 
     for (let i = 0; i < path.length; i++) {
         const index = path[i]; // eslint-disable-line security/detect-object-injection -- path is a server-provided integer array
-        const children = Array.from(node.childNodes).filter(child => {
-            if (child.nodeType === Node.ELEMENT_NODE) return true;
-            if (child.nodeType === Node.TEXT_NODE) {
-                // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
-                // Only filter out ASCII whitespace-only text nodes (space, tab, newline, CR).
-                // JS \s includes \u00A0, so we use an explicit ASCII whitespace pattern instead.
-                return (/[^ \t\n\r\f]/.test(child.textContent));
-            }
-            // Only include `dj-if`-family comments — the Rust VDOM
-            // parser preserves these for diffing stability (#559) and for
-            // boundary markers (#1358 Iter 1) but drops all other HTML
-            // comments. Regular comments (<!-- Hero Section --> etc.) must
-            // be excluded to keep path indices aligned. The predicate
-            // mirrors `crates/djust_vdom/src/parser.rs:494-499`.
-            if (child.nodeType === Node.COMMENT_NODE) {
-                return isDjIfComment(child.textContent);
-            }
-            return false;
-        });
+        // Shared significant-child predicate (#1655) — MUST match
+        // getSignificantChildren so path-based and index-based patch resolution
+        // agree (the #1640 drift). Path traversal never preserves whitespace.
+        const children = Array.from(node.childNodes).filter((child) =>
+            isSignificantChild(child)
+        );
 
         if (index >= children.length) {
             if (globalThis.djustDebug || window.DEBUG_MODE) {
@@ -6449,28 +6466,11 @@ function getSignificantChildren(node) {
     // Check if we're inside a whitespace-preserving element
     const preserveWhitespace = isWhitespacePreserving(node);
 
-    return Array.from(node.childNodes).filter(child => {
-        if (child.nodeType === Node.ELEMENT_NODE) return true;
-        if (child.nodeType === Node.TEXT_NODE) {
-            // Preserve all text nodes inside pre/code/textarea
-            if (preserveWhitespace) return true;
-            // Preserve non-breaking spaces (\u00A0) as significant, matching Rust VDOM parser.
-            // Only filter out ASCII whitespace-only text nodes.
-            return (/[^ \t\n\r\f]/.test(child.textContent));
-        }
-        // Count ONLY dj-if-family comments — the Rust VDOM parser preserves
-        // <!--dj-if-->/<!--/dj-if--> boundary markers and counts them in child
-        // indices (#559), but DROPS all other HTML comments. Counting regular
-        // comments here made index-based patches (InsertChild/RemoveChild/
-        // MoveChild) disagree with getNodeByPath (which is dj-if-only) and with
-        // the server's VDOM indices whenever a template had a plain
-        // <!-- comment --> among siblings (#1640). Predicate mirrors
-        // getNodeByPath and crates/djust_vdom/src/parser.rs.
-        if (child.nodeType === Node.COMMENT_NODE) {
-            return isDjIfComment(child.textContent);
-        }
-        return false;
-    });
+    // Shared significant-child predicate (#1655) — see getNodeByPath; passing
+    // preserveWhitespace keeps the pre/code/textarea behavior.
+    return Array.from(node.childNodes).filter((child) =>
+        isSignificantChild(child, preserveWhitespace)
+    );
 }
 
 /**
@@ -6748,6 +6748,7 @@ window.djust._extractDjIfMarkerId = _extractDjIfMarkerId;
 
 // Export for testing
 window.djust.getSignificantChildren = getSignificantChildren;
+window.djust.isSignificantChild = isSignificantChild;
 window.djust._applySinglePatch = applySinglePatch;
 window.djust._stampDjIds = _stampDjIds;
 window.djust._getNodeByPath = getNodeByPath;

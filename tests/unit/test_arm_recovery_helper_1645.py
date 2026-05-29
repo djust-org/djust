@@ -52,3 +52,29 @@ def test_render_send_paths_route_through_arm_recovery():
             f"{name} still hand-assigns _recovery_html; route it through "
             f"_arm_recovery instead (#1645)."
         )
+
+
+def test_arm_recovery_call_site_count_matches_known_send_paths():
+    """Count-based guard (#1655, Action #1125): pin the number of
+    ``self._arm_recovery(...)`` call sites so a NEW render-send path can't be
+    added without consciously arming the recovery baseline (the #1639 shape:
+    a send path that renders+sends but forgets to arm). A new path that arms
+    bumps this count (update the list + N below); a new path that FORGETS to
+    arm leaves the count unchanged, but is caught by
+    ``test_render_send_paths_route_through_arm_recovery`` extended with its name.
+
+    Known sites (4): _run_async_work patches-branch + full-HTML-fallback,
+    handle_event, server_push.
+    """
+    import inspect
+
+    import djust.websocket as ws_mod
+
+    src = inspect.getsource(ws_mod)
+    call_sites = src.count("self._arm_recovery(")
+    assert call_sites == 4, (
+        f"expected 4 self._arm_recovery() call sites (the known render-send "
+        f"paths), found {call_sites}. If you added a render-send path, arm the "
+        f"recovery baseline there and update this count + the enumerated list "
+        f"(#1655/#1645/#1639)."
+    )
