@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc14] - 2026-05-28
+
 ### Added
 
 - **`LiveViewTestClient.assert_http_ws_djid_parity()` — test-infra harness for HTTP-GET vs WebSocket-mount `dj-id` parity (#1642).** Builds two independent instances of a view (one exercising the HTTP initial-page path via `render_full_template` then `render_with_diff`; one the WebSocket-mount baseline via `render_with_diff` only) and asserts they assign an identical `dj-id` baseline in the `dj-root` subtree. A divergence is the `getNodeByPath → null` first-event patch-miss shape investigated in #1641; this locks the #1370 "marker IDs match between the initial HTTP DOM and subsequent WS diffs" invariant against regression and lets the divergence hypothesis be tested framework-side. See `docs/website/guides/testing.md`.
