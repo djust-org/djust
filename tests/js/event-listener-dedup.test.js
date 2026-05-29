@@ -71,8 +71,10 @@ describe('Event listener deduplication (issue #315)', () => {
                 return origPlus(type, ...args);
             };
 
-            // Simulate 5 server responses each calling initReactCounters
-            window.eval('initReactCounters(); initReactCounters(); initReactCounters(); initReactCounters(); initReactCounters();');
+            // Simulate 5 server responses each calling initReactCounters.
+            // The bundle is IIFE-wrapped (#1635), so internals are reached via
+            // the exposed namespace, not bare globals.
+            for (let i = 0; i < 5; i++) window.djust.initReactCounters();
 
             expect(minusCount).toBe(0); // container was already initialized before spy
             expect(plusCount).toBe(0);
@@ -81,9 +83,9 @@ describe('Event listener deduplication (issue #315)', () => {
         it('initReactCounters called 5 times: counter increments by 1 per click, not 5', () => {
             // Re-initialize with a fresh container by calling initReactCounters before setup
             // then verify the count increments correctly
-            window.eval('initReactCounters();');
-            window.eval('initReactCounters();');
-            window.eval('initReactCounters();');
+            window.djust.initReactCounters();
+            window.djust.initReactCounters();
+            window.djust.initReactCounters();
 
             const container = window.document.querySelector('[data-react-component="Counter"]');
             const display = container.querySelector('.counter-display');
@@ -191,7 +193,9 @@ describe('Event listener deduplication (issue #315)', () => {
 
             // The closure should now dispatch handler_b, not handler_a.
             // We verify by checking parseEventHandler output on the current attribute.
-            const result = window.eval('parseEventHandler(document.querySelector("[data-dj-id=btn1]").getAttribute("dj-click") || "")');
+            const rawClick =
+                window.document.querySelector('[data-dj-id=btn1]').getAttribute('dj-click') || '';
+            const result = window.djust.parseEventHandler(rawClick);
             expect(result.name).toBe('handler_b');
         });
     });

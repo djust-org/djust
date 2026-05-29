@@ -218,9 +218,13 @@ function parseSingleArgument(value) {
     return value;
 }
 
-// Export for global access and testing
+// Export for global access and testing. Explicit exports are required now
+// that the bundle is IIFE-wrapped (#1635) — top-level functions are no longer
+// implicit globals, so anything callable from outside the bundle (tests,
+// re-init hooks) must be attached to the namespace here.
 window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
+window.djust.initReactCounters = initReactCounters;
 
 /**
  * Extract parameters from element data-* attributes with optional type coercion.
