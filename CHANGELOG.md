@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc15] - 2026-05-28
+
 ### Fixed
 
 - **`@permission_required` event handlers no longer raise `SynchronousOnlyOperation` (#1648).** Sibling of #1638: the per-event handler-permission check (`_validate_event_security`) called `check_handler_permission` synchronously from an `async def`. For a handler decorated with `@permission_required`, that calls `user.has_perms()`, which under Django's default `ModelBackend` queries the DB for a non-superuser — raising `SynchronousOnlyOperation` in the event loop (and, unlike the object-permission path, with no fail-closed catch, so it propagated). The call is now wrapped in `sync_to_async`, mirroring #1638 and the mount path.
