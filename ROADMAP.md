@@ -3452,6 +3452,25 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 **Not in this bucket:** #1636 (production half fixed in PR #1639; remainder tracked by #1641), #1641 (blocked on reporter's minimal repo).
 
+**Shipped:** all six PRs (#1646/#1649/#1650/#1651/#1652/#1653) merged; released in **v1.0.0rc14**. A follow-up drain (#1647/#1648/#1654/#1655 → PRs #1656/#1657/#1658/#1659) landed post-rc14 and ships in the next RC.
+
+---
+
+### Milestone: v1.1.0 — post-1.0 backlog
+
+*Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | Custom filter `mark_safe()` output is HTML-escaped (#1660) | djust's renderer decides auto-escape by filter *name* (static `is_safe`), never by the filter *result's* runtime `SafeString`-ness — unlike Django's `render_value_in_context`. | **Designed** (see #1660 comment): thread runtime-`SafeString` from `apply_custom_filter` (`filter_registry.rs`) through the filter chain to the renderer escape decision (a `Value::Safe` variant / returned safeness flag) + maturin rebuild. **Security-critical** (mis-threaded safeness = XSS) → needs a full escaping-test matrix (text/attr context, multi-filter chains, autoescape-off). Workaround today: `@register.filter(is_safe=True)` or pre-render + `\|safe`. |
+| **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. | Small enhancement; drain-able when prioritized. |
+| **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. | Docs writing. |
+| **P2** | bug-capture iter B — replay viewer (#1562) | `/__djust__/replay/<blob>` read-only viewer. | Feature; needs design. |
+| **P2** | bug-capture iter C — Redis store + CLI + PII scrub (#1561) | Persistent capture store + `djust replay` CLI. | Feature; multi-day. |
+| **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
+
 ---
 
 ## Investigate & Decide
