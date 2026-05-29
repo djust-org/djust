@@ -3,7 +3,7 @@
 from django.conf import settings
 from django.core.checks import Error, Warning, register, Tags
 
-from .manager import get_theme_config
+from ._config import get_theme_config
 from .accessibility import AccessibilityValidator
 from .registry import get_registry
 

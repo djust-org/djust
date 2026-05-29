@@ -541,7 +541,7 @@ pre code {
 
     def generate_css(self) -> str:
         """Generate complete CSS for the theme."""
-        from .manager import get_theme_config
+        from ._config import get_theme_config
 
         config = get_theme_config()
         use_layers = config.get("use_css_layers", True)
@@ -613,7 +613,7 @@ pre code {
         Returns:
             CSS string suitable for inlining in a <style> tag.
         """
-        from .manager import get_theme_config
+        from ._config import get_theme_config
 
         config = get_theme_config()
         use_layers = config.get("use_css_layers", True)
@@ -658,7 +658,7 @@ pre code {
         Returns:
             CSS string suitable for serving from a <link> tag.
         """
-        from .manager import get_theme_config
+        from ._config import get_theme_config
 
         config = get_theme_config()
         use_layers = config.get("use_css_layers", True)

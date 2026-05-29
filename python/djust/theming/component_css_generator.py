@@ -120,7 +120,7 @@ def generate_component_css(prefix: str = "") -> str:
     Returns:
         Complete component CSS string.
     """
-    from .manager import get_theme_config
+    from ._config import get_theme_config
 
     css = _read_static_css()
     css = _apply_prefix(css, prefix)

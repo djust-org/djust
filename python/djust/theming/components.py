@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from django.template.loader import select_template
 from django.utils.safestring import mark_safe
 
-from .manager import ThemeManager, get_theme_config
+from ._config import get_theme_config
+from .manager import ThemeManager
 from .template_resolver import _get_component_candidates, _get_theme_template_candidates
 
 

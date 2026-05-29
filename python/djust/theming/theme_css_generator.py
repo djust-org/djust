@@ -14,7 +14,7 @@ Sources design data from DesignSystem objects in theme_packs.py.
 
 from functools import lru_cache
 
-from .manager import get_theme_config
+from ._config import get_theme_config
 from .theme_packs import DesignSystem, get_design_system
 from .css_generator import ThemeCSSGenerator as ColorCSSGenerator
 

@@ -200,7 +200,7 @@ class ThemeRegistry:
         """Load theme.toml manifests from configured themes_dir."""
         from django.conf import settings
 
-        from .manager import get_theme_config
+        from ._config import get_theme_config
 
         config = get_theme_config()
         themes_dir_rel = config.get("themes_dir", "themes/")

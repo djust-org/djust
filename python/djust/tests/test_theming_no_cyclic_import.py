@@ -135,3 +135,111 @@ class TestThemingNoCyclicImport:
         assert get_preset("blue").name == "blue"
         # Unknown name falls back to DEFAULT_THEME (resolution step 3)
         assert get_preset("definitely-not-a-real-theme-xyz").name == "default"
+
+
+class TestConfigReaderIsLeaf:
+    """Gate the #2351/#2357-#2362 cycle-break: ``get_theme_config`` lives in the
+    leaf ``_config`` module and NO theming module imports it from ``manager``.
+
+    The earlier fix (#2352) broke the *eager* SCC by making cross-module imports
+    lazy, but CodeQL's ``py/cyclic-import`` counts lazy edges too — so the
+    ``→ manager.get_theme_config`` edges from registry / css_generator /
+    theme_css_generator / pack_css_generator / component_css_generator / checks /
+    components kept the SCC alive in CodeQL's view. Extracting ``get_theme_config``
+    to the leaf ``_config`` removed every one of those edges. These tests gate
+    the static import graph (lazy + eager) so the cycle can't silently return.
+    """
+
+    def test_config_module_is_a_leaf(self):
+        """``_config`` must import NOTHING from the cycle modules — it's the leaf
+        registry/css_generator read instead of manager."""
+        import ast
+
+        src = (THEMING_DIR / "_config.py").read_text()
+        cycle_mods = {
+            "presets",
+            "registry",
+            "manager",
+            "css_generator",
+            "theme_css_generator",
+            "pack_css_generator",
+            "component_css_generator",
+        }
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
+                base = node.module.split(".")[0]
+                assert base not in cycle_mods, (
+                    f"_config.py must stay a leaf but imports .{base} — "
+                    "that would re-create the cyclic-import SCC (#2351)."
+                )
+
+    def test_no_theming_module_imports_get_theme_config_from_manager(self):
+        """Every reader of ``get_theme_config`` must import it from ``._config``,
+        not ``.manager`` — importing from manager re-creates the
+        manager-centered cycles CodeQL flagged (#2357-#2362)."""
+        import ast
+
+        offenders = []
+        for path in THEMING_DIR.glob("*.py"):
+            if path.name == "manager.py":
+                continue  # manager legitimately re-exports it from _config
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and node.level == 1
+                    and node.module
+                    and node.module.split(".")[0] == "manager"
+                    and any(alias.name == "get_theme_config" for alias in node.names)
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert offenders == [], (
+            "these modules import get_theme_config from .manager (re-creates the "
+            f"cyclic-import SCC #2357-#2362); import from ._config instead: {offenders}"
+        )
+
+    def test_manager_reexports_get_theme_config_for_backcompat(self):
+        """``from djust.theming.manager import get_theme_config`` must keep
+        working (back-compat) and be the SAME object as the _config source."""
+        from djust.theming._config import get_theme_config as cfg_src
+        from djust.theming.manager import get_theme_config as mgr_reexport
+
+        assert mgr_reexport is cfg_src
+
+    def test_flagged_modules_are_outside_every_import_scc(self):
+        """presets / manager / css_generator (the files CodeQL flagged) must not
+        be in ANY strongly-connected component of the theming import graph
+        (lazy + eager). The pre-existing registry↔theme_packs / registry↔manifest
+        SCC is allowed — it's separate and was never flagged — but the flagged
+        modules must be outside it."""
+        import ast
+
+        mods = {p.stem for p in THEMING_DIR.glob("*.py") if p.stem != "__init__"}
+        edges = {}
+        for m in mods:
+            deps = set()
+            for node in ast.walk(ast.parse((THEMING_DIR / f"{m}.py").read_text())):
+                if isinstance(node, ast.ImportFrom) and node.level == 1 and node.module:
+                    base = node.module.split(".")[0]
+                    if base in mods:
+                        deps.add(base)
+            edges[m] = deps
+
+        # Tarjan-free reachability SCC test: m is in an SCC iff it can reach
+        # itself through >=1 edge.
+        def reaches(start, target):
+            seen, stack = set(), [start]
+            while stack:
+                u = stack.pop()
+                for v in edges.get(u, ()):
+                    if v == target:
+                        return True
+                    if v not in seen:
+                        seen.add(v)
+                        stack.append(v)
+            return False
+
+        for m in ("presets", "manager", "css_generator"):
+            assert not reaches(m, m), (
+                f"{m} is in an import cycle (CodeQL py/cyclic-import #2351/"
+                f"#2357-#2362 would re-open). Edges from {m}: {sorted(edges[m])}"
+            )

@@ -8,7 +8,7 @@ framework-aware component overrides, and all other styling dimensions from a The
 from functools import lru_cache
 
 from ..config import config as djust_config
-from .manager import get_theme_config
+from ._config import get_theme_config
 from .theme_packs import get_theme_pack, get_design_system
 from .theme_css_generator import CompleteThemeCSSGenerator
 
