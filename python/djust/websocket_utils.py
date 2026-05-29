@@ -209,7 +209,11 @@ async def _validate_event_security(
         )
         await ws.send_error("Permission denied")
         return None
-    if owner_request and not check_handler_permission(handler, owner_request):
+    # Wrap in sync_to_async (#1648, sibling of #1638): for a @permission_required
+    # handler, check_handler_permission calls user.has_perms(), which under the
+    # default ModelBackend queries the DB for a non-superuser — raising
+    # SynchronousOnlyOperation when called bare from this async def.
+    if owner_request and not await sync_to_async(check_handler_permission)(handler, owner_request):
         await ws.send_error("Permission denied")
         return None
 
