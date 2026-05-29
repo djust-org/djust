@@ -162,6 +162,27 @@ client.trigger_info({"type": "db_notify", "channel": "orders", "payload": {"even
 client.assert_state(count=1)
 ```
 
+### `assert_http_ws_djid_parity(**mount_kwargs)`
+
+Asserts that the HTTP-GET render path and the WebSocket-mount render path assign
+the same `dj-id` baseline for a view. In production the initial HTTP `GET`
+renders the DOM the browser holds and establishes a VDOM baseline, while a
+*separate* instance handles the WebSocket mount and establishes its own
+baseline; the first WS event ships patches keyed by `dj-id`. If the two
+baselines diverge, those patches miss `dj-id` resolution and fall back to path
+traversal — a `getNodeByPath → null` patch failure.
+
+```python
+def test_dashboard_djid_parity():
+    LiveViewTestClient(ProjectDashboardView).assert_http_ws_djid_parity(slug="acme")
+```
+
+Reach for this when a view renders differently on first paint vs. reconnect, or
+when you suspect a `1/N patches failed` console warning traces to an HTTP-vs-WS
+`dj-id` mismatch. The harness builds two independent instances and compares the
+ordered `dj-id` sequence in the `dj-root` subtree; it returns that sequence so
+you can make further assertions.
+
 ## Putting it together
 
 A typical integration test combines several of these:
