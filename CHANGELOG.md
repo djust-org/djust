@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`live_redirect` to a different view now mounts the correct target (#1647).** The client's `resolveViewPath()` falls back to the current container's `dj-view` — the **source** view — when `window.djust._routeMap` is empty, which is the default for apps using plain Django `path()` URLconfs (no `live_session()`). The server trusted that client-supplied class in the `live_redirect_mount` frame, instantiated the *source* view against the destination URL's request, and raised "Failed to load view. Please refresh the page." `handle_live_redirect_mount` now resolves the destination view server-side from the URL via Django's URL dispatcher and overrides the client-supplied `view` when the URL maps to a djust `LiveView` (falling back to the client value otherwise, so `live_session()` route maps are unaffected). **`live_session()` is no longer a hidden prerequisite for `live_redirect` across plain `path()` URLconfs.**
+
 ## [1.0.0rc14] - 2026-05-28
 
 ### Added
