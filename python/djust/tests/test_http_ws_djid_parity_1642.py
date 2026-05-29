@@ -21,6 +21,8 @@ the next investigator can drop a suspect view in and get a definitive answer.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from djust import LiveView
@@ -92,3 +94,41 @@ def test_parity_harness_extracts_djroot_djids():
         '<div dj-root dj-id="0"><span dj-id="1">x</span><b dj-id="2">y</b></div>'
     )
     assert LiveViewTestClient._djroot_djids(html) == ["0", "1", "2"]
+
+
+@pytest.mark.django_db
+def test_parity_harness_reports_divergence_empirical_canary():
+    """Empirical canary (#1654, Action #1468 spirit): the harness passes for
+    every real view shape today, so its catch-power rests on the
+    path-differential argument. Prove it actually REPORTS a divergence by
+    forcing one — patch the dj-id extraction so the HTTP and WS baselines differ
+    — and assert ``assert_http_ws_djid_parity`` raises with a useful message.
+
+    Without this, a future refactor that silently neutered the comparison (e.g.
+    always returning the same list, or comparing an instance against itself)
+    would leave the harness green-but-toothless and this whole test file would
+    still pass.
+    """
+    client = LiveViewTestClient(_SimpleView)
+
+    # First call (HTTP baseline) → ["0","1"]; second call (WS baseline) → ["0","2"].
+    diverging = [["0", "1"], ["0", "2"]]
+    with patch.object(LiveViewTestClient, "_djroot_djids", side_effect=diverging):
+        with pytest.raises(AssertionError) as exc:
+            client.assert_http_ws_djid_parity()
+
+    msg = str(exc.value)
+    # The diagnostic must name both baselines so a real divergence is debuggable.
+    assert "divergence" in msg.lower()
+    assert "['0', '1']" in msg and "['0', '2']" in msg
+
+
+@pytest.mark.django_db
+def test_parity_harness_passes_when_baselines_match_canary_control():
+    """Control for the canary: identical patched baselines must NOT raise — so
+    the canary's failure above is attributable to the divergence, not the patch
+    machinery itself."""
+    client = LiveViewTestClient(_SimpleView)
+    with patch.object(LiveViewTestClient, "_djroot_djids", side_effect=[["0", "1"], ["0", "1"]]):
+        ids = client.assert_http_ws_djid_parity()
+    assert ids == ["0", "1"]
