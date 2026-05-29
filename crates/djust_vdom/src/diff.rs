@@ -345,34 +345,52 @@ fn diff_children(
         .map(|(i, n)| (new_off + i, n))
         .collect();
 
-    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out);
+    reconcile_siblings(&old_nb, &new_nb, old, new_off, ppath, pid, out);
 }
 
 /// Reconcile two lists of non-boundary siblings (each carrying its parent-
 /// absolute index). Chooses keyed reconciliation if any NEW sibling is keyed,
 /// otherwise positional/indexed.
+#[allow(clippy::too_many_arguments)]
 fn reconcile_siblings(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
+    old_slice: &[VNode],
+    new_off: usize,
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
 ) {
     let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
     if any_new_keyed {
-        reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+        reconcile_keyed(old_nb, new_nb, old_slice, new_off, ppath, pid, out);
     } else {
-        reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+        reconcile_indexed(old_nb, new_nb, old_slice, new_off, ppath, pid, out);
     }
+}
+
+/// `ref_d` heuristic: the djust_id of the OLD node occupying the new node's
+/// local slot — the reference sibling the client `insertBefore`s. Always
+/// resolves to a node present in the OLD tree (or is `None`), honoring the
+/// #1408 invariant. Mirrors the original's `old.get(new_idx)`.
+fn ref_d_for(old_slice: &[VNode], new_abs: usize, new_off: usize) -> Option<String> {
+    new_abs
+        .checked_sub(new_off)
+        .and_then(|local| old_slice.get(local))
+        .and_then(|n| n.djust_id.clone())
 }
 
 /// Positional reconciliation: pair the i-th old non-boundary sibling with the
 /// i-th new one. Compatible pairs recurse (Replace on tag mismatch); a
 /// comment-vs-noncomment pair is remove+insert; surplus old -> RemoveChild,
-/// surplus new -> InsertChild.
+/// surplus new -> InsertChild. Used for fully-unkeyed lists; intentionally
+/// positional (no moves) — matches the original's indexed-diff behavior.
+#[allow(clippy::too_many_arguments)]
 fn reconcile_indexed(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
+    old_slice: &[VNode],
+    new_off: usize,
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
@@ -388,7 +406,14 @@ fn reconcile_indexed(
         } else {
             // Incompatible kind: remove old, insert new.
             push_remove_child(old_abs, old_node, ppath, pid, out);
-            push_insert_child(new_abs, new_node, ppath, pid, out);
+            push_insert_child(
+                new_abs,
+                new_node,
+                ppath,
+                pid,
+                ref_d_for(old_slice, new_abs, new_off),
+                out,
+            );
         }
     }
     // Surplus old -> remove (descending order so apply-index fallback is safe).
@@ -398,23 +423,49 @@ fn reconcile_indexed(
     }
     // Surplus new -> insert (ascending order).
     for &(new_abs, new_node) in new_nb.iter().skip(common) {
-        push_insert_child(new_abs, new_node, ppath, pid, out);
+        push_insert_child(
+            new_abs,
+            new_node,
+            ppath,
+            pid,
+            ref_d_for(old_slice, new_abs, new_off),
+            out,
+        );
     }
 }
 
-/// Keyed reconciliation with LIS-based move minimization. In the MIXED case
-/// (keyed and unkeyed siblings interleaved), the LIS-skip is disabled and every
-/// surviving keyed child whose absolute index changed gets a MoveChild (#1260).
+/// Keyed reconciliation with LIS-based move minimization.
+///
+/// - DUPLICATE KEYS (a key appearing >1 time on either side) are *ambiguous*:
+///   keyed matching can't disambiguate them, so their siblings are reconciled
+///   positionally instead (preventing a last-wins map from matching two new
+///   nodes onto one old node and emitting a corrupting Replace).
+/// - In the MIXED case (any effectively-unkeyed sibling interleaved with keyed
+///   ones) the LIS-skip is disabled — every displaced keyed child gets a
+///   MoveChild (#1260) — AND every effectively-unkeyed sibling that carries a
+///   djust_id and changed absolute position also gets a MoveChild, so it is not
+///   stranded by the keyed reorder.
+#[allow(clippy::too_many_arguments)]
 fn reconcile_keyed(
     old_nb: &[(usize, &VNode)],
     new_nb: &[(usize, &VNode)],
+    old_slice: &[VNode],
+    new_off: usize,
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
 ) {
-    let any_new_unkeyed = new_nb.iter().any(|(_, n)| n.key.is_none());
-    let mixed = any_new_unkeyed;
-    if mixed {
+    // Keys appearing more than once on either side are ambiguous (warns DJE-051).
+    let ambiguous = ambiguous_keys(old_nb, new_nb);
+    let eff_key = |n: &VNode| -> Option<String> {
+        match n.key.as_deref() {
+            Some(k) if !ambiguous.contains(k) => Some(k.to_string()),
+            _ => None,
+        }
+    };
+
+    // DJE-050: a raw unkeyed sibling alongside keyed ones.
+    if new_nb.iter().any(|(_, n)| n.key.is_none()) && new_nb.iter().any(|(_, n)| n.key.is_some()) {
         vdom_trace!("DJE-050: Mixed keyed/unkeyed siblings during keyed diff");
         tracing::warn!(
             "DJE-050: Mixed keyed/unkeyed siblings detected during keyed diff; \
@@ -422,62 +473,100 @@ fn reconcile_keyed(
         );
     }
 
-    // Build key -> position-in-list maps (last-wins; warn on duplicates).
-    let old_key_pos = build_key_map(old_nb, "old");
-    let new_key_pos = build_key_map(new_nb, "new");
+    // The LIS-skip is only sound for fully-(effectively-)keyed lists.
+    let has_unkeyed = old_nb.iter().any(|(_, n)| eff_key(n).is_none())
+        || new_nb.iter().any(|(_, n)| eff_key(n).is_none());
 
-    // Matched keyed pairs, in NEW order: (old_list_pos, new_list_pos).
+    // Effective-key -> list position maps (each effective key is unique).
+    let mut old_eff: AHashMap<String, usize> = AHashMap::new();
+    for (pos, (_, n)) in old_nb.iter().enumerate() {
+        if let Some(k) = eff_key(n) {
+            old_eff.insert(k, pos);
+        }
+    }
+    let mut new_eff: AHashMap<String, usize> = AHashMap::new();
+    for (pos, (_, n)) in new_nb.iter().enumerate() {
+        if let Some(k) = eff_key(n) {
+            new_eff.insert(k, pos);
+        }
+    }
+
+    // Matched effective-keyed pairs, in NEW order: (old_list_pos, new_list_pos).
     let mut matched: Vec<(usize, usize)> = Vec::new();
     for (np, (_, n)) in new_nb.iter().enumerate() {
-        if let Some(k) = n.key.as_deref() {
-            if let Some(&op) = old_key_pos.get(k) {
+        if let Some(k) = eff_key(n) {
+            if let Some(&op) = old_eff.get(&k) {
                 matched.push((op, np));
             }
         }
     }
 
-    // 1) Remove old keyed children not present in new.
+    // 1) Remove old effective-keyed children absent from new.
     for &(old_abs, old_node) in old_nb.iter() {
-        if let Some(k) = old_node.key.as_deref() {
-            if !new_key_pos.contains_key(k) {
+        if let Some(k) = eff_key(old_node) {
+            if !new_eff.contains_key(&k) {
                 push_remove_child(old_abs, old_node, ppath, pid, out);
             }
         }
     }
 
-    // 2) Reconcile unkeyed siblings positionally (independent of keyed).
-    let old_unkeyed: Vec<(usize, &VNode)> = old_nb
+    // 2) Positional group = effectively-unkeyed siblings (key None OR ambiguous).
+    //    Move a repositioned member that carries a djust_id (#1260 generalization).
+    let old_pos: Vec<(usize, &VNode)> = old_nb
         .iter()
-        .filter(|(_, n)| n.key.is_none())
+        .filter(|(_, n)| eff_key(n).is_none())
         .copied()
         .collect();
-    let new_unkeyed: Vec<(usize, &VNode)> = new_nb
+    let new_pos: Vec<(usize, &VNode)> = new_nb
         .iter()
-        .filter(|(_, n)| n.key.is_none())
+        .filter(|(_, n)| eff_key(n).is_none())
         .copied()
         .collect();
-    let common = old_unkeyed.len().min(new_unkeyed.len());
+    let common = old_pos.len().min(new_pos.len());
     for i in 0..common {
-        let (old_abs, old_node) = old_unkeyed[i];
-        let (new_abs, new_node) = new_unkeyed[i];
+        let (old_abs, old_node) = old_pos[i];
+        let (new_abs, new_node) = new_pos[i];
         if positionally_compatible(old_node, new_node) {
+            if old_abs != new_abs && old_node.djust_id.is_some() {
+                out.push(Patch::MoveChild {
+                    path: ppath.to_vec(),
+                    d: pid.map(|s| s.to_string()),
+                    from: old_abs,
+                    to: new_abs,
+                    child_d: old_node.djust_id.clone(),
+                });
+            }
             let mut child_path = ppath.to_vec();
             child_path.push(new_abs);
             diff_node_into(old_node, new_node, &child_path, out);
         } else {
             push_remove_child(old_abs, old_node, ppath, pid, out);
-            push_insert_child(new_abs, new_node, ppath, pid, out);
+            push_insert_child(
+                new_abs,
+                new_node,
+                ppath,
+                pid,
+                ref_d_for(old_slice, new_abs, new_off),
+                out,
+            );
         }
     }
-    for i in (common..old_unkeyed.len()).rev() {
-        let (old_abs, old_node) = old_unkeyed[i];
+    for i in (common..old_pos.len()).rev() {
+        let (old_abs, old_node) = old_pos[i];
         push_remove_child(old_abs, old_node, ppath, pid, out);
     }
-    for &(new_abs, new_node) in new_unkeyed.iter().skip(common) {
-        push_insert_child(new_abs, new_node, ppath, pid, out);
+    for &(new_abs, new_node) in new_pos.iter().skip(common) {
+        push_insert_child(
+            new_abs,
+            new_node,
+            ppath,
+            pid,
+            ref_d_for(old_slice, new_abs, new_off),
+            out,
+        );
     }
 
-    // 3) Recurse into matched keyed pairs (emit their inner patches).
+    // 3) Recurse into matched effective-keyed pairs.
     for &(op, np) in &matched {
         let (_, old_node) = old_nb[op];
         let (new_abs, new_node) = new_nb[np];
@@ -486,26 +575,31 @@ fn reconcile_keyed(
         diff_node_into(old_node, new_node, &child_path, out);
     }
 
-    // 4) Insert new keyed children not present in old.
+    // 4) Insert new effective-keyed children absent from old.
     for (new_abs, new_node) in new_nb.iter() {
-        if let Some(k) = new_node.key.as_deref() {
-            if !old_key_pos.contains_key(k) {
-                push_insert_child(*new_abs, new_node, ppath, pid, out);
+        if let Some(k) = eff_key(new_node) {
+            if !old_eff.contains_key(&k) {
+                push_insert_child(
+                    *new_abs,
+                    new_node,
+                    ppath,
+                    pid,
+                    ref_d_for(old_slice, *new_abs, new_off),
+                    out,
+                );
             }
         }
     }
 
-    // 5) Moves for matched keyed pairs.
+    // 5) Moves for matched effective-keyed pairs.
     //    `matched` is in NEW order; the sequence of old_list_pos is what we LIS.
     let old_seq: Vec<usize> = matched.iter().map(|&(op, _)| op).collect();
-    let keep: AHashSet<usize> = if mixed {
-        // Mixed case: do NOT trust LIS; only keep a pair as "in place" when its
+    let keep: AHashSet<usize> = if has_unkeyed {
+        // Mixed case: do NOT trust LIS; keep a pair "in place" only when its
         // absolute index is unchanged.
         let mut s = AHashSet::new();
         for &(op, np) in &matched {
-            let old_abs = old_nb[op].0;
-            let new_abs = new_nb[np].0;
-            if old_abs == new_abs {
+            if old_nb[op].0 == new_nb[np].0 {
                 s.insert(np);
             }
         }
@@ -532,23 +626,28 @@ fn reconcile_keyed(
     }
 }
 
-/// Build a `key -> list position` map, warning (DJE-051) on duplicate keys.
-fn build_key_map(list: &[(usize, &VNode)], which: &str) -> AHashMap<String, usize> {
-    let mut map: AHashMap<String, usize> = AHashMap::new();
-    for (pos, (_, n)) in list.iter().enumerate() {
-        if let Some(k) = n.key.as_deref() {
-            if map.contains_key(k) {
-                vdom_trace!("DJE-051: Duplicate dj-key in {} children: {}", which, k);
-                tracing::warn!(
-                    "DJE-051: Duplicate dj-key in {} children: {} (last occurrence wins)",
-                    which,
-                    k
-                );
+/// Keys appearing more than once on either side (ambiguous for keyed matching).
+/// Warns DJE-051 once per duplicated key (the key value is interpolated so the
+/// message names the offender).
+fn ambiguous_keys(old_nb: &[(usize, &VNode)], new_nb: &[(usize, &VNode)]) -> AHashSet<String> {
+    let mut ambiguous: AHashSet<String> = AHashSet::new();
+    for (which, list) in [("old", old_nb), ("new", new_nb)] {
+        let mut seen: AHashSet<&str> = AHashSet::new();
+        for (_, n) in list.iter() {
+            if let Some(k) = n.key.as_deref() {
+                if !seen.insert(k) && ambiguous.insert(k.to_string()) {
+                    vdom_trace!("DJE-051: Duplicate dj-key in {} children: {}", which, k);
+                    tracing::warn!(
+                        "DJE-051: Duplicate dj-key '{}' in {} children (each keyed sibling \
+                         must have a unique key; ambiguous keys fall back to positional diffing)",
+                        k,
+                        which
+                    );
+                }
             }
-            map.insert(k.to_string(), pos);
         }
     }
-    map
+    ambiguous
 }
 
 fn push_remove_child(
@@ -571,6 +670,7 @@ fn push_insert_child(
     new_node: &VNode,
     ppath: &[usize],
     pid: Option<&str>,
+    ref_d: Option<String>,
     out: &mut Vec<Patch>,
 ) {
     out.push(Patch::InsertChild {
@@ -578,7 +678,7 @@ fn push_insert_child(
         d: pid.map(|s| s.to_string()),
         index: new_abs,
         node: new_node.clone(),
-        ref_d: None,
+        ref_d,
     });
 }
 
