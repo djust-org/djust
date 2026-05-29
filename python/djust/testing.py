@@ -356,6 +356,83 @@ class LiveViewTestClient:
             patches_list = []
         return (html, patches_list, version)
 
+    def _build_mounted_instance(self, **mount_kwargs: Any) -> Any:
+        """Construct + mount a FRESH view instance with a fresh request/session.
+
+        Mirrors :meth:`mount` but returns a standalone instance instead of
+        storing it on ``self`` — used by parity checks that must compare two
+        independent instances (as production does: one for the HTTP request,
+        one for the WebSocket mount).
+        """
+        from django.contrib.auth.models import AnonymousUser
+        from django.contrib.sessions.backends.db import SessionStore
+
+        instance = self.view_class()
+        request = self.request_factory.get("/")
+        request.user = self.user or AnonymousUser()
+        request.session = SessionStore()
+        instance.request = request
+        if hasattr(instance, "_initialize_temporary_assigns"):
+            instance._initialize_temporary_assigns()
+        instance.mount(request, **mount_kwargs)
+        return instance
+
+    @staticmethod
+    def _djroot_djids(html: str) -> list:
+        """Extract the ordered ``dj-id`` sequence from the ``dj-root`` subtree."""
+        m = re.search(r"<[^>]*\bdj-root\b", html)
+        subtree = html[m.start() :] if m else html
+        return re.findall(r'dj-id="([^"]+)"', subtree)
+
+    def assert_http_ws_djid_parity(self, **mount_kwargs: Any) -> list:
+        """Assert the HTTP-GET and WebSocket-mount render paths assign the same
+        ``dj-id`` baseline for this view (#1642).
+
+        In production the initial HTTP ``GET`` renders the DOM the browser holds
+        (``render_full_template``) and then establishes a VDOM baseline
+        (``render_with_diff``); a *separate* instance handles the WebSocket
+        mount and establishes its OWN baseline via ``render_with_diff``. The
+        first WS event diffs against that baseline and ships patches keyed by
+        ``dj-id``. If the two baselines assign divergent ``dj-id``s, the first
+        event's patches miss ``d``-resolution and fall back to path traversal —
+        the ``getNodeByPath → null`` failure shape investigated in #1641.
+
+        This builds two independent instances (HTTP-shaped and WS-shaped),
+        exercises ``render_full_template`` on the HTTP one (so the real
+        initial-page path runs), and asserts the two ``render_with_diff``
+        baselines carry an identical ordered ``dj-id`` sequence in the
+        ``dj-root`` subtree. Returns that sequence.
+
+        Note: the server's initial HTML carries no ``dj-id`` attributes on the
+        ``dj-root`` content (they are stamped during diffing and by the client
+        on load); the load-bearing invariant this pins is that the diff-time
+        assignment is identical across the two independent instances. The
+        #1370 fix made ``render_full_template`` reuse the same Rust view the WS
+        path diffs, which is what keeps these aligned — this harness locks that
+        against regression.
+        """
+        # HTTP-GET-shaped instance: render the browser DOM, then the baseline.
+        http = self._build_mounted_instance(**mount_kwargs)
+        http.get_template()
+        http.render_full_template(http.request)  # exercise the real initial-page path
+        http_html, _, _ = http.render_with_diff(http.request)
+        http_ids = self._djroot_djids(http_html)
+
+        # WebSocket-mount-shaped instance: independent baseline.
+        ws = self._build_mounted_instance(**mount_kwargs)
+        ws.get_template()
+        ws_html, _, _ = ws.render_with_diff(ws.request)
+        ws_ids = self._djroot_djids(ws_html)
+
+        assert http_ids == ws_ids, (
+            "HTTP-GET vs WebSocket-mount dj-id divergence for "
+            f"{self.view_class.__name__} (#1641/#1642): the two render paths "
+            f"assign different dj-id baselines, so the first WS event's patches "
+            f"would miss d-resolution and fall back to path traversal.\n"
+            f"  HTTP baseline: {http_ids}\n  WS   baseline: {ws_ids}"
+        )
+        return http_ids
+
     def assert_state(self, **expected: Any) -> None:
         """
         Assert state variables match expected values.
