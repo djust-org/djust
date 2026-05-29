@@ -4403,6 +4403,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # mutates ``self._sticky_preserved`` to the final survivor set
         # after the slot scan; if it raises mid-flight we drain any
         # staged children so their background tasks don't leak.
+        #
+        # #1647: trust the DESTINATION URL over the client-supplied `view`.
+        # The client's resolveViewPath() falls back to the current container's
+        # dj-view (the SOURCE view) when its route map is empty — which is the
+        # default for apps using plain Django path() URLconfs (no
+        # live_session()). Mounting the source class against the new URL's
+        # request raises. Resolve the target view server-side from the URL; only
+        # override when it maps to a djust LiveView, so the live_session
+        # route-map path (client resolved correctly) is unaffected.
+        resolved_view = self._resolve_view_path_from_url(data.get("url", ""))
+        if resolved_view and resolved_view != data.get("view"):
+            logger.debug(
+                "live_redirect_mount: server-resolved target view %s from URL %s (client sent %s)",
+                resolved_view,
+                sanitize_for_log(data.get("url", "")),
+                sanitize_for_log(str(data.get("view"))),
+            )
+            data = {**data, "view": resolved_view}
         try:
             await self.handle_mount(
                 data,
@@ -4426,6 +4444,36 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
             self._sticky_preserved = {}
             raise
+
+    def _resolve_view_path_from_url(self, url: str) -> Optional[str]:
+        """Resolve a ``live_redirect`` destination URL to its djust LiveView
+        dotted path, server-side, via Django's URL resolver (#1647).
+
+        Returns the ``module.QualName`` of the view class wired to ``url`` in the
+        URLconf when (and only when) it is a :class:`djust.LiveView` subclass.
+        Returns ``None`` when the URL doesn't resolve, or maps to a non-LiveView
+        (e.g. a plain Django view) — the caller then keeps the client-supplied
+        ``view`` (preserving the ``live_session`` route-map path, where the
+        client already resolved the target correctly).
+        """
+        if not url:
+            return None
+        from django.urls import Resolver404, resolve
+
+        from .live_view import LiveView
+
+        try:
+            match = resolve(url)
+        except Resolver404:
+            return None
+        except Exception:  # noqa: BLE001 — never let URL resolution break mount
+            logger.debug("live_redirect view resolution raised for %s", sanitize_for_log(url))
+            return None
+        # View.as_view() stamps the class onto the returned callable.
+        view_class = getattr(match.func, "view_class", None)
+        if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
+            return None
+        return f"{view_class.__module__}.{view_class.__qualname__}"
 
     def _build_live_redirect_request(self, data: Dict[str, Any]):
         """Reconstruct a minimal Django request for the live_redirect target.
