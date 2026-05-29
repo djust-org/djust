@@ -252,33 +252,24 @@ fn keyed_insert_ref_d_is_safe_not_a_wrong_guess() {
 }
 
 // =============================================================================
-// KNOWN LIMITATION (documented, NOT fixed): a matched dj-if boundary cannot be
-// repositioned. dj-if markers are `#comment` nodes with NO `djust_id`, and the
-// patch protocol has no `MoveSubtree`. So when an UNKEYED sibling is inserted
-// before a matched boundary, the id-resolved content relocates correctly but
-// the boundary's comment markers stay anchored at their old position — the
-// applied tree diverges from `new`.
+// #1666: a matched dj-if boundary IS repositioned via MoveSubtree.
 //
-// This is a PRE-EXISTING limitation shared with the original implementation
-// (the differential study found both fail identically here — see
-// scratch/vdom-rebuild/ANALYSIS_REPORT.md §8). It accounts for ~all of the
-// residual round-trip failures (~0.65% of an adversarial random-mutation
-// corpus; near-zero in real templates, where conditionals sit at stable
-// positions).
+// dj-if markers are `#comment` nodes with no `djust_id`, so a plain MoveChild
+// can't move them. When a matched boundary's significant position shifts
+// (siblings change around it), the differ now emits `MoveSubtree { id, d,
+// index }` and the applier detaches the `<!--dj-if id=X-->...<!--/dj-if-->`
+// marker span and re-inserts it at the new index — preserving inner identity.
 //
-// This test PINS the current (limited) behavior so the limitation is explicit
-// and any drift is caught. A proper fix needs a wire-protocol change
-// (`MoveSubtree`, or position-aware Remove/InsertSubtree for matched
-// boundaries) coordinated with the JS client — out of scope for the diff
-// rebuild. WHEN THAT FIX LANDS, the two `KNOWN-LIMITATION` assertions below
-// will fail; flip them to `structurally_equal(&applied, &new)`.
+// (This was previously a documented KNOWN-LIMITATION; #1666 fixes it. The test
+// below is the flipped assertion: the round-trip now reproduces `new`.)
 // =============================================================================
 
 #[test]
-fn known_limitation_matched_djif_boundary_not_repositioned() {
+fn matched_djif_boundary_repositioned_via_move_subtree() {
     // old: <div>[ <!--if-a--><!--/if-a-->, <p keep> ]
     // new: <div>[ <section new>, <!--if-a--><!--/if-a-->, <p keep> ]
-    // i.e. a <section> is inserted BEFORE the (matched, empty) boundary.
+    // i.e. a <section> is inserted BEFORE the (matched, empty) boundary, so the
+    // boundary's significant position shifts from 0 to 1.
     let old = el("div", "root").with_children(vec![
         dj_if_open("if-a"),
         dj_if_close(),
@@ -291,8 +282,9 @@ fn known_limitation_matched_djif_boundary_not_repositioned() {
         el_text("p", "keep", "x"),
     ]);
 
-    // The boundary is matched in both → no subtree-flip is emitted (correct).
     let patches = diff_nodes(&old, &new, &[]);
+
+    // The matched boundary is NOT torn down/re-inserted — it is MOVED.
     assert_eq!(
         patches
             .iter()
@@ -302,29 +294,48 @@ fn known_limitation_matched_djif_boundary_not_repositioned() {
         "matched boundary must not emit a subtree flip, got: {:#?}",
         patches
     );
+    assert!(
+        patches.iter().any(|p| matches!(
+            p,
+            Patch::MoveSubtree { id, index, .. } if id == "if-a" && *index == 1
+        )),
+        "expected MoveSubtree(if-a, index=1) for the repositioned boundary, got: {:#?}",
+        patches
+    );
 
+    // And the round-trip now reproduces `new` (the boundary moved correctly).
     let applied = round_trip(&old, &new);
-
-    // Sanity: in NEW a real element precedes the boundary marker.
-    assert_eq!(new.children[0].tag, "section");
-    assert!(new.children[1].is_comment());
-
-    // KNOWN-LIMITATION #1: after apply, the open marker is STILL anchored at
-    // the front — the inserted <section> could not be placed before it.
     assert!(
-        applied.children[0].is_comment(),
-        "KNOWN LIMITATION changed: the dj-if marker is no longer anchored at \
-         the front — if a MoveSubtree-style fix landed, flip this test to assert \
-         structurally_equal(&applied, &new). APPLIED: {:#?}",
-        applied
+        structurally_equal(&applied, &new),
+        "matched-boundary reposition round-trip failed.\nNEW: {:#?}\nAPPLIED: {:#?}\nPATCHES: {:#?}",
+        new,
+        applied,
+        patches
     );
+}
 
-    // KNOWN-LIMITATION #2: consequently the round-trip does NOT reproduce `new`.
+#[test]
+fn matched_djif_boundary_no_move_when_position_unchanged() {
+    // Guard: a matched boundary at the SAME significant position emits no
+    // MoveSubtree (only inner content patches, if any).
+    let build = |s: &str| {
+        el("div", &format!("r{}", s)).with_children(vec![
+            el_text("h1", &format!("h{}", s), "head"),
+            dj_if_open("if-b"),
+            el_text("p", &format!("p{}", s), "body"),
+            dj_if_close(),
+        ])
+    };
+    let old = build("0");
+    let new = build("1");
+    let patches = diff_nodes(&old, &new, &[]);
     assert!(
-        !structurally_equal(&applied, &new),
-        "KNOWN LIMITATION appears FIXED (matched dj-if boundary repositioned \
-         correctly). Flip both assertions in this test to assert the round-trip \
-         now succeeds. APPLIED: {:#?}",
-        applied
+        !patches
+            .iter()
+            .any(|p| matches!(p, Patch::MoveSubtree { .. })),
+        "no MoveSubtree expected when the boundary's position is unchanged, got: {:#?}",
+        patches
     );
+    let applied = round_trip(&old, &new);
+    assert!(structurally_equal(&applied, &new));
 }

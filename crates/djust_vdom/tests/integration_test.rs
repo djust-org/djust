@@ -399,7 +399,9 @@ fn test_patches_include_djust_id() {
         // dj-if subtree patches (#1358) are dispatched by marker id, not by
         // the parent's djust_id. They are out of scope for this attribute
         // test.
-        djust_vdom::Patch::RemoveSubtree { .. } | djust_vdom::Patch::InsertSubtree { .. } => false,
+        djust_vdom::Patch::RemoveSubtree { .. }
+        | djust_vdom::Patch::InsertSubtree { .. }
+        | djust_vdom::Patch::MoveSubtree { .. } => false,
     });
 
     assert!(

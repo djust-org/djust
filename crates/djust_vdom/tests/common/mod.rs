@@ -286,6 +286,11 @@ pub fn assert_handles_resolve(patches: &[Patch], client: &VNode, ctx: &str) {
                 // Boundary id, not a dj-id; verified by `apply_all`
                 // panicking if it can't find the marker.
             }
+            Patch::MoveSubtree { d, .. } => {
+                // Boundary id is a marker namespace (exempt); the parent `d`
+                // must resolve in the client tracker, like InsertSubtree.d.
+                check_handle(d, client, ctx, i, "MoveSubtree.d");
+            }
         }
     }
 }
