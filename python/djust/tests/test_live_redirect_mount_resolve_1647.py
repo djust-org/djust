@@ -100,3 +100,39 @@ async def test_handle_live_redirect_mount_keeps_client_view_when_url_unresolvabl
         )
 
     assert captured.get("view") == SOURCE
+
+
+@pytest.mark.asyncio
+@override_settings(ROOT_URLCONF=URLCONF)
+async def test_back_nav_state_snapshot_view_not_overridden():
+    """Back-nav guard: when a `state_snapshot` is present it carries the
+    authoritative view, and its `url` may be generic and resolve to an
+    unrelated view. The URL-override must NOT fire — otherwise back-nav restores
+    the wrong view (regression caught by the pre-push suite during #1647)."""
+    consumer = LiveViewConsumer()
+    consumer.scope = {"session": None, "user": None}
+    consumer.view_instance = None
+    consumer._sticky_auto_reattached = set()
+    consumer._sticky_preserved = {}
+
+    captured = {}
+
+    async def _fake_handle_mount(data, **kwargs):
+        captured["view"] = data.get("view")
+
+    # url="/redirect-target/" WOULD resolve to TARGET, but the snapshot's view
+    # (SOURCE here) must win because a snapshot is present.
+    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+        await consumer.handle_live_redirect_mount(
+            {
+                "view": SOURCE,
+                "url": "/redirect-target/",
+                "params": {},
+                "state_snapshot": {"view_slug": SOURCE, "state_json": "{}", "ts": 0},
+            }
+        )
+
+    assert captured.get("view") == SOURCE, (
+        "a live_redirect_mount carrying a state_snapshot must NOT have its view "
+        f"overridden from the URL; handle_mount received {captured.get('view')!r}"
+    )

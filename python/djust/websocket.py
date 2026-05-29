@@ -4412,7 +4412,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # request raises. Resolve the target view server-side from the URL; only
         # override when it maps to a djust LiveView, so the live_session
         # route-map path (client resolved correctly) is unaffected.
-        resolved_view = self._resolve_view_path_from_url(data.get("url", ""))
+        #
+        # NOT for back-navigation: a `state_snapshot` carries the authoritative
+        # `view_slug` for the restored view, and its `url` may be generic (e.g.
+        # "/") and resolve to an unrelated view. Skip the URL-override whenever a
+        # snapshot is present so back-nav restores the snapshot's view, not
+        # whatever the URL happens to map to.
+        resolved_view = (
+            None
+            if data.get("state_snapshot")
+            else self._resolve_view_path_from_url(data.get("url", ""))
+        )
         if resolved_view and resolved_view != data.get("view"):
             logger.debug(
                 "live_redirect_mount: server-resolved target view %s from URL %s (client sent %s)",
