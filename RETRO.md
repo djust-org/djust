@@ -316,6 +316,74 @@ issue or be explicitly closed with a reason.
 | 274 | Accessibility phase 2 — surface a11y findings in `djust_audit` | PR #1521 (#1513 follow-up) | #1523 | Closed | **Resolved in v1.0.0rc4 PR #1532** — `djust_audit --a11y` mode shipped. Pulled forward from `v1.1.0` into the rc4 drain. |
 | 275 | `djust_live` cannot be `cargo test`'d — gate the `extension-module` feature behind a Cargo flag | Retro v1.0.0rc4 (finding #4) | #1543 | Closed | **Resolved in v1.0.0rc6 PR #1547** — `extension-module` gated behind a default-on Cargo feature; `cargo test -p djust_live --no-default-features` runs 37 tests. Makefile `test-rust` + parallel `test` + CI workflow gained a Phase 2 invocation. Retroactively unlocked the 4 `msgpack_round_trip_patch_response_*` tests shipped in PR #1546. Maturin build path verified end-to-end. |
 | 276 | Sibling `skip_serializing_if`-without-`default` serde asymmetry in `actors/messages.rs` | PR #1542 (#1538 sibling) | #1541 | Closed | **Resolved in v1.0.0rc6 PR #1546** — but NOT via the planned fix shape. Stage 5 reproducer-first TDD proved that `#[serde(default, skip_serializing_if = ...)]` does NOT generalize from `VNode` (trailing optional) to `PatchResponse` (leading optionals). The correct fix removes `skip_serializing_if` entirely; canonicalized as the new "leading-vs-trailing serde" rule in CLAUDE.md's "Process canonicalizations from v1.0.0rc6 retro arc" section. |
+| 277 | Per-event `check_handler_permission` called bare-sync from async `_validate_event_security` (sibling of #1638) | PR #1646 (#1638 review) | #1648 | Open | Same `SynchronousOnlyOperation` class as #1638, for `@permission_required` handlers with a DB-backed perm backend; needs its own reproducer (N-sites-N-tests). |
+| 278 | Empirical-canary fixture for `assert_http_ws_djid_parity` (Action #1468 spirit) | PR #1653 (#1642 retro) | #1654 | Open | Harness passes for every shape today, so catch-power rests on the path-differential argument; add a synthetic divergence fixture so it can't go green-but-toothless. |
+| 279 | Strengthen drain guards: scaffold deploy-path integration test + `_arm_recovery` caller-count test + single `isSignificantChild` predicate | Retro v1.0.0rc14 (PRs #1651/#1652/#1649) | #1655 | Open | Three non-blocking test/code-hardening deferrals consolidated. |
+
+## v1.0.0rc14 — Open-issue drain: parallel-path drift (PRs #1646, #1649, #1650, #1651, #1652, #1653)
+
+**Date**: 2026-05-28
+**Scope**: Drained the post-rc13 open-issue bucket (#1635–1645): a P0 auth async-wrap bug, three client/VDOM/scaffold bugs, one consolidation refactor, and a test-infra harness. Reported against djust 1.0.0rc13, several from MAX Companion + downstream deploys.
+**Tests at close**: full Python suite green throughout (~5100+); full JS suite 1626.
+
+### What We Learned
+
+**1. Every issue in the drain was the same meta-bug: a path-specific invariant correct on path A, broken on path B.**
+Six independent reports collapsed to one shape once traced:
+
+| Issue | Path A (correct) | Path B (broken) |
+|---|---|---|
+| #1638 | mount wraps `sync_to_async` | per-event calls bare sync → `SynchronousOnlyOperation` |
+| #1640 | `getNodeByPath` counts dj-if comments only | `getSignificantChildren` counted ALL comments |
+| #1637 | dev `migrate --run-syncdb` (masks) | deploy `migrate` (no tables) |
+| #1635 | first `<script>` execution | re-execution shares the global lexical scope |
+| #1645 | `handle_event` arms recovery | `_run_async_work` didn't (caused #1639) |
+| #1642 | (harness) HTTP-GET baseline | WS-mount baseline |
+
+The durable cure was the same each time: make the invariant **structural** (one source of truth) rather than relying on each path to re-implement it correctly.
+
+**Action taken**: Added a "Process canonicalizations from v1.0.0rc14 drain arc" section to `djust/CLAUDE.md` — the **parallel-path-drift audit** rule (when fixing a path-specific invariant, grep every parallel path and prefer one shared helper + a guard).
+
+**2. Each fix shipped a structural GUARD, not just a point fix.**
+A single `_arm_recovery()` + a regex writer-guard (#1645), the shared `isDjIfComment` predicate (#1640), an IIFE scope boundary (#1635), `makemigrations` + a shipped `migrations/__init__.py` (#1637), and the reusable `assert_http_ws_djid_parity()` harness (#1642). Each makes its bug class harder to reintroduce than a point fix would.
+
+**Action taken**: Closed — guards shipped in PRs #1649 (`isDjIfComment`), #1650 (IIFE), #1651 (scaffold migrations), #1652 (`_arm_recovery` + writer-guard), #1653 (`assert_http_ws_djid_parity`).
+
+**3. Reproduction fidelity decides whether a bug is even reproducible: the harness must exercise the *real* path, not a convenient proxy.**
+#1650: a `window.eval(code)` double-eval gave a FALSE NEGATIVE (eval's `const` scopes to the eval, not the global lexical env); only two `<script>` elements reproduced the SyntaxError. #1638: every existing object-permission test used an in-memory `_StubDocument`, so none hit the sync-ORM path that actually trips `SynchronousOnlyOperation`. #1637: the scaffold only ever exercised the dev `--run-syncdb` path, never the deploy path.
+
+**Action taken**: Added the **repro-fidelity rule** to the same `djust/CLAUDE.md` canon section (classic-script re-execution bugs need `<script>`-element injection, not `eval`; sync-ORM/auth bugs need a real ORM call, not an in-memory stub; dev-vs-deploy bugs need the deploy path exercised).
+
+**4. Deferred guard-strengthenings were filed, not dropped.**
+The P0 fix surfaced a sibling (`check_handler_permission`, same async-wrap class); the parity harness lacks an empirical canary; and three test/code-hardenings were scoped out to keep PRs tight.
+
+**Action taken**: Open — tracked in Action Tracker #277 (GitHub #1648), #278 (GitHub #1654), #279 (GitHub #1655).
+
+### Insights
+
+- **Symptom-up tracing beat the reporter's cited mechanism every time.** #1643's reporter blamed the InsertChild; the real fix was the skip-render flush. #1635's reporter proposed "move decls into the else block"; the real bundle structure made that a no-op and the IIFE was correct. Trusting the symptom + reproducing — not the hypothesis — was the consistent unlock.
+- **A "negative result" investigation (#1641) still paid off** — it produced the #1642 parity harness and ruled out 5 shapes, narrowing the search rather than just closing as "can't repro."
+- **The drain's PRs averaged 0 🔴 / 0 🟡 at Stage 11** — reproducer-first + gate-off-self-test (Action #1200/#1468) front-loaded defect-finding into Stage 5/7.
+
+### Review Stats
+
+| Metric | #1646 | #1649 | #1650 | #1651 | #1652 | #1653 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|
+| Tests added | 1 | 4 | 2 | 3 | 3 | 4 | 17 |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 1 (sibling→#1648) | 0 | 0 | 0 | 0 | 1 (canary→#1654) | 2 |
+| CI failures pre-merge | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New section "Process canonicalizations from v1.0.0rc14 drain arc" — parallel-path-drift audit rule + repro-fidelity rule.
+**Pipeline template / checklist / skills**: No changes this milestone.
+
+### Open Items
+
+- [ ] `check_handler_permission` async-wrap sibling — Action Tracker #277 (GitHub #1648)
+- [ ] `assert_http_ws_djid_parity` empirical canary — Action Tracker #278 (GitHub #1654)
+- [ ] Drain guard-strengthenings (deploy-path test / caller-count test / single predicate) — Action Tracker #279 (GitHub #1655)
 
 ## v1.0.0rc6 — Open-issue drain + idna CVE (PRs #1546, #1547, #1548, #1549)
 

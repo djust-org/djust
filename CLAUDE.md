@@ -1070,6 +1070,19 @@ Two rules from the v1.0.0rc6 open-issue drain (PRs #1546 / #1547 / #1548 / #1549
 
   **Where this lives now**: this CLAUDE.md section + the milestone retro entry under "Process Improvements Applied" in `RETRO.md` v1.0.0rc6. Future Dependabot PRs that ship clean lockfile-only diffs may use the minimal form; the milestone retro Stage 2 gate is preserved as a backstop in case the minimal form is forgotten.
 
+## Process canonicalizations from v1.0.0rc14 drain arc
+
+Two rules from the #1635–1645 open-issue drain (PRs #1646, #1649, #1650, #1651, #1652, #1653). Every one of the six issues was the **same meta-bug** — a path-specific invariant correct on one path and broken on a parallel one — so the canon is about the *class*, not any single fix.
+
+- **Parallel-path-drift audit (#1646/#1640/#1637/#1635/#1645/#1642).** When a bug is a per-path invariant implemented in more than one place — sync vs async (#1638: mount `sync_to_async` vs per-event bare sync), main vs secondary send path (#1639/#1645: `handle_event` arms recovery, `_run_async_work` didn't), two DOM walkers (#1640: `getNodeByPath` dj-if-only vs `getSignificantChildren` all-comments), dev vs deploy (#1637: `migrate --run-syncdb` vs `migrate`), first-load vs re-execution (#1635: classic-script global lexical scope), HTTP-GET vs WS-mount baseline (#1642) — fixing only the cited path leaves the latent twin. **At Stage 4, grep every parallel path that implements the same invariant and decide each explicitly.** Prefer the structural cure over N correct copies: one shared helper (`_arm_recovery`, `_flush_all_pending`, `isDjIfComment`), a scope boundary (the client.js IIFE), or a guard that makes drift mechanically detectable (the regex writer-guard pinning `_recovery_html` is only assigned via `_arm_recovery`; `assert_http_ws_djid_parity` pinning the two render baselines agree). A point fix patches one instance; a structural fix retires the class.
+
+- **Reproduction fidelity — the harness must exercise the REAL path, not a convenient proxy (#1650/#1638/#1637).** A reproducer that uses the wrong mechanism gives a false negative and hides the bug:
+  - **Classic-script re-execution** (bfcache / `live_redirect` morph re-attaching `<script>`): reproduce by injecting two `<script>` elements, NOT `window.eval(code)` twice. `eval`'s top-level `const`/`let` scope to the eval call, not the global lexical environment, so `eval`×2 does NOT collide while two `<script>`s DO (#1650 — the eval repro passed; the `<script>` repro threw).
+  - **Sync-ORM / auth-in-async bugs**: the view's `get_object()` (or any predicate) must do a REAL `Model.objects.get(...)`, not return an in-memory stub. Every pre-#1638 object-permission test used a `_StubDocument` and so never hit the `SynchronousOnlyOperation` path the bug lives on.
+  - **Dev-vs-deploy bugs**: exercise the DEPLOY path. #1637's scaffold only ever ran `migrate --run-syncdb` (dev), which masked the missing migrations; the deploy `migrate` (no flag) was a different program and the only one that failed.
+
+  Generalizes the existing "trust the symptom, not the cited path" triage rule with a mechanism axis: also distrust the *reproduction harness* until it exercises the same code path production does.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
