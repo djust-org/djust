@@ -1,3026 +1,683 @@
-//! Fast virtual DOM diffing algorithm
+//! Virtual DOM diffing.
 //!
-//! Uses a keyed diffing algorithm for efficient list updates.
-//! Includes compact djust_id (dj-id) in patches for O(1) client-side resolution.
+//! Computes a minimal `Vec<Patch>` transforming an OLD `VNode` tree into a NEW
+//! one, and a companion `sync_ids` pass that carries stable `djust_id`s forward
+//! from the old tree onto the new tree after a render.
 //!
-//! ## Conditional Rendering (`{% if %}`)
+//! Key behaviors (reconstructed from the test suite):
+//! - Element nodes are matched positionally (or by `key` when keyed).
+//! - `{% if %}` conditional subtrees are wrapped by `<!--dj-if id="X"-->` /
+//!   `<!--/dj-if-->` comment markers and matched by boundary id (keyed
+//!   subtree diff): id-only-in-old -> `RemoveSubtree`, id-only-in-new ->
+//!   `InsertSubtree`, id-in-both -> recurse into the body. Non-boundary
+//!   siblings around a boundary are paired by RELATIVE position so a
+//!   boundary span-length change never cascades into mis-targeted paths.
+//! - Every targeting handle (`d`/`child_d`/`ref_d`) an emitted patch carries
+//!   refers to a node present in the OLD tree (#1408 invariant); the only
+//!   exceptions are `InsertChild.node` and `InsertSubtree.html` content.
 //!
-//! When `{% if %}` blocks evaluate to false, the template engine emits `<!--dj-if-->`
-//! placeholder comments to maintain consistent sibling positions in the DOM. This prevents
-//! VDOM diff from incorrectly matching siblings when conditionals remove nodes (issue #295).
-//! When toggling between placeholder and actual content, the diff generates `RemoveChild` +
-//! `InsertChild` patches instead of `Replace` patches for semantic consistency.
-//!
-//! ## Debugging
-//!
-//! Set `DJUST_VDOM_TRACE=1` environment variable to enable detailed tracing
-//! of the diffing algorithm. This logs:
-//! - Node comparisons with IDs
-//! - Attribute changes
-//! - Child diffing decisions
-//! - Generated patches
+//! In scope: [`crate::Patch`], [`crate::VNode`],
+//! [`crate::lis::longest_increasing_subsequence`], the `vdom_trace!` macro,
+//! and `ahash` maps.
 
-use crate::{lis::longest_increasing_subsequence, vdom_trace, Patch, VNode};
-use ahash::{AHashMap as HashMap, AHashSet as HashSet};
+use crate::lis::longest_increasing_subsequence;
+use crate::vdom_trace;
+use crate::{Patch, VNode};
+use ahash::{AHashMap, AHashSet};
 
-// =============================================================================
-// dj-if keyed boundary detection (Capability of #1358 — Iter 3 of v0.9.4-1)
-//
-// Iter 1 (PR #1363) made the Rust template renderer emit
-// `<!--dj-if id="if-<8hex>-N"-->...<!--/dj-if-->` boundary markers around
-// element-bearing `{% if %}` blocks. Iter 2 (PR #1364) taught the client
-// patch dispatcher to apply `RemoveSubtree { id }` / `InsertSubtree { id,
-// path, d, index, html }` patches.
-//
-// This iter's job: recognize those markers in the diff input and emit the
-// new patch types when conditionals flip — eliminating the long-standing
-// class of `{% if %}`-breaks-VDOM-patching bugs (issue #256, #1358).
-//
-// The predicate mirrors `crates/djust_vdom/src/parser.rs:494-499` (server)
-// and `python/djust/static/djust/src/12-vdom-patch.js:38-43` (client).
-// =============================================================================
+// ============================================================================
+// dj-if boundary marker helpers
+// ============================================================================
 
-/// Returns the id token from a `<!--dj-if id="X"-->` open-marker comment, if
-/// the node is such a comment. Mirrors the JS `_extractDjIfMarkerId` helper
-/// in `12-vdom-patch.js:1180-1199` and the server-side parser predicate at
-/// `crates/djust_vdom/src/parser.rs:497-498`.
-///
-/// Returns `None` for:
-///   - non-comment nodes
-///   - comments not matching the dj-if open-marker shape
-///   - the legacy single-comment placeholder `<!--dj-if-->` (issue #295) —
-///     it has no id and is handled by the existing legacy diff path
-///     (`diff_nodes` lines ~165-241)
-///   - the close marker `<!--/dj-if-->`
+/// If `node` is a dj-if OPEN marker (`<!--dj-if id="X"-->`), return its
+/// boundary id `X`. A bare `<!--dj-if-->` legacy placeholder (no id) is NOT a
+/// keyed boundary and returns `None`.
 fn dj_if_open_id(node: &VNode) -> Option<String> {
     if !node.is_comment() {
         return None;
     }
     let text = node.text.as_deref()?;
     let trimmed = text.trim();
-    // Open marker: `dj-if<space-or-tab>...id="X"...`. Must reject
-    // lookalikes like `dj-iffy`, `dj-ifid="x"` — only literal whitespace
-    // after `dj-if` qualifies (mirrors the parser broadening predicate).
-    if !(trimmed.starts_with("dj-if ") || trimmed.starts_with("dj-if\t")) {
+    // Must be `dj-if` followed by whitespace (space/tab), then an id="..." attr.
+    let after = trimmed.strip_prefix("dj-if")?;
+    if !after.starts_with(' ') && !after.starts_with('\t') {
         return None;
     }
-    // After `dj-if`, find an `id="..."` token. Production templates emit
-    // exactly one canonical form: `dj-if id="if-<8hex>-N"`. We extract the
-    // first `id=".."` substring. Returns None if absent (defensive — should
-    // not happen in production).
-    let after_dj_if = trimmed.get("dj-if".len()..)?;
-    let id_start = after_dj_if.find("id=\"")? + "id=\"".len();
-    let rest = after_dj_if.get(id_start..)?;
-    let id_end = rest.find('"')?;
-    Some(rest[..id_end].to_string())
+    // Extract id="..." value.
+    let key = "id=\"";
+    let start = after.find(key)? + key.len();
+    let rest = &after[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
-/// True if the node is a `<!--/dj-if-->` close marker.
+/// True if `node` is a dj-if CLOSE marker (`<!--/dj-if-->`).
 fn is_dj_if_close(node: &VNode) -> bool {
-    if !node.is_comment() {
-        return false;
-    }
-    node.text
-        .as_deref()
-        .map(|t| t.trim() == "/dj-if")
-        .unwrap_or(false)
+    node.is_comment() && node.text.as_deref().map(|t| t.trim()) == Some("/dj-if")
 }
 
-/// Find TOP-LEVEL (depth-0) dj-if boundary pairs in a sibling list.
-///
-/// Returns a vector of `(open_idx, close_idx, id)` tuples in document order
-/// — but ONLY the OUTERMOST pairs (depth 0). Nested pairs are intentionally
-/// excluded; they are handled by the recursive pre-pass when it descends
-/// into a matched-id boundary's body.
-///
-/// Example: `[open_A, open_B, close_B, close_A]` → `[(0, 3, "A")]` (B is
-/// nested inside A and is NOT returned at this level — it will be discovered
-/// when the recursive pre-pass descends into A's body slice).
-///
-/// Unbalanced markers (open without matching close, close without preceding
-/// open) are returned as the empty vector — the caller should fall through
-/// to the existing diff in that case (defensive against malformed input).
-///
-/// This function replaces the original `find_dj_if_pairs` (which returned
-/// nested pairs too). The change is the foundation of the recursive pre-pass
-/// for the elif-cascade fix: each recursion level handles only its OWN
-/// top-level pairs, eliminating the duplicate-patch / overlap-patch class
-/// of bugs that surfaced when boundaries nested (Stage 11 finding on PR
-/// #1365 — "if/elif/else cascade emits overlapping Replace +
-/// InsertSubtree patches that produce corrupt DOM").
-fn find_top_level_dj_if_pairs(children: &[VNode]) -> Vec<(usize, usize, String)> {
-    let mut pairs: Vec<(usize, usize, String)> = Vec::new();
-    // Stack of (open_idx, id) for unmatched open markers seen so far.
-    let mut stack: Vec<(usize, String)> = Vec::new();
-    for (i, child) in children.iter().enumerate() {
-        if let Some(id) = dj_if_open_id(child) {
-            stack.push((i, id));
-        } else if is_dj_if_close(child) {
-            if let Some((open_idx, id)) = stack.pop() {
-                if stack.is_empty() {
-                    // Top-level pair: closing brought depth back to 0.
-                    pairs.push((open_idx, i, id));
+/// A top-level dj-if boundary within a children slice: the open-marker local
+/// index, the matching close-marker local index, and the boundary id.
+#[derive(Debug, Clone)]
+struct Boundary {
+    id: String,
+    open: usize,
+    close: usize,
+}
+
+/// Scan `children` for TOP-LEVEL dj-if boundary pairs (depth-counted so nested
+/// boundaries are skipped — only the outermost pair at this level is returned).
+/// Also returns a mask marking every index that falls inside any boundary range
+/// (open through close, inclusive), so callers can pair the remaining
+/// non-boundary siblings by relative position.
+fn find_top_level_boundaries(children: &[VNode]) -> (Vec<Boundary>, Vec<bool>) {
+    let mut boundaries = Vec::new();
+    let mut excluded = vec![false; children.len()];
+    let mut i = 0;
+    while i < children.len() {
+        if let Some(id) = dj_if_open_id(&children[i]) {
+            // Find matching close via depth counting.
+            let mut depth = 1usize;
+            let mut j = i + 1;
+            let mut close = None;
+            while j < children.len() {
+                if dj_if_open_id(&children[j]).is_some() {
+                    depth += 1;
+                } else if is_dj_if_close(&children[j]) {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(j);
+                        break;
+                    }
                 }
-                // Otherwise the just-closed pair is nested inside an
-                // outer open — the recursive pre-pass will discover it
-                // when it descends into the outer body.
-            } else {
-                // Unbalanced close — bail to no pairs; existing diff handles it.
-                return Vec::new();
+                j += 1;
             }
-        }
-    }
-    if !stack.is_empty() {
-        // Unbalanced open(s) — bail to no pairs.
-        return Vec::new();
-    }
-    pairs
-}
-
-/// Render a `dj-if` boundary subtree as HTML for `InsertSubtree.html`.
-///
-/// Includes the open marker, all body nodes, and the close marker — Shape A
-/// per Iter 2's wire contract (`12-vdom-patch.js:1345-1389`). The client
-/// parses this via an inert `<template>.innerHTML` so any nested `<script>`
-/// tags do NOT execute.
-fn render_dj_if_boundary_html(children: &[VNode], open_idx: usize, close_idx: usize) -> String {
-    let mut out = String::new();
-    for child in children.iter().take(close_idx + 1).skip(open_idx) {
-        out.push_str(&child.to_html());
-    }
-    out
-}
-
-/// Diff sibling lists with `dj-if` keyed-boundary awareness.
-///
-/// Returns `Some(patches)` when at least one of the lists contains an
-/// id-bearing dj-if boundary pair (i.e. the new keyed-subtree machinery
-/// applies). The caller short-circuits its existing keyed/indexed diff
-/// when this returns `Some` — the returned patches are the complete child
-/// diff for this parent.
-///
-/// Returns `None` when neither list has id-bearing boundaries; the caller
-/// then runs its regular keyed/indexed diff (preserving the legacy
-/// `<!--dj-if-->` placeholder + `data-djust-replace` paths unchanged).
-///
-/// Patch emission rules:
-///   - id in OLD only (top-level) → `RemoveSubtree { id }`
-///   - id in NEW only (top-level) → `InsertSubtree { id, path: parent_path,
-///     d: parent_id, index: open_idx_in_new, html: full marker pair + body }`
-///   - id in BOTH (top-level) → recurse into the inner body via
-///     `dj_if_pre_pass_inner` (handles arbitrary nesting including
-///     `{% if %}/{% elif %}/{% else %}` cascades).
-///   - non-boundary children → paired by relative order among non-boundary
-///     siblings. Patch absolute indices are taken from the NEW tree (target).
-///
-/// The boundary id normalizes positions: shifts caused by adding/removing
-/// boundaries no longer cascade into mis-targeted patches in non-boundary
-/// siblings — the core fix for #1358.
-fn dj_if_pre_pass(
-    old: &[VNode],
-    new: &[VNode],
-    path: &[usize],
-    parent_id: &Option<String>,
-) -> Option<Vec<Patch>> {
-    dj_if_pre_pass_inner(old, new, 0, 0, path, parent_id)
-}
-
-/// Recursive worker for `dj_if_pre_pass`. Operates on a slice of children
-/// (`old`, `new`) representing either a parent's full children list (top-
-/// level call) or the body slice of a matched-id boundary (recursive call).
-///
-/// The `*_offset` parameters carry absolute indices into the original parent's
-/// children list — needed because `InsertSubtree.index`, `InsertChild.index`,
-/// `RemoveChild.index`, and child `path` segments must use absolute positions
-/// in the parent's child list (the DOM parent is the SAME for all recursion
-/// levels — dj-if markers are sibling comments, not container elements).
-///
-/// `path` and `parent_id` reference the DOM parent and DO NOT change across
-/// recursion levels. They are the path/id of the actual DOM element whose
-/// children include all the boundary markers (no matter how deeply nested).
-///
-/// ## Why recursion is the right shape (Stage 11 finding on PR #1365)
-///
-/// The first iteration of this pre-pass iterated matched-id body children
-/// element-by-element via `diff_nodes`, treating any nested boundary markers
-/// as ordinary comment-nodes/element-nodes. That produced overlapping
-/// patches when an `if/elif/else` cascade nested boundaries:
-///
-/// - Top-level step 2 emits `InsertSubtree(B, ...)` (B in NEW only).
-/// - Top-level step 3 ALSO emits `Replace` + `InsertChild` patches for B's
-///   markers and content, because `diff_nodes` saw them as ordinary nodes.
-/// - Both patches together produce corrupt DOM with duplicated content.
-///
-/// The fix: when matched-id A's body has nested boundaries, recursively run
-/// `dj_if_pre_pass_inner` on the body slice. The recursion identifies any
-/// nested top-level boundaries WITHIN A's body and emits the appropriate
-/// keyed patches (NOT element-by-element pairing for the markers).
-///
-/// When neither side of A's body has nested boundaries, the recursion falls
-/// through to element-by-element pairing — same as the original behavior.
-fn dj_if_pre_pass_inner(
-    old: &[VNode],
-    new: &[VNode],
-    old_offset: usize,
-    new_offset: usize,
-    path: &[usize],
-    parent_id: &Option<String>,
-) -> Option<Vec<Patch>> {
-    let old_pairs = find_top_level_dj_if_pairs(old);
-    let new_pairs = find_top_level_dj_if_pairs(new);
-    if old_pairs.is_empty() && new_pairs.is_empty() {
-        // Slice has no top-level boundaries on either side. For the
-        // top-level call: caller falls through to keyed/indexed diff.
-        // For the recursive (body) call: caller falls through to
-        // element-by-element pairing of the body.
-        return None;
-    }
-
-    let mut patches: Vec<Patch> = Vec::new();
-
-    // Build id → (open_idx, close_idx) maps (slice-relative indices).
-    let mut old_by_id: HashMap<String, (usize, usize)> = HashMap::new();
-    for (open, close, id) in &old_pairs {
-        old_by_id.insert(id.clone(), (*open, *close));
-    }
-    let mut new_by_id: HashMap<String, (usize, usize)> = HashMap::new();
-    for (open, close, id) in &new_pairs {
-        new_by_id.insert(id.clone(), (*open, *close));
-    }
-
-    // 1. RemoveSubtree for id-only-in-old.
-    for (open, close, id) in &old_pairs {
-        if !new_by_id.contains_key(id) {
-            vdom_trace!(
-                "dj_if_pre_pass: REMOVE_SUBTREE id={} (slice old open={}, close={})",
-                id,
-                open,
-                close
-            );
-            patches.push(Patch::RemoveSubtree { id: id.clone() });
-        }
-    }
-
-    // 2. InsertSubtree for id-only-in-new. The `index` is the open marker's
-    //    ABSOLUTE position within the new parent's children array (same
-    //    semantics as `InsertChild.index`; Iter 2 client uses
-    //    `getSignificantChildren(parent)[index]` as the ref-child).
-    for (open, close, id) in &new_pairs {
-        if !old_by_id.contains_key(id) {
-            let html = render_dj_if_boundary_html(new, *open, *close);
-            let abs_index = new_offset + *open;
-            vdom_trace!(
-                "dj_if_pre_pass: INSERT_SUBTREE id={} abs_index={} html_len={}",
-                id,
-                abs_index,
-                html.len()
-            );
-            patches.push(Patch::InsertSubtree {
-                id: id.clone(),
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                index: abs_index,
-                html,
-            });
-        }
-    }
-
-    // 3. Matched boundaries (id present in BOTH at this level). Recursively
-    //    handle the inner body — this is what fixes the if/elif/else cascade
-    //    case where A's body contains a nested B boundary.
-    //
-    //    The recursion's path/parent_id are UNCHANGED (DOM parent is the
-    //    same). The recursion's offsets advance into the body slice so
-    //    InsertSubtree.index / InsertChild.index / RemoveChild.index land
-    //    at correct ABSOLUTE positions in the parent's children array.
-    //
-    //    If the recursion returns None (no nested boundaries in the body),
-    //    we fall through to element-by-element pairing for that body slice
-    //    — preserving the original behavior for non-cascade cases.
-    //
-    //    Iterate old_pairs in document order so output is deterministic.
-    for (old_open, old_close, id) in &old_pairs {
-        let Some(&(new_open, new_close)) = new_by_id.get(id) else {
-            continue;
-        };
-        vdom_trace!(
-            "dj_if_pre_pass: RECURSE id={} old=[{}, {}] new=[{}, {}]",
-            id,
-            old_open,
-            old_close,
-            new_open,
-            new_close
-        );
-        // Inner body slices (exclusive of the markers themselves).
-        let old_body = &old[*old_open + 1..*old_close];
-        let new_body = &new[new_open + 1..new_close];
-
-        // Recursive pre-pass on the body. Offsets advance to the body's
-        // absolute position in the original parent's children array.
-        let body_old_offset = old_offset + old_open + 1;
-        let body_new_offset = new_offset + new_open + 1;
-
-        if let Some(body_patches) = dj_if_pre_pass_inner(
-            old_body,
-            new_body,
-            body_old_offset,
-            body_new_offset,
-            path,
-            parent_id,
-        ) {
-            // Recursion handled the body (it had nested boundaries).
-            patches.extend(body_patches);
-        } else {
-            // No nested boundaries: pair body children element-by-element.
-            // This is the original behavior — correct for the simple case
-            // of "matched-id boundary with non-boundary content inside".
-            let common = old_body.len().min(new_body.len());
-            for i in 0..common {
-                let mut child_path = path.to_vec();
-                // Path uses absolute index in the NEW tree's children array
-                // (target shape). Inside-body patches resolve via the `d`
-                // field (id-based) on the client; the path is a fallback.
-                child_path.push(body_new_offset + i);
-                patches.extend(diff_nodes(&old_body[i], &new_body[i], &child_path));
-            }
-            // Extra old body children → RemoveChild on the parent (using
-            // OLD absolute indices, descending order so removes don't shift
-            // indices for subsequent removes within this batch).
-            if old_body.len() > new_body.len() {
-                for i in (new_body.len()..old_body.len()).rev() {
-                    let abs_old_idx = body_old_offset + i;
-                    vdom_trace!(
-                        "dj_if_pre_pass: RemoveChild inside boundary id={} abs_old={}",
-                        id,
-                        abs_old_idx
-                    );
-                    patches.push(Patch::RemoveChild {
-                        path: path.to_vec(),
-                        d: parent_id.clone(),
-                        index: abs_old_idx,
-                        child_d: old_body[i].djust_id.clone(),
-                    });
+            if let Some(close) = close {
+                for e in excluded.iter_mut().take(close + 1).skip(i) {
+                    *e = true;
                 }
-            }
-            // Extra new body children → InsertChild on the parent.
-            if new_body.len() > old_body.len() {
-                for (offset, child) in new_body.iter().enumerate().skip(old_body.len()) {
-                    let abs_new_idx = body_new_offset + offset;
-                    vdom_trace!(
-                        "dj_if_pre_pass: InsertChild inside boundary id={} abs_new={}",
-                        id,
-                        abs_new_idx
-                    );
-                    patches.push(Patch::InsertChild {
-                        path: path.to_vec(),
-                        d: parent_id.clone(),
-                        index: abs_new_idx,
-                        node: child.clone(),
-                        ref_d: None,
-                    });
-                }
+                boundaries.push(Boundary { id, open: i, close });
+                i = close + 1;
+                continue;
             }
         }
+        i += 1;
     }
-
-    // 4. Diff non-boundary children (entries outside ALL TOP-LEVEL boundary
-    //    pair ranges in this slice). Pair them by RELATIVE position among
-    //    non-boundary siblings — adding/removing a boundary doesn't shift
-    //    these positions. Patch indices are absolute (apply offsets).
-    //
-    //    Limitation (acceptable for v0.9.4-1): when non-boundary siblings
-    //    carry `dj-key` attributes AND reorder within their relative slot,
-    //    this position-based pairing can produce suboptimal patches. The
-    //    existing keyed-diff (`diff_keyed_children`) handles that case
-    //    optimally, but layering keyed-alignment on top of boundary-keyed
-    //    siblings is out of scope for this iter — production templates
-    //    don't typically reorder elements across `{% if %}` boundaries.
-    let old_excluded: Vec<bool> = build_excluded_mask(old.len(), &old_pairs);
-    let new_excluded: Vec<bool> = build_excluded_mask(new.len(), &new_pairs);
-    let old_kept: Vec<usize> = (0..old.len()).filter(|&i| !old_excluded[i]).collect();
-    let new_kept: Vec<usize> = (0..new.len()).filter(|&i| !new_excluded[i]).collect();
-
-    let common = old_kept.len().min(new_kept.len());
-    for i in 0..common {
-        let old_idx = old_kept[i];
-        let new_idx = new_kept[i];
-        let mut child_path = path.to_vec();
-        // Absolute path index in the parent's children array.
-        child_path.push(new_offset + new_idx);
-        patches.extend(diff_nodes(&old[old_idx], &new[new_idx], &child_path));
-    }
-    // Extra old non-boundary children → RemoveChild (descending order).
-    if old_kept.len() > new_kept.len() {
-        for &old_idx in old_kept[new_kept.len()..].iter().rev() {
-            let abs_old_idx = old_offset + old_idx;
-            patches.push(Patch::RemoveChild {
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                index: abs_old_idx,
-                child_d: old[old_idx].djust_id.clone(),
-            });
-        }
-    }
-    // Extra new non-boundary children → InsertChild.
-    if new_kept.len() > old_kept.len() {
-        for &new_idx in new_kept[old_kept.len()..].iter() {
-            let abs_new_idx = new_offset + new_idx;
-            // ref_d: best-effort ID-based reference for client-side
-            // insertBefore. Looks up the OLD slice's node at the same
-            // slice-relative index (mirrors the original semantics —
-            // works uniformly at top level and inside recursion since
-            // both `old` and `new_idx` are slice-relative).
-            let ref_d = old.get(new_idx).and_then(|n| n.djust_id.clone());
-            patches.push(Patch::InsertChild {
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                index: abs_new_idx,
-                node: new[new_idx].clone(),
-                ref_d,
-            });
-        }
-    }
-
-    Some(patches)
+    (boundaries, excluded)
 }
 
-/// Build a boolean mask: `true` at indices that fall inside any dj-if
-/// boundary pair's `[open..=close]` range.
-fn build_excluded_mask(len: usize, pairs: &[(usize, usize, String)]) -> Vec<bool> {
-    let mut mask = vec![false; len];
-    for (open, close, _) in pairs {
-        for entry in mask.iter_mut().take(close + 1).skip(*open) {
-            *entry = true;
-        }
+/// Serialize a boundary's full marker-pair span (open..=close, inclusive) to
+/// HTML for `InsertSubtree.html`.
+fn serialize_boundary_html(children: &[VNode], open: usize, close: usize) -> String {
+    let mut html = String::new();
+    for child in &children[open..=close] {
+        html.push_str(&child.to_html());
     }
-    mask
+    html
 }
 
-/// Synchronize IDs from old VDOM to new VDOM for matched (non-replaced) elements.
-///
-/// After diffing, the new VDOM has fresh IDs from `parse_html_continue()` which
-/// don't match what the client has in its DOM. The client retains OLD IDs for
-/// elements that weren't replaced. This function copies old IDs to matched new
-/// nodes so that when the new VDOM is stored as `last_vdom`, subsequent diffs
-/// will use IDs that match the client DOM.
-///
-/// Only replaced nodes (tag mismatch) and newly inserted nodes keep their new IDs.
-pub fn sync_ids(old: &VNode, new: &mut VNode) {
-    // If tags differ, this node was replaced - keep new IDs
-    if old.tag != new.tag {
-        return;
-    }
+// ============================================================================
+// Node kind compatibility
+// ============================================================================
 
-    // Copy old ID to new for matched nodes.
-    // In production, only element nodes have IDs. In tests, text nodes may
-    // also have synthetic IDs for apply_patches resolution (#221).
-    if old.djust_id.is_some() {
-        new.djust_id = old.djust_id.clone();
-        // Also sync the dj-id attribute to match (elements only)
-        if !old.is_text() {
-            if let Some(ref id) = new.djust_id {
-                new.attrs.insert("dj-id".to_string(), id.clone());
-            }
-        }
-    }
-
-    // Skip subtrees the client won't patch (dj-update="ignore")
-    if old.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
-        return;
-    }
-
-    // Check for data-djust-replace: children were fully replaced, don't sync
-    let should_replace = old.attrs.contains_key("data-djust-replace")
-        || new.attrs.contains_key("data-djust-replace");
-    if should_replace {
-        return;
-    }
-
-    // dj-if boundary awareness (#1408): mirror `diff_children`'s
-    // `dj_if_pre_pass` so id-syncing respects the same boundary semantics
-    // as patch emission. Without this, a dj-if branch swap left
-    // `last_vdom` with stale ids at positions where the new branch
-    // inserted fresh content — the next render's diff then emitted
-    // RemoveChild/SetAttr patches whose `child_d`/`d` referenced ids the
-    // client DOM never had, leaking content from the prior branch.
-    if sync_ids_dj_if_pre_pass(&old.children, &mut new.children) {
-        return;
-    }
-
-    // Check if children use keyed diffing
-    let has_keys = new.children.iter().any(|n| n.key.is_some());
-
-    if has_keys {
-        sync_ids_keyed(&old.children, &mut new.children);
-    } else {
-        sync_ids_indexed(&old.children, &mut new.children);
-    }
+/// Two nodes are "compatible" for positional pairing when they are either both
+/// comments or both non-comments. A comment vs non-comment pairing is handled
+/// as remove + insert (so a legacy `<!--dj-if-->` placeholder being replaced by
+/// a real element emits InsertChild/RemoveChild, not Replace — #295).
+fn positionally_compatible(a: &VNode, b: &VNode) -> bool {
+    a.is_comment() == b.is_comment()
 }
 
-/// dj-if-boundary-aware id sync (#1408). Mirrors `dj_if_pre_pass` in
-/// shape but operates on ids instead of patches:
-///   - id only in OLD → skip (subtree is being removed; no syncing needed)
-///   - id only in NEW → skip (subtree is brand-new; the new ids are what
-///     the client just received via `InsertSubtree.html`, so they MUST
-///     remain so the next render's diff emits patches matching the DOM)
-///   - id in BOTH → recurse into the matched body slice
-///   - non-boundary siblings → pair by relative order outside boundary
-///     ranges (mirrors `build_excluded_mask` in `dj_if_pre_pass`)
-///
-/// Returns `true` when at least one of the slices contained a top-level
-/// dj-if boundary pair. The caller short-circuits its existing keyed /
-/// indexed sync when this returns `true`.
-///
-/// Returns `false` when neither slice has boundaries; caller falls
-/// through to the legacy keyed/indexed sync.
-fn sync_ids_dj_if_pre_pass(old: &[VNode], new: &mut [VNode]) -> bool {
-    let old_pairs = find_top_level_dj_if_pairs(old);
-    let new_pairs = find_top_level_dj_if_pairs(new);
-    if old_pairs.is_empty() && new_pairs.is_empty() {
-        return false;
-    }
+// ============================================================================
+// Public: diff_nodes
+// ============================================================================
 
-    // Build id → (open_idx, close_idx) for the new slice (lookup target
-    // when iterating old_pairs in document order).
-    let mut new_by_id: HashMap<String, (usize, usize)> = HashMap::new();
-    for (open, close, id) in &new_pairs {
-        new_by_id.insert(id.clone(), (*open, *close));
-    }
-
-    // Matched boundaries: recurse into the body slice. Iterate old_pairs
-    // in document order — each iteration's mutable borrow of `new[..]`
-    // ends before the next iteration. Bodies are disjoint slices.
-    for (old_open, old_close, id) in &old_pairs {
-        let Some(&(new_open, new_close)) = new_by_id.get(id) else {
-            continue;
-        };
-        let old_body = &old[*old_open + 1..*old_close];
-        let new_body = &mut new[new_open + 1..new_close];
-
-        // Recurse first: handles `if/elif/else` cascades where a matched-
-        // id boundary's body itself contains nested boundaries. If the
-        // body has no nested boundaries, fall through to element-by-
-        // element pairwise sync (mirrors `dj_if_pre_pass`'s body
-        // fall-through at line 333+).
-        if !sync_ids_dj_if_pre_pass(old_body, new_body) {
-            let common = old_body.len().min(new_body.len());
-            for i in 0..common {
-                sync_ids(&old_body[i], &mut new_body[i]);
-            }
-            // Extra body children (either side) are removed/inserted;
-            // no syncing applies.
-        }
-    }
-
-    // Non-boundary siblings (entries outside ALL top-level boundary
-    // ranges in this slice): pair by relative order. Adding/removing a
-    // boundary doesn't shift these positions — same invariant
-    // `dj_if_pre_pass` relies on for patch emission.
-    let old_excluded = build_excluded_mask(old.len(), &old_pairs);
-    let new_excluded = build_excluded_mask(new.len(), &new_pairs);
-    let old_kept: Vec<usize> = (0..old.len()).filter(|&i| !old_excluded[i]).collect();
-    let new_kept: Vec<usize> = (0..new.len()).filter(|&i| !new_excluded[i]).collect();
-
-    let common = old_kept.len().min(new_kept.len());
-    for i in 0..common {
-        sync_ids(&old[old_kept[i]], &mut new[new_kept[i]]);
-    }
-    // Extra non-boundary children on either side: kept as-is — old
-    // extras are being removed; new extras keep their fresh ids.
-
-    true
-}
-
-fn sync_ids_keyed(old: &[VNode], new: &mut [VNode]) {
-    let mut old_keys: HashMap<String, usize> = HashMap::new();
-    for (i, node) in old.iter().enumerate() {
-        if let Some(k) = &node.key {
-            old_keys.insert(k.clone(), i);
-        }
-    }
-
-    // Track processed indices for unkeyed matching
-    let mut processed_old: HashSet<usize> = HashSet::new();
-    let mut processed_new: HashSet<usize> = HashSet::new();
-
-    // Sync keyed children
-    for (new_idx, new_node) in new.iter_mut().enumerate() {
-        if let Some(key) = &new_node.key.clone() {
-            processed_new.insert(new_idx);
-            if let Some(&old_idx) = old_keys.get(key) {
-                processed_old.insert(old_idx);
-                sync_ids(&old[old_idx], new_node);
-            }
-            // New keyed node: keep its new IDs
-        }
-    }
-
-    // Collect unkeyed children by relative order (same logic as diff)
-    let old_unkeyed: Vec<usize> = old
-        .iter()
-        .enumerate()
-        .filter(|(i, n)| n.key.is_none() && !processed_old.contains(i))
-        .map(|(i, _)| i)
-        .collect();
-
-    let new_unkeyed_indices: Vec<usize> = new
-        .iter()
-        .enumerate()
-        .filter(|(i, n)| n.key.is_none() && !processed_new.contains(i))
-        .map(|(i, _)| i)
-        .collect();
-
-    let common_len = old_unkeyed.len().min(new_unkeyed_indices.len());
-    for i in 0..common_len {
-        let old_idx = old_unkeyed[i];
-        let new_idx = new_unkeyed_indices[i];
-        sync_ids(&old[old_idx], &mut new[new_idx]);
-    }
-    // Extra new unkeyed children: keep their new IDs
-}
-
-fn sync_ids_indexed(old: &[VNode], new: &mut [VNode]) {
-    let common = old.len().min(new.len());
-    for i in 0..common {
-        sync_ids(&old[i], &mut new[i]);
-    }
-    // Extra new children: keep their new IDs
-}
-
-/// Diff two VNodes and generate patches.
-///
-/// Each patch includes:
-/// - `path`: Index-based path (fallback)
-/// - `d`: Target element's djust_id for O(1) querySelector lookup
-///
-/// IMPORTANT: We use the OLD node's djust_id for targeting because that's what
-/// exists in the client DOM. The new node may have different IDs if the server
-/// re-parsed the HTML with a reset ID counter.
+/// Compute the patches transforming `old` into `new`. `path` is the index path
+/// from the diff root to the node pair being compared; emitted patches for this
+/// node use `path`, and child patches use `path + [child_index]`.
 pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
     let mut patches = Vec::new();
+    diff_node_into(old, new, path, &mut patches);
+    patches
+}
 
-    // Use OLD node's djust_id for targeting - that's what's in the client DOM
-    let target_id = old.djust_id.clone();
-
-    // Trace: log node comparison
-    vdom_trace!(
-        "diff_nodes: path={:?} old_tag={} new_tag={} old_id={:?} new_id={:?}",
-        path,
-        old.tag,
-        new.tag,
-        old.djust_id,
-        new.djust_id
-    );
-
-    // Skip diffing subtrees marked with dj-update="ignore" — the client
-    // won't patch them, so generating patches is wasted work.
-    if old.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
-        vdom_trace!("SKIP dj-update=ignore subtree at path={:?}", path);
-        return patches;
-    }
-
-    // If tags differ, replace the whole node.
-    // Special case: <!--dj-if--> placeholders (issue #295 fix) should generate
-    // RemoveChild + InsertChild instead of Replace when toggling to actual content,
-    // to maintain semantic consistency (conditionals "insert" content) and backward
-    // compatibility with code expecting InsertChild patches.
+fn diff_node_into(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
+    // Tag mismatch (including #text vs element, element vs #text) -> Replace.
     if old.tag != new.tag {
-        // Check if old is a <!--dj-if--> placeholder and new is actual content
-        if old.is_comment()
-            && old.text.as_ref().map(|t| t == "dj-if").unwrap_or(false)
-            && !new.is_comment()
-        {
-            vdom_trace!(
-                "DJ-IF PLACEHOLDER -> CONTENT: removing placeholder and inserting <{}> (id={:?})",
-                new.tag,
-                target_id
-            );
-
-            // Extract parent path and child index from current path
-            if let Some((&child_idx, parent_path)) = path.split_last() {
-                // Get parent's djust_id from the old node's parent context
-                // Since we don't have direct access to the parent node here,
-                // we need to pass None for parent_id and let the client handle it
-                let parent_id = None; // Will be resolved by client via path traversal
-
-                // RemoveChild to remove the <!--dj-if--> placeholder
-                patches.push(Patch::RemoveChild {
-                    path: parent_path.to_vec(),
-                    d: parent_id.clone(),
-                    index: child_idx,
-                    child_d: old.djust_id.clone(),
-                });
-
-                // InsertChild to add the actual content
-                patches.push(Patch::InsertChild {
-                    path: parent_path.to_vec(),
-                    d: parent_id,
-                    index: child_idx,
-                    node: new.clone(),
-                    ref_d: None,
-                });
-
-                return patches;
-            }
-            // Fallback if path is empty (shouldn't happen in practice)
-        }
-
-        // Also handle the reverse: content -> placeholder (for completeness)
-        if !old.is_comment()
-            && new.is_comment()
-            && new.text.as_ref().map(|t| t == "dj-if").unwrap_or(false)
-        {
-            vdom_trace!(
-                "CONTENT -> DJ-IF PLACEHOLDER: removing <{}> and inserting placeholder",
-                old.tag
-            );
-
-            if let Some((&child_idx, parent_path)) = path.split_last() {
-                let parent_id = None;
-
-                patches.push(Patch::RemoveChild {
-                    path: parent_path.to_vec(),
-                    d: parent_id.clone(),
-                    index: child_idx,
-                    child_d: old.djust_id.clone(),
-                });
-
-                patches.push(Patch::InsertChild {
-                    path: parent_path.to_vec(),
-                    d: parent_id,
-                    index: child_idx,
-                    node: new.clone(),
-                    ref_d: None,
-                });
-
-                return patches;
-            }
-        }
-
-        // Standard Replace for other tag mismatches
-        vdom_trace!(
-            "TAG MISMATCH: replacing <{}> (id={:?}) with <{}>",
-            old.tag,
-            target_id,
-            new.tag
-        );
-        patches.push(Patch::Replace {
+        vdom_trace!("Replace at {:?}: <{}> -> <{}>", path, old.tag, new.tag);
+        out.push(Patch::Replace {
             path: path.to_vec(),
-            d: target_id,
+            d: old.djust_id.clone(),
             node: new.clone(),
         });
-        return patches;
+        return;
     }
 
-    // Diff text content.
-    // In production, text nodes don't have djust_ids (the parser only assigns
-    // IDs to elements). However, test infrastructure may assign synthetic IDs
-    // to text nodes so that apply_patches can resolve them by ID after
-    // structural changes shift path indices (#221).
-    if old.is_text() {
+    // Text / comment nodes: compare text content.
+    if new.is_text() || new.is_comment() {
         if old.text != new.text {
-            vdom_trace!(
-                "TEXT CHANGE: path={:?} old={:?} new={:?}",
-                path,
-                old.text
-                    .as_ref()
-                    .map(|t| t.chars().take(50).collect::<String>()),
-                new.text
-                    .as_ref()
-                    .map(|t| t.chars().take(50).collect::<String>())
-            );
-            if let Some(text) = &new.text {
-                patches.push(Patch::SetText {
-                    path: path.to_vec(),
-                    d: old.djust_id.clone(),
-                    text: text.clone(),
-                });
-            }
-        }
-        return patches;
-    }
-
-    // Diff comment nodes (e.g., <!--dj-if--> placeholders for issue #295).
-    // Comments are static and don't change, but we need to handle them
-    // to avoid mismatching siblings in the VDOM diff.
-    if old.is_comment() {
-        if old.text != new.text {
-            vdom_trace!(
-                "COMMENT CHANGE: path={:?} old={:?} new={:?}",
-                path,
-                old.text,
-                new.text
-            );
-            // Comments can be replaced if needed (though our placeholders are static)
-            patches.push(Patch::Replace {
+            out.push(Patch::SetText {
                 path: path.to_vec(),
                 d: old.djust_id.clone(),
-                node: new.clone(),
+                text: new.text.clone().unwrap_or_default(),
             });
         }
-        return patches;
+        return;
     }
 
-    // Diff attributes
-    patches.extend(diff_attrs(old, new, path, &target_id));
+    // Same-tag element: diff attributes on this node first (so survivor
+    // mutations precede child removals in the emitted Vec — #1420 ordering).
+    diff_attrs(old, new, path, out);
 
-    // Diff children (parent's djust_id is used for child operations)
-    patches.extend(diff_children(old, new, path, &target_id));
-
-    patches
-}
-
-fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], target_id: &Option<String>) -> Vec<Patch> {
-    let mut patches = Vec::new();
-
-    // Find removed and changed attributes
-    for (key, old_value) in &old.attrs {
-        // Skip dj-id and data-dj-src attributes - managed by parser/renderer, not diffed
-        if key == "dj-id" || key == "data-dj-src" {
-            continue;
-        }
-
-        match new.attrs.get(key) {
-            None => {
-                // Never remove dj-* event handler attributes — these must be preserved
-                // to protect against VDOM path mismatches when conditional rendering
-                // changes the DOM structure (e.g., {% if conversation %} adds elements,
-                // shifting indices so diff incorrectly matches unrelated elements).
-                if key.starts_with("dj-") {
-                    continue;
-                }
-                patches.push(Patch::RemoveAttr {
-                    path: path.to_vec(),
-                    d: target_id.clone(),
-                    key: key.clone(),
-                });
-            }
-            Some(new_value) if new_value != old_value => {
-                patches.push(Patch::SetAttr {
-                    path: path.to_vec(),
-                    d: target_id.clone(),
-                    key: key.clone(),
-                    value: new_value.clone(),
-                });
-            }
-            _ => {}
-        }
+    // dj-update="ignore": the new node's interior is preserved verbatim from
+    // the old render (server splices old children in before diffing). Emit no
+    // child patches — the subtree is treated as unchanged. (#1252 / #1417)
+    if new.attrs.get("dj-update").map(String::as_str) == Some("ignore") {
+        return;
     }
 
-    // Find added attributes
-    for (key, new_value) in &new.attrs {
-        // Skip dj-id and data-dj-src attributes
-        if key == "dj-id" || key == "data-dj-src" {
-            continue;
-        }
-
-        if !old.attrs.contains_key(key) {
-            patches.push(Patch::SetAttr {
-                path: path.to_vec(),
-                d: target_id.clone(),
-                key: key.clone(),
-                value: new_value.clone(),
-            });
-        }
+    // data-djust-replace: clear-and-fill the children wholesale.
+    if old.attrs.contains_key("data-djust-replace") && new.attrs.contains_key("data-djust-replace")
+    {
+        diff_children_replace_mode(old, new, path, out);
+        return;
     }
 
-    patches
-}
-
-/// Diff children of two nodes.
-/// `parent_id` is the djust_id of the parent element, used for child operations.
-fn diff_children(
-    old: &VNode,
-    new: &VNode,
-    path: &[usize],
-    parent_id: &Option<String>,
-) -> Vec<Patch> {
-    let mut patches = Vec::new();
-
-    // Check for data-djust-replace attribute - if present, replace all children
-    // instead of diffing them. This is useful for containers where content
-    // changes completely (like switching conversations in a chat app).
-    let should_replace = old.attrs.contains_key("data-djust-replace")
-        || new.attrs.contains_key("data-djust-replace");
-
-    if should_replace {
-        vdom_trace!(
-            "diff_children: parent_id={:?} - REPLACE MODE (data-djust-replace)",
-            parent_id
-        );
-        return replace_all_children(old, new, path, parent_id);
-    }
-
-    // Capability of #1358: when sibling lists contain id-bearing dj-if
-    // boundary pairs (Iter 1's `<!--dj-if id="..."-->...<!--/dj-if-->`),
-    // run the keyed-boundary pre-pass. It emits RemoveSubtree/InsertSubtree
-    // for unmatched boundaries and recurses into matched ones. Non-boundary
-    // children are paired by relative order — sibling shifts caused by
-    // boundary flips no longer cascade into mis-targeted patches.
-    //
-    // Returns None when neither side has id-bearing boundaries, in which
-    // case we fall through to the existing keyed/indexed diff (preserving
-    // the legacy `<!--dj-if-->` no-id placeholder path at #295).
-    if let Some(boundary_patches) = dj_if_pre_pass(&old.children, &new.children, path, parent_id) {
-        vdom_trace!(
-            "diff_children: dj-if pre-pass produced {} patches",
-            boundary_patches.len()
-        );
-        patches.extend(boundary_patches);
-        return patches;
-    }
-
-    // Check if we can use keyed diffing
-    let has_keys = new.children.iter().any(|n| n.key.is_some());
-
-    vdom_trace!(
-        "diff_children: path={:?} parent_id={:?} old_children={} new_children={} has_keys={}",
+    // General child reconciliation (handles dj-if boundaries + keyed/unkeyed).
+    diff_children(
+        &old.children,
+        &new.children,
+        0,
+        0,
         path,
-        parent_id,
-        old.children.len(),
-        new.children.len(),
-        has_keys
+        old.djust_id.as_deref(),
+        out,
     );
-
-    if has_keys {
-        // Warn about mixed keyed/unkeyed children — a common source of suboptimal diffs.
-        // Keyed siblings should ideally ALL have keys for best diffing performance.
-        // (#1254) Promoted from `vdom_trace!` to `tracing::warn!` so the warning
-        // fires by default; see error code DJE-050.
-        if !new.children.iter().all(|n| n.key.is_some()) {
-            let keyed_count = new.children.iter().filter(|n| n.key.is_some()).count();
-            let total = new.children.len();
-            tracing::warn!(
-                "[DJE-050] Mixed keyed/unkeyed children ({}/{} keyed) on parent \
-                 tag=<{}> id={:?}. For optimal diffing, add keys to ALL siblings \
-                 or NONE. Run with DJUST_VDOM_TRACE=1 for detailed diff output.",
-                keyed_count,
-                total,
-                new.tag,
-                parent_id
-            );
-        }
-
-        vdom_trace!("  Using KEYED diffing");
-        patches.extend(diff_keyed_children(
-            &old.children,
-            &new.children,
-            path,
-            parent_id,
-        ));
-    } else {
-        vdom_trace!("  Using INDEXED diffing");
-        patches.extend(diff_indexed_children(
-            &old.children,
-            &new.children,
-            path,
-            parent_id,
-        ));
-    }
-
-    patches
 }
 
-fn diff_keyed_children(
-    old: &[VNode],
-    new: &[VNode],
-    path: &[usize],
-    parent_id: &Option<String>,
-) -> Vec<Patch> {
-    let mut patches = Vec::new();
+// ============================================================================
+// Attribute diff
+// ============================================================================
 
-    // Build key-to-index maps, warning on duplicate keys.
-    // (#1254) Promoted from `vdom_trace!` to `tracing::warn!` — duplicate
-    // keys silently overwrite earlier siblings in the key→index HashMap,
-    // making them invisible to the keyed diff. See error code DJE-051.
-    let mut old_keys: HashMap<String, usize> = HashMap::new();
-    for (i, node) in old.iter().enumerate() {
-        if let Some(k) = &node.key {
-            if let Some(&prev_idx) = old_keys.get(k) {
-                tracing::warn!(
-                    "[DJE-051] Duplicate dj-key '{}' in OLD children at indices {} \
-                     and {}. The earlier element will be INVISIBLE to the keyed \
-                     diff (silently overwritten in the key→index map). Each keyed \
-                     sibling must have a unique key.",
-                    k,
-                    prev_idx,
-                    i
-                );
+fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
+    // Deterministic order: sort keys.
+    let mut new_keys: Vec<&String> = new.attrs.keys().collect();
+    new_keys.sort();
+    for key in new_keys {
+        // `dj-id` is an id artifact, never diffed as a normal attribute.
+        if key == "dj-id" {
+            continue;
+        }
+        let new_val = &new.attrs[key];
+        match old.attrs.get(key) {
+            Some(old_val) if old_val == new_val => {}
+            _ => {
+                out.push(Patch::SetAttr {
+                    path: path.to_vec(),
+                    d: old.djust_id.clone(),
+                    key: key.clone(),
+                    value: new_val.clone(),
+                });
             }
-            old_keys.insert(k.clone(), i);
         }
     }
 
-    let mut new_keys: HashMap<String, usize> = HashMap::new();
-    for (i, node) in new.iter().enumerate() {
-        if let Some(k) = &node.key {
-            if let Some(&prev_idx) = new_keys.get(k) {
-                tracing::warn!(
-                    "[DJE-051] Duplicate dj-key '{}' in NEW children at indices {} \
-                     and {}. The earlier element will be INVISIBLE to the keyed \
-                     diff (silently overwritten in the key→index map). Each keyed \
-                     sibling must have a unique key.",
-                    k,
-                    prev_idx,
-                    i
-                );
-            }
-            new_keys.insert(k.clone(), i);
+    let mut old_keys: Vec<&String> = old.attrs.keys().collect();
+    old_keys.sort();
+    for key in old_keys {
+        if key == "dj-id" {
+            continue;
         }
-    }
-
-    vdom_trace!(
-        "diff_keyed_children: old_keys={:?} new_keys={:?}",
-        old_keys.keys().collect::<Vec<_>>(),
-        new_keys.keys().collect::<Vec<_>>()
-    );
-
-    // Find keyed nodes to remove
-    for (key, &old_idx) in &old_keys {
-        if !new_keys.contains_key(key) {
-            vdom_trace!("  REMOVE key={} from old_idx={}", key, old_idx);
-            patches.push(Patch::RemoveChild {
+        // dj-* event bindings must never be removed (client-side handlers).
+        if key.starts_with("dj-") {
+            continue;
+        }
+        if !new.attrs.contains_key(key) {
+            out.push(Patch::RemoveAttr {
                 path: path.to_vec(),
-                d: parent_id.clone(),
-                index: old_idx,
-                child_d: old[old_idx].djust_id.clone(),
+                d: old.djust_id.clone(),
+                key: key.clone(),
             });
         }
     }
-
-    // Track which indices have been processed (keyed children)
-    let mut processed_old_indices: HashSet<usize> = HashSet::new();
-    let mut processed_new_indices: HashSet<usize> = HashSet::new();
-
-    // Build the sequence of old indices in new-child order (for surviving keyed nodes).
-    // We'll use LIS on this to determine which nodes can stay in place.
-    let mut new_idx_for_surviving: Vec<usize> = Vec::new();
-    let mut old_indices_in_new_order: Vec<usize> = Vec::new();
-
-    for (new_idx, new_node) in new.iter().enumerate() {
-        if let Some(key) = &new_node.key {
-            if let Some(&old_idx) = old_keys.get(key) {
-                new_idx_for_surviving.push(new_idx);
-                old_indices_in_new_order.push(old_idx);
-            }
-        }
-    }
-
-    // Compute LIS of old indices -- these elements maintain their relative order
-    // and don't need MoveChild patches. Only non-LIS elements are moved.
-    let lis_positions = longest_increasing_subsequence(&old_indices_in_new_order);
-    let mut lis_set: HashSet<usize> = HashSet::new();
-    for &lis_pos in &lis_positions {
-        lis_set.insert(new_idx_for_surviving[lis_pos]);
-    }
-
-    // Issue #1260 / audit weakness #5/#6: the LIS-skip optimisation is only
-    // sound for FULLY-KEYED sibling lists. With unkeyed siblings interleaved,
-    // the assumption "MoveChild patches for non-LIS keyed children — plus
-    // implicit shifts from inserts/removes — will land in-LIS keyed children
-    // at their new absolute positions" breaks: unkeyed-sibling patches use
-    // RELATIVE-position pairing among unkeyed nodes and don't coordinate with
-    // keyed-sibling positions. A surviving keyed child can be left stranded
-    // (proptest-shrunk reproducer:
-    //   tree_a = section[#text*4, div key=f]
-    //   tree_b = section[div key=f, #text*2]
-    // — with the old algorithm the keyed div_f had a single-element LIS,
-    // was marked "in place", and never received a MoveChild even though its
-    // absolute index changed from 4 to 0.)
-    //
-    // Fix: when the sibling list is mixed (any unkeyed child in either old or
-    // new), emit MoveChild for every surviving keyed child whose old_idx
-    // differs from its new_idx. The LIS optimisation still applies to the
-    // fully-keyed case, where it correctly minimises the patch count.
-    let has_unkeyed_siblings =
-        old.iter().any(|n| n.key.is_none()) || new.iter().any(|n| n.key.is_none());
-
-    vdom_trace!(
-        "  LIS optimization: {} surviving keyed nodes, LIS length={}, moves needed={}, \
-         has_unkeyed_siblings={}",
-        old_indices_in_new_order.len(),
-        lis_positions.len(),
-        old_indices_in_new_order.len() - lis_positions.len(),
-        has_unkeyed_siblings
-    );
-
-    // Find keyed nodes to add, move, or diff
-    for (new_idx, new_node) in new.iter().enumerate() {
-        if let Some(key) = &new_node.key {
-            processed_new_indices.insert(new_idx);
-            match old_keys.get(key) {
-                None => {
-                    // New keyed node - ref_d is the djust_id of what's currently at this index in old
-                    let ref_d = old.get(new_idx).and_then(|n| n.djust_id.clone());
-                    vdom_trace!("  INSERT key={} at new_idx={}", key, new_idx);
-                    patches.push(Patch::InsertChild {
-                        path: path.to_vec(),
-                        d: parent_id.clone(),
-                        index: new_idx,
-                        node: new_node.clone(),
-                        ref_d,
-                    });
-                }
-                Some(&old_idx) => {
-                    processed_old_indices.insert(old_idx);
-
-                    // LIS optimization: elements in the LIS keep their relative
-                    // order and don't need MoveChild patches. All non-LIS
-                    // elements must be moved because other moves may shift
-                    // their positions even when old_idx == new_idx.
-                    //
-                    // (#1260) The skip is only safe in a FULLY-KEYED list.
-                    // With unkeyed siblings interleaved, the implicit "other
-                    // patches will land me at new_idx" assumption breaks —
-                    // see the comment on `has_unkeyed_siblings` above. In
-                    // that case, fall back to "always emit MoveChild when
-                    // old_idx != new_idx" for surviving keyed children.
-                    let lis_skip_safe = lis_set.contains(&new_idx) && !has_unkeyed_siblings;
-                    if lis_skip_safe {
-                        if old_idx != new_idx {
-                            vdom_trace!("  SKIP MOVE key={} (in LIS, fully-keyed list)", key);
-                        }
-                    } else if !lis_set.contains(&new_idx) || old_idx != new_idx {
-                        vdom_trace!("  MOVE key={} from {} to {}", key, old_idx, new_idx);
-                        patches.push(Patch::MoveChild {
-                            path: path.to_vec(),
-                            d: parent_id.clone(),
-                            from: old_idx,
-                            to: new_idx,
-                            child_d: old[old_idx].djust_id.clone(),
-                        });
-                    }
-
-                    // Diff the keyed node itself
-                    vdom_trace!("  DIFF key={} old_idx={} new_idx={}", key, old_idx, new_idx);
-                    let mut child_path = path.to_vec();
-                    child_path.push(new_idx);
-                    patches.extend(diff_nodes(&old[old_idx], new_node, &child_path));
-                }
-            }
-        }
-    }
-
-    // Collect unkeyed children by their relative order (not absolute index)
-    // This ensures correct matching when keyed children shift positions
-    let old_unkeyed: Vec<usize> = old
-        .iter()
-        .enumerate()
-        .filter(|(i, n)| n.key.is_none() && !processed_old_indices.contains(i))
-        .map(|(i, _)| i)
-        .collect();
-
-    let new_unkeyed: Vec<usize> = new
-        .iter()
-        .enumerate()
-        .filter(|(i, n)| n.key.is_none() && !processed_new_indices.contains(i))
-        .map(|(i, _)| i)
-        .collect();
-
-    vdom_trace!(
-        "  Unkeyed children: old={:?} new={:?}",
-        old_unkeyed,
-        new_unkeyed
-    );
-
-    // Diff common unkeyed children by relative position.
-    // When keyed siblings move, unkeyed children may end up at different
-    // absolute positions. For nodes with djust_ids, emit MoveChild patches
-    // so apply_patches can relocate them by ID. For nodes without djust_ids
-    // (text nodes), we skip the move because apply_patches resolves text
-    // patches using path-based traversal after structural changes (#219).
-    let common_len = old_unkeyed.len().min(new_unkeyed.len());
-    for i in 0..common_len {
-        let old_idx = old_unkeyed[i];
-        let new_idx = new_unkeyed[i];
-        processed_old_indices.insert(old_idx);
-        processed_new_indices.insert(new_idx);
-        vdom_trace!(
-            "  DIFF unkeyed: old[{}] <-> new[{}] (relative pos {})",
-            old_idx,
-            new_idx,
-            i
-        );
-
-        // Only emit MoveChild for nodes that have a djust_id, so
-        // apply_patches can locate them reliably after structural changes.
-        // Text nodes lack djust_id in production and are handled via
-        // path-based fallback in SetText patches.
-        if old_idx != new_idx && old[old_idx].djust_id.is_some() {
-            vdom_trace!("  MOVE unkeyed from {} to {}", old_idx, new_idx);
-            patches.push(Patch::MoveChild {
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                from: old_idx,
-                to: new_idx,
-                child_d: old[old_idx].djust_id.clone(),
-            });
-        }
-
-        let mut child_path = path.to_vec();
-        child_path.push(new_idx);
-        patches.extend(diff_nodes(&old[old_idx], &new[new_idx], &child_path));
-    }
-
-    // Insert extra new unkeyed children
-    for &new_idx in &new_unkeyed[common_len..] {
-        let ref_d = old.get(new_idx).and_then(|n| n.djust_id.clone());
-        vdom_trace!("  INSERT unkeyed at index {}", new_idx);
-        patches.push(Patch::InsertChild {
-            path: path.to_vec(),
-            d: parent_id.clone(),
-            index: new_idx,
-            node: new[new_idx].clone(),
-            ref_d,
-        });
-    }
-
-    // Remove extra old unkeyed children
-    for &old_idx in &old_unkeyed[common_len..] {
-        vdom_trace!("  REMOVE unkeyed at index {}", old_idx);
-        patches.push(Patch::RemoveChild {
-            path: path.to_vec(),
-            d: parent_id.clone(),
-            index: old_idx,
-            child_d: old[old_idx].djust_id.clone(),
-        });
-    }
-
-    patches
 }
 
-fn diff_indexed_children(
-    old: &[VNode],
-    new: &[VNode],
-    path: &[usize],
-    parent_id: &Option<String>,
-) -> Vec<Patch> {
-    let mut patches = Vec::new();
-    let old_len = old.len();
-    let new_len = new.len();
+// ============================================================================
+// data-djust-replace mode
+// ============================================================================
 
-    vdom_trace!(
-        "diff_indexed_children: old_len={} new_len={} common={}",
-        old_len,
-        new_len,
-        old_len.min(new_len)
-    );
-
-    // Diff common children
-    let patch_count_before = patches.len();
-    for i in 0..old_len.min(new_len) {
-        let mut child_path = path.to_vec();
-        child_path.push(i);
-        vdom_trace!(
-            "  Comparing child[{}]: old=<{}> (id={:?}) vs new=<{}> (id={:?})",
-            i,
-            old[i].tag,
-            old[i].djust_id,
-            new[i].tag,
-            new[i].djust_id
-        );
-        patches.extend(diff_nodes(&old[i], &new[i], &child_path));
-    }
-
-    // Warn when unkeyed diffing produces excessive patches (likely a reorder)
-    let common = old_len.min(new_len);
-    let child_patches = patches.len() - patch_count_before;
-    if common > 10 && child_patches > common / 2 {
-        vdom_trace!(
-            "  PERFORMANCE WARNING: Unkeyed list with {} children produced {} patches. \
-             This often means the list was reordered. Add `data-key` attributes to \
-             enable keyed diffing and reduce patch count. \
-             Run with DJUST_VDOM_TRACE=1 for detailed diff output. \
-             See: https://djust.org/errors/DJE-052",
-            common,
-            child_patches
-        );
-    }
-
-    // Remove extra old children
-    if old_len > new_len {
-        vdom_trace!(
-            "  Removing {} extra children (indices {}-{})",
-            old_len - new_len,
-            new_len,
-            old_len - 1
-        );
-        for i in (new_len..old_len).rev() {
-            vdom_trace!("    RemoveChild index={} parent_id={:?}", i, parent_id);
-            patches.push(Patch::RemoveChild {
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                index: i,
-                child_d: old[i].djust_id.clone(),
-            });
-        }
-    }
-
-    // Add new children
-    if new_len > old_len {
-        vdom_trace!(
-            "  Adding {} new children (indices {}-{})",
-            new_len - old_len,
-            old_len,
-            new_len - 1
-        );
-        #[allow(clippy::needless_range_loop)]
-        for i in old_len..new_len {
-            vdom_trace!(
-                "    InsertChild index={} tag=<{}> parent_id={:?}",
-                i,
-                new[i].tag,
-                parent_id
-            );
-            // ref_d: no existing sibling at this index (appending beyond old length)
-            patches.push(Patch::InsertChild {
-                path: path.to_vec(),
-                d: parent_id.clone(),
-                index: i,
-                node: new[i].clone(),
-                ref_d: None,
-            });
-        }
-    }
-
-    patches
-}
-
-/// Replace all children without diffing.
-///
-/// Used when a container has `data-djust-replace` attribute, indicating that
-/// its content should be fully replaced rather than diffed. This is more
-/// efficient for scenarios like conversation switching where the entire
-/// content changes.
-fn replace_all_children(
-    old: &VNode,
-    new: &VNode,
-    path: &[usize],
-    parent_id: &Option<String>,
-) -> Vec<Patch> {
-    let mut patches = Vec::new();
-    let old_len = old.children.len();
-    let new_len = new.children.len();
-
-    vdom_trace!(
-        "replace_all_children: removing {} old, inserting {} new",
-        old_len,
-        new_len
-    );
-
-    // Remove all old children (in reverse order to maintain indices)
-    for i in (0..old_len).rev() {
-        vdom_trace!("  RemoveChild index={}", i);
-        patches.push(Patch::RemoveChild {
+fn diff_children_replace_mode(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
+    let d = old.djust_id.clone();
+    // Remove all old children, descending index (so earlier indices stay valid).
+    for i in (0..old.children.len()).rev() {
+        out.push(Patch::RemoveChild {
             path: path.to_vec(),
-            d: parent_id.clone(),
+            d: d.clone(),
             index: i,
             child_d: old.children[i].djust_id.clone(),
         });
     }
-
-    // Insert all new children
-    for i in 0..new_len {
-        vdom_trace!("  InsertChild index={} tag=<{}>", i, new.children[i].tag);
-        // ref_d: None because we're replacing all children (old ones already removed)
-        patches.push(Patch::InsertChild {
+    // Insert all new children, ascending index.
+    for (i, child) in new.children.iter().enumerate() {
+        out.push(Patch::InsertChild {
             path: path.to_vec(),
-            d: parent_id.clone(),
+            d: d.clone(),
             index: i,
-            node: new.children[i].clone(),
+            node: child.clone(),
             ref_d: None,
         });
     }
-
-    patches
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// ============================================================================
+// Child reconciliation (dj-if boundaries + keyed/unkeyed)
+// ============================================================================
 
-    #[test]
-    fn test_diff_text_change() {
-        let old = VNode::text("Hello");
-        let new = VNode::text("World");
-        let patches = diff_nodes(&old, &new, &[]);
+/// Reconcile two children slices. `old`/`new` are slices; `old_off`/`new_off`
+/// are the ABSOLUTE indices of `old[0]`/`new[0]` within the diff parent's full
+/// children vector (so emitted indices/paths are parent-absolute even when this
+/// is a recursive call over a dj-if boundary body). `ppath` is the parent's
+/// path; `pid` the parent's djust_id.
+#[allow(clippy::too_many_arguments)]
+fn diff_children(
+    old: &[VNode],
+    new: &[VNode],
+    old_off: usize,
+    new_off: usize,
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    let (old_boundaries, old_excluded) = find_top_level_boundaries(old);
+    let (new_boundaries, new_excluded) = find_top_level_boundaries(new);
 
-        assert_eq!(patches.len(), 1);
-        match &patches[0] {
-            Patch::SetText { text, .. } => assert_eq!(text, "World"),
-            _ => panic!("Expected SetText patch"),
+    // --- Boundary matching by id ---
+    if !old_boundaries.is_empty() || !new_boundaries.is_empty() {
+        let new_ids: AHashMap<&str, &Boundary> =
+            new_boundaries.iter().map(|b| (b.id.as_str(), b)).collect();
+        let old_ids: AHashMap<&str, &Boundary> =
+            old_boundaries.iter().map(|b| (b.id.as_str(), b)).collect();
+
+        for ob in &old_boundaries {
+            if let Some(nb) = new_ids.get(ob.id.as_str()) {
+                // Matched in both -> recurse into the body slice.
+                let old_body = &old[ob.open + 1..ob.close];
+                let new_body = &new[nb.open + 1..nb.close];
+                diff_children(
+                    old_body,
+                    new_body,
+                    old_off + ob.open + 1,
+                    new_off + nb.open + 1,
+                    ppath,
+                    pid,
+                    out,
+                );
+            } else {
+                // Old-only -> RemoveSubtree.
+                out.push(Patch::RemoveSubtree { id: ob.id.clone() });
+            }
+        }
+        for nb in &new_boundaries {
+            if !old_ids.contains_key(nb.id.as_str()) {
+                // New-only -> InsertSubtree.
+                out.push(Patch::InsertSubtree {
+                    id: nb.id.clone(),
+                    path: ppath.to_vec(),
+                    d: pid.map(|s| s.to_string()),
+                    index: new_off + nb.open,
+                    html: serialize_boundary_html(new, nb.open, nb.close),
+                });
+            }
         }
     }
 
-    #[test]
-    fn test_diff_attr_change() {
-        let old = VNode::element("div")
-            .with_attr("class", "old")
-            .with_djust_id("0");
-        let new = VNode::element("div")
-            .with_attr("class", "new")
-            .with_djust_id("0");
-        let patches = diff_nodes(&old, &new, &[]);
+    // --- Non-boundary sibling reconciliation ---
+    let old_nb: Vec<(usize, &VNode)> = old
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !old_excluded[*i])
+        .map(|(i, n)| (old_off + i, n))
+        .collect();
+    let new_nb: Vec<(usize, &VNode)> = new
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !new_excluded[*i])
+        .map(|(i, n)| (new_off + i, n))
+        .collect();
 
-        assert!(patches.iter().any(
-            |p| matches!(p, Patch::SetAttr { key, value, d, .. } if key == "class" && value == "new" && d == &Some("0".to_string()))
-        ));
+    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out);
+}
+
+/// Reconcile two lists of non-boundary siblings (each carrying its parent-
+/// absolute index). Chooses keyed reconciliation if any NEW sibling is keyed,
+/// otherwise positional/indexed.
+fn reconcile_siblings(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
+    if any_new_keyed {
+        reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+    } else {
+        reconcile_indexed(old_nb, new_nb, ppath, pid, out);
     }
+}
 
-    #[test]
-    fn test_diff_children_insert() {
-        let old = VNode::element("div").with_djust_id("0");
-        let new = VNode::element("div")
-            .with_djust_id("0")
-            .with_child(VNode::text("child"));
-        let patches = diff_nodes(&old, &new, &[]);
-
-        assert!(patches
-            .iter()
-            .any(|p| matches!(p, Patch::InsertChild { d, .. } if d == &Some("0".to_string()))));
+/// Positional reconciliation: pair the i-th old non-boundary sibling with the
+/// i-th new one. Compatible pairs recurse (Replace on tag mismatch); a
+/// comment-vs-noncomment pair is remove+insert; surplus old -> RemoveChild,
+/// surplus new -> InsertChild.
+fn reconcile_indexed(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    let common = old_nb.len().min(new_nb.len());
+    for i in 0..common {
+        let (old_abs, old_node) = old_nb[i];
+        let (new_abs, new_node) = new_nb[i];
+        if positionally_compatible(old_node, new_node) {
+            let mut child_path = ppath.to_vec();
+            child_path.push(new_abs);
+            diff_node_into(old_node, new_node, &child_path, out);
+        } else {
+            // Incompatible kind: remove old, insert new.
+            push_remove_child(old_abs, old_node, ppath, pid, out);
+            push_insert_child(new_abs, new_node, ppath, pid, out);
+        }
     }
-
-    #[test]
-    fn test_diff_replace_tag() {
-        let old = VNode::element("div").with_djust_id("0");
-        let new = VNode::element("span").with_djust_id("1");
-        let patches = diff_nodes(&old, &new, &[]);
-
-        assert_eq!(patches.len(), 1);
-        // Use OLD node's ID for targeting - that's what's in the client DOM
-        assert!(matches!(&patches[0], Patch::Replace { d, .. } if d == &Some("0".to_string())));
+    // Surplus old -> remove (descending order so apply-index fallback is safe).
+    for i in (common..old_nb.len()).rev() {
+        let (old_abs, old_node) = old_nb[i];
+        push_remove_child(old_abs, old_node, ppath, pid, out);
     }
-
-    #[test]
-    fn test_diff_with_whitespace_text_nodes() {
-        // Simulate what html5ever creates: element children interspersed with whitespace text nodes
-        // This is the structure we see in the real bug: form has 11 children in Rust VDOM
-        // (elements at even indices 0,2,4,6,8,10 and whitespace at odd indices 1,3,5,7,9)
-        let old = VNode::element("form")
-            .with_djust_id("0")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("1"),
-                VNode::text("\n            "),
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("2"),
-                VNode::text("\n            "),
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("3"),
-                VNode::text("\n            "),
-                VNode::element("button").with_djust_id("4"),
-                VNode::text("\n        "),
-            ]);
-
-        // After removing some validation error divs, we have fewer element children
-        let new = VNode::element("form")
-            .with_djust_id("0")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("1"),
-                VNode::text("\n            "),
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("2"),
-                VNode::text("\n            "),
-                VNode::element("button").with_djust_id("4"),
-                VNode::text("\n        "),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[0, 0, 0, 1, 2]);
-
-        // Should generate RemoveChild patches for indices 6 and 7 (removed in reverse order)
-        // Parent ID should be "0" (the form)
-        assert!(patches.iter().any(
-            |p| matches!(p, Patch::RemoveChild { index: 7, d, .. } if d == &Some("0".to_string()))
-        ));
-        assert!(patches.iter().any(
-            |p| matches!(p, Patch::RemoveChild { index: 6, d, .. } if d == &Some("0".to_string()))
-        ));
+    // Surplus new -> insert (ascending order).
+    for &(new_abs, new_node) in new_nb.iter().skip(common) {
+        push_insert_child(new_abs, new_node, ppath, pid, out);
     }
+}
 
-    #[test]
-    fn test_form_validation_error_removal() {
-        // Simulates the exact bug we encountered:
-        // Form field with conditional validation error div
-        //
-        // Before: <div class="mb-3">
-        //           <input>
-        //           <div class="invalid-feedback">Error message</div>
-        //         </div>
-        //
-        // After:  <div class="mb-3">
-        //           <input>
-        //         </div>
-
-        let old_field = VNode::element("div")
-            .with_attr("class", "mb-3")
-            .with_djust_id("0")
-            .with_children(vec![
-                VNode::element("input")
-                    .with_attr("class", "form-control is-invalid")
-                    .with_djust_id("1"),
-                VNode::text("\n                "),
-                VNode::element("div")
-                    .with_attr("class", "invalid-feedback")
-                    .with_djust_id("2")
-                    .with_child(VNode::text("Username is required")),
-                VNode::text("\n            "),
-            ]);
-
-        let new_field = VNode::element("div")
-            .with_attr("class", "mb-3")
-            .with_djust_id("0")
-            .with_children(vec![
-                VNode::element("input")
-                    .with_attr("class", "form-control")
-                    .with_djust_id("1"),
-                VNode::text("\n                "),
-                VNode::text("\n            "),
-            ]);
-
-        let patches = diff_nodes(&old_field, &new_field, &[0, 0, 0, 1, 2, 7]);
-
-        // Should remove the "is-invalid" class from input
-        // The patch should include the target's djust_id ("1")
-        assert!(patches.iter().any(|p| matches!(p,
-            Patch::SetAttr { key, value, d, .. }
-            if key == "class" && value == "form-control" && d == &Some("1".to_string())
-        )));
-
-        // Should remove the validation error div at index 3
-        // Parent ID should be "0"
-        assert!(patches.iter().any(
-            |p| matches!(p, Patch::RemoveChild { index: 3, d, .. } if d == &Some("0".to_string()))
-        ));
-    }
-
-    #[test]
-    fn test_multiple_conditional_divs_removal() {
-        // Test the scenario where multiple form fields have validation errors cleared
-        // This creates patches targeting multiple child indices
-        let form_old = VNode::element("form")
-            .with_djust_id("form")
-            .with_children(vec![
-                // Field 1 WITH error
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("f1")
-                    .with_children(vec![
-                        VNode::element("input").with_djust_id("i1"),
-                        VNode::element("div")
-                            .with_attr("class", "invalid-feedback")
-                            .with_djust_id("e1"),
-                    ]),
-                VNode::text("\n            "),
-                // Field 2 WITH error
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("f2")
-                    .with_children(vec![
-                        VNode::element("input").with_djust_id("i2"),
-                        VNode::element("div")
-                            .with_attr("class", "invalid-feedback")
-                            .with_djust_id("e2"),
-                    ]),
-                VNode::text("\n            "),
-                // Submit button
-                VNode::element("button").with_djust_id("btn"),
-            ]);
-
-        let form_new = VNode::element("form")
-            .with_djust_id("form")
-            .with_children(vec![
-                // Field 1 WITHOUT error
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("f1")
-                    .with_children(vec![VNode::element("input").with_djust_id("i1")]),
-                VNode::text("\n            "),
-                // Field 2 WITHOUT error
-                VNode::element("div")
-                    .with_attr("class", "mb-3")
-                    .with_djust_id("f2")
-                    .with_children(vec![VNode::element("input").with_djust_id("i2")]),
-                VNode::text("\n            "),
-                // Submit button
-                VNode::element("button").with_djust_id("btn"),
-            ]);
-
-        let patches = diff_nodes(&form_old, &form_new, &[0, 0, 0, 1, 2]);
-
-        // Should generate patches to remove validation error divs from both fields
-        // Each RemoveChild should have the parent's djust_id
-        let remove_patches: Vec<_> = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .collect();
-
-        assert_eq!(
-            remove_patches.len(),
-            2,
-            "Should remove 2 validation error divs"
+/// Keyed reconciliation with LIS-based move minimization. In the MIXED case
+/// (keyed and unkeyed siblings interleaved), the LIS-skip is disabled and every
+/// surviving keyed child whose absolute index changed gets a MoveChild (#1260).
+fn reconcile_keyed(
+    old_nb: &[(usize, &VNode)],
+    new_nb: &[(usize, &VNode)],
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    let any_new_unkeyed = new_nb.iter().any(|(_, n)| n.key.is_none());
+    let mixed = any_new_unkeyed;
+    if mixed {
+        vdom_trace!("DJE-050: Mixed keyed/unkeyed siblings during keyed diff");
+        tracing::warn!(
+            "DJE-050: Mixed keyed/unkeyed siblings detected during keyed diff; \
+             reconciliation may be suboptimal"
         );
-
-        // Verify parent IDs are included
-        assert!(remove_patches
-            .iter()
-            .any(|p| matches!(p, Patch::RemoveChild { d, .. } if d == &Some("f1".to_string()))));
-        assert!(remove_patches
-            .iter()
-            .any(|p| matches!(p, Patch::RemoveChild { d, .. } if d == &Some("f2".to_string()))));
     }
 
-    #[test]
-    fn test_path_traversal_with_whitespace() {
-        // Ensure patches have correct paths when whitespace nodes are present
-        // Path should account for ALL children including whitespace
-        let old = VNode::element("div").with_djust_id("0").with_children(vec![
-            VNode::element("span")
-                .with_djust_id("1")
-                .with_child(VNode::text("A")),
-            VNode::text("\n    "), // whitespace at index 1
-            VNode::element("span")
-                .with_djust_id("2")
-                .with_child(VNode::text("B")),
-            VNode::text("\n    "), // whitespace at index 3
-            VNode::element("span")
-                .with_djust_id("3")
-                .with_child(VNode::text("C")),
-        ]);
+    // Build key -> position-in-list maps (last-wins; warn on duplicates).
+    let old_key_pos = build_key_map(old_nb, "old");
+    let new_key_pos = build_key_map(new_nb, "new");
 
-        let new = VNode::element("div").with_djust_id("0").with_children(vec![
-            VNode::element("span")
-                .with_djust_id("1")
-                .with_child(VNode::text("A")),
-            VNode::text("\n    "), // whitespace at index 1
-            VNode::element("span")
-                .with_djust_id("2")
-                .with_child(VNode::text("B-modified")), // Changed
-            VNode::text("\n    "), // whitespace at index 3
-            VNode::element("span")
-                .with_djust_id("3")
-                .with_child(VNode::text("C")),
-        ]);
-
-        let patches = diff_nodes(&old, &new, &[5]);
-
-        // The text change in the second span should have path [5, 2, 0]
-        // Text nodes don't have djust_ids (d should be None)
-        assert!(patches.iter().any(|p| matches!(p,
-            Patch::SetText { path, text, d, .. }
-            if path == &[5, 2, 0] && text == "B-modified" && d.is_none()
-        )));
-    }
-
-    #[test]
-    fn test_djust_id_included_in_patches() {
-        // Verify that patches include the djust_id for client-side resolution
-        let old = VNode::element("div")
-            .with_djust_id("abc")
-            .with_attr("class", "old");
-        let new = VNode::element("div")
-            .with_djust_id("abc")
-            .with_attr("class", "new");
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        assert_eq!(patches.len(), 1);
-        match &patches[0] {
-            Patch::SetAttr { d, key, value, .. } => {
-                assert_eq!(d, &Some("abc".to_string()));
-                assert_eq!(key, "class");
-                assert_eq!(value, "new");
+    // Matched keyed pairs, in NEW order: (old_list_pos, new_list_pos).
+    let mut matched: Vec<(usize, usize)> = Vec::new();
+    for (np, (_, n)) in new_nb.iter().enumerate() {
+        if let Some(k) = n.key.as_deref() {
+            if let Some(&op) = old_key_pos.get(k) {
+                matched.push((op, np));
             }
-            _ => panic!("Expected SetAttr patch"),
         }
     }
 
-    #[test]
-    fn test_data_d_attr_not_diffed() {
-        // Ensure that dj-id attribute changes don't generate patches
-        // (the parser handles dj-id, diffing should ignore it)
-        let old = VNode::element("div")
-            .with_djust_id("old")
-            .with_attr("dj-id", "old")
-            .with_attr("class", "same");
-        let new = VNode::element("div")
-            .with_djust_id("new")
-            .with_attr("dj-id", "new")
-            .with_attr("class", "same");
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Should be empty - no attribute changes (dj-id is ignored)
-        assert!(
-            patches.is_empty(),
-            "dj-id changes should not generate patches"
-        );
-    }
-
-    #[test]
-    fn test_conditional_content_change_empty_to_messages() {
-        // Test the conversation switching scenario:
-        // When switching from empty state to having messages, the diff generates
-        // patches that morph the old structure by:
-        // 1. Changing the class attribute
-        // 2. Replacing/removing children
-        //
-        // This is valid behavior - the patches correctly target OLD element IDs
-        // because that's what exists in the client DOM.
-
-        let old_messages = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_djust_id("messages")
-            .with_children(vec![VNode::element("div")
-                .with_attr("class", "messages__empty")
-                .with_djust_id("empty")
-                .with_children(vec![
-                    VNode::element("h2")
-                        .with_djust_id("h2")
-                        .with_child(VNode::text("Start a new conversation")),
-                    VNode::element("p")
-                        .with_djust_id("p")
-                        .with_child(VNode::text("Choose a model and type your message below.")),
-                ])]);
-
-        let new_messages = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_djust_id("messages")
-            .with_children(vec![VNode::element("div")
-                .with_attr("class", "message message--user")
-                .with_djust_id("msg1")
-                .with_children(vec![VNode::element("div")
-                    .with_attr("class", "message__content")
-                    .with_djust_id("content1")
-                    .with_child(VNode::text("Hello world"))])]);
-
-        let patches = diff_nodes(&old_messages, &new_messages, &[]);
-
-        // Verify patches are generated and target OLD element IDs (correct behavior)
-        assert!(
-            !patches.is_empty(),
-            "Should generate patches for structural change"
-        );
-
-        // The patches should:
-        // 1. SetAttr on "empty" to change class to "message message--user"
-        // 2. Replace the h2 with the content div
-        // 3. Remove the p element
-
-        let has_class_change = patches.iter().any(|p| match p {
-            Patch::SetAttr { d, key, value, .. } => {
-                d == &Some("empty".to_string())
-                    && key == "class"
-                    && value == "message message--user"
+    // 1) Remove old keyed children not present in new.
+    for &(old_abs, old_node) in old_nb.iter() {
+        if let Some(k) = old_node.key.as_deref() {
+            if !new_key_pos.contains_key(k) {
+                push_remove_child(old_abs, old_node, ppath, pid, out);
             }
-            _ => false,
-        });
-        assert!(
-            has_class_change,
-            "Should change class attribute on old 'empty' element"
-        );
-
-        // The h2 should be replaced (targeting OLD ID "h2")
-        let has_h2_replace = patches.iter().any(|p| match p {
-            Patch::Replace { d, .. } => d == &Some("h2".to_string()),
-            _ => false,
-        });
-        assert!(
-            has_h2_replace,
-            "Should replace h2 with new content (targeting old h2 ID)"
-        );
-
-        // The p should be removed
-        let has_p_remove = patches.iter().any(|p| match p {
-            Patch::RemoveChild { d, index, .. } => d == &Some("empty".to_string()) && *index == 1,
-            _ => false,
-        });
-        assert!(
-            has_p_remove,
-            "Should remove p element (index 1 of parent 'empty')"
-        );
+        }
     }
 
-    #[test]
-    fn test_conditional_content_change_messages_to_empty() {
-        // Reverse test: going from messages back to empty state
-        // Patches should morph the message div into empty state div
+    // 2) Reconcile unkeyed siblings positionally (independent of keyed).
+    let old_unkeyed: Vec<(usize, &VNode)> = old_nb
+        .iter()
+        .filter(|(_, n)| n.key.is_none())
+        .copied()
+        .collect();
+    let new_unkeyed: Vec<(usize, &VNode)> = new_nb
+        .iter()
+        .filter(|(_, n)| n.key.is_none())
+        .copied()
+        .collect();
+    let common = old_unkeyed.len().min(new_unkeyed.len());
+    for i in 0..common {
+        let (old_abs, old_node) = old_unkeyed[i];
+        let (new_abs, new_node) = new_unkeyed[i];
+        if positionally_compatible(old_node, new_node) {
+            let mut child_path = ppath.to_vec();
+            child_path.push(new_abs);
+            diff_node_into(old_node, new_node, &child_path, out);
+        } else {
+            push_remove_child(old_abs, old_node, ppath, pid, out);
+            push_insert_child(new_abs, new_node, ppath, pid, out);
+        }
+    }
+    for i in (common..old_unkeyed.len()).rev() {
+        let (old_abs, old_node) = old_unkeyed[i];
+        push_remove_child(old_abs, old_node, ppath, pid, out);
+    }
+    for &(new_abs, new_node) in new_unkeyed.iter().skip(common) {
+        push_insert_child(new_abs, new_node, ppath, pid, out);
+    }
 
-        let old_messages = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_djust_id("messages")
-            .with_children(vec![VNode::element("div")
-                .with_attr("class", "message message--user")
-                .with_djust_id("msg1")
-                .with_children(vec![VNode::element("div")
-                    .with_attr("class", "message__content")
-                    .with_djust_id("content1")
-                    .with_child(VNode::text("Hello world"))])]);
+    // 3) Recurse into matched keyed pairs (emit their inner patches).
+    for &(op, np) in &matched {
+        let (_, old_node) = old_nb[op];
+        let (new_abs, new_node) = new_nb[np];
+        let mut child_path = ppath.to_vec();
+        child_path.push(new_abs);
+        diff_node_into(old_node, new_node, &child_path, out);
+    }
 
-        let new_messages = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_djust_id("messages")
-            .with_children(vec![VNode::element("div")
-                .with_attr("class", "messages__empty")
-                .with_djust_id("empty")
-                .with_children(vec![
-                    VNode::element("h2")
-                        .with_djust_id("h2")
-                        .with_child(VNode::text("Start a new conversation")),
-                    VNode::element("p")
-                        .with_djust_id("p")
-                        .with_child(VNode::text("Choose a model and type your message below.")),
-                ])]);
-
-        let patches = diff_nodes(&old_messages, &new_messages, &[]);
-
-        // Verify patches target OLD element IDs
-        assert!(!patches.is_empty(), "Should generate patches");
-
-        // Class should change on "msg1"
-        let has_class_change = patches.iter().any(|p| match p {
-            Patch::SetAttr { d, key, value, .. } => {
-                d == &Some("msg1".to_string()) && key == "class" && value == "messages__empty"
+    // 4) Insert new keyed children not present in old.
+    for (new_abs, new_node) in new_nb.iter() {
+        if let Some(k) = new_node.key.as_deref() {
+            if !old_key_pos.contains_key(k) {
+                push_insert_child(*new_abs, new_node, ppath, pid, out);
             }
-            _ => false,
-        });
-        assert!(
-            has_class_change,
-            "Should change class on old 'msg1' element"
-        );
+        }
+    }
 
-        // content1 should be replaced with h2
-        let has_content_replace = patches.iter().any(|p| match p {
-            Patch::Replace { d, node, .. } => {
-                d == &Some("content1".to_string()) && node.tag == "h2"
+    // 5) Moves for matched keyed pairs.
+    //    `matched` is in NEW order; the sequence of old_list_pos is what we LIS.
+    let old_seq: Vec<usize> = matched.iter().map(|&(op, _)| op).collect();
+    let keep: AHashSet<usize> = if mixed {
+        // Mixed case: do NOT trust LIS; only keep a pair as "in place" when its
+        // absolute index is unchanged.
+        let mut s = AHashSet::new();
+        for &(op, np) in &matched {
+            let old_abs = old_nb[op].0;
+            let new_abs = new_nb[np].0;
+            if old_abs == new_abs {
+                s.insert(np);
             }
-            _ => false,
+        }
+        s
+    } else {
+        // Fully-keyed: keep the longest increasing subsequence of old positions.
+        let lis = longest_increasing_subsequence(&old_seq);
+        lis.iter().map(|&seq_i| matched[seq_i].1).collect()
+    };
+
+    for &(op, np) in &matched {
+        if keep.contains(&np) {
+            continue;
+        }
+        let (old_abs, old_node) = old_nb[op];
+        let (new_abs, _) = new_nb[np];
+        out.push(Patch::MoveChild {
+            path: ppath.to_vec(),
+            d: pid.map(|s| s.to_string()),
+            from: old_abs,
+            to: new_abs,
+            child_d: old_node.djust_id.clone(),
         });
-        assert!(has_content_replace, "Should replace content div with h2");
-
-        // p should be inserted
-        let has_p_insert = patches.iter().any(|p| match p {
-            Patch::InsertChild { d, node, .. } => d == &Some("msg1".to_string()) && node.tag == "p",
-            _ => false,
-        });
-        assert!(has_p_insert, "Should insert p element");
     }
+}
 
-    #[test]
-    fn test_data_djust_replace_removes_and_inserts_all() {
-        // Test that data-djust-replace causes all children to be replaced
-        // instead of diffed position-by-position
-        let old = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("a1")
-                    .with_child(VNode::text("Message A1")),
-                VNode::element("div")
-                    .with_djust_id("a2")
-                    .with_child(VNode::text("Message A2")),
-                VNode::element("div")
-                    .with_djust_id("a3")
-                    .with_child(VNode::text("Message A3")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("b1")
-                    .with_child(VNode::text("Message B1")),
-                VNode::element("div")
-                    .with_djust_id("b2")
-                    .with_child(VNode::text("Message B2")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Should have 3 RemoveChild + 2 InsertChild = 5 patches
-        // (not SetText patches which would indicate indexed diffing)
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-
-        assert_eq!(remove_count, 3, "Should remove all 3 old children");
-        assert_eq!(insert_count, 2, "Should insert all 2 new children");
-
-        // Verify no SetText patches (which would indicate indexed diffing happened)
-        let set_text_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::SetText { .. }))
-            .count();
-        assert_eq!(
-            set_text_count, 0,
-            "Should NOT have SetText patches (replace mode bypasses diffing)"
-        );
-    }
-
-    #[test]
-    fn test_data_djust_replace_on_new_element() {
-        // Test that data-djust-replace on the NEW element also triggers replace mode
-        let old = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_djust_id("container")
-            .with_children(vec![VNode::element("div")
-                .with_djust_id("a1")
-                .with_child(VNode::text("Old"))]);
-
-        let new = VNode::element("div")
-            .with_attr("class", "messages")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container")
-            .with_children(vec![VNode::element("div")
-                .with_djust_id("b1")
-                .with_child(VNode::text("New"))]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Should use replace mode
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-
-        assert_eq!(remove_count, 1, "Should remove old child");
-        assert_eq!(insert_count, 1, "Should insert new child");
-    }
-
-    #[test]
-    fn test_data_djust_replace_empty_to_content() {
-        // Test replace mode when going from empty to having content
-        let old = VNode::element("div")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container");
-        // No children
-
-        let new = VNode::element("div")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container")
-            .with_children(vec![VNode::element("p")
-                .with_djust_id("p1")
-                .with_child(VNode::text("Content"))]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-        assert_eq!(insert_count, 1, "Should insert new child");
-    }
-
-    #[test]
-    fn test_data_djust_replace_content_to_empty() {
-        // Test replace mode when going from content to empty
-        let old = VNode::element("div")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container")
-            .with_children(vec![
-                VNode::element("p")
-                    .with_djust_id("p1")
-                    .with_child(VNode::text("Content")),
-                VNode::element("p")
-                    .with_djust_id("p2")
-                    .with_child(VNode::text("More content")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_attr("data-djust-replace", "")
-            .with_djust_id("container");
-        // No children
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        assert_eq!(remove_count, 2, "Should remove both old children");
-    }
-
-    #[test]
-    fn test_interleaved_keyed_and_unkeyed_children() {
-        // Keyed children reorder while unkeyed children change content
-        // old: [keyed-A, unkeyed-X, keyed-B]
-        // new: [keyed-B, unkeyed-Y, keyed-A]
-        let old = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A content")),
-                VNode::element("div")
-                    .with_djust_id("x")
-                    .with_child(VNode::text("X content")),
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B content")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b2")
-                    .with_child(VNode::text("B content")),
-                VNode::element("div")
-                    .with_djust_id("y")
-                    .with_child(VNode::text("Y content")),
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a2")
-                    .with_child(VNode::text("A content")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Should have patches for:
-        // - Moving keyed children (a and b swapped)
-        // - Diffing the unkeyed child (X -> Y text change)
-        assert!(!patches.is_empty(), "Should generate patches");
-
-        // The unkeyed child text should change from X to Y
-        let has_text_change = patches
-            .iter()
-            .any(|p| matches!(p, Patch::SetText { text, .. } if text == "Y content"));
-        assert!(
-            has_text_change,
-            "Should update unkeyed child text from X to Y. Patches: {:?}",
-            patches
-        );
-
-        // Should NOT have duplicate patches for the same node
-        // (i.e., no RemoveChild for the unkeyed node that was already diffed)
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        assert_eq!(
-            remove_count, 0,
-            "Should not remove any children (all matched). Patches: {:?}",
-            patches
-        );
-    }
-
-    #[test]
-    fn test_adversarial_interleaved_keyed_unkeyed() {
-        // Adversarial pattern: keyed and unkeyed children alternate and reorder
-        // old: [unkeyed-X, keyed-A, unkeyed-Y, keyed-B]
-        // new: [keyed-B, unkeyed-Y2, keyed-A, unkeyed-X2]
-        let old = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("span")
-                    .with_djust_id("x")
-                    .with_child(VNode::text("X")),
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("span")
-                    .with_djust_id("y")
-                    .with_child(VNode::text("Y")),
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b2")
-                    .with_child(VNode::text("B")),
-                VNode::element("span")
-                    .with_djust_id("y2")
-                    .with_child(VNode::text("Y2")),
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a2")
-                    .with_child(VNode::text("A")),
-                VNode::element("span")
-                    .with_djust_id("x2")
-                    .with_child(VNode::text("X2")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Both unkeyed children should be diffed in-place (text changes X->X2, Y->Y2)
-        let text_patches: Vec<_> = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::SetText { .. }))
-            .collect();
-
-        // Should have exactly 2 text changes (X->something, Y->something)
-        assert_eq!(
-            text_patches.len(),
-            2,
-            "Should diff both unkeyed children. Patches: {:?}",
-            patches
-        );
-
-        // Should NOT generate insert+remove pairs for unkeyed children
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        assert_eq!(
-            insert_count, 0,
-            "Should not insert unkeyed children (should diff in place). Patches: {:?}",
-            patches
-        );
-        assert_eq!(
-            remove_count, 0,
-            "Should not remove unkeyed children (should diff in place). Patches: {:?}",
-            patches
-        );
-    }
-
-    #[test]
-    fn test_unkeyed_count_changes_in_keyed_context() {
-        // old: [keyed-A, unkeyed-X, keyed-B]
-        // new: [keyed-A, unkeyed-X, unkeyed-Y, keyed-B]
-        // One unkeyed child added between keyed children
-        let old = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("span")
-                    .with_djust_id("x")
-                    .with_child(VNode::text("X")),
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a2")
-                    .with_child(VNode::text("A")),
-                VNode::element("span")
-                    .with_djust_id("x2")
-                    .with_child(VNode::text("X")),
-                VNode::element("span")
-                    .with_djust_id("y2")
-                    .with_child(VNode::text("Y")),
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b2")
-                    .with_child(VNode::text("B")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // The existing unkeyed child X should be diffed (no text change)
-        // A new unkeyed child Y should be inserted
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-        assert_eq!(
-            insert_count, 1,
-            "Should insert exactly one new unkeyed child. Patches: {:?}",
-            patches
-        );
-
-        // No removals
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        assert_eq!(
-            remove_count, 0,
-            "Should not remove any children. Patches: {:?}",
-            patches
-        );
-    }
-
-    #[test]
-    fn test_unkeyed_count_decreases_in_keyed_context() {
-        // old: [keyed-A, unkeyed-X, unkeyed-Y, keyed-B]
-        // new: [keyed-A, unkeyed-X, keyed-B]
-        // One unkeyed child removed
-        let old = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("span")
-                    .with_djust_id("x")
-                    .with_child(VNode::text("X")),
-                VNode::element("span")
-                    .with_djust_id("y")
-                    .with_child(VNode::text("Y")),
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("parent")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_key("a")
-                    .with_djust_id("a2")
-                    .with_child(VNode::text("A")),
-                VNode::element("span")
-                    .with_djust_id("x2")
-                    .with_child(VNode::text("X")),
-                VNode::element("div")
-                    .with_key("b")
-                    .with_djust_id("b2")
-                    .with_child(VNode::text("B")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Should remove exactly one unkeyed child (Y)
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        assert_eq!(
-            remove_count, 1,
-            "Should remove exactly one unkeyed child. Patches: {:?}",
-            patches
-        );
-
-        // No inserts
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-        assert_eq!(
-            insert_count, 0,
-            "Should not insert any children. Patches: {:?}",
-            patches
-        );
-    }
-
-    #[test]
-    fn test_dj_event_attrs_never_removed() {
-        // When conditional rendering shifts DOM indices, the diff may incorrectly match
-        // old elements with new elements that lack dj-* attrs. RemoveAttr must be suppressed.
-        let old = VNode::element("button")
-            .with_djust_id("0")
-            .with_attr("class", "theme-btn")
-            .with_attr("dj-click", "set_theme('light')");
-        let new = VNode::element("button")
-            .with_djust_id("0")
-            .with_attr("class", "export-btn");
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        assert!(
-            patches.iter().any(
-                |p| matches!(p, Patch::SetAttr { key, value, .. } if key == "class" && value == "export-btn")
-            ),
-            "Should update class attribute"
-        );
-        assert!(
-            !patches
-                .iter()
-                .any(|p| matches!(p, Patch::RemoveAttr { key, .. } if key == "dj-click")),
-            "dj-click attribute should never be removed"
-        );
-    }
-
-    #[test]
-    fn test_dj_attrs_preserved_across_all_event_types() {
-        let old = VNode::element("input")
-            .with_djust_id("0")
-            .with_attr("dj-input", "search(value)")
-            .with_attr("dj-change", "on_change")
-            .with_attr("dj-blur", "validate")
-            .with_attr("dj-keydown.enter", "submit");
-        let new = VNode::element("input").with_djust_id("0");
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        for patch in &patches {
-            if let Patch::RemoveAttr { key, .. } = patch {
-                assert!(
-                    !key.starts_with("dj-"),
-                    "Should not remove dj-* attribute: {}",
-                    key
+/// Build a `key -> list position` map, warning (DJE-051) on duplicate keys.
+fn build_key_map(list: &[(usize, &VNode)], which: &str) -> AHashMap<String, usize> {
+    let mut map: AHashMap<String, usize> = AHashMap::new();
+    for (pos, (_, n)) in list.iter().enumerate() {
+        if let Some(k) = n.key.as_deref() {
+            if map.contains_key(k) {
+                vdom_trace!("DJE-051: Duplicate dj-key in {} children: {}", which, k);
+                tracing::warn!(
+                    "DJE-051: Duplicate dj-key in {} children: {} (last occurrence wins)",
+                    which,
+                    k
                 );
             }
+            map.insert(k.to_string(), pos);
         }
     }
+    map
+}
 
-    #[test]
-    fn test_regular_attrs_still_removed() {
-        let old = VNode::element("div")
-            .with_djust_id("0")
-            .with_attr("class", "old-class")
-            .with_attr("title", "old-title")
-            .with_attr("dj-click", "handler");
-        let new = VNode::element("div")
-            .with_djust_id("0")
-            .with_attr("class", "new-class");
+fn push_remove_child(
+    old_abs: usize,
+    old_node: &VNode,
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    out.push(Patch::RemoveChild {
+        path: ppath.to_vec(),
+        d: pid.map(|s| s.to_string()),
+        index: old_abs,
+        child_d: old_node.djust_id.clone(),
+    });
+}
 
-        let patches = diff_nodes(&old, &new, &[]);
+fn push_insert_child(
+    new_abs: usize,
+    new_node: &VNode,
+    ppath: &[usize],
+    pid: Option<&str>,
+    out: &mut Vec<Patch>,
+) {
+    out.push(Patch::InsertChild {
+        path: ppath.to_vec(),
+        d: pid.map(|s| s.to_string()),
+        index: new_abs,
+        node: new_node.clone(),
+        ref_d: None,
+    });
+}
 
-        assert!(
-            patches
-                .iter()
-                .any(|p| matches!(p, Patch::RemoveAttr { key, .. } if key == "title")),
-            "Regular attributes should still be removed"
-        );
-        assert!(
-            !patches
-                .iter()
-                .any(|p| matches!(p, Patch::RemoveAttr { key, .. } if key == "dj-click")),
-            "dj-click should be preserved"
-        );
+// ============================================================================
+// Public: sync_ids
+// ============================================================================
+
+/// Copy stable `djust_id`s (and the matching `dj-id` attribute) from `old` onto
+/// the logically-corresponding nodes of `new`, in place. Mirrors the diff's
+/// matching so that after a render `new` (the next render's `old`) carries the
+/// same ids the client DOM holds (#1408). dj-if-boundary aware: unmatched
+/// boundaries are skipped (fresh ids preserved), matched boundaries recurse.
+pub fn sync_ids(old: &VNode, new: &mut VNode) {
+    if old.tag != new.tag {
+        return;
     }
+    // Carry this node's id forward.
+    if old.djust_id.is_some() {
+        new.djust_id = old.djust_id.clone();
+        if new.attrs.contains_key("dj-id") || old.attrs.contains_key("dj-id") {
+            if let Some(id) = &old.djust_id {
+                new.attrs.insert("dj-id".to_string(), id.clone());
+            }
+        }
+    }
+    sync_children(&old.children, &mut new.children);
+}
 
-    #[test]
-    fn test_data_djust_replace_patch_ordering() {
-        // Verify that replace_all_children emits all RemoveChild patches
-        // before any InsertChild patches. The JS client batching path
-        // depends on this ordering to avoid stale index bugs (Issue #142).
-        let old = VNode::element("div")
-            .with_djust_id("container")
-            .with_attr("data-djust-replace", "")
-            .with_children(vec![
-                VNode::element("p").with_child(VNode::text("old-1")),
-                VNode::element("p").with_child(VNode::text("old-2")),
-                VNode::element("p").with_child(VNode::text("old-3")),
-            ]);
-        let new = VNode::element("div")
-            .with_djust_id("container")
-            .with_attr("data-djust-replace", "")
-            .with_children(vec![
-                VNode::element("span").with_child(VNode::text("new-1")),
-                VNode::element("span").with_child(VNode::text("new-2")),
-            ]);
+fn sync_children(old: &[VNode], new: &mut [VNode]) {
+    let (old_boundaries, old_excluded) = find_top_level_boundaries(old);
+    let (new_boundaries, new_excluded) = find_top_level_boundaries(new);
 
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // Find positions of last RemoveChild and first InsertChild
-        let last_remove_idx = patches
+    // Matched boundaries: recurse into bodies. Unmatched: skip.
+    if !old_boundaries.is_empty() || !new_boundaries.is_empty() {
+        let old_ids: AHashMap<&str, &Boundary> =
+            old_boundaries.iter().map(|b| (b.id.as_str(), b)).collect();
+        // Capture (old_boundary, new_boundary) pairs before mutably borrowing.
+        let matched: Vec<(Boundary, Boundary)> = new_boundaries
             .iter()
-            .rposition(|p| matches!(p, Patch::RemoveChild { .. }));
-        let first_insert_idx = patches
-            .iter()
-            .position(|p| matches!(p, Patch::InsertChild { .. }));
-
-        assert!(
-            last_remove_idx.is_some() && first_insert_idx.is_some(),
-            "Should have both RemoveChild and InsertChild patches"
-        );
-        assert!(
-            last_remove_idx.unwrap() < first_insert_idx.unwrap(),
-            "All RemoveChild patches must come before any InsertChild patch. \
-             Got last RemoveChild at index {}, first InsertChild at index {}",
-            last_remove_idx.unwrap(),
-            first_insert_idx.unwrap()
-        );
-
-        // Verify RemoveChild indices are in descending order (for safe removal)
-        let remove_indices: Vec<usize> = patches
-            .iter()
-            .filter_map(|p| match p {
-                Patch::RemoveChild { index, .. } => Some(*index),
-                _ => None,
+            .filter_map(|nb| {
+                old_ids
+                    .get(nb.id.as_str())
+                    .map(|ob| ((*ob).clone(), nb.clone()))
             })
             .collect();
-        assert_eq!(
-            remove_indices,
-            vec![2, 1, 0],
-            "RemoveChild should be in descending index order"
-        );
+        for (ob, nb) in matched {
+            let new_body = &mut new[nb.open + 1..nb.close];
+            sync_children(&old[ob.open + 1..ob.close], new_body);
+        }
     }
 
-    #[test]
-    fn test_data_djust_replace_with_siblings() {
-        // Regression test: when a data-djust-replace container has a sibling,
-        // all InsertChild/RemoveChild patches must have correct path and d values
-        // targeting only the replace container. This ensures the JS client's
-        // groupPatchesByParent groups them correctly (Issue #142 continued).
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("messages")
-                    .with_attr("data-djust-replace", "")
-                    .with_children(vec![
-                        VNode::element("p").with_child(VNode::text("No messages"))
-                    ]),
-                VNode::element("div")
-                    .with_djust_id("chat-input")
-                    .with_children(vec![VNode::element("input")]),
-            ]);
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("messages")
-                    .with_attr("data-djust-replace", "")
-                    .with_children(vec![
-                        VNode::element("p").with_child(VNode::text("Message 1")),
-                        VNode::element("p").with_child(VNode::text("Message 2")),
-                    ]),
-                VNode::element("div")
-                    .with_djust_id("chat-input")
-                    .with_children(vec![VNode::element("input")]),
-            ]);
+    // Non-boundary siblings: pair by relative order (or key when keyed).
+    let old_nb: Vec<usize> = (0..old.len()).filter(|i| !old_excluded[*i]).collect();
+    let new_nb: Vec<usize> = (0..new.len()).filter(|i| !new_excluded[*i]).collect();
 
-        let patches = diff_nodes(&old, &new, &[]);
+    let any_new_keyed = new_nb.iter().any(|&i| new[i].key.is_some());
+    if any_new_keyed {
+        // Keyed: match by key.
+        let mut old_by_key: AHashMap<String, usize> = AHashMap::new();
+        for &oi in &old_nb {
+            if let Some(k) = old[oi].key.as_deref() {
+                old_by_key.insert(k.to_string(), oi);
+            }
+        }
+        // Also positionally sync the unkeyed ones in relative order.
+        let new_unkeyed: Vec<usize> = new_nb
+            .iter()
+            .copied()
+            .filter(|&i| new[i].key.is_none())
+            .collect();
+        let old_unkeyed: Vec<usize> = old_nb
+            .iter()
+            .copied()
+            .filter(|&i| old[i].key.is_none())
+            .collect();
+        let common = old_unkeyed.len().min(new_unkeyed.len());
 
-        // All child-op patches should target the messages container
-        for patch in &patches {
-            match patch {
-                Patch::InsertChild { path, d, .. } | Patch::RemoveChild { path, d, .. } => {
-                    assert_eq!(
-                        d.as_deref(),
-                        Some("messages"),
-                        "Child op patch should target 'messages' container, got d={:?} path={:?}",
-                        d,
-                        path
-                    );
-                    assert_eq!(
-                        path,
-                        &vec![0],
-                        "Child op patch path should be [0] (first child of root), got {:?}",
-                        path
-                    );
+        for &ni in &new_nb {
+            if let Some(k) = new[ni].key.as_deref() {
+                if let Some(&oi) = old_by_key.get(k) {
+                    sync_one(old, new, oi, ni);
                 }
-                _ => {}
             }
         }
-
-        // Should have at least 1 remove and 2 inserts
-        let remove_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        let insert_count = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-        assert!(
-            remove_count >= 1,
-            "Should have at least 1 RemoveChild, got {}",
-            remove_count
-        );
-        assert!(
-            insert_count >= 2,
-            "Should have at least 2 InsertChild, got {}",
-            insert_count
-        );
-
-        // No patches should target the chat-input sibling
-        for patch in &patches {
-            match patch {
-                Patch::InsertChild { d, .. } | Patch::RemoveChild { d, .. } => {
-                    assert_ne!(
-                        d.as_deref(),
-                        Some("chat-input"),
-                        "No child op patches should target the sibling 'chat-input'"
-                    );
-                }
-                _ => {}
-            }
+        for k in 0..common {
+            sync_one(old, new, old_unkeyed[k], new_unkeyed[k]);
+        }
+    } else {
+        // Positional pairing by relative order among non-boundary siblings.
+        let common = old_nb.len().min(new_nb.len());
+        for k in 0..common {
+            sync_one(old, new, old_nb[k], new_nb[k]);
         }
     }
+}
 
-    #[test]
-    fn test_keyed_unkeyed_interleave_move() {
-        // Regression test for #219: when keyed children move, unkeyed element
-        // children at the same level must also get MoveChild patches so that
-        // subsequent content patches target the correct nodes.
-        //
-        // Uses an unkeyed *element* (span) rather than a text node because
-        // in production assign_ids only gives djust_ids to elements — text
-        // nodes never have djust_ids and are handled via path-based fallback.
-        //
-        // Tree A: [span(no key), section(key=a), ul(key=b)]
-        // Tree B: [ul(key=b), section(key=a), span(no key, attr changed)]
-        //
-        // After keyed moves, the span moves from index 0 to index 2.
-        use crate::patch::apply_patches;
-
-        let mut old_span = VNode::element("span");
-        old_span.djust_id = Some("sp1".to_string());
-        old_span
-            .attrs
-            .insert("class".to_string(), "old".to_string());
-
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                old_span,
-                VNode::element("section").with_key("a").with_djust_id("s1"),
-                VNode::element("ul").with_key("b").with_djust_id("u1"),
-            ]);
-
-        let mut new_span = VNode::element("span");
-        new_span.djust_id = Some("sp1".to_string());
-        new_span
-            .attrs
-            .insert("class".to_string(), "new".to_string());
-
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("ul").with_key("b").with_djust_id("u1"),
-                VNode::element("section").with_key("a").with_djust_id("s1"),
-                new_span,
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // The unkeyed span moved from index 0 to index 2 — verify a
-        // MoveChild patch is emitted for it.
-        let has_unkeyed_move = patches
-            .iter()
-            .any(|p| matches!(p, Patch::MoveChild { from: 0, to: 2, .. }));
-        assert!(
-            has_unkeyed_move,
-            "Expected MoveChild(0→2) for unkeyed span, got: {:?}",
-            patches
-        );
-
-        // Verify round-trip: apply patches to old tree and compare with new.
-        let mut patched = old.clone();
-        apply_patches(&mut patched, &patches);
-        assert_eq!(
-            patched.children.len(),
-            new.children.len(),
-            "Child count mismatch after apply"
-        );
-        for (i, (got, want)) in patched.children.iter().zip(new.children.iter()).enumerate() {
-            assert_eq!(
-                got.tag, want.tag,
-                "Tag mismatch at child {}: got {:?}, want {:?}",
-                i, got.tag, want.tag
-            );
-            assert_eq!(
-                got.attrs.get("class"),
-                want.attrs.get("class"),
-                "Attr mismatch at child {}: got {:?}, want {:?}",
-                i,
-                got.attrs.get("class"),
-                want.attrs.get("class")
-            );
-        }
-    }
-
-    #[test]
-    fn test_move_child_has_child_d() {
-        // Regression test for #225: MoveChild patches must carry child_d
-        // (the child's djust_id) so the client can resolve the child by
-        // dj-id instead of stale index after earlier moves.
-        //
-        // Tree A: [span(dj-id=sp1), section(key=a, dj-id=s1), ul(key=b, dj-id=u1)]
-        // Tree B: [ul(key=b), section(key=a), span(attr changed)]
-        use crate::patch::apply_patches;
-
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("span")
-                    .with_djust_id("sp1")
-                    .with_attr("class", "old"),
-                VNode::element("section").with_key("a").with_djust_id("s1"),
-                VNode::element("ul").with_key("b").with_djust_id("u1"),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("ul").with_key("b").with_djust_id("u1"),
-                VNode::element("section").with_key("a").with_djust_id("s1"),
-                VNode::element("span")
-                    .with_djust_id("sp1")
-                    .with_attr("class", "new"),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // All MoveChild patches should have child_d set (all children have djust_id)
-        let move_patches: Vec<_> = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::MoveChild { .. }))
-            .collect();
-        assert!(
-            !move_patches.is_empty(),
-            "Expected MoveChild patches, got: {:?}",
-            patches
-        );
-        for p in &move_patches {
-            if let Patch::MoveChild { child_d, .. } = p {
-                assert!(child_d.is_some(), "MoveChild should have child_d: {:?}", p);
-            }
-        }
-
-        // The SetAttr for span's class change should target "sp1"
-        let set_attr = patches.iter().find(|p| {
-            matches!(p, Patch::SetAttr { d: Some(id), key, .. } if id == "sp1" && key == "class")
-        });
-        assert!(
-            set_attr.is_some(),
-            "Expected SetAttr on sp1, got: {:?}",
-            patches
-        );
-
-        // Round-trip: apply patches to old tree
-        let mut patched = old.clone();
-        apply_patches(&mut patched, &patches);
-        assert_eq!(patched.children.len(), 3);
-        assert_eq!(patched.children[0].tag, "ul");
-        assert_eq!(patched.children[1].tag, "section");
-        assert_eq!(patched.children[2].tag, "span");
-        assert_eq!(
-            patched.children[2].attrs.get("class"),
-            Some(&"new".to_string())
-        );
-    }
-
-    #[test]
-    fn test_keyed_unkeyed_text_node_round_trip() {
-        // Regression test for #221: when keyed children move and a text node
-        // changes content, SetText must target the correct node even though
-        // path indices shifted due to structural changes.
-        //
-        // This works when text nodes have synthetic djust_ids (assigned by
-        // test infrastructure), allowing resolve_node_mut to find them by ID.
-        //
-        // Tree A: [#text("hello"), section(key=a), ul(key=b)]
-        // Tree B: [ul(key=b), section(key=a), #text("world")]
-        use crate::patch::apply_patches;
-
-        let mut text_old = VNode::text("hello");
-        text_old.djust_id = Some("txt1".to_string());
-
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                text_old,
-                VNode::element("section").with_key("a").with_djust_id("s1"),
-                VNode::element("ul").with_key("b").with_djust_id("u1"),
-            ]);
-
-        let mut text_new = VNode::text("world");
-        text_new.djust_id = Some("txt1".to_string());
-
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("ul").with_key("b").with_djust_id("u1"),
-                VNode::element("section").with_key("a").with_djust_id("s1"),
-                text_new,
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        // The SetText patch should carry the text node's djust_id
-        let set_text = patches.iter().find(|p| matches!(p, Patch::SetText { .. }));
-        assert!(
-            set_text.is_some(),
-            "Expected SetText patch, got: {:?}",
-            patches
-        );
-        if let Some(Patch::SetText { d, text, .. }) = set_text {
-            assert_eq!(
-                d.as_deref(),
-                Some("txt1"),
-                "SetText should carry text node ID"
-            );
-            assert_eq!(text, "world");
-        }
-
-        // Verify round-trip
-        let mut patched = old.clone();
-        apply_patches(&mut patched, &patches);
-        assert_eq!(patched.children.len(), 3);
-        // Text node should be at index 2 with content "world"
-        assert_eq!(patched.children[2].text.as_deref(), Some("world"));
-        assert_eq!(patched.children[0].tag, "ul");
-        assert_eq!(patched.children[1].tag, "section");
-    }
-
-    #[test]
-    fn test_remove_child_has_child_d() {
-        // Issue #410: RemoveChild patches should include child_d for
-        // ID-based resolution on the client, preventing stale-index
-        // mis-targeting when {% if %} blocks shift sibling positions.
-        //
-        // Old: [div(a), div(b), div(c)]
-        // New: [div(a), div(b)]
-        // Expected: RemoveChild for old[2] = div(c) with child_d="c"
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("div")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B")),
-                VNode::element("div")
-                    .with_djust_id("c")
-                    .with_child(VNode::text("C")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("div")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        let remove = patches
-            .iter()
-            .find(|p| matches!(p, Patch::RemoveChild { .. }));
-        assert!(remove.is_some(), "Expected RemoveChild patch");
-
-        if let Some(Patch::RemoveChild { child_d, index, .. }) = remove {
-            assert_eq!(*index, 2, "Should remove at old index 2");
-            assert_eq!(
-                child_d.as_deref(),
-                Some("c"),
-                "RemoveChild should carry child's djust_id"
-            );
-        }
-    }
-
-    #[test]
-    fn test_insert_child_has_ref_d() {
-        // Issue #410: InsertChild patches should include ref_d for
-        // ID-based insertBefore on the client.
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![VNode::element("div")
-                .with_djust_id("content")
-                .with_child(VNode::text("Content"))]);
-
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("error")
-                    .with_child(VNode::text("Error")),
-                VNode::element("div")
-                    .with_djust_id("content")
-                    .with_child(VNode::text("Content")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        let insert = patches
-            .iter()
-            .find(|p| matches!(p, Patch::InsertChild { .. }));
-        assert!(insert.is_some(), "Expected InsertChild patch");
-
-        if let Some(Patch::InsertChild { ref_d, index, .. }) = insert {
-            assert_eq!(*index, 1, "Should insert at index 1");
-            // Old has only 1 child (index 0), so old[1] doesn't exist → ref_d is None
-            assert!(
-                ref_d.is_none(),
-                "ref_d should be None when inserting beyond old children count"
-            );
-        }
-    }
-
-    #[test]
-    fn test_insert_child_ref_d_when_sibling_exists() {
-        // When inserting at an index where an old sibling exists,
-        // ref_d should carry that sibling's djust_id.
-        let old = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("div")
-                    .with_djust_id("c")
-                    .with_child(VNode::text("C")),
-            ]);
-
-        let new = VNode::element("div")
-            .with_djust_id("root")
-            .with_children(vec![
-                VNode::element("div")
-                    .with_djust_id("a")
-                    .with_child(VNode::text("A")),
-                VNode::element("div")
-                    .with_djust_id("b")
-                    .with_child(VNode::text("B")),
-                VNode::element("div")
-                    .with_djust_id("c")
-                    .with_child(VNode::text("C")),
-            ]);
-
-        let patches = diff_nodes(&old, &new, &[]);
-
-        let insert = patches
-            .iter()
-            .find(|p| matches!(p, Patch::InsertChild { .. }));
-        assert!(insert.is_some(), "Expected InsertChild patch");
-
-        if let Some(Patch::InsertChild { ref_d, index, .. }) = insert {
-            assert_eq!(*index, 2, "Should insert at index 2");
-            // ref_d should reference old child at index 2, which is "c"
-            // But old only has 2 children (indices 0,1), so old[2] doesn't exist
-            assert!(
-                ref_d.is_none(),
-                "ref_d should be None when appending beyond old children"
-            );
-        }
-    }
-
-    // =========================================================================
-    // LIS optimization tests
-    // =========================================================================
-
-    /// Helper: create a keyed child element with a djust_id
-    fn keyed_child(key: &str, id: &str) -> VNode {
-        VNode::element("li")
-            .with_key(key)
-            .with_djust_id(id)
-            .with_child(VNode::text(key))
-    }
-
-    /// Helper: count MoveChild patches
-    fn count_move_patches(patches: &[Patch]) -> usize {
-        patches
-            .iter()
-            .filter(|p| matches!(p, Patch::MoveChild { .. }))
-            .count()
-    }
-
-    #[test]
-    fn test_lis_1000_item_single_move() {
-        let n = 1000;
-        let old_children: Vec<VNode> = (0..n)
-            .map(|i| keyed_child(&format!("k{}", i), &format!("id{}", i)))
-            .collect();
-
-        let mut new_order: Vec<usize> = vec![n - 1];
-        new_order.extend(0..n - 1);
-        let new_children: Vec<VNode> = new_order
-            .iter()
-            .map(|&i| keyed_child(&format!("k{}", i), &format!("new_id{}", i)))
-            .collect();
-
-        let old = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(old_children);
-        let new = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(new_children);
-
-        let patches = diff_nodes(&old, &new, &[]);
-        let moves = count_move_patches(&patches);
-
-        assert_eq!(
-            moves, 1,
-            "Moving one item to front of 1000 should produce 1 MoveChild, got {}",
-            moves
-        );
-    }
-
-    #[test]
-    fn test_lis_reverse_10_items() {
-        let n = 10;
-        let old_children: Vec<VNode> = (0..n)
-            .map(|i| keyed_child(&format!("k{}", i), &format!("id{}", i)))
-            .collect();
-
-        let new_children: Vec<VNode> = (0..n)
-            .rev()
-            .map(|i| keyed_child(&format!("k{}", i), &format!("new_id{}", i)))
-            .collect();
-
-        let old = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(old_children);
-        let new = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(new_children);
-
-        let patches = diff_nodes(&old, &new, &[]);
-        let moves = count_move_patches(&patches);
-
-        assert_eq!(
-            moves,
-            n - 1,
-            "Reversing {} items should produce {} MoveChild patches, got {}",
-            n,
-            n - 1,
-            moves
-        );
-    }
-
-    #[test]
-    fn test_lis_no_moves_when_same_order() {
-        let n = 100;
-        let old_children: Vec<VNode> = (0..n)
-            .map(|i| keyed_child(&format!("k{}", i), &format!("id{}", i)))
-            .collect();
-
-        let new_children: Vec<VNode> = (0..n)
-            .map(|i| keyed_child(&format!("k{}", i), &format!("new_id{}", i)))
-            .collect();
-
-        let old = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(old_children);
-        let new = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(new_children);
-
-        let patches = diff_nodes(&old, &new, &[]);
-        let moves = count_move_patches(&patches);
-
-        assert_eq!(moves, 0, "Same order should produce 0 MoveChild patches");
-    }
-
-    #[test]
-    fn test_lis_with_inserts_and_removes() {
-        let old_children = vec![
-            keyed_child("a", "id_a"),
-            keyed_child("b", "id_b"),
-            keyed_child("c", "id_c"),
-            keyed_child("d", "id_d"),
-            keyed_child("e", "id_e"),
-        ];
-
-        let new_children = vec![
-            keyed_child("b", "new_b"),
-            keyed_child("d", "new_d"),
-            keyed_child("f", "new_f"),
-            keyed_child("a", "new_a"),
-        ];
-
-        let old = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(old_children);
-        let new = VNode::element("ul")
-            .with_djust_id("parent")
-            .with_children(new_children);
-
-        let patches = diff_nodes(&old, &new, &[]);
-        let moves = count_move_patches(&patches);
-        let removes: usize = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::RemoveChild { .. }))
-            .count();
-        let inserts: usize = patches
-            .iter()
-            .filter(|p| matches!(p, Patch::InsertChild { .. }))
-            .count();
-
-        assert_eq!(moves, 1, "Only 'a' should need a MoveChild, got {}", moves);
-        assert_eq!(removes, 2, "Should remove c and e, got {}", removes);
-        assert_eq!(inserts, 1, "Should insert f, got {}", inserts);
-    }
+/// Sync ids from `old[oi]` onto `new[ni]` (helper to localize the split borrow).
+fn sync_one(old: &[VNode], new: &mut [VNode], oi: usize, ni: usize) {
+    let old_node = &old[oi];
+    let new_node = &mut new[ni];
+    sync_ids(old_node, new_node);
 }
