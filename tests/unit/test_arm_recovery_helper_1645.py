@@ -1,0 +1,54 @@
+"""Regression/consolidation: a single _arm_recovery() helper is the source of
+truth for VDOM recovery-baseline arming, so no send path can drift (#1645).
+
+`_recovery_html` / `_recovery_version` were armed by a hand-copied two-line
+assignment at every send path (handle_event, server_push, _run_async_work). That
+is exactly the drift that caused #1639 — the async path was added without the
+arming. This pins the consolidation: the assignment lives in one helper, and
+every render-send path routes through it.
+"""
+
+from __future__ import annotations
+
+import inspect
+import re
+
+import djust.websocket as ws_mod
+from djust.websocket import LiveViewConsumer
+
+
+def test_arm_recovery_sets_both_fields():
+    consumer = LiveViewConsumer()
+    consumer._arm_recovery("<div>x</div>", 7)
+    assert consumer._recovery_html == "<div>x</div>"
+    assert consumer._recovery_version == 7
+
+
+def test_arm_recovery_is_the_only_arming_mechanism():
+    """No method other than _arm_recovery (and the one-time clear in
+    handle_request_html) may assign _recovery_html directly — otherwise a new
+    send path could arm inconsistently or forget a field."""
+    src = inspect.getsource(ws_mod)
+    # All `self._recovery_html = ...` assignments in the module.
+    assigns = re.findall(r"self\._recovery_html\s*=\s*(.+)", src)
+    # Allowed: the helper's own assignment, and the one-time clear (= None).
+    disallowed = [rhs.strip() for rhs in assigns if rhs.strip() not in ("html", "None")]
+    assert disallowed == [], (
+        "_recovery_html must only be assigned inside _arm_recovery (rhs 'html') "
+        f"or cleared (= None); found stray assignments: {disallowed}"
+    )
+
+
+def test_render_send_paths_route_through_arm_recovery():
+    """Each render-send path must call _arm_recovery rather than hand-assign."""
+    for name in ("handle_event", "server_push", "_run_async_work"):
+        method_src = inspect.getsource(getattr(LiveViewConsumer, name))
+        assert "_arm_recovery(" in method_src, (
+            f"{name} must arm the recovery baseline via self._arm_recovery(...) "
+            f"so it can't drift from the other send paths (#1645)."
+        )
+        # And must NOT hand-assign _recovery_html directly anymore.
+        assert "_recovery_html =" not in method_src, (
+            f"{name} still hand-assigns _recovery_html; route it through "
+            f"_arm_recovery instead (#1645)."
+        )

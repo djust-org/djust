@@ -955,8 +955,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # _recovery_html leaves it None, the next request_html returns
                 # "Recovery HTML unavailable", and the client freezes at the
                 # transitional state even though the backend advanced (#1636).
-                self._recovery_html = html
-                self._recovery_version = version
+                self._arm_recovery(html, version)
                 await self._send_update(
                     patches=patch_list,
                     version=version,
@@ -975,8 +974,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )(html)
                 # The fallback sends the full render to the client, so the
                 # recovery baseline must track it too (#1636).
-                self._recovery_html = html
-                self._recovery_version = version
+                self._arm_recovery(html, version)
                 await self._send_update(
                     html=html_content,
                     version=version,
@@ -1037,6 +1035,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     logger.exception(
                         "[djust] Error in handle_async_result for task '%s'", task_name
                     )
+
+    def _arm_recovery(self, html: str, version: int) -> None:
+        """Arm the on-demand VDOM recovery baseline.
+
+        Single source of truth for the ``request_html`` recovery state
+        (``_recovery_html`` / ``_recovery_version``). Every render-send path —
+        ``handle_event``, ``server_push``, ``_run_async_work`` — calls this after
+        rendering so the baseline can never drift between paths. Hand-copying the
+        two-line assignment is exactly how the async path was missed in #1639;
+        centralizing it here (#1645) makes a new send path inherit correct arming
+        by calling one method. The one-time clear (``_recovery_html = None`` in
+        ``handle_request_html``) is the only other writer.
+        """
+        self._recovery_html = html
+        self._recovery_version = version
 
     async def _send_update(
         self,
@@ -3630,8 +3643,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Store rendered HTML for on-demand recovery.
                         # Client sends request_html when applyPatches() fails
                         # (e.g., {% if %} blocks shifting DOM structure).
-                        self._recovery_html = html
-                        self._recovery_version = version
+                        self._arm_recovery(html, version)
 
                         await self._send_update(
                             patches=patch_list,
@@ -4983,8 +4995,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # handle_event. Without this, request_html after a failed
                     # broadcast-triggered patch finds _recovery_html=None and
                     # forces a page reload. See #1202.
-                    self._recovery_html = html
-                    self._recovery_version = version
+                    self._arm_recovery(html, version)
                     await self._send_update(
                         patches=patches,
                         version=version,
