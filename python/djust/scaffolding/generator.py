@@ -252,6 +252,16 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
         _write(pkg_dir / "models.py", T.MODELS_PY % ctx)
         _write(pkg_dir / "admin.py", T.ADMIN_PY % ctx)
 
+    # Any model-bearing app must ship a proper migrations package so the
+    # deploy-time `migrate` (no --run-syncdb) creates its tables. A migrations
+    # dir without __init__.py is a namespace package the migration loader skips,
+    # leaving the app unmigrated (#1637). Ship the package even when
+    # auto_setup=False (so `makemigrations` hasn't run yet).
+    if ctx["with_db"] or schema:
+        migrations_dir = pkg_dir / "migrations"
+        migrations_dir.mkdir(exist_ok=True)
+        _write(migrations_dir / "__init__.py", "")
+
     # Feature: --with-auth (login template)
     if ctx["with_auth"]:
         _write(tpl_dir / "login.html", T.LOGIN_HTML % ctx)
@@ -655,9 +665,18 @@ def _run_auto_setup(project_dir: Path) -> None:
         print("Installing dependencies (pip)...")
         _run_cmd([venv_pip, "install", "-r", "requirements.txt"], cwd=project_dir)
 
-    # Run migrate
+    # Make + run migrations.
+    #
+    # makemigrations BEFORE migrate is load-bearing (#1637): it generates the
+    # generated app's `migrations/__init__.py` + `0001_initial.py` on the dev
+    # machine, which then ship in the deploy tarball. Without it the app had no
+    # migrations and `--run-syncdb` only masked the gap on the dev DB — a deploy
+    # runs `migrate` WITHOUT `--run-syncdb`, so the app's tables were never
+    # created and the first query 500s. `--run-syncdb` is kept on the migrate as
+    # belt-and-suspenders for any migration-less third-party app.
     venv_python = str(project_dir / ".venv" / "bin" / "python")
     print("Running migrations...")
+    _run_cmd([venv_python, "manage.py", "makemigrations"], cwd=project_dir)
     _run_cmd([venv_python, "manage.py", "migrate", "--run-syncdb"], cwd=project_dir)
 
     print("\nDone!")
