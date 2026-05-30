@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc16] - 2026-05-29
+
 ### Added
 
 - **`MoveSubtree` VDOM patch — matched `{% if %}` boundaries can now be repositioned (#1666).** When a `dj-if` conditional boundary is present in both the old and new render but its position among the parent's significant children shifts (siblings added/removed/reordered around it), the markers — id-less `#comment` nodes that a plain `MoveChild` can't target — previously stayed anchored at their old position, so the conditional rendered in the wrong place (or the round-trip diverged). The differ now emits `MoveSubtree { id, path, d, index }` (the "move" verb for boundary spans, completing the Remove/Insert/Move trio), and the client (`12-vdom-patch.js`) locates the `<!--dj-if id="X"-->...<!--/dj-if-->` marker pair by id, detaches the whole range, and re-inserts it at the target index — **preserving inner node identity** (and any state/focus tied to inner dj-ids), unlike a Remove+Insert. Applied in a new phase **after** the path/index child ops so the surrounding siblings have settled. A client-faithful differential harness measured the matched-boundary-reposition residual drop from ~22 to ~6 per 6000 adversarial re-renders. Wire shape pinned in `wire_protocol_snapshot.rs`; behavior pinned by `matched_djif_boundary_repositioned_via_move_subtree` (Rust) and `tests/js/move_subtree_patch.test.js` (client).
