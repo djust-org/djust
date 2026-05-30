@@ -28,6 +28,7 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
     let mut parent_groups: std::collections::HashMap<String, ParentGroup<'_>> =
         std::collections::HashMap::new();
     let mut non_child_patches: Vec<&Patch> = Vec::new();
+    let mut subtree_moves: Vec<&Patch> = Vec::new();
 
     for patch in patches {
         match patch {
@@ -90,6 +91,11 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
             // on the client's marker-id index). Skip them here so existing
             // tests continue to compile against the new Patch variants.
             Patch::RemoveSubtree { .. } | Patch::InsertSubtree { .. } => {}
+            // MoveSubtree (#1666) is self-contained (moves existing nodes by
+            // marker id) — applied after all other patches settle the siblings.
+            Patch::MoveSubtree { .. } => {
+                subtree_moves.push(patch);
+            }
             _ => {
                 non_child_patches.push(patch);
             }
@@ -186,6 +192,64 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
             _ => {}
         }
     }
+
+    // Apply MoveSubtree last: detach the `<!--dj-if id="X"-->...<!--/dj-if-->`
+    // marker range and re-insert it at `index` within the parent (#1666).
+    for patch in &subtree_moves {
+        if let Patch::MoveSubtree { id, d, index, .. } = patch {
+            let parent = match d {
+                Some(pid) => find_by_djust_id_mut(root, pid),
+                None => Some(&mut *root),
+            };
+            if let Some(parent) = parent {
+                if let Some(open) = find_dj_if_open_idx(&parent.children, id) {
+                    if let Some(close) = match_close_idx(&parent.children, open) {
+                        let range: Vec<VNode> = parent.children.drain(open..=close).collect();
+                        let at = (*index).min(parent.children.len());
+                        for (offset, node) in range.into_iter().enumerate() {
+                            parent.children.insert(at + offset, node);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Index of the `<!--dj-if id="<id>"-->` open marker among `children`.
+fn find_dj_if_open_idx(children: &[VNode], id: &str) -> Option<usize> {
+    children.iter().position(|n| {
+        n.tag == "#comment"
+            && n.text.as_deref().is_some_and(|t| {
+                let t = t.trim();
+                (t.starts_with("dj-if ") || t.starts_with("dj-if\t"))
+                    && t.contains(&format!("id=\"{}\"", id))
+            })
+    })
+}
+
+/// Index of the close marker matching the open at `open_idx` (depth-counted).
+fn match_close_idx(children: &[VNode], open_idx: usize) -> Option<usize> {
+    let is_open = |n: &VNode| {
+        n.tag == "#comment"
+            && n.text
+                .as_deref()
+                .is_some_and(|t| t.trim().starts_with("dj-if ") || t.trim().starts_with("dj-if\t"))
+    };
+    let is_close =
+        |n: &VNode| n.tag == "#comment" && n.text.as_deref().map(|t| t.trim()) == Some("/dj-if");
+    let mut depth = 1;
+    for (i, n) in children.iter().enumerate().skip(open_idx + 1) {
+        if is_open(n) {
+            depth += 1;
+        } else if is_close(n) {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 /// Resolve a node: try djust_id first, fall back to path traversal.
@@ -303,7 +367,7 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
         // marker-id index so these are intentionally no-ops here. Tests
         // that exercise the diff output should assert on patch shape (via
         // `matches!`) rather than round-tripping through `apply_patch`.
-        Patch::RemoveSubtree { .. } | Patch::InsertSubtree { .. } => {}
+        Patch::RemoveSubtree { .. } | Patch::InsertSubtree { .. } | Patch::MoveSubtree { .. } => {}
     }
 }
 

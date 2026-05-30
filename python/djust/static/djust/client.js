@@ -6739,9 +6739,85 @@ function applyInsertSubtree(patch, rootEl = null) {
     return true;
 }
 
+/**
+ * Apply a `MoveSubtree` patch: locate the dj-if marker pair by id, detach the
+ * whole `<!--dj-if id="X"-->...<!--/dj-if-->` range, and re-insert it at
+ * `index` among the parent's significant children (#1666).
+ *
+ * The "move" verb for boundary spans — the markers are id-less `#comment`
+ * nodes, so a plain `MoveChild` can't target them. Unlike Remove+Insert, this
+ * preserves the inner nodes' identity (and any state/focus tied to inner
+ * dj-ids). Applied AFTER the path/index child ops so the surrounding siblings
+ * are in their final positions and `index` resolves against the new-frame.
+ *
+ * Patch shape: `{type: 'MoveSubtree', id, path: [parent path], d: <parent
+ * dj-id?>, index: N}`.
+ *
+ * @param {Object} patch
+ * @param {HTMLElement|null} rootEl — optional scoping root.
+ * @returns {boolean}
+ */
+function applyMoveSubtree(patch, rootEl = null) {
+    const targetId = String(patch.id || '');
+    if (!targetId) {
+        console.warn('[LiveView] MoveSubtree patch missing id, skipping');
+        return false;
+    }
+    const open = _findDjIfOpenMarker(targetId, rootEl);
+    if (!open) {
+        // Marker absent — nothing to move. Idempotent no-op (a prior patch in
+        // the batch may have torn it down); returning false would trigger the
+        // recovery-HTML fallback for a semantically-fine state.
+        if (globalThis.djustDebug) {
+            console.log(
+                '[LiveView] MoveSubtree: marker absent id=%s (idempotent no-op)',
+                sanitizeIdForLog(targetId)
+            );
+        }
+        return true;
+    }
+    const close = _findDjIfCloseMarker(open);
+    if (!close) {
+        console.warn('[LiveView] MoveSubtree: close marker not found id=%s', sanitizeIdForLog(targetId));
+        return false;
+    }
+    const parent = getNodeByPath(patch.path, patch.d, rootEl);
+    if (!parent || parent.nodeType !== 1) {
+        console.warn('[LiveView] MoveSubtree: parent not found path=%s id=%s',
+            Array.isArray(patch.path) ? patch.path.map(Number).join('/') : 'invalid',
+            sanitizeIdForLog(targetId));
+        return false;
+    }
+    // Collect the marker range (open..close inclusive, sibling order).
+    const range = [];
+    let cursor = open;
+    while (cursor) {
+        range.push(cursor);
+        if (cursor === close) break;
+        cursor = cursor.nextSibling;
+    }
+    // Detach from the current parent, then re-insert at the target index among
+    // the parent's significant children (computed AFTER detachment).
+    const curParent = open.parentNode;
+    for (const node of range) {
+        if (node.parentNode === curParent) curParent.removeChild(node);
+    }
+    const children = getSignificantChildren(parent);
+    const refChild = (typeof patch.index === 'number' ? children[patch.index] : null) || null;
+    const fragment = document.createDocumentFragment();
+    for (const node of range) fragment.appendChild(node);
+    if (refChild) {
+        parent.insertBefore(fragment, refChild);
+    } else {
+        parent.appendChild(fragment);
+    }
+    return true;
+}
+
 // Export for testing
 window.djust._applyRemoveSubtree = applyRemoveSubtree;
 window.djust._applyInsertSubtree = applyInsertSubtree;
+window.djust._applyMoveSubtree = applyMoveSubtree;
 window.djust._findDjIfOpenMarker = _findDjIfOpenMarker;
 window.djust._findDjIfCloseMarker = _findDjIfCloseMarker;
 window.djust._extractDjIfMarkerId = _extractDjIfMarkerId;
@@ -6846,7 +6922,8 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  *    0: RemoveChild (descending index within same parent)
  *    1: MoveChild
  *    2: InsertChild
- *    3: SetText, SetAttribute, other node-targeting patches
+ *    3: MoveSubtree (reposition matched boundary spans AFTER siblings settle)
+ *    4: SetText, SetAttribute, other node-targeting patches
  */
 function _sortPatches(patches) {
     function patchPhase(p) {
@@ -6856,7 +6933,8 @@ function _sortPatches(patches) {
             case 'RemoveChild':   return 0;
             case 'MoveChild':     return 1;
             case 'InsertChild':   return 2;
-            default:              return 3;
+            case 'MoveSubtree':   return 3;
+            default:              return 4;
         }
     }
     patches.sort(function(a, b) {
@@ -6887,10 +6965,13 @@ function applySinglePatch(patch, rootEl = null) {
     // marker id, not by path/d resolution. Short-circuit before the
     // generic `getNodeByPath` call so the dispatcher doesn't try to
     // resolve a non-applicable path.
-    if (patch && (patch.type === 'RemoveSubtree' || patch.type === 'InsertSubtree')) {
+    if (patch && (patch.type === 'RemoveSubtree' || patch.type === 'InsertSubtree' || patch.type === 'MoveSubtree')) {
         try {
             if (patch.type === 'RemoveSubtree') {
                 return applyRemoveSubtree(patch, rootEl);
+            }
+            if (patch.type === 'MoveSubtree') {
+                return applyMoveSubtree(patch, rootEl);
             }
             return applyInsertSubtree(patch, rootEl);
         } catch (error) {
@@ -7342,10 +7423,16 @@ function _applyPatchesInner(patches, rootEl = null) {
     // before the path-grouped batching pass; they must not enter
     // groupPatchesByParent which assumes patch.path exists.
     const pathPatches = [];
+    const moveSubtreePatches = [];
     for (const patch of patches) {
         if (patch.type === 'RemoveSubtree' || patch.type === 'InsertSubtree') {
+            // Phase -2/-1: tear down / add keyed subtrees BEFORE path indices apply.
             const ok = applySinglePatch(patch, rootEl);
             if (ok) { successCount++; } else { failedCount++; }
+        } else if (patch.type === 'MoveSubtree') {
+            // Phase 3: defer — reposition matched boundary spans AFTER the
+            // path/index child ops below settle the surrounding siblings (#1666).
+            moveSubtreePatches.push(patch);
         } else {
             pathPatches.push(patch);
         }
@@ -7443,6 +7530,13 @@ function _applyPatchesInner(patches, rootEl = null) {
                 failedCount++;
             }
         }
+    }
+
+    // Phase 3 (#1666): reposition matched boundary spans AFTER all path/index
+    // child ops above have settled the surrounding siblings, so each
+    // MoveSubtree's `index` resolves against the new-frame significant children.
+    for (const patch of moveSubtreePatches) {
+        if (applySinglePatch(patch, rootEl)) { successCount++; } else { failedCount++; }
     }
 
     if (failedCount > 0) {

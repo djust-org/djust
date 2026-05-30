@@ -529,6 +529,38 @@ pub enum Patch {
         /// Full HTML fragment: `<!--dj-if id="..."-->{body}<!--/dj-if-->`.
         html: String,
     },
+    /// Reposition an existing (matched) `dj-if` keyed subtree (#1666).
+    ///
+    /// When a `{% if %}` boundary is present in both old and new but its
+    /// position among the parent's significant children shifted (siblings were
+    /// added/removed/reordered around it), the marker span must move. The
+    /// markers are `#comment` nodes with no `djust_id`, so a plain `MoveChild`
+    /// can't target them — this is the "move" verb for boundary spans,
+    /// completing the Remove/Insert/Move trio.
+    ///
+    /// The client locates the `<!--dj-if id="X"-->...<!--/dj-if-->` marker pair
+    /// by `id`, detaches the whole range, and re-inserts it at `index` within
+    /// the parent (resolved by `d`, path fallback). Unlike Remove+Insert this
+    /// preserves the inner nodes' identity (and any state/focus tied to inner
+    /// dj-ids). `index` is the open marker's position among the parent's
+    /// significant children (same frame as `InsertSubtree.index`).
+    ///
+    /// `Patch` is internally tagged (`#[serde(tag = "type")]`) → map-encoded
+    /// even under msgpack, so an interior `d: Option` with `skip_serializing_if`
+    /// is wire-safe (the #1538/#1541 positional-array hazard applies only to
+    /// plain structs like `VNode`).
+    MoveSubtree {
+        /// Boundary marker id (e.g. `"if-a3b1c2d4-0"`).
+        id: String,
+        /// Parent path (same shape as `InsertSubtree.path`).
+        path: Vec<usize>,
+        /// Parent's djust_id (same role as `InsertSubtree.d`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        d: Option<String>,
+        /// Target index of the open marker among the parent's significant
+        /// children (same frame as `InsertSubtree.index`).
+        index: usize,
+    },
 }
 
 /// Compute the difference between two virtual DOM trees

@@ -300,6 +300,20 @@ fn diff_children(
 
         for ob in &old_boundaries {
             if let Some(nb) = new_ids.get(ob.id.as_str()) {
+                // Matched in both. If the boundary's significant position
+                // shifted (siblings changed around it), emit MoveSubtree to
+                // relocate the id-less marker span — a plain MoveChild can't
+                // target the markers (#1666). Then recurse into the body.
+                let old_open_abs = old_off + ob.open;
+                let new_open_abs = new_off + nb.open;
+                if old_open_abs != new_open_abs {
+                    out.push(Patch::MoveSubtree {
+                        id: ob.id.clone(),
+                        path: ppath.to_vec(),
+                        d: pid.map(|s| s.to_string()),
+                        index: new_open_abs,
+                    });
+                }
                 // Matched in both -> recurse into the body slice.
                 let old_body = &old[ob.open + 1..ob.close];
                 let new_body = &new[nb.open + 1..nb.close];

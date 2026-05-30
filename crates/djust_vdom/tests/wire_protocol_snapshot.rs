@@ -246,6 +246,38 @@ fn snapshot_patch_remove_subtree() {
     assert_eq!(json, r#"{"type":"RemoveSubtree","id":"if-a3b1c2d4-0"}"#);
 }
 
+#[test]
+fn snapshot_patch_move_subtree() {
+    // #1666: the "move" verb for boundary spans. Field order after `type`:
+    // id, path, d, index. `d` is skipped when None.
+    let p = Patch::MoveSubtree {
+        id: "if-a3b1c2d4-0".to_string(),
+        path: vec![0],
+        d: Some("2y".to_string()),
+        index: 3,
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    assert_eq!(
+        json,
+        r#"{"type":"MoveSubtree","id":"if-a3b1c2d4-0","path":[0],"d":"2y","index":3}"#
+    );
+}
+
+#[test]
+fn snapshot_patch_move_subtree_omits_d_when_none() {
+    let p = Patch::MoveSubtree {
+        id: "if-q-0".to_string(),
+        path: vec![],
+        d: None,
+        index: 0,
+    };
+    let serialized = serde_json::to_value(&p).unwrap();
+    assert!(
+        serialized.get("d").is_none(),
+        "MoveSubtree must omit `d` when None: {serialized}"
+    );
+}
+
 // ============================================================================
 // MessagePack round-trip tests (#1538)
 //
