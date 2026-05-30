@@ -220,7 +220,7 @@ pub fn apply_custom_filter(
     context: Option<&Context>,
     arg_was_quoted: bool,
     autoescape: bool,
-) -> Option<Result<Value, String>> {
+) -> Option<Result<(Value, bool), String>> {
     // Hot-path short-circuit: skip the lock when no filter has ever
     // been registered. Mirrors the guard in ``is_custom_filter_safe``.
     if !ANY_CUSTOM_FILTERS_REGISTERED.load(Ordering::Acquire) {
@@ -234,7 +234,7 @@ pub fn apply_custom_filter(
         (callable, entry.meta.clone())
     };
 
-    let result = Python::with_gil(|py| -> Result<Value, String> {
+    let result = Python::with_gil(|py| -> Result<(Value, bool), String> {
         use pyo3::IntoPyObject;
 
         let py_value = value
@@ -343,12 +343,35 @@ pub fn apply_custom_filter(
             ));
         }
 
+        // Capture runtime safeness BEFORE collapsing to ``Value`` (#1660).
+        // Django's ``SafeString`` / ``mark_safe()`` sets ``__html__``; the
+        // ``extract::<Value>()`` below discards that marker (a SafeString and a
+        // plain str both become ``Value::String``). The renderer uses this flag
+        // to skip auto-escaping a value the filter explicitly marked safe at
+        // runtime — independent of the static ``is_safe=True`` decoration —
+        // matching Django's ``render_value_in_context``.
+        //
+        // CRITICAL — require ``str`` subclass-ness, not just ``__html__``.
+        // Django's ``render_value_in_context`` stringifies any NON-``str`` value
+        // (``if not issubclass(type(value), str): value = str(value)``) BEFORE
+        // the ``__html__`` check, so only a genuine ``str``-subclass SafeString
+        // is trusted. Trusting ``__html__`` alone is an XSS hole here: ``Value``'s
+        // ``FromPyObject`` stringifies an arbitrary object via ``__str__``
+        // (``djust_core`` lib.rs), so a non-``str`` object that advertises
+        // ``__html__`` but renders attacker-controlled HTML through ``__str__``
+        // would reach output UNESCAPED. ``is_instance_of::<PyString>()`` is an
+        // ``isinstance(_, str)`` check — true for ``SafeString`` subclasses,
+        // false for the impostor.
+        let is_runtime_safe = py_result.is_instance_of::<pyo3::types::PyString>()
+            && py_result.hasattr("__html__").unwrap_or(false);
+
         // Convert back to Value. Filters typically return strings or
         // SafeStrings; via ``FromPyObject for Value`` either becomes
         // ``Value::String``. Rare numeric/bool returns also extract.
-        py_result
+        let value = py_result
             .extract::<Value>()
-            .map_err(|_| format!("Custom filter '{name}' returned a non-convertible value"))
+            .map_err(|_| format!("Custom filter '{name}' returned a non-convertible value"))?;
+        Ok((value, is_runtime_safe))
     });
 
     Some(result)

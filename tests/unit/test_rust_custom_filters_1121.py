@@ -66,6 +66,38 @@ def _bold_html(value):
     return mark_safe(f"<b>{value}</b>")
 
 
+@_test_library.filter(name="md_runtime")
+def _md_runtime(value):
+    """Returns a ``SafeString`` at RUNTIME but is NOT decorated ``is_safe=True``
+    — the exact #1660 shape (a markdown-style filter that ``mark_safe()``s its
+    own HTML output). Django escapes a value iff the *final* value lacks
+    ``__html__``; djust must honour that runtime marker, not just the static
+    ``is_safe`` flag."""
+    return mark_safe(f"<em>{value}</em>")
+
+
+class _HtmlAttrButNotStr:
+    """A NON-str object that advertises ``__html__`` but whose rendered text
+    comes from ``__str__`` (here, attacker-controlled HTML). Django's
+    ``render_value_in_context`` stringifies any non-``str`` value BEFORE the
+    ``__html__`` check, so such an object is ESCAPED — only a genuine
+    ``str`` subclass with ``__html__`` (a real ``SafeString``) is trusted.
+    djust must match: the runtime-safe flag requires str-subclass-ness, not
+    merely the presence of ``__html__`` (#1660 XSS-hardening)."""
+
+    def __html__(self):  # noqa: D401 — presence is the point
+        return "totally safe, trust me"
+
+    def __str__(self):
+        return "<script>alert(1)</script>"
+
+
+@_test_library.filter(name="evil_html_obj")
+def _evil_html_obj(value):
+    """Returns the non-str ``__html__``-bearing object above (no mark_safe)."""
+    return _HtmlAttrButNotStr()
+
+
 @_test_library.filter(name="prefix")
 def _prefix(value, arg):
     """Single-argument filter."""
@@ -99,6 +131,8 @@ def _register_custom_filters():
     register_django_filter("lookup", _lookup)
     register_django_filter("exclaim", _exclaim)
     register_django_filter("bold_html", _bold_html)
+    register_django_filter("md_runtime", _md_runtime)
+    register_django_filter("evil_html_obj", _evil_html_obj)
     register_django_filter("prefix", _prefix)
     register_django_filter("autoescape_aware", _autoescape_aware)
     yield
@@ -185,6 +219,70 @@ def test_is_safe_filter_output_is_not_re_escaped():
     assert "<b>Hi</b>" in out
     # Must not be double-escaped:
     assert "&lt;b&gt;" not in out
+
+
+# ---------------------------------------------------------------------------
+# Runtime SafeString — filter NOT decorated is_safe=True but returns
+# mark_safe() at runtime (#1660). Django escapes iff the *final* value lacks
+# __html__; djust must honour the runtime marker, not only the static flag.
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_safe_filter_output_is_not_escaped_1660():
+    """The #1660 repro: a filter that ``mark_safe()``s its output at runtime
+    (without ``@register.filter(is_safe=True)``) must NOT be re-escaped."""
+    out = render_template("{{ name|md_runtime }}", {"name": "Hi"})
+    assert "<em>Hi</em>" in out
+    assert "&lt;em&gt;" not in out
+
+
+def test_runtime_safe_then_plain_filter_re_taints_1660():
+    """``x|md_runtime|upper`` — a subsequent plain-returning filter RE-TAINTS:
+    ``upper`` is a built-in that returns a plain string, so the final value is
+    no longer safe and MUST be escaped (matches Django + the #1660 design)."""
+    out = render_template("{{ name|md_runtime|upper }}", {"name": "Hi"})
+    # The final value (after upper) is plain → escaped.
+    assert "&lt;EM&gt;HI&lt;/EM&gt;" in out
+    assert "<EM>" not in out
+
+
+def test_plain_then_runtime_safe_filter_is_not_escaped_1660():
+    """``x|upper|md_runtime`` — the LAST filter (md_runtime) returns a
+    SafeString, so the final value is safe and is NOT escaped."""
+    out = render_template("{{ name|upper|md_runtime }}", {"name": "hi"})
+    assert "<em>HI</em>" in out
+    assert "&lt;em&gt;" not in out
+
+
+def test_runtime_safe_filter_in_attribute_context_is_not_escaped_1660():
+    """A runtime-safe value in an HTML attribute context is also honoured
+    (no attribute-escaping), consistent with text context and Django's
+    ``SafeData`` semantics."""
+    out = render_template('<a title="{{ name|md_runtime }}">x</a>', {"name": "Hi"})
+    assert '<a title="<em>Hi</em>">' in out
+    assert "&lt;em&gt;" not in out
+
+
+def test_plain_filter_without_runtime_safe_still_escaped_1660():
+    """Guard against over-broadening the fix: a custom filter that returns a
+    plain string (no mark_safe, no is_safe=True) MUST still be escaped — the
+    runtime-safe path only fires when the final value actually has __html__."""
+    out = render_template("{{ name|exclaim }}", {"name": "<script>"})
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+
+
+def test_runtime_safe_requires_str_subclass_not_just_html_attr_1660():
+    """XSS hardening (#1660): the runtime-safe marker is honoured ONLY for a
+    genuine ``str`` subclass with ``__html__`` (a real ``SafeString``). A
+    NON-str object that merely advertises ``__html__`` but renders via
+    ``__str__`` must be ESCAPED — matching Django's ``render_value_in_context``,
+    which stringifies any non-``str`` value before the ``__html__`` check.
+    Otherwise an attacker-controlled ``__str__`` would reach output unescaped."""
+    out = render_template("{{ x|evil_html_obj }}", {"x": "ignored"})
+    # The object's __str__ is attacker HTML — it MUST be escaped, not trusted.
+    assert "<script>" not in out
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in out
 
 
 def test_needs_autoescape_filter_receives_kwarg():

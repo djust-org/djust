@@ -37,7 +37,65 @@ pub fn apply_filter_full(
     context: Option<&Context>,
     arg_was_quoted: bool,
 ) -> Result<Value> {
-    match filter_name {
+    apply_filter_full_safe(filter_name, value, arg, context, arg_was_quoted).map(|(v, _)| v)
+}
+
+/// Like [`apply_filter_full`] but also reports whether the produced value is a
+/// runtime ``SafeString`` (Django ``mark_safe`` / a value with ``__html__``).
+///
+/// Built-in filters never produce a runtime-safe value — their output is a
+/// plain string, and the renderer's name-based ``safe_output_filters`` list
+/// governs built-in safe filters like ``safe``/``urlize``. A *custom* filter is
+/// runtime-safe iff its Python result has ``__html__``. The renderer threads
+/// this out so a value a filter explicitly ``mark_safe()``d at runtime bypasses
+/// auto-escaping — matching Django's ``render_value_in_context`` (escape iff the
+/// *final* value lacks ``__html__``), even when the filter is not decorated
+/// ``is_safe=True`` (#1660). A later plain-returning filter re-taints, because
+/// it overwrites this flag with ``false``.
+pub fn apply_filter_full_safe(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+    arg_was_quoted: bool,
+) -> Result<(Value, bool)> {
+    // Built-ins take precedence over custom filters (mirrors the original
+    // dispatch order). A built-in hit is never runtime-safe.
+    if let Some(builtin) = apply_builtin_filter(filter_name, value, arg, context) {
+        return builtin.map(|v| (v, false));
+    }
+    // Built-in match miss — fall through to the custom filter registry for
+    // project-defined ``@register.filter`` callables (#1121).
+    // ``apply_custom_filter`` returns ``Some(Ok|Err)`` on hit (the ``Ok`` now
+    // carries the result's runtime ``__html__``-ness, #1660), ``None`` on miss.
+    //
+    // ``autoescape=true`` is supplied here as the engine's current (pinned)
+    // policy. When ``{% autoescape %}`` block tracking lands in a future PR,
+    // the renderer will thread the surrounding policy through this call site
+    // (#1162).
+    if let Some(result) =
+        filter_registry::apply_custom_filter(filter_name, value, arg, context, arg_was_quoted, true)
+    {
+        return result.map_err(DjangoRustError::TemplateError);
+    }
+    Err(DjangoRustError::TemplateError(format!(
+        "Unknown filter: {filter_name}"
+    )))
+}
+
+/// Dispatch table for all built-in filters. Returns ``None`` when
+/// ``filter_name`` is not a built-in, so the caller falls through to the
+/// custom-filter registry. Extracted from ``apply_filter_full`` so the
+/// runtime-safe variant and the plain variant share ONE dispatch table — a
+/// single source of truth, with no parallel built-in-name list that could
+/// drift (#1660; cf. the #1640 parallel-path-drift class).
+fn apply_builtin_filter(
+    filter_name: &str,
+    value: &Value,
+    arg: Option<&str>,
+    context: Option<&Context>,
+) -> Option<Result<Value>> {
+    let result: Result<Value> = match filter_name {
         "upper" => Ok(Value::String(value.to_string().to_uppercase())),
         "lower" => Ok(Value::String(value.to_string().to_lowercase())),
         "title" => Ok(Value::String(titlecase(&value.to_string()))),
@@ -95,9 +153,12 @@ pub fn apply_filter_full(
             Ok(Value::String(truncate_chars(&text, num_chars)))
         }
         "slice" => {
-            // slice filter supports Python slice syntax: ":5", "2:", "2:5"
+            // slice filter supports Python slice syntax: ":5", "2:", "2:5".
+            // Return the Result directly (no `?`): this arm's value IS the
+            // match's `Result<Value>`, and `apply_builtin_filter` returns
+            // `Option<Result<Value>>`, where `?` would wrongly target the Option.
             let slice_str = arg.unwrap_or(":");
-            Ok(apply_slice(value, slice_str)?)
+            apply_slice(value, slice_str)
         }
         "timesince" => {
             // timesince filter: converts ISO datetime to "X minutes/hours/days ago" format
@@ -493,31 +554,12 @@ pub fn apply_filter_full(
                 num_words,
             )))
         }
-        _ => {
-            // Built-in match miss — fall through to the custom filter
-            // registry for project-defined ``@register.filter`` callables
-            // (issue #1121). Bridge: ``filter_registry::apply_custom_filter``
-            // returns ``Some(Ok|Err)`` on hit, ``None`` on miss.
-            //
-            // ``autoescape=true`` is supplied here as the engine's current
-            // (pinned) policy. When ``{% autoescape %}`` block tracking
-            // lands in a future PR, the renderer will thread the
-            // surrounding policy through this call site (#1162).
-            if let Some(result) = filter_registry::apply_custom_filter(
-                filter_name,
-                value,
-                arg,
-                context,
-                arg_was_quoted,
-                true,
-            ) {
-                return result.map_err(DjangoRustError::TemplateError);
-            }
-            Err(DjangoRustError::TemplateError(format!(
-                "Unknown filter: {filter_name}"
-            )))
-        }
-    }
+        // Not a built-in — signal the caller to try the custom-filter
+        // registry. (The custom fallback lives in ``apply_filter_full_safe``
+        // so it can capture the result's runtime safeness, #1660.)
+        _ => return None,
+    };
+    Some(result)
 }
 
 fn titlecase(s: &str) -> String {
