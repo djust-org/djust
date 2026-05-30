@@ -3470,6 +3470,7 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 | **P2** | bug-capture iter B — replay viewer (#1562) | `/__djust__/replay/<blob>` read-only viewer. | Feature; needs design. |
 | **P2** | bug-capture iter C — Redis store + CLI + PII scrub (#1561) | Persistent capture store + `djust replay` CLI. | Feature; multi-day. |
 | **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
+| **P3** | VDOM compounding-reorder residual tail (#1669, **closed not-planned** — recorded here so the analysis isn't lost if revisited) | ~6 / 6000 adversarial-corpus re-renders mis-patch when several keyed reorders + a `dj-if` boundary move compound in one parent; ~0 production incidence. Accepted after #1666 (`MoveSubtree`) / #1667 (`InsertChild.ref_d=None`) / #1668 drove the client-faithful-harness residual from ~40 → ~6. | **Accept + document.** A robust fix needs a reconciliation/apply redesign in `crates/djust_vdom/src/diff.rs` with real regression risk against 268 Rust + 1636 JS tests for negligible benefit. If ever revisited, two candidate directions: **(a) frame-consistent move-target resolution** — resolve `MoveChild`/`MoveSubtree` indices against a single post-removal frame so compounding ops don't shift each other's targets; **(b) unified id-keying across all node types** (incl. `dj-if` boundary spans, which today are id-less `#comment` markers) so reconciliation never falls back to positional matching. |
 
 ---
 
