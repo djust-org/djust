@@ -374,6 +374,12 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let mut value = context.resolve(var_name).unwrap_or(Value::Null);
 
             // Apply filters (pass context so date/time can read DATE_FORMAT etc.)
+            //
+            // `runtime_safe` tracks whether the LAST filter produced a runtime
+            // ``SafeString`` (Django ``mark_safe`` / ``__html__``). A later
+            // plain-returning filter re-taints it (resets to false), matching
+            // Django's final-value escape semantics (#1660).
+            let mut runtime_safe = false;
             for (filter_name, arg) in filter_specs {
                 // Strip quotes from literal filter args at render time —
                 // the parser preserves quotes so the dep-tracking
@@ -384,13 +390,15 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
                 let stripped = original.map(crate::parser::strip_filter_arg_quotes);
-                value = filters::apply_filter_full(
+                let (new_value, produced_safe) = filters::apply_filter_full_safe(
                     filter_name,
                     &value,
                     stripped,
                     Some(context),
                     arg_was_quoted,
                 )?;
+                value = new_value;
+                runtime_safe = produced_safe;
             }
 
             let text = value.to_string();
@@ -401,6 +409,10 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             // 3. A filter that produces already-escaped/safe output is in the chain
             //    (built-in safe_output_filters list OR a custom filter
             //    registered with ``is_safe=True`` per #1121).
+            // 4. The final value is a runtime ``SafeString`` — a custom filter
+            //    ``mark_safe()``d its result at runtime without the static
+            //    ``is_safe=True`` flag (#1660). Additive: only ever marks MORE
+            //    values safe, and only when the LAST filter's output is safe.
             let safe_output_filters = [
                 "safe",
                 "safeseq",
@@ -413,7 +425,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let is_safe = filter_specs.iter().any(|(name, _)| {
                 safe_output_filters.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
-            }) || context.is_safe(var_name);
+            }) || context.is_safe(var_name)
+                || runtime_safe;
             if is_safe {
                 Ok(text)
             } else if *in_attr {
@@ -442,17 +455,23 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
             let mut value = get_value(expr, context)?;
 
+            // See the Variable arm: track the LAST filter's runtime safeness so
+            // a custom filter that ``mark_safe()``s at runtime bypasses escaping
+            // (#1660); a later plain filter re-taints.
+            let mut runtime_safe = false;
             for (filter_name, arg) in filters {
                 let original = arg.as_deref();
                 let arg_was_quoted = original.map(is_quoted_arg).unwrap_or(false);
                 let stripped = original.map(crate::parser::strip_filter_arg_quotes);
-                value = filters::apply_filter_full(
+                let (new_value, produced_safe) = filters::apply_filter_full_safe(
                     filter_name,
                     &value,
                     stripped,
                     Some(context),
                     arg_was_quoted,
                 )?;
+                value = new_value;
+                runtime_safe = produced_safe;
             }
 
             let text = value.to_string();
@@ -468,7 +487,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             let is_safe = filters.iter().any(|(name, _)| {
                 safe_output_filters.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
-            }) || context.is_safe(expr);
+            }) || context.is_safe(expr)
+                || runtime_safe;
             if is_safe {
                 Ok(text)
             } else {
@@ -1770,6 +1790,14 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
                 (filter_part, None, false)
             };
 
+            // NOTE (#1672, parallel-path decision per CLAUDE.md #1646): this
+            // `get_value` pipe helper returns a bare `Value` and is used by the
+            // `{% firstof %}` / `{% cycle %}` emit path. It intentionally uses
+            // the plain `apply_filter_full` (not `apply_filter_full_safe`), so a
+            // custom filter that `mark_safe()`s at runtime is *over-escaped*
+            // here — fail-SAFE (no XSS), unlike the Variable/InlineIf arms which
+            // honour runtime safeness (#1660). Threading `(Value, bool)` out of
+            // `get_value` touches its many callers; deferred to #1672.
             value = filters::apply_filter_full(
                 filter_name,
                 &value,
