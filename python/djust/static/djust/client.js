@@ -5110,6 +5110,11 @@ function generateCacheRequestId() {
     return `cache_${Date.now()}_${++cacheRequestCounter}`;
 }
 
+// One-time guard so the actionable HTTP-fallback warning (#1674) fires once
+// per session, not on every degraded event. Function-scoped within the bundle
+// IIFE (#1635).
+let _djustHttpFallbackWarned = false;
+
 // Main Event Handler
 async function handleEvent(eventName, params = {}) {
     if (globalThis.djustDebug) {
@@ -5283,7 +5288,21 @@ async function handleEvent(eventName, params = {}) {
         return;
     }
 
-    // Fallback to HTTP
+    // Fallback to HTTP. Emit an actionable, NON-debug-gated warning ONCE per
+    // session (#1674): a URL-routed LiveView missing from
+    // LIVEVIEW_ALLOWED_MODULES has its WebSocket mount rejected and silently
+    // degrades to full-page HTTP re-renders that *look* like the app works.
+    // The server intentionally returns a generic "View not found" (no allowlist
+    // detail leaked), so the client points the developer at the likely cause.
+    if (!_djustHttpFallbackWarned) {
+        _djustHttpFallbackWarned = true;
+        console.warn(
+            '[LiveView] Events are falling back to full-page HTTP re-renders '
+            + '(WebSocket unavailable, or the view\'s mount was rejected). '
+            + 'If this is your own LiveView, check that its module is listed in '
+            + 'LIVEVIEW_ALLOWED_MODULES in your Django settings.'
+        );
+    }
     if (globalThis.djustDebug) console.log('[LiveView] WebSocket unavailable, falling back to HTTP');
 
     try {

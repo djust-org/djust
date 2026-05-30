@@ -433,6 +433,42 @@ class LiveViewTestClient:
         )
         return http_ids
 
+    def assert_allowlisted(self) -> None:
+        """Assert this view's path is permitted by ``LIVEVIEW_ALLOWED_MODULES``.
+
+        The WebSocket mount path rejects any view whose path isn't allowlisted,
+        after which the client silently degrades to full-page HTTP re-renders —
+        a misconfiguration ``mount()`` does NOT surface (it just instantiates
+        the class), so a URL-routed view can be 100% green in the unit suite yet
+        broken in the browser (#1674). Call this in a test to fail fast on the
+        gap (pairs with the ``djust.V005`` system check, which now also walks
+        URL-routed views).
+
+        Matches the runtime enforcement exactly: a NON-empty allowlist is
+        required, and a view is permitted when an allowed entry is a PREFIX of
+        its view path. An unset or empty allowlist means allow-all, so this is a
+        no-op in that case.
+
+        Raises:
+            AssertionError: If the allowlist is non-empty and no entry is a
+                prefix of this view's path.
+        """
+        from django.conf import settings
+
+        allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
+        if not allowed:
+            return
+        module = getattr(self.view_class, "__module__", "") or ""
+        view_path = f"{module}.{getattr(self.view_class, '__name__', '')}"
+        if not any(view_path.startswith(m) or module.startswith(m) for m in allowed):
+            raise AssertionError(
+                f"{self.view_class.__name__}'s module '{module}' is not permitted "
+                f"by LIVEVIEW_ALLOWED_MODULES {list(allowed)} — its WebSocket mount "
+                f"would be rejected and events would silently fall back to "
+                f"full-page HTTP re-renders. Add '{module}' (or a prefix) to "
+                f"LIVEVIEW_ALLOWED_MODULES in settings (#1674)."
+            )
+
     def assert_state(self, **expected: Any) -> None:
         """
         Assert state variables match expected values.
@@ -1072,6 +1108,46 @@ def create_test_view(view_class: Type, user: Optional[Any] = None, **mount_param
     client = LiveViewTestClient(view_class, user=user)
     client.mount(**mount_params)
     return client.view_instance
+
+
+def assert_all_routed_liveviews_allowlisted() -> None:
+    """Assert EVERY URL-routed LiveView's module is permitted by the allowlist.
+
+    A single unit-test guard for the #1674 gap: a routed LiveView forgotten
+    from ``LIVEVIEW_ALLOWED_MODULES`` is invisible to per-view tests (which
+    instantiate the class directly, bypassing the mount allowlist) and nearly
+    invisible at runtime (it silently degrades to HTTP fallback). Drop this in
+    one test and the whole app is covered.
+
+    Walks the root URLconf via the same discovery the ``djust.V005`` system
+    check uses (single source of truth), and applies the same prefix matching
+    as the WebSocket mount enforcement. No-op when the allowlist is unset/empty
+    (allow-all).
+
+    Raises:
+        AssertionError: listing every routed view whose path no allowlist entry
+            is a prefix of.
+    """
+    from django.conf import settings
+
+    from djust.checks import _routed_liveview_classes
+
+    allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
+    if not allowed:
+        return
+    missing = []
+    for view_class in _routed_liveview_classes():
+        module = getattr(view_class, "__module__", "") or ""
+        view_path = f"{module}.{getattr(view_class, '__name__', '')}"
+        if not any(view_path.startswith(m) or module.startswith(m) for m in allowed):
+            missing.append(view_path)
+    if missing:
+        raise AssertionError(
+            "URL-routed LiveViews not permitted by LIVEVIEW_ALLOWED_MODULES "
+            f"{list(allowed)} — their WebSocket mounts would be rejected and "
+            f"events would silently fall back to HTTP: {sorted(set(missing))}. "
+            "Add the missing module(s) to LIVEVIEW_ALLOWED_MODULES (#1674)."
+        )
 
 
 # ============================================================================

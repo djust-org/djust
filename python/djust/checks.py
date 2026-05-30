@@ -1212,6 +1212,44 @@ def _walk_subclasses(cls):
         yield from _walk_subclasses(sub)
 
 
+def _routed_liveview_classes():
+    """Yield LiveView subclasses reachable from the root URLconf.
+
+    ``check_liveviews`` otherwise discovers views only via ``__subclasses__()``,
+    which sees a class only once its module has been imported. A URL-routed
+    LiveView whose module isn't imported by anything else at check time is
+    therefore invisible to that walk — so its missing-from-allowlist
+    misconfiguration (``V005``) is never flagged at ``manage.py check`` time,
+    and it silently degrades to HTTP fallback in the browser (#1674).
+
+    Walking the resolver imports the view modules (Django stamps
+    ``view_class`` on every ``as_view()`` callback) and discovers them
+    deterministically. URLconf import errors are surfaced by Django's own URL
+    system checks, so they're swallowed here rather than crashing this check.
+    """
+    try:
+        from django.urls import get_resolver
+
+        from djust.live_view import LiveView
+    except Exception:
+        return
+
+    def _walk(node):
+        nested = getattr(node, "url_patterns", None)
+        if nested is not None:
+            for child in nested:
+                yield from _walk(child)
+            return
+        view_class = getattr(getattr(node, "callback", None), "view_class", None)
+        if isinstance(view_class, type) and issubclass(view_class, LiveView):
+            yield view_class
+
+    try:
+        yield from _walk(get_resolver())
+    except Exception:
+        return
+
+
 @register("djust")
 def check_liveviews(app_configs, **kwargs):
     """Validate LiveView subclasses."""
@@ -1225,7 +1263,16 @@ def check_liveviews(app_configs, **kwargs):
     from django.conf import settings
     from djust.decorators import is_event_handler
 
-    for cls in _walk_subclasses(LiveView):
+    # Discover LiveViews from BOTH __subclasses__() (imported classes) AND the
+    # root URLconf (URL-routed views, whose module may not be imported anywhere
+    # else at check time). The union closes the #1674 gap where a routed view
+    # missing from LIVEVIEW_ALLOWED_MODULES was never flagged at check time.
+    # Sorted for deterministic check output across runs.
+    discovered = {*_walk_subclasses(LiveView), *_routed_liveview_classes()}
+    for cls in sorted(
+        discovered,
+        key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
+    ):
         # Skip abstract-looking classes (mixins, bases defined in djust itself)
         module = getattr(cls, "__module__", "") or ""
         if module.startswith("djust.") or module.startswith("djust_"):
@@ -1420,9 +1467,20 @@ def check_liveviews(app_configs, **kwargs):
                 )
             )
 
-        # V005 -- module not in LIVEVIEW_ALLOWED_MODULES
+        # V005 -- module not allowlisted. Mirror the WebSocket mount
+        # enforcement (websocket.py): the allowlist is enforced ONLY when
+        # non-empty, and a view is permitted when an allowed entry is a PREFIX
+        # of its view path — NOT by exact membership. Keeping V005 in sync with
+        # the runtime check avoids false positives now that URL-routed views are
+        # also discovered (#1674; parallel-path-drift, CLAUDE.md #1646): e.g. an
+        # allowlist of ['myapp'] permits 'myapp.views.MyView', and an explicitly
+        # empty [] means allow-all (no longer flags every view).
         allowed = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", None)
-        if allowed is not None and module not in allowed and not _is_check_suppressed("djust.V005"):
+        view_path = "%s.%s" % (module, getattr(cls, "__name__", ""))
+        is_allowlisted = allowed and any(
+            view_path.startswith(m) or module.startswith(m) for m in allowed
+        )
+        if allowed and not is_allowlisted and not _is_check_suppressed("djust.V005"):
             errors.append(
                 DjustWarning(
                     "%s is not in LIVEVIEW_ALLOWED_MODULES. "
