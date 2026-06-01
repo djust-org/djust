@@ -156,6 +156,11 @@ class TestRendererDispatch:
         view._sync_done_this_cycle = False
         view._force_full_html = False
         view._current_html_size = None
+        # MagicMock auto-creates attrs as truthy children, so without this the
+        # dispatch's ``getattr(self, "_djust_renderer", None) or HtmlRenderer(self)``
+        # would pick the mock instead of HtmlRenderer. Real LiveViews have no
+        # ``_djust_renderer`` (set only by ViewRuntime for native) → None → HtmlRenderer.
+        view._djust_renderer = None
         view.__class__ = type("StubView", (), {})  # avoid 'template' property check
 
         with patch(
