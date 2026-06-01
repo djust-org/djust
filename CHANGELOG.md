@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`client.min.js` no longer crashes with `ReferenceError: ie is not defined` in production (#1676).** P0: after the #1635 single-IIFE wrap, terser `--mangle` renamed a cross-module function declaration (`applyPatches` → `ie`) and relocated it so a caller's `await ie(...)` no longer resolved — crashing the **minified** client (served when `DEBUG=False`) and triggering a WebSocket reconnect loop. The unminified `client.js` resolves the reference via the shared outer-IIFE scope, so the bug was production-only and invisible to the (unminified-only) unit suite. Fix: `scripts/build-client.sh` now passes terser `--keep-fnames`, preserving function names through mangling so no cross-module reference can be renamed out of scope. This is terser-version-independent and covers the whole class of cross-module functions (not just `applyPatches`). Costs ~2 KB gzipped (correctness over size for a prod-breaking class). Guarded by a structural check (`tests/js/min_bundle_applypatches_1676.test.js`) asserting the minified bundle preserves the names; gate-off verified (drop `--keep-fnames` → `applyPatches` mangles to `ie` → the guard fails). Reproduction note: the crash is browser-runtime/terser-version specific and does not reproduce under jsdom/Node V8, so the fix rests on the reporter's bit-exact prod console evidence + structural verification.
+
 ## [1.0.0rc16] - 2026-05-29
 
 ### Added

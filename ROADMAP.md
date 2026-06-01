@@ -3456,6 +3456,21 @@ Three v0.8.6 retro patterns (#1125, #1124, #1123) are also still open as canon i
 
 ---
 
+### Milestone: v1.0.0rc17 — post-rc16 production-bug drain
+
+*Goal:* Three production bugs reported against rc15/rc16 (post-release). Drain
+to a single RC. P0 first.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P0** | `client.min.js` `ReferenceError: ie is not defined` (#1676) | terser `--mangle` × #1635 IIFE wrap renamed cross-module `applyPatches`→`ie` out of scope; crashes the minified client in prod + WS reconnect loop. | Fix: `--keep-fnames` in build-client.sh (terser-version-independent, whole-class). Ships in rc15/rc16. |
+| **P1** | `{% kanban_board %}` emits no `dj-id` anchors (#1678) | Cards/columns rendered as positional HTML; a card move shifts child counts → VDOM patches against stale paths → failed patches + `html_recovery` on every drag. | Fix: emit `dj-id`/`dj-key` on cards + columns in `djust_components.py`. |
+| **P1** | VDOM version-mismatch recovery storm (#1677) | Rapid events + `push_to_view` self-broadcast → non-sequential versions → strict sequential check treats each gap as corruption → `request_html` storm + intermittent reconnect. | Deeper: per-source version tracking / tolerate self-broadcast interleaving. Needs design. |
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
