@@ -2892,6 +2892,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # version while an event handler is mid-execution.
             await self._render_lock.acquire()
             self._processing_user_event = True
+            # Tag any push_to_view broadcasts this handler emits with the
+            # originating channel, so this same session skips its OWN redundant
+            # self-broadcast (#1677). Reset in the finally below.
+            from djust import push as _djust_push
+
+            _origin_token = _djust_push.origin_channel.set(getattr(self, "channel_name", None))
             try:
                 if component_id:
                     # Component event: route to component's event handler method
@@ -3764,6 +3770,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 await self.send_json(response)
             finally:
+                _djust_push.origin_channel.reset(_origin_token)
                 self._processing_user_event = False
                 self._render_lock.release()
 
@@ -4983,6 +4990,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
 
         try:
+            # Skip our OWN self-broadcast (#1677): when a handler on THIS
+            # session pushed to its own view, the originating session already
+            # got the state via its direct event response. Re-rendering for the
+            # redundant self-broadcast bumps the VDOM version, which under rapid
+            # event bursts arrives non-sequentially at the client and triggers a
+            # full-HTML recovery storm + intermittent reconnect. Other sessions
+            # (sender_channel != ours) and external pushes (sender_channel is
+            # None — Celery, cross-view, etc.) are unaffected.
+            sender_channel = event.get("sender_channel")
+            if sender_channel and sender_channel == self.channel_name:
+                logger.debug(
+                    "[djust] server_push on %s skipped — own self-broadcast (#1677)",
+                    self.view_instance.__class__.__name__,
+                )
+                return
+
             # Yield to user events: if a user event is being processed,
             # skip this broadcast to avoid version interleaving (#560).
             if self._processing_user_event:
