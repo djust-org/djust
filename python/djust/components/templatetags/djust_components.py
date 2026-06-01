@@ -3179,7 +3179,13 @@ def kanban_board(
                 else ""
             )
             cards_html += (
-                f'<div class="kanban-card" draggable="true" '
+                # dj-key anchors each card by its stable id so the VDOM differ
+                # reconciles cards by IDENTITY (keyed) across a move, instead of
+                # by position. Without it, moving a card shifts per-column child
+                # counts and the differ patches against stale positional paths →
+                # a storm of failed patches + full html_recovery on every drag
+                # (#1678). `data-card-id` is for the drag JS, not the differ.
+                f'<div class="kanban-card" dj-key="{card_id}" draggable="true" '
                 f'data-card-id="{card_id}" data-col-id="{col_id}" '
                 f"ondragstart=\"(function(e,el){{e.dataTransfer.setData('card',el.dataset.cardId);"
                 f"e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');}})( event,this)\" "
@@ -3196,7 +3202,12 @@ def kanban_board(
         )
 
         cols_html += (
-            f'<div class="kanban-col" '
+            # dj-key anchors each column by its stable id (keyed reconciliation),
+            # so when a card moves the differ matches the same column across
+            # renders and resolves its header/count/cards-container children by
+            # their stable positions rather than mis-patching positionally
+            # (#1678).
+            f'<div class="kanban-col" dj-key="{col_id}" '
             f'data-col-id="{col_id}" '
             f"ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" "
             f"ondragleave=\"this.classList.remove('kanban-col-over')\" "
