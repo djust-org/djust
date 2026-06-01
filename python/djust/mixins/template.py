@@ -280,9 +280,24 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Strip HTML comments and normalize whitespace to match Rust VDOM parser behavior.
 
         IMPORTANT: Preserve whitespace inside <pre>, <code>, and <textarea> tags.
+
+        IMPORTANT (#1678): Preserve ``<!--dj-if …-->`` / ``<!--/dj-if-->``
+        boundary markers. These are load-bearing VDOM structure — the Rust
+        parser counts them as significant children and the client differ
+        resolves patch paths against them — NOT cosmetic comments. The Rust
+        VDOM parser keeps them, so stripping them here desynced the hydrated
+        mount HTML (and SSE / recovery HTML) from the server's ``last_vdom``:
+        the client DOM lost every dj-if marker while the server vdom kept
+        them, so on a multi-``{% if %}`` container (e.g. a tabbed dashboard
+        with one ``{% if active_tab == X %}`` block per tab) the server's
+        positional patch paths over-counted the client's children (index N vs
+        a marker-less DOM) and every subsequent event fell back to
+        ``html_recovery``.
         """
-        # Remove HTML comments
-        html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+        # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
+        # negative lookahead skips comments whose body is ``dj-if …`` or
+        # ``/dj-if`` so they survive; all other comments are stripped.
+        html = re.sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
 
         # Preserve whitespace inside <pre>, <code>, and <textarea> tags
         preserved_blocks = []
