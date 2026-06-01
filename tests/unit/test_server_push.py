@@ -31,6 +31,7 @@ class TestPushToView:
                 "state": {"count": 42},
                 "handler": None,
                 "payload": None,
+                "sender_channel": None,  # #1677: None outside an event handler
             },
         )
 
@@ -80,6 +81,7 @@ class TestPushToView:
                 "state": {"x": 1},
                 "handler": None,
                 "payload": None,
+                "sender_channel": None,  # #1677
             },
         )
 
