@@ -39,9 +39,18 @@ minify_and_compress() {
         return 0
     fi
 
+    # --keep-fnames (#1676): after the #1635 single-IIFE wrap, terser's
+    # name-mangling renamed cross-module function declarations (e.g.
+    # applyPatches -> ie) inconsistently across the IIFE scope, so a call
+    # site / export referencing the mangled name threw
+    # `ReferenceError: <name> is not defined` in the MINIFIED bundle only
+    # (the unminified client.js resolves via the shared outer-IIFE scope).
+    # Preserving function names keeps every cross-module reference resolvable.
+    # Costs ~2 KB gzipped; correctness > size for a prod-breaking class of bug.
     "$terser_bin" "$input" \
         --compress \
         --mangle \
+        --keep-fnames \
         --comments=false \
         --source-map "url='$(basename "$output_min").map',includeSources,root='./'" \
         --output "$output_min" 2>/dev/null || {
