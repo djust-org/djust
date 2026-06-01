@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc18] - 2026-06-01
+
 ### Fixed
 
 - **`{% kanban_board %}` card moves no longer storm `html_recovery` on a tabbed dashboard (#1678, fully fixed).** This was a **stacked** bug (reopened 3×); both layers are now resolved:
