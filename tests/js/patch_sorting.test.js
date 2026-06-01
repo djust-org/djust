@@ -102,12 +102,21 @@ describe('Patch sorting — 4-phase ordering', () => {
         expect(patches[2].index).toBe(0);
     });
 
-    it('should order RemoveSubtree + InsertSubtree BEFORE path-based child ops (#1370)', () => {
+    it('should order RemoveSubtree BEFORE path-based child ops (#1370)', () => {
         // #1370 reproduction: server emits a batch mixing id-based subtree
         // ops and path-based child ops. The path-based indices reflect the
         // NEW tree's positions (after subtree ops applied). If RemoveChild
         // runs before RemoveSubtree, it targets the still-old DOM and
-        // removes the wrong child. Sort must place id-based patches first.
+        // removes the wrong child. The #1370 corruption guard: RemoveSubtree
+        // (tear-down) must run before any path-based child op.
+        //
+        // NOTE (#1678): InsertSubtree is NO LONGER bundled directly after
+        // RemoveSubtree. It moved to the boundary-span phase (with MoveSubtree)
+        // AFTER the child ops, applied by ascending index — see the dedicated
+        // #1678 test below and the _sortPatches phase doc. The #1370 invariant
+        // here (RemoveSubtree before RemoveChild) is unaffected, and the child
+        // ops resolve their parent by `d` (dj-id), so they are robust to the
+        // InsertSubtree position.
         const patches = [
             { type: 'SetAttr', path: [1, 2, 4, 0, 1], d: '2B', key: 'class', value: 'x' },
             { type: 'RemoveSubtree', id: 'if-290fa3f1-100' },
@@ -119,13 +128,40 @@ describe('Patch sorting — 4-phase ordering', () => {
 
         _sortPatches(patches);
         const types = patches.map(p => p.type);
-        // Subtree ops must come first, then RemoveChild, then InsertChild,
-        // then SetAttr. Any phase ordering that puts RemoveChild before
-        // RemoveSubtree is the #1370 corruption bug.
+        // The #1370 corruption guard: RemoveSubtree first, before RemoveChild.
         expect(types[0]).toBe('RemoveSubtree');
-        expect(types[1]).toBe('InsertSubtree');
-        expect(types.slice(2, 4).sort()).toEqual(['InsertChild', 'RemoveChild']);
+        expect(types.indexOf('RemoveSubtree')).toBeLessThan(types.indexOf('RemoveChild'));
+        // RemoveChild before InsertChild (4-phase child ordering).
         expect(types.indexOf('RemoveChild')).toBeLessThan(types.indexOf('InsertChild'));
+        // #1678: InsertSubtree (boundary-span phase) now runs AFTER the child ops.
+        expect(types.indexOf('InsertChild')).toBeLessThan(types.indexOf('InsertSubtree'));
+        // SetAttr (node-targeting) last.
         expect(types.slice(-2).every(t => t === 'SetAttr')).toBe(true);
+    });
+
+    it('should interleave MoveSubtree + InsertSubtree by ascending index, after child ops (#1678)', () => {
+        // #1678: a tab activates whose body is a NESTED conditional. The differ
+        // emits MoveSubtree(outer boundary) + InsertSubtree(inner boundary)
+        // where the inner index assumes the outer is already at its final
+        // position. Both must be in the same (boundary-span) phase AFTER child
+        // ops, ordered by ASCENDING target index, so the outer boundary is
+        // repositioned before the nested insert lands inside it. Running
+        // InsertSubtree first put the inner span as a SIBLING of the outer →
+        // marker drift → html_recovery on every kanban move.
+        const patches = [
+            { type: 'InsertSubtree', id: 'if-x-13', path: [], d: '0', index: 7, html: '' },
+            { type: 'RemoveChild', path: [], d: '0', index: 1, child_d: '1' },
+            { type: 'MoveSubtree', id: 'if-x-12', path: [], d: '0', index: 6 },
+            { type: 'SetText', path: [8, 0, 0, 1, 0], text: '1' },
+        ];
+
+        _sortPatches(patches);
+        const types = patches.map(p => p.type);
+        // RemoveChild (child op) before the boundary-span ops.
+        expect(types.indexOf('RemoveChild')).toBeLessThan(types.indexOf('MoveSubtree'));
+        // Boundary-span ops ascending by index: MoveSubtree(6) before InsertSubtree(7).
+        expect(types.indexOf('MoveSubtree')).toBeLessThan(types.indexOf('InsertSubtree'));
+        // SetText (node-targeting) last — after the structure is final.
+        expect(types[types.length - 1]).toBe('SetText');
     });
 });

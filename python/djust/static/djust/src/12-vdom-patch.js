@@ -1600,22 +1600,40 @@ window.djust._groupConsecutiveInserts = groupConsecutiveInserts;
  *
  * Phases:
  *   -2: RemoveSubtree (tear down keyed subtrees first)
- *   -1: InsertSubtree (add keyed subtrees before any path indices apply)
  *    0: RemoveChild (descending index within same parent)
  *    1: MoveChild
  *    2: InsertChild
- *    3: MoveSubtree (reposition matched boundary spans AFTER siblings settle)
+ *    3: MoveSubtree + InsertSubtree (boundary-span ops, INTERLEAVED by
+ *       ascending target index — see below)
  *    4: SetText, SetAttribute, other node-targeting patches
+ *
+ * Boundary-span ordering (#1678): InsertSubtree was historically phase -1
+ * (before path ops), but its `index` is a FINAL-structure index. When a tab
+ * activates whose body is a NESTED conditional (e.g. `{% if ideas %}{% if
+ * has_cards %}{% kanban %}{% else %}{% empty_state %}{% endif %}{% endif %}`),
+ * the differ emits MoveSubtree(outer boundary) + InsertSubtree(inner boundary)
+ * where the inner index assumes the outer is already at its final position.
+ * Running InsertSubtree before MoveSubtree inserted the inner span as a
+ * SIBLING of the outer boundary instead of NESTED inside it — the client's
+ * flat marker tree then diverged from the server's by one significant child,
+ * so a later positional `SetText` landed on a dj-if comment marker →
+ * html_recovery (#1678). With flat indices there is no linear phase order that
+ * satisfies #1370 (Insert-before-path), #1666 (Move-after-path) AND #1678
+ * (Insert-after-Move) simultaneously. The break: keep the boundary-span ops
+ * (Move + Insert) in a single phase AFTER the child ops (#1666), and apply
+ * them in ASCENDING target-index order so each lower-index op builds the
+ * correct prefix before a higher-index op resolves against it (the outer
+ * boundary is repositioned before the nested insert lands inside it).
  */
 function _sortPatches(patches) {
     function patchPhase(p) {
         switch (p.type) {
             case 'RemoveSubtree': return -2;
-            case 'InsertSubtree': return -1;
             case 'RemoveChild':   return 0;
             case 'MoveChild':     return 1;
             case 'InsertChild':   return 2;
             case 'MoveSubtree':   return 3;
+            case 'InsertSubtree': return 3;
             default:              return 4;
         }
     }
@@ -1628,6 +1646,15 @@ function _sortPatches(patches) {
             const pA = JSON.stringify(a.path);
             const pB = JSON.stringify(b.path);
             if (pA === pB) return b.index - a.index;
+        }
+        // Within the boundary-span phase, apply by ASCENDING target index so a
+        // moved outer boundary is positioned before a nested insert lands
+        // inside it (#1678). Indices are parent-absolute significant-child
+        // positions in the final tree.
+        if (phaseA === 3) {
+            const ai = typeof a.index === 'number' ? a.index : 0;
+            const bi = typeof b.index === 'number' ? b.index : 0;
+            return ai - bi;
         }
         return 0;
     });
@@ -2100,21 +2127,24 @@ function _applyPatchesInner(patches, rootEl = null) {
     let failedCount = 0;
     let successCount = 0;
 
-    // id-based patches (RemoveSubtree, InsertSubtree) don't have a `path`
-    // field — they locate their target by marker id. Apply them directly
-    // before the path-grouped batching pass; they must not enter
-    // groupPatchesByParent which assumes patch.path exists.
+    // id-based patches don't have a `path` field — they locate their target by
+    // marker id. RemoveSubtree (phase -2) tears down keyed subtrees up front.
+    // InsertSubtree + MoveSubtree (phase 3) are DEFERRED together and applied
+    // by ascending target index AFTER the path/index child ops settle — so a
+    // moved outer boundary is repositioned before a nested insert lands inside
+    // it (#1678; see _sortPatches phase doc). They must not enter
+    // groupPatchesByParent, which assumes patch.path exists.
     const pathPatches = [];
-    const moveSubtreePatches = [];
+    const boundarySpanPatches = [];
     for (const patch of patches) {
-        if (patch.type === 'RemoveSubtree' || patch.type === 'InsertSubtree') {
-            // Phase -2/-1: tear down / add keyed subtrees BEFORE path indices apply.
+        if (patch.type === 'RemoveSubtree') {
+            // Phase -2: tear down keyed subtrees first.
             const ok = applySinglePatch(patch, rootEl);
             if (ok) { successCount++; } else { failedCount++; }
-        } else if (patch.type === 'MoveSubtree') {
-            // Phase 3: defer — reposition matched boundary spans AFTER the
-            // path/index child ops below settle the surrounding siblings (#1666).
-            moveSubtreePatches.push(patch);
+        } else if (patch.type === 'InsertSubtree' || patch.type === 'MoveSubtree') {
+            // Phase 3: defer — boundary-span ops apply after child ops, by
+            // ascending index (#1666 + #1678).
+            boundarySpanPatches.push(patch);
         } else {
             pathPatches.push(patch);
         }
@@ -2214,10 +2244,17 @@ function _applyPatchesInner(patches, rootEl = null) {
         }
     }
 
-    // Phase 3 (#1666): reposition matched boundary spans AFTER all path/index
-    // child ops above have settled the surrounding siblings, so each
-    // MoveSubtree's `index` resolves against the new-frame significant children.
-    for (const patch of moveSubtreePatches) {
+    // Phase 3 (#1666 + #1678): apply boundary-span ops (MoveSubtree +
+    // InsertSubtree) AFTER all path/index child ops above have settled the
+    // surrounding siblings, in ASCENDING target index so a moved outer
+    // boundary is repositioned before a nested insert lands inside it. Each
+    // op's `index` then resolves against the new-frame significant children.
+    boundarySpanPatches.sort(function (a, b) {
+        const ai = typeof a.index === 'number' ? a.index : 0;
+        const bi = typeof b.index === 'number' ? b.index : 0;
+        return ai - bi;
+    });
+    for (const patch of boundarySpanPatches) {
         if (applySinglePatch(patch, rootEl)) { successCount++; } else { failedCount++; }
     }
 

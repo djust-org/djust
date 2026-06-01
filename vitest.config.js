@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { defineConfig, configDefaults } from 'vitest/config';
 
 /**
  * Test-runtime unhandled-error policy (v0.9.3 — issues #1186 / #1152)
@@ -35,6 +35,11 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     globals: true,
+    // Don't discover tests inside agent git worktrees (`.claude/worktrees/*`)
+    // or other `.claude/` internals — those are other branches' checkouts and
+    // running their (possibly stale) test copies against this tree's built
+    // client.js produces spurious failures. Preserve vitest's defaults.
+    exclude: [...configDefaults.exclude, '**/.claude/**'],
     onUnhandledError(error) {
       const msg = String(error && error.message ? error.message : '');
       const stack = String(error && error.stack ? error.stack : '');

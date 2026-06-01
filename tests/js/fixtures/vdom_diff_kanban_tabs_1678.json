@@ -1,0 +1,83 @@
+{
+  "scenario": "kanban_tabs_1678",
+  "description": "8-tab dashboard, tab 3 keyed kanban. Mount tab0 -> switch to tab3 (MoveSubtree for shifted blocks) -> cross-column card move.",
+  "root_selector": ".tabs-content",
+  "initial_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><div class=\"tab tab0\" dj-id=\"1\"><p dj-id=\"2\">Tab 0 intro</p><!--dj-if id=\"if-4017a4e7-1\"--><div class=\"detail\" dj-id=\"3\">Detail for 0</div><!--/dj-if--><!--dj-if id=\"if-4017a4e7-2\"--><div class=\"extra\" dj-id=\"4\"><span dj-id=\"5\">x</span><!--dj-if id=\"if-4017a4e7-3\"--><b dj-id=\"6\">deep</b><!--/dj-if--></div><!--/dj-if--><p dj-id=\"7\">Tab 0 outro</p></div><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>",
+  "steps": [
+    {
+      "label": "switch tab0 -> tab3 (kanban)",
+      "patches": [
+        {
+          "type": "RemoveChild",
+          "path": [],
+          "d": "0",
+          "index": 1,
+          "child_d": "1"
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-4",
+          "path": [],
+          "d": "0",
+          "index": 2
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-8",
+          "path": [],
+          "d": "0",
+          "index": 4
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-12",
+          "path": [],
+          "d": "0",
+          "index": 6
+        },
+        {
+          "type": "InsertSubtree",
+          "id": "if-4017a4e7-13",
+          "path": [],
+          "d": "0",
+          "index": 7,
+          "html": "<!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" dj-id=\"9\"><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"a\" dj-key=\"todo\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"b\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"c\">To Do</span><span class=\"kanban-col-count\" dj-id=\"d\">2</span></div><div class=\"kanban-cards\" dj-id=\"e\"><div class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"f\" dj-key=\"c1\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"g\">Alpha</div></div><div class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"h\" dj-key=\"c2\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"i\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"j\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"k\" dj-key=\"doing\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"l\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"m\">Doing</span><span class=\"kanban-col-count\" dj-id=\"n\">1</span></div><div class=\"kanban-cards\" dj-id=\"o\"><div class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"p\" dj-key=\"c3\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"q\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"r\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"s\" dj-key=\"done\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"t\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"u\">Done</span><span class=\"kanban-col-count\" dj-id=\"v\">0</span></div><div class=\"kanban-cards\" dj-id=\"w\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"x\">+ Add card</button></div></div><!--/dj-if-->"
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-14",
+          "path": [],
+          "d": "0",
+          "index": 11
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-15",
+          "path": [],
+          "d": "0",
+          "index": 13
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-16",
+          "path": [],
+          "d": "0",
+          "index": 15
+        },
+        {
+          "type": "MoveSubtree",
+          "id": "if-4017a4e7-17",
+          "path": [],
+          "d": "0",
+          "index": 17
+        }
+      ],
+      "expected_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" dj-id=\"9\"><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"a\" dj-key=\"todo\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"b\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"c\">To Do</span><span class=\"kanban-col-count\" dj-id=\"d\">2</span></div><div class=\"kanban-cards\" dj-id=\"e\"><div class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"f\" dj-key=\"c1\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"g\">Alpha</div></div><div class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"h\" dj-key=\"c2\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"i\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"j\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"k\" dj-key=\"doing\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"l\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"m\">Doing</span><span class=\"kanban-col-count\" dj-id=\"n\">1</span></div><div class=\"kanban-cards\" dj-id=\"o\"><div class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"p\" dj-key=\"c3\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"q\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"r\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"s\" dj-key=\"done\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"t\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"u\">Done</span><span class=\"kanban-col-count\" dj-id=\"v\">0</span></div><div class=\"kanban-cards\" dj-id=\"w\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"x\">+ Add card</button></div></div><!--/dj-if--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>"
+    },
+    {
+      "label": "move card c1 todo -> done",
+      "patches": [],
+      "expected_html": "<div class=\"tabs-content\" dj-id=\"0\"><!--dj-if id=\"if-4017a4e7-0\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-4\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-8\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-12\"--><!--dj-if id=\"if-4017a4e7-13\"--><div class=\"kanban\" dj-id=\"9\"><div class=\"kanban-col\" data-col-id=\"todo\" dj-id=\"a\" dj-key=\"todo\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"b\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"c\">To Do</span><span class=\"kanban-col-count\" dj-id=\"d\">2</span></div><div class=\"kanban-cards\" dj-id=\"e\"><div class=\"kanban-card\" data-card-id=\"c1\" data-col-id=\"todo\" dj-id=\"f\" dj-key=\"c1\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"g\">Alpha</div></div><div class=\"kanban-card\" data-card-id=\"c2\" data-col-id=\"todo\" dj-id=\"h\" dj-key=\"c2\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"i\">Bravo</div></div></div><button class=\"kanban-add-card\" data-value=\"todo\" dj-click=\"kanban_add_card\" dj-id=\"j\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"doing\" dj-id=\"k\" dj-key=\"doing\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"l\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"m\">Doing</span><span class=\"kanban-col-count\" dj-id=\"n\">1</span></div><div class=\"kanban-cards\" dj-id=\"o\"><div class=\"kanban-card\" data-card-id=\"c3\" data-col-id=\"doing\" dj-id=\"p\" dj-key=\"c3\" draggable=\"true\" ondragend=\"this.classList.remove('dragging')\" ondragstart=\"(function(e,el){e.dataTransfer.setData('card',el.dataset.cardId);e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');})( event,this)\"><div class=\"kanban-card-title\" dj-id=\"q\">Charlie</div></div></div><button class=\"kanban-add-card\" data-value=\"doing\" dj-click=\"kanban_add_card\" dj-id=\"r\">+ Add card</button></div><div class=\"kanban-col\" data-col-id=\"done\" dj-id=\"s\" dj-key=\"done\" ondragleave=\"this.classList.remove('kanban-col-over')\" ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" ondrop=\"(function(e,el){e.preventDefault();el.classList.remove('kanban-col-over');var cid=e.dataTransfer.getData('card');var from=e.dataTransfer.getData('from');var to=el.dataset.colId;if(from!==to){window.djust&amp;&amp;window.djust.handleEvent('move_card',{card_id:cid,from_col:from,to_col:to});}})( event,this)\"><div class=\"kanban-col-header\" dj-id=\"t\" style=\"border-top-color:#6366F1\"><span class=\"kanban-col-title\" dj-id=\"u\">Done</span><span class=\"kanban-col-count\" dj-id=\"v\">0</span></div><div class=\"kanban-cards\" dj-id=\"w\"></div><button class=\"kanban-add-card\" data-value=\"done\" dj-click=\"kanban_add_card\" dj-id=\"x\">+ Add card</button></div></div><!--/dj-if--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-14\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-15\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-16\"--><!--/dj-if--><!--dj-if id=\"if-4017a4e7-17\"--><!--/dj-if--></div>"
+    }
+  ]
+}
