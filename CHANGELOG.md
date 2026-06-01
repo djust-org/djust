@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`_strip_comments_and_whitespace` no longer strips `dj-if` boundary markers from hydrated / SSE / `html_recovery` HTML (#1678, contributing fix — does not fully close the issue).** The hydrated-mount path (and SSE + recovery) runs rendered HTML through `_strip_comments_and_whitespace` before sending it to the client. It removed **all** comments via `re.sub(r"<!--.*?-->", "", …)` — including the `<!--dj-if …-->` / `<!--/dj-if-->` boundary markers, which are **load-bearing VDOM structure**, not cosmetic comments: the Rust parser counts them as significant children and the client differ resolves patch paths against them. So the client DOM lost every dj-if marker while the server's `last_vdom` kept them; on a multi-`{% if %}` container (a tabbed dashboard with one `{% if active_tab == X %}` block per tab) the server's positional patch paths over-counted the marker-less client children → `Path traversal failed at index N` → `html_recovery` on every event. Fix: a negative-lookahead regex (`<!--(?!\s*/?dj-if\b).*?-->`) strips ordinary comments but preserves dj-if markers, matching the Rust parser. Verified live on a tabbed kanban dashboard: 0 markers in the client DOM before, 41 preserved after. Pinned by `python/tests/test_djif_marker_preservation_1678.py` (gate-off: revert to `<!--.*?-->` → markers stripped → assertions fail). **Scope note:** this removes one source of server↔client VDOM desync but does **not** fully resolve #1678 — a remaining `last_vdom`↔client-DOM parity drift (the client `.tabs-content` carries one more significant child before the active block than the server's diff baseline) still triggers recovery on cross-column kanban moves; #1678 stays open for that root cause.
+
 ## [1.0.0rc17] - 2026-05-31
 
 ### Fixed
