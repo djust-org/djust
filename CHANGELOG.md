@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0rc17] - 2026-05-31
+
 ### Fixed
 
 - **Rapid events on a self-broadcasting view no longer storm full-HTML recovery + reconnect (#1677).** When a view's event handler calls `push_to_view()` for its **own** view (the `djust new` scaffold's `react`/`vote`/`post_message` demos), the triggering session received both its direct event response (VDOM version N) *and* its own self-broadcast (N+1, N+2…). The client tracks a single VDOM version with a strict sequential check, so under rapid bursts the interleaved non-sequential versions read as corruption → a `request_html` full-HTML recovery on every gap (a re-fetch + morph storm), with an occasional `location.reload()`/WS reconnect when the socket hiccupped mid-storm. The originating session already has the state from its direct response, so the self-broadcast is redundant: `push_to_view` now tags broadcasts with the originating channel (a `ContextVar` set during event handling) and `server_push` skips a broadcast whose `sender_channel` matches the receiving session — leaving the delicate client version-check untouched. Broadcasts to **other** sessions and external pushes (Celery, cross-view; `sender_channel` is `None`) are unaffected. **Semantic note:** a handler's `push_to_view` to its own view no longer echoes back to the triggering session — set state directly on `self` for local updates (the normal pattern). Pinned by `tests/unit/test_push_self_broadcast_1677.py` (gate-off verified).
