@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-02
+
+First stable release. 🎉
+
+Promotes `v1.0.0rc18` to general availability with no code changes since rc18 —
+the public API is now SemVer-stable under the deprecation policy documented in
+`docs/API_STABILITY.md`. The 1.0.0 stabilization cycle ran from `rc1`
+(2026-05-17) through `rc18` (2026-06-01): eighteen release candidates of
+hardening on real production sites (djust.org and djustlive run on djust; every
+example app dogfoods it). See the `rc1`–`rc18` entries below for the full
+changelog of the stabilization cycle.
+
 ## [1.0.0rc18] - 2026-06-01
 
 ### Fixed
