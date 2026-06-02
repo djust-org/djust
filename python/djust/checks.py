@@ -1413,6 +1413,18 @@ def check_liveviews(app_configs, **kwargs):
                 "handle_disconnect",
                 "handle_connect",
                 "handle_event",
+                # Framework-invoked lifecycle hooks (#1684). The framework calls
+                # these directly (self.X() / getattr / hasattr), not the user-event
+                # router, so a user override must NOT carry @event_handler — but the
+                # names match the event-handler-like regex. See each hook's call site:
+                "handle_presence_join",  # presence.py track_presence()
+                "handle_presence_leave",  # presence.py untrack_presence()
+                "handle_cursor_move",  # websocket.py cursor_move handler (LiveCursorMixin)
+                "handle_tick",  # websocket.py tick loop (LiveView)
+                "handle_async_result",  # websocket.py/sse.py background-work completion
+                "handle_component_event",  # mixins/components.py child-component callback
+                "handle_info",  # websocket.py channel-layer/info messages (NotificationMixin)
+                "on_wizard_complete",  # wizard.py submit_wizard() (WizardMixin)
             ):
                 continue
             if is_event_handler(method):

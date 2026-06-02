@@ -3665,6 +3665,44 @@ class TestV004LifecycleMethods:
         """handle_event() is a lifecycle method — V004 must not fire."""
         self._make_view_with_method("handle_event")
 
+    # #1684 — framework-invoked lifecycle hooks a user is meant to override.
+    # The framework calls these directly (self.X() / getattr / hasattr), not
+    # the user-event router, so they must NOT carry @event_handler — yet their
+    # names match the V004 "event-handler-like" regex. Each fails against the
+    # pre-fix allowlist and passes once the hook is added (gates the change off).
+
+    def test_v004_ignores_handle_presence_join(self):
+        """handle_presence_join() — PresenceMixin hook (presence.py track_presence). V004 must not fire."""
+        self._make_view_with_method("handle_presence_join")
+
+    def test_v004_ignores_handle_presence_leave(self):
+        """handle_presence_leave() — PresenceMixin hook (presence.py untrack_presence); the djust-start#5 symptom. V004 must not fire."""
+        self._make_view_with_method("handle_presence_leave")
+
+    def test_v004_ignores_handle_cursor_move(self):
+        """handle_cursor_move() — LiveCursorMixin hook (websocket.py cursor_move). V004 must not fire."""
+        self._make_view_with_method("handle_cursor_move")
+
+    def test_v004_ignores_handle_tick(self):
+        """handle_tick() — LiveView tick-loop hook (websocket.py tick loop). V004 must not fire."""
+        self._make_view_with_method("handle_tick")
+
+    def test_v004_ignores_handle_async_result(self):
+        """handle_async_result() — AsyncWorkMixin background-completion hook (websocket.py/sse.py). V004 must not fire."""
+        self._make_view_with_method("handle_async_result")
+
+    def test_v004_ignores_handle_component_event(self):
+        """handle_component_event() — ComponentMixin child-event hook (mixins/components.py). V004 must not fire."""
+        self._make_view_with_method("handle_component_event")
+
+    def test_v004_ignores_handle_info(self):
+        """handle_info() — NotificationMixin channel-layer hook (websocket.py). V004 must not fire."""
+        self._make_view_with_method("handle_info")
+
+    def test_v004_ignores_on_wizard_complete(self):
+        """on_wizard_complete() — WizardMixin completion hook (wizard.py submit_wizard). V004 must not fire."""
+        self._make_view_with_method("on_wizard_complete")
+
 
 # ---------------------------------------------------------------------------
 # T013 — allow {{ ... }} Django template variable in dj-view (issue #395)
