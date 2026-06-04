@@ -2,11 +2,13 @@
   <img src="branding/logo/djust-wordmark-dark.png" alt="djust" width="300" />
 </p>
 
-<p align="center"><strong>Blazing fast reactive server-side rendering for Django, powered by Rust</strong></p>
+<p align="center"><strong>Reactive server-side rendering for Django, powered by Rust</strong></p>
 
-djust brings Phoenix LiveView-style reactive components to Django, with performance that feels native. Write server-side Python code with automatic, instant client updates—no JavaScript bundling, no build step, no complexity.
+djust brings Phoenix LiveView-style reactive components to Django. You write
+server-side Python; the client updates automatically over a WebSocket. There is
+no JavaScript to write, no bundler, and no build step in your project.
 
-🌐 **[djust.org](https://djust.org)** | 📚 **[docs.djust.org](https://docs.djust.org)** | 🚀 **[Quick Start](https://docs.djust.org/getting-started/)** | 📝 **[Examples](https://djust.org/examples/)**
+**[djust.org](https://djust.org)** · **[Documentation](https://docs.djust.org)** · **[Quick Start](https://docs.djust.org/getting-started/)** · **[Examples](https://djust.org/examples/)**
 
 [![PyPI version](https://img.shields.io/pypi/v/djust.svg)](https://pypi.org/project/djust/)
 [![CI](https://github.com/djust-org/djust/actions/workflows/test.yml/badge.svg)](https://github.com/djust-org/djust/actions/workflows/test.yml)
@@ -15,23 +17,23 @@ djust brings Phoenix LiveView-style reactive components to Django, with performa
 [![Django 4.2+](https://img.shields.io/badge/django-4.2+-green.svg)](https://www.djangoproject.com/)
 [![PyPI Downloads](https://img.shields.io/pypi/dm/djust.svg)](https://pypi.org/project/djust/)
 
-## ✨ Features
+## Features
 
-- ⚡ **10-100x Faster** - Rust-powered template engine and Virtual DOM diffing
-- 🔄 **Reactive Components** - Phoenix LiveView-style server-side reactivity
-- 🔌 **Django Compatible** - Works with existing Django templates and components
-- 📦 **Zero Build Step** - ~53 KB gzipped minified client JavaScript, no bundling needed
-- 🌐 **WebSocket Updates** - Real-time DOM patches over WebSocket (with HTTP fallback)
-- 🎯 **Minimal Client Code** - Smart diffing sends only what changed
-- 🔒 **Type Safe** - Rust guarantees for core performance-critical code
-- 🐞 **Developer Debug Panel** - Interactive debugging with event history and VDOM inspection
-- 💤 **Lazy Hydration** - Defer WebSocket connections for below-fold content (20-40% memory savings)
-- 🚀 **TurboNav Compatible** - Works seamlessly with Turbo-style client-side navigation
-- 📱 **PWA Support** - Offline-first Progressive Web Apps with automatic sync
-- 🏢 **Multi-Tenant Ready** - Production SaaS architecture with tenant isolation
-- 🔐 **Authentication & Authorization** - View-level and handler-level auth with Django permissions integration
+- **Fast** — Rust-powered template engine and virtual DOM diffing (10–100x faster than plain Django rendering; see [Performance](#performance))
+- **Reactive components** — Phoenix LiveView-style server-side reactivity
+- **Django compatible** — works with existing Django templates and components
+- **No build step** — ~55 KB gzipped client JavaScript, no bundling required
+- **WebSocket updates** — real-time DOM patches over WebSocket, with HTTP fallback
+- **Minimal payloads** — diffing sends only what changed
+- **Rust core** — performance-critical paths (templates, VDOM, parsing) are written in Rust
+- **Debug panel** — interactive debugging with event history and VDOM inspection
+- **Lazy hydration** — defer WebSocket connections for below-the-fold content to reduce memory
+- **TurboNav compatible** — works with Turbo-style client-side navigation
+- **PWA support** — offline-first Progressive Web Apps with automatic sync
+- **Multi-tenant** — tenant isolation for SaaS architectures
+- **Auth** — view-level and handler-level authorization via Django permissions
 
-## 🎯 Quick Example
+## Quick Example
 
 ```python
 from djust import LiveView, event_handler
@@ -50,18 +52,20 @@ class CounterView(LiveView):
 
     @event_handler
     def increment(self):
-        self.count += 1  # Automatically updates client!
+        self.count += 1  # Automatically updates client
 
     @event_handler
     def decrement(self):
         self.count -= 1
 ```
 
-That's it! No JavaScript needed. State changes automatically trigger minimal DOM updates.
+No JavaScript needed. State changes trigger minimal DOM updates automatically.
 
-## 🔄 How Reactivity Works
+## How Reactivity Works
 
-djust uses a Rust-powered Virtual DOM (VDOM) to diff server-rendered HTML and send only the changed patches over WebSocket. Understanding a few core attributes makes everything click.
+djust uses a Rust-powered virtual DOM (VDOM) to diff server-rendered HTML and
+send only the changed patches over WebSocket. A few core attributes make
+everything click.
 
 ### Template Anatomy
 
@@ -90,7 +94,10 @@ djust uses a Rust-powered Virtual DOM (VDOM) to diff server-rendered HTML and se
 
 ### Stable List Identity
 
-For lists that can reorder or have items inserted/deleted, add `data-key` or `dj-key` on each item. djust uses this to emit `MoveChild` patches instead of remove-then-insert pairs — preserving DOM state (focus, scroll position, animations):
+For lists that can reorder or have items inserted/deleted, add `data-key` or
+`dj-key` on each item. djust uses this to emit `MoveChild` patches instead of
+remove-then-insert pairs, preserving DOM state (focus, scroll position,
+animations):
 
 ```html
 {% for item in items %}
@@ -101,11 +108,13 @@ For lists that can reorder or have items inserted/deleted, add `data-key` or `dj
 {% endfor %}
 ```
 
-Without a key, djust diffs by position — correct, but produces more DOM mutations for reorders.
+Without a key, djust diffs by position — correct, but it produces more DOM
+mutations for reorders.
 
 ### Common Pitfall: One-Sided `{% if %}` in Class Attributes
 
-Using `{% if %}` without `{% else %}` inside an HTML attribute value can cause VDOM patching misalignment due to djust's branch-aware div-depth counting:
+Using `{% if %}` without `{% else %}` inside an HTML attribute value can cause
+VDOM patching misalignment, because of djust's branch-aware div-depth counting:
 
 ```html
 {# WRONG: one-sided if inside class attribute #}
@@ -124,13 +133,16 @@ Using `{% if %}` without `{% else %}` inside an HTML attribute value can cause V
 </div>
 ```
 
-This applies only to attribute values — `{% if %}` blocks in element content work fine.
+This applies only to attribute values — `{% if %}` blocks in element content
+work fine.
 
-See the [VDOM Architecture guide](docs/website/advanced/vdom-architecture.md) and [Template Cheat Sheet](docs/website/guides/template-cheatsheet.md) for full details.
+See the [VDOM Architecture guide](docs/website/advanced/vdom-architecture.md)
+and [Template Cheat Sheet](docs/website/guides/template-cheatsheet.md) for full
+details.
 
-## 🚀 Getting Started
+## Getting Started
 
-Here's a complete walkthrough from zero to a working reactive counter in 5 steps.
+A complete walkthrough from zero to a working reactive counter in five steps.
 
 ### Step 1 — Install
 
@@ -237,7 +249,9 @@ class CounterView(LiveView):
 </html>
 ```
 
-Run with `uvicorn myproject.asgi:application --reload` and open `/counter/`. Clicking the buttons updates the count **without a page reload** — no JavaScript written, no build step.
+Run with `uvicorn myproject.asgi:application --reload` and open `/counter/`.
+Clicking the buttons updates the count without a page reload — no JavaScript
+written, no build step.
 
 **Next steps:**
 - [Template Cheat Sheet](docs/website/guides/template-cheatsheet.md) — all directives and filters at a glance
@@ -247,30 +261,31 @@ Run with `uvicorn myproject.asgi:application --reload` and open `/counter/`. Cli
 
 ---
 
-## 📊 Performance
+## Performance
 
-Benchmarked on M1 MacBook Pro (2021):
+Benchmarked on an M1 MacBook Pro (2021):
 
 | Operation | Django | djust | Speedup |
 |-----------|---------|-------|---------|
-| Template Rendering (100 items) | 2.5 ms | 0.15 ms | **16.7x** |
-| Large List (10k items) | 450 ms | 12 ms | **37.5x** |
-| Virtual DOM Diff | N/A | 0.08 ms | **Sub-ms** |
-| Round-trip Update | 50 ms | 5 ms | **10x** |
+| Template rendering (100 items) | 2.5 ms | 0.15 ms | **16.7x** |
+| Large list (10k items) | 450 ms | 12 ms | **37.5x** |
+| Virtual DOM diff | N/A | 0.08 ms | **sub-ms** |
+| Round-trip update | 50 ms | 5 ms | **10x** |
 
-Run benchmarks yourself:
+Run the benchmarks yourself:
+
 ```bash
 cd benchmarks
 python benchmark.py
 ```
 
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
 
 - Python 3.10+
-- Rust 1.70+ (for building from source)
 - Django 4.2+
+- Rust 1.70+ (only required when building from source)
 
 ### Install from PyPI
 
@@ -280,7 +295,7 @@ pip install djust
 
 ### Build from Source
 
-#### Using Make (Easiest - Recommended for Development)
+#### Using Make (recommended for development)
 
 ```bash
 # Clone the repository
@@ -300,15 +315,16 @@ make start
 make help
 ```
 
-**Common Make Commands:**
-- `make start` - Start development server with hot reload
-- `make stop` - Stop the development server
-- `make status` - Check if server is running
-- `make test` - Run all tests
-- `make clean` - Clean build artifacts
-- `make help` - Show all available commands
+Common Make commands:
 
-#### Using uv (Fast)
+- `make start` — start development server with hot reload
+- `make stop` — stop the development server
+- `make status` — check if the server is running
+- `make test` — run all tests
+- `make clean` — clean build artifacts
+- `make help` — show all available commands
+
+#### Using uv
 
 ```bash
 # Clone the repository
@@ -350,59 +366,16 @@ pip install maturin
 # Build and install
 maturin develop --release
 
-# Or build wheel
+# Or build a wheel
 maturin build --release
 pip install target/wheels/djust-*.whl
 ```
 
-## 📖 Documentation
+## Documentation
 
-### Setup
-
-1. Add to `INSTALLED_APPS`:
-
-```python
-INSTALLED_APPS = [
-    # ...
-    'channels',  # Required for WebSocket support
-    'djust',
-    # ...
-]
-```
-
-2. Configure ASGI application (`asgi.py`):
-
-```python
-import os
-from django.core.asgi import get_asgi_application
-from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.auth import AuthMiddlewareStack
-from djust.websocket import LiveViewConsumer
-from django.urls import path
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
-
-application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
-    "websocket": AuthMiddlewareStack(
-        URLRouter([
-            path('ws/live/', LiveViewConsumer.as_asgi()),
-        ])
-    ),
-})
-```
-
-3. Add to `settings.py`:
-
-```python
-ASGI_APPLICATION = 'myproject.asgi.application'
-
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer'
-    }
-}
-```
+The full documentation lives at [docs.djust.org](https://docs.djust.org). The
+sections below cover the core API; see [Getting Started](#getting-started) above
+for first-time setup.
 
 ### Creating LiveViews
 
@@ -420,7 +393,7 @@ class TodoListView(LiveView):
 
     @event_handler
     def add_todo(self, text):
-        """Event handler - called from client"""
+        """Event handler — called from client"""
         self.todos.append({'text': text, 'done': False})
 
     @event_handler
@@ -456,7 +429,7 @@ djust supports Django template syntax with event binding:
 <p>{{ text|upper }}</p>
 <p>{{ description|truncatewords:20 }}</p>
 <a href="?q={{ query|urlencode }}">Search</a>
-{{ body|urlize }}  {# No |safe needed — djust's Rust engine auto-marks urlize output as safe via safe_output_filters. Unlike standard Django where you'd add |safe, djust handles this automatically. #}
+{{ body|urlize }}  {# No |safe needed — djust auto-marks urlize output as safe (see note below) #}
 
 <!-- Control flow -->
 {% if show %}
@@ -486,22 +459,23 @@ djust supports Django template syntax with event binding:
 </form>
 ```
 
-> **Django migration note:** In standard Django, `urlize` requires `|safe` to render
-> its HTML output. djust's Rust template engine automatically marks `urlize`,
-> `urlizetrunc`, and `unordered_list` as safe (via `safe_output_filters` in the
-> renderer) because these filters handle their own HTML escaping internally.
-> Adding `|safe` after them is unnecessary.
+> **Django migration note:** In standard Django, `urlize` requires `|safe` to
+> render its HTML output. djust's Rust template engine automatically marks
+> `urlize`, `urlizetrunc`, and `unordered_list` as safe (via
+> `safe_output_filters` in the renderer), because these filters handle their own
+> HTML escaping internally. Adding `|safe` after them is unnecessary.
 
 ### Supported Events
 
-- `dj-click` - Click events
-- `dj-input` - Input events (passes `value`)
-- `dj-change` - Change events (passes `value`)
-- `dj-submit` - Form submission (passes form data as dict)
+- `dj-click` — click events
+- `dj-input` — input events (passes `value`)
+- `dj-change` — change events (passes `value`)
+- `dj-submit` — form submission (passes form data as a dict)
 
 ### Reusable Components
 
-djust provides a powerful component system with automatic state management and stable component IDs.
+djust includes a component system with automatic state management and stable
+component IDs.
 
 #### Basic Component Example
 
@@ -521,7 +495,8 @@ class MyView(LiveView):
 
 #### Component ID Management
 
-Components automatically receive a stable `component_id` based on their **attribute name** in your view. This eliminates manual ID management:
+Components automatically receive a stable `component_id` based on their
+**attribute name** in your view, which eliminates manual ID management:
 
 ```python
 # When you write:
@@ -534,13 +509,14 @@ self.alert_success = AlertComponent(message="Success!")
 # 4. Routes events back to the correct component
 ```
 
-**Why it works:**
+Why it works:
+
 - The attribute name (`alert_success`) is already unique within your view
 - It's stable across re-renders and WebSocket reconnections
 - Event handlers can reference components by their attribute names
 - No manual ID strings to keep in sync
 
-**Event Routing Example:**
+Event routing example:
 
 ```python
 class MyView(LiveView):
@@ -552,14 +528,15 @@ class MyView(LiveView):
 
     @event_handler
     def dismiss(self, component_id: str = None):
-        """Handle dismissal - automatically routes to correct component"""
+        """Handle dismissal — automatically routes to correct component"""
         if component_id and hasattr(self, component_id):
             component = getattr(self, component_id)
             if hasattr(component, 'dismiss'):
                 component.dismiss()  # component_id="alert_warning"
 ```
 
-When the dismiss button is clicked, the client sends `component_id="alert_warning"`, and the handler uses `getattr(self, "alert_warning")` to find the component.
+When the dismiss button is clicked, the client sends `component_id="alert_warning"`,
+and the handler uses `getattr(self, "alert_warning")` to find the component.
 
 #### Creating Custom Components
 
@@ -599,7 +576,7 @@ class MyView(LiveView):
 
     @reactive
     def count(self):
-        """Reactive property - auto-triggers updates"""
+        """Reactive property — auto-triggers updates"""
         return self._count
 
     @count.setter
@@ -627,7 +604,7 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-**Common Configuration Options:**
+Common configuration options:
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -636,25 +613,23 @@ LIVEVIEW_CONFIG = {
 | `strict_serialization` | `False` | Raise TypeError for non-serializable state (recommended in dev) |
 | `css_framework` | `'bootstrap5'` | CSS framework for components |
 
-**CSS Framework Setup:**
-
-For Tailwind CSS (recommended), use the one-command setup:
+CSS framework setup. For Tailwind CSS, use the one-command setup:
 
 ```bash
 python manage.py djust_setup_css tailwind
 ```
 
-This auto-detects template directories, creates config files, and builds your CSS. For production:
+This auto-detects template directories, creates config files, and builds your
+CSS. For production:
 
 ```bash
 python manage.py djust_setup_css tailwind --minify
 ```
 
-See the [CSS Framework Guide](docs/website/guides/css-frameworks.md) for detailed setup instructions, Bootstrap configuration, and CI/CD integration.
+See the [CSS Framework Guide](docs/website/guides/css-frameworks.md) for detailed
+setup instructions, Bootstrap configuration, and CI/CD integration.
 
-**Debug Mode:**
-
-When troubleshooting VDOM issues, enable debug logging:
+Debug mode. When troubleshooting VDOM issues, enable debug logging:
 
 ```python
 # In settings.py
@@ -667,17 +642,19 @@ from djust.config import config
 config.set('debug_vdom', True)
 ```
 
-This will log:
-- Server-side: Patch generation details (stderr)
-- Client-side: Patch application and DOM traversal (browser console)
+This logs:
+
+- Server-side: patch generation details (stderr)
+- Client-side: patch application and DOM traversal (browser console)
 
 ### State Management
 
-djust provides Python-only state management decorators that eliminate the need for manual JavaScript.
+djust provides Python-only state management decorators that remove the need for
+manual JavaScript.
 
-#### 🚀 Quick Start (5 minutes)
+#### Quick Start
 
-Build a debounced search in **8 lines of Python** (no JavaScript):
+Build a debounced search in eight lines of Python (no JavaScript):
 
 ```python
 from djust import LiveView
@@ -697,18 +674,10 @@ class ProductSearchView(LiveView):
         self.results = Product.objects.filter(name__icontains=query)[:10]
 ```
 
-**That's it!** Server only queries after you stop typing. Add `@optimistic` for instant UI updates, `@cache(ttl=300)` to cache responses for 5 minutes.
+The server only queries after you stop typing. Add `@optimistic` for instant UI
+updates, or `@cache(ttl=300)` to cache responses for five minutes.
 
-**👉 [Full Quick Start Guide (5 min)](docs/STATE_MANAGEMENT_QUICKSTART.md)**
-
----
-
-#### Key Features
-
-- ✅ **Zero JavaScript Required** - Common patterns work without writing any JS
-- ✅ **87% Code Reduction** - Decorators replace hundreds of lines of manual JavaScript
-- ✅ **Lightweight Bundle** - ~53 KB gzipped minified client.js, no npm dependencies
-- ✅ **Competitive DX** - Matches Phoenix LiveView and Laravel Livewire developer experience
+See the [State Management Quick Start](docs/STATE_MANAGEMENT_QUICKSTART.md).
 
 #### Available Decorators
 
@@ -722,27 +691,29 @@ class ProductSearchView(LiveView):
 | `@background` | Long operations | AI generation, file processing |
 | `DraftModeMixin` | Auto-save forms | Contact form |
 
-**Quick Decision Matrix:**
-- Typing in input? → `@debounce(0.5)`
+Quick decision guide:
+
+- Typing in an input? → `@debounce(0.5)`
 - Scrolling/resizing? → `@throttle(0.1)`
-- Need instant UI update? → `@optimistic`
+- Need an instant UI update? → `@optimistic`
 - Same query multiple times? → `@cache(ttl)`
 - Multiple components? → `@client_state([keys])`
 - Long-running work? → `@background` or `self.start_async(callback)`
 - Auto-save forms? → `DraftModeMixin`
 
-#### Learn More
+More documentation:
 
-- 🚀 **[Quick Start (5 min)](docs/STATE_MANAGEMENT_QUICKSTART.md)** - Get productive fast
-- 📚 **[Full Tutorial (20 min)](docs/STATE_MANAGEMENT_TUTORIAL.md)** - Step-by-step Product Search
-- 📖 **[API Reference](docs/STATE_MANAGEMENT_API.md)** - Complete decorator docs + cheat sheet
-- 🎯 **[Examples](docs/STATE_MANAGEMENT_EXAMPLES.md)** - Copy-paste ready code
-- 🔄 **[Migration Guide](docs/STATE_MANAGEMENT_MIGRATION.md)** - Convert JavaScript to Python
-- ⚖️ **[Framework Comparison](docs/STATE_MANAGEMENT_COMPARISON.md)** - vs Phoenix LiveView & Laravel Livewire
+- [Quick Start](docs/STATE_MANAGEMENT_QUICKSTART.md) — get productive fast
+- [Full Tutorial](docs/STATE_MANAGEMENT_TUTORIAL.md) — step-by-step product search
+- [API Reference](docs/STATE_MANAGEMENT_API.md) — complete decorator docs and cheat sheet
+- [Examples](docs/STATE_MANAGEMENT_EXAMPLES.md) — copy-paste-ready code
+- [Migration Guide](docs/STATE_MANAGEMENT_MIGRATION.md) — convert JavaScript to Python
+- [Framework Comparison](docs/STATE_MANAGEMENT_COMPARISON.md) — vs Phoenix LiveView and Laravel Livewire
 
-### 🧭 Navigation Patterns
+### Navigation Patterns
 
-djust provides three navigation mechanisms for building multi-view applications without full page reloads:
+djust provides three navigation mechanisms for building multi-view applications
+without full page reloads:
 
 #### When to Use What
 
@@ -753,8 +724,6 @@ djust provides three navigation mechanisms for building multi-view applications 
 | Link to non-LiveView page | Standard `<a href>` | Full page load needed |
 
 #### Quick Decision Tree
-
-Use this flowchart when choosing a navigation method:
 
 ```
 Is this a direct user click on a link?
@@ -768,86 +737,94 @@ Is this a direct user click on a link?
     └─ No → You probably need dj-navigate (see anti-pattern below)
 ```
 
-#### ⚠️ Anti-Pattern: Don't Use `dj-click` for Navigation
+#### Anti-Pattern: Don't Use `dj-click` for Navigation
 
-This is **the most common mistake** when building multi-view djust apps. Using `dj-click` to trigger a handler that immediately calls `live_redirect()` creates an unnecessary round-trip.
+This is the most common mistake when building multi-view djust apps. Using
+`dj-click` to trigger a handler that immediately calls `live_redirect()` creates
+an unnecessary round-trip.
 
-**❌ Wrong** — using `dj-click` to trigger a handler that calls `live_redirect()`:
+Wrong — using `dj-click` to trigger a handler that calls `live_redirect()`:
 
 ```python
-# Anti-pattern: Handler does nothing but navigate
+# Anti-pattern: handler does nothing but navigate
 @event_handler()
 def go_to_item(self, item_id, **kwargs):
-    self.live_redirect(f"/items/{item_id}/")  # Wasteful round-trip!
+    self.live_redirect(f"/items/{item_id}/")  # Wasteful round-trip
 ```
 
 ```html
-<!-- Wrong: Forces WebSocket round-trip just to navigate -->
+<!-- Wrong: forces a WebSocket round-trip just to navigate -->
 <button dj-click="go_to_item" dj-value-item_id="{{ item.id }}">View</button>
 ```
 
-**What actually happens:**
-1. User clicks button → Client sends WebSocket message (50-100ms)
-2. Server receives message, processes handler (10-50ms)
-3. Server responds with `live_redirect` command (50-100ms)
-4. Client finally navigates to new view
-**Total: 110-250ms** + handler processing time
+What actually happens:
 
-**✅ Right** — using `dj-navigate` directly:
+1. User clicks button → client sends WebSocket message (50–100ms)
+2. Server receives message, processes handler (10–50ms)
+3. Server responds with `live_redirect` command (50–100ms)
+4. Client finally navigates to the new view
+
+Total: 110–250ms, plus handler processing time.
+
+Right — using `dj-navigate` directly:
 
 ```html
-<!-- Right: Client navigates immediately, no server round-trip -->
+<!-- Right: client navigates immediately, no server round-trip -->
 <a dj-navigate="/items/{{ item.id }}/">View Item</a>
 ```
 
-**What happens:**
-1. User clicks link → Client navigates directly
-**Total: ~10ms** (just DOM updates)
+What happens:
 
-**Why it matters:**
-- **Performance:** 10-20x faster navigation
-- **Network efficiency:** Saves WebSocket bandwidth
-- **User experience:** Instant response, no loading indicators needed
-- **Simplicity:** Less code, fewer moving parts
+1. User clicks link → client navigates directly
+
+Total: ~10ms (just DOM updates).
+
+Why it matters:
+
+- Performance: 10–20x faster navigation
+- Network efficiency: saves WebSocket bandwidth
+- User experience: instant response, no loading indicators needed
+- Simplicity: less code, fewer moving parts
 
 #### When to Use `live_redirect()` in Handlers
 
-Use handlers for navigation only when navigation depends on **server-side logic or validation**:
+Use handlers for navigation only when navigation depends on server-side logic or
+validation.
 
-**✅ Conditional navigation after form validation:**
+Conditional navigation after form validation:
 
 ```python
 @event_handler()
 def submit_form(self, **kwargs):
     if self.form.is_valid():
         self.form.save()
-        self.live_redirect("/success/")  # OK: Conditional on validation
+        self.live_redirect("/success/")  # OK: conditional on validation
     else:
         # Stay on form to show errors
         pass
 ```
 
-**✅ Navigation based on auth/permissions:**
+Navigation based on auth/permissions:
 
 ```python
 @event_handler()
 def view_sensitive_data(self, **kwargs):
     if not self.request.user.has_perm('app.view_sensitive'):
-        self.live_redirect("/access-denied/")  # OK: Auth check required
+        self.live_redirect("/access-denied/")  # OK: auth check required
         return
     self.show_sensitive = True
 ```
 
-**✅ Navigation after async operations:**
+Navigation after async operations:
 
 ```python
 @event_handler()
 async def create_and_view_item(self, name, **kwargs):
     item = await Item.objects.acreate(name=name, owner=self.request.user)
-    self.live_redirect(f"/items/{item.id}/")  # OK: Navigate to newly created item
+    self.live_redirect(f"/items/{item.id}/")  # OK: navigate to newly created item
 ```
 
-**✅ Multi-step wizard logic:**
+Multi-step wizard logic:
 
 ```python
 @event_handler()
@@ -856,10 +833,11 @@ def next_step(self, **kwargs):
         # Stay on payment step if invalid
         return
     self.current_step = self.get_next_step()
-    self.live_patch(params={"step": self.current_step})  # OK: Conditional flow
+    self.live_patch(params={"step": self.current_step})  # OK: conditional flow
 ```
 
-**Common theme:** The handler does **meaningful work** before navigating. If your handler only calls `live_redirect()`, use `dj-navigate` instead.
+The common theme: the handler does meaningful work before navigating. If your
+handler only calls `live_redirect()`, use `dj-navigate` instead.
 
 #### Quick Example: Multi-View App
 
@@ -892,8 +870,8 @@ class ProductListView(NavigationMixin, LiveView):
         self.products = Product.objects.filter(category=self.category)
 ```
 
-**Learn More:**
-- 📖 **[Navigation Guide](docs/guides/navigation.md)** - Complete API reference (`live_patch()`, `live_redirect()`, `handle_params()`)
+See the [Navigation Guide](docs/guides/navigation.md) for the complete API
+reference (`live_patch()`, `live_redirect()`, `handle_params()`).
 
 ### Developer Tooling
 
@@ -906,77 +884,80 @@ Interactive debugging tool for LiveView development (DEBUG mode only):
 DEBUG = True  # Debug panel automatically enabled
 ```
 
-**Open**: Press `Ctrl+Shift+D` (Windows/Linux) or `Cmd+Shift+D` (Mac), or click the 🐞 floating button
+Open it with `Ctrl+Shift+D` (Windows/Linux) or `Cmd+Shift+D` (Mac), or click the
+floating debug button.
 
-**Features**:
-- 🔍 **Event Handlers** - Discover all handlers with parameters, types, and descriptions
-- 📊 **Event History** - Real-time log with timing metrics (e.g., `search • 45.2ms`)
-- ⚡ **VDOM Patches** - Monitor DOM updates with sub-millisecond precision
-- 🔬 **Variables** - Inspect current view state
+Features:
 
-**Learn More**:
-- 📖 **[Debug Panel Guide](docs/DEBUG_PANEL.md)** - Complete user guide
-- 📝 **[Event Handler Best Practices](docs/EVENT_HANDLERS.md)** - Patterns and conventions
+- **Event handlers** — discover all handlers with parameters, types, and descriptions
+- **Event history** — real-time log with timing metrics (e.g., `search • 45.2ms`)
+- **VDOM patches** — monitor DOM updates with sub-millisecond precision
+- **Variables** — inspect current view state
+
+See the [Debug Panel Guide](docs/DEBUG_PANEL.md) and
+[Event Handler Best Practices](docs/EVENT_HANDLERS.md).
 
 #### Event Handlers
 
-Always use `@event_handler` decorator for auto-discovery and validation:
+Always use the `@event_handler` decorator for auto-discovery and validation:
 
 ```python
 from djust.decorators import event_handler
 
 @event_handler()
 def search(self, value: str = "", **kwargs):
-    """Search handler - description shown in debug panel"""
+    """Search handler — description shown in debug panel"""
     self.search_query = value
 ```
 
-**Parameter Convention**: Use `value` for form inputs (`dj-input`, `dj-change` events):
+Parameter convention: use `value` for form inputs (`dj-input`, `dj-change`
+events):
 
 ```python
-# ✅ Correct - matches what form events send
+# Correct — matches what form events send
 @event_handler()
 def search(self, value: str = "", **kwargs):
     self.search_query = value
 
-# ❌ Wrong - won't receive input value
+# Wrong — won't receive input value
 @event_handler()
 def search(self, query: str = "", **kwargs):
     self.search_query = query  # Always "" (default)
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
 │  Browser                                    │
-│  ├── Client.js (~53 KB gz) - Events & DOM  │
-│  └── WebSocket Connection                   │
+│  ├── client.js (~55 KB gz) — events & DOM  │
+│  └── WebSocket connection                   │
 └─────────────────────────────────────────────┘
-           ↕️ WebSocket (Binary/JSON)
+           ↕ WebSocket (Binary/JSON)
 ┌─────────────────────────────────────────────┐
 │  Django + Channels (Python)                 │
-│  ├── LiveView Classes                       │
-│  ├── Event Handlers                         │
-│  └── State Management                       │
+│  ├── LiveView classes                       │
+│  ├── Event handlers                         │
+│  └── State management                       │
 └─────────────────────────────────────────────┘
-           ↕️ Python/Rust FFI (PyO3)
+           ↕ Python/Rust FFI (PyO3)
 ┌─────────────────────────────────────────────┐
-│  Rust Core (Native Speed)                   │
-│  ├── Template Engine (<1ms)                │
-│  ├── Virtual DOM Diffing (<100μs)          │
-│  ├── HTML Parser                            │
-│  └── Binary Serialization (MessagePack)    │
+│  Rust core (native speed)                   │
+│  ├── Template engine (<1ms)                │
+│  ├── Virtual DOM diffing (<100μs)          │
+│  ├── HTML parser                            │
+│  └── Binary serialization (MessagePack)    │
 └─────────────────────────────────────────────┘
 ```
 
-## 🎨 Examples
+## Examples
 
-See the [examples/demo_project](examples/demo_project) directory for complete working examples:
+See the [examples/demo_project](examples/demo_project) directory for complete
+working examples:
 
-- **Counter** - Simple reactive counter
-- **Todo List** - CRUD operations with lists
-- **Chat** - Real-time messaging
+- **Counter** — simple reactive counter
+- **Todo List** — CRUD operations with lists
+- **Chat** — real-time messaging
 
 Run the demo:
 
@@ -987,9 +968,9 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Visit http://localhost:8000
+Visit http://localhost:8000.
 
-## 🔧 Development
+## Development
 
 ### Project Structure
 
@@ -1030,7 +1011,8 @@ pytest tests/unit/test_live_view.py
 cargo test --workspace --exclude djust_live
 ```
 
-For comprehensive testing documentation, see **[Testing Guide](docs/TESTING.md)**.
+For comprehensive testing documentation, see the
+[Testing Guide](docs/TESTING.md).
 
 ### Building Documentation
 
@@ -1038,77 +1020,67 @@ For comprehensive testing documentation, see **[Testing Guide](docs/TESTING.md)*
 cargo doc --open
 ```
 
-## 💰 Supporting djust
+## Roadmap
 
-djust is open source (MIT licensed) and free forever. If you're using djust in production or want to support development:
+djust 1.0 is released and stable. Active planning lives in
+[the issue tracker](https://github.com/djust-org/djust/issues). One notable
+item still open:
 
-- ⭐ **Star this repo** - Help others discover djust
-- 💜 **[GitHub Sponsors](https://github.com/sponsors/djust-org)** - Monthly support from $5/month
+- React/Vue component compatibility
 
-Your support helps us maintain and improve djust for everyone!
+## Security
 
-## 🤝 Contributing
+- CSRF protection via Django middleware
+- XSS protection via automatic template escaping (the Rust engine escapes all variables by default)
+- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally; the Rust engine's `safe_output_filters` whitelist prevents double-escaping, so `|safe` is never needed with these filters
+- WebSocket authentication via Django sessions
+- WebSocket origin validation and HMAC message signing
+- Per-view and global rate limiting
+- Configurable allowed origins for WebSocket connections
+- View-level auth enforcement (`login_required`, `permission_required`) before `mount()`
+- Handler-level `@permission_required` for protecting individual event handlers
+- `djust_audit` command and `djust.S005` system check for auth-posture visibility
 
-Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+Report security issues to security@djust.org.
 
-Areas we'd love help with:
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
+Areas where help is especially useful:
+
 - More example applications
 - Performance optimizations
 - Documentation improvements
 - Browser compatibility testing
 
-## 📝 Roadmap
+## Supporting djust
 
-- [x] Template inheritance (`{% extends %}`)
-- [x] `{% url %}` and `{% include %}` tags
-- [x] Comparison operators in `{% if %}` tags
-- [x] All 57 Django built-in template filters
-- [x] Security hardening (WebSocket origin validation, HMAC signing, rate limiting)
-- [x] Developer debug panel with event history and VDOM inspection
-- [x] Reusable component library (`djust_components` crate)
-- [x] JIT pipeline improvements and stale-closure fixes
-- [x] Authentication & authorization (view-level + handler-level)
-- [x] File upload handling
-- [x] Server-sent events (SSE) fallback
-- [ ] React/Vue component compatibility
-- [x] TypeScript definitions (`djust.d.ts` shipped with the package)
-- [x] Redis-backed session storage
-- [x] Horizontal scaling support
+djust is open source (MIT licensed) and free. If you use djust in production or
+want to support development:
 
-## 🔒 Security
+- Star this repository to help others discover it
+- [Sponsor on GitHub](https://github.com/sponsors/djust-org) — from $5/month
 
-- CSRF protection via Django middleware
-- XSS protection via automatic template escaping (Rust engine escapes all variables by default)
-- HTML-producing filters (`urlize`, `urlizetrunc`, `unordered_list`) handle their own escaping internally — the Rust engine's `safe_output_filters` whitelist prevents double-escaping, so `|safe` is never needed with these filters
-- WebSocket authentication via Django sessions
-- WebSocket origin validation and HMAC message signing (v0.2.1)
-- Per-view and global rate limiting support
-- Configurable allowed origins for WebSocket connections
-- View-level auth enforcement (`login_required`, `permission_required`) before `mount()`
-- Handler-level `@permission_required` for protecting individual event handlers
-- `djust_audit` command and `djust.S005` system check for auth posture visibility
+## License
 
-Report security issues to: security@djust.org
+MIT License — see the [LICENSE](LICENSE) file for details.
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Inspired by [Phoenix LiveView](https://hexdocs.pm/phoenix_live_view/)
 - Built with [PyO3](https://pyo3.rs/) for Python/Rust interop
 - Uses [html5ever](https://github.com/servo/html5ever) for HTML parsing
-- Powered by the amazing Rust and Django communities
+- Built on the Rust and Django communities
 
-## 💬 Community & Support
+## Community & Support
 
-- 🌐 **[djust.org](https://djust.org)** - Official website
-- 🚀 **[Quick Start](https://djust.org/quickstart/)** - Get started in minutes
-- 📝 **[Examples](https://djust.org/examples/)** - Live code examples
-- 🐛 **[Issues](https://github.com/djust-org/djust/issues)** - Bug reports & feature requests
-- 📧 **Email**: support@djust.org
+- [djust.org](https://djust.org) — official website
+- [Documentation](https://docs.djust.org) — guides and API reference
+- [Examples](https://djust.org/examples/) — live code examples
+- [Issues](https://github.com/djust-org/djust/issues) — bug reports and feature requests
+- Email: support@djust.org
 
 ---
 
-**[djust.org](https://djust.org)** — Made with ❤️ by the djust community
+Maintained by the djust community.
