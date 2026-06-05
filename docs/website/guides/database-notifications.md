@@ -287,9 +287,32 @@ pgbouncer transaction pooling doesn't interfere.
 `LISTEN/NOTIFY` requires session-level connections. If you're behind
 pgbouncer in `transaction` mode, point the listener directly at Postgres
 (bypass the pooler) or use `session` mode for the djust listener
-connection. The listener reads DSN fields from `settings.DATABASES
-["default"]`; override `HOST` / `PORT` there if you need a direct
-route.
+connection.
+
+By default the listener reads DSN fields from `settings.DATABASES
+["default"]`. To isolate the long-lived `LISTEN` connection from your
+request-path connection pool entirely, set **`DJUST_NOTIFY_DATABASE_URL`**
+— a `DATABASE_URL`-style override that takes precedence over
+`DATABASES["default"]` for the listener connection only:
+
+```python
+# settings.py
+DJUST_NOTIFY_DATABASE_URL = "postgres://user:pass@direct-pg.internal:5432/appdb"
+```
+
+It can also be supplied via an environment variable of the same name
+(handy on PaaS):
+
+```bash
+export DJUST_NOTIFY_DATABASE_URL="postgres://user:pass@direct-pg.internal:5432/appdb"
+```
+
+Point this at a direct (non-pooler) endpoint so the session-mode `LISTEN`
+connection can't saturate a shared transaction-pool. The setting is fully
+backwards-compatible — when unset, the listener uses `DATABASES["default"]`
+exactly as before. The postgres-only check still applies: a non-postgresql
+URL scheme raises `DatabaseNotificationNotSupported`. The override URL (and
+its embedded password) is never logged.
 
 ### Security: untrusted NOTIFY sources
 
