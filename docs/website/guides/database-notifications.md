@@ -314,6 +314,38 @@ exactly as before. The postgres-only check still applies: a non-postgresql
 URL scheme raises `DatabaseNotificationNotSupported`. The override URL (and
 its embedded password) is never logged.
 
+#### Connection query parameters (TLS, unix sockets)
+
+The override URL may carry a query string with a **known-safe allowlist** of
+libpq connection parameters — useful for requiring TLS on a direct endpoint
+or pointing the listener at a unix socket:
+
+| Query param        | Example                          | Purpose                          |
+|--------------------|----------------------------------|----------------------------------|
+| `sslmode`          | `?sslmode=require`               | Require/verify TLS               |
+| `sslrootcert`      | `?sslrootcert=/etc/ssl/ca.pem`   | CA bundle for `verify-full`      |
+| `sslcert`          | `?sslcert=/etc/ssl/client.pem`   | Client cert (mTLS)               |
+| `sslkey`           | `?sslkey=/etc/ssl/client.key`    | Client key (mTLS)                |
+| `host`             | `?host=/var/run/postgresql`      | Unix-socket directory            |
+| `application_name` | `?application_name=djust-listen` | Label the connection in `pg_stat`|
+| `connect_timeout`  | `?connect_timeout=10`            | Connect timeout (seconds)        |
+
+```python
+# Require TLS on a direct endpoint:
+DJUST_NOTIFY_DATABASE_URL = "postgres://user:pass@direct-pg.internal:5432/appdb?sslmode=require"
+
+# Connect over a unix socket (the URL host is treated as an ignored placeholder):
+DJUST_NOTIFY_DATABASE_URL = "postgres://user:pass@placeholder/appdb?host=/var/run/postgresql"
+```
+
+**`host` precedence.** When a `?host=` query item is present it **replaces**
+the URL netloc host, so the resulting connection has exactly one host value.
+This is the deterministic unix-socket behavior — the netloc host (`placeholder`
+above) is ignored. Any **unknown** query key is silently dropped: a query
+string can never override the URL-derived `user` / `password` / `dbname`
+(those keys are not in the allowlist), so a stray `?password=…` cannot
+hijack the credentials.
+
 ### Security: untrusted NOTIFY sources
 
 If Postgres is shared with other applications, anyone with DB access can
