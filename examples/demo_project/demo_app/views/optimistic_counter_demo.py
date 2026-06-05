@@ -92,12 +92,12 @@ class OptimisticCounterView(LiveView):
                     <div class="btn-group-custom">
                         <button
                             class="btn-custom btn-decrement"
-                            @click="decrement"
+                            dj-click="decrement"
                             data-loading-text="..."
                         >-</button>
                         <button
                             class="btn-custom btn-increment"
-                            @click="increment"
+                            dj-click="increment"
                             data-loading-text="..."
                         >+</button>
                     </div>

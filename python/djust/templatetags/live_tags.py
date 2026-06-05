@@ -205,7 +205,7 @@ def live_form(view, **kwargs):
 
     Example:
         {% load live_tags %}
-        <form @submit="submit_form">
+        <form dj-submit="submit_form">
             {% live_form view %}
             <button type="submit">Submit</button>
         </form>

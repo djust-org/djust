@@ -134,9 +134,9 @@ class ComponentsDemoView(LiveView):
                 <div class="card">
                     <div class="card-body">
                         <h3>Count: {{ count }}</h3>
-                        <button @click="increment" class="btn btn-primary">Increment</button>
-                        <button @click="decrement" class="btn btn-secondary">Decrement</button>
-                        <button @click="reset" class="btn btn-danger">Reset</button>
+                        <button dj-click="increment" class="btn btn-primary">Increment</button>
+                        <button dj-click="decrement" class="btn btn-secondary">Decrement</button>
+                        <button dj-click="reset" class="btn btn-danger">Reset</button>
 
                         <div class="mt-3">
                             {% if count > 0 %}

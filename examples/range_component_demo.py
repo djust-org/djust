@@ -173,7 +173,7 @@ class VolumeControlView(LiveView):
             show_value=True
         )
 
-# In template, use @input or @change event:
-# <input type="range" @change="update_volume" name="volume" ... >
+# In template, use dj-input or dj-change event:
+# <input type="range" dj-change="update_volume" name="volume" ... >
 """)
 print()

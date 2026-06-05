@@ -32,7 +32,7 @@ def cache_search(self, query: str = "", **kwargs):
 
     HTML_CODE = '''<input
     type="text"
-    @input="cache_search"
+    dj-input="cache_search"
     placeholder="Try: laptop, mouse..."
     value="{{ cache_query }}"
 >

@@ -27,9 +27,9 @@ def reset(self):
     HTML_CODE = '''<div style="text-align: center;">
     <div style="font-size: 4rem;">{{ counter }}</div>
     <div style="display: flex; gap: 1rem;">
-        <button @click="decrement">Decrement</button>
-        <button @click="reset">Reset</button>
-        <button @click="increment">Increment</button>
+        <button dj-click="decrement">Decrement</button>
+        <button dj-click="reset">Reset</button>
+        <button dj-click="increment">Increment</button>
     </div>
 </div>'''
 

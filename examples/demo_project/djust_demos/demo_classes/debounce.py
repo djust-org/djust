@@ -27,7 +27,7 @@ def debounce_search(self, value: str = "", **kwargs):
     HTML_CODE = '''<input
     type="text"
     class="form-control"
-    @input="debounce_search"
+    dj-input="debounce_search"
     placeholder="Type something..."
     value="{{ debounce_query }}"
 >

@@ -301,7 +301,7 @@ async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = No
         handler: The event handler method (sync or async)
         params: Optional dictionary of parameters to pass to the handler.
             Note: Empty dict {} is treated as no params (falsy check).
-            Positional args from @click="handler('value')" syntax are merged
+            Positional args from dj-click="handler('value')" syntax are merged
             into params by validate_handler_params() before calling this.
 
     Returns:

@@ -837,7 +837,7 @@ class CounterView(LiveView):
             icon="⚡",
             code_examples=[
                 {"code": "class CounterView(LiveView): ...", "language": "python"},
-                {"code": "<button @click='increment'>+</button>", "language": "html"}
+                {"code": "<button dj-click='increment'>+</button>", "language": "html"}
             ],
             features=[
                 ("🔌", "WebSocket", "Persistent connection"),
