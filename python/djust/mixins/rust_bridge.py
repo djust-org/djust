@@ -529,6 +529,24 @@ class RustBridgeMixin:
                 if _normalized is not _val:
                     full_context[_key] = _normalized
 
+            # Apply Django context processors so context-processor vars
+            # (e.g. djust theming's {{ theme_panel }} / {{ theme_head }})
+            # are available everywhere the dj-root template renders —
+            # including inside {% include %} partials (#1722, completes
+            # #233). render_full_template applies processors only to the
+            # outer page shell (template.py); this is the equivalent for
+            # the dj-root template that render()/render_with_diff() drive
+            # on the initial GET and on every WebSocket update.
+            #
+            # _apply_context_processors only ADDS keys absent from
+            # full_context (view context wins) and is a no-op when
+            # request is None, so it is safe on the WS path. The vars are
+            # sent once on the first sync and Rust's merging update_state
+            # retains them across subsequent partial syncs.
+            request = getattr(self, "request", None)
+            if request is not None:
+                full_context = self._apply_context_processors(full_context, request)
+
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
             # Cache it to avoid creating a new string object each call,
             # which would cause the change tracker to see it as "changed".

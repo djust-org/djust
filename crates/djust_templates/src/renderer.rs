@@ -3336,4 +3336,110 @@ mod tests {
         );
         assert_eq!(result, "has-analysis");
     }
+
+    // ---- #1722: context-processor vars must propagate into {% include %} ----
+    //
+    // Reporter symptom: a SafeString context-processor var ({{ theme_panel }})
+    // renders correctly at the TOP LEVEL of a template but renders EMPTY inside
+    // a nested {% include %} partial. A plain (non-safe) view-attr var
+    // ({{ nav_items }}) DOES reach the same include — so the divergence is
+    // specific to SafeString-marked values, not to includes in general.
+
+    /// A tiny in-memory template loader for include tests.
+    struct MapLoader {
+        templates: std::collections::HashMap<String, Vec<Node>>,
+    }
+
+    impl MapLoader {
+        fn new(entries: &[(&str, &str)]) -> Self {
+            let mut templates = std::collections::HashMap::new();
+            for (name, source) in entries {
+                let tokens = tokenize(source).unwrap();
+                let nodes = parse(&tokens).unwrap();
+                templates.insert((*name).to_string(), nodes);
+            }
+            Self { templates }
+        }
+    }
+
+    impl crate::inheritance::TemplateLoader for MapLoader {
+        fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+            self.templates.get(name).cloned().ok_or_else(|| {
+                DjangoRustError::TemplateError(format!("template not found: {name}"))
+            })
+        }
+    }
+
+    #[test]
+    fn test_1722_safe_var_renders_at_top_level() {
+        // Baseline: a SafeString-marked HTML var renders unescaped at top level.
+        let tokens = tokenize("{{ theme_panel }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "theme_panel".to_string(),
+            Value::String("<div class=\"panel\">x</div>".to_string()),
+        );
+        context.mark_safe("theme_panel".to_string());
+        let loader = MapLoader::new(&[]);
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(result, "<div class=\"panel\">x</div>");
+    }
+
+    #[test]
+    fn test_1722_safe_var_propagates_into_include() {
+        // THE BUG: the same SafeString var, used inside an {% include %}, must
+        // render non-empty (and unescaped) just like at top level.
+        let loader = MapLoader::new(&[("_partial.html", "[{{ theme_panel }}]")]);
+        let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "theme_panel".to_string(),
+            Value::String("<div class=\"panel\">x</div>".to_string()),
+        );
+        context.mark_safe("theme_panel".to_string());
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(
+            result, "[<div class=\"panel\">x</div>]",
+            "SafeString context-processor var must propagate into {{% include %}} unescaped (#1722)"
+        );
+    }
+
+    #[test]
+    fn test_1722_discriminator_plain_var_reaches_include() {
+        // Discriminator from the report: a plain (non-safe) var DOES reach the
+        // include. This guards against a regression that would "fix" #1722 by
+        // breaking the working plain-var path.
+        let loader = MapLoader::new(&[("_partial.html", "[{{ nav_items }}]")]);
+        let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "nav_items".to_string(),
+            Value::String("home,about".to_string()),
+        );
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(result, "[home,about]");
+    }
+
+    #[test]
+    fn test_1722_safe_var_propagates_into_nested_include() {
+        // Reporter's real shape: base -> include _start -> include _sidebar,
+        // with the SafeString var used in the deepest partial.
+        let loader = MapLoader::new(&[
+            ("_start.html", "{% include \"_sidebar.html\" %}"),
+            ("_sidebar.html", "<aside>{{ theme_panel }}</aside>"),
+        ]);
+        let tokens = tokenize("{% include \"_start.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "theme_panel".to_string(),
+            Value::String("<b>P</b>".to_string()),
+        );
+        context.mark_safe("theme_panel".to_string());
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(result, "<aside><b>P</b></aside>");
+    }
 }
