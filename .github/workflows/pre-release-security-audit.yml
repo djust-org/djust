@@ -305,8 +305,13 @@ jobs:
           cat "$REPORT" >> $GITHUB_STEP_SUMMARY
 
       - name: Create tracking issue
+        # Only on an explicit workflow_dispatch with create_issue=true. The old
+        # `inputs.create_issue == ''` clause was a footgun: GHA coerces a boolean
+        # `false` and `''` both to 0, so `false == ''` was TRUE and the step ran
+        # even when create_issue=false was passed. `== true` alone is correct
+        # (skips on push via the event guard; skips on dispatch when false).
         if: >-
-          (inputs.create_issue == true || inputs.create_issue == '') &&
+          inputs.create_issue == true &&
           github.event_name != 'push'
         uses: actions/github-script@v9
         with:
@@ -333,6 +338,16 @@ jobs:
               summary = 'Automated scan summary not available. Check workflow artifacts.';
             }
             body += '\n\n---\n\n## Automated Scan Results\n\n' + summary;
+
+            // GitHub rejects issue bodies over 65536 chars (HTTP 422). The
+            // aggregated scan summary can exceed that, so cap the body and
+            // point to the uploaded `security-audit-report` artifact (which
+            // always carries the full, untruncated detail).
+            const MAX_BODY = 65000;
+            if (body.length > MAX_BODY) {
+              const note = '\n\n---\n\n_Body truncated to fit GitHub\'s 65536-character issue limit. Full scan output is in the `security-audit-report` workflow artifact for this run._';
+              body = body.slice(0, MAX_BODY - note.length) + note;
+            }
 
             const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,
