@@ -3522,6 +3522,11 @@ three tech-debt follow-ups the v1.0.1 drain explicitly deferred (#1713, #1716)
 or filed (#1719). Design-gated features (#1562, #1561, #1557) stay in v1.1.0.
 Drained 2026-06-05 via `/pipeline-drain`.
 
+**STATUS: COMPLETE (6/6 merged 2026-06-05).**
+PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716), #1730 (#1713),
+#1731 (#1719). Follow-up filed: #1727 (request-scope memoize theme_context —
+the per-WS-event cost surfaced by #1726).
+
 **Priority Matrix**
 
 | Priority | Issue | Summary | Notes |
