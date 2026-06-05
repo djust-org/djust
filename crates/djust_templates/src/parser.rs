@@ -1549,10 +1549,8 @@ fn find_if_keyword(expr: &str) -> Option<usize> {
         match bytes[i] {
             b'\'' if !in_double => in_single = !in_single,
             b'"' if !in_single => in_double = !in_double,
-            _ if !in_single && !in_double => {
-                if expr[i..].starts_with(" if ") {
-                    return Some(i);
-                }
+            _ if !in_single && !in_double && expr[i..].starts_with(" if ") => {
+                return Some(i);
             }
             _ => {}
         }

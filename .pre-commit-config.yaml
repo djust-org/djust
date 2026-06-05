@@ -106,7 +106,12 @@ repos:
 
       - id: eslint
         name: eslint
-        entry: npx eslint --max-warnings 0 --no-warn-ignored
+        # Gate on errors (severity 2), tolerate warnings (severity 1) — matches
+        # the Pre-Release Security Audit eslint policy (#1717). eslint exits
+        # non-zero only on errors by default, so dropping --max-warnings keeps
+        # real XSS/no-script-url regressions blocking while not failing on the
+        # pre-existing security/detect-object-injection + no-var warnings.
+        entry: npx eslint --no-warn-ignored
         language: system
         files: ^python/djust/static/djust/[^/]*\.js$
         pass_filenames: true

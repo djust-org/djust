@@ -108,7 +108,7 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
 
         // Removes: descending index order
         let mut removes: Vec<_> = group.removes.iter().collect();
-        removes.sort_by(|a, b| b.1.cmp(&a.1));
+        removes.sort_by_key(|b| std::cmp::Reverse(b.1));
         for (_, index) in &removes {
             if let Some(target) = find_by_djust_id_mut(root, pid) {
                 if *index < target.children.len() {
@@ -119,7 +119,7 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
 
         // Inserts: ascending index order
         let mut inserts: Vec<_> = group.inserts.iter().collect();
-        inserts.sort_by(|a, b| a.1.cmp(&b.1));
+        inserts.sort_by_key(|a| a.1);
         for (patch, _) in &inserts {
             if let Patch::InsertChild { index, node, .. } = patch {
                 if let Some(target) = find_by_djust_id_mut(root, pid) {

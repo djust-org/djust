@@ -124,6 +124,10 @@ var djustSecurity = (function() {
                     // Remove dangerous URL schemes (javascript:, data:, vbscript:)
                     if (attr.value) {
                         const val = attr.value.toLowerCase().trim();
+                        // This is a denylist MATCH that strips dangerous schemes,
+                        // not a script-URL USE. The string literal is the sanitizer
+                        // pattern; suppress the false-positive no-script-url error.
+                        // eslint-disable-next-line no-script-url
                         if (val.startsWith('javascript:') ||
                             val.startsWith('data:') ||
                             val.startsWith('vbscript:')) {

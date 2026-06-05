@@ -6,8 +6,6 @@
  */
 
 (function() {
-    'use strict';
-
     // Debug logging helper - uses djust debug system when available,
     // otherwise silently drops messages in production
     function _log(level, msg) {

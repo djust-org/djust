@@ -27,6 +27,14 @@ concurrency:
   group: security-audit
   cancel-in-progress: false
 
+# Disable ANSI color across all tools so console logs stay readable (no raw
+# escape sequences). CARGO_TERM_COLOR covers cargo/clippy/cargo-audit; NO_COLOR
+# is honored by eslint and most modern CLIs. Full detail is still captured in
+# the uploaded *-report.md artifacts.
+env:
+  CARGO_TERM_COLOR: never
+  NO_COLOR: "1"
+
 jobs:
   # --- Python security scanning ---
   python-security:
@@ -56,7 +64,9 @@ jobs:
         run: |
           echo "## Bandit Results" > bandit-report.md
           echo '```' >> bandit-report.md
+          echo "::group::Bandit full output"
           uv run bandit -r python/djust/ -ll -f txt 2>&1 | tee -a bandit-report.md || true
+          echo "::endgroup::"
           echo '```' >> bandit-report.md
 
           # Also produce JSON for machine-readable output
@@ -67,7 +77,9 @@ jobs:
         run: |
           echo "## Safety Results" > safety-report.md
           echo '```' >> safety-report.md
+          echo "::group::Safety full report"
           uv run safety check --full-report 2>&1 | tee -a safety-report.md || true
+          echo "::endgroup::"
           echo '```' >> safety-report.md
 
       - name: Run pip-audit
@@ -75,7 +87,9 @@ jobs:
         run: |
           echo "## pip-audit Results" > pip-audit-report.md
           echo '```' >> pip-audit-report.md
+          echo "::group::pip-audit full output"
           uv run pip-audit 2>&1 | tee -a pip-audit-report.md || true
+          echo "::endgroup::"
           echo '```' >> pip-audit-report.md
 
       - name: Upload Python security reports
@@ -112,7 +126,9 @@ jobs:
         run: |
           echo "## cargo-audit Results" > cargo-audit-report.md
           echo '```' >> cargo-audit-report.md
+          echo "::group::cargo-audit full output"
           cargo audit 2>&1 | tee -a cargo-audit-report.md || true
+          echo "::endgroup::"
           echo '```' >> cargo-audit-report.md
 
           # JSON output for machine parsing
@@ -126,12 +142,14 @@ jobs:
 
           echo "## Clippy Security Lints" > clippy-report.md
           echo '```' >> clippy-report.md
+          echo "::group::clippy full output"
           cargo clippy -- \
             -W clippy::all \
             -D clippy::correctness \
             -D clippy::suspicious \
             -W clippy::complexity \
             2>&1 | tee -a clippy-report.md || true
+          echo "::endgroup::"
           echo '```' >> clippy-report.md
 
       - name: Upload Rust security reports
@@ -165,15 +183,27 @@ jobs:
           echo "## npm audit Results" > npm-audit-report.md
           echo '```' >> npm-audit-report.md
           npm audit --json > npm-audit-results.json 2>/dev/null || true
+          echo "::group::npm audit full output"
           npm audit 2>&1 | tee -a npm-audit-report.md || true
+          echo "::endgroup::"
           echo '```' >> npm-audit-report.md
 
-      - name: Run ESLint with security plugin
+      - name: Run ESLint (fails on errors, tolerates warnings)
         run: |
+          # eslint exits non-zero ONLY on errors (severity 2) by default;
+          # warnings (severity 1) leave the exit code at 0. set -o pipefail lets
+          # the eslint exit code survive the `tee` so a real error (e.g. an XSS
+          # / no-script-url regression) FAILS this step instead of being
+          # swallowed by `|| true`. The full report artifact is still written.
+          set -o pipefail
           echo "## ESLint Security Results" > eslint-report.md
           echo '```' >> eslint-report.md
-          npm run lint 2>&1 | tee -a eslint-report.md || true
+          status=0
+          echo "::group::eslint full output"
+          npm run lint 2>&1 | tee -a eslint-report.md || status=$?
+          echo "::endgroup::"
           echo '```' >> eslint-report.md
+          exit $status
 
       - name: Upload JS security reports
         uses: actions/upload-artifact@v7
