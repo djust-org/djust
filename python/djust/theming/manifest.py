@@ -158,7 +158,7 @@ class ThemeManifest:
 
     def validate(self) -> list[str]:
         """Return a list of validation error messages. Empty list means valid."""
-        from .registry import get_registry
+        from ._registry_accessor import get_registry
 
         registry = get_registry()
         errors: list[str] = []

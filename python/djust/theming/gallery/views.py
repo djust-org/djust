@@ -50,7 +50,7 @@ def gallery_view(request):
     preset_name = request.GET.get("preset", "default")
 
     # Validate and normalise preset name
-    from djust.theming.registry import get_registry
+    from djust.theming._registry_accessor import get_registry
 
     if not get_registry().has_preset(preset_name):
         preset_name = "default"

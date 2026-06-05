@@ -243,3 +243,160 @@ class TestConfigReaderIsLeaf:
                 f"{m} is in an import cycle (CodeQL py/cyclic-import #2351/"
                 f"#2357-#2362 would re-open). Edges from {m}: {sorted(edges[m])}"
             )
+
+
+class TestWholeThemingPackageAcyclic:
+    """Gate the #1662 cycle-break: the ENTIRE ``djust.theming`` package import
+    graph (lazy + eager, level-1 relative imports) must be acyclic.
+
+    Before #1662 a pre-existing, never-CodeQL-flagged SCC survived #1661's
+    ``_config`` extraction::
+
+        theme_packs ──(lazy: get_registry)──> registry
+        manifest    ──(lazy: get_registry)──> registry
+        registry    ──(lazy: DESIGN_SYSTEMS/THEME_PACKS)──> theme_packs
+        registry    ──(lazy: load_theme_manifests)──> manifest
+
+    The fix extracts ``ThemeRegistry`` + ``get_registry`` into the leaf
+    ``_registry_accessor`` (imports nothing from theming) so the
+    ``theme_packs``/``manifest`` → ``registry`` back-edges become
+    ``→ _registry_accessor`` (a true leaf), and the only registry→theme_packs/
+    manifest edges (discovery) stay one-directional in ``registry``.
+
+    Unlike ``test_flagged_modules_are_outside_every_import_scc`` (which only
+    checks 3 specific modules and ALLOWS the registry SCC), this test gates the
+    whole package — so no future refactor can reopen ANY cycle.
+    """
+
+    @staticmethod
+    def _build_edges() -> dict[str, set[str]]:
+        """Build the level-1 relative-import graph (lazy + eager) for every
+        theming module. Mirrors the machinery in
+        ``test_flagged_modules_are_outside_every_import_scc`` but over ALL
+        modules, returning the edge map for SCC analysis."""
+        import ast
+
+        mods = {p.stem for p in THEMING_DIR.glob("*.py") if p.stem != "__init__"}
+        edges: dict[str, set[str]] = {}
+        for m in mods:
+            deps: set[str] = set()
+            for node in ast.walk(ast.parse((THEMING_DIR / f"{m}.py").read_text())):
+                if isinstance(node, ast.ImportFrom) and node.level == 1:
+                    if node.module:
+                        # ``from .X import name`` / ``from .X.Y import name``
+                        base = node.module.split(".")[0]
+                        if base in mods:
+                            deps.add(base)
+                    else:
+                        # ``from . import X, Y`` — each imported name is a
+                        # sibling submodule. CodeQL's py/cyclic-import counts
+                        # these edges too, so the SCC gate must as well.
+                        for alias in node.names:
+                            if alias.name in mods:
+                                deps.add(alias.name)
+            edges[m] = deps
+        return edges
+
+    @staticmethod
+    def _find_sccs(edges: dict[str, set[str]]) -> list[list[str]]:
+        """Return all strongly-connected components of size > 1 (Tarjan)."""
+        import sys
+
+        index_counter = [0]
+        stack: list[str] = []
+        lowlink: dict[str, int] = {}
+        index: dict[str, int] = {}
+        on_stack: dict[str, bool] = {}
+        result: list[list[str]] = []
+
+        old_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(max(old_limit, 10000))
+        try:
+
+            def strongconnect(v: str) -> None:
+                index[v] = index_counter[0]
+                lowlink[v] = index_counter[0]
+                index_counter[0] += 1
+                stack.append(v)
+                on_stack[v] = True
+                for w in edges.get(v, ()):
+                    if w not in index:
+                        strongconnect(w)
+                        lowlink[v] = min(lowlink[v], lowlink[w])
+                    elif on_stack.get(w):
+                        lowlink[v] = min(lowlink[v], index[w])
+                if lowlink[v] == index[v]:
+                    comp: list[str] = []
+                    while True:
+                        w = stack.pop()
+                        on_stack[w] = False
+                        comp.append(w)
+                        if w == v:
+                            break
+                    if len(comp) > 1:
+                        result.append(comp)
+
+            for v in edges:
+                if v not in index:
+                    strongconnect(v)
+        finally:
+            sys.setrecursionlimit(old_limit)
+        return result
+
+    def test_whole_theming_package_import_graph_is_acyclic(self):
+        """No strongly-connected component of size > 1 may exist anywhere in the
+        ``djust.theming`` import graph. This is the #1662 gate — it would have
+        caught the registry↔theme_packs / registry↔manifest SCC that
+        ``test_flagged_modules_are_outside_every_import_scc`` deliberately
+        allowed."""
+        edges = self._build_edges()
+        sccs = self._find_sccs(edges)
+        assert sccs == [], (
+            "djust.theming has cyclic-import SCC(s) (CodeQL py/cyclic-import "
+            f"#1662): {sorted(sorted(c) for c in sccs)}. Every cross-module "
+            "edge must be one-directional; extract shared accessors to a leaf "
+            "module (see _registry_accessor / _config)."
+        )
+
+    def test_registry_accessor_is_a_leaf(self):
+        """``_registry_accessor`` holds ``ThemeRegistry`` + ``get_registry`` and
+        must import NOTHING from theming — it's the leaf that theme_packs /
+        manifest / presets / etc. import to reach the singleton WITHOUT pointing
+        back at ``registry`` (which would reopen the #1662 SCC)."""
+        import ast
+
+        src = (THEMING_DIR / "_registry_accessor.py").read_text()
+        theming_mods = {p.stem for p in THEMING_DIR.glob("*.py") if p.stem != "__init__"}
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.ImportFrom) and node.level == 1:
+                # Catch both ``from .X import name`` AND ``from . import X``
+                # (the latter has node.module is None) — the leaf must do
+                # neither, or it gets a back-edge into the SCC.
+                offenders = set()
+                if node.module:
+                    base = node.module.split(".")[0]
+                    if base in theming_mods:
+                        offenders.add(base)
+                else:
+                    offenders |= {a.name for a in node.names if a.name in theming_mods}
+                assert not offenders, (
+                    f"_registry_accessor.py must stay a leaf but imports {sorted(offenders)} — "
+                    "that would re-create the cyclic-import SCC (#1662)."
+                )
+
+    def test_get_registry_back_compat_from_registry_module(self):
+        """``from djust.theming.registry import get_registry`` (and
+        ``ThemeRegistry``) must keep working after the extraction — external
+        callers and ``__init__`` import from ``.registry``, which re-exports the
+        leaf's objects (same object identity)."""
+        from djust.theming._registry_accessor import (
+            ThemeRegistry as leaf_cls,
+            get_registry as leaf_fn,
+        )
+        from djust.theming.registry import (
+            ThemeRegistry as reg_cls,
+            get_registry as reg_fn,
+        )
+
+        assert reg_fn is leaf_fn
+        assert reg_cls is leaf_cls

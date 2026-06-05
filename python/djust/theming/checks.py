@@ -5,7 +5,7 @@ from django.core.checks import Error, Warning, register, Tags
 
 from ._config import get_theme_config
 from .accessibility import AccessibilityValidator
-from .registry import get_registry
+from ._registry_accessor import get_registry
 
 
 # Foreground/background pairs to check (attr_fg, attr_bg, label)

@@ -116,8 +116,13 @@ class TestLoadThemePackageDetectsTemplates:
         mod.get_theme_manifest = lambda: manifest
 
         with patch.dict(sys.modules, {"test_theme_pkg": mod}):
+            from djust.theming.registry import _load_theme_package
+
             registry = get_registry()
-            registry._load_theme_package("test_theme_pkg")
+            # _load_theme_package moved from a ThemeRegistry method to a
+            # module-level discovery function (registry, package_name) when the
+            # singleton was extracted to the _registry_accessor leaf (#1662).
+            _load_theme_package(registry, "test_theme_pkg")
 
         stored_manifest = registry.get_manifest("test-theme-pkg")
         assert stored_manifest is not None
@@ -140,8 +145,10 @@ class TestLoadThemePackageDetectsTemplates:
         mod.get_theme_manifest = lambda: manifest
 
         with patch.dict(sys.modules, {"no_tmpl_pkg": mod}):
+            from djust.theming.registry import _load_theme_package
+
             registry = get_registry()
-            registry._load_theme_package("no_tmpl_pkg")
+            _load_theme_package(registry, "no_tmpl_pkg")
 
         stored_manifest = registry.get_manifest("no-tmpl-pkg")
         assert stored_manifest is not None

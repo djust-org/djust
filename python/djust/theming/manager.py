@@ -261,7 +261,7 @@ class ThemeManager:
         Returns:
             ThemeState with current theme, preset and mode
         """
-        from .registry import get_registry
+        from ._registry_accessor import get_registry
         import logging
 
         logger = logging.getLogger(__name__)
@@ -393,7 +393,7 @@ class ThemeManager:
         Returns:
             True if theme was valid and set
         """
-        from .registry import get_registry
+        from ._registry_accessor import get_registry
 
         if not get_registry().has_theme(theme_name):
             return False
@@ -413,7 +413,7 @@ class ThemeManager:
         Returns:
             True if preset was valid and set
         """
-        from .registry import get_registry
+        from ._registry_accessor import get_registry
 
         if not get_registry().has_preset(preset_name):
             return False
@@ -469,7 +469,7 @@ class ThemeManager:
 
     def get_available_presets(self) -> list[dict]:
         """Get list of available preset metadata."""
-        from .registry import get_registry
+        from ._registry_accessor import get_registry
 
         return [
             {
