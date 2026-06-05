@@ -14809,13 +14809,19 @@ globalThis.djust.djTransitionGroup = {
      * event without tripping an exception.
      */
     async function _applyScopedPatches(patches, rootEl) {
-        if (typeof applyPatches !== "function") {
+        // #1688: reference the published alias, NOT the bare `applyPatches`
+        // symbol. `applyPatches` lives in 12-vdom-patch.js's inner IIFE and is
+        // only exposed as `globalThis.djust.applyPatches`; a bare reference is
+        // out of scope here and throws under terser-minified bundles (the
+        // #1676 class). Reading the alias is minification-independent.
+        const _ap = globalThis.djust && globalThis.djust.applyPatches;
+        if (typeof _ap !== "function") {
             if (globalThis.djustDebug) {
                 console.warn("[djust] applyPatches is not in scope; skipping");
             }
             return false;
         }
-        return applyPatches(patches, rootEl);
+        return _ap(patches, rootEl);
     }
 
     /**
@@ -15026,8 +15032,13 @@ globalThis.djust.djTransitionGroup = {
     // Also expose the top-level applyPatches under a stable name so
     // other modules (and tests) can invoke the scoped variant without
     // reaching into 12-vdom-patch.js's internals.
-    if (typeof applyPatches === "function" && !djust._applyPatches) {
-        djust._applyPatches = applyPatches;
+    // #1688: read the published alias (`globalThis.djust.applyPatches`), not the
+    // bare `applyPatches` symbol — the latter is out of this IIFE's scope and
+    // throws in the terser-minified bundle (and silently no-ops unminified,
+    // leaving `_applyPatches` unwired so emitChildMountedEvents never runs).
+    const _topApplyPatches = globalThis.djust && globalThis.djust.applyPatches;
+    if (typeof _topApplyPatches === "function" && !djust._applyPatches) {
+        djust._applyPatches = _topApplyPatches;
     }
 
     if (document.readyState === "loading") {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`client.min.js` no longer logs `Uncaught ReferenceError: applyPatches is not defined` in production (#1688).** A recurrence of the #1676 terser-mangle × IIFE class, different manifestation. `45-child-view.js` referenced the **bare** `applyPatches` symbol at two sites (`_applyScopedPatches` and the `djust._applyPatches` expose block), but `applyPatches` is declared inside `12-vdom-patch.js`'s own inner IIFE and published only as `globalThis.djust.applyPatches`. The bare cross-IIFE reference is out of scope: it silently no-ops in the unminified bundle (leaving `djust._applyPatches` unwired, so `emitChildMountedEvents` — the child-mounted lifecycle for embedded/sticky views — never runs) and **throws** in the terser-minified production bundle (served when `DEBUG=False`), logging an alarming uncaught error in every console at page load. Non-fatal — core LiveView (WebSocket connect, event dispatch, DOM patching via the in-scope applier) keeps working. Fix: read the published alias `globalThis.djust.applyPatches` at both sites, which is minification-independent and also restores the intended `_applyPatches` wiring. Pinned by a behavioral regression (`tests/js/min_bundle_applypatches_1688.test.js`) asserting `djust._applyPatches` is wired after load (gate-off verified: `undefined` on the pre-fix bundle).
+
 ## [1.0.0] - 2026-06-02
 
 First stable release. 🎉

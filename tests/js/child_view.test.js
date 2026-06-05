@@ -129,12 +129,13 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
         await nextFrame(dom);
 
         // Phase B wires a SCOPED applier call — applyPatches(patches, rootEl)
-        // where rootEl is the child_a subtree. Spy on the top-level
-        // ``applyPatches`` that 45-child-view.js reaches for via closure.
+        // where rootEl is the child_a subtree. Spy on the published alias
+        // ``globalThis.djust.applyPatches`` that 45-child-view.js reaches for
+        // (#1688: the alias, not a bare cross-IIFE symbol).
         let spyCalls = [];
         const win = dom.window;
-        const originalApply = win.applyPatches;
-        win.applyPatches = function (patches, rootEl) {
+        const originalApply = win.djust.applyPatches;
+        win.djust.applyPatches = function (patches, rootEl) {
             spyCalls.push({ patches: patches, rootEl: rootEl });
             return true;
         };
@@ -147,7 +148,7 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
                 version: 1,
             });
         } finally {
-            win.applyPatches = originalApply;
+            win.djust.applyPatches = originalApply;
         }
 
         // Phase B: scoped apply IS called — rootEl is the child A root,
@@ -189,11 +190,11 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
             details.push(ev.detail);
         });
 
-        // Stub applyPatches so we don't get DOM-mutation side effects
-        // while asserting on the event detail.
+        // Stub the published alias so we don't get DOM-mutation side effects
+        // while asserting on the event detail (#1688: alias, not bare symbol).
         const win = dom.window;
-        const originalApply = win.applyPatches;
-        win.applyPatches = function () { return true; };
+        const originalApply = win.djust.applyPatches;
+        win.djust.applyPatches = function () { return true; };
         try {
             dom.window.djust.childView.handleChildUpdate({
                 type: 'child_update',
@@ -202,7 +203,7 @@ describe('45-child-view.js — child_update dispatch (Phase A)', () => {
                 version: 42,
             });
         } finally {
-            win.applyPatches = originalApply;
+            win.djust.applyPatches = originalApply;
         }
 
         expect(details.length).toBe(1);
