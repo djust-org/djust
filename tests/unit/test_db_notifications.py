@@ -753,3 +753,94 @@ class TestBuildDsnOverride:
         dsn = _dsn_from_url("postgresql+psycopg://u:p@h:5432/db")
         assert "host=h" in dsn
         assert "dbname=db" in dsn
+
+
+class TestDsnQueryParams:
+    """Known-safe libpq query params pass through the DJUST_NOTIFY_DATABASE_URL
+    override DSN (issue #1696, follow-up to #1687/#1695). Unknown keys are
+    silently ignored; a ``?host=`` query item REPLACES the URL host (unix-socket
+    use case). No-query URLs stay byte-identical to the #1695 behavior.
+    """
+
+    @staticmethod
+    def _parts(dsn):
+        return dict(p.split("=", 1) for p in dsn.split(" ") if p)
+
+    def test_sslmode_passes_through(self):
+        from djust.db.notifications import _dsn_from_url
+
+        dsn = _dsn_from_url("postgres://u:p@h:5432/db?sslmode=require")
+        assert "sslmode=require" in dsn
+        assert self._parts(dsn)["sslmode"] == "require"
+
+    def test_unix_socket_host_query_overrides_url_host(self):
+        from djust.db.notifications import _dsn_from_url
+
+        # The URL netloc host ("ignored") is a placeholder; ?host= wins.
+        dsn = _dsn_from_url("postgres://u:p@ignored:5432/db?host=/var/run/postgresql")
+        parts = self._parts(dsn)
+        assert parts["host"] == "/var/run/postgresql"
+        # Exactly one host key — the URL host is replaced, not appended.
+        assert dsn.count("host=") == 1
+        assert "ignored" not in dsn
+        # Core creds still present.
+        assert parts["dbname"] == "db"
+        assert parts["user"] == "u"
+        assert parts["password"] == "p"
+
+    def test_unknown_query_key_is_ignored(self):
+        from djust.db.notifications import _dsn_from_url
+
+        dsn = _dsn_from_url("postgres://u:p@h:5432/db?evil=1&sslmode=require")
+        assert "evil" not in dsn
+        assert "sslmode=require" in dsn
+
+    def test_no_query_url_is_byte_identical_to_1695(self):
+        from djust.db.notifications import _dsn_from_url
+
+        # #1695 produced exactly this string for this URL.
+        dsn = _dsn_from_url("postgres://appuser:apppass@primary.internal:5432/appdb")
+        assert dsn == ("host=primary.internal port=5432 dbname=appdb user=appuser password=apppass")
+
+    def test_multiple_allowlisted_params_all_pass_through(self):
+        from djust.db.notifications import _dsn_from_url
+
+        dsn = _dsn_from_url(
+            "postgres://u:p@h:5432/db"
+            "?sslmode=verify-full&sslrootcert=/etc/ssl/ca.pem"
+            "&application_name=djust-listener&connect_timeout=10"
+        )
+        parts = self._parts(dsn)
+        assert parts["sslmode"] == "verify-full"
+        assert parts["sslrootcert"] == "/etc/ssl/ca.pem"
+        assert parts["application_name"] == "djust-listener"
+        assert parts["connect_timeout"] == "10"
+
+    def test_query_value_is_percent_decoded(self):
+        from djust.db.notifications import _dsn_from_url
+
+        # application_name without spaces, percent-encoded hyphen-free value.
+        dsn = _dsn_from_url("postgres://u:p@h:5432/db?application_name=djust%2Dlistener")
+        assert self._parts(dsn)["application_name"] == "djust-listener"
+
+    def test_query_value_with_space_is_libpq_quoted(self):
+        from djust.db.notifications import _dsn_from_url
+
+        # A value containing a space must be single-quoted per libpq DSN syntax,
+        # otherwise libpq would treat the second word as a new keyword.
+        dsn = _dsn_from_url("postgres://u:p@h:5432/db?application_name=djust%20listener")
+        assert "application_name='djust listener'" in dsn
+
+    def test_query_cannot_override_credentials(self):
+        from djust.db.notifications import _dsn_from_url
+
+        # A query password/user/dbname is NOT in the allowlist — it must not
+        # override the URL-derived credentials.
+        dsn = _dsn_from_url(
+            "postgres://realuser:realpass@h:5432/realdb?password=evil&user=evil&dbname=evil"
+        )
+        parts = self._parts(dsn)
+        assert parts["user"] == "realuser"
+        assert parts["password"] == "realpass"
+        assert parts["dbname"] == "realdb"
+        assert "evil" not in dsn
