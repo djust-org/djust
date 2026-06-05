@@ -3512,6 +3512,29 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ---
 
+### Milestone: v1.0.2 — second post-1.0 patch (6 issues: theming/hydration bugs + v1.0.1 review follow-ups)
+
+*Goal:* The single 1.0.2 patch release. Three production bugs surfaced
+integrating djust 1.0.1rc1 into a real app (SSR→hydration child replacement
+destroying client widgets; theming context-processor vars missing in includes;
+the documented `{% theme_panel %}` tag rejected by the Rust engine), plus the
+three tech-debt follow-ups the v1.0.1 drain explicitly deferred (#1713, #1716)
+or filed (#1719). Design-gated features (#1562, #1561, #1557) stay in v1.1.0.
+Drained 2026-06-05 via `/pipeline-drain`.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | SSR→hydration replaces dj-view top-level children wholesale (#1724) | First WS hydration removes+re-adds the `dj-view` root's direct children instead of morphing in place — full-page re-render on every navigation (~150-250ms "double load") and destroys client-side widget state (Chart.js `<canvas>` goes blank). SSR HTML carries zero `dj-id`s; server sends hydrated HTML for ID-based patching but client replaces rather than morphs. | Bug; core hydration/VDOM path. Highest impact — destroys client widget state. |
+| **P1** | Context-processor theme vars empty in nested `{% include %}` (#1722) | `theme_context` vars (`{{ theme_panel }}`/`{{ theme_head }}`) render at the top level of a LiveView template but are empty inside a nested `{% include %}` partial. View-instance attrs DO reach the includes; only context-processor vars don't. Incomplete #233. | Bug; template engine context propagation into includes. |
+| **P1** | Rust engine rejects `{% theme_panel %}` tag the docs recommend (#1721) | The theming guide documents `{% theme_panel %}` (with `{% load theme_tags %}`) but the Rust template engine raises `RuntimeError: Unsupported template tag '{% theme_panel %}'`. Docs ↔ engine disagree (cf. #1452). Either support the tag in the Rust engine or update the docs to the `{{ theme_panel }}` context-string form. | Bug/docs; resolve docs↔engine disagreement. |
+| **P2** | Generalize cross-IIFE guard to top-level modules (#1716) | `check-cross-iife-refs.mjs` only flags `decl.inGuard && !refInGuard`; a bare cross-IIFE ref between two top-level modules (22-51) is NOT flagged. 10/58 published fns are gap-exposed to the same ReferenceError-under-minify class. *(deferred follow-up from v1.0.1 #1706)* | Tech-debt; generalize the scope test, re-verify against the 68-FP set. |
+| **P2** | Promote demo `djust_check` dogfood to blocking gate (#1713) | #1708's dogfood step is `continue-on-error: true`; it has now shipped green on the runner. Flip to enforcing — extract a dedicated `demo-checks` job (decoupled from playwright flakiness) without `continue-on-error`. Add a unit test feeding the wrapper a synthetic error-severity payload so both gate arms are covered. *(deferred follow-up from v1.0.1 #1708)* | Tech-debt / CI. |
+| **P2** | Ratchet down 33 tolerated eslint warnings (#1719) | #1717 changed eslint policy to gate on errors, tolerate warnings — leaving ~33 project-wide warnings with no ceiling. Drive the count down (`catch (error)`→`catch (_error)` or `catch {}`; `no-var`→`const`/`let`; targeted `eslint-disable-next-line` for genuine FPs) then re-add `--max-warnings <N>` as a ratchet. *(filed from v1.0.1 #1718 review)* | Tech-debt / JS hygiene. |
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
