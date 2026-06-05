@@ -12,6 +12,25 @@ use std::collections::HashSet;
 /// Regex for {% spaceless %}: matches whitespace between > and <
 static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 
+/// Built-in filters whose output is already HTML-safe (escaped or
+/// HTML-producing) and so must NOT be auto-escaped again when they are the
+/// last filter in a chain. Single source of truth shared by the
+/// `Node::Variable`, `Node::InlineIf`, and `get_value_safe` (`{% firstof %}` /
+/// `{% cycle %}`) render paths — hoisted from three inline copies to prevent
+/// parallel-path drift (CLAUDE.md #1646, issue #1692). Mirrors Django's
+/// `is_safe`/`needs_autoescape` semantics. NAME-based check is additive: it
+/// only ever marks MORE values safe, and only for these established names —
+/// never under-escapes a plain/unknown filter's output.
+const SAFE_OUTPUT_FILTERS: [&str; 7] = [
+    "safe",
+    "safeseq",
+    "force_escape",
+    "json_script",
+    "urlize",
+    "urlizetrunc",
+    "unordered_list",
+];
+
 /// Returns ``true`` if the (parser-preserved) filter argument string is a
 /// quoted literal — i.e. starts and ends with matching single or double
 /// quotes. Used to drive the custom-filter fallback's arg-resolution
@@ -413,17 +432,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             //    ``mark_safe()``d its result at runtime without the static
             //    ``is_safe=True`` flag (#1660). Additive: only ever marks MORE
             //    values safe, and only when the LAST filter's output is safe.
-            let safe_output_filters = [
-                "safe",
-                "safeseq",
-                "force_escape",
-                "json_script",
-                "urlize",
-                "urlizetrunc",
-                "unordered_list",
-            ];
             let is_safe = filter_specs.iter().any(|(name, _)| {
-                safe_output_filters.contains(&name.as_str())
+                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
             }) || context.is_safe(var_name)
                 || runtime_safe;
@@ -475,17 +485,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             }
 
             let text = value.to_string();
-            let safe_output_filters = [
-                "safe",
-                "safeseq",
-                "force_escape",
-                "json_script",
-                "urlize",
-                "urlizetrunc",
-                "unordered_list",
-            ];
             let is_safe = filters.iter().any(|(name, _)| {
-                safe_output_filters.contains(&name.as_str())
+                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
             }) || context.is_safe(expr)
                 || runtime_safe;
@@ -1848,7 +1849,16 @@ fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
                 arg_was_quoted,
             )?;
             value = new_value;
-            runtime_safe = produced_safe;
+            // Mark safe when EITHER the filter produced a runtime SafeString
+            // (#1672) OR its NAME is in the name-based safe_output_filters
+            // whitelist / a custom is_safe=True filter — mirroring the
+            // Variable/InlineIf arms exactly (#1692). LAST-filter semantics:
+            // assigned each iteration, so a later plain filter re-taints to
+            // false. Fail-safe: only ever ADDS safeness for established names;
+            // a plain/unknown filter (e.g. `upper`) stays escaped.
+            runtime_safe = produced_safe
+                || SAFE_OUTPUT_FILTERS.contains(&filter_name)
+                || crate::filter_registry::is_custom_filter_safe(filter_name);
         }
 
         return Ok((value, runtime_safe));
@@ -2848,6 +2858,69 @@ mod tests {
         context.set("user".to_string(), Value::Object(user));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "Alice");
+    }
+
+    // ---- #1692: firstof/cycle must honor the NAME-BASED safe_output_filters
+    // whitelist (safe/urlize/...), completing #1660→#1672. ----
+
+    #[test]
+    fn test_firstof_safe_filter_not_double_escaped() {
+        // {% firstof x|safe %} must NOT be re-escaped — `safe` is a name-based
+        // safe_output_filter (matches the Variable arm).
+        let tokens = tokenize("{% firstof x|safe %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<b>hi</b>");
+    }
+
+    #[test]
+    fn test_cycle_urlize_filter_not_double_escaped() {
+        // {% cycle x|urlize %} — urlize produces its own <a href=...> HTML; it
+        // must not be re-escaped (urlize is a name-based safe_output_filter).
+        let tokens = tokenize("{% cycle x|urlize %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "x".to_string(),
+            Value::String("Visit https://example.com".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        // urlize's <a href="..."> must survive verbatim, not become &lt;a ...
+        assert!(
+            result.contains("<a href=\"https://example.com\""),
+            "urlize output was re-escaped: {result}"
+        );
+        assert!(
+            !result.contains("&lt;a"),
+            "urlize output was double-escaped: {result}"
+        );
+    }
+
+    #[test]
+    fn test_firstof_nonsafe_filter_still_escaped() {
+        // {% firstof x|upper %} — `upper` is NOT a safe_output_filter, so HTML
+        // in its output must STILL be escaped (fail-safe: only whitelisted
+        // names skip escaping).
+        let tokens = tokenize("{% firstof x|upper %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "&lt;B&gt;HI&lt;/B&gt;");
+    }
+
+    #[test]
+    fn test_firstof_safe_then_plain_filter_re_taints() {
+        // LAST-filter semantics: `{% firstof x|safe|upper %}` — `upper` is the
+        // last filter and is NOT safe, so the value is re-tainted and escaped.
+        let tokens = tokenize("{% firstof x|safe|upper %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "&lt;B&gt;HI&lt;/B&gt;");
     }
 
     #[test]
