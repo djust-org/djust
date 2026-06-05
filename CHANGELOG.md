@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI promotes the demo `djust_check` dogfood to a BLOCKING `demo-checks` job (#1713, CI infra — completes #1708, applies CLAUDE.md rc4 retro finding #3).** The dogfood added in #1708 ran as a `continue-on-error` step inside the non-blocking `playwright-tests` job, so a re-introduced dead `@click` / legacy attribute (the #1683 bug class) could NOT red-bar a PR. Now that the step has shipped green on the runner (the budgeted ≥1 runner-only iteration), it is extracted into a dedicated `demo-checks` job WITHOUT `continue-on-error` and wired into the `test-summary` aggregate gate (added to `needs:` and the blocking success condition alongside rust/python/js/security-tests). The dogfood step is removed from `playwright-tests`, which stays non-blocking and decoupled from the demo check (its own `migrate` step is retained for the dev server it starts). The wrapper `scripts/ci_djust_check_demo.py` is refactored to extract an importable `evaluate(parsed_json)` decision function (CLI behavior of `main()` unchanged), and a new unit test (`tests/test_ci_djust_check_demo.py`) feeds SYNTHETIC `djust_check --json` payloads through it to exercise BOTH gate arms end-to-end — the error-severity arm (never hit by the live 0-error demo, the Stage-11 note) and the deprecated-attr `T001`/`T014`/`T015` ID-set arm — the #252 empirical canary, with a clean-payload tautology guard (#254 gate-off verified: neutering the blocking arm makes all four blocking cases fail). No framework behavior change — CI config + test only.
+
 ### Security
 
 - Bump starlette 1.0.0 → 1.2.1 (CVE-2026-48710 host-header validation; transitive via mcp).
