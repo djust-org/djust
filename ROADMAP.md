@@ -3471,17 +3471,23 @@ to a single RC. P0 first.
 
 ---
 
-### Milestone: v1.0.1 — post-1.0 production-bug + small-fix drain (7 issues)
+### Milestone: v1.0.1 — first post-1.0 patch (13 issues, two drain waves)
 
-*Goal:* Drain post-1.0 production bugs and small, well-specified fixes into one
-patch milestone. P0 first. Design-gated features (#1562, #1561, #1557) stay in
-v1.1.0. Drained 2026-06-04 via `/pipeline-drain` (scope: 7 drain-sized issues).
+*Goal:* The single 1.0.1 patch release. All work below ships together as 1.0.1
+(one version bump, one tag). Design-gated features (#1562, #1561, #1557) stay in
+v1.1.0. Drained 2026-06-04/05 via two `/pipeline-drain` passes — wave 1
+(production bug + small fixes) and wave 2 (the durable-cure + review follow-ups
+wave 1 surfaced). The wave split is process history only; it is **one release**.
 
-**STATUS: COMPLETE (7/7 merged 2026-06-05).** PRs #1690 (#1688), #1691 (#1672),
-#1693 (#1683), #1694 (#1662), #1695 (#1687), #1697 (#1602), #1698 (#1559).
-Follow-ups filed: #1692, #1696, #1699. New P0 surfaced during drain (NOT in scope): #1689.
+**STATUS: COMPLETE (13/13 merged 2026-06-05).**
+Wave 1 — PRs #1690 (#1688), #1691 (#1672), #1693 (#1683), #1694 (#1662),
+#1695 (#1687), #1697 (#1602), #1698 (#1559).
+Wave 2 — PRs #1709 (#1692), #1710 (#1699), #1711 (#1696), #1712 (#1708),
+#1714 (#1707), #1715 (#1706).
+New P0 surfaced + closed as dup of #1688: #1689. Follow-ups deferred to a later
+milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE guard).
 
-**Priority Matrix**
+**Priority Matrix — wave 1 (production bug + small fixes)**
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
@@ -3493,20 +3499,7 @@ Follow-ups filed: #1692, #1696, #1699. New P0 surfaced during drain (NOT in scop
 | **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. *(moved from v1.1.0)* | Small enhancement. |
 | **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. *(moved from v1.1.0)* | Docs writing. |
 
----
-
-### Milestone: v1.0.2 — v1.0.1 retro follow-up drain (6 issues)
-
-*Goal:* Drain the v1.0.1 retro's durable-cure issues + the three deferred
-review follow-ups. Drained 2026-06-05 via `/pipeline-drain` (scope: 6
-drain-sized; design-gated #1562/#1561/#1557 stay in v1.1.0). Process order puts
-#1699 before #1707 (fix the guide before adding the checker that flags it).
-
-**STATUS: COMPLETE (6/6 merged 2026-06-05).** PRs #1709 (#1692), #1710 (#1699),
-#1711 (#1696), #1712 (#1708), #1714 (#1707), #1715 (#1706). Follow-ups filed:
-#1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE guard).
-
-**Priority Matrix**
+**Priority Matrix — wave 2 (durable cures + review follow-ups from wave 1)**
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
@@ -3515,7 +3508,7 @@ drain-sized; design-gated #1562/#1561/#1557 stay in v1.1.0). Process order puts
 | **P2** | `DJUST_NOTIFY_DATABASE_URL` drops query params (#1696) | Pass through known-safe libpq query items (sslmode, unix-socket host) for the direct-to-Postgres LISTEN use case. | Enhancement. |
 | **P2** | CI dogfood `djust_check` against the demo project (#1708) | Run `djust_check`/`djust_audit` over `examples/demo_project` in CI; would have caught #1683's dead buttons + the new T015. | Tech-debt / CI. |
 | **P2** | Extend `check-doc-snippets.py` to `docs/website/guides/*.md` (#1707) | Symbol/import-resolvability guard on guide prose; gate-off should fail on #1699's bug pre-fix. | Tech-debt / CI. |
-| **P2** | Whole-class guard against the #1676 cross-IIFE class (#1706) | Static lint for bare cross-IIFE refs and/or a real-browser minified-bundle init smoke test; the class recurred 3× (#1676→#1688→#1689). | Tech-debt / build. |
+| **P2** | Whole-class guard against the #1676 cross-IIFE class (#1706) | Static lint for bare cross-IIFE refs; the class recurred 3× (#1676→#1688→#1689) and the guard found 2 more live instances (dialog, keyboard). | Tech-debt / build. |
 
 ---
 

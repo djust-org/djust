@@ -319,40 +319,52 @@ issue or be explicitly closed with a reason.
 | 277 | Per-event `check_handler_permission` called bare-sync from async `_validate_event_security` (sibling of #1638) | PR #1646 (#1638 review) | #1648 | Open | Same `SynchronousOnlyOperation` class as #1638, for `@permission_required` handlers with a DB-backed perm backend; needs its own reproducer (N-sites-N-tests). |
 | 278 | Empirical-canary fixture for `assert_http_ws_djid_parity` (Action #1468 spirit) | PR #1653 (#1642 retro) | #1654 | Open | Harness passes for every shape today, so catch-power rests on the path-differential argument; add a synthetic divergence fixture so it can't go green-but-toothless. |
 | 279 | Strengthen drain guards: scaffold deploy-path integration test + `_arm_recovery` caller-count test + single `isSignificantChild` predicate | Retro v1.0.0rc14 (PRs #1651/#1652/#1649) | #1655 | Open | Three non-blocking test/code-hardening deferrals consolidated. |
-| 280 | Structural whole-class guard against the #1676 class (bare cross-IIFE refs surviving terser) — static src lint and/or real-browser minified-bundle init smoke test | Retro v1.0.1 (finding #1) | #1706 | Open | Class recurred 3× (#1676 → #1688/#1690 → #1689-dup). Per-symbol fixes don't retire it; need a whole-class guard. |
-| 281 | Extend `check-doc-snippets.py` to scan `docs/website/guides/*.md` for symbol/import resolvability | Retro v1.0.1 (finding #2) | #1707 | Open | #1559's own suggested API name (`tenant_queryset`) didn't exist; old multi-tenant.md repeats it. No CI guard on guide prose today. |
-| 282 | CI dogfood `djust_check`/`djust_audit` against `examples/demo_project` | Retro v1.0.1 (finding #3) | #1708 | Open | #1683 shipped dead `@click` buttons to GA; T001 existed but was never run against the demos. Enforces CLAUDE.md #1060 in CI. |
-| 283 | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (e.g. `x\|safe`) | PR #1691 (#1672 review) | #1692 | Open | Parallel surface to #1672's runtime-SafeString fix; `get_value_safe` doesn't consult the name-based whitelist the Variable arm uses. |
-| 284 | `DJUST_NOTIFY_DATABASE_URL` drops URL query params (sslmode, unix-socket host) | PR #1695 (#1687 review) | #1696 | Open | Relevant to the direct-to-Postgres use case #1687 targets; pass through known-safe libpq query items. |
-| 285 | `multi-tenant.md` Quick Start cites non-existent `self.tenant_queryset()` (+ `DJUST_TENANT_RESOLVER` / `mixins` plural) | PR #1698 (#1559 review) | #1699 | Open | Pre-existing doc inaccuracy the #1559 guide was careful to avoid; the two guides now disagree. Pairs with #1707's CI guard. |
+| 280 | Structural whole-class guard against the #1676 class (bare cross-IIFE refs surviving terser) | Retro v1.0.1 (finding #1) | #1706 | Closed | **Resolved in v1.0.1 wave 2 (PR #1715)** — `scripts/check-cross-iife-refs.mjs` static guard + pre-commit/CI wiring; found + fixed 2 more live instances (`handleEvent` in dj-dialog + keyboard-nav). Residual top-level-module gap tracked in #1716 (row 287). |
+| 281 | Extend `check-doc-snippets.py` to scan `docs/website/guides/*.md` for symbol/import resolvability | Retro v1.0.1 (finding #2) | #1707 | Closed | **Resolved in v1.0.1 wave 2 (PR #1714)** — guide scanner added; found + fixed 3 more wrong-import bugs (components/state-primitives/uploads). |
+| 282 | CI dogfood `djust_check`/`djust_audit` against `examples/demo_project` | Retro v1.0.1 (finding #3) | #1708 | Closed | **Resolved in v1.0.1 wave 2 (PR #1712)** — wrapper `scripts/ci_djust_check_demo.py` (djust_check exits 0 always) gates errors + T001/T014/T015. Promotion-to-blocking tracked in #1713 (row 286). |
+| 283 | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (e.g. `x\|safe`) | PR #1691 (#1672 review) | #1692 | Closed | **Resolved in v1.0.1 wave 2 (PR #1709)** — `get_value_safe` honors the name-based whitelist; hoisted the duplicated list to one shared const. |
+| 284 | `DJUST_NOTIFY_DATABASE_URL` drops URL query params (sslmode, unix-socket host) | PR #1695 (#1687 review) | #1696 | Closed | **Resolved in v1.0.1 wave 2 (PR #1711)** — allowlist passthrough; credentials cannot be overridden via query. |
+| 285 | `multi-tenant.md` Quick Start cites non-existent `self.tenant_queryset()` (+ `DJUST_TENANT_RESOLVER` / `mixins` plural) | PR #1698 (#1559 review) | #1699 | Closed | **Resolved in v1.0.1 wave 2 (PR #1710)** — corrected ~10 hallucinated `djust.tenants` symbols to the real API. |
+| 286 | Promote the demo `djust_check` dogfood from `continue-on-error` to a blocking gate | PR #1712 (#1708 review) | #1713 | Open | Shipped green once (rc4 #3); next step is a dedicated blocking `demo-checks` job + a synthetic-error unit test for the wrapper's error-severity arm. |
+| 287 | Generalize the cross-IIFE guard to top-level-module (22-51) bare refs | PR #1715 (#1706 review) | #1716 | Open | Guard fires only for guard-block declarations; 10/58 published fns declared at bundle top level are gap-exposed (same class, unobserved shape). |
 
-## v1.0.1 — Post-1.0 production-bug + small-fix drain (PRs #1690, #1691, #1693, #1694, #1695, #1697, #1698)
+## v1.0.1 — First post-1.0 patch: two drain waves (PRs #1690–#1715, 13 merged)
 
 **Date**: 2026-06-05
-**Scope**: First post-1.0.0 patch drain — 7 issues triaged from the open backlog via `/pipeline-strategy`-style scoping: one P0 production bug, three small bugfixes, two DX/feature additions, and one docs guide. Three design-gated features (#1562/#1561/#1557) were deliberately left in v1.1.0. One newly-filed P0 (#1689) surfaced mid-drain and was closed as a duplicate of #1688.
-**Tests at close**: JS 1648 passing (142 files); Rust `djust_templates` 420; theming sweep 1853; full pre-push suite green on each PR.
+**Scope**: The single 1.0.1 patch release (one version bump / tag — the two waves below are process history, not separate releases). **Wave 1** (7 PRs: #1690, #1691, #1693, #1694, #1695, #1697, #1698) drained one P0 production bug + small fixes + a docs guide. **Wave 2** (6 PRs: #1709, #1710, #1711, #1712, #1714, #1715) drained the durable-cure issues + review follow-ups that wave 1 surfaced — so 1.0.1 both *found* and *resolved* its own follow-ups. Three design-gated features (#1562/#1561/#1557) deliberately stay in v1.1.0. A newly-filed P0 (#1689) was closed as a duplicate of #1688.
+**Tests at close**: JS 1654 passing; Rust `djust_templates` 300+; theming sweep 1853; full pre-push suite green on each of the 13 PRs.
 
 ### What We Learned
 
 **1. The #1676 "minified cross-IIFE crash" class recurred a third time — per-symbol fixes don't retire it.**
 #1688 (PR #1690) fixed a bare `applyPatches` reference in `45-child-view.js`; while the drain ran, #1689 was filed independently describing the *same two source sites* with a different terser mechanism (`--compress` stripping the `typeof` guards). #1689 was already structurally fixed by #1690 (the `typeof applyPatches` construct is gone from source) and was closed as a duplicate — but the recurrence (#1676 → #1688 → #1689) shows the class keeps coming back because every fix, and every regression test (`min_bundle_applypatches_1676/1688`), guards a *single symbol*. The durable cure is a whole-class guard (static lint for bare cross-IIFE refs and/or a real-browser minified-bundle init smoke test).
 
-**Action taken**: Open — tracked in Action Tracker #280 (GitHub #1706).
+**Action taken**: Resolved in v1.0.1 wave 2 (PR #1715, Action Tracker #280) — whole-class static guard `scripts/check-cross-iife-refs.mjs`, which on first run found + fixed 2 more live instances of the class. Residual top-level-module gap → #1716 (row 287).
 
 **2. doc-claim-verbatim caught the issue's OWN suggested API being wrong — and the same error pre-existing in shipped docs.**
 #1559 (PR #1698) asked for a migration guide and suggested `tenant_queryset`; verification against `python/djust/tenants/` showed that symbol does not exist (real: `TenantScopedMixin.get_tenant_queryset`), and that the existing `multi-tenant.md` Quick Start already ships the same non-existent call (plus `DJUST_TENANT_RESOLVER` / `djust.tenants.mixins` plural). The new guide avoided all three only because the implementer + Stage-11 reviewer ran the imports. Guide prose has no CI guard today (`check-doc-snippets.py` covers only README/QUICKSTART).
 
-**Action taken**: Open — tracked in Action Tracker #281 (GitHub #1707) for the CI guard; #285 (GitHub #1699) for the multi-tenant.md fix.
+**Action taken**: Resolved in v1.0.1 wave 2 — CI guard PR #1714 (Action Tracker #281; found + fixed 3 more wrong-import bugs on first run) + multi-tenant.md fix PR #1710 (Action Tracker #285; corrected ~10 hallucinated symbols).
 
 **3. A working system check (T001) didn't prevent dead demos reaching GA because it wasn't dogfooded in CI.**
 #1683 (PR #1693) migrated 117 dead `@click` bindings in the demos — controls the shipped client never binds. T001 already flagged `@click` as deprecated, but the demos were never run through `djust_check` in CI, so the dead buttons shipped at 1.0 GA (a first-impression surface). CLAUDE.md #1060 ("dogfood new CLI tools against the demo") is canon but unenforced.
 
-**Action taken**: Open — tracked in Action Tracker #282 (GitHub #1708).
+**Action taken**: Resolved in v1.0.1 wave 2 (PR #1712, Action Tracker #282) — `ci_djust_check_demo.py` wrapper gating errors + T001/T014/T015. Promotion-to-blocking → #1713 (row 286).
 
-**4. Deferred-finding discipline held across the drain — three follow-ups filed at review time, not lost.**
-Each PR's Stage-11 review surfaced a non-blocking adjacent gap, and each was filed immediately rather than scope-crept into the PR (#1079): #1692 (firstof/cycle name-based safe filters), #1696 (LISTEN DSN query params), #1699 (multi-tenant.md inaccuracy).
+**4. Deferred-finding discipline held — and the follow-ups were drained WITHIN the same release.**
+Each wave-1 PR's Stage-11 review surfaced a non-blocking adjacent gap, filed immediately rather than scope-crept (#1079): #1692 (firstof/cycle name-based safe filters), #1696 (LISTEN DSN query params), #1699 (multi-tenant.md inaccuracy). All three were then drained in wave 2 (PRs #1709/#1711/#1710) — the "file-it-promptly" loop closed end-to-end inside 1.0.1, not deferred to a later milestone.
 
-**Action taken**: Open — tracked in Action Tracker #283 (GitHub #1692), #284 (GitHub #1696), #285 (GitHub #1699).
+**Action taken**: Resolved in v1.0.1 wave 2 — PRs #1709 (#1692, row 283), #1711 (#1696, row 284), #1710 (#1699, row 285).
+
+**5. (wave 2) A whole-class guard is worth more than per-symbol fixes — it found live bugs nobody had reported.**
+The #1706 cross-IIFE static guard (PR #1715), built to retire the recurring #1676 class, flagged 2 *additional* live instances the moment it ran: bare `handleEvent` in `35-dj-dialog.js` (dialog-close silently no-opped under minification) and `51-keyboard-nav.js` (keyboard `dj-click` activation no-opped). Both were the exact #1688 shape, unreported. It also corrected an imprecise root-cause belief (the discriminator is the double-load-guard scope boundary, not per-module inner IIFEs). Stage-11 then found the guard's own coverage gap (top-level-module refs).
+
+**Action taken**: Resolved in v1.0.1 wave 2 (PR #1715); residual generalization → #1716 (Action Tracker #287).
+
+**6. (wave 2) A new lint can red-bar its own PR — local-green ≠ merge-green.**
+PR #1714's guide doc-snippet checker passed locally but turned its OWN `python-tests (py3.12)` red: `uploads.md`'s S3 blocks `import boto3`, absent from CI dev deps — the implementer's local env had boto3, masking it (the rc4-finding-#3 cross-environment trap, verbatim). Stage 11's mandatory `gh pr checks` (review the PR's *actual* runner CI, not just local) caught it; fixed with the existing skip-directive.
+
+**Action taken**: Fixed in PR #1714 before merge. Reinforces the existing Stage-11 "confirm the PR's runner CI is green" discipline; no new tracker row (already canon).
 
 ### Insights
 
@@ -364,32 +376,30 @@ Each PR's Stage-11 review surfaced a non-blocking adjacent gap, and each was fil
 
 ### Review Stats
 
-| Metric | #1690 | #1691 | #1693 | #1694 | #1695 | #1697 | #1698 | Total |
-|--------|-------|-------|-------|-------|-------|-------|-------|-------|
-| Type | P0 bug | bug | demo | tech-debt | feat | feat | docs | — |
-| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| 🟡 Findings (deferred) | 0 | 1 | 1 | 1 | 1 | 0 | 1 | 5 |
-| Stage-11 verdict | APPROVE | APPROVE | APPROVE | APPROVE | APPROVE | APPROVE | APPROVE | 7/7 |
-| Gate-off verified | ✓ | ✓ | n/a | ✓ | ✓ | ✓ | n/a | — |
-| CI | green | green | green | green | green | green | green | 7/7 |
+| Metric | Wave 1 (7 PRs) | Wave 2 (6 PRs) | 1.0.1 total |
+|--------|----------------|----------------|-------------|
+| PRs merged | 7 | 6 | 13 |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings (deferred) | 5 | 2 | 7 |
+| Stage-11 verdict | 7× APPROVE | 5× APPROVE, 1× REQUEST_CHANGES→fixed (#1714 boto3) | 13 merged |
+| Latent bugs found by the new guards | — | 2 (cross-IIFE) + 3 (doc imports) | 5 |
+| CI green at merge | 7/7 | 6/6 | 13/13 |
+
+Wave-2 deferred 🟡: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE guard). Both filed, both Open.
 
 ### Process Improvements Applied
 
-**CLAUDE.md**: none this milestone (the dominant findings are net-new durable cures filed as issues #1706–#1708, not yet canonical rules — they become canon once shipped).
-**Pipeline template**: none.
-**Checklist**: none.
-**Skills**: none.
+**CLAUDE.md**: none codified this release — the dominant findings became net-new tooling guards (the cross-IIFE static lint #1706, the guide doc-snippet checker #1707, the demo djust_check dogfood #1708), all shipped within 1.0.1 wave 2 rather than written as prose rules.
+**Pipeline template / Checklist / Skills**: none.
+**New CI/build guards shipped (1.0.1):** `scripts/check-cross-iife-refs.mjs` (pre-commit + CI), guide-scanning in `check-doc-snippets.py` (pre-commit + CI), `scripts/ci_djust_check_demo.py` (CI).
 
 ### Open Items
 
-- [ ] #280 — whole-class guard against the #1676 cross-IIFE class (GitHub #1706)
-- [ ] #281 — doc-snippet checker for guides (GitHub #1707)
-- [ ] #282 — CI dogfood djust_check against demos (GitHub #1708)
-- [ ] #283 — firstof/cycle name-based safe filters (GitHub #1692)
-- [ ] #284 — LISTEN DSN query params (GitHub #1696)
-- [ ] #285 — multi-tenant.md tenant_queryset inaccuracy (GitHub #1699)
+- [ ] #286 — promote demo djust_check dogfood to a blocking gate (GitHub #1713)
+- [ ] #287 — generalize the cross-IIFE guard to top-level modules (GitHub #1716)
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
-- [ ] Release decision: a `1.0.1` patch is warranted — `[Unreleased]` holds 8 entries incl. the #1688 P0 production fix.
+- [x] Wave-1 durable cures + review follow-ups (#280–#285) — all resolved in wave 2, within 1.0.1
+- [ ] **Release**: cut `1.0.1` (one version bump + tag) covering all 13 PRs. `[Unreleased]` holds the full set incl. the #1688 P0 production fix and the two wave-2 cross-IIFE prod fixes (dialog + keyboard).
 
 ## v1.0.0rc14 — Open-issue drain: parallel-path drift (PRs #1646, #1649, #1650, #1651, #1652, #1653)
 
