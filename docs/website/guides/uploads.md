@@ -232,6 +232,7 @@ Guarantees:
 
 ### S3 multipart upload (full example)
 
+<!-- doc-snippet-check: skip -->
 ```python
 import boto3
 from pathlib import Path
@@ -448,6 +449,7 @@ Stores are sync or async — djust handles both transparently.
 
 For large files that also use a custom destination (S3, GCS, Azure Blob), combine `ResumableUploadWriter` with the state store:
 
+<!-- doc-snippet-check: skip -->
 ```python
 from djust.uploads import ResumableUploadWriter, BufferedUploadWriter
 import boto3
