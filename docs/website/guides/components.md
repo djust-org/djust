@@ -896,6 +896,16 @@ LIVEVIEW_CONFIG = {"theme": {"theme": "ios", "preset": "forest"}}
 </html>
 ```
 
+The `{% theme_X %}` tags above work in **both** template engines — Django's
+and djust's Rust engine (the one that renders LiveView templates). They are
+also available as context-string variables (`{{ theme_head }}`,
+`{{ theme_switcher }}`, `{{ theme_panel }}`, `{{ theme_mode_toggle }}`,
+`{{ theme_preset_selector }}`) for the default-args case. Prefer the
+`{{ ... }}` form when a tag appears multiple times on a page (it pre-renders
+once per request); use the `{% theme_X %}` tag form when you need
+customization-with-args, e.g. `{% theme_panel show_packs=False %}` or
+`{% theme_preset_selector layout="grid" %}`.
+
 ### Reactive Theme Switching with LiveView
 
 ```python

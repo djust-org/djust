@@ -15,3 +15,11 @@ class DjustThemingConfig(AppConfig):
         from .registry import get_registry
 
         get_registry().discover()
+
+        # Register the documented {% theme_X %} tags as Rust template-engine
+        # tag handlers so they work in LiveView templates (rendered by the
+        # Rust engine), matching the docs and the {{ theme_X }} context-string
+        # form (#1721). Degrades gracefully when the Rust extension is absent.
+        from .rust_handlers import register_with_rust_engine
+
+        register_with_rust_engine()
