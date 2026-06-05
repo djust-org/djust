@@ -267,6 +267,31 @@ jobs:
           uv run python manage.py migrate --noinput
           cd ../..
 
+      # Dogfood djust_check against the demo project (#1708, enforces
+      # CLAUDE.md #1060). #1683 shipped dead @click buttons to 1.0 GA because
+      # the demo templates were never run through djust_check in CI.
+      #
+      # The helper wraps `manage.py djust_check --json` (which itself always
+      # exits 0) and sets a real exit code. It fails ONLY on error-severity
+      # checks and the deprecated-attribute classes T001/T014/T015 (the exact
+      # #1683 bug class) — NOT on the demo's intentional warnings (public-view
+      # auth notices, partial-fragment templates).
+      #
+      # NOTE: this step inherits the job's `continue-on-error: true`, so it is
+      # NON-BLOCKING on its first runner iterations (rc4 retro finding #3: a new
+      # CI check exercising an env the dev machine can't fully mirror needs >=1
+      # runner-only iteration budgeted). Once it has shipped green on the
+      # runner, promote it to a blocking gate — either move it to a dedicated
+      # `demo-checks` job without continue-on-error, or wire it into the
+      # test-summary aggregate gate.
+      - name: Dogfood djust_check against the demo (non-blocking until green)
+        run: |
+          cd examples/demo_project
+          PYTHONPATH=../.. uv run python ../../scripts/ci_djust_check_demo.py
+          cd ../..
+        env:
+          PYTHONPATH: .
+
       - name: Start development server
         run: |
           cd examples/demo_project
