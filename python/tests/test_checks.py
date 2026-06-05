@@ -3751,6 +3751,139 @@ class TestT013TemplateVariableDjView:
         assert len(t013) == 1
 
 
+class TestT015LegacyRootAttrs:
+    """T015 must detect the pre-1.0 legacy root attributes
+    ``data-djust-root`` / ``data-djust-view`` and emit a migration hint."""
+
+    def _set_templates(self, tpl_dir, settings):
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+    def test_t015_fires_for_legacy_data_djust_view(self, tmp_path, settings):
+        """A template using data-djust-view must trigger exactly one T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "foo.html").write_text(
+            '<div data-djust-root data-djust-view="app.views.MyView"></div>'
+        )
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        # One finding per legacy attr occurrence (root + view).
+        assert len(t015) == 2
+        attrs = {e.msg for e in t015}
+        assert any("data-djust-view" in m for m in attrs)
+        assert any("data-djust-root" in m for m in attrs)
+
+    def test_t015_fires_for_legacy_data_djust_root_only(self, tmp_path, settings):
+        """data-djust-root on its own must trigger T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bar.html").write_text("<div data-djust-root>content</div>")
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 1
+        assert "data-djust-root" in t015[0].msg
+
+    def test_t015_migration_hint_names_the_rename(self, tmp_path, settings):
+        """The hint must explicitly name the dj-view / dj-root rename."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "foo.html").write_text('<div data-djust-view="app.views.V"></div>')
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 1
+        hint = t015[0].hint
+        assert "dj-view" in hint
+        assert "dj-root" in hint
+        assert "data-" in hint
+
+    def test_t015_reports_relpath_attr_and_line(self, tmp_path, settings):
+        """The message must include the file relpath, the offending attr, and the line number."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            '<html>\n<body>\n<div data-djust-view="app.views.V"></div>\n</body>\n</html>'
+        )
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 1
+        e = t015[0]
+        assert "page.html" in e.msg
+        assert "data-djust-view" in e.msg
+        # data-djust-view is on the third line.
+        assert ":3" in e.msg
+        assert e.line_number == 3
+
+    def test_t015_passes_for_modern_dj_view_dj_root(self, tmp_path, settings):
+        """Modern dj-view / dj-root must NOT trigger T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "modern.html").write_text('<div dj-root dj-view="app.views.MyView"></div>')
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 0
+
+    def test_t015_does_not_false_match_other_data_djust_attrs(self, tmp_path, settings):
+        """Other legitimate data-djust-* attributes (and longer suffixes of
+        root/view) must NOT trigger T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text(
+            "<div data-djust-embedded data-djust-activity "
+            'data-djust-view-model="x" data-djust-rooted></div>'
+        )
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 0, (
+            "T015 must scope to exactly data-djust-root / data-djust-view, "
+            "not other data-djust-* attributes or longer suffixes"
+        )
+
+    def test_t015_suppressed_via_suppress_checks(self, tmp_path, settings):
+        """Suppression via DJUST_CONFIG suppress_checks must silence T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "foo.html").write_text(
+            '<div data-djust-root data-djust-view="app.views.V"></div>'
+        )
+        self._set_templates(tpl_dir, settings)
+        settings.DJUST_CONFIG = {"suppress_checks": ["T015"]}
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 0
+
+
 # ---------------------------------------------------------------------------
 # V008 — primitive return type annotation suppresses warning (issue #393)
 # ---------------------------------------------------------------------------
