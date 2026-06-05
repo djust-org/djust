@@ -3512,36 +3512,22 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ---
 
-### Milestone: v1.0.3 — third post-1.0 patch (theming perf follow-up)
-
-*Goal:* The single 1.0.3 patch release. One perf follow-up that the v1.0.2 #1722
-fix surfaced: applying context processors in `_sync_state_to_rust` made
-`theme_context` run per WS event, and its four `_safe_render` tag bodies are
-uncached. Design-gated features (#1562, #1561, #1557) stay in v1.1.0. Drained
-2026-06-05 via `/pipeline-drain`.
-
-**Priority Matrix**
-
-| Priority | Issue | Summary | Notes |
-|---|---|---|---|
-| **P2** | request-scope memoize `theme_context` (#1727) | The #1722 fix applies context processors in `_sync_state_to_rust`, which runs on every WS event; `theme_context`'s four `_safe_render` tag bodies (`theme_head`/`theme_panel`/`theme_mode_toggle`/`theme_preset_selector`) are uncached. Add request-scoped memoization keyed on resolved theme state so the per-event re-run is cheap when theme state is unchanged but still reflects a switch when it changes. Must NOT first-sync-gate (breaks dynamic theme switching — change-detection only forwards changed vars). | Tech-debt / perf. From PR #1726 (#1722) Stage 11 finding 🟡 PERF-1. |
-
----
-
-### Milestone: v1.0.2 — second post-1.0 patch (6 issues: theming/hydration bugs + v1.0.1 review follow-ups)
+### Milestone: v1.0.2 — second post-1.0 patch (7 issues: theming/hydration bugs + v1.0.1 review follow-ups + perf follow-up)
 
 *Goal:* The single 1.0.2 patch release. Three production bugs surfaced
 integrating djust 1.0.1rc1 into a real app (SSR→hydration child replacement
 destroying client widgets; theming context-processor vars missing in includes;
 the documented `{% theme_panel %}` tag rejected by the Rust engine), plus the
 three tech-debt follow-ups the v1.0.1 drain explicitly deferred (#1713, #1716)
-or filed (#1719). Design-gated features (#1562, #1561, #1557) stay in v1.1.0.
-Drained 2026-06-05 via `/pipeline-drain`.
+or filed (#1719), plus the perf follow-up (#1727) the #1722 fix surfaced — all
+ship together as 1.0.2 (one version bump, one tag; not yet released). Design-gated
+features (#1562, #1561, #1557) stay in v1.1.0. Drained 2026-06-05 via
+`/pipeline-drain`.
 
-**STATUS: COMPLETE (6/6 merged 2026-06-05).**
-PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716), #1730 (#1713),
-#1731 (#1719). Follow-up filed: #1727 (request-scope memoize theme_context —
-the per-WS-event cost surfaced by #1726).
+**STATUS: 6/7 merged (2026-06-05); #1727 in progress.**
+Merged: PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
+#1730 (#1713), #1731 (#1719). In progress: #1727 (request-scope memoize
+theme_context — the per-WS-event cost surfaced by #1726).
 
 **Priority Matrix**
 
@@ -3553,6 +3539,7 @@ the per-WS-event cost surfaced by #1726).
 | **P2** | Generalize cross-IIFE guard to top-level modules (#1716) | `check-cross-iife-refs.mjs` only flags `decl.inGuard && !refInGuard`; a bare cross-IIFE ref between two top-level modules (22-51) is NOT flagged. 10/58 published fns are gap-exposed to the same ReferenceError-under-minify class. *(deferred follow-up from v1.0.1 #1706)* | Tech-debt; generalize the scope test, re-verify against the 68-FP set. |
 | **P2** | Promote demo `djust_check` dogfood to blocking gate (#1713) | #1708's dogfood step is `continue-on-error: true`; it has now shipped green on the runner. Flip to enforcing — extract a dedicated `demo-checks` job (decoupled from playwright flakiness) without `continue-on-error`. Add a unit test feeding the wrapper a synthetic error-severity payload so both gate arms are covered. *(deferred follow-up from v1.0.1 #1708)* | Tech-debt / CI. |
 | **P2** | Ratchet down 33 tolerated eslint warnings (#1719) | #1717 changed eslint policy to gate on errors, tolerate warnings — leaving ~33 project-wide warnings with no ceiling. Drive the count down (`catch (error)`→`catch (_error)` or `catch {}`; `no-var`→`const`/`let`; targeted `eslint-disable-next-line` for genuine FPs) then re-add `--max-warnings <N>` as a ratchet. *(filed from v1.0.1 #1718 review)* | Tech-debt / JS hygiene. |
+| **P2** | Request-scope memoize `theme_context` (#1727) | The #1722 fix applies context processors in `_sync_state_to_rust`, which runs on every WS event; `theme_context`'s four `_safe_render` tag bodies (`theme_head`/`theme_panel`/`theme_mode_toggle`/`theme_preset_selector`) are uncached. Add request-scoped memoization keyed on resolved theme state so the per-event re-run is cheap when theme state is unchanged but still reflects a switch when it changes. Must NOT first-sync-gate (breaks dynamic theme switching). | Tech-debt / perf. *(filed from v1.0.2 #1726 review, 🟡 PERF-1)* |
 
 ---
 
