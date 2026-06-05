@@ -624,3 +624,132 @@ class TestConsumerDbNotify:
         kwargs = consumer._send_update.await_args.kwargs
         assert kwargs["source"] == "broadcast"
         assert kwargs["broadcast"] is True
+
+
+# ---------------------------------------------------------------------------
+# _build_dsn / _dsn_from_url — DJUST_NOTIFY_DATABASE_URL override (issue #1687)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDsnOverride:
+    """The optional DJUST_NOTIFY_DATABASE_URL override lets operators isolate
+    the long-lived LISTEN connection from DATABASES['default'] (djustlive #380:
+    pgbouncer session-pool saturation). Override is preferred BEFORE the
+    DATABASES['default'] fallback; unset → byte-identical legacy behavior.
+    """
+
+    _PG_DEFAULT = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "appdb",
+            "USER": "appuser",
+            "PASSWORD": "apppass",
+            "HOST": "primary.internal",
+            "PORT": "5432",
+        }
+    }
+
+    def _clear_pg_env(self, monkeypatch):
+        for k in ("PGHOST", "PGPORT", "PGDBNAME", "PGUSER", "PGPASSWORD"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.delenv("DJUST_NOTIFY_DATABASE_URL", raising=False)
+
+    def test_setting_override_preferred_over_databases_default(self, monkeypatch):
+        from django.test import override_settings
+
+        from djust.db.notifications import _build_dsn
+
+        self._clear_pg_env(monkeypatch)
+        url = "postgres://listenuser:listenpass@listener.internal:6543/listendb"
+        with override_settings(DATABASES=self._PG_DEFAULT, DJUST_NOTIFY_DATABASE_URL=url):
+            dsn = _build_dsn()
+        # Comes from the override, NOT DATABASES['default'].
+        assert "listener.internal" in dsn
+        assert "listendb" in dsn
+        assert "primary.internal" not in dsn
+        assert "appdb" not in dsn
+
+    def test_env_var_override_parsed_correctly(self, monkeypatch):
+        from django.test import override_settings
+
+        from djust.db.notifications import _build_dsn
+
+        self._clear_pg_env(monkeypatch)
+        monkeypatch.setenv(
+            "DJUST_NOTIFY_DATABASE_URL",
+            "postgresql://envuser:envpass@envhost:7654/envdb",
+        )
+        with override_settings(DATABASES=self._PG_DEFAULT):
+            dsn = _build_dsn()
+        parts = dict(p.split("=", 1) for p in dsn.split(" "))
+        assert parts["host"] == "envhost"
+        assert parts["port"] == "7654"
+        assert parts["dbname"] == "envdb"
+        assert parts["user"] == "envuser"
+        assert parts["password"] == "envpass"
+
+    def test_unset_override_byte_identical_fallback(self, monkeypatch):
+        from django.test import override_settings
+
+        from djust.db.notifications import _build_dsn
+
+        self._clear_pg_env(monkeypatch)
+        # No DJUST_NOTIFY_DATABASE_URL anywhere → legacy DATABASES path.
+        with override_settings(DATABASES=self._PG_DEFAULT):
+            dsn = _build_dsn()
+        # Exact legacy string, in the documented key order.
+        assert dsn == ("host=primary.internal port=5432 dbname=appdb user=appuser password=apppass")
+
+    def test_non_postgres_override_scheme_raises(self, monkeypatch):
+        from django.test import override_settings
+
+        from djust.db.notifications import _build_dsn
+
+        self._clear_pg_env(monkeypatch)
+        with override_settings(
+            DATABASES=self._PG_DEFAULT,
+            DJUST_NOTIFY_DATABASE_URL="mysql://u:p@h:3306/db",
+        ):
+            with pytest.raises(DatabaseNotificationNotSupported):
+                _build_dsn()
+
+    def test_setting_takes_precedence_over_env_var(self, monkeypatch):
+        from django.test import override_settings
+
+        from djust.db.notifications import _build_dsn
+
+        self._clear_pg_env(monkeypatch)
+        monkeypatch.setenv(
+            "DJUST_NOTIFY_DATABASE_URL",
+            "postgres://envuser:envpass@envhost:1111/envdb",
+        )
+        with override_settings(
+            DATABASES=self._PG_DEFAULT,
+            DJUST_NOTIFY_DATABASE_URL="postgres://setuser:setpass@sethost:2222/setdb",
+        ):
+            dsn = _build_dsn()
+        assert "sethost" in dsn
+        assert "envhost" not in dsn
+
+    def test_url_encoded_credentials_are_decoded(self, monkeypatch):
+        from django.test import override_settings
+
+        from djust.db.notifications import _build_dsn
+
+        self._clear_pg_env(monkeypatch)
+        # Password "p@ss:word" percent-encoded in the URL userinfo.
+        url = "postgres://us%40er:p%40ss%3Aword@h:5432/db"
+        with override_settings(DATABASES=self._PG_DEFAULT, DJUST_NOTIFY_DATABASE_URL=url):
+            dsn = _build_dsn()
+        parts = dict(p.split("=", 1) for p in dsn.split(" "))
+        assert parts["user"] == "us@er"
+        assert parts["password"] == "p@ss:word"
+
+    def test_dsn_from_url_postgresql_driver_scheme_accepted(self, monkeypatch):
+        from djust.db.notifications import _dsn_from_url
+
+        self._clear_pg_env(monkeypatch)
+        # Driver-qualified scheme (e.g. SQLAlchemy-style) still accepted.
+        dsn = _dsn_from_url("postgresql+psycopg://u:p@h:5432/db")
+        assert "host=h" in dsn
+        assert "dbname=db" in dsn

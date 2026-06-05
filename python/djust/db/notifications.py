@@ -71,12 +71,72 @@ def _import_psycopg():
     return psycopg, _sql
 
 
+def _dsn_from_url(url: str) -> str:
+    """Parse a ``DATABASE_URL``-style string into a libpq DSN string.
+
+    Accepts the standard ``postgres://user:pass@host:port/dbname`` form
+    (and the ``postgresql://`` alias, plus driver-qualified schemes like
+    ``postgresql+psycopg://``). Returns the same space-separated
+    ``key=value`` DSN shape that :func:`_build_dsn` produces from
+    ``DATABASES['default']`` so the override path and the fallback path
+    are byte-compatible.
+
+    The engine check still applies: a non-postgresql URL scheme raises
+    :class:`~djust.db.exceptions.DatabaseNotificationNotSupported`.
+
+    Credential safety: the URL may embed a password. This function never
+    logs the URL or the resulting DSN — the value flows only into
+    ``psycopg.AsyncConnection.connect``.
+    """
+    from urllib.parse import unquote, urlparse
+
+    parsed = urlparse(url)
+    # Normalize driver-qualified schemes (``postgresql+psycopg`` etc.) to
+    # the bare backend name before the engine check.
+    scheme = parsed.scheme.split("+", 1)[0].lower()
+    if scheme not in ("postgres", "postgresql"):
+        raise DatabaseNotificationNotSupported(
+            "djust.db notifications require a postgresql backend "
+            f"(got DJUST_NOTIFY_DATABASE_URL scheme {scheme!r})."
+        )
+    # ``path`` is ``/dbname`` — strip the leading slash. userinfo and host
+    # are percent-decoded so passwords containing ``@`` / ``:`` round-trip.
+    parts = []
+    for dsn_key, val in (
+        ("host", parsed.hostname),
+        ("port", parsed.port),
+        ("dbname", parsed.path.lstrip("/")),
+        ("user", unquote(parsed.username) if parsed.username else None),
+        ("password", unquote(parsed.password) if parsed.password else None),
+    ):
+        if val:
+            parts.append(f"{dsn_key}={val}")
+    return " ".join(parts)
+
+
 def _build_dsn() -> str:
-    """Derive a psycopg DSN from Django's default DB settings.
+    """Derive a psycopg DSN for the dedicated LISTEN connection.
 
     We avoid inheriting Django's connection (which may be inside a
     connection pool) by creating a dedicated ``AsyncConnection``.
+
+    Source precedence:
+
+    1. ``settings.DJUST_NOTIFY_DATABASE_URL`` (or the environment variable
+       of the same name) — an explicit ``DATABASE_URL``-style override.
+       This lets operators point the long-lived LISTEN connection at a
+       direct (non-pgbouncer / session-pool) endpoint so it cannot
+       saturate the request-path connection pool (issue #1687,
+       djustlive #380). The engine check still applies to the override.
+    2. Otherwise, fall back to ``settings.DATABASES['default']`` — the
+       original behavior. When the override is unset this returns a DSN
+       byte-identical to prior releases.
     """
+    override = getattr(settings, "DJUST_NOTIFY_DATABASE_URL", "") or os.environ.get(
+        "DJUST_NOTIFY_DATABASE_URL", ""
+    )
+    if override:
+        return _dsn_from_url(override)
     db = settings.DATABASES.get("default", {})
     engine = db.get("ENGINE", "")
     if "postgresql" not in engine:
