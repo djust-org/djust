@@ -3495,6 +3495,26 @@ Follow-ups filed: #1692, #1696, #1699. New P0 surfaced during drain (NOT in scop
 
 ---
 
+### Milestone: v1.0.2 — v1.0.1 retro follow-up drain (6 issues)
+
+*Goal:* Drain the v1.0.1 retro's durable-cure issues + the three deferred
+review follow-ups. Drained 2026-06-05 via `/pipeline-drain` (scope: 6
+drain-sized; design-gated #1562/#1561/#1557 stay in v1.1.0). Process order puts
+#1699 before #1707 (fix the guide before adding the checker that flags it).
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (#1692) | `get_value_safe` doesn't honor the name-based safe-filter whitelist (e.g. `x\|safe`) the Variable arm uses. Closes the #1672/#1660 lineage. | Bugfix; Rust template engine. |
+| **P2** | `multi-tenant.md` cites non-existent `self.tenant_queryset()` (#1699) | Pre-existing doc inaccuracy (real: `get_tenant_queryset`); also `DJUST_TENANT_RESOLVER`/`mixins` plural. | Docs fix. |
+| **P2** | `DJUST_NOTIFY_DATABASE_URL` drops query params (#1696) | Pass through known-safe libpq query items (sslmode, unix-socket host) for the direct-to-Postgres LISTEN use case. | Enhancement. |
+| **P2** | CI dogfood `djust_check` against the demo project (#1708) | Run `djust_check`/`djust_audit` over `examples/demo_project` in CI; would have caught #1683's dead buttons + the new T015. | Tech-debt / CI. |
+| **P2** | Extend `check-doc-snippets.py` to `docs/website/guides/*.md` (#1707) | Symbol/import-resolvability guard on guide prose; gate-off should fail on #1699's bug pre-fix. | Tech-debt / CI. |
+| **P2** | Whole-class guard against the #1676 cross-IIFE class (#1706) | Static lint for bare cross-IIFE refs and/or a real-browser minified-bundle init smoke test; the class recurred 3× (#1676→#1688→#1689). | Tech-debt / build. |
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
