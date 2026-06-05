@@ -41,6 +41,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T012 | Templates | Warning | Template with dj-* directives but no dj-view |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
+| T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -363,6 +364,25 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: Old `data-dj-id` attribute syntax, replaced by `dj-id`
 - **Suppression**: Fix the templates; or `SILENCED_SYSTEM_CHECKS = ["djust.T014"]`
 - **False positives**: None; the old attribute name is deprecated
+
+### T015 — Legacy data-djust-root / data-djust-view root attributes
+- **Severity**: Warning
+- **Method**: Regex (template scan)
+- **What it detects**: The pre-1.0 root attributes `data-djust-root` and
+  `data-djust-view`, renamed in djust 1.0 to `dj-root` / `dj-view` (the
+  `data-` prefix is no longer required). The generic T012 ("dj-* directives
+  but no dj-view") doesn't recognise that a view IS declared when it uses the
+  deprecated spelling, so the path from symptom (the LiveView never connects
+  over WebSocket) to fix is non-obvious — T015 names the rename explicitly.
+- **Suppression**: Fix the templates (`data-djust-view` → `dj-view`,
+  `data-djust-root` → `dj-root`); or
+  `DJUST_CONFIG = {"suppress_checks": ["T015"]}`
+- **False positives**: None; the match is scoped to exactly `data-djust-root`
+  / `data-djust-view`, so other `data-djust-*` attributes
+  (`data-djust-embedded`, `data-djust-activity`, `data-djust-view-model`, …)
+  are never flagged.
+- **Scope**: Static check only — djust 1.0's runtime does not accept the
+  legacy attributes; the template must be migrated to the `dj-` spelling.
 
 ---
 
