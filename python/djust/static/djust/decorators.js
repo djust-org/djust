@@ -470,7 +470,7 @@ export function optimisticSelectUpdate(element, params) {
 /**
  * Optimistically update button state (disable + loading text)
  */
-export function optimisticButtonUpdate(element, params) {
+export function optimisticButtonUpdate(element, _params) {
     element.disabled = true;
     if (element.hasAttribute('data-loading-text')) {
         element.textContent = element.getAttribute('data-loading-text');
@@ -544,6 +544,9 @@ export function generateCacheKey(eventName, eventData, keyParams) {
     }
 
     const paramValues = keyParams.map(param => {
+        // Safe: `param` is a developer-declared cache-key name from the
+        // @cache(key=...) decorator config (not user input); this is a read.
+        // eslint-disable-next-line security/detect-object-injection
         const value = eventData[param];
         if (value === undefined || value === null) {
             return '';
@@ -818,6 +821,8 @@ export class LoadingManager {
 
         // Parse dj-loading.* attributes
         for (let i = 0; i < attributes.length; i++) {
+            // Safe: `i` is a validated numeric loop index over attributes.length.
+            // eslint-disable-next-line security/detect-object-injection
             const attr = attributes[i];
             const match = attr.name.match(/^dj-loading\.(.+)$/);
             if (match) {
@@ -987,6 +992,10 @@ export function collectFormData(container) {
     editables.forEach(editable => {
         const name = editable.getAttribute('name') || editable.id;
         if (name) {
+            // Safe: `data` is a fresh local {} (same shape as the input/select
+            // writes above), `name` is a developer-authored markup attribute,
+            // and the collected data is re-validated server-side.
+            // eslint-disable-next-line security/detect-object-injection
             data[name] = editable.innerHTML;
         }
     });

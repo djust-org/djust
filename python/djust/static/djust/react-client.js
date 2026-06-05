@@ -20,6 +20,9 @@ class ReactHydrationManager {
     register(name, component) {
         if (typeof component === 'string') {
             // Module path - will be loaded dynamically
+            // Safe: `name` is a developer-supplied component name passed to the
+            // register() API (not user input); writes to an instance-owned object.
+            // eslint-disable-next-line security/detect-object-injection
             this.componentModules[name] = component;
         } else {
             // Direct component reference
@@ -35,6 +38,9 @@ class ReactHydrationManager {
     async loadComponent(modulePath, exportName = 'default') {
         try {
             const module = await import(modulePath);
+            // Safe: `exportName` is a developer-supplied named export (default
+            // 'default'); read from a freshly imported ES module namespace.
+            // eslint-disable-next-line security/detect-object-injection
             return module[exportName] || module.default;
         } catch (error) {
             console.error(`Failed to load component from ${modulePath}:`, error);
@@ -84,8 +90,13 @@ class ReactHydrationManager {
             }
         }
 
+        // Safe: `componentName` is a developer-authored data-react-component
+        // markup attribute used to look up a registered module path (reads
+        // from an instance-owned object).
+        // eslint-disable-next-line security/detect-object-injection
         if (!Component && this.componentModules[componentName]) {
             Component = await this.loadComponent(
+                // eslint-disable-next-line security/detect-object-injection
                 this.componentModules[componentName],
                 exportName
             );

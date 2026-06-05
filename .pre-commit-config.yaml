@@ -106,12 +106,13 @@ repos:
 
       - id: eslint
         name: eslint
-        # Gate on errors (severity 2), tolerate warnings (severity 1) — matches
-        # the Pre-Release Security Audit eslint policy (#1717). eslint exits
-        # non-zero only on errors by default, so dropping --max-warnings keeps
-        # real XSS/no-script-url regressions blocking while not failing on the
-        # pre-existing security/detect-object-injection + no-var warnings.
-        entry: npx eslint --no-warn-ignored
+        # Gate on errors (severity 2) AND warnings (severity 1). After #1719
+        # drove the project-wide warning count to 0 (each remaining
+        # security/detect-object-injection site carries a justified
+        # eslint-disable comment), --max-warnings 0 re-introduces a ceiling
+        # so the count can only go down — any new warning blocks the commit,
+        # alongside the real XSS/no-script-url error gates.
+        entry: npx eslint --no-warn-ignored --max-warnings 0
         language: system
         files: ^python/djust/static/djust/[^/]*\.js$
         pass_filenames: true
