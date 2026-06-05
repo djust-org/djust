@@ -25,14 +25,14 @@ def select_item(self, item: str = "", **kwargs):
     self.dropdown_open = False'''
 
     HTML_CODE = '''<div class="dropdown">
-    <button @click="toggle_dropdown">
+    <button dj-click="toggle_dropdown">
         {{ selected_item }}
         {% if dropdown_open %}▲{% else %}▼{% endif %}
     </button>
     {% if dropdown_open %}
     <div class="dropdown-menu">
         {% for item in dropdown_items %}
-        <div @click="select_item" data-item="{{ item }}">
+        <div dj-click="select_item" data-item="{{ item }}">
             {{ item }}
         </div>
         {% endfor %}

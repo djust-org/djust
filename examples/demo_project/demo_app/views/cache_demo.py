@@ -53,7 +53,7 @@ class CacheDemoView(LiveView):
                             <input
                                 type="text"
                                 class="form-control form-control-lg"
-                                @input="search"
+                                dj-input="search"
                                 placeholder="Try: laptop, mouse, keyboard..."
                                 value="{{ query }}"
                                 autocomplete="off"

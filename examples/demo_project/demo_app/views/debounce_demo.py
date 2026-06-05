@@ -32,7 +32,7 @@ class DebounceSearchView(LiveView):
                             <input
                                 type="text"
                                 class="form-control form-control-lg"
-                                @input="search"
+                                dj-input="search"
                                 placeholder="Type something..."
                                 value="{{ query }}"
                             >

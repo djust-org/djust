@@ -207,7 +207,7 @@ def calculate_monthly_per_diem(self):
     self.form.data['total_monthly_meals_per_diem'] = days * rate
 
 # Template triggers calculation
-<input type="number" @input="calculate_monthly_per_diem">
+<input type="number" dj-input="calculate_monthly_per_diem">
 ```
 
 **Key Difference:**
@@ -344,7 +344,7 @@ class StatusChangeFormView(FormMixin, LiveView):
         self.sections_expanded[section_id] = not self.sections_expanded[section_id]
 
 # Template
-<div class="section-header" @click="toggle_section('employee_info')">
+<div class="section-header" dj-click="toggle_section('employee_info')">
     <i class="fas fa-chevron-{{ sections_expanded.employee_info|yesno:'up,down' }}"></i>
 </div>
 ```

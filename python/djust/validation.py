@@ -176,7 +176,7 @@ def validate_handler_params(
     type hints (enabled by default). Template data-* attributes always
     pass strings, so coercion converts them to int, float, bool, etc.
 
-    Positional arguments from inline handler syntax (e.g., @click="handler('value')")
+    Positional arguments from inline handler syntax (e.g., dj-click="handler('value')")
     are mapped to named parameters based on their position in the handler signature.
 
     Args:
@@ -185,7 +185,7 @@ def validate_handler_params(
         event_name: Name of the event (for error messages)
         coerce: Whether to coerce string values to expected types (default: True)
         positional_args: Optional list of positional arguments from inline handler
-            syntax (e.g., ['value'] from @click="handler('value')")
+            syntax (e.g., ['value'] from dj-click="handler('value')")
 
     Returns:
         Dict with validation result:

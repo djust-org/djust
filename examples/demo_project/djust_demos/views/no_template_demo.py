@@ -52,7 +52,7 @@ class NoTemplateDemo(LiveView):
         {% if show_success %}
         <div class="alert alert-success alert-dismissible fade show" role="alert">
             Action completed successfully!
-            <button type="button" class="btn-close" @click="dismiss_alert"></button>
+            <button type="button" class="btn-close" dj-click="dismiss_alert"></button>
         </div>
         {% endif %}
 
@@ -71,9 +71,9 @@ class NoTemplateDemo(LiveView):
                                 <span class="badge bg-{% if counter > 0 %}primary{% else %}secondary{% endif %}">{{ counter }}</span>
                             </h2>
                             <div class="d-flex gap-2 justify-content-center flex-wrap">
-                                <button class="btn btn-danger btn-lg" @click="decrement">-</button>
-                                <button class="btn btn-secondary btn-lg" @click="reset_counter">Reset</button>
-                                <button class="btn btn-success btn-lg" @click="increment">+</button>
+                                <button class="btn btn-danger btn-lg" dj-click="decrement">-</button>
+                                <button class="btn btn-secondary btn-lg" dj-click="reset_counter">Reset</button>
+                                <button class="btn btn-success btn-lg" dj-click="increment">+</button>
                             </div>
                         </div>
                     </div>
@@ -88,7 +88,7 @@ class NoTemplateDemo(LiveView):
                                 {% for item in items %}
                                 <div class="d-flex justify-content-between align-items-center p-2 border-bottom">
                                     <span>{{ item }}</span>
-                                    <button class="btn btn-sm btn-danger" @click="remove_item" data-index="{{ forloop.counter0 }}">×</button>
+                                    <button class="btn btn-sm btn-danger" dj-click="remove_item" data-index="{{ forloop.counter0 }}">×</button>
                                 </div>
                                 {% endfor %}
                             {% else %}
@@ -97,7 +97,7 @@ class NoTemplateDemo(LiveView):
                         </div>
                         <div class="input-group">
                             <input type="text" class="form-control" placeholder="Add item..." id="new-item">
-                            <button class="btn btn-primary" @click="add_item">Add</button>
+                            <button class="btn btn-primary" dj-click="add_item">Add</button>
                         </div>
                     </div>
                 </div>
@@ -144,8 +144,8 @@ class NoTemplateDemo(LiveView):
                             </div>
                         </div>
                         <div class="d-flex gap-2">
-                            <button class="btn btn-danger btn-sm" @click="decrease_progress">- 10%</button>
-                            <button class="btn btn-success btn-sm" @click="increase_progress">+ 10%</button>
+                            <button class="btn btn-danger btn-sm" dj-click="decrease_progress">- 10%</button>
+                            <button class="btn btn-success btn-sm" dj-click="increase_progress">+ 10%</button>
                         </div>
                     </div>
                 </div>
@@ -296,7 +296,7 @@ class NoTemplateDemo(LiveView):
         &lt;div&gt;
             {{ navbar.render }}
             &lt;h1&gt;Counter: {{ counter }}&lt;/h1&gt;
-            &lt;button @click="increment"&gt;+&lt;/button&gt;
+            &lt;button dj-click="increment"&gt;+&lt;/button&gt;
         &lt;/div&gt;
     '''
 

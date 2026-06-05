@@ -2714,7 +2714,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         cache_request_id = params.get("_cacheRequestId")
 
         # Extract positional arguments from inline handler syntax
-        # e.g., @click="set_period('month')" sends params._args = ['month']
+        # e.g., dj-click="set_period('month')" sends params._args = ['month']
         positional_args = params.pop("_args", [])
 
         logger.debug("[WebSocket] handle_event called: %s with params: %s", event_name, params)

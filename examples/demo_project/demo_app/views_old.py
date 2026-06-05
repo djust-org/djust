@@ -139,11 +139,11 @@ class NavbarBadgeDemo(LiveView):
             </p>
 
             <div class="flex gap-3 justify-center items-center mb-4">
-                <button @click="increment_notifications"
+                <button dj-click="increment_notifications"
                         class="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition">
                     🔔 Add Notification
                 </button>
-                <button @click="reset_notifications"
+                <button dj-click="reset_notifications"
                         class="px-6 py-3 bg-gray-600 text-white rounded-lg font-semibold hover:bg-gray-700 transition">
                     🔄 Reset
                 </button>
@@ -1153,15 +1153,15 @@ class RegistrationFormView(FormMixin, LiveView):
                     <div class="card-body">
                         <div class="alert alert-success alert-dismissible fade show{% if not success_message %} d-none{% endif %}" role="alert">
                             {{ success_message }}
-                            <button type="button" class="btn-close" @click="clear_message"></button>
+                            <button type="button" class="btn-close" dj-click="clear_message"></button>
                         </div>
 
                         <div class="alert alert-danger alert-dismissible fade show{% if not error_message %} d-none{% endif %}" role="alert">
                             {{ error_message }}
-                            <button type="button" class="btn-close" @click="clear_message"></button>
+                            <button type="button" class="btn-close" dj-click="clear_message"></button>
                         </div>
 
-                        <form @submit="submit_form" class="needs-validation" novalidate>
+                        <form dj-submit="submit_form" class="needs-validation" novalidate>
                             <!-- Username -->
                             <div class="mb-3">
                                 <label for="username" class="form-label">Username</label>
@@ -1171,7 +1171,7 @@ class RegistrationFormView(FormMixin, LiveView):
                                     id="username"
                                     class="form-control {% if field_errors.username %}is-invalid{% endif %}"
                                     value="{{ form_data.username }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="username"
                                     required
                                 />
@@ -1194,7 +1194,7 @@ class RegistrationFormView(FormMixin, LiveView):
                                     id="email"
                                     class="form-control {% if field_errors.email %}is-invalid{% endif %}"
                                     value="{{ form_data.email }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="email"
                                     required
                                 />
@@ -1217,7 +1217,7 @@ class RegistrationFormView(FormMixin, LiveView):
                                     id="password"
                                     class="form-control {% if field_errors.password %}is-invalid{% endif %}"
                                     value="{{ form_data.password }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="password"
                                     required
                                 />
@@ -1240,7 +1240,7 @@ class RegistrationFormView(FormMixin, LiveView):
                                     id="password_confirm"
                                     class="form-control {% if field_errors.password_confirm %}is-invalid{% endif %}"
                                     value="{{ form_data.password_confirm }}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="password_confirm"
                                     required
                                 />
@@ -1261,7 +1261,7 @@ class RegistrationFormView(FormMixin, LiveView):
                                     id="agree_terms"
                                     class="form-check-input {% if field_errors.agree_terms %}is-invalid{% endif %}"
                                     {% if form_data.agree_terms %}checked{% endif %}
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="agree_terms"
                                     required
                                 />
@@ -1291,7 +1291,7 @@ class RegistrationFormView(FormMixin, LiveView):
                                 <button type="submit" class="btn btn-primary btn-lg">
                                     Create Account
                                 </button>
-                                <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                                <button type="button" class="btn btn-outline-secondary" dj-click="reset_form">
                                     Reset Form
                                 </button>
                             </div>
@@ -1359,7 +1359,7 @@ class ContactFormView(FormMixin, LiveView):
                         {% if success_message %}
                         <div class="alert alert-success alert-dismissible fade show" role="alert">
                             {{ success_message }}
-                            <button type="button" class="btn-close" @click="clear_message"></button>
+                            <button type="button" class="btn-close" dj-click="clear_message"></button>
                         </div>
                         {% endif %}
 
@@ -1369,7 +1369,7 @@ class ContactFormView(FormMixin, LiveView):
                         </div>
                         {% endif %}
 
-                        <form @submit="submit_form" class="needs-validation" novalidate>
+                        <form dj-submit="submit_form" class="needs-validation" novalidate>
                             <div class="row">
                                 <!-- Name -->
                                 <div class="col-md-6 mb-3">
@@ -1380,7 +1380,7 @@ class ContactFormView(FormMixin, LiveView):
                                         id="name"
                                         class="form-control {% if field_errors.name %}is-invalid{% endif %}"
                                         value="{{ form_data.name }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="name"
                                         required
                                     />
@@ -1400,7 +1400,7 @@ class ContactFormView(FormMixin, LiveView):
                                         id="email"
                                         class="form-control {% if field_errors.email %}is-invalid{% endif %}"
                                         value="{{ form_data.email }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="email"
                                         required
                                     />
@@ -1419,7 +1419,7 @@ class ContactFormView(FormMixin, LiveView):
                                     name="subject"
                                     id="subject"
                                     class="form-control {% if field_errors.subject %}is-invalid{% endif %}"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="subject"
                                     required
                                 >
@@ -1443,25 +1443,25 @@ class ContactFormView(FormMixin, LiveView):
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="priority" id="priority_low" value="low"
                                            {% if form_data.priority == "low" %}checked{% endif %}
-                                           @change="validate_field" data-field="priority">
+                                           dj-change="validate_field" data-field="priority">
                                     <label class="form-check-label" for="priority_low">Low</label>
                                 </div>
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="priority" id="priority_medium" value="medium"
                                            {% if form_data.priority == "medium" or not form_data.priority %}checked{% endif %}
-                                           @change="validate_field" data-field="priority">
+                                           dj-change="validate_field" data-field="priority">
                                     <label class="form-check-label" for="priority_medium">Medium</label>
                                 </div>
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="priority" id="priority_high" value="high"
                                            {% if form_data.priority == "high" %}checked{% endif %}
-                                           @change="validate_field" data-field="priority">
+                                           dj-change="validate_field" data-field="priority">
                                     <label class="form-check-label" for="priority_high">High</label>
                                 </div>
                                 <div class="form-check">
                                     <input class="form-check-input" type="radio" name="priority" id="priority_urgent" value="urgent"
                                            {% if form_data.priority == "urgent" %}checked{% endif %}
-                                           @change="validate_field" data-field="priority">
+                                           dj-change="validate_field" data-field="priority">
                                     <label class="form-check-label" for="priority_urgent">Urgent</label>
                                 </div>
                             </div>
@@ -1474,7 +1474,7 @@ class ContactFormView(FormMixin, LiveView):
                                     id="message"
                                     class="form-control {% if field_errors.message %}is-invalid{% endif %}"
                                     rows="5"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="message"
                                     required
                                 >{{ form_data.message }}</textarea>
@@ -1494,7 +1494,7 @@ class ContactFormView(FormMixin, LiveView):
                                     id="subscribe_newsletter"
                                     class="form-check-input"
                                     {% if form_data.subscribe_newsletter %}checked{% endif %}
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="subscribe_newsletter"
                                 />
                                 <label class="form-check-label" for="subscribe_newsletter">
@@ -1507,7 +1507,7 @@ class ContactFormView(FormMixin, LiveView):
                                 <button type="submit" class="btn btn-success btn-lg">
                                     Send Message
                                 </button>
-                                <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                                <button type="button" class="btn btn-outline-secondary" dj-click="reset_form">
                                     Reset Form
                                 </button>
                             </div>
@@ -1577,11 +1577,11 @@ class ProfileFormView(FormMixin, LiveView):
                         {% if success_message %}
                         <div class="alert alert-success alert-dismissible fade show" role="alert">
                             {{ success_message }}
-                            <button type="button" class="btn-close" @click="clear_message"></button>
+                            <button type="button" class="btn-close" dj-click="clear_message"></button>
                         </div>
                         {% endif %}
 
-                        <form @submit="submit_form" class="needs-validation" novalidate>
+                        <form dj-submit="submit_form" class="needs-validation" novalidate>
                             <div class="row">
                                 <!-- First Name -->
                                 <div class="col-md-6 mb-3">
@@ -1592,7 +1592,7 @@ class ProfileFormView(FormMixin, LiveView):
                                         id="first_name"
                                         class="form-control {% if field_errors.first_name %}is-invalid{% endif %}"
                                         value="{{ form_data.first_name }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="first_name"
                                         required
                                     />
@@ -1612,7 +1612,7 @@ class ProfileFormView(FormMixin, LiveView):
                                         id="last_name"
                                         class="form-control {% if field_errors.last_name %}is-invalid{% endif %}"
                                         value="{{ form_data.last_name }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="last_name"
                                         required
                                     />
@@ -1632,7 +1632,7 @@ class ProfileFormView(FormMixin, LiveView):
                                     id="bio"
                                     class="form-control {% if field_errors.bio %}is-invalid{% endif %}"
                                     rows="4"
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="bio"
                                 >{{ form_data.bio }}</textarea>
                                 <small class="form-text text-muted">Tell us about yourself (max 500 characters)</small>
@@ -1653,7 +1653,7 @@ class ProfileFormView(FormMixin, LiveView):
                                         id="birth_date"
                                         class="form-control {% if field_errors.birth_date %}is-invalid{% endif %}"
                                         value="{{ form_data.birth_date }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="birth_date"
                                     />
                                     {% if field_errors.birth_date %}
@@ -1670,7 +1670,7 @@ class ProfileFormView(FormMixin, LiveView):
                                         name="country"
                                         id="country"
                                         class="form-control {% if field_errors.country %}is-invalid{% endif %}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="country"
                                     >
                                         <option value="">Select country...</option>
@@ -1701,7 +1701,7 @@ class ProfileFormView(FormMixin, LiveView):
                                         id="phone"
                                         class="form-control {% if field_errors.phone %}is-invalid{% endif %}"
                                         value="{{ form_data.phone }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="phone"
                                         placeholder="+1 (555) 123-4567"
                                     />
@@ -1722,7 +1722,7 @@ class ProfileFormView(FormMixin, LiveView):
                                         id="website"
                                         class="form-control {% if field_errors.website %}is-invalid{% endif %}"
                                         value="{{ form_data.website }}"
-                                        @change="validate_field"
+                                        dj-change="validate_field"
                                         data-field="website"
                                         placeholder="https://yourwebsite.com"
                                     />
@@ -1742,7 +1742,7 @@ class ProfileFormView(FormMixin, LiveView):
                                     id="receive_updates"
                                     class="form-check-input"
                                     {% if form_data.receive_updates %}checked{% endif %}
-                                    @change="validate_field"
+                                    dj-change="validate_field"
                                     data-field="receive_updates"
                                 />
                                 <label class="form-check-label" for="receive_updates">
@@ -1755,7 +1755,7 @@ class ProfileFormView(FormMixin, LiveView):
                                 <button type="submit" class="btn btn-info btn-lg text-white">
                                     Save Profile
                                 </button>
-                                <button type="button" class="btn btn-outline-secondary" @click="reset_form">
+                                <button type="button" class="btn btn-outline-secondary" dj-click="reset_form">
                                     Reset Form
                                 </button>
                             </div>
