@@ -74,14 +74,11 @@ The remainder of this guide covers `djust.tenants`.
 
 ```python
 # settings.py
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SubdomainResolver'
-
-DJUST_TENANT_CONFIG = {
-    'default_tenant': 'public',
-    'subdomain_resolver': {
-        'domain': 'myapp.com',
-        'exclude_subdomains': ['www', 'api', 'admin']
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'subdomain',  # or 'path', 'header', 'session', 'custom'
+    'TENANT_MAIN_DOMAIN': 'myapp.com',
+    'TENANT_SUBDOMAIN_EXCLUDE': ['www', 'api', 'admin'],
+    'TENANT_DEFAULT': 'public',
 }
 ```
 
@@ -89,15 +86,15 @@ DJUST_TENANT_CONFIG = {
 
 ```python
 from djust import LiveView
-from djust.tenants.mixins import TenantMixin, TenantScopedMixin
+from djust.tenants import TenantMixin, TenantScopedMixin
 
 class DashboardView(TenantScopedMixin, LiveView):
     template_name = 'dashboard.html'
 
     def mount(self, request):
         # self.tenant is automatically available
-        self.users_count = self.tenant_queryset(User).count()
-        self.projects = self.tenant_queryset(Project).order_by('-created_at')[:5]
+        self.users_count = self.get_tenant_queryset(User).count()
+        self.projects = self.get_tenant_queryset(Project).order_by('-created_at')[:5]
 ```
 
 ### 3. Tenant-Scoped Models
@@ -120,13 +117,11 @@ class Project(TenantScopedModel):
 
 ```python
 # acme.myapp.com -> tenant_id: "acme"
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SubdomainResolver'
-DJUST_TENANT_CONFIG = {
-    'subdomain_resolver': {
-        'domain': 'myapp.com',
-        'exclude_subdomains': ['www', 'api'],
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'subdomain',
+    'TENANT_MAIN_DOMAIN': 'myapp.com',
+    'TENANT_SUBDOMAIN_EXCLUDE': ['www', 'api'],
+    'TENANT_DEFAULT': 'public',
 }
 ```
 
@@ -134,12 +129,11 @@ DJUST_TENANT_CONFIG = {
 
 ```python
 # myapp.com/acme/dashboard -> tenant_id: "acme"
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.PathResolver'
-DJUST_TENANT_CONFIG = {
-    'path_resolver': {
-        'position': 0,  # First path segment
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'path',
+    'TENANT_PATH_POSITION': 1,  # 1-based: first path segment after /
+    'TENANT_PATH_EXCLUDE': ['admin', 'api', 'static'],
+    'TENANT_DEFAULT': 'public',
 }
 ```
 
@@ -147,27 +141,25 @@ DJUST_TENANT_CONFIG = {
 
 ```python
 # X-Tenant-ID: acme -> tenant_id: "acme"
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.HeaderResolver'
-DJUST_TENANT_CONFIG = {
-    'header_resolver': {
-        'header_name': 'X-Tenant-ID',
-        'default_tenant': 'public'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'header',
+    'TENANT_HEADER': 'X-Tenant-ID',
+    'TENANT_DEFAULT': 'public',
 }
 ```
 
 ### Session / JWT
 
 ```python
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.SessionResolver'
-DJUST_TENANT_CONFIG = {
-    'session_resolver': {
-        'session_key': 'tenant_id',
-        'jwt_claim': 'tenant',
-        'user_attribute': 'tenant_id'
-    }
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'session',
+    'TENANT_SESSION_KEY': 'tenant_id',  # session key to read
+    'TENANT_JWT_CLAIM': 'tenant_id',    # JWT claim, if request.user has jwt_payload
 }
 ```
+
+> The session resolver also falls back to a `user.tenant_id` model attribute when neither
+> the session key nor a JWT claim is present.
 
 ### Custom
 
@@ -175,25 +167,23 @@ DJUST_TENANT_CONFIG = {
 def custom_tenant_resolver(request):
     from djust.tenants.resolvers import TenantInfo
     tenant_id = request.user.organization.slug if request.user.is_authenticated else 'public'
-    return TenantInfo(id=tenant_id, name=tenant_id, settings={'theme': 'blue'})
+    return TenantInfo(tenant_id=tenant_id, name=tenant_id, settings={'theme': 'blue'})
 
 # settings.py
-DJUST_TENANT_RESOLVER = 'myapp.utils.custom_tenant_resolver'
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': 'custom',
+    'TENANT_CUSTOM_RESOLVER': 'myapp.utils.custom_tenant_resolver',  # dotted path
+}
 ```
 
 ### Chained (Fallback)
 
 ```python
-DJUST_TENANT_RESOLVER = 'djust.tenants.resolvers.ChainedResolver'
-DJUST_TENANT_CONFIG = {
-    'chained_resolver': {
-        'resolvers': [
-            'djust.tenants.resolvers.HeaderResolver',
-            'djust.tenants.resolvers.SubdomainResolver',
-            'djust.tenants.resolvers.SessionResolver'
-        ],
-        'default_tenant': 'public'
-    }
+# Set TENANT_RESOLVER to a LIST of short names; each is tried in order
+# and the first successful match wins (chained resolution).
+DJUST_CONFIG = {
+    'TENANT_RESOLVER': ['header', 'subdomain', 'session'],
+    'TENANT_DEFAULT': 'public',
 }
 ```
 
@@ -215,18 +205,23 @@ Extends TenantMixin with scoped querysets:
 
 ```python
 class ProjectListView(TenantScopedMixin, LiveView):
+    model = Project  # used as the default for the helpers below
+
     def mount(self, request):
-        self.projects = self.tenant_queryset(Project)
+        self.projects = self.get_tenant_queryset()
 
     def get_project(self, project_id):
-        return self.tenant_get_object_or_404(Project, id=project_id)
+        return self.get_tenant_object(project_id)
 ```
 
 | Method | Description |
 |--------|-------------|
-| `tenant_queryset(model_class, tenant_field='tenant_id')` | Queryset filtered by current tenant |
-| `tenant_get_object_or_404(model_class, **kwargs)` | Get object scoped to current tenant |
-| `tenant_filter(queryset, tenant_field='tenant_id')` | Filter existing queryset by tenant |
+| `get_tenant_queryset(model=None)` | Queryset filtered by current tenant (defaults to `self.model`) |
+| `get_tenant_object(pk, model=None)` | Get a single object by `pk`, scoped to the current tenant |
+| `create_for_tenant(model=None, **fields)` | Create an instance with `tenant_id` stamped automatically |
+
+The tenant field defaults to `tenant_id`; override it per view with the
+`tenant_field` class attribute.
 
 ## State Backend Isolation
 
@@ -271,22 +266,27 @@ class TenantPermissionMixin:
 ## Testing
 
 ```python
-from djust.tenants.test import TenantTestCase, override_tenant
+from djust.tenants import set_current_tenant
 from djust.tenants.resolvers import TenantInfo
 from django.test import RequestFactory
 
-class ProjectTestCase(TenantTestCase):
-    def test_tenant_scoped_query(self):
-        with override_tenant('acme'):
-            projects = Project.objects.all()
-            self.assertEqual(projects.count(), 2)
+
+def test_tenant_scoped_query(db):
+    # Set the thread-local tenant, then assert tenant-scoped filtering.
+    set_current_tenant(TenantInfo(tenant_id='acme'))
+    try:
+        projects = Project.objects.filter(tenant_id='acme')
+        assert projects.count() == 2
+    finally:
+        set_current_tenant(None)  # clear thread-local between tests
+
 
 def test_view_with_tenant():
     request = RequestFactory().get('/dashboard/')
-    request.tenant = TenantInfo(id='test', name='Test Org')
+    request.tenant = TenantInfo(tenant_id='test', name='Test Org')
     view = DashboardView()
     view.setup(request)
-    view.mount(request)
+    view.tenant = request.tenant  # mixin populates this from request.tenant in dispatch
     assert view.tenant.id == 'test'
 ```
 
