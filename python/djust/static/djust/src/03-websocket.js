@@ -318,7 +318,7 @@ class LiveViewWebSocket {
                 // have state cached by the SW.
                 if (data.public_state && typeof data.public_state === 'object' && data.view) {
                     if (!window.djust._clientState) window.djust._clientState = {};
-                    window.djust._clientState[data.view] = data.public_state;
+                    window.djust._clientState[data.view] = data.public_state; // codeql[js/remote-property-injection] -- data.view is a server-sent view name, not arbitrary user input
                 }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -556,7 +556,7 @@ class LiveViewWebSocket {
                             target.charAt(1) !== '/'  // reject protocol-relative
                         );
                         if (isSameOriginPath) {
-                            window.location.href = target;
+                            window.location.href = target; // codeql[js/xss] -- target validated to same-origin path (charAt(0)==='/' && charAt(1)!=='/')
                         } else if (globalThis.djustDebug) {
                             console.warn(
                                 '[djust] live_redirect rejected non-same-origin target:',
