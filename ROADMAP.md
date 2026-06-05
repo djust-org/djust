@@ -3477,6 +3477,10 @@ to a single RC. P0 first.
 patch milestone. P0 first. Design-gated features (#1562, #1561, #1557) stay in
 v1.1.0. Drained 2026-06-04 via `/pipeline-drain` (scope: 7 drain-sized issues).
 
+**STATUS: COMPLETE (7/7 merged 2026-06-05).** PRs #1690 (#1688), #1691 (#1672),
+#1693 (#1683), #1694 (#1662), #1695 (#1687), #1697 (#1602), #1698 (#1559).
+Follow-ups filed: #1692, #1696, #1699. New P0 surfaced during drain (NOT in scope): #1689.
+
 **Priority Matrix**
 
 | Priority | Issue | Summary | Notes |
