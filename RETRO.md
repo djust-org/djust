@@ -325,8 +325,59 @@ issue or be explicitly closed with a reason.
 | 283 | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (e.g. `x\|safe`) | PR #1691 (#1672 review) | #1692 | Closed | **Resolved in v1.0.1 wave 2 (PR #1709)** — `get_value_safe` honors the name-based whitelist; hoisted the duplicated list to one shared const. |
 | 284 | `DJUST_NOTIFY_DATABASE_URL` drops URL query params (sslmode, unix-socket host) | PR #1695 (#1687 review) | #1696 | Closed | **Resolved in v1.0.1 wave 2 (PR #1711)** — allowlist passthrough; credentials cannot be overridden via query. |
 | 285 | `multi-tenant.md` Quick Start cites non-existent `self.tenant_queryset()` (+ `DJUST_TENANT_RESOLVER` / `mixins` plural) | PR #1698 (#1559 review) | #1699 | Closed | **Resolved in v1.0.1 wave 2 (PR #1710)** — corrected ~10 hallucinated `djust.tenants` symbols to the real API. |
-| 286 | Promote the demo `djust_check` dogfood from `continue-on-error` to a blocking gate | PR #1712 (#1708 review) | #1713 | Open | Shipped green once (rc4 #3); next step is a dedicated blocking `demo-checks` job + a synthetic-error unit test for the wrapper's error-severity arm. |
-| 287 | Generalize the cross-IIFE guard to top-level-module (22-51) bare refs | PR #1715 (#1706 review) | #1716 | Open | Guard fires only for guard-block declarations; 10/58 published fns declared at bundle top level are gap-exposed (same class, unobserved shape). |
+| 286 | Promote the demo `djust_check` dogfood from `continue-on-error` to a blocking gate | PR #1712 (#1708 review) | #1713 | Closed | **Resolved in v1.0.2 (PR #1730)** — dedicated blocking `demo-checks` job (no `continue-on-error`), wired into the `test-summary` AND-condition; synthetic-error unit test covers both gate arms (error-severity + T001/T014/T015). |
+| 287 | Generalize the cross-IIFE guard to top-level-module (22-51) bare refs | PR #1715 (#1706 review) | #1716 | Closed | **Resolved in v1.0.2 (PR #1729)** — barrier-span scope model covers guard-block AND top-level-module declarations; the program-scope `maybeDeferRemoval` FP control is what required scope-aware (not module-aware) analysis. Two-sided empirical canary (#252): synthetic trigger exit 1 on branch / exit 0 on main; real tree clean. |
+| 288 | Request-scope memoize `theme_context` — now runs per WS event after #1722 | PR #1726 (#1722 review) | #1727 | Open | Applying context processors in `_sync_state_to_rust` (the #1722 fix) runs `theme_context` per WS event; four `_safe_render` tag bodies are uncached. Must NOT first-sync-gate (breaks dynamic theme switching — change-detection only forwards changed vars); the cure is request-scoped memoization inside `theme_context`. |
+
+## v1.0.2 — Second post-1.0 patch: theming/hydration bugs + v1.0.1 follow-ups (PRs #1725–#1731, 6 merged)
+
+**Date**: 2026-06-05
+**Scope**: Three production bugs surfaced integrating djust 1.0.1rc1 into a real app (SSR→hydration child teardown destroying client widgets; theming context-processor vars missing inside `{% include %}`; the documented `{% theme_panel %}` tag rejected by the Rust engine) + the three tech-debt follow-ups the v1.0.1 drain deferred (#1713, #1716) or filed (#1719).
+**Tests at close**: JS 1665 (vitest); Python 7506+ (full suite); Rust 304 (djust_templates) — all green. demo-checks now a blocking CI job.
+
+### What We Learned
+
+**1. VDOM/morph reproducers must construct the existing DOM the way the browser does — parse from an HTML string, not DOM-builder APIs.**
+PR #1725 (#1724) shipped a first fix (a new `morphChildren` "Strategy 2b" keyed on the standard `.id`) that was **dead code against real input** — the Rust renderer emits `dj-id`, which never populates `.id`. The Stage-11 reviewer's faithful reproduction — `existing` built via `container.innerHTML = "<div>…\n  <div>…"` (WITH inter-element whitespace) and `desired` carrying `dj-id` — proved both pre-fix AND the first fix tore down the Chart.js canvas (`canvas preserved: false`). The real root cause was **whitespace text-node misalignment**: SSR `innerHTML` produces whitespace text nodes between element children, so the positional existing node is a text node when an element is processed → all element strategies skip (they require `ELEMENT_NODE`) → clone+insert+remove. The original test passed only because it used `appendChild` (no whitespace) + standard `id`. This is the "Reproduction fidelity" failure class (#1650/#1638/#1637) with a new, specific axis for client-side VDOM tests: the DOM-construction *method* itself (innerHTML vs appendChild) changes whether the bug reproduces.
+**Action taken**: Added a bullet to the CLAUDE.md "Reproduction fidelity" section (Bug-report triage) canonicalizing the innerHTML-with-whitespace rule for VDOM/morph reproducers.
+
+**2. Per-event work that feeds change-detection cannot be first-sync-gated — it must be memoized.**
+PR #1726 (#1722) fixed context-processor vars being empty inside `{% include %}` by applying `_apply_context_processors` in `_sync_state_to_rust` — which runs on EVERY WebSocket event, not just the initial GET. The obvious "optimization" (apply processors only on first sync to save the per-event cost) is **wrong**: djust's change-detection only forwards *changed* vars, so the processors must re-run each sync to detect a theme switch. The correct cure is request-scoped memoization inside `theme_context`, not gating. The reviewer also confirmed the load-bearing fact that made the fix effective at all: the WS-path `request` is non-None (a long-lived instance attr set in `handle_connect`), so the fix works on every navigation, not just GET.
+**Action taken**: Open — tracked in Action Tracker #288 (GitHub #1727).
+
+**3. Promoting a "soft" CI check to blocking requires verifying it's in the aggregate gate's AND-condition — not merely in `needs`/echoed.**
+PR #1730 (#1713) moved the demo `djust_check` dogfood out of the `continue-on-error` playwright job into a dedicated blocking `demo-checks` job. The check that matters is not "is it a job?" but "does a failure actually fail the merge?" — the reviewer explicitly traced: failure → `needs.demo-checks.result == "failure"` → the `test-summary` AND-condition fails → else-branch `exit 1`, with no `continue-on-error` anywhere. A check can be `needs`-listed and printed in the summary yet still not gate the merge. (The dogfood also followed the rc4 "ship green on the runner before making it blocking" cycle — it passed first runner run.)
+**Action taken**: Added a bullet to the CLAUDE.md PR-process canon (CI-gate promotion) requiring the aggregate-AND-condition trace when promoting a soft check to blocking.
+
+### Insights
+
+- **Symptom-up triage disproved the orchestrator's cited hypothesis twice in one milestone.** #1722's implementer wrote 4 Rust tests proving the cited `renderer.rs` `context.clone()` was NOT the bug (it faithfully carries values into includes) before tracing the real cause upstream in `_sync_state_to_rust`; #1724's real cause was whitespace, not the hypothesized `id`/`dj-id` strategy gap. The CLAUDE.md rule "trust the symptom, not the cited path" held on both — and the orchestrator's hypotheses were the "cited path" that was wrong. Reproducer-first is what caught it both times.
+- **When an engine error names an extension API, registering through it is usually the least-surprise fix.** #1721's 500 literally said "Register a handler via djust._rust.register_tag_handler()". Option A (register the theme tags as Rust handlers) made existing user templates + the documented tag form work without editing the external docs.djust.org repo — better than a docs-only workaround that asks users to rewrite templates. Design-decision-first (#1056), decided before implementation.
+- **Tooling/lint PRs are highest-confidence when the empirical canary is two-sided.** #1729 (cross-IIFE guard) proved the synthetic trigger flips exit 1 on the branch / exit 0 on main AND the real tree stays clean; #1731 (eslint ratchet) proved the `--max-warnings 0` valve with a dummy-warning inject→exit-1→revert. Both confirm the existing #252/#1459 canon rather than needing new rules.
+- **Two reviewer catches prevented shipping incorrect/incomplete fixes** (#1724 dead-code first fix; #1726 the per-event perf nit + the WS-request-non-None confirmation that the fix was actually complete). The adversarial Stage-11 with an independent reproduction is doing real work, not rubber-stamping.
+
+### Review Stats
+
+| Metric | #1725 | #1726 | #1728 | #1729 | #1730 | #1731 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|
+| 🔴 Findings | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| 🟡 Findings | 0 | 1 | 1 | 2 | 0 | 0 | 4 |
+| Fix-passes | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| Follow-ups filed | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (1) Reproduction-fidelity bullet — VDOM/morph reproducers must build the existing DOM via `innerHTML` (with whitespace), not `appendChild` (finding 1). (2) CI-gate-promotion bullet — verify a promoted check is in the aggregate gate's AND-condition, not just `needs`/echo (finding 3).
+**Pipeline template**: none.
+**Checklist**: none this milestone (the CI-gate-promotion rule lives in CLAUDE.md).
+**Skills**: none.
+
+### Open Items
+
+- [ ] #288 — request-scope memoize `theme_context` (GitHub #1727)
+- [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
+- [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 6 PRs — 3 production bug fixes + 3 tech-debt follow-ups.
 
 ## v1.0.1 — First post-1.0 patch: two drain waves (PRs #1690–#1715, 13 merged)
 
@@ -395,8 +446,8 @@ Wave-2 deferred 🟡: #1713 (promote dogfood to blocking), #1716 (generalize cro
 
 ### Open Items
 
-- [ ] #286 — promote demo djust_check dogfood to a blocking gate (GitHub #1713)
-- [ ] #287 — generalize the cross-IIFE guard to top-level modules (GitHub #1716)
+- [x] #286 — promote demo djust_check dogfood to a blocking gate (GitHub #1713) — resolved in v1.0.2 (PR #1730)
+- [x] #287 — generalize the cross-IIFE guard to top-level modules (GitHub #1716) — resolved in v1.0.2 (PR #1729)
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
 - [x] Wave-1 durable cures + review follow-ups (#280–#285) — all resolved in wave 2, within 1.0.1
 - [ ] **Release**: cut `1.0.1` (one version bump + tag) covering all 13 PRs. `[Unreleased]` holds the full set incl. the #1688 P0 production fix and the two wave-2 cross-IIFE prod fixes (dialog + keyboard).
