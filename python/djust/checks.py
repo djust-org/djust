@@ -485,7 +485,10 @@ def _check_multi_tenant_asgi_set_calls(errors):
                 "exist on that path. Migrate to `djust.tenants` — see "
                 "docs/website/guides/multi-tenant.md "
                 "(`Choosing Your Multi-Tenancy Strategy`) for the "
-                "decision criteria and migration target. "
+                "decision criteria and migration target, and "
+                "docs/website/guides/migrating-from-django-tenants.md "
+                "for the step-by-step migration recipe (data migration, "
+                "code/settings diffs, rollout, isolation canary). "
                 "If you cannot migrate immediately, the stopgap is to "
                 "set `TENANT_LIMIT_SET_CALLS = True` in settings; this "
                 "django-tenants flag skips the `SET search_path` wire "
@@ -500,7 +503,10 @@ def _check_multi_tenant_asgi_set_calls(errors):
             id="djust.C014",
             fix_hint=(
                 "Recommended: migrate to djust.tenants (row-level "
-                "multi-tenancy) — see docs/website/guides/multi-tenant.md. "
+                "multi-tenancy) — see docs/website/guides/multi-tenant.md "
+                "for the strategy decision and "
+                "docs/website/guides/migrating-from-django-tenants.md "
+                "for the step-by-step migration recipe. "
                 "django-tenants integration is deprecated under djust. "
                 "Stopgap until migration: add `TENANT_LIMIT_SET_CALLS = "
                 "True` to your Django settings file. Under the stopgap "
