@@ -9,7 +9,7 @@ Usage:
 """
 
 from django.core.management.base import BaseCommand, CommandError
-from djust.theming.registry import get_registry
+from djust.theming._registry_accessor import get_registry
 from djust.theming.tailwind import (
     generate_tailwind_config,
     export_preset_as_tailwind_colors,
