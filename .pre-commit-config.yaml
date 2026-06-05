@@ -81,6 +81,14 @@ repos:
         types: [javascript]
         pass_filenames: false
 
+      - id: check-cross-iife-refs
+        name: bundle cross-IIFE bare-reference static guard (#1706)
+        entry: node scripts/check-cross-iife-refs.mjs
+        language: system
+        files: ^python/djust/static/djust/src/
+        types: [javascript]
+        pass_filenames: false
+
       - id: build-js
         name: build client.js from src/ modules
         entry: bash -c 'bash scripts/build-client.sh && git add python/djust/static/djust/client.js python/djust/static/djust/debug-panel.js'

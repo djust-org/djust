@@ -222,6 +222,12 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Bundle init-order static lint (#1372)
+        run: node scripts/check-bundle-init-order.mjs
+
+      - name: Bundle cross-IIFE bare-reference static guard (#1706)
+        run: node scripts/check-cross-iife-refs.mjs
+
       - name: Run JavaScript tests
         run: npm test
 

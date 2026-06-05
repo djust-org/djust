@@ -70,12 +70,21 @@ function press(dom, el, key, opts = {}) {
 }
 
 function installHandleEventSpy(dom) {
+    // #1706: 51-keyboard-nav.js reads the published alias
+    // `globalThis.djust.handleEvent`, NOT the bare `handleEvent` global
+    // (the bare symbol is block-scoped inside the double-load guard and out
+    // of scope at this module's bundle top level). Stub the alias so the spy
+    // is on the path production actually invokes. (Also set the bare global
+    // for any legacy consumers, harmless.)
     dom.window.eval(`
         window._handleEventCalls = [];
-        window.handleEvent = function(name, params) {
+        function _kbNavHandleEventSpy(name, params) {
             window._handleEventCalls.push({ name: name, params: params });
             return Promise.resolve();
-        };
+        }
+        window.handleEvent = _kbNavHandleEventSpy;
+        window.djust = window.djust || {};
+        window.djust.handleEvent = _kbNavHandleEventSpy;
     `);
 }
 
