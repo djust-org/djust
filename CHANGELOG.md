@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Bump starlette 1.0.0 → 1.2.1 (CVE-2026-48710 host-header validation; transitive via mcp).
+
+### Fixed
+
+- Add inline CodeQL suppression comments for false-positive alerts in source JS: `js/remote-property-injection` in `03-websocket.js` (server-sent view name) and `debug/07-tab-state.js` (null-prototype clone with UNSAFE_KEYS filter); `js/xss` in live_redirect path (target validated to same-origin path). Rebuilds `client.js` and `debug-panel.js` to pick up the suppressions.
+- Fix `UploadWriter.write_chunk` base class signature to accept optional `chunk_index: int = 0` — resolves CodeQL `py/inheritance/incorrect-overridden-signature` (#2190); callers already guard via `_supports_chunk_index` introspection.
+
 ## [1.0.1] - 2026-06-05
 
 ### Added

@@ -231,7 +231,7 @@ class UploadWriter:
         resources (e.g. start an S3 multipart upload)."""
         return None
 
-    def write_chunk(self, chunk: bytes) -> None:
+    def write_chunk(self, chunk: bytes, chunk_index: int = 0) -> None:
         """Called once per WebSocket binary frame. Must be overridden."""
         raise NotImplementedError("UploadWriter subclasses must implement write_chunk()")
 
