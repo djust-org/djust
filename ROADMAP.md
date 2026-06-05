@@ -3502,6 +3502,10 @@ review follow-ups. Drained 2026-06-05 via `/pipeline-drain` (scope: 6
 drain-sized; design-gated #1562/#1561/#1557 stay in v1.1.0). Process order puts
 #1699 before #1707 (fix the guide before adding the checker that flags it).
 
+**STATUS: COMPLETE (6/6 merged 2026-06-05).** PRs #1709 (#1692), #1710 (#1699),
+#1711 (#1696), #1712 (#1708), #1714 (#1707), #1715 (#1706). Follow-ups filed:
+#1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE guard).
+
 **Priority Matrix**
 
 | Priority | Issue | Summary | Notes |
