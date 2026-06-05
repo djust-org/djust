@@ -3471,6 +3471,26 @@ to a single RC. P0 first.
 
 ---
 
+### Milestone: v1.0.1 — post-1.0 production-bug + small-fix drain (7 issues)
+
+*Goal:* Drain post-1.0 production bugs and small, well-specified fixes into one
+patch milestone. P0 first. Design-gated features (#1562, #1561, #1557) stay in
+v1.1.0. Drained 2026-06-04 via `/pipeline-drain` (scope: 7 drain-sized issues).
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P0** | `client.min.js` `ReferenceError: applyPatches is not defined` (#1688) | Recurrence of #1676 class (terser mangle × IIFE wrap): sticky/embedded module references bare `applyPatches` cross-IIFE; throws only in minified prod bundle. Non-fatal but alarms every prod console + aborts `emitChildMountedEvents` tail. | Fix: reference `globalThis.djust.applyPatches` alias, not the bare symbol, in the sticky/embedded module. See `12-vdom-patch.js:2299` expose site. |
+| **P2** | SafeString over-escaped in `{% firstof %}`/`{% cycle %}` (#1672) | Runtime-`SafeString` from a custom filter is double-escaped through the `get_value` pipe path in firstof/cycle tags. | Bug; preserve SafeString through the tag value path. |
+| **P2** | Demo templates use dead `@click` (#1683) | Example/demo templates use deprecated, non-functional `@click` → dead buttons; migrate to `dj-click`. | Docs/demo fix; good first issue. |
+| **P2** | theming registry↔packs/manifest import SCC (#1662) | Latent CodeQL cyclic-import in `djust.theming` (registry↔theme_packs / registry↔manifest). | Tech-debt; break the import cycle. |
+| **P2** | Dedicated LISTEN DSN for `db.notifications` (#1687) | Allow a dedicated LISTEN DSN separate from `DATABASES['default']`. | Enhancement. |
+| **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. *(moved from v1.1.0)* | Small enhancement. |
+| **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. *(moved from v1.1.0)* | Docs writing. |
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
@@ -3479,8 +3499,8 @@ to a single RC. P0 first.
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. | Small enhancement; drain-able when prioritized. |
-| **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. | Docs writing. |
+| **P2** | ~~System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602)~~ → moved to v1.0.1 | DX: detect pre-1.0 attribute names during upgrade. | Moved into the v1.0.1 drain. |
+| **P2** | ~~Multi-tenant migration guide (#1559)~~ → moved to v1.0.1 | Docs: django-tenants → djust.tenants. | Moved into the v1.0.1 drain. |
 | **P2** | bug-capture iter B — replay viewer (#1562) | `/__djust__/replay/<blob>` read-only viewer. | Feature; needs design. |
 | **P2** | bug-capture iter C — Redis store + CLI + PII scrub (#1561) | Persistent capture store + `djust replay` CLI. | Feature; multi-day. |
 | **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
