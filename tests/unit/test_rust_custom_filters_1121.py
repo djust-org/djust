@@ -439,3 +439,81 @@ class TestNewBehavior_1162:
             assert "ae=True" in html.unescape(out)
         finally:
             unregister_custom_filter("ae_capture_1162")
+
+
+# ---------------------------------------------------------------------------
+# Runtime SafeString in {% firstof %} / {% cycle %} (#1672, follow-up to #1660)
+#
+# #1660 threaded runtime-safeness through the Variable + InlineIf render arms.
+# The parallel ``get_value`` pipe helper (used by the {% firstof %} / {% cycle %}
+# emit path) dropped the runtime-safe flag, so a custom filter that
+# ``mark_safe()``s its output AT RUNTIME was OVER-escaped there — fail-safe
+# (no XSS) but a parity gap. These tests pin that the firstof/cycle path now
+# honours the same runtime-safe semantics as the Variable arm.
+# ---------------------------------------------------------------------------
+
+
+class TestFirstofCycleRuntimeSafe_1672:
+    """Parity with #1660 for the ``get_value`` pipe path.
+
+    ``md_runtime`` (registered at module scope) returns a ``SafeString`` at
+    runtime without ``is_safe=True`` — the exact #1660 shape. It must NOT be
+    re-escaped inside ``{% firstof %}`` / ``{% cycle %}``.
+    """
+
+    def test_firstof_runtime_safe_filter_not_escaped(self):
+        """``{% firstof name|md_runtime %}`` — the first arg is a runtime
+        SafeString and must NOT be double-escaped (the #1672 repro)."""
+        out = render_template("{% firstof name|md_runtime %}", {"name": "Hi"})
+        assert "<em>Hi</em>" in out
+        assert "&lt;em&gt;" not in out
+
+    def test_firstof_runtime_safe_second_arg_not_escaped(self):
+        """First arg empty/falsy → firstof falls through to the second arg,
+        which is a runtime SafeString and must NOT be escaped."""
+        out = render_template(
+            "{% firstof blank name|md_runtime %}",
+            {"blank": "", "name": "Hi"},
+        )
+        assert "<em>Hi</em>" in out
+        assert "&lt;em&gt;" not in out
+
+    def test_firstof_plain_filter_still_escaped(self):
+        """Guard against over-broadening: a plain (non-safe) custom filter
+        inside firstof MUST still be escaped — only the runtime-safe path
+        bypasses escaping."""
+        out = render_template("{% firstof name|exclaim %}", {"name": "<script>"})
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_cycle_runtime_safe_filter_not_escaped(self):
+        """``{% cycle name|md_runtime %}`` outside a loop resolves the first
+        value, a runtime SafeString that must NOT be double-escaped."""
+        out = render_template("{% cycle name|md_runtime %}", {"name": "Hi"})
+        assert "<em>Hi</em>" in out
+        assert "&lt;em&gt;" not in out
+
+    def test_cycle_runtime_safe_in_for_loop_not_escaped(self):
+        """A runtime-safe cycle value inside a for loop must NOT be escaped
+        on any iteration."""
+        out = render_template(
+            "{% for i in items %}{% cycle name|md_runtime other %}{% endfor %}",
+            {"items": [1, 2], "name": "Hi", "other": "X"},
+        )
+        assert "<em>Hi</em>" in out
+        assert "&lt;em&gt;" not in out
+
+    def test_cycle_plain_filter_still_escaped(self):
+        """A plain (non-safe) custom filter inside cycle MUST still be
+        escaped — fail-safe parity guard."""
+        out = render_template("{% cycle name|exclaim %}", {"name": "<script>"})
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_firstof_runtime_safe_then_plain_re_taints(self):
+        """A subsequent plain-returning filter RE-TAINTS inside firstof,
+        matching the Variable arm (#1660): ``name|md_runtime|upper`` is no
+        longer safe and MUST be escaped."""
+        out = render_template("{% firstof name|md_runtime|upper %}", {"name": "Hi"})
+        assert "&lt;EM&gt;HI&lt;/EM&gt;" in out
+        assert "<EM>" not in out
