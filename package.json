@@ -8,7 +8,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint python/djust/static/djust/",
+    "lint": "eslint python/djust/static/djust/ --max-warnings 0",
     "lint:fix": "eslint python/djust/static/djust/ --fix"
   },
   "devDependencies": {
