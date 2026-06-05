@@ -65,35 +65,18 @@ def _extract_json(stdout):
     raise ValueError("no JSON object found in djust_check output")
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--demo-dir",
-        default=".",
-        help="Demo project directory containing manage.py (default: cwd)",
-    )
-    args = parser.parse_args(argv)
+def evaluate(data):
+    """Apply the CI gate to a parsed ``djust_check --json`` payload.
 
-    proc = subprocess.run(
-        [sys.executable, "manage.py", "djust_check", "--json"],
-        cwd=args.demo_dir,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        # djust_check itself errored (e.g. import/config failure) — surface it.
-        print("ERROR: `manage.py djust_check --json` exited %d" % proc.returncode)
-        print(proc.stdout)
-        print(proc.stderr, file=sys.stderr)
-        return 1
+    ``data`` is the dict produced by ``manage.py djust_check --json`` —
+    ``{"checks": [{"id", "severity", "message", ...}], "summary": {...}}``.
 
-    try:
-        data = _extract_json(proc.stdout)
-    except (ValueError, json.JSONDecodeError) as exc:
-        print("ERROR: could not parse djust_check JSON output: %s" % exc)
-        print(proc.stdout)
-        return 1
-
+    Returns ``0`` when the demo is clean (no error-severity checks and no
+    deprecated-attribute findings T001/T014/T015) and ``1`` otherwise. This
+    is the single decision point shared by ``main()`` and the unit tests so
+    both gate arms (error-severity and deprecated-attr ID-set) are exercised
+    end-to-end without spawning a subprocess (#1713, #252 empirical canary).
+    """
     checks = data.get("checks", [])
     summary = data.get("summary", {})
 
@@ -125,6 +108,38 @@ def main(argv=None):
 
     print("OK: no errors and no deprecated-attribute findings (T001/T014/T015).")
     return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--demo-dir",
+        default=".",
+        help="Demo project directory containing manage.py (default: cwd)",
+    )
+    args = parser.parse_args(argv)
+
+    proc = subprocess.run(
+        [sys.executable, "manage.py", "djust_check", "--json"],
+        cwd=args.demo_dir,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        # djust_check itself errored (e.g. import/config failure) — surface it.
+        print("ERROR: `manage.py djust_check --json` exited %d" % proc.returncode)
+        print(proc.stdout)
+        print(proc.stderr, file=sys.stderr)
+        return 1
+
+    try:
+        data = _extract_json(proc.stdout)
+    except (ValueError, json.JSONDecodeError) as exc:
+        print("ERROR: could not parse djust_check JSON output: %s" % exc)
+        print(proc.stdout)
+        return 1
+
+    return evaluate(data)
 
 
 if __name__ == "__main__":
