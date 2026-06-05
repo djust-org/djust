@@ -31,16 +31,25 @@
  * ---------------------
  * For the set P of names published via `(globalThis|window|djust).djust.X = X`
  * where X is a bare identifier resolving to a function declared in some
- * module B, this check flags every BARE identifier reference to X inside a
- * DIFFERENT module A when X is not also declared/bound within module A.
+ * module B, this check flags every BARE identifier reference to X that falls
+ * OUTSIDE X's declaration's lexical scope barrier (its enclosing IIFE /
+ * function body, or the double-load-guard `else {}` block) — i.e. a
+ * reference that resolves only by luck unminified and throws under terser.
  * Such references must read the published alias `globalThis.djust.X`.
  *
- * Scope discipline (#1079)
- * ------------------------
- * This is the NARROW-but-robust shape: it catches exactly the
- * proven-dangerous class — a bare reference to a djust-published function
- * from a different module — which is precisely #1676/#1688. It is
- * conservative by design (see "Allowlist / false-positive control"):
+ * Scope coverage (#1706 + #1716)
+ * ------------------------------
+ * The check models the actual bundle scope structure (see "Lexical
+ * scope-barrier spans" below) and covers BOTH dangerous shapes:
+ *   - GUARD-BLOCK → TOP-LEVEL (#1676/#1688): a function declared inside the
+ *     double-load-guard `else {}` block (modules 00–20, block-scoped)
+ *     referenced bare from bundle top level.
+ *   - TOP-LEVEL → TOP-LEVEL (#1716): a function declared inside module A's
+ *     own inner IIFE (modules 22–51) referenced bare from a DIFFERENT
+ *     top-level module's IIFE. 10 of 58 published functions are
+ *     top-level-declared and were gap-exposed before #1716 closed this.
+ *
+ * It is conservative by design (false-positive control):
  *   - Browser/host globals (`window`, `document`, `console`,
  *     `queueMicrotask`, `MutationObserver`, timers, `CustomEvent`, …) are
  *     inherently excluded — they are never in P (P only ever contains
@@ -48,12 +57,19 @@
  *   - `djust.X` / `globalThis.djust.X` MEMBER ACCESS is the correct form
  *     and is never flagged (it's a MemberExpression, not a bare ref).
  *   - A function referenced bare from the SAME module it's declared in is
- *     never flagged (`P[X] !== A` and `X ∈ bindings(A)`).
+ *     never flagged, and a name locally re-bound in the referring module is
+ *     excluded.
+ *   - A PROGRAM-SCOPE function declaration (declared OUTSIDE any IIFE and
+ *     outside the guard block — e.g. `maybeDeferRemoval` in 42-dj-remove.js)
+ *     is a true global, visible everywhere even minified, so it has no
+ *     barrier and a bare reference to it is NOT flagged.
  *
  * Documented limitation: a bare cross-IIFE reference to a NON-published
  * inner-IIFE function is not flagged by this check (such a reference is a
- * plain ReferenceError caught at load by existing JS tests). Fully-general
- * inner-IIFE cross-reference analysis is a possible follow-up.
+ * plain ReferenceError caught at load by existing JS tests). The
+ * published-top-level gap that #1716 cited is now CLOSED; the only remaining
+ * limitation is fully-general analysis of NON-published inner-IIFE
+ * cross-references, a possible follow-up.
  *
  * Source dir is configurable via env var `BUNDLE_SRC_DIR` for testing
  * (mirrors `scripts/check-bundle-init-order.mjs`).
@@ -185,23 +201,40 @@ function collectPatternNames(pattern, out) {
 }
 
 // ---------------------------------------------------------------------------
-// 2b. Double-load-guard scope region.
+// 2b. Lexical scope-barrier spans (#1706 + #1716).
 //
-// 00-namespace.js opens `if (window._djustClientLoaded) { … } else { … }`
-// and 21-guard-close.js closes the `else {}` block. So modules 00–20 sit
-// INSIDE that `else` BlockStatement (block scope), and modules 22–51 sit at
-// the bundle's true top level (program scope), OUTSIDE the block.
+// A function-name reference resolves at runtime by walking outward from the
+// reference's lexical scope through every ENCLOSING scope to the program
+// (global) scope. A bare reference to function X is in scope iff X's
+// declaration sits in a scope that lexically CONTAINS the reference.
 //
-// `function foo() {}` declared inside the `else {}` block is block-scoped:
-// it is NOT visible at bundle top level. THIS is the real reason a bare
-// reference from module 45 (top level) to `applyPatches` (declared in
-// module 12, inside the guard block) is out of scope even UNMINIFIED — it
-// silently no-ops via the `typeof` guard, and throws ReferenceError under
-// terser-minified bundles (#1676 / #1688). References WITHIN the guard
-// block resolve fine (shared block scope) and must NOT be flagged.
+// Two scope barriers matter for the djust bundle, and BOTH are just line
+// spans a declaration may sit inside:
 //
-// We find the guard-else BlockStatement's bundle-line span. A node is in
-// the GUARD region iff its line falls within [elseStart, elseEnd].
+//   (a) Per-module inner IIFE (`(function () { … })()`). Modules 22–51 each
+//       wrap their body in their own IIFE. `function foo() {}` declared
+//       inside module 22's IIFE is NOT visible as a bare name inside module
+//       23's IIFE — each IIFE is a separate function scope. (#1716)
+//
+//   (b) The double-load-guard `else {}` block. 00-namespace.js opens
+//       `if (window._djustClientLoaded) { … } else { … }` and
+//       21-guard-close.js closes the `else {}`. Modules 00–20 sit INSIDE
+//       that block (block scope); modules 22–51 sit at the program's true
+//       top level, OUTSIDE it. `function foo() {}` declared in the `else {}`
+//       block is block-scoped and NOT visible at program top level. (#1706)
+//
+// THE BARRIER of a declaration is the INNERMOST enclosing scope span that is
+// narrower than the program — the nearest enclosing function/IIFE body if
+// any, else the guard `else {}` block if the declaration sits directly in
+// it, else NONE (program scope). A program-scope declaration (e.g.
+// `maybeDeferRemoval` in 42-dj-remove.js, declared OUTSIDE any IIFE) is a
+// true global: visible everywhere, even terser-minified — so it has no
+// barrier and is never flagged.
+//
+// A bare reference to a published function X is out of scope (and thus a
+// #1676/#1688/#1716 ReferenceError-under-minify risk) iff X has a barrier
+// span AND the reference's line falls OUTSIDE that span. The correct form
+// always reads the published alias `globalThis.djust.X`.
 // ---------------------------------------------------------------------------
 function findGuardElseSpan(ast) {
     let span = null;
@@ -224,10 +257,12 @@ function findGuardElseSpan(ast) {
     return span;
 }
 
-function inGuardRegion(node, guardSpan) {
-    if (!guardSpan) return false;
-    const line = node.loc && node.loc.start ? node.loc.start.line : 0;
-    return line >= guardSpan.start && line <= guardSpan.end;
+function lineOf(node) {
+    return node && node.loc && node.loc.start ? node.loc.start.line : 0;
+}
+
+function withinSpan(line, span) {
+    return !!span && line >= span.start && line <= span.end;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,27 +279,62 @@ function memberRightmostName(expr) {
 }
 
 function buildFunctionTable(ast, offsets, guardSpan) {
-    // name -> { moduleIndex, inGuard, bundleLine } (first definition wins)
+    // name -> { moduleIndex, barrierSpan, bundleLine } (first definition wins)
+    //
+    // barrierSpan is the innermost enclosing scope span the declaration sits
+    // inside, narrower than the program (see "Lexical scope-barrier spans"):
+    //   - the nearest ENCLOSING function/IIFE body's line span, if any;
+    //   - else the guard `else {}` block span, if the declaration sits
+    //     directly inside it (no intervening function scope);
+    //   - else null (program scope — visible everywhere, never flagged).
+    //
+    // We track the enclosing-function-scope stack with a custom walk so each
+    // declaration knows its nearest function-scope barrier. The guard block
+    // is NOT a function scope, so it never enters the stack; it's consulted
+    // only when the function-scope stack is empty.
     const fnTable = new Map();
+    const fnScopeStack = [];  // line spans of enclosing function bodies
+
+    function barrierFor(node) {
+        // Nearest enclosing function scope wins; else the guard block iff the
+        // declaration is directly inside it; else program scope (null).
+        if (fnScopeStack.length > 0) {
+            return fnScopeStack[fnScopeStack.length - 1];
+        }
+        if (guardSpan && withinSpan(lineOf(node), guardSpan)) {
+            return guardSpan;
+        }
+        return null;
+    }
+
     function addFn(name, node) {
         if (!name) return;
         if (fnTable.has(name)) return;
         fnTable.set(name, {
             moduleIndex: moduleIndexOf(node, offsets),
-            inGuard: inGuardRegion(node, guardSpan),
-            bundleLine: node.loc && node.loc.start ? node.loc.start.line : 0,
+            barrierSpan: barrierFor(node),
+            bundleLine: lineOf(node),
         });
     }
-    walk(ast, (node) => {
+
+    function visit(node) {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+            for (const item of node) visit(item);
+            return;
+        }
+        if (typeof node.type !== 'string') return;
+
+        // Record declarations (using the CURRENT enclosing scope as barrier)
+        // BEFORE descending into any function body those declarations open.
         if (node.type === 'FunctionDeclaration' && node.id) {
             addFn(node.id.name, node);
-        } else if (node.type === 'VariableDeclarator' && node.init) {
-            if (node.init.type === 'FunctionExpression' ||
-                node.init.type === 'ArrowFunctionExpression') {
-                if (node.id && node.id.type === 'Identifier') addFn(node.id.name, node.init);
-            }
-        } else if (node.type === 'AssignmentExpression' &&
-                   node.operator === '=' &&
+        } else if (node.type === 'VariableDeclarator' && node.init &&
+                   (node.init.type === 'FunctionExpression' ||
+                    node.init.type === 'ArrowFunctionExpression') &&
+                   node.id && node.id.type === 'Identifier') {
+            addFn(node.id.name, node.init);
+        } else if (node.type === 'AssignmentExpression' && node.operator === '=' &&
                    (node.right.type === 'FunctionExpression' ||
                     node.right.type === 'ArrowFunctionExpression')) {
             if (node.left.type === 'Identifier') {
@@ -274,7 +344,27 @@ function buildFunctionTable(ast, offsets, guardSpan) {
                 if (name) addFn(name, node.right);
             }
         }
-    });
+
+        const isFnScope = node.type === 'FunctionDeclaration' ||
+            node.type === 'FunctionExpression' ||
+            node.type === 'ArrowFunctionExpression';
+        let pushed = false;
+        if (isFnScope && node.body && node.body.loc) {
+            fnScopeStack.push({
+                start: node.body.loc.start.line,
+                end: node.body.loc.end.line,
+            });
+            pushed = true;
+        }
+        for (const key of Object.keys(node)) {
+            if (SKIP_KEYS.has(key)) continue;
+            const child = node[key];
+            if (child && typeof child === 'object') visit(child);
+        }
+        if (pushed) fnScopeStack.pop();
+    }
+
+    visit(ast);
     return fnTable;
 }
 
@@ -391,27 +481,34 @@ function buildModuleBindings(ast, offsets, numModules) {
 // 6. Bare-reference scan. Find every bare Identifier read/call/typeof that
 //    is a published cross-module name not bound in its own module.
 // ---------------------------------------------------------------------------
-function findBareCrossIifeRefs({ ast, offsets, published, bindings, guardSpan }) {
+function findBareCrossIifeRefs({ ast, offsets, published, bindings }) {
     const violations = [];
     const seen = new Set();
 
     function flag(name, node) {
-        const decl = published.get(name);            // { moduleIndex, inGuard, bundleLine }
+        const decl = published.get(name);            // { moduleIndex, barrierSpan, bundleLine }
         const useModule = moduleIndexOf(node, offsets);
         if (useModule === decl.moduleIndex) return;  // same module — in scope
         if (bindings[useModule].has(name)) return;   // bound locally — in scope
 
-        // THE LOAD-BEARING SCOPE TEST: the function is declared inside the
-        // double-load-guard `else {}` block (block-scoped, NOT visible at
-        // bundle top level), but this reference sits at bundle top level
-        // (OUTSIDE the guard block). That bare reference is out of scope even
-        // unminified and is the #1676/#1688 cross-scope class. References from
-        // INSIDE the guard block to a guard-block function resolve fine
-        // (shared block scope) and are NOT flagged — that's the bulk of legit
-        // cross-module calls. (A guard-block reference to a top-level function
-        // resolves via the outer scope, also not a bug.)
-        const refInGuard = inGuardRegion(node, guardSpan);
-        if (!(decl.inGuard && !refInGuard)) return;
+        // THE LOAD-BEARING SCOPE TEST (#1706 + #1716): the declaration sits
+        // inside a lexical scope BARRIER — either the double-load-guard
+        // `else {}` block (modules 00–20, block-scoped) or its own module's
+        // inner IIFE (modules 22–51, function-scoped). A reference is out of
+        // scope iff it falls OUTSIDE that barrier span. Cases:
+        //   - decl in guard block, ref outside it (program top level): the
+        //     original #1676/#1688 class — flagged.
+        //   - decl in module A's IIFE, ref in module B (its own IIFE, or any
+        //     position outside A's IIFE span): the #1716 top-level↔top-level
+        //     gap — flagged.
+        //   - decl + ref in the SAME barrier span (shared scope): in scope —
+        //     NOT flagged (the bulk of legit cross-module calls).
+        //   - decl at PROGRAM scope (no barrier, e.g. maybeDeferRemoval in
+        //     42-dj-remove.js): a true global, visible everywhere even
+        //     minified — NOT flagged.
+        const refLine = lineOf(node);
+        if (!decl.barrierSpan) return;                 // program-scope decl
+        if (withinSpan(refLine, decl.barrierSpan)) return;  // ref shares scope
 
         const m = mapLine(node.loc.start.line, offsets);
         const key = `${name}@${m.file}:${m.fileLine}`;
@@ -544,7 +641,7 @@ export function analyze() {
     const fnTable = buildFunctionTable(ast, offsets, guardSpan);
     const published = buildPublishedSet(ast, fnTable);
     const bindings = buildModuleBindings(ast, offsets, numModules);
-    const violations = findBareCrossIifeRefs({ ast, offsets, published, bindings, guardSpan });
+    const violations = findBareCrossIifeRefs({ ast, offsets, published, bindings });
     return { numModules, published, violations };
 }
 
