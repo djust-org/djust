@@ -3512,6 +3512,22 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ---
 
+### Milestone: v1.0.3 — third post-1.0 patch (theming perf follow-up)
+
+*Goal:* The single 1.0.3 patch release. One perf follow-up that the v1.0.2 #1722
+fix surfaced: applying context processors in `_sync_state_to_rust` made
+`theme_context` run per WS event, and its four `_safe_render` tag bodies are
+uncached. Design-gated features (#1562, #1561, #1557) stay in v1.1.0. Drained
+2026-06-05 via `/pipeline-drain`.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | request-scope memoize `theme_context` (#1727) | The #1722 fix applies context processors in `_sync_state_to_rust`, which runs on every WS event; `theme_context`'s four `_safe_render` tag bodies (`theme_head`/`theme_panel`/`theme_mode_toggle`/`theme_preset_selector`) are uncached. Add request-scoped memoization keyed on resolved theme state so the per-event re-run is cheap when theme state is unchanged but still reflects a switch when it changes. Must NOT first-sync-gate (breaks dynamic theme switching — change-detection only forwards changed vars). | Tech-debt / perf. From PR #1726 (#1722) Stage 11 finding 🟡 PERF-1. |
+
+---
+
 ### Milestone: v1.0.2 — second post-1.0 patch (6 issues: theming/hydration bugs + v1.0.1 review follow-ups)
 
 *Goal:* The single 1.0.2 patch release. Three production bugs surfaced
