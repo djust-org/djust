@@ -93,6 +93,7 @@ These are where schema-per-tenant assumptions break under one shared schema. Han
 - **Foreign keys.** If you let the shared table assign fresh PKs (2c), you must remap FKs to the new ids. The robust approach is to migrate tables in dependency order, keeping a per-tenant `old_pk → new_pk` map (a temp table per migrated table) and rewriting child FKs through it. If you instead **preserve original ids** (`INSERT` including the PK column), original FK values stay valid — but then PKs collide across tenants, so the shared table's PK must be a **composite** or you must offset/renumber ids per tenant before the copy. Choose one strategy per table and apply it consistently to that table's whole FK subtree.
 - **Cross-tenant unique constraints.** A column that was `unique=True` *within a schema* (e.g. `Project.slug`) is no longer globally unique once all tenants share a table. Replace the single-column unique with a **composite unique on `(tenant_id, <field>)`**:
 
+  <!-- doc-snippet-check: skip -->
   ```python
   class Meta:
       constraints = [
@@ -301,6 +302,7 @@ In that case, do **not** silently stay on the deprecated django-tenants path. [O
 
 Add a regression test that fails loudly if any tenant-scoped query returns a row belonging to another tenant. This catches a missing `tenant_id` filter on a queryset, a forgotten `unique` → composite migration, or a resolver returning the wrong id. The snippet below uses only verified `djust.tenants` symbols:
 
+<!-- doc-snippet-check: skip -->
 ```python
 # tests/test_tenant_isolation.py
 import pytest

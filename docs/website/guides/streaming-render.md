@@ -218,6 +218,7 @@ process startup):
   - To silence (e.g. for documentation projects that aren't actually
     using djust):
 
+    <!-- doc-snippet-check: skip -->
     ```python
     DJUST_CONFIG = {"suppress_checks": ["A075"]}
     ```

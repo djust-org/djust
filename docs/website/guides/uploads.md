@@ -426,7 +426,7 @@ The store is instantiated lazily on first use. djust reads `DJUST['upload_state_
 Implement the store protocol:
 
 ```python
-from djust.uploads.stores import UploadStateStore
+from djust.uploads.storage import UploadStateStore
 
 class MyUploadStateStore(UploadStateStore):
     async def get_offset(self, upload_id: str) -> int | None:

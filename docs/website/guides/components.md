@@ -900,7 +900,7 @@ LIVEVIEW_CONFIG = {"theme": {"theme": "ios", "preset": "forest"}}
 
 ```python
 from djust import LiveView
-from djust_theming import ThemeMixin
+from djust.theming import ThemeMixin
 
 class DashboardView(ThemeMixin, LiveView):
     template_name = "dashboard.html"

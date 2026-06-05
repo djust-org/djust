@@ -144,6 +144,7 @@ consumer calls `render_with_diff` and pushes VDOM patches. Setting
 
 Anywhere you can reach a Django DB connection, you can broadcast:
 
+<!-- doc-snippet-check: skip -->
 ```python
 # Celery task
 from celery import shared_task

@@ -138,15 +138,17 @@ repos:
 
   # Doc-snippet smoke test + claim assertions — catches doc-rot in fenced
   # Python snippets (syntax/phantom-import) and the Django-floor / JS
-  # bundle-size claims in README/QUICKSTART. See scripts/check-doc-snippets.py
-  # and tests/test_check_doc_snippets.py. Closes #1500 (parts a+b).
+  # bundle-size claims in README/QUICKSTART, plus symbol/import resolvability
+  # in docs/website/guides/*.md (#1707 — the guard for #1559/#1699's
+  # hallucinated djust.tenants symbols). See scripts/check-doc-snippets.py
+  # and tests/test_check_doc_snippets.py. Closes #1500 (parts a+b), #1707.
   - repo: local
     hooks:
       - id: check-doc-snippets
-        name: check doc snippets + version/size claims (#1500)
+        name: check doc snippets + version/size claims (#1500, #1707)
         entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/check-doc-snippets.py'
         language: system
-        files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$
+        files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$
         pass_filenames: false
 
   # Lockfile self-entry version sync — catches the drift class #1487 cited

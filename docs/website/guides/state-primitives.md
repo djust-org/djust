@@ -30,8 +30,8 @@ instance** and only recomputed when any listed dep changes (identity
 or shallow content).
 
 ```python
-from djust.decorators import computed
-from djust.live_view import LiveView, state
+from djust import LiveView
+from djust.decorators import computed, state
 
 
 class CartView(LiveView):

@@ -151,7 +151,10 @@ jobs:
       - name: ADR status/version-line consistency (#1501)
         run: .venv/bin/python scripts/check-adr-status.py
 
-      - name: Doc-snippet smoke test + claim assertions (#1500)
+      - name: Doc-snippet smoke test + claim assertions (#1500, #1707)
+        # Also scans docs/website/guides/*.md for symbol/import resolvability
+        # (#1707) — the guard for #1559/#1699's hallucinated djust.tenants
+        # symbols. Guides are scanned by default; --no-guides disables.
         run: .venv/bin/python scripts/check-doc-snippets.py
 
       - name: Lockfile self-entry version sync (#1498)
