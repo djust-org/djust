@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2rc3] - 2026-06-06
+
 ### Added
 
 - **Demo dogfood + playwright regression guard for the v1.0.2 navigation arc (#1742).** The entire v1.0.2 nav arc (#1733 zero-wiring route map, #1737 SSR→hydration flash parity, #1738 `DjustHooks`/`dj-hook`) was driven by a downstream consumer because `examples/demo_project` didn't exercise these paths end-to-end. Adds two plain `djust.LiveView` pages (`NavDemoPageAView` / `NavDemoPageBView` at `/demos/nav-a/` and `/demos/nav-b/`) linked by `dj-navigate` — confirming the #1733 dogfood that SPA cross-view nav needs NO `live_session()`, `get_route_map_script()`, or context-processor wiring (the route map auto-derives from the URLconf and auto-emits via `{% djust_client_config %}` already in the demo base `<head>`). Page A and Page B each carry a `DemoWidget` `dj-hook` (canvas, `dj-update="ignore"`) registered once in the persistent shell per the #1738 pattern. New `tests/playwright/test_nav_hooks.py` (wired into the `playwright-tests` CI job) asserts: a `window` sentinel survives navigation and `location.pathname` changes (#1733 SPA nav, not a full reload); a `MutationObserver` on the `[dj-view]` root records zero direct-child remove/re-add during first-load hydration (#1737 no-flash); and the hook's `mounted()` marker is set on initial load AND a fresh `mounted()` fires on the SPA patch-inserted Page B widget (#1738 hooks-survive-nav). A future regression in any of the three paths now red-bars CI internally.
