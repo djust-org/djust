@@ -7,6 +7,8 @@ import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from django.test import override_settings
+
 # Add python/ to path so we can import djust submodules directly
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -213,19 +215,46 @@ class TestLiveSession:
         # Check that view path is stored
         assert any("FakeView" in vp for _, vp in entries)
 
+    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
     def test_get_route_map_script_empty(self):
+        # Empty-safe requires BOTH no live_session entries AND no URLconf-derived
+        # LiveView routes (#1733 merges the auto-derived map). Use a URLconf with
+        # no LiveViews and reset the derived-map cache.
         routing = _import_routing()
         routing.live_session._route_maps = {}
-        result = routing.get_route_map_script()
+        routing._reset_route_map_cache()
+        try:
+            result = routing.get_route_map_script()
+        finally:
+            routing._reset_route_map_cache()
         assert result == ""
 
+    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
     def test_get_route_map_script_has_content(self):
+        # Use a no-LiveView URLconf so only the live_session entry is asserted on.
         routing = _import_routing()
         routing.live_session._route_maps = {"test": [("/app/", "myapp.views.DashboardView")]}
-        result = routing.get_route_map_script()
+        routing._reset_route_map_cache()
+        try:
+            result = routing.get_route_map_script()
+        finally:
+            routing._reset_route_map_cache()
         assert "window.djust._routeMap" in result
         assert "myapp.views.DashboardView" in result
         assert "<script>" in result
+
+    @override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+    def test_get_route_map_script_includes_urlconf_routes(self):
+        """#1733: get_route_map_script auto-includes URLconf-derived LiveView routes."""
+        routing = _import_routing()
+        routing.live_session._route_maps = {}
+        routing._reset_route_map_cache()
+        try:
+            result = routing.get_route_map_script()
+        finally:
+            routing._reset_route_map_cache()
+        assert "window.djust._routeMap" in result
+        assert "tests.route_map_test_urls.DashboardView" in result
 
 
 # ============================================================================

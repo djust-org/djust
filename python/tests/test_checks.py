@@ -92,6 +92,93 @@ class TestT004CheckIntegration:
         assert len(t004_errors) == 0
 
 
+class TestT016DjNavigateWithoutRoutes:
+    """T016 (#1733) — dj-navigate used but no LiveView routes in URLconf.
+
+    EMPIRICAL CANARY (#252): constructs the dj-navigate-without-routes
+    condition and asserts the check fires; asserts it does NOT fire when the
+    URLconf has LiveView routes.
+    """
+
+    def _set_template_dir(self, tmp_path, settings, body):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "nav.html").write_text(body)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+    def setup_method(self):
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+
+    def teardown_method(self):
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+
+    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
+    def test_fires_when_dj_navigate_without_routes(self, tmp_path, settings):
+        """T016 fires: dj-navigate present + URLconf has no LiveView routes."""
+        self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 1
+        assert "dj-navigate" in t016[0].msg
+        assert "route map is empty" in t016[0].msg
+
+    @override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+    def test_silent_when_routes_exist(self, tmp_path, settings):
+        """T016 stays silent: dj-navigate present + LiveView routes exist."""
+        self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 0
+
+    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
+    def test_silent_when_no_dj_navigate(self, tmp_path, settings):
+        """T016 stays silent when no template uses dj-navigate."""
+        self._set_template_dir(tmp_path, settings, "<div>no nav here</div>")
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 0
+
+    @override_settings(
+        ROOT_URLCONF="tests.api_test_urls_unmounted",
+        DJUST_CONFIG={"suppress_checks": ["T016"]},
+    )
+    def test_suppressible(self, tmp_path, settings):
+        """T016 is suppressible via DJUST_CONFIG['suppress_checks']."""
+        self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 0
+
+
 # ---------------------------------------------------------------------------
 # Configuration checks (C001-C004, S004)
 # ---------------------------------------------------------------------------

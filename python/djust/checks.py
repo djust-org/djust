@@ -2495,6 +2495,10 @@ _DJ_EVENT_DIRECTIVES_RE = re.compile(
     r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
 )
 _DJ_COMPONENT_RE = re.compile(r"dj-component")
+# T016 (#1733) — dj-navigate directive. Used to warn when SPA navigation is
+# requested but the URLconf-derived route map is empty (so dj-navigate would
+# silently full-reload instead of navigating over the WebSocket).
+_DJ_NAVIGATE_RE = re.compile(r"dj-navigate\s*=")
 # #1096 — opt-out marker for fragment templates that are intentionally
 # {% include %}d from a parent LiveView root. Fragment authors annotate
 # the file with `{# djust:partial #}` (case-insensitive, optional surrounding
@@ -2950,6 +2954,12 @@ def check_templates(app_configs, **kwargs):
     # confirmation the Rust-side safe renderer is active.
     djust_markdown_hits: list[tuple[str, int]] = []
 
+    # T016 (#1733) — tally dj-navigate occurrences across templates. The
+    # actual Warning is emitted once per project after the loop, gated on the
+    # URLconf-derived route map being empty (no LiveView routes → dj-navigate
+    # silently full-reloads).
+    dj_navigate_hits: list[tuple[str, int]] = []
+
     for filepath in _iter_template_files(tpl_dirs):
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
@@ -3248,6 +3258,51 @@ def check_templates(app_configs, **kwargs):
         for match in _DJ_MARKDOWN_TAG_RE.finditer(content):
             lineno = content[: match.start()].count("\n") + 1
             djust_markdown_hits.append((relpath, lineno))
+
+        # T016 — tally dj-navigate occurrences (#1733).
+        for match in _DJ_NAVIGATE_RE.finditer(content):
+            lineno = content[: match.start()].count("\n") + 1
+            dj_navigate_hits.append((relpath, lineno))
+
+    # T016 (#1733) — dj-navigate used but the URLconf-derived route map is
+    # empty. Without LiveView routes in the route map, dj-navigate cannot
+    # resolve a target view and silently falls back to a full page reload
+    # instead of SPA-navigating over the WebSocket. Emitted once per project.
+    if dj_navigate_hits and not _is_check_suppressed("djust.T016"):
+        try:
+            from .routing import build_route_map_from_urlconf
+
+            derived_map = build_route_map_from_urlconf()
+        except Exception:  # pragma: no cover - defensive; URLconf import errors
+            # If the URLconf can't be resolved we can't make a claim about the
+            # route map; stay silent rather than emit a misleading warning.
+            derived_map = None
+        if derived_map is not None and not derived_map:
+            first_relpath, first_lineno = dj_navigate_hits[0]
+            count = len(dj_navigate_hits)
+            errors.append(
+                DjustWarning(
+                    "dj-navigate is used in %d location(s) (first: %s:%d) but no "
+                    "LiveView routes were found in the URLconf, so the client "
+                    "route map is empty — dj-navigate will silently full-reload "
+                    "instead of navigating over the WebSocket."
+                    % (count, first_relpath, first_lineno),
+                    hint=(
+                        "dj-navigate needs LiveView routes in the URLconf; none "
+                        "were found. Ensure your views subclass djust.LiveView "
+                        "and are wired into urlpatterns (e.g. "
+                        "path('dashboard/', DashboardView.as_view())). "
+                        "Suppress this check with "
+                        "DJUST_CONFIG = {'suppress_checks': ['T016']}."
+                    ),
+                    id="djust.T016",
+                    fix_hint=(
+                        "dj-navigate needs LiveView routes in the URLconf; none "
+                        "were found — ensure your views subclass djust.LiveView "
+                        "and are in urlpatterns."
+                    ),
+                )
+            )
 
     if djust_markdown_hits and not _is_check_suppressed("djust.A090"):
         first_relpath, first_lineno = djust_markdown_hits[0]
