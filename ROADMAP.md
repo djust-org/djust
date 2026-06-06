@@ -3512,6 +3512,21 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ---
 
+### Milestone: v1.0.2-3 — nav-arc retro follow-ups (test-pollution + demo dogfood) (drain bucket → ships in 1.0.2)
+
+*Goal:* Close the loop on the two tech-debt items the v1.0.2 navigation-arc retro
+surfaced (Action Tracker #289/#290) before cutting 1.0.2 stable. Drain bucket:
+accumulates into the **1.0.2** release. Drained 2026-06-06 via `/pipeline-drain`.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | Fix 2 `test_checks.py` pollution failures + audit module-level caches (#1741) | `TestC003DaphneOrdering::test_c003_daphne_missing_info` (test_checks.py:286) + `TestSuppressChecks::test_no_suppress_by_default` (:4279) fail only under cross-test ordering (polluted check-registry/global state). Same class as #1733's `_route_map_cache` (routing.py:27). Find the polluting test, add an autouse reset, and audit module-level caches/registries for test-reset fixtures so the class stops recurring. | Tech-debt; pollution-class fix → 3-clean-runs gate. From Retro v1.0.2 nav arc (Action #289). |
+| **P2** | Dogfood `dj-navigate` + a client-hook in the demo (#1742) | Add a `dj-navigate` cross-view flow + a `dj-hook` third-party-lib widget to `examples/demo_project`, with a playwright/demo-checks assertion, so nav-foundation (#1733) / hydration-flash (#1737) / hooks (#1738) regressions red-bar CI in-house instead of surfacing downstream. | Tech-debt / demo + CI. From Retro v1.0.2 nav arc (Action #290). |
+
+---
+
 ### Milestone: v1.0.2-2 — hydration-flash parity + client-hooks docs (drain bucket → ships in 1.0.2)
 
 **STATUS: COMPLETE (2/2 merged 2026-06-06) — PR #1739 (#1737), PR #1740 (#1738).** Accumulates into the 1.0.2 release (re-cut 1.0.2rc3).
