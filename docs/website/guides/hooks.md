@@ -111,6 +111,99 @@ coordinate explicitly via `pushEvent` + a server-side handler.
 Sync hooks (no async/await, no Promise return) behave exactly as
 before. This is purely additive: no API change for existing hook code.
 
+## Integrating third-party libraries (Chart.js, maps, editors)
+
+This is the canonical pattern for any client-side library that draws into or
+manages its own DOM — Chart.js, Leaflet/MapLibre, CodeMirror, a rich-text
+editor. **Use a hook. Do not init the library from an inline `<script>` inside
+the reactive root.**
+
+### The trap: inline `<script>` works on reload, blank after navigation
+
+The intuitive approach is to drop a `<script>` next to the element, inside the
+LiveView's reactive (`dj-view`) root:
+
+```html
+<!-- ❌ Works on a full page load, SILENTLY BLANK after dj-navigate -->
+<canvas id="sales"></canvas>
+<script>
+    new Chart(document.getElementById('sales'), { /* ... */ });
+</script>
+```
+
+On a hard reload this runs and the chart draws. But when you arrive via a
+[`dj-navigate`](navigation#dj-navigate) SPA link, djust patches the new page in
+over the WebSocket — and **scripts in morphed-in content do not execute**. The
+library never initializes, the canvas stays blank, and **there is no error in
+the console**. The confusing signature is *"reload works, navigation doesn't."*
+If you've spent an hour on a chart that renders on refresh but is empty after
+clicking a link, this is why.
+
+### The fix: register a hook once in the persistent shell
+
+Register the hook **once** in your base template (the persistent shell that
+loads on every page and survives SPA navigation), and have the element opt in
+via `dj-hook`. The hook's `mounted()` fires both on initial hydration **and**
+every time the element is patched in via SPA navigation — so the library
+initializes on every route.
+
+```html
+<!-- base.html — loaded once, OUTSIDE the per-page reactive content -->
+<script>
+window.DjustHooks = window.DjustHooks || {};
+window.DjustHooks.Chart = {
+    mounted()   { this.draw(); },   // fires on hydration AND SPA patch-insert
+    updated()   { this.draw(); },   // server re-rendered new data
+    destroyed() {                   // element left the DOM — dispose
+        const c = Chart.getChart(this.el);
+        if (c) c.destroy();
+    },
+    draw() {
+        // Tear down a prior instance before redrawing (avoids Chart.js's
+        // "Canvas is already in use" error on updated()/re-mount).
+        const prior = Chart.getChart(this.el);
+        if (prior) prior.destroy();
+        const data = JSON.parse(this.el.dataset.chart);
+        new Chart(this.el, {
+            type: data.type,
+            data: { labels: data.labels, datasets: [{ data: data.values }] },
+        });
+    },
+};
+</script>
+```
+
+```html
+<!-- per-page template — the element opts into the hook -->
+<canvas dj-hook="Chart" dj-update="ignore"
+        data-chart='{{ chart_json }}'></canvas>
+```
+
+> `window.DjustHooks` and `window.djust.hooks` are merged into one registry, so
+> either works. `window.DjustHooks` is the Phoenix-LiveView-compatible name.
+
+### Why `dj-update="ignore"`
+
+Chart.js (and maps, editors, …) mutate the element's own DOM — a `<canvas>`
+gets a sized drawing buffer, a map fills a `<div>` with tiles. djust's VDOM has
+no idea those mutations happened and would fight the library on the next patch,
+wiping its work. `dj-update="ignore"` tells the patcher to **skip this element
+entirely** on server re-renders, leaving the subtree fully under the library's
+control. You drive updates yourself from `updated()` (reading fresh
+`data-*` attributes), not from the VDOM.
+
+> For elements where you want the VDOM to keep patching *most* attributes but
+> leave a specific few alone (e.g. a `<dialog open>` toggled by the browser),
+> use [`dj-ignore-attrs`](#ignored-attributes-dj-ignore-attrs--v050) instead —
+> it's a per-attribute opt-out rather than a whole-element one.
+
+### Cleanup matters
+
+`destroyed()` fires when the element leaves the DOM (including when you navigate
+*away* via `dj-navigate`). Disposing the library instance there prevents leaked
+canvases, dangling map listeners, and Chart.js's "Canvas is already in use"
+error when you navigate back. See [Best Practices](#best-practices) below.
+
 ## Hook Instance API
 
 ### Properties

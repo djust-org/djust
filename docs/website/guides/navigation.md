@@ -143,6 +143,12 @@ route map is empty), djust's system check **`djust.T016`** warns you — otherwi
 connection, and its registrations are merged into the auto-derived map. It is no
 longer required just to make `dj-navigate` resolve routes.
 
+> **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
+> don't execute, so an inline `<script>` that inits a library renders on a hard
+> reload but stays blank after navigation. Initialize third-party libraries from
+> a [client hook](hooks#integrating-third-party-libraries-chartjs-maps-editors)
+> registered once in your base template, not an inline `<script>`.
+
 ## Example: Search with URL State
 
 ```python
