@@ -264,7 +264,7 @@ issue or be explicitly closed with a reason.
 | 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Closed | Resolved in v0.9.5-2 PR #1399 — Stage 4 mandatory checklist item added to `.pipeline-templates/bugfix-state.json`. |
 | 223 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | PR #1355 Stage 13 Re-Review | #1356 | Open | PR #1355 fixed `get()` to clone via msgpack round-trip (closes #1353), but `get_and_update()` was overlooked. Currently zero callers. If a future caller is added without auditing, the #1353 race class returns. Suggested fix: delete (cleanest), or apply the same clone, or document the shared-ref contract. |
 | 224 | Deduplicate `_parseTimeMs` / `_computeTransitionTiming` between dj-transition and dj-remove modules | PR #1359 Stage 11 Review (CodeQL) | #1360 | Open | PR #1357 introduced both helpers in `41-dj-transition.js` AND `42-dj-remove.js`. The bundle (concatenation of source modules) has duplicate top-level function declarations. CodeQL flagged it once PR #1359 rebuilt the bundle. JS allows duplicate fn decls in non-strict mode (second wins) — bundle works because both copies are functionally identical, but the duplication is fragile. Fix: move helpers to a shared earlier-loaded module. |
-| 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Open | `pathname` is user-controllable; current safety relies on downstream server validation rejecting invalid routes. Defensive tightening recommended: own-property guard or `Map` (prototype-pollution-immune by design). PR #1359 added eslint-disable-next-line with rationale; this issue tracks tightening the actual access. |
+| 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Closed | **Resolved in v1.0.2-1 (PR #1736, #1733).** `resolveViewPath` already iterated via `Object.entries` (own-prop-safe); #1736 hardened the do-not-reintroduce comment and added a regression test that pollutes `Object.prototype['/evil/']` and asserts no leak. GitHub #1361 closed. |
 | 226 | Stage 11 Code Review's reproducer-driven verdict is more reliable than diff-only review | Retro v0.9.4-1 / PR #1365 | — | Closed | **Resolved as canon: reviewers should write a local reproducer test for any algorithm finding before classifying severity.** Stage 11 reviewer for PR #1365 wrote a test that FAILED LOCALLY on the original `ea6c4c4a`, providing empirical proof of the elif-cascade algorithm bug. Stage 13 reviewer wrote 9 independent reproducer tests, 4 of which fail on `ea6c4c4a` and pass on the fix `278d6f2a` — converting "this looks wrong" into "this IS wrong." Pattern: when a Stage 11 reviewer suspects an algorithmic flaw, they should attempt a reproducer; the reproducer either confirms a 🔴 finding or shows the suspicion was unfounded (downgrade to 🟡 or 🟢). Future Stage 11 reviews on algorithm-class PRs should follow this discipline. |
 | 227 | dj-if + dj-key boundary-reorder limitation in keyed VDOM diff | PR #1365 Stage 13 (deferred) | #1366 | Open | When non-boundary siblings carry `dj-key` AND reorder within their relative slot, position-based pairing of non-boundary children can produce suboptimal patches. Production templates don't typically reorder elements across `{% if %}` boundaries. Defer to v0.10 polish. Suggested fix: extend the pre-pass to delegate to `diff_keyed_children` when any non-boundary children have `dj-key`. |
 | 228 | HTTP path log-injection asymmetry: cache_key not sanitize_for_log'd in rust_bridge.py | PR #1367 Stage 11 (deferred per Action #1079) | #1368 | Open | Pre-existing — `rust_bridge.py:372` (HTTP path) doesn't use `sanitize_for_log` for cache_key while sibling at line 343 (WS path) does. Out of scope for #1362's literal text; one-line fix proposed in the issue. |
@@ -328,6 +328,59 @@ issue or be explicitly closed with a reason.
 | 286 | Promote the demo `djust_check` dogfood from `continue-on-error` to a blocking gate | PR #1712 (#1708 review) | #1713 | Closed | **Resolved in v1.0.2 (PR #1730)** — dedicated blocking `demo-checks` job (no `continue-on-error`), wired into the `test-summary` AND-condition; synthetic-error unit test covers both gate arms (error-severity + T001/T014/T015). |
 | 287 | Generalize the cross-IIFE guard to top-level-module (22-51) bare refs | PR #1715 (#1706 review) | #1716 | Closed | **Resolved in v1.0.2 (PR #1729)** — barrier-span scope model covers guard-block AND top-level-module declarations; the program-scope `maybeDeferRemoval` FP control is what required scope-aware (not module-aware) analysis. Two-sided empirical canary (#252): synthetic trigger exit 1 on branch / exit 0 on main; real tree clean. |
 | 288 | Request-scope memoize `theme_context` — now runs per WS event after #1722 | PR #1726 (#1722 review) | #1727 | Closed | **Resolved in v1.0.2 (PR #1732)** — request-scoped cache on the request object keyed by the 7-tuple theme-state key (same shape as `_render_theme_outputs` lru); four `_safe_render` tag bodies memoized per connection, recomputed on a theme switch. No nonce/per-request data embedded (verified), so no cross-request leak. NOT first-sync-gated. |
+| 289 | Fix 2 pre-existing `test_checks.py` pollution failures + audit module-level caches for test-reset fixtures | Retro v1.0.2 nav arc (PRs #1736, #1739 reviews) | #1741 | Open | `TestC003DaphneOrdering::test_c003_daphne_missing_info` + `TestSuppressChecks::test_no_suppress_by_default` fail only under cross-test ordering; #1733's `_route_map_cache` was the same class (fixed in #1739). Audit all module-level caches + check-registry for autouse reset. |
+| 290 | Dogfood `dj-navigate` cross-view flow + a client-hook (3rd-party lib) in the demo so demo-checks catches nav/hydration/hook regressions | Retro v1.0.2 nav arc (PRs #1736, #1739, #1740) | #1742 | Open | The whole arc was downstream-driven, not caught in-house, because the demo doesn't exercise these paths end-to-end (T016 stays silent; no hook example). |
+
+## v1.0.2 navigation arc — zero-wiring dj-navigate + hydration-flash parity + hooks docs (v1.0.2-1 + v1.0.2-2; PRs #1736, #1739, #1740)
+
+**Date**: 2026-06-06
+**Scope**: The post-rc1 navigation/hydration work, all driven by one downstream consumer (rent app) integrating djust 1.0.2rc1/rc2, and governed by ADR-021 (chosen via `/pipeline-strategy`, Path 2). v1.0.2-1: #1733 zero-wiring route map (PR #1736). v1.0.2-2: #1737 SSR render-normalization parity / first-hydration flash (PR #1739), #1738 client-hooks-for-third-party-libs docs (PR #1740). All accumulate into the 1.0.2 release.
+**Tests at close**: python/djust/tests 3092; all CI green (py3.12, py3.14t, rust, demo-checks, playwright).
+
+### What We Learned
+
+**1. A parity/coverage test can pass while the invariant it protects has an untested variant — "parity holds" ≠ "parity is tested across every variant".**
+Caught twice in one arc. PR #1736's dual-engine `djust_client_config` parity test used no-LiveView URLconfs + an empty Rust-handler context, so it never compared the route-map `<script>` or the CSP nonce — the exact variant it existed to protect. PR #1739's "byte-equivalence modulo dj-id" claim was literally false for adjacent preserved blocks (`</textarea> <pre>`), benign (the #1724 client whitespace-skip prunes it) but untested. In both cases the Stage-11 reviewer built its OWN reproduction and found the hole; the fix in each case was not just the code but adding the missing-variant test (parity-with-nonce-and-routemap in #1736; adjacent-preserved-blocks byte-equality in #1739). This is exactly v1.0.0rc4 retro finding #1 ("a coverage suite must enumerate EVERY variant of the surface it covers"), re-confirmed.
+**Action taken**: Closed — variant-completeness tests added in PR #1736 (`test_django_and_rust_engines_emit_identical_route_map_with_nonce`) and PR #1739 (`test_adjacent_preserved_blocks_byte_equivalent`); canon already exists (v1.0.0rc4 finding #1).
+
+**2. A foundation PR's own new module-level cache introduced a latent test-isolation regression that only surfaced in a sibling PR's CI shard.**
+#1733 (PR #1736) added `_route_map_cache` (routing.py:27) and made `get_route_map_script` merge the URLconf-derived map. That broke `test_no_routes_returns_empty` deterministically (the URLconf always has LiveView routes now), but it was masked in #1736's own CI by test ordering and only surfaced in #1739's py3.12 shard — where the implementer first mis-diagnosed it as an "xdist flake" before the reviewer proved it deterministic. Two further pre-existing `test_checks.py` pollution failures (Daphne-ordering, suppress) ride the same class. Module-level caches without an autouse test-reset are a recurring pollution source.
+**Action taken**: Open — tracked in Action Tracker #289 (GitHub #1741).
+
+**3. The entire arc was downstream-driven, not caught in-house, because the demo doesn't exercise dj-navigate/hydration/hooks end-to-end.**
+Every issue here (#1733, #1737, #1738) came from a real consumer integrating the framework, not from internal testing — and the new blocking `demo-checks` job couldn't catch them because the demo's nav coverage is thin (T016 stays silent in the checked scope) and there's no client-hook/third-party-lib example at all. A demo that dogfooded a `dj-navigate` cross-view flow + a `dj-hook` widget would have surfaced the flash and the inline-`<script>` trap internally.
+**Action taken**: Open — tracked in Action Tracker #290 (GitHub #1742).
+
+### Insights
+
+- **Adversarial Stage-11 with independent reproduction is load-bearing, not ceremony.** Across the three PRs the reviewer overturned implementer claims four times (parity-test hole; byte-equivalence-modulo-dj-id false for adjacent blocks; "flake" was a deterministic regression; doc-runtime was a different file than briefed) — every time by building its own repro rather than trusting the report. Keep spawning a fresh-context reviewer that reproduces, not just reads.
+- **Split-foundation (ADR-021 / Action #1122) is executing cleanly.** The zero-wiring route-map foundation (#1733) shipped and is soaking; the directional `auto_navigate` capability (#1734/#1735) stays deferred to v1.1.0. The strategy session's Path 2 is playing out as designed — foundation in a patch, directional opt-in in a minor.
+- **Doc-claim ledger discipline (#1046/#1197) keeps paying.** #1733 removed a phantom `{% djust_route_map %}` docstring tag; #1740 produced a grep-verified symbol→file:line ledger and discovered the real hooks runtime (`19-hooks.js`) was a different file than the brief assumed — documenting what actually fires, not what was guessed.
+- **Drain-bucket-into-release consolidation worked.** Per user direction, nav work folded into the unreleased 1.0.2 line as `v1.0.2-1`/`v1.0.2-2` buckets (re-cut rc2, rc3 pending) rather than spinning new patch versions — keeping one coherent 1.0.2 release.
+
+### Review Stats
+
+| Metric | PR #1736 | PR #1739 | PR #1740 | Total |
+|--------|----------|----------|----------|-------|
+| 🔴 Findings | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 2 | 2 | 0 | 4 |
+| Fix-passes | 1 | 1 | 0 | 2 |
+| Tracker rows filed | 0 | 0 | 0 | 2 (milestone) |
+| CI failures (resolved) | 0 | 1 (pre-existing #1733 regr.) | 0 | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (from the parent v1.0.2 arc) the Reproduction-fidelity VDOM/innerHTML bullet + the v1.0.2 process-canon section (CI-gate AND-condition, per-event memoization) — both already landed; this arc re-confirmed them rather than adding new canon.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] #289 — fix 2 test_checks.py pollution failures + audit module-level caches (GitHub #1741)
+- [ ] #290 — dogfood dj-navigate + a client-hook in the demo (GitHub #1742)
+- [ ] v1.1.0 (ADR-021 Stage 2): #1734 `auto_navigate` opt-in + #1735 nav-story reconcile
+- [ ] **Release**: re-cut 1.0.2rc3 (rc2 + #1737 + #1738) or go to 1.0.2 stable.
 
 ## v1.0.2 — Second post-1.0 patch: theming/hydration bugs + v1.0.1 follow-ups (PRs #1725–#1732, 7 merged)
 
@@ -379,7 +432,7 @@ PR #1730 (#1713) moved the demo `djust_check` dogfood out of the `continue-on-er
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
 - [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 7 PRs — 3 production bug fixes + 3 tech-debt follow-ups + 1 perf follow-up (#1727).
 
-**Forward-link**: `/pipeline-strategy` 2026-06-05 (auto-navigation) → `docs/strategy-sessions/2026-06-05-auto-navigation.md`. Chose Path 2 (Foundation + opt-in `auto_navigate`); drafted **ADR-021**; filed #1733 (v1.0.3 foundation), #1734 + #1735 (v1.1.0). Surfaced from a downstream consumer hitting `dj-navigate` silent full-reload (undocumented route-map prerequisite + phantom `{% djust_route_map %}` tag in `get_route_map_script`'s docstring).
+**Forward-link**: `/pipeline-strategy` 2026-06-05 (auto-navigation) → `docs/strategy-sessions/2026-06-05-auto-navigation.md`. Chose Path 2 (Foundation + opt-in `auto_navigate`); drafted **ADR-021**; filed #1733 (foundation — shipped v1.0.2-1, PR #1736), #1734 + #1735 (v1.1.0). Surfaced from a downstream consumer hitting `dj-navigate` silent full-reload (undocumented route-map prerequisite + phantom `{% djust_route_map %}` tag in `get_route_map_script`'s docstring). **Retro for the resulting nav arc (v1.0.2-1 + v1.0.2-2): see the "v1.0.2 navigation arc" entry above.**
 
 ## v1.0.1 — First post-1.0 patch: two drain waves (PRs #1690–#1715, 13 merged)
 
