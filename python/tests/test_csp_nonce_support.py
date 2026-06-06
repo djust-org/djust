@@ -13,9 +13,9 @@ compatible (no attribute when no nonce, same as pre-fix behavior).
 from unittest.mock import MagicMock
 
 from django.template import Context, Template
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 
-from djust.routing import get_route_map_script, live_session
+from djust.routing import _reset_route_map_cache, get_route_map_script, live_session
 from djust.utils import get_csp_nonce
 
 
@@ -71,6 +71,13 @@ class TestRouteMapScriptNonce:
         live_session._route_maps = {
             "test": [("/dashboard", "myapp.views.DashboardView")],
         }
+        # #1733: ``get_route_map_script`` now merges live_session routes with
+        # ``build_route_map_from_urlconf()`` (which walks the active ROOT_URLCONF
+        # and caches the derived map at module level keyed by urlconf+prefix).
+        # Reset that cache around every test in this class so a derived map from
+        # another test's ROOT_URLCONF can't leak in (the cause of the
+        # intermittent ``test_no_routes_returns_empty`` failure under xdist).
+        _reset_route_map_cache()
 
     def teardown_method(self):
         if self._saved is None:
@@ -78,6 +85,7 @@ class TestRouteMapScriptNonce:
                 delattr(live_session, "_route_maps")
         else:
             live_session._route_maps = self._saved
+        _reset_route_map_cache()
 
     def test_no_request_no_nonce(self):
         """No request → plain <script> tag, same as pre-#655 behavior."""
@@ -106,9 +114,20 @@ class TestRouteMapScriptNonce:
         out = get_route_map_script(req)
         assert 'nonce="' not in out
 
+    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
     def test_no_routes_returns_empty(self):
-        """No route maps → empty string, unchanged by #655."""
+        """No route maps from EITHER source → empty string (unchanged by #655).
+
+        #1733 made ``get_route_map_script`` merge the live_session route maps
+        with ``build_route_map_from_urlconf()``, which walks the active
+        ROOT_URLCONF. The genuine no-routes case therefore requires BOTH
+        sources empty: clear ``live_session._route_maps`` AND point
+        ROOT_URLCONF at a routeless urlconf (``tests.api_test_urls_unmounted``
+        has ``urlpatterns = []``). The cache is reset in setup/teardown so the
+        derived map can't leak in from another test's urlconf.
+        """
         live_session._route_maps = {}
+        _reset_route_map_cache()  # ensure no cached derived map from setup's prefix
         out = get_route_map_script(RequestFactory().get("/"))
         assert out == ""
 

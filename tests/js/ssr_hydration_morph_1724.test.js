@@ -204,6 +204,52 @@ describe('#1724 SSR→hydration morphs whitespace-separated root children in pla
         expect(root.querySelector('.after')).toBe(after);
     });
 
+    // #1737 — symptom-level: with the SERVER fix in place the initial-GET
+    // dj-root is normalized identically to the first WS frame (comments
+    // stripped, inter-element whitespace collapsed, dj-if markers + <pre>
+    // preserved), differing only by the dj-id attrs the client stamps.
+    // morphChildren over (SSR-normalized, WS-frame) must produce ZERO churn:
+    // the same element nodes survive in place, so there is no flash. The
+    // SSR-side strings below mirror what python `_strip_comments_and_whitespace`
+    // now emits for the GET dj-root (the byte-equivalence the Python tests in
+    // python/djust/tests/test_ssr_render_normalization_1737.py assert).
+    it('#1737: normalized SSR root morphs into the WS frame with zero element churn', () => {
+        // SSR side = normalized server output: NO comment nodes, NO
+        // inter-element whitespace text nodes, NO dj-id (client stamps it).
+        const root = document.createElement('div');
+        root.setAttribute('dj-view', 'app.views.UnitsView');
+        root.innerHTML =
+            '<div class="mobile-header">SSR header</div>' +
+            '<div class="main-wrapper"><canvas class="chart"></canvas></div>';
+        const header = root.querySelector('.mobile-header');
+        const wrapper = root.querySelector('.main-wrapper');
+        const canvas = root.querySelector('canvas');
+        canvas._chartInstance = { id: 'chart-99' };
+
+        // WS frame = same structure, dj-id stamped, updated text.
+        const desired = document.createElement('div');
+        desired.innerHTML =
+            '<div class="mobile-header" dj-id="e1">WS header</div>' +
+            '<div class="main-wrapper" dj-id="e2"><canvas class="chart" dj-id="e3"></canvas></div>';
+
+        const beforeChildren = Array.from(root.children);
+        morphChildren(root, desired);
+        const afterChildren = Array.from(root.children);
+
+        // Zero element churn: identical node objects, identical order.
+        expect(afterChildren.length).toBe(2);
+        expect(afterChildren[0]).toBe(beforeChildren[0]);
+        expect(afterChildren[1]).toBe(beforeChildren[1]);
+        expect(afterChildren[0]).toBe(header);
+        expect(afterChildren[1]).toBe(wrapper);
+        // The Chart.js canvas instance survives (no teardown = no flash).
+        expect(root.querySelector('canvas')).toBe(canvas);
+        expect(canvas._chartInstance.id).toBe('chart-99');
+        // dj-id adopted onto the SAME nodes; updated text reaches the user.
+        expect(header.getAttribute('dj-id')).toBe('e1');
+        expect(header.textContent).toBe('WS header');
+    });
+
     it('still REPLACES when existing children carry a different id (keyed reorder/replace not broken)', () => {
         // Guard against over-reach: when the existing positional node already
         // carries an id that differs from the desired id, this is a legitimate

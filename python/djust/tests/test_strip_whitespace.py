@@ -107,20 +107,30 @@ class TestStripCommentsAndWhitespace:
         assert "three\nfour" in result
 
     def test_textarea_surrounded_by_whitespace(self, mixin):
-        """Whitespace OUTSIDE textarea is still collapsed."""
+        """Whitespace between a tag boundary and a <textarea> is STRIPPED.
+
+        #1737: a <pre>/<code>/<textarea> tag is a tag boundary for
+        inter-element whitespace collapse, matching the Rust
+        ``render_with_diff()`` whitespace pass. Pre-#1737 this normalizer
+        left a single space (``<div> <textarea>``) which diverged from Rust
+        and re-opened the first-hydration whitespace mismatch. Content
+        INSIDE the textarea is still preserved.
+        """
         html = "<div>   <textarea>keep\nme</textarea>   </div>"
         result = mixin._strip_comments_and_whitespace(html)
         assert "keep\nme" in result
-        # Runs of whitespace outside are collapsed to single space
-        assert "<div> <textarea>" in result
+        # Whitespace adjacent to the preserved block is stripped (Rust parity)
+        assert "<div><textarea>" in result
+        assert "</textarea></div>" in result
 
     def test_whitespace_between_sibling_tags_collapsed(self, mixin):
-        """Whitespace between sibling tags is collapsed to single space."""
+        """Whitespace between a sibling tag and a <textarea> is STRIPPED (#1737)."""
         html = "<span>a</span>   \n   <textarea>keep\nme</textarea>"
         result = mixin._strip_comments_and_whitespace(html)
         assert "keep\nme" in result
-        # Multi-whitespace between close/open tags collapsed to single space
-        assert "</span> <textarea>" in result
+        # A <textarea> boundary is a tag boundary — whitespace collapses to
+        # nothing, matching the Rust render_with_diff() pass (#1737).
+        assert "</span><textarea>" in result
 
     def test_textarea_case_insensitive(self, mixin):
         html = "<TEXTAREA>hello\nworld</TEXTAREA>"

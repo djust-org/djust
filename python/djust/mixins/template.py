@@ -32,6 +32,21 @@ _DJ_ROOT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Match ``<div ... dj-view ...>`` as a standalone attribute name. Used as a
+# FALLBACK to ``_DJ_ROOT_RE`` in ``render_full_template``: when a template
+# declares only ``dj-view`` (the auto-inferred-dj-root case, see PR #297) and
+# no literal ``dj-root`` attribute, the dj-root replacement step must still
+# find the root div in the page shell — otherwise it falls through to
+# returning the un-normalized ``_full_template`` render, leaving HTML comments
+# and as-authored whitespace in the initial-GET dj-root that the WS
+# (``render_with_diff``) frame has already stripped. That structural mismatch
+# is what triggers the first-hydration ``morphChildren`` re-render / flash
+# (#1737). Same standalone-attribute lookahead semantics as ``_DJ_ROOT_RE``.
+_DJ_VIEW_RE = re.compile(
+    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
+    re.IGNORECASE,
+)
+
 # Match ``</body>`` tolerating trailing whitespace inside the tag (``</body >``).
 _BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
 
@@ -317,6 +332,36 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Normalize whitespace
         html = re.sub(r"\s+", " ", html)
         html = re.sub(r">\s+<", "><", html)
+
+        # #1737: collapse whitespace between a tag boundary and a preserved
+        # (<pre>/<code>/<textarea>) block too, so this Python normalizer
+        # matches the Rust ``render_with_diff()`` whitespace pass exactly.
+        # Rust's parser drops every whitespace-only text node that is a direct
+        # child of a non-whitespace-preserving element (parser.rs:520-531), so
+        # the inter-element whitespace around — and BETWEEN — preserved blocks
+        # is removed: ``</div> <pre>`` → ``</div><pre>``,
+        # ``</textarea> </div>`` → ``</textarea></div>``, AND
+        # ``</textarea> <pre>`` → ``</textarea><pre>`` (preserved↔preserved).
+        # The placeholder-substitution above hides those boundaries from the
+        # ``>\s+<`` rule (the placeholder doesn't start with ``<``), so collapse
+        # them explicitly. Without this the initial-GET dj-root keeps
+        # whitespace-only text nodes around preserved blocks that the first WS
+        # frame lacks, re-opening the first-hydration whitespace mismatch
+        # (#1724 / #1737). Whitespace INSIDE a preserved block is untouched
+        # (it's hidden behind the placeholder and restored verbatim below), and
+        # whitespace adjacent to actual TEXT (e.g. ``before <pre>``) is left as
+        # a single space — Rust keeps it because that text node is not
+        # whitespace-only.
+        #
+        # (1) literal-tag → preserved   and   (2) preserved → literal-tag:
+        html = re.sub(r">\s+(__PRESERVED_BLOCK_\d+__)", r">\1", html)
+        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+<", r"\1<", html)
+        # (3) preserved → preserved: collapse whitespace between two adjacent
+        # preserved blocks. The lookahead (not a consuming group) lets a run of
+        # 3+ adjacent blocks collapse every gap in a single pass — a consuming
+        # ``\1...\2`` form would swallow the middle block and miss its trailing
+        # gap.
+        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+(?=__PRESERVED_BLOCK_\d+__)", r"\1", html)
 
         # Restore preserved blocks
         for i, block in enumerate(preserved_blocks):
@@ -832,6 +877,21 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             liveview_html = self._rust_view.render()
             liveview_html = self._hydrate_react_components(liveview_html)
 
+            # #1737: normalize the rendered dj-root so the initial-GET output
+            # is structurally identical to the first WS frame. The WS path
+            # (``render_with_diff`` → Rust ``render_with_diff()``) applies an
+            # additional whitespace pass that plain Rust ``render()`` does NOT
+            # — e.g. the single spaces a normalized template keeps around
+            # ``{% if %}`` tags survive ``render()`` as ``> <!--dj-if--> <``
+            # but are collapsed to ``><!--dj-if-->`` by ``render_with_diff()``.
+            # Applying the SAME ``_strip_comments_and_whitespace()`` the
+            # template path uses (get_template():154/172/184) converges the
+            # two: ``dj-if`` boundary markers are preserved (negative
+            # lookahead in the normalizer), ``<pre>``/``<code>``/``<textarea>``
+            # whitespace is preserved, and the only residual difference is the
+            # dj-id attrs the client stamps onto the prerender DOM (#1610).
+            liveview_html = self._strip_comments_and_whitespace(liveview_html)
+
             # --- Step 2: Render the page shell from _full_template ---
             from djust._rust import RustLiveView
 
@@ -881,7 +941,21 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # wrapper (since get_template() returns the dj-root template).
             # Replace the shell's <div dj-root>...</div> ENTIRELY (opening
             # tag through closing tag) with liveview_html.
-            dj_root_match = _DJ_ROOT_RE.search(shell_html)
+            #
+            # #1737: fall back to ``dj-view`` when no literal ``dj-root``
+            # attribute is present (the auto-inferred-dj-root case). Without
+            # this fallback the replacement misses the root entirely and we
+            # return the un-normalized ``_full_template`` shell — leaving
+            # comment nodes + as-authored whitespace in the initial-GET
+            # dj-root that the WS frame (``render_with_diff`` →
+            # ``_strip_comments_and_whitespace`` at get_template()) has
+            # already stripped. The structural mismatch is what makes the
+            # client's first-hydration ``morphChildren`` rebuild the subtree
+            # (visible flash). ``liveview_html`` is rendered from the SAME
+            # normalized ``self._rust_view`` the WS path uses, so the
+            # replaced dj-root is structurally identical to the first WS
+            # frame (modulo the dj-id attrs the client stamps on, per #1610).
+            dj_root_match = _DJ_ROOT_RE.search(shell_html) or _DJ_VIEW_RE.search(shell_html)
             if dj_root_match:
                 # Start of the <div dj-root...> opening tag
                 tag_start = dj_root_match.start()
