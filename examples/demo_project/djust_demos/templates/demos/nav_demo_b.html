@@ -1,0 +1,31 @@
+{% extends "demos/nav_demo_base.html" %}
+
+{% block title %}Nav Demo — Page B (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.nav_demo.NavDemoPageBView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1 id="nav-demo-heading" style="font-size: 2rem; font-weight: 700;">Nav Demo — Page {{ page }}</h1>
+    <p style="color: var(--color-text-muted);">
+        You arrived here via SPA <code>dj-navigate</code> — no full page reload.
+    </p>
+
+    <!-- #1738 dj-hook widget — mounts on the SPA patch-insert when arriving
+         from Page A. dj-update="ignore" protects the canvas. -->
+    <canvas
+        id="demo-widget-b"
+        dj-hook="DemoWidget"
+        dj-update="ignore"
+        width="40"
+        height="40"
+        style="border: 1px solid var(--color-border); border-radius: 6px;"
+    ></canvas>
+
+    <div style="margin: 1.5rem 0;">
+        <button dj-click="bump" class="btn-primary-modern">Bump (clicks: {{ clicks }})</button>
+    </div>
+
+    <a id="go-to-a" dj-navigate="/demos/nav-a/" class="btn-secondary-modern">
+        ← Back to Page A
+    </a>
+</div>
+{% endblock %}
