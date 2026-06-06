@@ -3,6 +3,7 @@ Demo views for djust_demos app
 """
 
 from .counter_demo import CounterView
+from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .demos import (
     TodoView,
     ChatView,
@@ -42,6 +43,8 @@ from .markdown_stream_demo import MarkdownStreamDemoView
 
 __all__ = [
     "CounterView",
+    "NavDemoPageAView",
+    "NavDemoPageBView",
     "TodoView",
     "ChatView",
     "ReactDemoView",

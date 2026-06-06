@@ -316,6 +316,8 @@ jobs:
           .venv/bin/python tests/playwright/test_cache_decorator.py
           echo "Running DraftMode tests..."
           .venv/bin/python tests/playwright/test_draft_mode.py
+          echo "Running nav + dj-hook regression guard (#1742)..."
+          .venv/bin/python tests/playwright/test_nav_hooks.py
 
       - name: Upload server logs on failure
         if: failure()

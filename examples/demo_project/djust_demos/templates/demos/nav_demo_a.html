@@ -1,0 +1,34 @@
+{% extends "demos/nav_demo_base.html" %}
+
+{% block title %}Nav Demo — Page A (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.nav_demo.NavDemoPageAView" style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+    <h1 id="nav-demo-heading" style="font-size: 2rem; font-weight: 700;">Nav Demo — Page {{ page }}</h1>
+    <p style="color: var(--color-text-muted);">
+        Dogfoods #1733 (zero-wiring route map), #1737 (no hydration flash),
+        and #1738 (dj-hook survives SPA nav). No <code>live_session()</code>
+        wiring — the route map auto-derives from the URLconf.
+    </p>
+
+    <!-- #1738 dj-hook widget. dj-update="ignore" keeps VDOM patches from
+         touching the canvas the hook owns. -->
+    <canvas
+        id="demo-widget-a"
+        dj-hook="DemoWidget"
+        dj-update="ignore"
+        width="40"
+        height="40"
+        style="border: 1px solid var(--color-border); border-radius: 6px;"
+    ></canvas>
+
+    <div style="margin: 1.5rem 0;">
+        <button dj-click="bump" class="btn-primary-modern">Bump (clicks: {{ clicks }})</button>
+    </div>
+
+    <!-- #1733 SPA cross-view nav — no get_route_map_script, no live_session. -->
+    <a id="go-to-b" dj-navigate="/demos/nav-b/" class="btn-secondary-modern">
+        Go to Page B →
+    </a>
+</div>
+{% endblock %}
