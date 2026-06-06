@@ -3514,6 +3514,8 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ### Milestone: v1.0.2-3 — nav-arc retro follow-ups (test-pollution + demo dogfood) (drain bucket → ships in 1.0.2)
 
+**STATUS: COMPLETE (2/2 merged 2026-06-06) — PR #1743 (#1741), PR #1744 (#1742).** Accumulates into the 1.0.2 release.
+
 *Goal:* Close the loop on the two tech-debt items the v1.0.2 navigation-arc retro
 surfaced (Action Tracker #289/#290) before cutting 1.0.2 stable. Drain bucket:
 accumulates into the **1.0.2** release. Drained 2026-06-06 via `/pipeline-drain`.
