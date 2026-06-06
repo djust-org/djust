@@ -3514,6 +3514,8 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ### Milestone: v1.0.2-2 — hydration-flash parity + client-hooks docs (drain bucket → ships in 1.0.2)
 
+**STATUS: COMPLETE (2/2 merged 2026-06-06) — PR #1739 (#1737), PR #1740 (#1738).** Accumulates into the 1.0.2 release (re-cut 1.0.2rc3).
+
 *Goal:* Finish the first-hydration flash story #1724 started, at the source, and
 document the client-hook pattern for third-party JS libs. Both surfaced from the
 same downstream integration (rent app, 1.0.2rc2). Drain bucket: accumulates into
