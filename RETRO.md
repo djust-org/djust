@@ -327,9 +327,9 @@ issue or be explicitly closed with a reason.
 | 285 | `multi-tenant.md` Quick Start cites non-existent `self.tenant_queryset()` (+ `DJUST_TENANT_RESOLVER` / `mixins` plural) | PR #1698 (#1559 review) | #1699 | Closed | **Resolved in v1.0.1 wave 2 (PR #1710)** — corrected ~10 hallucinated `djust.tenants` symbols to the real API. |
 | 286 | Promote the demo `djust_check` dogfood from `continue-on-error` to a blocking gate | PR #1712 (#1708 review) | #1713 | Closed | **Resolved in v1.0.2 (PR #1730)** — dedicated blocking `demo-checks` job (no `continue-on-error`), wired into the `test-summary` AND-condition; synthetic-error unit test covers both gate arms (error-severity + T001/T014/T015). |
 | 287 | Generalize the cross-IIFE guard to top-level-module (22-51) bare refs | PR #1715 (#1706 review) | #1716 | Closed | **Resolved in v1.0.2 (PR #1729)** — barrier-span scope model covers guard-block AND top-level-module declarations; the program-scope `maybeDeferRemoval` FP control is what required scope-aware (not module-aware) analysis. Two-sided empirical canary (#252): synthetic trigger exit 1 on branch / exit 0 on main; real tree clean. |
-| 288 | Request-scope memoize `theme_context` — now runs per WS event after #1722 | PR #1726 (#1722 review) | #1727 | Open | Applying context processors in `_sync_state_to_rust` (the #1722 fix) runs `theme_context` per WS event; four `_safe_render` tag bodies are uncached. Must NOT first-sync-gate (breaks dynamic theme switching — change-detection only forwards changed vars); the cure is request-scoped memoization inside `theme_context`. |
+| 288 | Request-scope memoize `theme_context` — now runs per WS event after #1722 | PR #1726 (#1722 review) | #1727 | Closed | **Resolved in v1.0.2 (PR #1732)** — request-scoped cache on the request object keyed by the 7-tuple theme-state key (same shape as `_render_theme_outputs` lru); four `_safe_render` tag bodies memoized per connection, recomputed on a theme switch. No nonce/per-request data embedded (verified), so no cross-request leak. NOT first-sync-gated. |
 
-## v1.0.2 — Second post-1.0 patch: theming/hydration bugs + v1.0.1 follow-ups (PRs #1725–#1731, 6 merged)
+## v1.0.2 — Second post-1.0 patch: theming/hydration bugs + v1.0.1 follow-ups (PRs #1725–#1732, 7 merged)
 
 **Date**: 2026-06-05
 **Scope**: Three production bugs surfaced integrating djust 1.0.1rc1 into a real app (SSR→hydration child teardown destroying client widgets; theming context-processor vars missing inside `{% include %}`; the documented `{% theme_panel %}` tag rejected by the Rust engine) + the three tech-debt follow-ups the v1.0.1 drain deferred (#1713, #1716) or filed (#1719).
@@ -375,9 +375,9 @@ PR #1730 (#1713) moved the demo `djust_check` dogfood out of the `continue-on-er
 
 ### Open Items
 
-- [ ] #288 — request-scope memoize `theme_context` (GitHub #1727)
+- [x] #288 — request-scope memoize `theme_context` (GitHub #1727) — resolved in v1.0.2 (PR #1732)
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
-- [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 6 PRs — 3 production bug fixes + 3 tech-debt follow-ups.
+- [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 7 PRs — 3 production bug fixes + 3 tech-debt follow-ups + 1 perf follow-up (#1727).
 
 ## v1.0.1 — First post-1.0 patch: two drain waves (PRs #1690–#1715, 13 merged)
 

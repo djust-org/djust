@@ -3524,10 +3524,9 @@ ship together as 1.0.2 (one version bump, one tag; not yet released). Design-gat
 features (#1562, #1561, #1557) stay in v1.1.0. Drained 2026-06-05 via
 `/pipeline-drain`.
 
-**STATUS: 6/7 merged (2026-06-05); #1727 in progress.**
-Merged: PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
-#1730 (#1713), #1731 (#1719). In progress: #1727 (request-scope memoize
-theme_context — the per-WS-event cost surfaced by #1726).
+**STATUS: COMPLETE (7/7 merged 2026-06-05).**
+PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
+#1730 (#1713), #1731 (#1719), #1732 (#1727).
 
 **Priority Matrix**
 
