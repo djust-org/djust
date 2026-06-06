@@ -48,7 +48,21 @@ def block_watchdog():
     the NEW module and the patch silently no-ops in the OLD-module's
     callsites. Tripped by ``test_a020_fires_with_multiple_groups`` in
     the v0.9.0 suite — see #1134.
+
+    #1741: a re-import (``importlib.import_module("djust.checks")``)
+    rebinds BOTH ``sys.modules["djust.checks"]`` AND the parent-package
+    attribute ``djust.checks``. Restoring only ``sys.modules`` left the
+    two out of sync: ``from djust import checks`` resolves the package
+    attribute (one object) while ``from djust.checks import X`` resolves
+    ``sys.modules`` (a different object). A later cross-dir test
+    (``python/tests/test_checks.py``) then monkeypatched the
+    package-attribute copy while the function under test resolved
+    against the ``sys.modules`` copy, so the patch silently no-op'd and
+    C003 deterministically failed. Snapshot + restore the package
+    attribute alongside ``sys.modules`` so the two stay consistent.
     """
+    import djust as _djust_pkg
+
     # Drop any cached watchdog modules first so the re-import sees
     # our blocker, not the previously-imported real module.
     for mod in list(sys.modules):
@@ -56,8 +70,16 @@ def block_watchdog():
             del sys.modules[mod]
 
     # Snapshot djust.* modules that test bodies will evict, so we can
-    # restore them in teardown.
-    snapshot = {name: sys.modules.get(name) for name in ("djust.dev_server", "djust.checks")}
+    # restore them in teardown. Capture BOTH the ``sys.modules`` entry
+    # and the parent-package attribute (#1741) so a re-import can't
+    # leave the two pointing at different module objects.
+    _evicted = ("djust.dev_server", "djust.checks")
+    snapshot = {name: sys.modules.get(name) for name in _evicted}
+    _MISSING = object()
+    pkg_attr_snapshot = {
+        name.split(".", 1)[1]: getattr(_djust_pkg, name.split(".", 1)[1], _MISSING)
+        for name in _evicted
+    }
 
     blocker = _BlockWatchdog()
     sys.meta_path.insert(0, blocker)
@@ -73,6 +95,15 @@ def block_watchdog():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = mod
+        # #1741: also restore the parent-package attribute so
+        # ``from djust import checks`` and ``from djust.checks import X``
+        # resolve the SAME object.
+        for attr, mod in pkg_attr_snapshot.items():
+            if mod is _MISSING:
+                if hasattr(_djust_pkg, attr):
+                    delattr(_djust_pkg, attr)
+            else:
+                setattr(_djust_pkg, attr, mod)
 
 
 def test_dev_server_imports_without_watchdog(block_watchdog):
