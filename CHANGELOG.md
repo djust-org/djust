@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Initial SSR render now matches the first WebSocket frame — eliminates the first-hydration flash (#1737, completes #1724).** The initial HTTP-GET render skipped the comment/whitespace normalization that `render_with_diff()` applies, so the server-rendered dj-root kept HTML comment nodes and as-authored inter-element whitespace while the first WS frame had them stripped. The structural mismatch made the client's first-hydration `morphChildren` rebuild the whole subtree (visible re-render / flash), even with #1724's client-side whitespace-only-text-node skip in place. `render_full_template()` now (a) falls back to matching the `dj-view` root when no literal `dj-root` attribute is present (the auto-inferred-dj-root case) so the normalized render replaces the shell root, and (b) applies `_strip_comments_and_whitespace()` to the rendered dj-root, mirroring the extra whitespace pass the Rust `render_with_diff()` performs. `_strip_comments_and_whitespace()` now also collapses whitespace adjacent to `<pre>`/`<code>`/`<textarea>` boundaries for byte-parity with the Rust pass. The SSR dj-root is now byte-equivalent to the first WS frame (modulo the `dj-id` attrs the client stamps onto the prerender DOM per #1610), so the first `morphChildren` is a no-op. `<pre>`/`<code>`/`<textarea>` internal whitespace and `dj-if` boundary markers are preserved.
+
 ## [1.0.2rc2] - 2026-06-05
 
 ### Added
