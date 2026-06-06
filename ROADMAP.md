@@ -3514,6 +3514,8 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ### Milestone: v1.0.2-1 — navigation foundation (drain bucket → ships in 1.0.2)
 
+**STATUS: COMPLETE (1/1 merged 2026-06-05) — PR #1736 (#1733).** Accumulates into the 1.0.2 release (re-cut 1.0.2rc2 on top of the 7 PRs in 1.0.2rc1).
+
 *Goal:* Make `dj-navigate` work with **zero wiring** — the foundation cluster of
 the auto-navigation strategy (`/pipeline-strategy` 2026-06-05, Path 2; ADR-021).
 `dj-navigate` is documented as SPA-over-WebSocket but silently full-reloads
