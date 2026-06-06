@@ -3512,6 +3512,22 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ---
 
+### Milestone: v1.0.2-2 — hydration-flash parity + client-hooks docs (drain bucket → ships in 1.0.2)
+
+*Goal:* Finish the first-hydration flash story #1724 started, at the source, and
+document the client-hook pattern for third-party JS libs. Both surfaced from the
+same downstream integration (rent app, 1.0.2rc2). Drain bucket: accumulates into
+the **1.0.2** release (re-cut 1.0.2rc3). Drained 2026-06-06 via `/pipeline-drain`.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | SSR render normalization parity (#1737) | `render_with_diff()` normalizes via `_strip_comments_and_whitespace()` (template.py:154) but the initial render path (`render()` / `render_full_template`, :196/:832) does NOT — so SSR HTML and the first WS frame differ structurally (comments preserved + whitespace as-authored vs stripped/normalized), triggering a wholesale `morphChildren` re-render ("flash") on connect even with #1724. Fix at the source: apply the same normalization to the initial dj-root render so SSR is byte-equivalent to the first `render_with_diff()` output → first-hydration morph is a no-op. | Bug; completes #1724 (client-side whitespace-skip) with a source-side normalization. Must preserve `<pre>`/`<code>`/`<textarea>` + dj-if markers (same isSignificantChild concerns). |
+| **P2** | Client-hooks docs for third-party libs (#1738) | Extend `docs/website/guides/hooks.md`: document the `DjustHooks`/`dj-hook` pattern (register once in the persistent shell; `mounted`/`updated`/`destroyed`) for initializing Chart.js/Leaflet/editors so they survive `dj-navigate` SPA nav — and warn about the inline-`<script>`-in-reactive-root trap ("works on reload, silently blank on dj-navigate"). | Docs; the DX trap that cost the downstream app hours. |
+
+---
+
 ### Milestone: v1.0.2-1 — navigation foundation (drain bucket → ships in 1.0.2)
 
 **STATUS: COMPLETE (1/1 merged 2026-06-05) — PR #1736 (#1733).** Accumulates into the 1.0.2 release (re-cut 1.0.2rc2 on top of the 7 PRs in 1.0.2rc1).
