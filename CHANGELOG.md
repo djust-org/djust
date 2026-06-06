@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Zero-wiring `dj-navigate` — the client route map is now auto-derived from the URLconf and auto-emitted (#1733, ADR-021 Stage 1).** `dj-navigate` previously SPA-navigated only if the developer manually wired `live_session()` *and* emitted `get_route_map_script()`; with no route map it silently full-reloaded. Now `djust.routing.build_route_map_from_urlconf()` walks the Django URLconf (descending `include()` resolvers) and collects every route whose callback resolves to a `LiveView` subclass — handling both `callback.view_class` and `login_required`-wrapped `callback.__wrapped__.view_class`, converting `<int:id>` → `:id`, and applying the `FORCE_SCRIPT_NAME` sub-path prefix. The derived map is auto-emitted by `{% djust_client_config %}` (already in every scaffolded base `<head>`), with CSP-nonce support and empty-safe behavior (no `<script>` when an app has no LiveViews). No `live_session()` required. New system check **`djust.T016`** warns when `dj-navigate` appears in templates but the derived route map is empty (suppressible via `DJUST_CONFIG['suppress_checks']`).
+
+### Changed
+
+- **`{% djust_client_config %}` now takes the template context (#1733).** The tag became `takes_context=True` so it can read `request.csp_nonce` for the auto-emitted route-map `<script>`. The Rust-engine handler delegates to the same shared helper, so dual-engine output stays byte-identical. Existing templates need no change.
+- **`get_route_map_script()` now merges the URLconf-derived route map with `live_session()` entries (#1733).** **Behavior change:** the emitted `window.djust._routeMap` now includes auto-derived LiveView routes in addition to any `live_session()` registrations (idempotent union). Apps that called `get_route_map_script()` with no `live_session()` and expected an empty map now get the URLconf-derived routes — which is the intended zero-wiring behavior. The phantom `{% djust_route_map %}` reference in the docstring (a tag that never existed) was removed. `live_session()` remains valid for WebSocket session grouping.
+
 ## [1.0.2rc1] - 2026-06-05
 
 ### Changed

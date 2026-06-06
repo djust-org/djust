@@ -112,12 +112,36 @@ Patching to the root path `/` is supported and correctly updates the browser URL
 
 ### `dj-navigate`
 
-Declarative `live_redirect`. Navigates to a different view over the WebSocket.
+Declarative `live_redirect`. SPA-navigates to a **different LiveView over the existing WebSocket** — no socket teardown, no full page reload. (A full reload happens only as a fallback when the target path isn't in the route map.)
 
 ```html
 <a dj-navigate="/dashboard/">Go to Dashboard</a>
 <a dj-navigate="/items/{{ item.id }}/">View Item</a>
 ```
+
+#### Zero wiring required
+
+`dj-navigate` works **out of the box** — no `live_session()` needed. The client
+route map (URL path → LiveView) is **auto-derived from your Django URLconf**
+(every route whose view subclasses `djust.LiveView`) and **auto-emitted by
+`{% djust_client_config %}`**, the tag that's already in every scaffolded base
+`<head>`. As long as your base template loads `{% djust_client_config %}` and
+your LiveViews are wired into `urlpatterns`, SPA navigation just works.
+
+```html
+{% load live_tags %}
+<head>
+    {% djust_client_config %}  {# emits the API/SSE prefixes + the route map #}
+</head>
+```
+
+If `dj-navigate` is used but no LiveView routes are found in the URLconf (so the
+route map is empty), djust's system check **`djust.T016`** warns you — otherwise
+`dj-navigate` would silently fall back to a full page reload.
+
+`live_session()` is still supported for grouping views that share a WebSocket
+connection, and its registrations are merged into the auto-derived map. It is no
+longer required just to make `dj-navigate` resolve routes.
 
 ## Example: Search with URL State
 
@@ -278,7 +302,7 @@ class DashboardView(NavigationMixin, LiveView):
 |---|---|
 | `dj-click` | Actions that modify state (increment counter, delete item, toggle) |
 | `dj-patch` | Navigation that should update the URL (tabs, filters, pagination) |
-| `dj-navigate` | Full page navigation to a different LiveView |
+| `dj-navigate` | SPA navigation to a different LiveView over the WebSocket (full reload only as a fallback when the route isn't in the map) |
 
 ### URL Design Best Practices
 
