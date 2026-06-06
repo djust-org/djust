@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2rc1] - 2026-06-05
+
 ### Changed
 
 - **eslint warnings driven to 0 and a `--max-warnings 0` ceiling re-added (#1719, follow-up to #1717).** #1717 changed the eslint policy to gate on errors and tolerate warnings, which left ~33 project-wide warnings in `python/djust/static/djust/*.js` with no ceiling, so the count could silently grow. All 33 are now resolved: 1 `prefer-const` and 1 `no-var` (single-assignment globals), 9 `no-unused-vars` (8 unused caught errors → bare `catch {}`, 1 unused arg → `_params`), and 22 `security/detect-object-injection` — each verified a false positive (`Object.keys()` own-prop iteration, `isSafeKey()`-guarded keys, validated numeric index, fixed-literal/allowlist key, or developer-supplied component/cache-key name) and given a targeted `// eslint-disable-next-line` with a per-site justification (no blanket config disable; no site was a real injection risk). The `--max-warnings 0` ceiling is re-added to BOTH gate paths — the `.pre-commit-config.yaml` eslint hook and the `package.json` `lint` script (used by the Pre-Release Security Audit workflow) — so the warning count can only go down. No `src/` module changed, so the `client.js`/`debug-panel.js` bundles rebuild byte-identically; all 1665 JS tests pass.

@@ -33,7 +33,7 @@ descriptors, mixins, rust handlers, gallery).
     python manage.py component_gallery
 """
 
-__version__ = "1.0.1"
+__version__ = "1.0.2rc1"
 
 # ---------------------------------------------------------------------------
 # Core component classes (original djust.components)
