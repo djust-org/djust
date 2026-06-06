@@ -379,6 +379,8 @@ PR #1730 (#1713) moved the demo `djust_check` dogfood out of the `continue-on-er
 - [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
 - [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 7 PRs — 3 production bug fixes + 3 tech-debt follow-ups + 1 perf follow-up (#1727).
 
+**Forward-link**: `/pipeline-strategy` 2026-06-05 (auto-navigation) → `docs/strategy-sessions/2026-06-05-auto-navigation.md`. Chose Path 2 (Foundation + opt-in `auto_navigate`); drafted **ADR-021**; filed #1733 (v1.0.3 foundation), #1734 + #1735 (v1.1.0). Surfaced from a downstream consumer hitting `dj-navigate` silent full-reload (undocumented route-map prerequisite + phantom `{% djust_route_map %}` tag in `get_route_map_script`'s docstring).
+
 ## v1.0.1 — First post-1.0 patch: two drain waves (PRs #1690–#1715, 13 merged)
 
 **Date**: 2026-06-05

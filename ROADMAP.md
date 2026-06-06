@@ -3512,6 +3512,25 @@ milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE gua
 
 ---
 
+### Milestone: v1.0.2-1 — navigation foundation (drain bucket → ships in 1.0.2)
+
+*Goal:* Make `dj-navigate` work with **zero wiring** — the foundation cluster of
+the auto-navigation strategy (`/pipeline-strategy` 2026-06-05, Path 2; ADR-021).
+`dj-navigate` is documented as SPA-over-WebSocket but silently full-reloads
+without a manually-wired route map; this bucket auto-derives + auto-emits the
+map so the documented behavior is real. Drain bucket: accumulates into the
+**1.0.2** release (re-cut as 1.0.2rc2 on top of the 7 PRs already in 1.0.2rc1).
+The opt-in `auto_navigate` capability (#1734) + nav-story reconciliation (#1735)
+ride on top in v1.1.0 after this soaks.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | Auto-wire `dj-navigate` route map (#1733) | Auto-derive the URL→view route map from the URLconf (no `live_session` required) and auto-emit it via `{% djust_client_config %}`; fix the `get_route_map_script` docstring (phantom `{% djust_route_map %}` tag) + navigation.md; add a system check; fold in #1361 route-map access tightening. | Foundation (ADR-021 Stage 1). Prereq for #1734. Bugfix-ish: makes documented behavior real. |
+
+---
+
 ### Milestone: v1.0.2 — second post-1.0 patch (7 issues: theming/hydration bugs + v1.0.1 review follow-ups + perf follow-up)
 
 *Goal:* The single 1.0.2 patch release. Three production bugs surfaced
@@ -3555,6 +3574,8 @@ PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
 | **P2** | bug-capture iter B — replay viewer (#1562) | `/__djust__/replay/<blob>` read-only viewer. | Feature; needs design. |
 | **P2** | bug-capture iter C — Redis store + CLI + PII scrub (#1561) | Persistent capture store + `djust replay` CLI. | Feature; multi-day. |
 | **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
+| **P1** | `auto_navigate` — Turbo-Drive `<a>` interception, opt-in (#1734) | Delegated click listener: SPA-navigate plain `<a href>` when the path resolves in the route map (opt-outs: modifier/middle-click, target/download, external, hash, `data-no-navigate`); same-view query-only → `live_patch`, else `live_redirect`. Config flag `auto_navigate`, **default OFF**. | Directional (ADR-021 Stage 2). Depends on #1733. Default-on deferred to a future major. |
+| **P2** | Reconcile native dj-navigate vs external TurboNav (#1735) | Position native `dj-navigate` as canonical; reframe `turbonav-integration.md` as interop (per-nav WS reconnect tradeoff). Docs/stance only. | Pairs with ADR-021; ships with #1734. |
 | **P3** | VDOM compounding-reorder residual tail (#1669, **closed not-planned** — recorded here so the analysis isn't lost if revisited) | ~6 / 6000 adversarial-corpus re-renders mis-patch when several keyed reorders + a `dj-if` boundary move compound in one parent; ~0 production incidence. Accepted after #1666 (`MoveSubtree`) / #1667 (`InsertChild.ref_d=None`) / #1668 drove the client-faithful-harness residual from ~40 → ~6. | **Accept + document.** A robust fix needs a reconciliation/apply redesign in `crates/djust_vdom/src/diff.rs` with real regression risk against 268 Rust + 1636 JS tests for negligible benefit. If ever revisited, two candidate directions: **(a) frame-consistent move-target resolution** — resolve `MoveChild`/`MoveSubtree` indices against a single post-removal frame so compounding ops don't shift each other's targets; **(b) unified id-keying across all node types** (incl. `dj-if` boundary spans, which today are id-less `#comment` markers) so reconciliation never falls back to positional matching. |
 
 ---
