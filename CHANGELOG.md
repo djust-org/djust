@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2rc2] - 2026-06-05
+
 ### Added
 
 - **Zero-wiring `dj-navigate` — the client route map is now auto-derived from the URLconf and auto-emitted (#1733, ADR-021 Stage 1).** `dj-navigate` previously SPA-navigated only if the developer manually wired `live_session()` *and* emitted `get_route_map_script()`; with no route map it silently full-reloaded. Now `djust.routing.build_route_map_from_urlconf()` walks the Django URLconf (descending `include()` resolvers) and collects every route whose callback resolves to a `LiveView` subclass — handling both `callback.view_class` and `login_required`-wrapped `callback.__wrapped__.view_class`, converting `<int:id>` → `:id`, and applying the `FORCE_SCRIPT_NAME` sub-path prefix. The derived map is auto-emitted by `{% djust_client_config %}` (already in every scaffolded base `<head>`), with CSP-nonce support and empty-safe behavior (no `<script>` when an app has no LiveViews). No `live_session()` required. New system check **`djust.T016`** warns when `dj-navigate` appears in templates but the derived route map is empty (suppressible via `DJUST_CONFIG['suppress_checks']`).
