@@ -9602,13 +9602,18 @@ window.djust.getActiveStreams = getActiveStreams;
      * or by data attributes on the container.
      */
     function resolveViewPath(pathname) {
-        // Check the route map (populated by live_session)
+        // Check the route map. As of #1733 it is auto-derived from the
+        // Django URLconf and auto-emitted by {% djust_client_config %};
+        // live_session() entries are merged in as well.
         const routeMap = window.djust._routeMap || {};
 
-        // Try exact match first. `pathname` is user-controllable (URL
-        // path) so the lookup must be prototype-pollution-immune: walk
-        // own entries explicitly via `Object.entries` rather than
-        // indexing with `routeMap[pathname]`. Closes #1361.
+        // #1361 — `pathname` is user-controllable (URL path). With the route
+        // map now populated on EVERY page by default (#1733), the lookup must
+        // be prototype-pollution-immune. We walk OWN enumerable entries via
+        // `Object.entries` (never `routeMap[pathname]` bracket-indexing), so
+        // a polluted `Object.prototype` (e.g. `Object.prototype.toString`)
+        // and inherited keys like `constructor` can never resolve to a view.
+        // Do NOT reintroduce `routeMap[pathname]` here — it would reopen #1361.
         for (const [routePath, viewPath] of Object.entries(routeMap)) {
             if (routePath === pathname) return viewPath;
         }

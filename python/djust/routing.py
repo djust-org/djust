@@ -6,12 +6,35 @@ DjustMiddlewareStack for apps without django.contrib.auth,
 and emitting a client-side route map for live_redirect navigation.
 """
 
-from typing import Any, List, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 from django.urls import URLPattern, path
-from django.urls.resolvers import RegexPattern, RoutePattern
+from django.urls.resolvers import RegexPattern, RoutePattern, URLResolver
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
+
+# Django ``<int:id>`` / ``<slug:x>`` → JS-friendly ``:id`` / ``:x``. Shared by
+# ``live_session`` and ``build_route_map_from_urlconf`` so both engines emit the
+# identical client-side route shape.
+_PARAM_RE = re.compile(r"<(?:\w+:)?(\w+)>")
+
+# Module-level cache for the URLconf-derived route map. The URLconf is static at
+# runtime, so we derive once and reuse. ``_reset_route_map_cache()`` clears it
+# (used by tests that swap ROOT_URLCONF / FORCE_SCRIPT_NAME via override_settings).
+# Keyed by (root_urlconf, script_prefix) so FORCE_SCRIPT_NAME / sub-path mounts
+# (which production sets per-request via set_script_prefix) don't collide.
+_route_map_cache: Dict[Any, Dict[str, str]] = {}
+
+
+def _reset_route_map_cache() -> None:
+    """Clear the cached URLconf-derived route map.
+
+    The cache assumes the URLconf is static at runtime. Tests that swap
+    ``ROOT_URLCONF`` or ``FORCE_SCRIPT_NAME`` via ``override_settings`` must
+    call this between cases so a stale map doesn't leak across tests.
+    """
+    _route_map_cache.clear()
 
 
 def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
@@ -150,10 +173,8 @@ def live_session(
         if view_cls:
             view_path = f"{view_cls.__module__}.{view_cls.__qualname__}"
             # Convert Django URL params to JS-friendly format
-            # e.g., <int:id> → :id
-            import re
-
-            js_path = re.sub(r"<(?:\w+:)?(\w+)>", r":\1", full_path)
+            # e.g., <int:id> → :id  (shared _PARAM_RE; see module top)
+            js_path = _PARAM_RE.sub(r":\1", full_path)
             route_map_entries.append((js_path, view_path))
 
         # Create new pattern with prefix
@@ -172,12 +193,139 @@ def live_session(
     return result
 
 
+def _resolve_view_class(pattern: URLPattern) -> Optional[type]:
+    """Return the view class behind a ``URLPattern`` callback, or ``None``.
+
+    Mirrors the resolution logic in :func:`live_session` (routing.py): handles
+    both Django CBV ``as_view()`` (``callback.view_class``) and decorator-wrapped
+    callbacks such as ``login_required(View.as_view())`` whose original view is
+    reachable via ``callback.__wrapped__.view_class`` (functools.wraps).
+    """
+    cb = getattr(pattern, "callback", None)
+    if cb is None:
+        return None
+    if hasattr(cb, "view_class"):
+        return cb.view_class
+    wrapped = getattr(cb, "__wrapped__", None)
+    if wrapped is not None:
+        return getattr(wrapped, "view_class", None)
+    return None
+
+
+def _pattern_route(pattern: Any) -> str:
+    """Return the raw route string for a URLPattern/URLResolver.
+
+    Uses the same isinstance idioms as :func:`live_session` so ``path()`` and
+    ``re_path()`` patterns are both handled.
+    """
+    p = pattern.pattern
+    if isinstance(p, RegexPattern):
+        return p._regex.lstrip("^").rstrip("$")
+    if isinstance(p, RoutePattern):
+        return p._route
+    return str(p).lstrip("^").rstrip("$")
+
+
+def _walk_liveview_routes(patterns: List[Any], prefix: str, route_map: Dict[str, str]) -> None:
+    """Recursively collect ``{js_path: "module.QualName"}`` for LiveView routes.
+
+    Descends into ``URLResolver`` includes, accumulating the route prefix. For
+    every ``URLPattern`` whose callback resolves to a :class:`~djust.LiveView`
+    subclass, adds an entry keyed by the JS-friendly path (``<int:id>`` → ``:id``).
+    """
+    # Imported here (not at module top) to avoid a circular import: live_view
+    # imports from routing-adjacent modules at package init time.
+    from djust import LiveView
+
+    for pattern in patterns:
+        route = _pattern_route(pattern)
+        full = (prefix + route).replace("//", "/")
+        if isinstance(pattern, URLResolver):
+            _walk_liveview_routes(pattern.url_patterns, full, route_map)
+            continue
+        view_cls = _resolve_view_class(pattern)
+        if view_cls is None:
+            continue
+        try:
+            is_liveview = issubclass(view_cls, LiveView)
+        except TypeError:
+            is_liveview = False
+        if not is_liveview:
+            continue
+        # Ensure a leading slash, then convert Django params to ``:name``.
+        js_path = full if full.startswith("/") else "/" + full
+        js_path = _PARAM_RE.sub(r":\1", js_path)
+        view_path = f"{view_cls.__module__}.{view_cls.__qualname__}"
+        route_map[js_path] = view_path
+
+
+def build_route_map_from_urlconf(urlconf: Any = None) -> Dict[str, str]:
+    """Derive the client route map by walking the Django URLconf.
+
+    Walks ``django.urls.get_resolver(urlconf).url_patterns`` recursively,
+    descending into ``include()`` resolvers, and returns
+    ``{js_path: "module.QualName"}`` for every route whose callback resolves to
+    a :class:`~djust.LiveView` subclass. This is what powers zero-wiring
+    ``dj-navigate`` (#1733, ADR-021 Stage 1) — no ``live_session()`` required.
+
+    Django URL params are converted to the JS-friendly form (``<int:id>`` →
+    ``:id``), and the ``FORCE_SCRIPT_NAME`` / sub-path mount prefix is applied
+    via :func:`django.urls.get_script_prefix` so sub-path deploys resolve the
+    same paths the browser sees (mirrors ``_resolve_api_prefix`` in
+    ``live_tags.py``).
+
+    The result is cached at module level keyed by ``(root_urlconf,
+    script_prefix)`` (the URLconf is static at runtime). Call
+    :func:`_reset_route_map_cache` to clear it (used by tests).
+
+    Args:
+        urlconf: Optional URLconf module/string passed to ``get_resolver``.
+            Defaults to ``settings.ROOT_URLCONF``.
+
+    Returns:
+        A ``dict`` mapping JS route paths to dotted view paths. Empty when the
+        app has no LiveView routes (so the emitting tag can stay empty-safe).
+    """
+    from django.conf import settings
+    from django.urls import get_resolver, get_script_prefix
+
+    script_prefix = get_script_prefix().rstrip("/")
+    # Resolve None → the actual ROOT_URLCONF for the cache key. get_resolver(None)
+    # internally resolves to settings.ROOT_URLCONF, so caching on the raw arg
+    # would (a) give two callers passing None vs the explicit ROOT_URLCONF
+    # different cache entries for identical work, and (b) make override_settings
+    # tests (which swap ROOT_URLCONF but pass urlconf=None) collide on a single
+    # (None, prefix) key — a cross-test pollution hazard. Key on the resolved
+    # value instead.
+    resolved_urlconf = urlconf if urlconf is not None else getattr(settings, "ROOT_URLCONF", None)
+    cache_key = (resolved_urlconf, script_prefix)
+    cached = _route_map_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    resolver = get_resolver(urlconf)
+    route_map: Dict[str, str] = {}
+    _walk_liveview_routes(resolver.url_patterns, script_prefix + "/", route_map)
+
+    _route_map_cache[cache_key] = route_map
+    return route_map
+
+
 def get_route_map_script(request: Any = None) -> str:
     """
     Return a ``<script>`` tag that populates ``window.djust._routeMap``.
 
-    Include this in your base template (or use the ``{% djust_route_map %}``
-    tag, which passes the current request automatically).
+    As of #1733 (ADR-021 Stage 1) the route map is **auto-emitted** by
+    ``{% djust_client_config %}`` (the tag already present in every scaffolded
+    base ``<head>``), so ``dj-navigate`` works with zero wiring. This function
+    remains available for manual / custom emission (e.g. a base template that
+    does not use ``{% djust_client_config %}``).
+
+    The emitted map merges the routes auto-derived from the URLconf
+    (:func:`build_route_map_from_urlconf` — every ``LiveView`` route) with any
+    entries registered by :func:`live_session`. The two sources are an
+    idempotent union (live_session entries win on key collision; for shared
+    routes the values are equal).
 
     Args:
         request: An optional Django ``HttpRequest``. When set and
@@ -191,8 +339,11 @@ def get_route_map_script(request: Any = None) -> str:
     """
     import json
 
+    # Auto-derived URLconf routes (zero-wiring, #1733) merged with any
+    # live_session registrations. live_session entries are applied last so
+    # they win on key collision (values are equal for shared routes).
+    all_routes: Dict[str, str] = dict(build_route_map_from_urlconf())
     route_maps = getattr(live_session, "_route_maps", {})
-    all_routes = {}
     for entries in route_maps.values():
         for js_path, view_path in entries:
             all_routes[js_path] = view_path
@@ -204,14 +355,22 @@ def get_route_map_script(request: Any = None) -> str:
     # CSP nonce support (#655)
     from .utils import get_csp_nonce
 
+    # Safety note: json.dumps escapes ", \, and control chars — it does NOT
+    # escape angle brackets, so a literal "</script>" / "<!--" would pass
+    # through verbatim. That is safe HERE only because the route data is
+    # developer-defined URL config (view module paths + URL patterns), which
+    # structurally cannot contain those script-breakout sequences. The
+    # route_json is therefore mark_safe()'d for interpolation inside the
+    # <script> body; the nonce is escaped by format_html. (Do NOT mark_safe
+    # user-derived data into a <script> body — that WOULD be an XSS surface.)
     nonce = get_csp_nonce(request)
     if nonce:
         return format_html(
             '<script nonce="{}">window.djust=window.djust||{{}};window.djust._routeMap={};</script>',
             nonce,
-            mark_safe(route_json),  # json.dumps escapes <, >, quotes; data is developer-defined
+            mark_safe(route_json),  # developer-defined URL config; see safety note above
         )
     return format_html(
         "<script>window.djust=window.djust||{{}};window.djust._routeMap={};</script>",
-        mark_safe(route_json),  # json.dumps escapes <, >, quotes; data is developer-defined
+        mark_safe(route_json),  # developer-defined URL config; see safety note above
     )

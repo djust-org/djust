@@ -131,21 +131,77 @@ def _resolve_sse_prefix() -> str:
     return ""
 
 
-@register.simple_tag
-def djust_client_config() -> Any:
-    """Emit client bootstrap configuration as ``<meta>`` tags.
+def _client_config_html(request: Any = None) -> Any:
+    """Build the ``{% djust_client_config %}`` output (shared across engines).
 
-    Currently emits two tags::
+    Emits the API/SSE prefix ``<meta>`` tags and, when the URLconf has any
+    ``LiveView`` routes, appends the route-map ``<script>`` that populates
+    ``window.djust._routeMap`` for zero-wiring ``dj-navigate`` (#1733,
+    ADR-021 Stage 1).
+
+    Both the Django-engine ``@register.simple_tag`` below and the Rust-engine
+    ``ClientConfigTagHandler`` call this helper so their output stays
+    byte-identical (the dual-registration invariant from PR #993).
+
+    Security: the resolved prefixes are HTML-escaped via
+    :func:`django.utils.html.escape`; the route map is emitted via
+    :func:`djust.routing.get_route_map_script`, which ``json.dumps``-escapes
+    the developer-defined route data and ``format_html``-escapes the CSP
+    nonce. No user-input-to-HTML surface is introduced (#1078).
+    """
+    api_prefix = _resolve_api_prefix()
+    sse_prefix = _resolve_sse_prefix()
+    # escape() handles all HTML-special chars including the double-quote
+    # (rendered as &quot;) so the value is safe to interpolate inside
+    # content="..." — even if a developer accidentally puts
+    # <script> in FORCE_SCRIPT_NAME.
+    api_escaped = escape(api_prefix)
+    sse_escaped = escape(sse_prefix)
+    # String concatenation (not f-string) to comply with the repo rule
+    # against f-string mark_safe interpolation.
+    html = (
+        '<meta name="djust-api-prefix" content="' + api_escaped + '">'
+        '\n<meta name="djust-sse-prefix" content="' + sse_escaped + '">'
+    )
+    # Auto-emit the route map (#1733). get_route_map_script returns "" when
+    # the app has no LiveView routes (empty-safe — no stray <script>), and a
+    # nonce-bearing <script> when request.csp_nonce is available.
+    from ..routing import get_route_map_script
+
+    route_script = get_route_map_script(request)
+    if route_script:
+        # route_script is already a SafeString (format_html). Concatenating a
+        # SafeString to a plain str via mark_safe(...) below is safe because
+        # both the meta markup (static + escape()d) and the route script
+        # (format_html + json.dumps) are individually escaped.
+        html = html + "\n" + str(route_script)
+    return mark_safe(html)
+
+
+@register.simple_tag(takes_context=True)
+def djust_client_config(context) -> Any:
+    """Emit client bootstrap configuration as ``<meta>`` tags + route map.
+
+    Emits::
 
         <meta name="djust-api-prefix" content="<resolved API prefix>">
         <meta name="djust-sse-prefix" content="<resolved SSE prefix>">
+        <script>window.djust._routeMap={...};</script>   (when LiveViews exist)
 
     The resolved prefix is computed via Django's ``reverse()`` so it
     honors ``FORCE_SCRIPT_NAME`` and any custom ``api_patterns(prefix=...)``
-    mount. When the djust API is not mounted at all, the tag is still
+    mount. When the djust API is not mounted at all, the meta tag is still
     emitted with ``content=""`` (for easier debugging — an inspector
     looking at the rendered HTML can immediately see resolution failed),
     and the client falls back to its compile-time default ``/djust/api/``.
+
+    The route-map ``<script>`` is auto-derived from the Django URLconf
+    (every route whose callback resolves to a ``LiveView`` subclass) so
+    ``dj-navigate`` works with **zero wiring** — no ``live_session()``
+    required (#1733, ADR-021 Stage 1). It is **empty-safe**: when the app
+    has no LiveView routes, no ``<script>`` is appended. The tag now takes
+    the template context so it can read ``request.csp_nonce`` for the
+    route-map script's nonce attribute.
 
     Usage::
 
@@ -168,21 +224,8 @@ def djust_client_config() -> Any:
     ``FORCE_SCRIPT_NAME`` value cannot break out of the ``content="..."``
     attribute. See ``test_tag_output_is_escaped``.
     """
-    api_prefix = _resolve_api_prefix()
-    sse_prefix = _resolve_sse_prefix()
-    # escape() handles all HTML-special chars including the double-quote
-    # (rendered as &quot;) so the value is safe to interpolate inside
-    # content="..." — even if a developer accidentally puts
-    # <script> in FORCE_SCRIPT_NAME.
-    api_escaped = escape(api_prefix)
-    sse_escaped = escape(sse_prefix)
-    # String concatenation (not f-string) to comply with the repo rule
-    # against f-string mark_safe interpolation.
-    html = (
-        '<meta name="djust-api-prefix" content="' + api_escaped + '">'
-        '\n<meta name="djust-sse-prefix" content="' + sse_escaped + '">'
-    )
-    return mark_safe(html)
+    request = context.get("request") if context is not None else None
+    return _client_config_html(request)
 
 
 @register.simple_tag

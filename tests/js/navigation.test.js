@@ -211,6 +211,24 @@ describe('navigation', () => {
             expect(window.djust.navigation.resolveViewPath('constructor')).toBeNull();
             expect(window.djust.navigation.resolveViewPath('hasOwnProperty')).toBeNull();
         });
+
+        it('ignores a polluted Object.prototype (#1361 / #1733 default route map)', () => {
+            // Stronger #1361 canary: actually pollute Object.prototype with a
+            // key that looks like a route. Because resolveViewPath walks OWN
+            // enumerable entries (Object.entries) and never bracket-indexes
+            // routeMap[pathname], the injected prototype entry must NOT leak
+            // through as a resolved view. This is load-bearing now that #1733
+            // populates the route map on every page by default.
+            const { window } = createEnv('');
+            window.djust._routeMap = {};
+            // eslint-disable-next-line no-extend-native
+            Object.prototype['/evil/'] = 'attacker.views.Pwned';
+            try {
+                expect(window.djust.navigation.resolveViewPath('/evil/')).toBeNull();
+            } finally {
+                delete Object.prototype['/evil/'];
+            }
+        });
     });
 
     describe('bindDirectives', () => {
