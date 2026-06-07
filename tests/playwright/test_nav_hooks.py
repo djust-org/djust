@@ -43,24 +43,24 @@ async def test_nav_hooks():
         failures = []
 
         print(f"📄 Loading Nav Demo Page A: {PAGE_A}")
-        await page.goto(PAGE_A)
 
-        # Install a MutationObserver on the [dj-view] root BEFORE the LiveView
-        # finishes hydrating, recording any remove+re-add of direct children
-        # (the #1737 hydration-flash symptom). Also set a window sentinel that
-        # a full page reload would wipe.
-        await page.evaluate(
+        # Install the observer before navigation so it can catch early hydration churn.
+        await page.add_init_script(
             """
-            () => {
+            (() => {
                 window.__nav_sentinel = Date.now();
                 window.__hydration_child_churn = 0;
-                const root = document.querySelector('[dj-view]');
-                if (root) {
+                window.__nav_observed_root = false;
+
+                const observeRoot = () => {
+                    const root = document.querySelector('[dj-view]');
+                    if (!root || window.__nav_obs) {
+                        return;
+                    }
+
                     window.__nav_observed_root = true;
                     const obs = new MutationObserver((records) => {
                         for (const r of records) {
-                            // Count only direct-child add/remove on the root —
-                            // the wholesale-replacement symptom of #1737.
                             if (r.target === root &&
                                 (r.removedNodes.length > 0 || r.addedNodes.length > 0)) {
                                 window.__hydration_child_churn += 1;
@@ -69,16 +69,51 @@ async def test_nav_hooks():
                     });
                     obs.observe(root, { childList: true });
                     window.__nav_obs = obs;
-                } else {
-                    window.__nav_observed_root = false;
-                }
-            }
+                };
+
+                observeRoot();
+
+                const installDocumentObserver = () => {
+                    if (!document.documentElement || window.__nav_doc_obs) {
+                        return;
+                    }
+
+                    const docObs = new MutationObserver(() => observeRoot());
+                    docObs.observe(document.documentElement, {
+                        childList: true,
+                        subtree: true,
+                    });
+                    window.__nav_doc_obs = docObs;
+                };
+
+                installDocumentObserver();
+
+                document.addEventListener("DOMContentLoaded", () => {
+                    observeRoot();
+                    installDocumentObserver();
+                });
+            })();
             """
         )
 
-        # Let the WebSocket connect + hooks mount + any (mis)hydration settle.
-        print("⏳ Waiting for hydration + hook mount (~1.5s)...")
-        await asyncio.sleep(1.5)
+        await page.goto(PAGE_A)
+
+        # Wait for the WebSocket connect + hooks mount + hydration observer.
+        print("⏳ Waiting for hydration + hook mount...")
+        try:
+            await page.wait_for_function(
+                """
+                () => window.__nav_observed_root === true &&
+                    window.__demoWidgetMounted === true &&
+                    (window.__demoWidgetMountCount || 0) >= 1 &&
+                    !!document.querySelector('#demo-widget-a')?.dataset.djustHookMounted
+                """,
+                timeout=8000,
+            )
+        except Exception:
+            failures.append(
+                "#1738/#1737: timed out waiting for Page A hydration observer and hook mount"
+            )
 
         # --- #1738: DemoWidget hook mounted on Page A ---
         mounted_a = await page.evaluate(
@@ -118,14 +153,18 @@ async def test_nav_hooks():
         # Wait for the SPA mount frame to arrive + new view to render.
         try:
             await page.wait_for_function(
-                "() => window.location.pathname === '/demos/nav-b/'",
+                """
+                (mountCountBefore) => window.location.pathname === '/demos/nav-b/' &&
+                                    (window.__demoWidgetMountCount || 0) > mountCountBefore &&
+                                    !!document.querySelector('#demo-widget-b')?.dataset.djustHookMounted
+                """,
+                arg=mount_count_before,
                 timeout=8000,
             )
         except Exception:
             failures.append(
-                "#1733: pathname did not change to /demos/nav-b/ after dj-navigate click"
+                "#1733/#1738: timed out waiting for Page B SPA nav and hook mount"
             )
-        await asyncio.sleep(1.0)
 
         path_after = await page.evaluate("() => window.location.pathname")
         sentinel_after = await page.evaluate("() => window.__nav_sentinel")

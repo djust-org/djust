@@ -265,6 +265,9 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --extra dev
 
+      - name: Build package
+        run: uv run maturin develop --release
+
       - name: Install Playwright
         run: |
           uv pip install playwright
@@ -326,6 +329,79 @@ jobs:
           name: playwright-server-logs
           path: examples/demo_project/server.log
 
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f examples/demo_project/server.pid ]; then
+            kill $(cat examples/demo_project/server.pid) || true
+            rm examples/demo_project/server.pid
+          fi
+
+  nav-hooks-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Cache Python dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-nav-hooks-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-python-nav-hooks-
+            ${{ runner.os }}-python-
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+      - name: Install Playwright
+        run: |
+          uv pip install playwright
+          .venv/bin/playwright install chromium
+      - name: Run Django migrations
+        run: |
+          cd examples/demo_project
+          uv run python manage.py migrate --noinput
+          cd ../..
+      - name: Start development server
+        run: |
+          cd examples/demo_project
+          nohup uv run python -m uvicorn demo_project.asgi:application \
+            --host 0.0.0.0 \
+            --port 8002 \
+            --log-level info \
+            > server.log 2>&1 &
+          echo $! > server.pid
+          cd ../..
+        env:
+          PYTHONPATH: .
+      - name: Wait for server to be ready
+        run: |
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8002/ > /dev/null; then
+              echo "Server is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: Server not ready yet..."
+            sleep 1
+          done
+          echo "Server failed to start"
+          cat examples/demo_project/server.log
+          exit 1
+      - name: Run nav + dj-hook regression guard
+        run: .venv/bin/python tests/playwright/test_nav_hooks.py
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nav-hooks-server-logs
+          path: examples/demo_project/server.log
       - name: Stop server
         if: always()
         run: |
@@ -538,7 +614,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, security-scan, security-tests, demo-checks]
+    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, nav-hooks-guard, security-scan, security-tests, demo-checks]
     if: always()
     steps:
       - name: Check test results
@@ -548,6 +624,7 @@ jobs:
           echo "  Python tests: ${{ needs.python-tests.result }}"
           echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
           echo "  Playwright tests: ${{ needs.playwright-tests.result }} (optional)"
+          echo "  Nav/hooks guard: ${{ needs.nav-hooks-guard.result }}"
           echo "  Security scan: ${{ needs.security-scan.result }}"
           echo "  Security tests: ${{ needs.security-tests.result }}"
           echo "  Demo checks: ${{ needs.demo-checks.result }}"
@@ -558,6 +635,7 @@ jobs:
           if [ "${{ needs.rust-tests.result }}" == "success" ] && \
              [ "${{ needs.python-tests.result }}" == "success" ] && \
              [ "${{ needs.javascript-tests.result }}" == "success" ] && \
+             [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
              [ "${{ needs.security-tests.result }}" == "success" ] && \
              [ "${{ needs.demo-checks.result }}" == "success" ]; then
             echo "All core tests passed!"
