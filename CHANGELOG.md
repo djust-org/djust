@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`render_full_template` ejected page content outside `[dj-root]` for multi-line `<div>` tags, leaking it across `dj-navigate` (#1749).** The `dj-root` region's closing `</div>` was located by counting `<div>` depth, but the opening-tag check only matched the exact forms `"<div "` and `"<div>"` — a multi-line opening tag (`<div\n  class=...>` / `<div\t...>`) was not counted. Each missed open under-counted depth, so a later `</div>` closed the `dj-root` region early; the full rendered view was then spliced in place of the truncated region, leaving the tail of the page **outside** `<div dj-root>` (and duplicated). Because `dj-navigate` swaps only the `[dj-root]` subtree, that ejected content was never cleared on navigation (it leaked onto the next page — observed on a page authored with multi-line `<div>` sections, reached via a fresh GET). Fix: match `<div` followed by any tag-boundary char (whitespace, `>`, `/`). Same family as #1746.
+
 ## [1.0.3rc1] - 2026-06-06
 
 ### Fixed
