@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`render_full_template` double-rendered the whole page when a child template merely *mentioned* `dj-root`/`dj-view` as text** (#1746). `get_template()` picked the VDOM source with a naive substring check (`"dj-root" in template_source or "dj-view" in template_source`). When the real `<div dj-root>` lived in the BASE template and the child only displayed the tokens in text (e.g. a `<code>` example) — or as a substring of another word (`adj-view`) — the check wrongly selected the child as the VDOM source, so `render_full_template` nested the entire page (two `<!DOCTYPE>`/two `<footer>`, truncated inline `<script>`, broken `dj-navigate` morphs). Replaced the substring check with the anchored-attribute regexes `_DJ_ROOT_RE`/`_DJ_VIEW_RE` already used elsewhere in the module, which require a real `<div ... dj-root/dj-view ...>` tag.
+
 ## [1.0.2] - 2026-06-06
 
 ### Added
