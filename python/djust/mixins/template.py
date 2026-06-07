@@ -158,9 +158,23 @@ class TemplateMixin:
                     # the dj-root block directly without base template surrounding HTML,
                     # making extraction simpler and immune to Issue #365 miscount.
                     # Fall back to resolved if dj-root is only in the base template.
+                    #
+                    # Use the anchored-attribute regexes (NOT a naive substring): a
+                    # naive ``"dj-root" in template_source`` matches the token ANYWHERE
+                    # — including documentation/example code that merely *displays*
+                    # ``dj-root``/``dj-view`` as text, or another word containing it as
+                    # a substring (``adj-view``). When the real ``<div dj-root>`` lives
+                    # in the BASE template and the child only mentions the tokens in
+                    # text, the substring check wrongly picks the child as the VDOM
+                    # source → extraction finds no real dj-root → render_full_template
+                    # nests the whole page (two <!DOCTYPE>/two <footer>). The regexes
+                    # require a REAL ``<div ... dj-root/dj-view ...>`` tag (#1746).
                     vdom_source = (
                         template_source
-                        if ("dj-root" in template_source or "dj-view" in template_source)
+                        if (
+                            _DJ_ROOT_RE.search(template_source)
+                            or _DJ_VIEW_RE.search(template_source)
+                        )
                         else resolved
                     )
                     vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
