@@ -979,7 +979,20 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 depth = 1
                 i = after_open
                 while i < len(shell_html) and depth > 0:
-                    if shell_html[i : i + 5] == "<div " or shell_html[i : i + 5] == "<div>":
+                    # Opening <div ...>: match "<div" followed by a tag-boundary
+                    # char (whitespace, '>' or '/'). The previous check only
+                    # recognized the exact forms "<div " and "<div>", so a
+                    # MULTI-LINE opening tag ("<div\n  class=...>" / "<div\t...")
+                    # was not counted as an open. Each missed open under-counted
+                    # depth, so a later "</div>" drove depth to 0 EARLY — the
+                    # dj-root region was closed before its real end and all
+                    # subsequent page content rendered OUTSIDE [dj-root]. Because
+                    # dj-navigate only swaps the [dj-root] subtree, that ejected
+                    # content was never cleared on navigation (leaked onto the
+                    # next page). Matching any tag-boundary char fixes the count.
+                    if shell_html[i : i + 4] == "<div" and (
+                        i + 4 >= len(shell_html) or shell_html[i + 4] in " \t\r\n>/"
+                    ):
                         depth += 1
                     elif shell_html[i : i + 6] == "</div>":
                         depth -= 1
