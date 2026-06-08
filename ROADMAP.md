@@ -3598,6 +3598,29 @@ PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
 
 ---
 
+### Milestone: v1.0.3 — dj-root boundary + nav-guard hardening (post-1.0.2 patch)
+
+*Goal:* The 1.0.3 patch. A production-bug family surfaced integrating djust into
+djust.org's marketing site: `render_full_template` mis-locating the `dj-root`
+region boundary so page content rendered OUTSIDE `[dj-root]` and leaked across
+`dj-navigate`. Plus CI hardening of the v1.0.2 nav/hooks guard. Drained
+2026-06-07 via `/pipeline-drain`. Design-gated features (#1734, #1735, #1562,
+#1561, #1557) stay in v1.1.0.
+
+**STATUS: IN PROGRESS.**
+Merged toward 1.0.3: #1747 (#1746 substring mis-detect, shipped in 1.0.3rc1),
+#1750 (#1749 multi-line `<div>` open under-count), #1748 (nav/hooks guard
+hardening, #1745), #1753 (#1752 item 1 — maturin build in nav-hooks-guard).
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | Close-side `</div>` tolerance + consolidate dj-root scanners (#1751) | `render_full_template`'s hand-rolled div-depth loop (open side fixed in #1750) and `_find_closing_div_pos` both hardcode the close tag as `</div>`, missing `</div >`/`</div\n>`. Add `</div\s*>` tolerance in `_find_closing_div_pos` (benefits all 6 call sites) and replace the duplicate hand-rolled loop with a `_find_closing_div_pos` call (multi-line-safe open + if/else handling). | Tech-debt; completes the #1749/#1750 fix class (parallel-path-drift). *(filed from #1750 Stage-7 review)* |
+| **P2** | Harden nav-hooks-guard: blocking-soak + CI dedup (#1752 items 2–3) | Item 1 (maturin build) shipped in #1753. Remaining: (2) decide blocking-vs-`continue-on-error` soak for the Playwright guard; (3) extract a reusable workflow to de-duplicate the ~80% shared server harness between `nav-hooks-guard` and `playwright-tests`. | Tech-debt / CI. Item 3 is a deliberate refactor. |
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
