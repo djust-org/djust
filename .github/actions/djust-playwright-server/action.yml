@@ -1,0 +1,85 @@
+name: 'djust Playwright server'
+description: >-
+  Set up Python + uv, build the djust Rust extension, install Playwright
+  (chromium), run Django migrations, and start the demo project's dev server
+  on :8002, waiting until it answers. Shared by the playwright-tests and
+  nav-hooks-guard jobs (#1752). The caller must `actions/checkout` first
+  (this is a local action) and is responsible for running its own test step,
+  uploading server.log on failure, and stopping the server.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Cache Python dependencies
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cache/uv
+          .venv
+        key: ${{ runner.os }}-python-playwright-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-python-playwright-
+          ${{ runner.os }}-python-
+
+    - name: Install Python dependencies
+      shell: bash
+      run: uv sync --extra dev
+
+    - name: Build package
+      # Force a fresh Rust-extension build so render-behavior guards never test a
+      # stale cached extension. The uv/.venv cache key is keyed on
+      # pyproject.toml/uv.lock only, so a crates/*.rs-only change would otherwise
+      # restore a previously-built djust. (#1752)
+      shell: bash
+      run: uv run maturin develop --release
+
+    - name: Install Playwright
+      shell: bash
+      run: |
+        uv pip install playwright
+        .venv/bin/playwright install chromium
+
+    - name: Run Django migrations
+      shell: bash
+      run: |
+        cd examples/demo_project
+        uv run python manage.py migrate --noinput
+        cd ../..
+
+    - name: Start development server
+      shell: bash
+      env:
+        PYTHONPATH: .
+      run: |
+        cd examples/demo_project
+        nohup uv run python -m uvicorn demo_project.asgi:application \
+          --host 0.0.0.0 \
+          --port 8002 \
+          --log-level info \
+          > server.log 2>&1 &
+        echo $! > server.pid
+        cd ../..
+
+    - name: Wait for server to be ready
+      shell: bash
+      run: |
+        echo "Waiting for server to start..."
+        for i in {1..30}; do
+          if curl -s http://localhost:8002/ > /dev/null; then
+            echo "Server is ready!"
+            exit 0
+          fi
+          echo "Attempt $i/30: Server not ready yet..."
+          sleep 1
+        done
+        echo "Server failed to start"
+        cat examples/demo_project/server.log
+        exit 1
