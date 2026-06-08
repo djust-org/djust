@@ -143,6 +143,30 @@ route map is empty), djust's system check **`djust.T016`** warns you — otherwi
 connection, and its registrations are merged into the auto-derived map. It is no
 longer required just to make `dj-navigate` resolve routes.
 
+#### Active-link highlighting
+
+A persistent nav usually lives **outside** `[dj-root]`, so `dj-navigate`'s
+`dj-root`-only swap won't update a server-rendered "active page" class on
+navigation. djust handles this for you: after every navigation (click, WS mount,
+and browser back/forward) it sets `aria-current="page"` on the `[dj-navigate]`
+link whose path matches the current URL and removes it from the others. Style the
+active link off that attribute — no per-app JavaScript needed:
+
+```html
+<a dj-navigate="/">Home</a>
+<a dj-navigate="/docs/">Docs</a>
+
+<style>
+  a[dj-navigate][aria-current="page"] { font-weight: 700; color: #fff; }
+</style>
+```
+
+Cross-origin `dj-navigate` targets (e.g. a link to a sister site) are never
+marked current, and an `aria-current` you set yourself to a different value
+(`step`, `true`, …) is left untouched. Matching is exact-path; for
+section/ancestor highlighting (e.g. `/docs/` active on `/docs/guides/x`), add
+your own rule on top.
+
 > **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
 > don't execute, so an inline `<script>` that inits a library renders on a hard
 > reload but stays blank after navigation. Initialize third-party libraries from

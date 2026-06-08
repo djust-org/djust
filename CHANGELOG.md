@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dj-navigate` keeps `aria-current="page"` in sync across SPA navigation (#1756).** A persistent nav usually lives outside `[dj-root]`; since `dj-navigate` swaps only the `[dj-root]` subtree, a server-rendered active-link highlight previously stayed on the page you navigated *from*. The client now sets `aria-current="page"` on the `[dj-navigate]` link whose path matches the current URL (and removes it from the others) after each navigation — on click, on the WS mount, and on back/forward (popstate). Cross-origin `dj-navigate` targets are never marked current, and an app-authored `aria-current` of a different value is left untouched. Style the active link with `a[dj-navigate][aria-current="page"]`. (Syncing `document.title` and the `[dj-root]` `dj-view` attribute across SPA nav remain tracked in #1756.)
+
 ## [1.0.3rc2] - 2026-06-07
 
 ### Fixed
