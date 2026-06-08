@@ -9526,6 +9526,10 @@ window.djust.getActiveStreams = getActiveStreams;
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
 
+        // Move the active-nav highlight immediately (the URL is now current),
+        // rather than waiting for the WS mount round-trip. (#1756)
+        updateAriaCurrent();
+
         // Scroll to top on navigation (or to anchor if present)
         const hash = newUrl.hash;
         if (hash) {
@@ -9663,6 +9667,9 @@ window.djust.getActiveStreams = getActiveStreams;
      * afterwards via the normal mount handler.
      */
     window.addEventListener('popstate', async function (event) {
+        // Keep the active-nav highlight in sync on back/forward (the URL is
+        // already current here), regardless of WS state. (#1756)
+        updateAriaCurrent();
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
@@ -9839,6 +9846,41 @@ window.djust.getActiveStreams = getActiveStreams;
                 handleLiveRedirect({ path: path, replace: false });
             });
         });
+
+        // Keep aria-current="page" in sync with the current URL. A persistent
+        // nav usually lives OUTSIDE [dj-root], so dj-navigate's dj-root-only
+        // swap never updates a server-rendered active state — this re-derives
+        // it client-side. Runs on each call because bindNavigationDirectives is
+        // invoked from reinitAfterDOMUpdate (initial load + every SPA mount and
+        // patch), so the highlight tracks the current page. (#1756)
+        updateAriaCurrent();
+    }
+
+    /**
+     * Set ``aria-current="page"`` on the ``[dj-navigate]`` link whose path
+     * matches the current URL and remove it from the others. Only manages the
+     * ``"page"`` value this module sets (never clobbers an app-authored
+     * ``aria-current`` of a different value). Cross-origin dj-navigate targets
+     * (e.g. a sister-site link) are never "current". Apps style the active link
+     * via ``[dj-navigate][aria-current="page"]``.
+     */
+    function updateAriaCurrent() {
+        const here = window.location.pathname;
+        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+            let dest;
+            try {
+                dest = new URL(el.getAttribute('dj-navigate'), window.location.origin);
+            } catch (_e) {
+                return;
+            }
+            const isCurrent =
+                dest.origin === window.location.origin && dest.pathname === here;
+            if (isCurrent) {
+                el.setAttribute('aria-current', 'page');
+            } else if (el.getAttribute('aria-current') === 'page') {
+                el.removeAttribute('aria-current');
+            }
+        });
     }
 
     // Expose to djust namespace
@@ -9846,6 +9888,7 @@ window.djust.getActiveStreams = getActiveStreams;
         handleNavigation: handleNavigation,
         bindDirectives: bindNavigationDirectives,
         resolveViewPath: resolveViewPath,
+        updateAriaCurrent: updateAriaCurrent,
     };
 
     // Initialize route map
