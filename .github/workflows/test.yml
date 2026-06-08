@@ -359,6 +359,13 @@ jobs:
             ${{ runner.os }}-python-
       - name: Install Python dependencies
         run: uv sync --extra dev
+      - name: Build package
+        # Force a fresh Rust-extension build so this BLOCKING render guard never
+        # tests a stale cached extension. The uv/.venv cache key is keyed on
+        # pyproject.toml/uv.lock only, so a PR that changes just crates/*.rs would
+        # otherwise restore a previously-built djust and exercise old rendering.
+        # Mirrors the python-tests / playwright-tests jobs. (#1752)
+        run: uv run maturin develop --release
       - name: Install Playwright
         run: |
           uv pip install playwright
