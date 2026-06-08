@@ -189,3 +189,41 @@ class TestMultilineDivBoundary:
         p = _RootContainmentParser()
         p.feed(html)
         assert p.tail_inside == 1 and p.tail_outside == 0
+
+
+class TestFindClosingDivCloseSideWhitespace:
+    """The shared boundary scanner ``_find_closing_div_pos`` must tolerate
+    whitespace before '>' in a close tag (``</div >`` / ``</div\\n>``) — the
+    close-side twin of the #1749 open-side under-count (#1751). A plain
+    ``</div>`` match misses those, over-counting depth so the close is never
+    found (returns (None, None) → caller falls back / mis-splices)."""
+
+    def _find(self, template, inner_start):
+        from djust.mixins.template import TemplateMixin
+
+        return TemplateMixin._find_closing_div_pos(template, inner_start)
+
+    def test_trailing_whitespace_close_tags_are_matched(self):
+        # Outer <div> opened at index 0; inner_start just past "<div>".
+        # Nested inner div closed by "</div\n>"; outer closed by "</div >".
+        tpl = "<div>A<div>B</div\n>C</div >TAIL"
+        inner_start = len("<div>")
+        close_start, close_end = self._find(tpl, inner_start)
+        assert close_start is not None and close_end is not None, (
+            "scanner returned (None, None) — whitespace close tags "
+            "(</div >, </div\\n>) were not matched."
+        )
+        # close_end must consume the FULL outer "</div >" (incl. trailing ws),
+        # so the splice boundary lands exactly before TAIL.
+        assert tpl[close_end:] == "TAIL", (
+            "close_end (%d) does not consume the full whitespace close tag; "
+            "remainder=%r" % (close_end, tpl[close_end:])
+        )
+
+    def test_plain_close_tag_still_works(self):
+        # Control: the common no-whitespace form must keep working.
+        tpl = "<div>A<div>B</div>C</div>TAIL"
+        inner_start = len("<div>")
+        close_start, close_end = self._find(tpl, inner_start)
+        assert close_start is not None
+        assert tpl[close_end:] == "TAIL"
