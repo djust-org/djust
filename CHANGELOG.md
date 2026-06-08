@@ -7,20 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-07
+
 ### Added
 
 - **`dj-navigate` keeps `aria-current="page"` in sync across SPA navigation (#1756).** A persistent nav usually lives outside `[dj-root]`; since `dj-navigate` swaps only the `[dj-root]` subtree, a server-rendered active-link highlight previously stayed on the page you navigated *from*. The client now sets `aria-current="page"` on the `[dj-navigate]` link whose path matches the current URL (and removes it from the others) after each navigation — on click, on the WS mount, and on back/forward (popstate). Cross-origin `dj-navigate` targets are never marked current, and an app-authored `aria-current` of a different value is left untouched. Style the active link with `a[dj-navigate][aria-current="page"]`. (Syncing `document.title` and the `[dj-root]` `dj-view` attribute across SPA nav remain tracked in #1756.)
-
-## [1.0.3rc2] - 2026-06-07
 
 ### Fixed
 
 - **`render_full_template` ejected page content outside `[dj-root]` for multi-line `<div>` tags, leaking it across `dj-navigate` (#1749).** The `dj-root` region's closing `</div>` was located by counting `<div>` depth, but the opening-tag check only matched the exact forms `"<div "` and `"<div>"` — a multi-line opening tag (`<div\n  class=...>` / `<div\t...>`) was not counted. Each missed open under-counted depth, so a later `</div>` closed the `dj-root` region early; the full rendered view was then spliced in place of the truncated region, leaving the tail of the page **outside** `<div dj-root>` (and duplicated). Because `dj-navigate` swaps only the `[dj-root]` subtree, that ejected content was never cleared on navigation (it leaked onto the next page — observed on a page authored with multi-line `<div>` sections, reached via a fresh GET). Fix: match `<div` followed by any tag-boundary char (whitespace, `>`, `/`). Same family as #1746.
 - **`dj-root` boundary close tag missed whitespace (`</div >` / `</div\n>`), and two divergent scanners (#1751).** Completes the #1749 fix class. `_find_closing_div_pos` (the shared scanner, 6 call sites) hardcoded the close as `</div>` — the close-side twin of #1749's open-side under-count, which would over-count depth and fail to find the close. Now matches `</div\s*>`. Also consolidated `render_full_template`'s separate hand-rolled depth loop (whose open side was fixed in #1749/#1750) into the shared `_find_closing_div_pos`, removing the parallel-path-drift that let the open-side bug exist in one copy and not the other.
-
-## [1.0.3rc1] - 2026-06-06
-
-### Fixed
 
 - **`render_full_template` double-rendered the whole page when a child template merely *mentioned* `dj-root`/`dj-view` as text** (#1746). `get_template()` picked the VDOM source with a naive substring check (`"dj-root" in template_source or "dj-view" in template_source`). When the real `<div dj-root>` lived in the BASE template and the child only displayed the tokens in text (e.g. a `<code>` example) — or as a substring of another word (`adj-view`) — the check wrongly selected the child as the VDOM source, so `render_full_template` nested the entire page (two `<!DOCTYPE>`/two `<footer>`, truncated inline `<script>`, broken `dj-navigate` morphs). Replaced the substring check with the anchored-attribute regexes `_DJ_ROOT_RE`/`_DJ_VIEW_RE` already used elsewhere in the module, which require a real `<div ... dj-root/dj-view ...>` tag.
 
