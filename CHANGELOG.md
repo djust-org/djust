@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`djust deploy` now respects `.gitignore` when building the deploy tarball, and warns before oversized uploads (#1759).** `_create_tarball` previously walked the source tree using a hardcoded `EXCLUDE_*` list, ignoring the project's `.gitignore`. Non-standard names — a `.venv-dev/` virtualenv carrying a 115 MB Playwright `node` binary, `scratch/` screenshots, `mobile-app/wheels/` — slipped straight in, producing a 152 MB tarball that the server's ingress rejected with a raw 413. Fix: when the source is a git work tree, `_create_tarball` takes its file list from `git ls-files --cached --others --exclude-standard` (tracked ∪ untracked, minus ignored), so the project's `.gitignore` is the source of truth. Non-git directories fall back to the existing `os.walk` path unchanged. The `EXCLUDE_*` security net (`EXCLUDE_DIR_NAMES`, `EXCLUDE_FILENAMES`, `EXCLUDE_FILE_SUFFIXES`, `EXCLUDE_FILENAME_STEMS`) still applies on the git path so credentials and live databases are dropped even if the user forgot to gitignore them (#1505 intent preserved). A new `_tarball_size_warning` prints an actionable warning to stderr before upload when the packed tarball exceeds 50 MB, listing the largest included files so the user can identify what to add to `.gitignore` instead of hitting a raw nginx 413 page. 6 new regression cases in `python/tests/test_deploy_cli.py`.
+
 ## [1.0.3] - 2026-06-07
 
 ### Added

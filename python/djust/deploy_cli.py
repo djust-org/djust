@@ -93,6 +93,13 @@ EXCLUDE_FILENAMES = frozenset({".DS_Store", "Thumbs.db"})
 # ``.environment`` is NOT a stem variant of ``.env`` and stays included.
 EXCLUDE_FILENAME_STEMS = frozenset({".env", "db.sqlite3"})
 
+# Above this packed size, ``deploy_dir`` warns before uploading and points at
+# the largest included files. A clean djust app tarball is a few MB; anything
+# this large is almost always build artifacts or local data that belongs in
+# .gitignore — and the djustlive ingress 413s uploads past its body-size cap,
+# so surfacing it here turns a raw nginx error into an actionable message.
+TARBALL_WARN_BYTES = 50 * 1024 * 1024
+
 
 # ---------------------------------------------------------------------------
 # Credential helpers
@@ -1032,47 +1039,121 @@ def status(ctx: click.Context, project: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_excluded_dirname(name: str) -> bool:
+    """A directory basename is excluded iff it exactly equals an
+    EXCLUDE_DIR_NAMES entry or ends with an EXCLUDE_DIR_SUFFIXES entry."""
+    return name in EXCLUDE_DIR_NAMES or name.endswith(EXCLUDE_DIR_SUFFIXES)
+
+
+def _is_excluded_filename(name: str) -> bool:
+    """A file basename is excluded iff it equals an EXCLUDE_FILENAMES entry,
+    ends with an EXCLUDE_FILE_SUFFIXES entry, or is a stem-variant of an
+    EXCLUDE_FILENAME_STEMS entry (``stem``, ``stem + "."*`` or ``stem + "-"*``
+    — e.g. ``.env.production``, ``db.sqlite3-wal``). The ``.`` / ``-``
+    discriminator keeps ``.environment`` in (not a ``.env`` variant; #1505)."""
+    if name in EXCLUDE_FILENAMES or name.endswith(EXCLUDE_FILE_SUFFIXES):
+        return True
+    return any(
+        name == stem or name.startswith(stem + ".") or name.startswith(stem + "-")
+        for stem in EXCLUDE_FILENAME_STEMS
+    )
+
+
+def _is_excluded_relpath(relative: str) -> bool:
+    """Apply the EXCLUDE_* rules to a POSIX relative path (as emitted by
+    ``git ls-files``): excluded iff any directory segment is an excluded
+    dirname OR the final segment is an excluded filename. This is the security
+    net that keeps credentials / live DBs / bytecode out of the tarball even
+    when the user has not gitignored them."""
+    segments = relative.split("/")
+    *dir_parts, base = segments
+    if any(_is_excluded_dirname(d) for d in dir_parts):
+        return True
+    return _is_excluded_filename(base)
+
+
+def _git_tracked_files(source_dir: Path) -> Optional[list]:
+    """Return the working-tree files of ``source_dir`` minus gitignored paths,
+    as POSIX relative paths, or ``None`` if ``source_dir`` is not a usable git
+    work tree.
+
+    ``git ls-files --cached --others --exclude-standard`` is exactly "tracked
+    files ∪ untracked files, minus everything matched by .gitignore / global
+    excludes" — i.e. the working tree as the user sees it, minus the junk they
+    already told git to ignore. No commit is required (``--others`` reports
+    untracked files directly), so a freshly-``git init``'d project works too.
+
+    The presence of ``.git`` (a directory in a normal clone, a file in a
+    worktree) gates this: a plain non-git directory returns ``None`` so the
+    caller falls back to the os.walk path. Any git failure (git absent, bad
+    repo) also falls back rather than aborting the deploy.
+    """
+    if not (source_dir / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=str(source_dir),
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [
+        chunk.decode("utf-8", "surrogateescape") for chunk in result.stdout.split(b"\0") if chunk
+    ]
+
+
 def _create_tarball(source_dir: Path, output_path: Path) -> None:
     """
     Create a tarball of source_dir excluding unwanted patterns.
 
-    Exclusion is path-segment / basename anchored (NOT substring-matched):
-    a directory is excluded iff its basename equals an entry in
-    EXCLUDE_DIR_NAMES or ends with an EXCLUDE_DIR_SUFFIXES entry; a file is
-    excluded iff its name equals an EXCLUDE_FILENAMES entry, ends with an
-    EXCLUDE_FILE_SUFFIXES entry, or is a stem-variant of an
-    EXCLUDE_FILENAME_STEMS entry (``stem``, ``stem + "."*`` or
-    ``stem + "-"*`` — e.g. ``.env.production``, ``db.sqlite3-wal``). This
-    prevents over-exclusion such as a ``venv`` token wrongly dropping
-    ``venvironment.py`` (#1505), while still excluding suffixed credential /
-    live-database files such as ``.env.production`` and ``db.sqlite3-wal``.
+    When ``source_dir`` is a git work tree, the file set comes from
+    ``git ls-files`` (see :func:`_git_tracked_files`), so the user's existing
+    ``.gitignore`` is the source of truth — a ``.venv-dev`` virtualenv, a
+    ``scratch/`` build dir, or locally-built wheels they already ignore stay
+    out of the tarball even though their names are not in EXCLUDE_DIR_NAMES.
+    Otherwise (a non-git directory, or git unavailable) it falls back to an
+    ``os.walk`` of the tree.
+
+    In BOTH paths the EXCLUDE_* rules are applied as a security net via
+    :func:`_is_excluded_dirname` / :func:`_is_excluded_filename`: exclusion is
+    path-segment / basename anchored (NOT substring-matched), so credential /
+    live-database files such as ``.env.production`` and ``db.sqlite3-wal`` are
+    dropped even if the user forgot to gitignore them, while lookalikes such as
+    ``venvironment.py`` and ``.environment`` are kept (#1505).
 
     Args:
         source_dir: Directory to tar
         output_path: Where to write the tarball
     """
+    git_files = _git_tracked_files(source_dir)
+
     with tarfile.open(output_path, "w:gz") as tar:
+        if git_files is not None:
+            for relative in git_files:
+                # Security net: EXCLUDE_* still applies to git-listed paths.
+                if _is_excluded_relpath(relative):
+                    continue
+                file_path = source_dir / relative
+                # Skip gitlinks (submodules), broken symlinks, and anything
+                # git lists that is not a regular file on disk.
+                if not file_path.is_file():
+                    continue
+                try:
+                    tar.add(file_path, arcname=relative)
+                except Exception as e:
+                    logger.debug("Failed to add %s to tarball: %s", file_path, e)
+            return
+
         for root, dirs, files in os.walk(source_dir):
             # Prune excluded directories in-place so os.walk does not descend
             # into them. Matched by exact basename or basename suffix.
-            dirs[:] = [
-                d
-                for d in dirs
-                if d not in EXCLUDE_DIR_NAMES and not d.endswith(EXCLUDE_DIR_SUFFIXES)
-            ]
+            dirs[:] = [d for d in dirs if not _is_excluded_dirname(d)]
 
             for file in files:
-                # Skip excluded files — exact basename or basename suffix.
-                if file in EXCLUDE_FILENAMES or file.endswith(EXCLUDE_FILE_SUFFIXES):
-                    continue
-                # Skip stem-variants of sensitive filenames: the file equals
-                # the stem, or starts with ``stem + "."`` / ``stem + "-"``.
-                # The ``.`` / ``-`` discriminator keeps ``.environment`` in
-                # (it is not a ``.env`` variant) — see #1505.
-                if any(
-                    file == stem or file.startswith(stem + ".") or file.startswith(stem + "-")
-                    for stem in EXCLUDE_FILENAME_STEMS
-                ):
+                if _is_excluded_filename(file):
                     continue
 
                 file_path = Path(root) / file
@@ -1082,6 +1163,45 @@ def _create_tarball(source_dir: Path, output_path: Path) -> None:
                     tar.add(file_path, arcname=str(relative))
                 except Exception as e:
                     logger.debug("Failed to add %s to tarball: %s", file_path, e)
+
+
+def _tarball_size_warning(tarball_path: Path, threshold: Optional[int] = None) -> Optional[str]:
+    """Return a human-readable warning if ``tarball_path`` is suspiciously
+    large, else ``None``.
+
+    "Large" means larger than ``threshold`` bytes (default
+    :data:`TARBALL_WARN_BYTES`). The message reports the packed size and the
+    largest included files (by uncompressed size) so the user can see exactly
+    what to add to ``.gitignore``. Surfaced before upload so an oversized
+    tarball produces an actionable hint instead of a raw nginx 413 page.
+    """
+    if threshold is None:
+        threshold = TARBALL_WARN_BYTES
+    size = tarball_path.stat().st_size
+    if size <= threshold:
+        return None
+
+    try:
+        with tarfile.open(tarball_path, "r:gz") as tar:
+            largest = sorted(
+                ((m.size, m.name) for m in tar.getmembers() if m.isfile()),
+                reverse=True,
+            )[:5]
+    except (OSError, tarfile.TarError):
+        largest = []
+
+    lines = [
+        f"Warning: deploy tarball is {size / 1_048_576:.1f} MB — unusually large "
+        "and may exceed the server's upload limit.",
+    ]
+    if largest:
+        lines.append("Largest files included:")
+        lines.extend(f"  {sz / 1_048_576:6.1f} MB  {name}" for sz, name in largest)
+    lines.append(
+        "If any are build artifacts or local data, add them to .gitignore "
+        "(the deploy honors it) and re-run."
+    )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1210,6 +1330,10 @@ def deploy_dir(
     try:
         _create_tarball(Path(source_dir), tarball_path)
         click.echo(f"Tarball created: {tarball_path.stat().st_size} bytes")
+
+        size_warning = _tarball_size_warning(tarball_path)
+        if size_warning:
+            click.echo(size_warning, err=True)
 
         url = f"{server}/api/v1/projects/{project_slug}/deploy/directory/"
 

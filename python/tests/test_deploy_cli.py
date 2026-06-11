@@ -1422,3 +1422,166 @@ class TestCreateTarball:
         assert "keep.py" in names
         assert "dist" in names
         assert "logs" in names
+
+
+class TestCreateTarballGitignore:
+    """`_create_tarball` honors ``.gitignore`` when the source dir is a git repo.
+
+    The hardcoded EXCLUDE_* list only knows a fixed set of dir/file names, so
+    project-specific bloat with non-standard names (a ``.venv-dev`` virtualenv,
+    a ``scratch/`` dir, locally-built wheels) sailed straight into the tarball
+    even though the user had already gitignored it — producing a 152 MB upload
+    that the server's 50 MB ingress cap 413'd. When the source is a git work
+    tree, the file set is taken from ``git ls-files --cached --others
+    --exclude-standard`` (the working tree minus ignored paths), so the user's
+    existing ``.gitignore`` is the source of truth. The EXCLUDE_* rules still
+    apply as a security net so credentials / live DBs never ship even if the
+    user forgot to ignore them.
+    """
+
+    def _git_repo(self, tmp_path, layout, gitignore=""):
+        """Create a git repo (no commit needed) with files + a .gitignore.
+
+        ``git ls-files --others --exclude-standard`` reports untracked,
+        non-ignored files without any commit, so the repo stays uncommitted.
+        """
+        import subprocess
+
+        src = tmp_path / "repo"
+        src.mkdir()
+        if gitignore:
+            (src / ".gitignore").write_text(gitignore)
+        for rel in layout:
+            target = src / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x")
+        subprocess.run(["git", "init", "-q"], cwd=src, check=True)
+        return src
+
+    def test_gitignored_paths_excluded(self, tmp_path):
+        """Paths matched by .gitignore are dropped; app code is kept. This is
+        the max-companion case: ``.venv-dev`` and ``scratch`` are gitignored but
+        NOT in EXCLUDE_DIR_NAMES, so only .gitignore-respect drops them."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = self._git_repo(
+            tmp_path,
+            layout=[
+                "app.py",
+                "pkg/mod.py",
+                ".venv-dev/lib/python3.12/site-packages/playwright/node",
+                "scratch/shot.png",
+                "mobile-app/wheels/djust.whl",
+            ],
+            gitignore=".venv-dev/\nscratch/\nmobile-app/wheels/\n",
+        )
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "app.py" in names
+        assert "pkg/mod.py" in names
+        assert ".venv-dev/lib/python3.12/site-packages/playwright/node" not in names
+        assert "scratch/shot.png" not in names
+        assert "mobile-app/wheels/djust.whl" not in names
+
+    def test_credentials_excluded_even_when_not_gitignored(self, tmp_path):
+        """SECURITY net: even in git mode, the EXCLUDE_* rules still drop a
+        ``.env`` variant / live SQLite DB / ``.pyc`` that the user forgot to
+        gitignore, so secrets never ship just because git would list them."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = self._git_repo(
+            tmp_path,
+            layout=["app.py", ".env.production", "db.sqlite3", "m.pyc"],
+            gitignore="",  # nothing ignored — rely entirely on the security net
+        )
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "app.py" in names
+        assert ".env.production" not in names
+        assert "db.sqlite3" not in names
+        assert "m.pyc" not in names
+
+    def test_non_git_source_uses_walker_fallback(self, tmp_path):
+        """A directory that is NOT a git repo keeps the os.walk behavior: a
+        stray ``.gitignore`` is inert (no git to interpret it), so a listed-but-
+        not-EXCLUDE_* path is still included. Guards against the git path
+        leaking into non-git deploys (`djust deploy-dir` on a plain folder)."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = tmp_path / "plain"
+        src.mkdir()
+        (src / ".gitignore").write_text("keepme/\n")
+        (src / "app.py").write_text("x")
+        (src / "keepme").mkdir()
+        (src / "keepme" / "data.txt").write_text("x")
+
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "app.py" in names
+        # No .git → .gitignore is not consulted → keepme/ is still shipped.
+        assert "keepme/data.txt" in names
+
+
+class TestTarballSizeWarning:
+    """`_tarball_size_warning` flags oversized tarballs before upload so a 413
+    becomes an actionable message instead of a raw nginx error page."""
+
+    def _tarball(self, tmp_path, files):
+        """Build a real .tar.gz from ``{relpath: byte_length}``."""
+        from djust.deploy_cli import _create_tarball
+
+        src = tmp_path / "src"
+        src.mkdir()
+        for rel, length in files.items():
+            target = src / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"x" * length)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        return out
+
+    def test_no_warning_under_threshold(self, tmp_path):
+        from djust.deploy_cli import _tarball_size_warning
+
+        out = self._tarball(tmp_path, {"app.py": 100})
+        assert _tarball_size_warning(out, threshold=10_000_000) is None
+
+    def test_warning_lists_largest_members(self, tmp_path):
+        from djust.deploy_cli import _tarball_size_warning
+
+        out = self._tarball(
+            tmp_path,
+            {"small.py": 10, "big.bin": 4096, "mid.txt": 512},
+        )
+        msg = _tarball_size_warning(out, threshold=0)
+        assert msg is not None
+        # Mentions the size, the offending file, and a gitignore hint.
+        assert "big.bin" in msg
+        assert "MB" in msg
+        assert ".gitignore" in msg
+        # Largest member is listed before the smaller ones.
+        assert msg.index("big.bin") < msg.index("mid.txt")
+
+    def test_warning_uses_module_default_threshold(self, tmp_path):
+        """With no explicit threshold the module constant TARBALL_WARN_BYTES is
+        used; a tiny tarball is well under it and stays silent."""
+        from djust.deploy_cli import TARBALL_WARN_BYTES, _tarball_size_warning
+
+        assert TARBALL_WARN_BYTES >= 10 * 1024 * 1024
+        out = self._tarball(tmp_path, {"app.py": 100})
+        assert _tarball_size_warning(out) is None
