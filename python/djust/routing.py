@@ -250,6 +250,18 @@ def _view_auth_requirement(pattern: URLPattern, view_cls: type) -> Optional[dict
     inner = getattr(cb, "__wrapped__", None)
     if inner is not None and getattr(inner, "view_class", None) is not None:
         login = True
+    # Django's class-based auth mixins gate via dispatch and set no class attr
+    # (LoginRequiredMixin) — detect them by MRO name so a view gated only that
+    # way isn't leaked. (PermissionRequiredMixin uses the same
+    # ``permission_required`` attr already read above.) Detection is by name to
+    # avoid importing django.contrib.auth at module load. NOTE: a purely
+    # runtime gate — a view that only overrides ``check_permissions()`` /
+    # ``mount()`` with no attr or mixin — cannot be detected statically here;
+    # such a route would still appear in the map (it remains access-protected
+    # at mount). Prefer the ``login_required`` / ``permission_required`` attrs.
+    mro_names = {c.__name__ for c in getattr(view_cls, "__mro__", ())}
+    if "LoginRequiredMixin" in mro_names or "PermissionRequiredMixin" in mro_names:
+        login = True
     if login or perms:
         return {"login": True, "perms": perms}
     return None

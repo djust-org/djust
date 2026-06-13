@@ -64,8 +64,12 @@ def test_anonymous_sees_only_public_routes():
     assert "/login-attr/" not in routes  # login_required class attr
     assert "/perm-attr/" not in routes  # permission_required class attr
     assert "/deco/" not in routes  # login_required decorator wrap
+    assert "/mixin/" not in routes  # Django stdlib LoginRequiredMixin (no attr)
     # The view-class paths of gated routes must not leak either.
-    assert all("LoginAttrView" not in v and "PermAttrView" not in v for v in routes.values())
+    assert all(
+        "LoginAttrView" not in v and "PermAttrView" not in v and "MixinGatedView" not in v
+        for v in routes.values()
+    )
 
 
 @override_settings(ROOT_URLCONF=_AUTH_URLS)
@@ -76,6 +80,7 @@ def test_authenticated_sees_login_gated_but_not_perm_gated():
     assert "/public/" in routes
     assert "/login-attr/" in routes
     assert "/deco/" in routes
+    assert "/mixin/" in routes  # LoginRequiredMixin → satisfied by any authed user
     assert "/perm-attr/" not in routes  # lacks auth.view_user
 
 

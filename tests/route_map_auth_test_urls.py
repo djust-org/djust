@@ -13,6 +13,7 @@ Referenced via ``@override_settings(ROOT_URLCONF="tests.route_map_auth_test_urls
 from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import path
 
 from djust import LiveView
@@ -42,9 +43,16 @@ class DecoratorGatedView(LiveView):
     template = '<div dj-root dj-view="tests.route_map_auth_test_urls.DecoratorGatedView">deco</div>'
 
 
+class MixinGatedView(LoginRequiredMixin, LiveView):
+    """Gated via Django's stdlib ``LoginRequiredMixin`` (sets no class attr)."""
+
+    template = '<div dj-root dj-view="tests.route_map_auth_test_urls.MixinGatedView">mixin</div>'
+
+
 urlpatterns = [
     path("public/", PublicView.as_view(), name="public"),
     path("login-attr/", LoginAttrView.as_view(), name="login-attr"),
     path("perm-attr/", PermAttrView.as_view(), name="perm-attr"),
     path("deco/", login_required(DecoratorGatedView.as_view()), name="deco"),
+    path("mixin/", MixinGatedView.as_view(), name="mixin"),
 ]
