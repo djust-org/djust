@@ -2757,6 +2757,46 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("View not mounted. Please reload the page.")
             return
 
+        # Per-event auth re-check (#1777, threat model T3, opt-in). Auth runs at
+        # mount; the connect-time scope user is cached, so a user who logs out /
+        # loses a permission mid-session would keep dispatching events until they
+        # reconnect. When LIVEVIEW_CONFIG['reauth_on_event'] is True and the view
+        # declares login_required/permission_required, re-resolve the user from
+        # the session and re-run the view's auth check; on failure, redirect +
+        # close the socket (mirroring the mount-time gate). Costs one session
+        # read per event — hence default-OFF. Fail-safe: any error here (e.g. no
+        # session in scope) skips the re-check rather than breaking the event.
+        if djust_config.get("reauth_on_event") and (
+            getattr(self.view_instance, "login_required", None)
+            or getattr(self.view_instance, "permission_required", None)
+        ):
+            try:
+                from channels.auth import get_user
+
+                from .auth.core import check_view_auth_lightweight
+
+                fresh_user = await get_user(self.scope)
+                # The mount request is stored on the view (see handle_mount:
+                # ``self.view_instance.request = request``), not on the consumer.
+                request = getattr(self.view_instance, "request", None)
+                if request is not None:
+                    request.user = fresh_user  # reflect current auth for the check + handler
+                    authorized = await sync_to_async(check_view_auth_lightweight)(
+                        self.view_instance, request
+                    )
+                    if not authorized:
+                        from django.conf import settings as _dj_settings
+
+                        login_url = getattr(self.view_instance, "login_url", None) or getattr(
+                            _dj_settings, "LOGIN_URL", "/accounts/login/"
+                        )
+                        await self.send_json({"type": "navigate", "to": login_url})
+                        await self.close(code=4403)
+                        self.view_instance = None
+                        return
+            except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
+                logger.debug("reauth_on_event re-check skipped (non-fatal)", exc_info=True)
+
         # Route to embedded child view if view_id is specified.
         # The registry is provided by StickyChildRegistry (composed into
         # LiveView since v0.6.0 / Sticky LiveViews Phase A). The hasattr
