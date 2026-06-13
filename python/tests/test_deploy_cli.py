@@ -1754,6 +1754,44 @@ class TestDeployDoctor:
             "DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text)
         )
 
+    def test_databases_from_individual_env_vars_does_not_warn(self):
+        """#1768: a DATABASES dict built from individual os.environ['DB_*'] vars
+        (not DATABASE_URL) IS environment-derived and must NOT warn."""
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import os\n"
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.postgresql',\n"
+            "        'NAME': os.environ['DB_NAME'],\n"
+            "        'USER': os.environ['DB_USER'],\n"
+            "        'HOST': os.environ.get('DB_HOST', 'localhost'),\n"
+            "    }\n"
+            "}\n"
+        )
+        assert not any(
+            "DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text)
+        )
+
+    def test_databases_hardcoded_still_warns_despite_env_secret_key(self):
+        """#1768 region-scoping guard: a SECRET_KEY read from env elsewhere must
+        NOT mask a genuinely hardcoded DATABASES block — the env-read check is
+        scoped to the DATABASES region."""
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import os\n"
+            "SECRET_KEY = os.environ['SECRET_KEY']\n"
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.postgresql',\n"
+            "        'NAME': 'mydb', 'USER': 'me', 'HOST': 'localhost',\n"
+            "    }\n"
+            "}\n"
+        )
+        assert any("DATABASES" in w for w in _deploy_doctor_warnings(text))
+
     def test_sqlite_under_project_dir_warns(self):
         from djust.deploy_cli import _deploy_doctor_warnings
 

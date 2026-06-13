@@ -1244,6 +1244,43 @@ _DOCTOR_ENV_POINTER = (
 )
 
 
+def _databases_region(settings_text: str) -> str:
+    """Return the source text of the ``DATABASES = ...`` assignment's value.
+
+    For a dict literal (`DATABASES = { ... }`) this brace-balances to the
+    matching `}`; for a call form (`DATABASES = dj_database_url.config(...)`)
+    it returns the rest of that logical line. Returns `""` when there is no
+    `DATABASES` assignment. Scoping the env-read check to this region (rather
+    than the whole file) keeps a `SECRET_KEY = os.environ[...]` elsewhere from
+    masking a genuinely hardcoded `DATABASES` block (#1768).
+    """
+    m = re.search(r"^\s*DATABASES\s*=\s*", settings_text, re.MULTILINE)
+    if not m:
+        return ""
+    start = m.end()
+    if start < len(settings_text) and settings_text[start] == "{":
+        depth = 0
+        for i in range(start, len(settings_text)):
+            ch = settings_text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return settings_text[start : i + 1]
+        return settings_text[start:]  # unbalanced — fall back to the tail
+    nl = settings_text.find("\n", start)
+    return settings_text[start : nl if nl != -1 else len(settings_text)]
+
+
+# Env-read signals: any of these inside the DATABASES region (or the
+# DB-specific DATABASE_URL/dj_database_url tokens anywhere) mean the DB config
+# is environment-derived, so the platform's injected values are honored.
+_DB_ENV_READ_RE = re.compile(
+    r"os\.environ|os\.getenv|\bgetenv\(|\benviron\[|\benviron\.get\(|\benv\(|\bconfig\(|decouple"
+)
+
+
 def _deploy_doctor_warnings(settings_text: str) -> list:
     """Statically inspect a Django settings module's source text and return
     human-readable WARNINGS (never errors) for settings that violate the
@@ -1275,12 +1312,22 @@ def _deploy_doctor_warnings(settings_text: str) -> list:
                 "the platform host will raise DisallowedHost (400) — " + _DOCTOR_ENV_POINTER
             )
 
-    # DATABASES that never consult DATABASE_URL.
+    # DATABASES that read no configuration from the environment. The canonical
+    # DATABASE_URL / dj_database_url tokens count anywhere; other env reads
+    # (individual os.environ['DB_*'] vars, python-decouple, etc.) count only
+    # within the DATABASES region so an unrelated SECRET_KEY=os.environ[...]
+    # elsewhere can't mask a hardcoded DB block (#1768).
     if re.search(r"^\s*DATABASES\s*=", settings_text, re.MULTILINE):
-        if "DATABASE_URL" not in settings_text and "dj_database_url" not in settings_text:
+        reads_env = (
+            "DATABASE_URL" in settings_text
+            or "dj_database_url" in settings_text
+            or _DB_ENV_READ_RE.search(_databases_region(settings_text)) is not None
+        )
+        if not reads_env:
             warnings.append(
-                "DATABASES does not consult DATABASE_URL; on a read-only app rootfs the "
-                "first write 500s (OperationalError: readonly database) — " + _DOCTOR_ENV_POINTER
+                "DATABASES reads no configuration from the environment (neither "
+                "DATABASE_URL nor os.environ); on a read-only app rootfs the first "
+                "write 500s (OperationalError: readonly database) — " + _DOCTOR_ENV_POINTER
             )
 
     # sqlite DB, which lands under the (read-only) project dir on the platform.
