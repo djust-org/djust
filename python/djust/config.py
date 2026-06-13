@@ -76,6 +76,15 @@ class LiveViewConfig:
         # This is also readable from settings.DJUST_CONFIG["hook_namespacing"]
         # via the template tag (kept here for discoverability / system-check tooling).
         "hook_namespacing": "lax",
+        # Automatic SPA navigation (#1734, ADR-021 Stage 2). When True,
+        # {% djust_client_config %} emits a <meta name="djust-auto-navigate">
+        # flag and the client installs ONE delegated click listener that
+        # SPA-navigates plain <a href> links whose path resolves in the
+        # (auth-filtered, #1758) route map — Turbo-Drive-style, no djust
+        # attributes needed. Default OFF: opt in only after reading the
+        # opt-out matrix (modifier/middle-click, target/download, external,
+        # hash-only, data-no-navigate). Non-LiveView links full-reload as usual.
+        "auto_navigate": False,
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
