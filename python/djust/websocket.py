@@ -1977,12 +1977,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.close(code=4403)
                 return
             if redirect_url:
+                # Auth failure (e.g. anonymous user on a login_required view).
+                # Send the redirect frame so a browser navigates to LOGIN_URL,
+                # THEN close the socket — otherwise a raw WS client can ignore
+                # the navigate and keep sending events to handlers with no
+                # authenticated session (the mount left view_instance set but
+                # never ran mount(), and handle_event does not re-check auth).
+                # Mirrors the PermissionDenied/4403 branch above. (Threat model
+                # T1, docs/audits/websocket-auth-2026-06.md.)
                 await self.send_json(
                     {
                         "type": "navigate",
                         "to": redirect_url,
                     }
                 )
+                await self.close(code=4403)
+                self.view_instance = None
                 return
             # --- End auth check ---
 
@@ -2003,7 +2013,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self.view_instance, request, **params
             )
             if hook_redirect:
+                # Same shape as the auth redirect above (T2): the view never
+                # mounted (we return before mount()), so the socket is orphaned
+                # — close it + clear view_instance so a raw client can't dispatch
+                # events against the unmounted view. (docs/audits/websocket-auth-2026-06.md.)
                 await self.send_json({"type": "navigate", "to": hook_redirect})
+                await self.close(code=4403)
+                self.view_instance = None
                 return
             # --- End on_mount hooks ---
 
