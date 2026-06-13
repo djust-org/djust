@@ -28,7 +28,7 @@ pub struct Context {
     /// implement `Clone` directly (it requires a GIL-held `clone_ref`).
     /// Wrapping in `Arc` lets `Context::clone` stay GIL-free — the
     /// sidecar is logically immutable after construction.
-    raw_py_objects: Option<std::sync::Arc<HashMap<String, PyObject>>>,
+    raw_py_objects: Option<std::sync::Arc<HashMap<String, Py<PyAny>>>>,
 }
 
 impl Clone for Context {
@@ -71,7 +71,7 @@ impl Context {
     /// lookups. Typically called by the live-view layer after
     /// building the context from JSON-compatible state. Safe to
     /// call with an empty map (no-op on lookup).
-    pub fn set_raw_py_objects(&mut self, objects: HashMap<String, PyObject>) {
+    pub fn set_raw_py_objects(&mut self, objects: HashMap<String, Py<PyAny>>) {
         if objects.is_empty() {
             self.raw_py_objects = None;
         } else {
@@ -92,7 +92,7 @@ impl Context {
     /// the Django template tag. Returns ``None`` when no sidecar is
     /// attached (the common case for templates rendered outside a
     /// ``RustLiveView``).
-    pub fn raw_py_objects(&self) -> Option<&HashMap<String, PyObject>> {
+    pub fn raw_py_objects(&self) -> Option<&HashMap<String, Py<PyAny>>> {
         self.raw_py_objects.as_deref()
     }
 
@@ -241,7 +241,7 @@ impl Context {
         let first = *parts.first()?;
         let obj = raw.get(first)?;
 
-        Python::with_gil(|py| -> Option<Value> {
+        Python::attach(|py| -> Option<Value> {
             let mut current: pyo3::Bound<'_, pyo3::PyAny> = obj.bind(py).clone();
             for part in &parts[1..] {
                 match current.getattr(*part) {

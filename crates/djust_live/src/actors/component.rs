@@ -12,7 +12,7 @@ use djust_core::{Context, Value};
 use djust_templates::Template;
 use djust_vdom::{diff, parse_html, VNode};
 use pyo3::types::{PyAnyMethods, PyDictMethods};
-use pyo3::{FromPyObject, IntoPyObject};
+use pyo3::IntoPyObject;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -277,7 +277,7 @@ impl ComponentActor {
             .ok_or_else(|| ActorError::Python("No Python component set".to_string()))?;
 
         // Call Python handler with GIL
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let component = python_component.bind(py);
 
             // Get the handler method
@@ -325,7 +325,7 @@ impl ComponentActor {
             None => return Ok(()), // No Python component, nothing to sync
         };
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let component = python_component.bind(py);
 
             // Get context_data (calls component.get_context_data())
@@ -340,7 +340,7 @@ impl ComponentActor {
                 ActorError::Python(format!("Error calling get_context_data(): {e}"))
             })?;
 
-            let context_dict = context_dict.downcast::<PyDict>().map_err(|e| {
+            let context_dict = context_dict.cast::<PyDict>().map_err(|e| {
                 ActorError::Python(format!("get_context_data() did not return dict: {e}"))
             })?;
 
@@ -351,7 +351,7 @@ impl ComponentActor {
                     ActorError::Python(format!("Failed to extract key as string: {e}"))
                 })?;
 
-                let rust_value = Value::extract_bound(&value).map_err(|e| {
+                let rust_value = value.extract::<Value>().map_err(|e| {
                     ActorError::Python(format!("Failed to convert value for key '{key_str}': {e}"))
                 })?;
 

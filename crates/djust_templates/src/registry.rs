@@ -282,7 +282,7 @@ pub fn call_block_handler_with_py_sidecar(
     args: &[String],
     content: &str,
     context: &HashMap<String, djust_core::Value>,
-    raw_py_objects: Option<&HashMap<String, pyo3::PyObject>>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<String, String> {
     let handler = {
         let registry = BLOCK_TAG_HANDLERS
@@ -293,10 +293,10 @@ pub fn call_block_handler_with_py_sidecar(
             .get(name)
             .ok_or_else(|| format!("No block handler registered for tag: {name}"))?;
 
-        Python::with_gil(|py| handler_ref.clone_ref(py))
+        Python::attach(|py| handler_ref.clone_ref(py))
     };
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         use pyo3::IntoPyObject;
 
         let py_args = pyo3::types::PyList::new(py, args)
@@ -404,7 +404,7 @@ pub fn call_handler_with_py_sidecar(
     name: &str,
     args: &[String],
     context: &HashMap<String, djust_core::Value>,
-    raw_py_objects: Option<&HashMap<String, pyo3::PyObject>>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<String, String> {
     // Get handler from registry
     let handler = {
@@ -412,16 +412,16 @@ pub fn call_handler_with_py_sidecar(
             .read()
             .map_err(|e| format!("Registry lock error: {e}"))?;
 
-        // Clone the Py<PyAny> using Python::with_gil
+        // Clone the Py<PyAny> using Python::attach
         let handler_ref = registry
             .get(name)
             .ok_or_else(|| format!("No handler registered for tag: {name}"))?;
 
-        Python::with_gil(|py| handler_ref.clone_ref(py))
+        Python::attach(|py| handler_ref.clone_ref(py))
     };
 
     // Acquire GIL and call Python handler
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         use pyo3::IntoPyObject;
 
         // Convert args to Python list
@@ -586,7 +586,7 @@ pub fn call_assign_handler_with_py_sidecar(
     name: &str,
     args: &[String],
     context: &HashMap<String, djust_core::Value>,
-    raw_py_objects: Option<&HashMap<String, pyo3::PyObject>>,
+    raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<HashMap<String, djust_core::Value>, String> {
     let handler = {
         let registry = ASSIGN_TAG_HANDLERS
@@ -595,10 +595,10 @@ pub fn call_assign_handler_with_py_sidecar(
         let handler_ref = registry
             .get(name)
             .ok_or_else(|| format!("No assign handler registered for tag: {name}"))?;
-        Python::with_gil(|py| handler_ref.clone_ref(py))
+        Python::attach(|py| handler_ref.clone_ref(py))
     };
 
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         use pyo3::IntoPyObject;
 
         let py_args = pyo3::types::PyList::new(py, args)

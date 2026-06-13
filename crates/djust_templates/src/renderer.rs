@@ -388,7 +388,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
         Node::Variable(var_name, filter_specs, in_attr) => {
             // `resolve` tries the normal value-stack path first, then
-            // falls back to `getattr` on any PyObject sidecar attached
+            // falls back to `getattr` on any Py<PyAny> sidecar attached
             // to the context (e.g. Django model instances).
             let mut value = context.resolve(var_name).unwrap_or(Value::Null);
 

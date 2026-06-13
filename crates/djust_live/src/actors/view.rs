@@ -357,7 +357,7 @@ impl ViewActor {
             .ok_or_else(|| ActorError::Python("No Python view set".to_string()))?;
 
         // Call Python handler with GIL
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let view = python_view.bind(py);
 
             // Get the handler method
@@ -402,7 +402,7 @@ impl ViewActor {
             None => return Ok(()), // No Python view, nothing to sync
         };
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let view = python_view.bind(py);
 
             // Get context_data (calls view.get_context_data())
@@ -417,7 +417,7 @@ impl ViewActor {
                 ActorError::Python(format!("Error calling get_context_data(): {e}"))
             })?;
 
-            let context_dict = context_dict.downcast::<PyDict>().map_err(|e| {
+            let context_dict = context_dict.cast::<PyDict>().map_err(|e| {
                 ActorError::Python(format!("get_context_data() did not return dict: {e}"))
             })?;
 
@@ -428,7 +428,7 @@ impl ViewActor {
                     ActorError::Python(format!("Failed to extract key as string: {e}"))
                 })?;
 
-                let rust_value = Value::extract_bound(&value).map_err(|e| {
+                let rust_value = value.extract::<Value>().map_err(|e| {
                     ActorError::Python(format!("Failed to convert value for key '{key_str}': {e}"))
                 })?;
 
@@ -599,7 +599,7 @@ impl ViewActor {
         };
 
         // Try to call handle_component_event(component_id, event_name, data) on Python view
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let view = python_view.bind(py);
 
             // Try to get handle_component_event method

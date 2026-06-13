@@ -189,8 +189,13 @@ impl fmt::Display for Value {
     }
 }
 
-impl<'py> FromPyObject<'py> for Value {
-    fn extract_bound(ob: &pyo3::Bound<'py, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for Value {
+    // PyO3 0.29 reshaped FromPyObject: it now carries an associated `Error`
+    // type and a single `extract(Borrowed<...>)` method (the old single-lifetime
+    // `extract_bound(&Bound<...>)` was removed). `Borrowed` derefs to `Bound`,
+    // so the body below is unchanged — method calls on `ob` auto-deref.
+    type Error = PyErr;
+    fn extract(ob: pyo3::Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         if ob.is_none() {
             Ok(Value::Null)
         } else if let Ok(b) = ob.extract::<bool>() {
