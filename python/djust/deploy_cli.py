@@ -10,6 +10,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import tarfile
@@ -1205,6 +1206,154 @@ def _tarball_size_warning(tarball_path: Path, threshold: Optional[int] = None) -
 
 
 # ---------------------------------------------------------------------------
+# deploy status display (#1761) + deploy doctor preflight (#1760)
+# ---------------------------------------------------------------------------
+
+
+def _poll_display(data: dict) -> tuple:
+    """Map a deployment-status poll response to ``(message, done, url)``.
+
+    ``done`` is ``True`` when polling should stop. During a blue/green rollout
+    the deployment row is ``active``/``deploying`` but ``serving_current`` is
+    ``False`` — the OLD placement is still serving the env URL while the new
+    rootfs cuts over (djustlive #517). In that window we surface "rolling out"
+    and keep polling instead of reporting "active" / printing the URL, so users
+    stop re-testing against stale code.
+
+    ``serving_current`` is an additive field: older servers omit it, so a
+    missing value is treated as ``True`` (fail-safe — today's behavior).
+    """
+    status = data.get("status")
+    serving_current = data.get("serving_current", True)
+    if status in ("active", "deploying") and not serving_current:
+        return (
+            "rolling out (new version built; old version still serving — waiting for cutover)",
+            False,
+            None,
+        )
+    url = data.get("container_url") if status in ("active", "deploying") else None
+    done = status in ("active", "deploying", "failed", "cancelled", "superseded")
+    return (status, done, url)
+
+
+# Appended to every deploy-doctor warning so the user always learns the fix.
+_DOCTOR_ENV_POINTER = (
+    "the platform injects these at runtime — read them from the environment "
+    "(e.g. os.environ['DATABASE_URL'], os.environ['SECRET_KEY'], "
+    "os.environ['ALLOWED_HOSTS'])."
+)
+
+
+def _deploy_doctor_warnings(settings_text: str) -> list:
+    """Statically inspect a Django settings module's source text and return
+    human-readable WARNINGS (never errors) for settings that violate the
+    platform's env-injection contract (#1760).
+
+    These are grep-level heuristics over the source text, not an import of the
+    settings module — the point is to catch the common "foreign app" footguns
+    (hardcoded SECRET_KEY / ALLOWED_HOSTS, a DATABASES block that ignores
+    DATABASE_URL, sqlite on the read-only rootfs) that otherwise deploy fine and
+    only 500 at runtime in production.
+    """
+    warnings = []
+
+    # SECRET_KEY assigned a string literal (not derived from os.environ/env()).
+    m = re.search(r"^\s*SECRET_KEY\s*=\s*(.+)$", settings_text, re.MULTILINE)
+    if m and m.group(1).strip()[:1] in ("'", '"'):
+        warnings.append(
+            "SECRET_KEY is a hardcoded literal; serving a dev key on a public host "
+            "is a security risk — " + _DOCTOR_ENV_POINTER
+        )
+
+    # ALLOWED_HOSTS as a literal host list (not read from env).
+    m = re.search(r"^\s*ALLOWED_HOSTS\s*=\s*(.+)$", settings_text, re.MULTILINE)
+    if m:
+        rhs = m.group(1).strip()
+        if rhs.startswith("[") and ("'" in rhs or '"' in rhs):
+            warnings.append(
+                "ALLOWED_HOSTS is a hardcoded list not read from the environment; "
+                "the platform host will raise DisallowedHost (400) — " + _DOCTOR_ENV_POINTER
+            )
+
+    # DATABASES that never consult DATABASE_URL.
+    if re.search(r"^\s*DATABASES\s*=", settings_text, re.MULTILINE):
+        if "DATABASE_URL" not in settings_text and "dj_database_url" not in settings_text:
+            warnings.append(
+                "DATABASES does not consult DATABASE_URL; on a read-only app rootfs the "
+                "first write 500s (OperationalError: readonly database) — " + _DOCTOR_ENV_POINTER
+            )
+
+    # sqlite DB, which lands under the (read-only) project dir on the platform.
+    if re.search(r"ENGINE.*sqlite3", settings_text):
+        warnings.append(
+            "DATABASES uses sqlite3; the platform app rootfs is read-only, so a sqlite "
+            "NAME under the project dir 500s on first write (use the injected DATABASE_URL "
+            "/ a managed Postgres instead) — " + _DOCTOR_ENV_POINTER
+        )
+
+    return warnings
+
+
+# Directories never worth scanning for a settings module.
+_DOCTOR_SKIP_DIRS = frozenset(
+    {".venv", "venv", "env", "site-packages", "node_modules", ".git", "__pycache__"}
+)
+
+
+def _find_settings_files(source_dir) -> list:
+    """Locate the project's primary Django settings file(s) under ``source_dir``.
+
+    Prefers the module named by ``manage.py``'s ``DJANGO_SETTINGS_MODULE``
+    default (the module the platform will actually load); falls back to globbing
+    for ``settings.py`` (shallowest first). Returns ``[]`` when nothing is found.
+    """
+    source_dir = Path(source_dir)
+    manage = source_dir / "manage.py"
+    if manage.is_file():
+        try:
+            m = re.search(
+                r"DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([\w.]+)['\"]",
+                manage.read_text(encoding="utf-8", errors="replace"),
+            )
+        except OSError:
+            m = None
+        if m:
+            rel = m.group(1).replace(".", "/")
+            for cand in (source_dir / (rel + ".py"), source_dir / rel / "__init__.py"):
+                if cand.is_file():
+                    return [cand]
+
+    return sorted(
+        (
+            p
+            for p in source_dir.rglob("settings.py")
+            if not any(part in _DOCTOR_SKIP_DIRS for part in p.parts)
+        ),
+        key=lambda p: len(p.parts),
+    )
+
+
+def _run_deploy_doctor(source_dir) -> None:
+    """Run the deploy doctor (#1760) over ``source_dir`` and print any warnings
+    to stderr. Always non-blocking — a doctor failure must never stop a deploy.
+    """
+    try:
+        for settings_file in _find_settings_files(source_dir):
+            try:
+                text = settings_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for warning in _deploy_doctor_warnings(text):
+                click.echo(f"⚠ deploy doctor: {warning}", err=True)
+            # Inspect only the primary settings module — checking dev-only
+            # settings files would produce false positives.
+            break
+    except Exception:
+        # The doctor is advisory; never let it block a deploy.
+        logger.debug("deploy doctor failed; skipping", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # deploy
 # ---------------------------------------------------------------------------
 
@@ -1250,6 +1399,10 @@ def deploy(
         no_create=no_create,
         yes=yes,
     )
+
+    # Preflight doctor (#1760): warn (never block) on settings that violate the
+    # platform env contract before we ship them.
+    _run_deploy_doctor(Path.cwd())
 
     url = f"{server}/api/v1/projects/{project_slug}/environments/production/deploy/"
 
@@ -1319,6 +1472,10 @@ def deploy_dir(
         yes=yes,
     )
 
+    # Preflight doctor (#1760): warn (never block) on settings that violate the
+    # platform env contract before we ship them.
+    _run_deploy_doctor(Path(source_dir))
+
     click.echo(f"Creating tarball from {source_dir}...")
 
     # Create tarball in temp location
@@ -1370,18 +1527,18 @@ def deploy_dir(
                 )
                 if status_resp.status_code == 200:
                     data = status_resp.json()
-                    status = data.get("status")
-                    click.echo(f"Status: {status}")
-
-                    # `deploying` means the k8s resources have been created
-                    # and the readiness probe passed; the deployment row
-                    # may still flip to `active` later, but the app is
-                    # already serving so we can return.
-                    if status in ("active", "deploying", "failed", "cancelled", "superseded"):
-                        if status in ("active", "deploying"):
-                            container_url = data.get("container_url")
-                            if container_url:
-                                click.echo(f"Application available at: {container_url}")
+                    # `deploying` means the k8s resources have been created and
+                    # the readiness probe passed; the row may still flip to
+                    # `active` later, but the app is already serving so we can
+                    # return — UNLESS serving_current is False (#1761), meaning a
+                    # blue/green rollout is still serving the OLD rootfs, in
+                    # which case _poll_display reports "rolling out" + done=False
+                    # so we keep polling until the new placement takes over.
+                    message, done, container_url = _poll_display(data)
+                    click.echo(f"Status: {message}")
+                    if done:
+                        if container_url:
+                            click.echo(f"Application available at: {container_url}")
                         return
             except requests.RequestException:
                 # Transient network error during status poll; the loop's
