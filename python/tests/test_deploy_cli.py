@@ -1585,3 +1585,243 @@ class TestTarballSizeWarning:
         assert TARBALL_WARN_BYTES >= 10 * 1024 * 1024
         out = self._tarball(tmp_path, {"app.py": 100})
         assert _tarball_size_warning(out) is None
+
+
+# ---------------------------------------------------------------------------
+# #1761 — serving_current → "rolling out" vs "active"
+# ---------------------------------------------------------------------------
+
+
+class TestPollDisplay:
+    """`_poll_display` maps a deployment-status poll response to
+    (message, done, url). During blue/green the deployment row is
+    active/deploying but `serving_current` is False (the old placement still
+    serves) — the CLI shows "rolling out" and keeps polling until it flips True.
+    `serving_current` is additive (djustlive #517): older servers omit it, so a
+    missing field is treated as True (no behavior change)."""
+
+    def test_active_serving_current_true_is_done_with_url(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display(
+            {
+                "status": "active",
+                "serving_current": True,
+                "container_url": "https://x.djustlive.com",
+            }
+        )
+        assert msg == "active"
+        assert done is True
+        assert url == "https://x.djustlive.com"
+
+    def test_active_serving_current_false_is_rolling_out_not_done(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display(
+            {
+                "status": "active",
+                "serving_current": False,
+                "container_url": "https://x.djustlive.com",
+            }
+        )
+        assert "rolling out" in msg
+        assert done is False
+        # No URL surfaced while still serving stale code.
+        assert url is None
+
+    def test_missing_serving_current_is_back_compat_active(self):
+        """Older servers omit the field → fail-safe True → today's behavior."""
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display(
+            {"status": "active", "container_url": "https://x.djustlive.com"}
+        )
+        assert msg == "active"
+        assert done is True
+        assert url == "https://x.djustlive.com"
+
+    def test_deploying_serving_current_false_keeps_polling(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "deploying", "serving_current": False})
+        assert "rolling out" in msg
+        assert done is False
+        assert url is None
+
+    def test_failed_is_terminal_without_url(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "failed"})
+        assert msg == "failed"
+        assert done is True
+        assert url is None
+
+    def test_cancelled_and_superseded_are_terminal(self):
+        from djust.deploy_cli import _poll_display
+
+        for st in ("cancelled", "superseded"):
+            msg, done, url = _poll_display({"status": st})
+            assert msg == st
+            assert done is True
+            assert url is None
+
+    def test_active_without_container_url_is_done_no_url(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "active", "serving_current": True})
+        assert msg == "active"
+        assert done is True
+        assert url is None
+
+    def test_pending_is_not_terminal(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "pending"})
+        assert msg == "pending"
+        assert done is False
+        assert url is None
+
+
+# ---------------------------------------------------------------------------
+# #1760 — deploy doctor preflight
+# ---------------------------------------------------------------------------
+
+
+class TestDeployDoctor:
+    """`_deploy_doctor_warnings(settings_text)` statically inspects a Django
+    settings module and WARNS (never errors) when it hardcodes values the
+    platform injects via env. Each check has a positive (warns) and negative
+    (silent) case."""
+
+    def test_clean_env_driven_settings_produce_no_warnings(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import os\n"
+            "import dj_database_url\n"
+            "SECRET_KEY = os.environ['SECRET_KEY']\n"
+            "ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')\n"
+            "DATABASES = {'default': dj_database_url.config()}\n"
+        )
+        assert _deploy_doctor_warnings(text) == []
+
+    def test_hardcoded_secret_key_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "SECRET_KEY = 'django-insecure-abc123'\n"
+        warns = _deploy_doctor_warnings(text)
+        assert any("SECRET_KEY" in w for w in warns)
+
+    def test_secret_key_from_env_does_not_warn(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "SECRET_KEY = os.environ['SECRET_KEY']\n"
+        assert not any("SECRET_KEY" in w for w in _deploy_doctor_warnings(text))
+
+    def test_literal_allowed_hosts_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "ALLOWED_HOSTS = ['example.com', 'www.example.com']\n"
+        assert any("ALLOWED_HOSTS" in w for w in _deploy_doctor_warnings(text))
+
+    def test_allowed_hosts_from_env_does_not_warn(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')\n"
+        assert not any("ALLOWED_HOSTS" in w for w in _deploy_doctor_warnings(text))
+
+    def test_databases_without_database_url_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.postgresql',\n"
+            "        'NAME': 'mydb', 'USER': 'me', 'HOST': 'localhost',\n"
+            "    }\n"
+            "}\n"
+        )
+        assert any("DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text))
+
+    def test_databases_reading_database_url_does_not_warn(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import dj_database_url\n"
+            "DATABASES = {'default': dj_database_url.config(default=os.environ['DATABASE_URL'])}\n"
+        )
+        assert not any(
+            "DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text)
+        )
+
+    def test_sqlite_under_project_dir_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.sqlite3',\n"
+            "        'NAME': BASE_DIR / 'db.sqlite3',\n"
+            "    }\n"
+            "}\n"
+        )
+        warns = _deploy_doctor_warnings(text)
+        assert any("sqlite" in w.lower() or "read-only" in w.lower() for w in warns)
+
+    def test_warnings_carry_env_pointer(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "SECRET_KEY = 'literal'\n"
+        warns = _deploy_doctor_warnings(text)
+        assert warns
+        # Every warning points the user at the env-injection contract.
+        assert all("env" in w.lower() for w in warns)
+
+    def test_find_settings_files_resolves_manage_py_default(self, tmp_path):
+        from djust.deploy_cli import _find_settings_files
+
+        (tmp_path / "manage.py").write_text(
+            "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproj.settings')\n"
+        )
+        pkg = tmp_path / "myproj"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        settings = pkg / "settings.py"
+        settings.write_text("SECRET_KEY = 'x'\n")
+        found = _find_settings_files(tmp_path)
+        assert settings in found
+
+    def test_find_settings_files_glob_fallback(self, tmp_path):
+        from djust.deploy_cli import _find_settings_files
+
+        pkg = tmp_path / "app"
+        pkg.mkdir()
+        settings = pkg / "settings.py"
+        settings.write_text("SECRET_KEY = 'x'\n")
+        found = _find_settings_files(tmp_path)
+        assert settings in found
+
+    def test_find_settings_files_missing_returns_empty(self, tmp_path):
+        from djust.deploy_cli import _find_settings_files
+
+        assert _find_settings_files(tmp_path) == []
+
+    def test_run_deploy_doctor_prints_warnings_to_stderr(self, tmp_path, capsys):
+        from djust.deploy_cli import _run_deploy_doctor
+
+        (tmp_path / "manage.py").write_text(
+            "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'p.settings')\n"
+        )
+        pkg = tmp_path / "p"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "settings.py").write_text("SECRET_KEY = 'django-insecure-literal'\n")
+        _run_deploy_doctor(tmp_path)
+        err = capsys.readouterr().err
+        assert "SECRET_KEY" in err
+
+    def test_run_deploy_doctor_silent_when_no_settings(self, tmp_path, capsys):
+        from djust.deploy_cli import _run_deploy_doctor
+
+        _run_deploy_doctor(tmp_path)
+        assert capsys.readouterr().err == ""
