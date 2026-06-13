@@ -1991,8 +1991,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         "to": redirect_url,
                     }
                 )
-                await self.close(code=4403)
+                # Clear the unmounted view so handle_event can't dispatch against
+                # it, then close — UNLESS we're inside a multiplexed mount_batch
+                # on a shared socket, where the navigate frame is collected into
+                # navigate[] and closing would kill sibling mounts (the batch
+                # reports this view as a redirect, not a bypass). (T1)
                 self.view_instance = None
+                if not getattr(self, "_mounting_in_batch", False):
+                    await self.close(code=4403)
                 return
             # --- End auth check ---
 
@@ -2018,8 +2024,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # — close it + clear view_instance so a raw client can't dispatch
                 # events against the unmounted view. (docs/audits/websocket-auth-2026-06.md.)
                 await self.send_json({"type": "navigate", "to": hook_redirect})
-                await self.close(code=4403)
+                # Same as the auth branch (T2): clear the unmounted view, and
+                # close only when not inside a multiplexed mount_batch.
                 self.view_instance = None
+                if not getattr(self, "_mounting_in_batch", False):
+                    await self.close(code=4403)
                 return
             # --- End on_mount hooks ---
 
@@ -2541,6 +2550,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             captured.append(payload)
 
         self.send_json = _collect  # type: ignore[assignment]
+        # Signal to handle_mount that it runs inside a multiplexed batch on a
+        # shared socket: an auth/hook redirect must NOT close() the socket here
+        # (that would kill sibling mounts + the collected navigate[] and
+        # reconnect-storm the client). handle_mount still clears view_instance,
+        # and the redirect's navigate frame is collected into navigate[] — so a
+        # batched login-required view is reported as a redirect, not a bypass.
+        self._mounting_in_batch = True
         # Mount-batch is never combined with sticky preservation (sticky
         # only runs through live_redirect_mount which doesn't batch) or
         # state_snapshot (snapshot is for popstate restoration, also
@@ -2553,6 +2569,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
         except Exception as exc:  # noqa: BLE001 — isolate per-view failures
             self.send_json = orig_send_json  # type: ignore[assignment]
+            self._mounting_in_batch = False
             logger.exception(
                 "mount_batch: _mount_one raised for view %s",
                 sanitize_for_log(view_path),
@@ -2570,6 +2587,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Only restore if the try-block didn't already restore (else
             # we'd double-restore harmlessly). Idempotent.
             self.send_json = orig_send_json  # type: ignore[assignment]
+            self._mounting_in_batch = False
 
         # Extract the successful mount frame; any "error" frame means failure.
         # Fix #4: capture "navigate" frames too — those are emitted when

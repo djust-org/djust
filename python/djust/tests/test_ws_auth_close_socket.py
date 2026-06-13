@@ -49,10 +49,23 @@ class _LoginRequiredView(LiveView):
         _HANDLER_RAN = True  # a real handler would write to the DB here
 
 
-# Ensure the dotted path resolves for the consumer's import.
+class _PublicView(LiveView):
+    """A public view used to prove a batch survives a login-redirecting sibling."""
+
+    template = (
+        '<div dj-view="djust.tests.test_ws_auth_close_socket._PublicView" dj-id="0">pub</div>'
+    )
+
+    def mount(self, request, **kwargs):
+        self.ok = True
+
+
+# Ensure the dotted paths resolve for the consumer's import.
 setattr(sys.modules[__name__], "_LoginRequiredView", _LoginRequiredView)
+setattr(sys.modules[__name__], "_PublicView", _PublicView)
 
 _VIEW_PATH = f"{__name__}._LoginRequiredView"
+_PUBLIC_PATH = f"{__name__}._PublicView"
 
 
 async def _connect_and_mount(communicator):
@@ -116,5 +129,46 @@ async def test_anonymous_cannot_dispatch_event_after_login_redirect():
     assert _HANDLER_RAN is False, (
         "AUTH BYPASS: an anonymous client dispatched an event to a login_required "
         "view's @event_handler after the mount redirect (T1)"
+    )
+    await communicator.disconnect()
+
+
+@pytest.mark.django_db
+@override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__])
+async def test_mount_batch_with_login_view_does_not_close_shared_socket():
+    """Regression (review of the T1/T2 fix): a login-redirecting view inside a
+    mount_batch must NOT close the shared socket — the surviving public view
+    mounts and the redirecting view is reported in navigate[]. (The close() is
+    suppressed inside _mount_one; view_instance is still cleared.)"""
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    connected, _ = await communicator.connect()
+    assert connected
+    try:
+        await communicator.receive_json_from(timeout=2)
+    except Exception:
+        pass
+    await communicator.send_json_to(
+        {
+            "type": "mount_batch",
+            "views": [
+                {"view": _PUBLIC_PATH, "target_id": "pub", "url": "/pub/"},
+                {"view": _VIEW_PATH, "target_id": "secret", "url": "/secret/"},
+            ],
+        }
+    )
+    resp = await communicator.receive_json_from(timeout=3)
+    assert resp.get("type") == "mount_batch", f"got {resp!r}"
+    # Public view survived; login-required view is a navigate[] redirect.
+    survivor_targets = [v.get("target_id") for v in resp.get("views", [])]
+    nav_targets = [n.get("target_id") for n in resp.get("navigate", [])]
+    assert "pub" in survivor_targets, f"public view dropped: {resp!r}"
+    assert "secret" in nav_targets, f"login view not reported as redirect: {resp!r}"
+    # The shared socket must still be open (no mid-batch close).
+    assert await communicator.receive_nothing(timeout=0.5) is True, (
+        "shared socket received an unexpected frame (likely a websocket.close mid-batch)"
     )
     await communicator.disconnect()
