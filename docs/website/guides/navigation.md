@@ -173,6 +173,45 @@ your own rule on top.
 > a [client hook](hooks#integrating-third-party-libraries-chartjs-maps-editors)
 > registered once in your base template, not an inline `<script>`.
 
+### `auto_navigate` — automatic link interception (opt-in)
+
+With `dj-navigate` you annotate each link. **`auto_navigate`** goes one step
+further: a single delegated click listener SPA-navigates **plain `<a href>`
+links** — no djust attribute needed — whenever the link's path resolves in the
+route map. It is **off by default**; enable it in settings:
+
+```python
+LIVEVIEW_CONFIG = {"auto_navigate": True}
+```
+
+When enabled, `{% djust_client_config %}` emits a small opt-in flag and the
+client intercepts in-app navigations automatically. It is deliberately
+conservative — a link **falls through to a normal browser navigation** (no
+interception) whenever any of these hold:
+
+- a modifier/middle click (⌘/Ctrl/Shift/Alt, or a non-left button) — i.e. new tab/window
+- a `target` other than `_self`, a `download` attribute, or `rel="external"`
+- the link or any ancestor has `data-no-navigate`
+- the href is external (different origin) or a non-http(s) scheme (`mailto:`, `tel:`)
+- a same-page hash-only jump (`#section`) — the browser scrolls instead
+- **the path isn't a LiveView route in the route map** — admin pages, plain
+  Django views, and routes the current user can't access just reload normally
+
+Same-view query-only changes use `live_patch` (state-preserving); cross-view uses
+`live_redirect`. Because the route map is auth-filtered, `auto_navigate` never
+intercepts a route the current user isn't authorized for — it full-reloads and
+the server enforces access.
+
+Opt a single link out with `data-no-navigate`:
+
+```html
+<a href="/reports/" data-no-navigate>Force a full reload</a>
+```
+
+`auto_navigate` is opt-in and should soak in your app before you rely on it; it
+changes the behavior of *every* in-app link, so the opt-out matrix above is the
+contract. `dj-navigate` remains the explicit, always-on way to mark a single SPA link.
+
 ## Example: Search with URL State
 
 ```python

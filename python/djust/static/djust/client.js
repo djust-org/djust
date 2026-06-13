@@ -9883,12 +9883,121 @@ window.djust.getActiveStreams = getActiveStreams;
         });
     }
 
+    /**
+     * auto_navigate (#1734, ADR-021 Stage 2): opt-in Turbo-Drive-style link
+     * interception. When enabled (server emits
+     * ``<meta name="djust-auto-navigate" content="1">`` from
+     * ``LIVEVIEW_CONFIG['auto_navigate']``, default OFF), a SINGLE delegated
+     * click listener on ``document`` SPA-navigates plain ``<a href>`` links —
+     * but ONLY when the path resolves in the (auth-filtered, #1758) route map.
+     * Everything else falls through to normal browser navigation, so non-djust
+     * links (admin, logout, external, downloads) and routes the user can't
+     * access just load normally.
+     *
+     * The skip matrix below is correctness-critical (ADR-021): a wrong skip
+     * either breaks expected browser behavior (new-tab, downloads) or hijacks a
+     * link that should reload. Returning early === "let the browser handle it".
+     */
+    function _shouldSkipAutoNavigate(e, link) {
+        // Another handler already took it (e.g. dj-navigate/dj-patch above).
+        if (e.defaultPrevented) return true;
+        // Only plain left-clicks; modified clicks mean new tab/window/download.
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return true;
+        if (!link) return true;
+        // Explicit opt-outs on the link or any ancestor.
+        if (link.hasAttribute('download')) return true;
+        if (link.closest('[data-no-navigate]')) return true;
+        const target = link.getAttribute('target');
+        if (target && target !== '_self') return true;
+        const rel = (link.getAttribute('rel') || '').toLowerCase();
+        if (rel.split(/\s+/).indexOf('external') !== -1) return true;
+        return false;
+    }
+
+    function _handleAutoNavigateClick(e) {
+        const link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (_shouldSkipAutoNavigate(e, link)) return;
+
+        let url;
+        try {
+            url = new URL(link.getAttribute('href'), window.location.href);
+        } catch (_e) {
+            return; // unparseable href → let the browser deal with it
+        }
+        // External origin or non-http(s) scheme (mailto:, tel:, …) → browser.
+        if (url.origin !== window.location.origin) return;
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+        // Same-document hash-only jump → let the browser scroll, don't hijack.
+        if (
+            url.pathname === window.location.pathname &&
+            url.search === window.location.search &&
+            url.hash
+        ) {
+            return;
+        }
+        // Only intercept paths the (auth-filtered) route map knows are LiveView
+        // routes. Unknown paths (admin, plain Django views, routes the user
+        // can't access) fall through to a normal navigation the server gates.
+        if (!resolveViewPath(url.pathname)) return;
+        if (!liveViewWS || !liveViewWS.ws) return; // no socket → normal nav
+
+        e.preventDefault();
+        if (url.pathname === window.location.pathname) {
+            // Same view, query-only change → state-preserving url_change (no
+            // remount), mirroring the dj-patch wire shape but navigating to the
+            // link's EXACT query (replace, not dj-patch's param-merge — a full
+            // <a href> is the complete intended target). Falls back to a normal
+            // load if the view isn't mounted yet.
+            if (!liveViewWS.viewMounted) {
+                window.location.href = url.toString();
+                return;
+            }
+            window.history.pushState({ djust: true }, '', url.pathname + url.search);
+            liveViewWS.sendMessage({
+                type: 'url_change',
+                params: Object.fromEntries(url.searchParams),
+                uri: url.pathname + url.search,
+            });
+        } else {
+            // Cross-view → live_redirect over the existing WebSocket.
+            handleLiveRedirect({ path: url.pathname + url.search, replace: false });
+        }
+    }
+
+    let _autoNavigateInstalled = false;
+
+    function installAutoNavigate() {
+        if (_autoNavigateInstalled) return;
+        if (typeof document === 'undefined') return;
+        const meta = document.querySelector('meta[name="djust-auto-navigate"]');
+        if (!meta || meta.getAttribute('content') !== '1') return;
+        // One delegated listener for the whole document — survives SPA mounts
+        // (no per-element binding to re-run on reinit). Default (bubble) phase
+        // so app/dj-navigate handlers that call preventDefault run first and
+        // set e.defaultPrevented, which the skip matrix honors.
+        document.addEventListener('click', _handleAutoNavigateClick);
+        _autoNavigateInstalled = true;
+    }
+
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', installAutoNavigate);
+        } else {
+            installAutoNavigate();
+        }
+    }
+
     // Expose to djust namespace
     window.djust.navigation = {
         handleNavigation: handleNavigation,
         bindDirectives: bindNavigationDirectives,
         resolveViewPath: resolveViewPath,
         updateAriaCurrent: updateAriaCurrent,
+        installAutoNavigate: installAutoNavigate,
+        // Exposed for tests + advanced callers; the delegated listener is the
+        // supported entry point.
+        _handleAutoNavigateClick: _handleAutoNavigateClick,
+        _shouldSkipAutoNavigate: _shouldSkipAutoNavigate,
     };
 
     // Initialize route map

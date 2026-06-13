@@ -2,6 +2,16 @@
 
 This guide covers integrating djust LiveViews with TurboNav for SPA-style navigation in Django projects.
 
+> **Native navigation is djust's canonical SPA model (ADR-021).** For SPA
+> navigation, prefer djust's built-in [`dj-navigate` / `auto_navigate`](../website/guides/navigation.md):
+> they navigate over the **existing** WebSocket (no socket teardown, no
+> reconnect, LiveView state preserved) and need zero wiring. **TurboNav is
+> supported as interop** — useful when you're already invested in Turbo or need
+> its full-document/forms behavior — but it fetches via AJAX and swaps
+> innerHTML, which **tears down and reconnects the WebSocket on every
+> navigation** (heavier; loses connection continuity). Reach for TurboNav when
+> you specifically want Turbo; otherwise use native navigation.
+
 ## What is TurboNav?
 
 TurboNav intercepts link clicks and form submissions, fetches the new page via AJAX, and swaps the `<main>` element's innerHTML — avoiding full page reloads. This gives users a faster, app-like navigation experience while keeping server-rendered HTML as the source of truth.

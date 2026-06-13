@@ -416,3 +416,55 @@ def test_client_config_route_map_json_escaped():
     # Extract the route-map script body and confirm it parses as JSON-safe.
     assert "window.djust._routeMap={" in html
     assert "</script>" in html
+
+
+# ---------------------------------------------------------------------------
+# auto_navigate flag emit (#1734, ADR-021 Stage 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_djust_config():
+    """Restore the config singleton after each test.
+
+    ``LIVEVIEW_CONFIG`` is loaded once into the ``config`` singleton at import;
+    tests that ``override_settings(LIVEVIEW_CONFIG=...)`` call ``config.reset()``
+    inside the override, so this re-reads the restored settings afterwards to
+    avoid cross-test leakage of ``auto_navigate``.
+    """
+    yield
+    from djust.config import config
+
+    config.reset()
+
+
+def test_auto_navigate_meta_absent_by_default():
+    """Default OFF: no auto-navigate <meta>, so no client behavior change."""
+    from djust.config import config
+
+    config.reset()
+    html = _render_tag()
+    assert "djust-auto-navigate" not in html
+
+
+@override_settings(LIVEVIEW_CONFIG={"auto_navigate": True})
+def test_auto_navigate_meta_emitted_when_enabled():
+    """LIVEVIEW_CONFIG['auto_navigate']=True emits the opt-in <meta> flag."""
+    from djust.config import config
+
+    config.reset()  # pick up the overridden LIVEVIEW_CONFIG
+    html = _render_tag()
+    assert '<meta name="djust-auto-navigate" content="1">' in html
+
+
+@override_settings(LIVEVIEW_CONFIG={"auto_navigate": True})
+def test_auto_navigate_meta_engines_identical():
+    """Both template engines emit the flag (dual-registration invariant)."""
+    from djust.config import config
+    from djust.template_tags.client_config import ClientConfigTagHandler
+
+    config.reset()
+    django_html = _render_tag()
+    rust_html = str(ClientConfigTagHandler().render([], {}))
+    assert "djust-auto-navigate" in django_html
+    assert django_html == rust_html
