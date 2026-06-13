@@ -76,7 +76,7 @@ redirect, it sends `{"type":"navigate"}` and `return`s without `close()`. Same
 unmounted-view-stays-reachable shape as T1. **Mitigation:** same close+clear on
 this branch (fix both in one pass — parallel-path-drift #1646).
 
-### T3 — No auth re-check on the live event path — **GAP (defense-in-depth)**
+### T3 — No auth re-check on the live event path — **MITIGATED, opt-in (#1777)**
 
 Auth is **mount-time only**; `handle_event` (`websocket.py:2689`) never re-checks
 `login_required`/`permission_required`. A user who logs out or loses a permission
@@ -84,7 +84,8 @@ Auth is **mount-time only**; `handle_event` (`websocket.py:2689`) never re-check
 reconnect. This is also the enabler that makes T1/T2 reachable. **Mitigation:** a
 lightweight re-check in `handle_event` for views declaring auth
 (`check_view_auth_lightweight`, `auth/core.py:241`) — defense-in-depth; the T1/T2
-close is the primary fix.
+close is the primary fix. **Shipped opt-in in #1777** as
+`LIVEVIEW_CONFIG['reauth_on_event']` (default OFF — one session read per event).
 
 ### T4 — Client-controlled `view` path on `live_redirect_mount` — **MITIGATED, with a default-open caveat**
 
@@ -141,7 +142,7 @@ rendered once, never WS-patched). Documented in BEST_PRACTICES.
 |---|---|---|---|
 | **T1** auth-redirect no-close | **High** | close(4403)+clear on redirect branch + reproducer | **this session** |
 | **T2** hook-redirect no-close | Med | same close+clear (same PR) | this session |
-| **T3** no event-path re-check | Med | `handle_event` re-check for auth views (defense-in-depth) | follow-up PR |
+| **T3** no event-path re-check | Med | opt-in `reauth_on_event` (default OFF) | done (#1777) |
 | T4 allowlist default-open | Low | docs: recommend `LIVEVIEW_ALLOWED_MODULES` | follow-up |
 | T8 replay XSS | Med | escape + iframe sandbox | with #1562 |
 | T9 disappearing auth UI | Low | docs (outside `[dj-root]`) | BEST_PRACTICES |

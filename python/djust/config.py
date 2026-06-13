@@ -85,6 +85,16 @@ class LiveViewConfig:
         # opt-out matrix (modifier/middle-click, target/download, external,
         # hash-only, data-no-navigate). Non-LiveView links full-reload as usual.
         "auto_navigate": False,
+        # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
+        # Auth normally runs only at mount; with this OFF (default) an
+        # authenticated user who logs out / loses a permission mid-session keeps
+        # dispatching events on the open socket until they reconnect (the
+        # connect-time scope user is cached). When True, handle_event re-resolves
+        # the user from the session (channels.auth.get_user) and re-runs the
+        # view's login_required/permission_required check, closing 4403 on
+        # failure. Default OFF: it costs one session read per event — opt in for
+        # high-security apps that want mid-session deauth enforced on the live path.
+        "reauth_on_event": False,
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
