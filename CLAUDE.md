@@ -1094,6 +1094,49 @@ bullet above (#1724); the rules below are the new standalone ones.
 
 - **Per-event work that feeds change-detection must be memoized, not first-sync-gated (#1722 / PR #1726, follow-up #1727).** When a fix applies request/per-render work (context processors, derived state) on a path that runs on EVERY WebSocket event (e.g. `_sync_state_to_rust`), do not "optimize" by running it only on the first sync — djust's change-detection only forwards *changed* vars, so the work must re-run each event to detect a change (e.g. a live theme switch). The correct cost reduction is request-scoped memoization of the expensive sub-renders, not gating the application. Also verify the per-event path actually has the inputs it needs: the WS-path `request` is a long-lived instance attr set in `handle_connect` (non-None), which is what makes such a fix effective on every navigation rather than only the initial GET.
 
+## Process canonicalizations from v1.1.0 retro arc (security & navigation)
+
+Two rules from the v1.1.0 security/nav arc (WS auth threat model + fixes,
+`docs/audits/websocket-auth-2026-06.md`; PRs #1775, #1776, #1780, #1781, #1782,
+#1783). Both are Action-Tracker rows #291/#292.
+
+- **Multiplexed-path transport rule (#291 / PR #1780 review).** A
+  transport-terminating side effect — `self.close()`, a connection drop, a
+  socket-level write — placed inside a handler that is ALSO reused under a
+  multiplexer/collector will fire on the *shared* transport mid-batch and kill
+  the sibling operations. Canonical case: PR #1780's auth fix added
+  `await self.close(code=4403)` inside `LiveViewConsumer.handle_mount`;
+  `handle_mount_batch._mount_one` reuses `handle_mount` but swaps only
+  `self.send_json` for a collector — NOT `close()` — so a single
+  login-redirecting view in a `mount_batch` closed the whole shared socket,
+  dropping the survivor mounts + the collected `navigate[]` and reconnect-storming
+  the client. The existing batch test could not catch it (its fake consumer's
+  `close()` is a no-op). **Rule:** before adding a transport-level side effect to
+  a handler, grep for collector/batch reuse of that handler (a swapped
+  `send_json`, a `_mounting_in_batch`-style flag, a `_collect` wrapper); gate the
+  transport side effect on "not in batch," but apply the *state* change that
+  closes the security/correctness gap (e.g. clearing `view_instance`)
+  unconditionally. Same family as the parallel-path-drift rule (#1646) but for the
+  multiplex axis. A real-`WebsocketCommunicator` batch test is required — a fake
+  consumer with a no-op `close()` hides the bug.
+
+- **Pre-commit can silently drop UNSTAGED working-tree files; recover from the
+  patch cache (#292).** The `pre-commit` framework stashes UNSTAGED working-tree
+  files to `~/.cache/pre-commit/patch<ts>-<pid>`, runs hooks against the staged
+  snapshot, then restores. A failed/skipped restore (the stash-pop-conflict class
+  — same root as the swallowed-commit failure mode in "MANDATORY Post-Commit
+  Verification") leaves that unstaged work ONLY in the patch cache, silently
+  absent from the working tree. Canonical case: the user kept in-progress
+  `BEST_PRACTICES*.md` drafts uncommitted; after a pipeline commit cycle they
+  vanished and were recovered with `git apply` of the newest patch. **Rule:** when
+  uncommitted *unstaged* work coexists with pipeline commits (a collaborator's
+  drafts, scratch edits you promised to preserve), do NOT assume `git checkout -B`
+  / commit kept them — verify with `git status` after the commit. If they're gone,
+  they are almost certainly in `~/.cache/pre-commit/`: `grep -rl '<distinctive
+  text>' ~/.cache/pre-commit/` to find the newest patch, then
+  `git apply ~/.cache/pre-commit/patch<newest>` to restore. Prefer staging or
+  stashing such work yourself before a commit so it never enters this window.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

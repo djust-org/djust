@@ -330,6 +330,116 @@ issue or be explicitly closed with a reason.
 | 288 | Request-scope memoize `theme_context` — now runs per WS event after #1722 | PR #1726 (#1722 review) | #1727 | Closed | **Resolved in v1.0.2 (PR #1732)** — request-scoped cache on the request object keyed by the 7-tuple theme-state key (same shape as `_render_theme_outputs` lru); four `_safe_render` tag bodies memoized per connection, recomputed on a theme switch. No nonce/per-request data embedded (verified), so no cross-request leak. NOT first-sync-gated. |
 | 289 | Fix 2 pre-existing `test_checks.py` pollution failures + audit module-level caches for test-reset fixtures | Retro v1.0.2 nav arc (PRs #1736, #1739 reviews) | #1741 | Closed | **Resolved in v1.0.2-3 (PR #1743).** Polluter proven: `block_watchdog` fixture re-imported `djust.checks` restoring only `sys.modules`, not the parent-package attr → module-object desync → monkeypatch hit the wrong copy. Fixed by restoring both. 3-clean-runs gate green. |
 | 290 | Dogfood `dj-navigate` cross-view flow + a client-hook (3rd-party lib) in the demo so demo-checks catches nav/hydration/hook regressions | Retro v1.0.2 nav arc (PRs #1736, #1739, #1740) | #1742 | Closed | **Resolved in v1.0.2-3 (PR #1744).** Added 2 dj-navigate demo views + a DjustHooks widget + playwright guard (3 non-tautological assertions: no-reload sentinel, no-flash churn=0, hook-survives-nav); confirmed #1733 needs zero wiring. Guard-hardening → #1745. |
+| 291 | Canonicalize: a transport-level `close()` / state mutation is unsafe on a **multiplexed / collector** path — gate it on batch context | Retro v1.1.0 / PR #1780 review | — | Closed | **Resolved this retro** (CLAUDE.md "Multiplexed-path transport rule"). Case study: PR #1780's auth fix called `self.close(4403)` inside `handle_mount`; `handle_mount_batch._mount_one` swaps `send_json` to a collector but NOT `close()`, so the close fired mid-loop on the shared socket and killed sibling mounts. Fixed by gating the close on a `_mounting_in_batch` flag (clear `view_instance` always; close only when not batching). |
+| 292 | Canonicalize: pre-commit stash/restore can silently DROP unstaged working-tree files across a commit cycle; recover from `~/.cache/pre-commit/patch*` | Retro v1.1.0 | — | Closed | **Resolved this retro** (CLAUDE.md "Pre-commit can drop unstaged files"). Case study: the user's uncommitted `BEST_PRACTICES*.md` drafts vanished after a pipeline commit (pre-commit stashes UNSTAGED files, runs hooks on staged, restores — a failed restore leaves them only in the patch cache). Recovered by `git apply ~/.cache/pre-commit/patch<newest>`. |
+
+## v1.1.0 — Security hardening & navigation arc (PRs #1775, #1776, #1780, #1781, #1782, #1783)
+
+**Date**: 2026-06-13
+**Scope**: ADR-021 Stage 2 (auto_navigate) + a complete WebSocket auth/transport
+threat model (`docs/audits/websocket-auth-2026-06.md`, 9 threats) and its fixes:
+the route-map information leak (#1758), the WS auth bypass (T1/T2), opt-in
+per-event re-auth (T3), allowlist-hardening docs (T4), and a regression test
+confirming T9 was already fixed. Preceded in the same session by a v1.0.4 deploy-DX
+drain + pyo3 0.29 security bump (separate per-PR retros; not re-synthesized here).
+**Tests at close**: full suite green (the security PRs added ~27 cases: route-map
+auth-filter, WS-auth reproducer, batch regression, reauth, csrf/user-survive-WS).
+
+### What We Learned
+
+**1. The user's security instinct beat my first-pass triage — twice.**
+I initially classified the `dj-navigate` route-map exposure as "by design, URLs
+are public, not sensitive." The user pushed ("should we worry about leaking
+data?"); re-tracing from the code showed a real recon-grade disclosure (anonymous
+clients received the full route table — incl. login/admin routes — plus each
+view's `module.QualName`). Separately, the user's own draft note flagged a WS
+`login_required` auth bypass that, when traced, was a real bypass. Both instincts
+were right; my initial dismissal of the first cost a round-trip.
+**Action taken**: Closed — fixed in #1775 (route-map auth-filter) and #1780 (WS
+auth bypass); the working-style lesson is saved to project memory
+(`feedback_security_instinct`).
+
+**2. Threat-model-first (user's explicit request) caught parallel vulnerabilities a one-instance patch would have missed.**
+Before patching the confirmed bypass, modeling the whole WS auth/transport surface
+(`docs/audits/websocket-auth-2026-06.md`) surfaced T2 (the parallel `on_mount`-hook
+redirect branch, same no-close shape), T3 (the event path never re-checks auth),
+and T4 (`LIVEVIEW_ALLOWED_MODULES` is default-open). Each became a tracked,
+addressed item instead of a future rediscovery.
+**Action taken**: Closed — T1/T2 fixed in #1780; T3 in #1781 (#1777); T4 documented
+in #1782 (#1778); T9 verified-fixed + pinned in #1783 (#1779). All threat-model
+threats triaged in the audit doc.
+
+**3. Reproducer-first empirically proved the auth bypass (not just argued it).**
+The RED `WebsocketCommunicator` reproducer didn't merely fail an assertion — it
+crashed *inside* the `@event_handler` body, proving an anonymous client's event
+reached the handler. RED→GREEN was the gate-off.
+**Action taken**: Closed — reproducer shipped with #1780 (`test_ws_auth_close_socket.py`).
+
+**4. A transport-level `close()` is unsafe on a multiplexed path — review caught a fix-induced regression.**
+My T1/T2 fix called `self.close(4403)` inside `handle_mount`; because
+`handle_mount_batch` reuses `handle_mount` (swapping only `send_json` to a
+collector), the close fired mid-batch on the shared socket and killed sibling
+mounts + the collected `navigate[]`. The existing batch test couldn't catch it
+(its fake consumer's `close()` is a no-op); the reviewer reproduced it with a real
+communicator.
+**Action taken**: Open — tracked in Action Tracker #291 (canonicalized in
+CLAUDE.md this retro; fixed in #1780 via the `_mounting_in_batch` gate).
+
+**5. Verify-before-documenting: T9 was already fixed; don't ship docs for a non-bug.**
+The draft (and the threat model's first pass) framed T9 (`{% csrf_token %}` /
+`{{ user }}` deleted on WS patches) as a live bug. Reading `rust_bridge.py` showed
+it was already handled (#1722 runs context processors on every WS update; #696
+injects csrf). Rather than write "here's a problem" docs, I pinned the fix with a
+gate-off-verified regression test.
+**Action taken**: Closed — #1783 adds the regression test; #1779 closed as
+already-mitigated. Generalizes "grep for existing fixes before classifying a
+threat as a GAP."
+
+**6. Pre-commit stash/restore can silently drop UNSTAGED working-tree files.**
+The user kept uncommitted `BEST_PRACTICES*.md` drafts in the tree; after a pipeline
+commit cycle they vanished (pre-commit stashes unstaged files, runs hooks on
+staged, restores — a missed restore leaves them only in `~/.cache/pre-commit/`).
+Caught on a final status check and recovered via `git apply` of the newest patch.
+**Action taken**: Open — tracked in Action Tracker #292 (canonicalized in CLAUDE.md
+this retro).
+
+### Insights
+
+- **Security features ship default-OFF.** `auto_navigate`, `reauth_on_event`, and
+  the route-map's behavior all default to the safe/zero-cost state; opt-in is the
+  contract. This kept every change zero-behavior-change for existing apps.
+- **Composition is a security property.** `auto_navigate` consults the
+  *auth-filtered* route map (#1758), so it can't SPA-probe gated routes — which is
+  why the leak fix landed before the feature. Designing the arc as a unit (ADR-021
+  Stage 2) made that ordering obvious.
+- **A threat model is a durable artifact, not ceremony.** The 9-threat doc became
+  the backbone for 5 PRs + 3 follow-up issues and tracks the 2 accepted/low items
+  (T6 CSWSH, T7 tenant) so they aren't re-litigated.
+- The user catches things the code-read misses (leak instinct, draft note, the
+  lost drafts). Trust the observation over the first conclusion.
+
+### Review Stats
+
+| Metric | #1775 | #1776 | #1780 | #1781 | #1783 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Tests added | 5 | 15 | 3 | 2 | 2 | 27 |
+| Review verdict | APPROVE | APPROVE | COMMENT→fixed | APPROVE | (test-only) | — |
+| 🟡 findings (fixed/deferred) | 1 (mixin gap, fixed) | 1 (req.user note, doc'd) | 1 (batch regression, fixed) | 1 (req.user note, doc'd) | 0 | 4 |
+| Gate-off verified | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added two canon rules this retro — the multiplexed-path
+`close()`/state-mutation hazard (#291) and the pre-commit-drops-unstaged-files
+hazard + recovery (#292).
+**Docs**: New threat-model class under `docs/audits/` (`websocket-auth-2026-06.md`).
+**Memory**: `feedback_security_instinct` (trace flagged concerns from the data;
+threat-model-first; preserve uncommitted working-tree drafts).
+
+### Open Items
+
+- [ ] Bug-capture iter B/C (#1562/#1561) — deferred (multi-day, security-gated; a
+  dedicated session each). Not part of this milestone.
 
 ## v1.0.2 navigation arc — zero-wiring dj-navigate + hydration-flash parity + hooks docs (v1.0.2-1 + v1.0.2-2; PRs #1736, #1739, #1740)
 
