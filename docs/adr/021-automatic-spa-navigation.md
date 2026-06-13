@@ -1,6 +1,6 @@
 # ADR-021: Automatic SPA Navigation (native `dj-navigate` as canonical)
 
-**Status**: Accepted — Stage 1 (route-map foundation, #1733/PR #1736) shipped v1.0.2; Stage 2 (`auto_navigate` opt-in + nav-story reconciliation, #1734/#1735) targeted v1.1.0
+**Status**: Accepted — Stage 1 (route-map foundation, #1733/PR #1736) shipped v1.0.2; Stage 2 (`auto_navigate` opt-in #1734, nav-story reconciliation #1735, route-map auth-hardening #1758) targeted v1.1.0
 **Shipped in**: v1.0.2 (Stage 1); v1.1.0 (Stage 2, planned)
 **Source**: `/pipeline-strategy` 2026-06-05 (auto-navigation), Path 2 (Foundation + opt-in)
 
@@ -64,6 +64,40 @@ per Action #1122):
   repositioned as **interop** ("djust also works under external Turbo", with the
   per-nav-WS-reconnect tradeoff stated), not a parallel-recommended path (#1735).
 
+### Stage 2 — Route-map exposure hardening (#1758, security)
+
+The Stage-1 risk note below originally read "URLs are public, not sensitive."
+Investigation (#1758) found that under-stated the disclosure on two axes, so the
+default-emitted route map is hardened in Stage 2:
+
+1. **It is not just URLs.** Each entry is `{ url_path: "module.QualName" }` — it
+   ships the *dotted view-class path* of every route. That is internal code
+   structure (`myapp.admin.SecretDashboardView`), beyond the URL itself.
+2. **No auth filtering.** `_walk_liveview_routes` walks the whole URLconf and
+   deliberately unwraps `login_required(as_view())`, so **login-gated and admin
+   routes are included**, and the module-cached map is emitted to **every**
+   client including anonymous visitors. An anonymous visitor to a public page
+   therefore enumerates the app's entire route table — including routes they
+   cannot access — plus each view's class name. This is recon-grade information
+   disclosure (not an auth bypass: the mount path allowlists modules at
+   `websocket.py:1726` and views still enforce auth at mount, so it leaks
+   *existence + naming*, not access).
+
+**Decision:** `get_route_map_script(request)` — the single funnel both template
+engines use via `_client_config_html` — auth-filters the emitted map: a route
+whose `LiveView` declares `login_required` / `permission_required` (or whose
+callback is decorator-gated) is **omitted** unless `request.user` satisfies it.
+Public routes are unchanged; the filter **fails closed** (omits gated routes)
+when there is no request/user. This removes gated-route enumeration and the
+view-class disclosure of routes the user cannot reach, while keeping the
+zero-round-trip SPA-nav behavior for the routes the user *can* reach.
+
+The deeper protocol change — client sends the *URL path* and the server resolves
+path→view authoritatively, removing client-sent view paths and the residual
+view-class disclosure for accessible routes entirely — is noted as a possible
+future Stage 3, not required by Stage 2 (it is a wire-protocol change with
+regression surface across existing `dj-navigate`).
+
 ### Default-on is deferred (not decided here)
 `auto_navigate` ships **opt-in** and must soak at least one release before any
 consideration of becoming default-on. Flipping link behavior for every app by
@@ -82,9 +116,12 @@ default-on flip (if ever) is a **future-major** decision that will amend this AD
   `applyPatches`, which already supports the VT wrap.
 
 **Negative / risks**
-- The route map is now exposed to the client by default (it already was for
-  `live_session` apps; URLs are public, not sensitive). The map is empty-safe
-  (no script when an app has no LiveViews).
+- The route map is exposed to the client by default (it already was for
+  `live_session` apps). ⚠️ Originally assessed as "URLs are public, not
+  sensitive" — corrected by #1758: the map also ships view-class paths and, in
+  Stage 1, included auth-gated routes for anonymous clients (recon disclosure).
+  Stage 2 auth-filters the emitted map (see "Route-map exposure hardening"
+  above). The map remains empty-safe (no script when an app has no LiveViews).
 - Auto-interception is opt-in but, once enabled, changes the behavior of *every*
   link — the same-view→`live_patch` branch and the skip-rule matrix
   (modifier/middle-click new-tab, downloads, external) are correctness-critical
