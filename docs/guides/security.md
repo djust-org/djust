@@ -147,6 +147,30 @@ Views that expose state without auth are flagged with a warning.
 
 See the [Authentication Guide](authentication.md) for complete documentation.
 
+### Restricting which views can be mounted over WebSocket
+
+When the client navigates (`live_redirect` / `auto_navigate`), it sends the
+target view's dotted path and the server mounts it. djust gates this with
+`LIVEVIEW_ALLOWED_MODULES` — but **the allowlist is only enforced when you set
+it.** If it is unset (the default), a client may request mounting *any* of your
+`LiveView` subclasses by path:
+
+```python
+# settings.py — recommended hardening: only these module prefixes may be mounted.
+LIVEVIEW_ALLOWED_MODULES = ["myapp", "djust"]
+```
+
+This is **not an auth bypass** — each mounted view still runs its own
+`login_required` / `permission_required` / `check_permissions()` at mount, and
+those are your real access controls. What an unset allowlist allows is
+*enumeration*: a client can discover which LiveView classes exist (and trigger
+their mount, which for a gated view just redirects). Setting
+`LIVEVIEW_ALLOWED_MODULES` to your app's module prefixes removes that surface and
+is recommended for production. The per-view `djust.V005` system check flags views
+outside a **non-empty** allowlist; it cannot warn about an unset one, so treat
+setting the allowlist as a deployment step. See the WebSocket auth threat model
+(`docs/audits/websocket-auth-2026-06.md`, T4) for the full analysis.
+
 ## What Reaches the Client
 
 ### Always sent (by design)

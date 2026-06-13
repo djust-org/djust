@@ -306,6 +306,11 @@ class ProjectView(LiveView):
 - **`djust_audit` command** shows auth configuration for every view
 - **`djust.S005` system check** warns when views expose state without authentication
 - Set `login_required = False` to explicitly mark public views and suppress warnings
+- **Set `LIVEVIEW_ALLOWED_MODULES`** to your app's module prefixes in production:
+  the WebSocket mount allowlist is enforced only when non-empty, so an unset list
+  lets a client request mounting any `LiveView` by path (enumeration, not bypass —
+  per-view auth still gates). `djust.V005` flags views outside a non-empty list
+  but cannot warn about an unset one. See `docs/audits/websocket-auth-2026-06.md` (T4).
 
 For the full guide, see **[Authentication & Authorization Guide](guides/authentication.md)**.
 
