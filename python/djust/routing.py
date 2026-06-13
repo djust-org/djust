@@ -26,15 +26,23 @@ _PARAM_RE = re.compile(r"<(?:\w+:)?(\w+)>")
 # (which production sets per-request via set_script_prefix) don't collide.
 _route_map_cache: Dict[Any, Dict[str, str]] = {}
 
+# Parallel cache, populated by the SAME URLconf walk as the route map:
+# ``js_path -> {"login": bool, "perms": tuple}`` for GATED routes only (public
+# routes are absent → "not in gating" means public). Used to auth-filter the
+# client-emitted map so anonymous/unauthorized clients can't enumerate
+# login/permission-gated routes or their view-class paths (#1758).
+_route_gating_cache: Dict[Any, Dict[str, dict]] = {}
+
 
 def _reset_route_map_cache() -> None:
-    """Clear the cached URLconf-derived route map.
+    """Clear the cached URLconf-derived route map (and its gating sidecar).
 
     The cache assumes the URLconf is static at runtime. Tests that swap
     ``ROOT_URLCONF`` or ``FORCE_SCRIPT_NAME`` via ``override_settings`` must
     call this between cases so a stale map doesn't leak across tests.
     """
     _route_map_cache.clear()
+    _route_gating_cache.clear()
 
 
 def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
@@ -212,6 +220,58 @@ def _resolve_view_class(pattern: URLPattern) -> Optional[type]:
     return None
 
 
+def _view_auth_requirement(pattern: URLPattern, view_cls: type) -> Optional[dict]:
+    """Return a LiveView route's auth requirement, or ``None`` if it is public.
+
+    Detects gating from (a) the djust ``LiveView`` class attrs ``login_required``
+    / ``permission_required`` (see ``live_view.py``), and (b) a decorator-gated
+    callback such as ``login_required(View.as_view())`` — which presents as a
+    callback with ``__wrapped__`` but no direct ``view_class``. Returns
+    ``{"login": bool, "perms": tuple[str, ...]}``; ``perms`` implies login.
+    Used to auth-filter the client route map (#1758).
+    """
+    login = getattr(view_cls, "login_required", None) is True
+    perms_attr = getattr(view_cls, "permission_required", None)
+    if isinstance(perms_attr, str):
+        perms: tuple = (perms_attr,)
+    elif perms_attr:
+        perms = tuple(perms_attr)
+    else:
+        perms = ()
+    # Decorator-gated callback, e.g. ``login_required(View.as_view())``.
+    # functools.wraps copies ``view_class`` onto the wrapper, so its presence
+    # can't distinguish a wrapped from a bare callback. The reliable signal:
+    # a decorator AROUND as_view() has ``cb.__wrapped__`` that is itself the
+    # as_view result (carrying ``view_class``), whereas a *bare* as_view's
+    # ``__wrapped__`` is ``cls.dispatch`` (no ``view_class``). Treat any such
+    # wrap as login-gated — fail closed (we can't prove the decorator is
+    # auth-related, so an unauthorized client doesn't get the route).
+    cb = getattr(pattern, "callback", None)
+    inner = getattr(cb, "__wrapped__", None)
+    if inner is not None and getattr(inner, "view_class", None) is not None:
+        login = True
+    if login or perms:
+        return {"login": True, "perms": perms}
+    return None
+
+
+def _user_satisfies(request: Any, requirement: dict) -> bool:
+    """True iff ``request.user`` satisfies a gated route's auth requirement.
+
+    Fails closed (#1758): a missing request, missing user, or unauthenticated
+    user never satisfies a gated route, so gated routes are omitted from the
+    client map for anonymous/unknown callers. Permission checks use
+    ``user.has_perms`` (all required perms).
+    """
+    user = getattr(request, "user", None) if request is not None else None
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    perms = requirement.get("perms") or ()
+    if perms and not user.has_perms(perms):
+        return False
+    return True
+
+
 def _pattern_route(pattern: Any) -> str:
     """Return the raw route string for a URLPattern/URLResolver.
 
@@ -226,12 +286,19 @@ def _pattern_route(pattern: Any) -> str:
     return str(p).lstrip("^").rstrip("$")
 
 
-def _walk_liveview_routes(patterns: List[Any], prefix: str, route_map: Dict[str, str]) -> None:
+def _walk_liveview_routes(
+    patterns: List[Any],
+    prefix: str,
+    route_map: Dict[str, str],
+    gating: Optional[Dict[str, dict]] = None,
+) -> None:
     """Recursively collect ``{js_path: "module.QualName"}`` for LiveView routes.
 
     Descends into ``URLResolver`` includes, accumulating the route prefix. For
     every ``URLPattern`` whose callback resolves to a :class:`~djust.LiveView`
     subclass, adds an entry keyed by the JS-friendly path (``<int:id>`` → ``:id``).
+    When ``gating`` is provided, also records the auth requirement of any GATED
+    route into it (public routes are left absent) for the #1758 auth filter.
     """
     # Imported here (not at module top) to avoid a circular import: live_view
     # imports from routing-adjacent modules at package init time.
@@ -241,7 +308,7 @@ def _walk_liveview_routes(patterns: List[Any], prefix: str, route_map: Dict[str,
         route = _pattern_route(pattern)
         full = (prefix + route).replace("//", "/")
         if isinstance(pattern, URLResolver):
-            _walk_liveview_routes(pattern.url_patterns, full, route_map)
+            _walk_liveview_routes(pattern.url_patterns, full, route_map, gating)
             continue
         view_cls = _resolve_view_class(pattern)
         if view_cls is None:
@@ -257,6 +324,10 @@ def _walk_liveview_routes(patterns: List[Any], prefix: str, route_map: Dict[str,
         js_path = _PARAM_RE.sub(r":\1", js_path)
         view_path = f"{view_cls.__module__}.{view_cls.__qualname__}"
         route_map[js_path] = view_path
+        if gating is not None:
+            requirement = _view_auth_requirement(pattern, view_cls)
+            if requirement is not None:
+                gating[js_path] = requirement
 
 
 def build_route_map_from_urlconf(urlconf: Any = None) -> Dict[str, str]:
@@ -305,10 +376,29 @@ def build_route_map_from_urlconf(urlconf: Any = None) -> Dict[str, str]:
 
     resolver = get_resolver(urlconf)
     route_map: Dict[str, str] = {}
-    _walk_liveview_routes(resolver.url_patterns, script_prefix + "/", route_map)
+    gating: Dict[str, dict] = {}
+    _walk_liveview_routes(resolver.url_patterns, script_prefix + "/", route_map, gating)
 
     _route_map_cache[cache_key] = route_map
+    _route_gating_cache[cache_key] = gating
     return route_map
+
+
+def _route_gating_from_urlconf(urlconf: Any = None) -> Dict[str, dict]:
+    """Return the auth-requirement sidecar (``js_path -> requirement``) for
+    gated routes, populated by the same cached walk as
+    :func:`build_route_map_from_urlconf` (#1758). Public routes are absent.
+    """
+    from django.conf import settings
+    from django.urls import get_script_prefix
+
+    script_prefix = get_script_prefix().rstrip("/")
+    resolved_urlconf = urlconf if urlconf is not None else getattr(settings, "ROOT_URLCONF", None)
+    cache_key = (resolved_urlconf, script_prefix)
+    if cache_key not in _route_gating_cache:
+        # Populating the route map populates the gating sidecar too.
+        build_route_map_from_urlconf(urlconf)
+    return _route_gating_cache.get(cache_key, {})
 
 
 def get_route_map_script(request: Any = None) -> str:
@@ -347,6 +437,18 @@ def get_route_map_script(request: Any = None) -> str:
     for entries in route_maps.values():
         for js_path, view_path in entries:
             all_routes[js_path] = view_path
+
+    # Auth-filter (#1758): never emit a login/permission-gated route — or its
+    # view-class path — to a client that can't access it. Public routes (absent
+    # from the gating sidecar) always emit; gated routes emit only when
+    # request.user satisfies them (fails closed for anonymous/unknown callers).
+    gating = _route_gating_from_urlconf()
+    if gating:
+        all_routes = {
+            js_path: view_path
+            for js_path, view_path in all_routes.items()
+            if js_path not in gating or _user_satisfies(request, gating[js_path])
+        }
 
     if not all_routes:
         return ""
