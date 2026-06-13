@@ -732,10 +732,10 @@ impl PyDropdown {
             // items: list of dicts with 'label' and 'value'
             if let Ok(items) = kwargs.get_item("items") {
                 if let Some(items_list) = items {
-                    if let Ok(items_py) = items_list.downcast::<pyo3::types::PyList>() {
+                    if let Ok(items_py) = items_list.cast::<pyo3::types::PyList>() {
                         let mut items_vec = Vec::new();
                         for item in items_py.iter() {
-                            if let Ok(item_dict) = item.downcast::<PyDict>() {
+                            if let Ok(item_dict) = item.cast::<PyDict>() {
                                 if let (Ok(Some(label)), Ok(Some(value))) =
                                     (item_dict.get_item("label"), item_dict.get_item("value"))
                                 {
@@ -854,10 +854,10 @@ impl PyTabs {
             // tabs: list of dicts with 'id', 'label', and 'content'
             if let Ok(tabs_item) = kwargs.get_item("tabs") {
                 if let Some(tabs_list) = tabs_item {
-                    if let Ok(tabs_py) = tabs_list.downcast::<pyo3::types::PyList>() {
+                    if let Ok(tabs_py) = tabs_list.cast::<pyo3::types::PyList>() {
                         let mut tabs_vec = Vec::new();
                         for tab in tabs_py.iter() {
-                            if let Ok(tab_dict) = tab.downcast::<PyDict>() {
+                            if let Ok(tab_dict) = tab.cast::<PyDict>() {
                                 if let (Ok(Some(id)), Ok(Some(label)), Ok(Some(content))) = (
                                     tab_dict.get_item("id"),
                                     tab_dict.get_item("label"),

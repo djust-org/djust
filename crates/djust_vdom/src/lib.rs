@@ -1118,7 +1118,8 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
 }
 
 /// Python bindings
-#[pyclass]
+#[pyclass(from_py_object)]
+// PyVNode is taken by value in add_child(); keep the FromPyObject derive (pyo3 0.29 made it opt-in)
 #[derive(Clone)]
 pub struct PyVNode {
     inner: VNode,

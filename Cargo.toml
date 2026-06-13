@@ -18,7 +18,9 @@ repository = "https://github.com/djust-org/djust"
 [workspace.dependencies]
 # PyO3 without extension-module (added per-crate as needed)
 # PyO3 0.25+ adds native Python 3.14 support (0.24 hard-caps at 3.13)
-pyo3 = { version = "0.25" }
+# 0.29 fixes GHSA-36hh-v3qg-5jq4 (OOB read in nth/nth_back) +
+# GHSA-chgr-c6px-7xpp (missing Sync bound on new_closure).
+pyo3 = { version = "0.29" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rmp-serde = "1.3"  # MessagePack for binary serialization
@@ -39,7 +41,7 @@ chrono = "0.4"  # DateTime handling for timesince filter
 parking_lot = "0.12"  # Faster sync primitives
 tracing = "0.1"  # Structured logging
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-pyo3-async-runtimes = { version = "0.25", features = ["tokio-runtime"] }  # PyO3 async bridge (matches pyo3 0.25)
+pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }  # PyO3 async bridge (matches pyo3 0.29)
 bincode = "2.0"  # Internal message serialization
 tokio-test = "0.4"  # Tokio testing utilities
 uuid = { version = "1.23", features = ["v4", "serde"] }  # UUID for view identification (Phase 6)
