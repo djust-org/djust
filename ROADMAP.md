@@ -3621,6 +3621,35 @@ hardening, #1745), #1753 (#1752 item 1 — maturin build in nav-hooks-guard).
 
 ---
 
+### Milestone: v1.0.4-1 — deploy DX drain (doctor preflight + rollout status) (drain bucket → ships in 1.0.4)
+
+*Goal:* Two small, drain-mechanical `djust deploy` CLI improvements in the same
+deploy-DX theme as the just-shipped #1759 (`.gitignore`-respecting tarball + size
+warning). Both consume signals/contracts the platform side already provides;
+client-side changes only. Drained 2026-06-13 via `/pipeline-drain`.
+
+**STATUS: IN PROGRESS.**
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | `djust deploy` preflight "doctor" warning for platform-env-contract violations (#1760) | Static preflight in `djust deploy` that **warns** (not hard-errors) when the resolved settings module hardcodes `SECRET_KEY`, doesn't read `ALLOWED_HOSTS` from env, doesn't consult `DATABASE_URL`, or resolves a sqlite `NAME` under the (read-only) project dir. Grep-level static checks + one-line "the platform injects these — read them from env" pointer. | Feature; complements #1759. Prevents the silent "successful deploy, 500s at runtime" chain that cost a multi-hour `max-companion` prod debug (2026-06-11). |
+| **P2** | Consume djustlive `serving_current` → print "rolling out" vs "active" (#1761) | The deploy poll should read the additive `serving_current` boolean (server signal shipped in djustlive #517) and print "rolling out" instead of "active"/the URL until it's `True`, so users stop re-testing against stale rootfs during blue/green. Thin client-side change in `python/djust/deploy_cli.py`. | Feature; authoritative server signal already shipped. |
+
+**#1760 — `djust deploy` preflight "doctor"** — `djust deploy` ships an app whose
+Django settings can't work on the platform with no warning; a foreign (non-scaffold)
+app silently violates the env-injection contract and only fails at runtime in prod.
+Add a static preflight that warns on hardcoded `SECRET_KEY`, literal `ALLOWED_HOSTS`,
+`DATABASES` not reading `DATABASE_URL`, and sqlite `NAME` on a read-only path.
+
+**#1761 — consume `serving_current`** — djustlive's `deployment_status` now returns
+an additive `serving_current` boolean (False while a new rootfs is built+current but
+the old placement still serves during blue/green). `djust deploy` should print
+"rolling out" until it's `True` so users stop re-testing stale rootfs.
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
@@ -3636,6 +3665,7 @@ hardening, #1745), #1753 (#1752 item 1 — maturin build in nav-hooks-guard).
 | **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
 | **P1** | `auto_navigate` — Turbo-Drive `<a>` interception, opt-in (#1734) | Delegated click listener: SPA-navigate plain `<a href>` when the path resolves in the route map (opt-outs: modifier/middle-click, target/download, external, hash, `data-no-navigate`); same-view query-only → `live_patch`, else `live_redirect`. Config flag `auto_navigate`, **default OFF**. | Directional (ADR-021 Stage 2). Depends on #1733. Default-on deferred to a future major. |
 | **P2** | Reconcile native dj-navigate vs external TurboNav (#1735) | Position native `dj-navigate` as canonical; reframe `turbonav-integration.md` as interop (per-nav WS reconnect tradeoff). Docs/stance only. | Pairs with ADR-021; ships with #1734. |
+| **P3** | Route map & dj-navigation — reconsider client exposure (#1758) | Investigation: what the route map exposes to the client; whether route-resolution logic should move into template render. No proposed design yet. | Design-gated; pairs with the `auto_navigate` / route-map work (#1734). Tracked here, not drain-mechanical. |
 | **P3** | VDOM compounding-reorder residual tail (#1669, **closed not-planned** — recorded here so the analysis isn't lost if revisited) | ~6 / 6000 adversarial-corpus re-renders mis-patch when several keyed reorders + a `dj-if` boundary move compound in one parent; ~0 production incidence. Accepted after #1666 (`MoveSubtree`) / #1667 (`InsertChild.ref_d=None`) / #1668 drove the client-faithful-harness residual from ~40 → ~6. | **Accept + document.** A robust fix needs a reconciliation/apply redesign in `crates/djust_vdom/src/diff.rs` with real regression risk against 268 Rust + 1636 JS tests for negligible benefit. If ever revisited, two candidate directions: **(a) frame-consistent move-target resolution** — resolve `MoveChild`/`MoveSubtree` indices against a single post-removal frame so compounding ops don't shift each other's targets; **(b) unified id-keying across all node types** (incl. `dj-if` boundary spans, which today are id-less `#comment` markers) so reconciliation never falls back to positional matching. |
 
 ---
