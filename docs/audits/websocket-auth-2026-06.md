@@ -143,7 +143,7 @@ rendered once, never WS-patched). Documented in BEST_PRACTICES.
 | **T1** auth-redirect no-close | **High** | close(4403)+clear on redirect branch + reproducer | **this session** |
 | **T2** hook-redirect no-close | Med | same close+clear (same PR) | this session |
 | **T3** no event-path re-check | Med | opt-in `reauth_on_event` (default OFF) | done (#1777) |
-| T4 allowlist default-open | Low | docs: recommend `LIVEVIEW_ALLOWED_MODULES` | follow-up |
+| T4 allowlist default-open | Low | docs: recommend `LIVEVIEW_ALLOWED_MODULES` | done (#1778) |
 | T8 replay XSS | Med | escape + iframe sandbox | with #1562 |
 | T9 disappearing auth UI | Low | docs (outside `[dj-root]`) | BEST_PRACTICES |
 | T5 route-map | — | done (#1758) | ✅ |
