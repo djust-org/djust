@@ -4,6 +4,7 @@ Context processors for djust_theming.
 Adds theme CSS and state to template context.
 """
 
+import logging
 from functools import lru_cache
 
 from django.contrib.staticfiles.storage import staticfiles_storage
@@ -15,6 +16,8 @@ from .manager import (
     get_css_prefix,
     get_theme_manager,
 )
+
+logger = logging.getLogger(__name__)
 
 # Anti-FOUC script — static; defined at module load (NOT per-request).
 _ANTI_FOUC_SCRIPT = """<script>
@@ -219,8 +222,16 @@ def theme_context(request):
                     theme_preset_selector_html,
                 ),
             )
-        except (AttributeError, TypeError):
-            pass
+        except (AttributeError, TypeError) as exc:
+            # Some request objects can't hold arbitrary attributes
+            # (a `__slots__` object in tests / exotic callers). Caching is a
+            # micro-optimization, so we skip it — but log at debug so the
+            # swallowed write is observable rather than silently dropped.
+            logger.debug(
+                "skipping theme-context cache write on %s request: %s",
+                type(request).__name__,
+                exc,
+            )
 
     return {
         "theme_head": mark_safe(theme_head_html) if theme_head_html else "",
