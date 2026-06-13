@@ -987,6 +987,42 @@ class PropertyListView(LiveView):
 
 ---
 
+## 12. Deployment 🚀
+
+The `djust deploy` platform **injects config via environment variables** and serves from a **read-only rootfs**. Settings that hardcode platform-provided values, or that write to local files, deploy "successfully" then 500 at runtime.
+
+### Settings Pattern (CRITICAL for platform deploys)
+
+```python
+# ❌ WRONG — works in dev, breaks in prod
+SECRET_KEY = "django-insecure-dev-key"               # dev key on a public host (security risk)
+ALLOWED_HOSTS = ["localhost"]                          # → DisallowedHost (400) on the platform
+DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3",
+                         "NAME": BASE_DIR / "db.sqlite3"}}  # read-only rootfs → 500 on first write
+
+# ✅ CORRECT — read everything the platform injects from the env
+import os, dj_database_url
+SECRET_KEY = os.environ["SECRET_KEY"]
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
+DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"])}
+# (Individual os.environ["DB_NAME"], os.environ["DB_HOST"], … is equally fine.)
+```
+
+### Deploy Doctor
+
+`djust deploy` runs a static preflight over your settings *source text* (never imports it) and **warns** — without blocking — on: hardcoded `SECRET_KEY`, literal `ALLOWED_HOSTS`, a `DATABASES` block that reads no env config, or a sqlite engine. **Treat every doctor warning as deploy-blocking** — they predict runtime 500s.
+
+### Rollout Status
+
+`djust deploy` prints `Status: rolling out …` (not `active`) while a blue/green rollout still serves the OLD version, and only shows the URL once the new version is live. Wait for the URL before re-testing — "rolling out" means you'd be testing old code.
+
+**Deployment checklist:**
+- [ ] `SECRET_KEY`, `ALLOWED_HOSTS`, `DATABASES` all read from `os.environ` (no hardcoded values, no sqlite on the rootfs)
+- [ ] Zero `djust deploy` deploy-doctor warnings
+- [ ] Re-test only after `djust deploy` reports the live URL (not "rolling out")
+
+---
+
 ## Summary for AI Assistants
 
 **When writing djust code, always:**
@@ -1011,6 +1047,7 @@ class PropertyListView(LiveView):
 5. ❌ Missing default parameter values
 6. ❌ Skipping authorization checks
 7. ❌ Using `|safe` filter on user input (bypasses auto-escaping)
+8. ❌ Hardcoding `SECRET_KEY`/`ALLOWED_HOSTS`/`DATABASES` (or sqlite) for platform deploys instead of reading from `os.environ` — deploys "succeed" then 500 at runtime
 
 **Quick pattern matching:**
 - Search/filter → @debounce + private QuerySet + JIT
