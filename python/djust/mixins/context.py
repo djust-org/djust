@@ -390,12 +390,29 @@ class ContextMixin:
     def _apply_context_processors(self, context: Dict[str, Any], request) -> Dict[str, Any]:
         """
         Apply Django context processors to the context.
+
+        Records the set of keys added by context processors on
+        ``self._context_processor_keys`` (#1786). These are request-scoped,
+        framework-provided values (auth ``user`` / ``perms``, messages
+        storage, the ``request`` itself, etc.) that the view never assigns
+        to ``self``. ``_sync_state_to_rust`` uses this set — together with
+        the ``request`` key — to keep those values out of the persisted
+        change-detection fingerprint (``_prev_context_refs``) and out of the
+        non-serializable-value warning path: they still reach the Rust
+        renderer (serializable ones via ``update_state``; non-serializable
+        ones such as ``PermWrapper`` / ``FallbackStorage`` /
+        ``SimpleLazyObject`` via the raw-value sidecar), so templates keep
+        rendering ``{{ user }}`` / ``{{ perms }}`` / ``{{ messages }}``.
         """
         if request is None:
             return context
 
         processor_paths = self._get_context_processors()
         resolved = self._get_resolved_processors(processor_paths)
+
+        # Track which keys context processors actually contribute this cycle,
+        # so downstream change-detection / serialization can exclude them.
+        added_keys: set = set()
 
         for processor in resolved:
             try:
@@ -407,6 +424,7 @@ class ContextMixin:
                     for k, v in processor_context.items():
                         if k not in context:
                             context[k] = v
+                            added_keys.add(k)
             except Exception as e:
                 module = getattr(processor, "__module__", "")
                 qualname = getattr(processor, "__qualname__", "")
@@ -421,6 +439,14 @@ class ContextMixin:
                     proc_name,
                     e,
                 )
+
+        # Expose the processor-added keys for change-detection / serialization
+        # exclusion (#1786). Stored as an instance attr so ``_sync_state_to_rust``
+        # can read it after this call. The ``request`` key (added by
+        # ``django.template.context_processors.request``) is included here when
+        # that processor is configured; ``_sync_state_to_rust`` additionally
+        # excludes ``request`` unconditionally as a belt-and-suspenders guard.
+        self._context_processor_keys = added_keys
 
         return context
 

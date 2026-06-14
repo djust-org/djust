@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
 from ..utils import get_template_dirs
+from .context import _is_json_serializable
 
 logger = logging.getLogger(__name__)
 
@@ -547,6 +548,29 @@ class RustBridgeMixin:
             if request is not None:
                 full_context = self._apply_context_processors(full_context, request)
 
+            # Request-scoped, framework-provided context keys (#1786): the
+            # ``request`` itself plus everything the standard context
+            # processors contribute (auth ``user`` / ``perms``, messages
+            # storage, etc.). The view never assigns these to ``self`` — they
+            # are folded in above purely so the Rust template can render
+            # ``{{ user }}`` / ``{% csrf_token %}`` etc. We must keep them OUT
+            # of:
+            #   (a) the change-detection fingerprint (``_prev_context_refs`` /
+            #       immutables / containers) — they get a fresh ``id()`` every
+            #       event, so otherwise they bloat the fingerprint (the
+            #       58-key truncation warning) and show as "changed" on every
+            #       render; and
+            #   (b) the non-serializable-value warning path
+            #       (``normalize_django_value``) — request / ``PermWrapper`` /
+            #       ``FallbackStorage`` / ``SimpleLazyObject`` are not
+            #       JSON-serializable and would log a warning on every render.
+            # The non-serializable ones still reach the Rust renderer through
+            # the raw-value sidecar (``set_raw_py_values`` below); serializable
+            # processor outputs (e.g. theming's ``{{ theme_head }}`` SafeString)
+            # stay in ``update_state`` and are unaffected.
+            _request_scoped_keys = set(getattr(self, "_context_processor_keys", ()))
+            _request_scoped_keys.add("request")
+
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
             # Cache it to avoid creating a new string object each call,
             # which would cause the change tracker to see it as "changed".
@@ -703,12 +727,24 @@ class RustBridgeMixin:
             # - Containers (dict/list/tuple) — CPython address reuse after GC
             #   can cause id() to match even when the value changed (#774).
             #   Compared by value equality.
-            self._prev_context_refs = {k: id(v) for k, v in full_context.items()}
+            # Exclude request-scoped, framework-provided keys (#1786) from the
+            # change-detection fingerprint — see the _request_scoped_keys
+            # comment above. Keeping ``request`` / ``user`` / ``perms`` /
+            # ``messages`` out of these dicts is what fixes the
+            # ``_prev_context_refs has N keys — fingerprint truncated`` warning
+            # and the per-event "changed" false positives for those values.
+            self._prev_context_refs = {
+                k: id(v) for k, v in full_context.items() if k not in _request_scoped_keys
+            }
             self._prev_context_immutables = {
-                k: v for k, v in full_context.items() if isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
+                k: v
+                for k, v in full_context.items()
+                if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
             self._prev_context_containers = {
-                k: v for k, v in full_context.items() if isinstance(v, (dict, list, tuple))
+                k: v
+                for k, v in full_context.items()
+                if k not in _request_scoped_keys and isinstance(v, (dict, list, tuple))
             }
             self._sync_done_this_cycle = True
             self._changed_keys = None  # Clear
@@ -726,6 +762,20 @@ class RustBridgeMixin:
             rendered_context = {}
             needs_normalize = False
             for key, value in context.items():
+                # #1786: request-scoped, framework-provided context values
+                # (the request, auth ``user`` / ``perms``, messages storage)
+                # that are NOT JSON-serializable must not flow into
+                # ``update_state`` / ``normalize_django_value`` — that path
+                # logs a "non-serializable value: ASGIRequest / PermWrapper /
+                # FallbackStorage / SimpleLazyObject" warning on every render
+                # and would str()-stringify them into persisted state. They
+                # still reach the Rust template through the raw-value sidecar
+                # (``set_raw_py_values`` below), so ``{{ user }}`` etc. keep
+                # rendering. Serializable processor outputs (e.g. theming's
+                # ``{{ theme_head }}`` SafeString) are NOT skipped — they fall
+                # through to the normal handling below.
+                if key in _request_scoped_keys and not _is_json_serializable(value):
+                    continue
                 if isinstance(value, (Component, LiveComponent)):
                     # Render caching: skip render if component has clean cached HTML
                     cached = getattr(value, "_cached_html", None)
@@ -813,7 +863,12 @@ class RustBridgeMixin:
             # Also exclude temporary_assigns keys — they're reset to new
             # objects after each render, always getting new id().
             _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
-            _skip_keys = _FRAMEWORK_KEYS | _temp_assigns
+            # #1786: request-scoped keys are excluded from the change-detection
+            # fingerprint above, so on every render they look "new" and would
+            # otherwise be reported as changed keys — triggering spurious
+            # partial re-renders. They never change the user-visible output
+            # (their values are re-applied fresh each cycle), so skip them.
+            _skip_keys = _FRAMEWORK_KEYS | _temp_assigns | _request_scoped_keys
             # Collect auto-generated _count keys (context.py adds {list_key}_count).
             # Only exclude keys where the base name is a list in full_context.
             _auto_count_keys = set()
