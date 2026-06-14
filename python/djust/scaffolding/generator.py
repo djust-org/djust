@@ -231,6 +231,13 @@ def _create_project_files(project_dir: Path, app_name: str, ctx: Dict[str, Any])
     # warning-loud insecure secret rather than lax production settings.
     _write(project_dir / ".env.example", T.ENV_EXAMPLE % ctx)
 
+    # .env — the working local-dev config the scaffold actually loads
+    # (settings.py reads it via _load_dotenv). Ships DEBUG=True + a real
+    # SECRET_KEY so a fresh scaffold boots in dev mode and passes
+    # ``manage.py check`` (A014 stays dormant while DEBUG=True). It is
+    # gitignored so secrets never get committed.
+    _write(project_dir / ".env", T.ENV_EXAMPLE % ctx)
+
     # base.html
     _write(tpl_dir / "base.html", T.BASE_HTML % ctx)
 
