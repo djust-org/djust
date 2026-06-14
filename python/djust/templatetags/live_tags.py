@@ -17,8 +17,10 @@ Usage:
     {% live_input "text" handler="set_subject" value=subject %}
 """
 
+import contextlib
 import logging
 import re
+import threading
 from typing import Any, Dict, Optional
 
 from django import template
@@ -1313,6 +1315,63 @@ def _stamp_view_id(html: str, view_id: str) -> str:
 _STICKY_IDS_SEEN_KEY = "_djust_sticky_ids_seen"
 
 
+# ---------------------------------------------------------------------------
+# Active-parent-view thread-local (#1784)
+# ---------------------------------------------------------------------------
+#
+# The initial HTTP GET renders the page shell — including any embedded
+# ``{% live_render %}`` tag — through the Rust renderer with a
+# JSON-serialized context (see ``RequestMixin.get`` →
+# ``TemplateMixin.render_full_template``). A JSON context structurally cannot
+# carry the live parent ``LiveView`` object that ``live_render`` needs, so the
+# tag historically raised ``TemplateSyntaxError: ... no parent view in the
+# current render context`` and the request 500'd — which blocked
+# server-rendering of sticky / app-shell pages entirely.
+#
+# Fix: ``render_full_template`` AND ``render_with_diff`` register the active
+# parent view in this thread-local for the duration of their Rust render (via
+# the :func:`active_parent_view` context manager, which save/restores so nested
+# child renders don't blank the parent and the value is always restored even on
+# error — never leaking across requests/threads). The ``live_render`` tag falls
+# back to this thread-local only when the render context has no ``view``/``self``
+# key — the WS path and the Django-engine path still carry a real ``view`` in
+# context and are unaffected (the fallback is inert for them).
+#
+# Both render paths must set it: ``RequestMixin.get`` calls
+# ``render_full_template`` AND then ``render_with_diff`` to establish the VDOM
+# baseline, and both re-run the ``live_render`` tag through the Rust engine
+# (parallel-path-drift class, per CLAUDE.md — fixing only one leaves the twin).
+_active_parent_view = threading.local()
+
+
+def get_active_parent_view() -> Any:
+    """Return the active parent view registered for the current thread, or
+    ``None`` when none is set (the common case for the WS / Django-engine
+    render paths)."""
+    return getattr(_active_parent_view, "view", None)
+
+
+@contextlib.contextmanager
+def active_parent_view(view: Any):
+    """Context manager that registers ``view`` as the active parent
+    :class:`~djust.live_view.LiveView` for the current thread so an embedded
+    ``{% live_render %}`` tag can find it during a Rust render that carries
+    only a JSON-serialized context (#1784).
+
+    The PREVIOUS value is saved on entry and restored on exit (not merely
+    cleared) so nested renders — a parent render that triggers a child's
+    ``render_with_diff`` — restore the parent as the active view rather than
+    blanking it. Restoration runs even on error, so the thread-local never
+    leaks across requests/threads.
+    """
+    previous = getattr(_active_parent_view, "view", None)
+    _active_parent_view.view = view
+    try:
+        yield
+    finally:
+        _active_parent_view.view = previous
+
+
 @register.simple_tag(takes_context=True)
 def live_render(context, view_path: str, **kwargs) -> Any:
     """Embed a LiveView as a child of the current view (Phoenix nested-LV parity).
@@ -1424,7 +1483,16 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         )
 
     # 3. Locate the parent view in the render context.
+    #
+    # On the initial HTTP GET the page shell is rendered through the Rust
+    # engine with a JSON-serialized context that cannot carry the live
+    # ``LiveView`` object, so ``view``/``self`` are absent. Fall back to the
+    # thread-local registered by ``render_full_template`` (#1784). The WS path
+    # and the Django-engine path put a real ``view`` in the context, so the
+    # fallback is inert for them.
     parent = context.get("view") or context.get("self")
+    if parent is None or not isinstance(parent, LiveView):
+        parent = get_active_parent_view()
     if parent is None or not isinstance(parent, LiveView):
         raise TemplateSyntaxError(
             "{% live_render %} must be called inside a LiveView template; "
@@ -1432,7 +1500,18 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         )
 
     # 4. Instantiate + mount the child.
+    #
+    # On the initial HTTP GET shell render (#1784) the context flows through
+    # the Rust engine as a JSON-serialized dict, so ``request`` is a stringified
+    # placeholder (``normalize_django_value`` turns the WSGIRequest into a str).
+    # The child needs the real request object for ``mount(request, ...)`` and
+    # ``check_view_auth``, so fall back to the parent view's live
+    # ``request`` attribute when the context value isn't an ``HttpRequest``.
+    from django.http import HttpRequest
+
     request = context.get("request")
+    if not isinstance(request, HttpRequest):
+        request = getattr(parent, "request", None)
     preferred_view_id = kwargs.pop("view_id", None)
     # Phase B: sticky kwarg — if the caller asks for sticky preservation,
     # the child class must opt in (``sticky = True`` + non-empty
