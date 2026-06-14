@@ -74,6 +74,11 @@ keeps the 1.0 docs/canon honest.
 
 | Priority | Issue | Summary |
 |---|---|---|
+| **P1** | #1785 | fix(websocket): WS recovery forces full page reload — DJE-053 `html_update` path omits `_arm_recovery` (VERIFIED; breaks djust.org /insights/ on 1.0.4) |
+| **P1** | #1784 | fix: embedded `{% live_render %}` 500s on initial HTTP render — sticky-view pages cannot be served |
+| **P1** | #1787 | fix: `djust new` scaffold does not boot (asgi misuses `live_session`; scaffold trips its own system checks) |
+| **P2** | #1786 | fix(serialization): context-processor outputs + request leak into persisted LiveView state |
+| **P2** | #1788 | fix(websocket): consumer-owned monotonic VDOM send-version (follow-up to #1785) |
 | **P2** | #1493 | docs(adr): update stale `Target version` lines in the 10 reconciled ADRs |
 | **P2** | #1495 | Fix 2 low-severity CodeQL note alerts (`TARBALL_EXCLUDES` unused, `py/empty-except`) |
 | **P2** | #1496 | Accessibility long-tail — P2/P3 component ARIA, keyboard JS, Y003+ checks |
@@ -3649,6 +3654,35 @@ Add a static preflight that warns on hardcoded `SECRET_KEY`, literal `ALLOWED_HO
 an additive `serving_current` boolean (False while a new rootfs is built+current but
 the old placement still serves during blue/green). `djust deploy` should print
 "rolling out" until it's `True` so users stop re-testing stale rootfs.
+
+---
+
+### Milestone: v1.0.5-1 — WS recovery + render-path hardening drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Drain post-1.0.4 open bugs surfaced by the djust.org `/insights/` production
+incident (WS recovery/version handshake) plus two render-path bugs and two
+state/serialization tech-debt items. Ships as 1.0.5.
+
+**#1785 — WS `request_html` recovery forces full page reload (P1, VERIFIED)** — On the
+DJE-053 `html_update` fallback, `handle_event` (`python/djust/websocket.py:3740-3816`) sends
+full HTML but never calls `_arm_recovery`, so a follow-up `request_html` returns "Recovery
+HTML unavailable" → page reload. Reproduced locally with a gate-off self-test. Fix: arm
+recovery on the `html_update` branch (mirror `:3726`). Breaks djust.org `/insights/` on 1.0.4.
+
+**#1784 — embedded `{% live_render %}` 500s on initial HTTP render** — sticky-view pages
+cannot be served on the first GET. Render-path bug.
+
+**#1787 — `djust new` scaffold does not boot** — the generated asgi misuses `live_session`
+and the scaffold trips its own system checks. New-user first-run blocker.
+
+**#1786 — context/request leak into persisted LiveView state** — context-processor outputs
+(`PermWrapper`, `FallbackStorage`, the request) get serialized into the Redis state backend,
+producing a per-render warning flood + state bloat + `_prev_context_refs` fingerprint overflow.
+
+**#1788 — consumer-owned monotonic VDOM send-version (follow-up to #1785)** — the VDOM version
+is coupled to the Rust-view lifetime; a baseline loss resets it and the client rejects the
+`html_update` (extra recovery round-trip). Track a connection-owned send-version across all
+outbound frame paths.
 
 ---
 
