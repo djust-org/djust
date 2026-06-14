@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5rc1] - 2026-06-14
+
 ### Fixed
 
 - **WebSocket recovery no longer forces a full page reload on the `html_update` fallback (#1785).** When a LiveView event's VDOM diff returns no patches and the server sends a full-HTML `html_update` frame (the DJE-053 fallback), it now arms on-demand recovery — matching the patches path. Previously the `html_update` branch in `handle_event` skipped `_arm_recovery`, so a client that subsequently requested recovery (e.g. after a VDOM version mismatch on the full-HTML frame) received `Recovery HTML unavailable — the server may have restarted` and reloaded the whole page instead of morphing. Surfaced by a multi-replica djust.org `/insights/` page reloading on every time-range switch. Added a `WebsocketCommunicator` regression test (`TestWSRecoveryHtmlUpdate`-style, in `test_ws_recovery_html_update_1785.py`) plus a source pin.
