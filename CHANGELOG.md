@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4rc1] - 2026-06-13
+
 ### Added
 
 - **`auto_navigate` — opt-in automatic SPA link interception (#1734, ADR-021 Stage 2).** With `dj-navigate` you annotate each link; `auto_navigate` goes one step further — a single delegated click listener SPA-navigates **plain `<a href>` links** (no djust attribute needed) whenever the link's path resolves in the route map. Enable via `LIVEVIEW_CONFIG['auto_navigate'] = True` (**default OFF**); `{% djust_client_config %}` then emits a `<meta name="djust-auto-navigate">` flag (CSP-clean, no inline script) and the client installs one delegated `document` listener. It is deliberately conservative — a link falls through to a normal browser navigation on a modifier/middle click, a `target` other than `_self`, a `download` attr, `rel="external"`, a `data-no-navigate` ancestor, an external origin or non-http(s) scheme, a same-page hash-only jump, or **any path not in the (auth-filtered, #1758) route map** — so admin pages, plain Django views, and routes the user can't access reload normally and the server enforces access. Same-view query-only changes use `live_patch` (state-preserving); cross-view uses `live_redirect`. Native `dj-navigate`/`auto_navigate` is positioned as djust's canonical SPA model; `turbonav-integration.md` is reframed as interop (#1735). New `TestRouteMapAuthFilter`-adjacent JS suite (`tests/js/auto_navigate_1734.test.js`, 15 cases incl. the full opt-out matrix) + `TestClientConfig` emit tests.

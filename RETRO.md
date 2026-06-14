@@ -333,15 +333,18 @@ issue or be explicitly closed with a reason.
 | 291 | Canonicalize: a transport-level `close()` / state mutation is unsafe on a **multiplexed / collector** path — gate it on batch context | Retro v1.1.0 / PR #1780 review | — | Closed | **Resolved this retro** (CLAUDE.md "Multiplexed-path transport rule"). Case study: PR #1780's auth fix called `self.close(4403)` inside `handle_mount`; `handle_mount_batch._mount_one` swaps `send_json` to a collector but NOT `close()`, so the close fired mid-loop on the shared socket and killed sibling mounts. Fixed by gating the close on a `_mounting_in_batch` flag (clear `view_instance` always; close only when not batching). |
 | 292 | Canonicalize: pre-commit stash/restore can silently DROP unstaged working-tree files across a commit cycle; recover from `~/.cache/pre-commit/patch*` | Retro v1.1.0 | — | Closed | **Resolved this retro** (CLAUDE.md "Pre-commit can drop unstaged files"). Case study: the user's uncommitted `BEST_PRACTICES*.md` drafts vanished after a pipeline commit (pre-commit stashes UNSTAGED files, runs hooks on staged, restores — a failed restore leaves them only in the patch cache). Recovered by `git apply ~/.cache/pre-commit/patch<newest>`. |
 
-## v1.1.0 — Security hardening & navigation arc (PRs #1775, #1776, #1780, #1781, #1782, #1783)
+## v1.0.4 — Security hardening & navigation arc (rc1; PRs #1775, #1776, #1780, #1781, #1782, #1783)
 
 **Date**: 2026-06-13
+**Released as**: v1.0.4rc1 (the new `auto_navigate` feature is opt-in / default-OFF,
+so this ships as a patch rc, not a minor — see the version-choice note below).
 **Scope**: ADR-021 Stage 2 (auto_navigate) + a complete WebSocket auth/transport
 threat model (`docs/audits/websocket-auth-2026-06.md`, 9 threats) and its fixes:
 the route-map information leak (#1758), the WS auth bypass (T1/T2), opt-in
 per-event re-auth (T3), allowlist-hardening docs (T4), and a regression test
-confirming T9 was already fixed. Preceded in the same session by a v1.0.4 deploy-DX
-drain + pyo3 0.29 security bump (separate per-PR retros; not re-synthesized here).
+confirming T9 was already fixed. Ships in the same 1.0.4 release as the earlier
+v1.0.4-1 deploy-DX drain bucket + pyo3 0.29 security bump (separate per-PR retros;
+not re-synthesized here).
 **Tests at close**: full suite green (the security PRs added ~27 cases: route-map
 auth-filter, WS-auth reproducer, batch regression, reauth, csrf/user-survive-WS).
 
