@@ -1,6 +1,6 @@
 # ADR-021: Automatic SPA Navigation (native `dj-navigate` as canonical)
 
-**Status**: Accepted — Stage 1 (route-map foundation, #1733/PR #1736) shipped v1.0.2; Stage 2 (`auto_navigate` opt-in #1734, nav-story reconciliation #1735, route-map auth-hardening #1758) shipped 2026-06-13 in v1.0.4rc1 (PRs #1775/#1776)
+**Status**: Accepted — Stage 1 (route-map foundation, #1733/PR #1736) shipped v1.0.2; Stage 2 (`auto_navigate` opt-in #1734, nav-story reconciliation #1735, route-map auth-hardening #1758) shipped 2026-06-13 in v1.0.4 (PRs #1775/#1776)
 **Shipped in**: v1.0.2 (Stage 1); v1.0.4 (Stage 2)
 **Source**: `/pipeline-strategy` 2026-06-05 (auto-navigation), Path 2 (Foundation + opt-in)
 
