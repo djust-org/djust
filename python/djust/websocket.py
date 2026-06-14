@@ -3739,6 +3739,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )
                     else:
                         # patches=None means VDOM diff failed or was skipped - send full HTML
+                        #
+                        # Arm on-demand recovery with the RAW rendered HTML *before*
+                        # the strip/extract below reassigns ``html`` — mirrors the
+                        # recovery-arming in the patches branch above. Without this,
+                        # a client that requests recovery after
+                        # a version mismatch on THIS html_update frame gets
+                        # "Recovery HTML unavailable" → forced full page reload (#1785).
+                        # ``_recovery_html`` expects the pre-strip HTML (it strips +
+                        # extracts on demand in ``handle_request_html``), matching the
+                        # value the patches branch passes.
+                        self._arm_recovery(html, version)
+
                         # Batch strip + extract into a single thread hop
                         # to avoid two separate sync_to_async crossings.
                         def _sync_strip_and_extract(raw_html):
