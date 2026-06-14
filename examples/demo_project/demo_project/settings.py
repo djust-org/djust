@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "djust_tests",  # Test views
     "djust_docs",  # Documentation views
     "djust_rentals",  # Rental property management app
+    "sticky_demo",  # Sticky LiveViews / app-shell demo (#1784)
     # Old app (will be phased out)
     "demo_app",
 ]

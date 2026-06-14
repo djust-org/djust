@@ -882,6 +882,24 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Returns the complete HTML document (DOCTYPE, html, head, body, etc.)
         """
+        # #1784: register self as the active parent view for the duration of
+        # this render so an embedded ``{% live_render ... %}`` tag can find its
+        # parent during the Rust shell/dj-root render. The Rust engine renders
+        # from a JSON-serialized context that structurally cannot carry the
+        # live ``LiveView`` object, so without this thread-local the tag raised
+        # ``TemplateSyntaxError`` ("no parent view in the current render
+        # context") and the initial HTTP GET 500'd. The context manager
+        # save/restores so it never leaks across requests/threads, even on
+        # error.
+        from ..templatetags.live_tags import active_parent_view
+
+        with active_parent_view(self):
+            return self._render_full_template_inner(request, serialized_context)
+
+    def _render_full_template_inner(self, request=None, serialized_context=None) -> str:
+        """Body of :meth:`render_full_template`. Split out so the
+        active-parent-view thread-local (#1784) wraps the entire render in a
+        ``with`` block without indenting the whole method."""
         if hasattr(self, "_full_template") and self._full_template:
             # --- Step 1: Render the dj-root content via self._rust_view ---
             # This is the SAME instance the WS path will use for diffing,
@@ -1047,7 +1065,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             )
         self._sync_done_this_cycle = False  # Reset for next cycle
 
-        result = self._rust_view.render_with_diff()
+        # #1784: register self as the active parent view for the duration of
+        # the Rust diff render. ``RequestMixin.get`` calls this AFTER
+        # ``render_full_template`` to establish the VDOM baseline, and the Rust
+        # ``render_with_diff()`` re-runs any embedded ``{% live_render %}`` tag
+        # against a JSON-serialized context that cannot carry the live parent
+        # view — same gap ``render_full_template`` guards (parallel-path-drift,
+        # per CLAUDE.md). The context manager save/restores so the WS path
+        # (which already carries a real ``view``) is unaffected and the
+        # thread-local never leaks.
+        from ..templatetags.live_tags import active_parent_view
+
+        with active_parent_view(self):
+            result = self._rust_view.render_with_diff()
         html, patches_json, version = result
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
