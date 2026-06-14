@@ -67,6 +67,30 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(path):
+    \"\"\"Load ``KEY=VALUE`` pairs from a ``.env`` file into ``os.environ``.
+
+    Dependency-free (no python-dotenv): values already present in the
+    environment win, so real deployments that export real env vars are
+    never overridden by a committed ``.env``. Blank lines and ``#``
+    comments are skipped.
+    \"\"\"
+    if not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+# Load a ``.env`` next to BASE_DIR (if present) so local development picks up
+# ``DEBUG=True`` + a real ``SECRET_KEY`` without exporting them by hand. An
+# unconfigured deploy (no ``.env``) still fails safe to ``DEBUG=False``.
+_load_dotenv(BASE_DIR / ".env")
+
 SECRET_KEY = os.environ.get(
     "SECRET_KEY",
     "django-insecure-%(secret_key)s",
@@ -84,7 +108,7 @@ ALLOWED_HOSTS = [
 ]
 
 INSTALLED_APPS = [
-    "daphne",
+    "channels",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -118,6 +142,24 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+    # django.contrib.admin requires a DjangoTemplates backend (admin.E403).
+    # APP_DIRS=False so it doesn't shadow app templates rendered by djust.
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": False,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+            "loaders": [
+                "django.template.loaders.app_directories.Loader",
             ],
         },
     },
@@ -158,17 +200,48 @@ LIVEVIEW_ALLOWED_MODULES = [
 # ---------------------------------------------------------------------------
 
 ASGI_PY = """\
-\"\"\"ASGI config for %(app_name)s project.\"\"\"
+\"\"\"
+ASGI config for %(app_name)s project.
+
+Wraps the HTTP handler with ``ASGIStaticFilesHandler`` so static files
+(client.js, CSS, etc.) are served correctly under an ASGI server like
+uvicorn without needing a separate static file server or extra deps.
+\"\"\"
 
 import os
-import django
+
+from django.core.asgi import get_asgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "%(app_name)s.settings")
-django.setup()
 
-from djust.routing import live_session  # noqa: E402
+# Initialize Django's app registry BEFORE importing anything that touches
+# models / consumers (channels, djust.websocket). ``get_asgi_application()``
+# calls ``django.setup()`` internally, so the imports below are safe.
+django_asgi_app = get_asgi_application()
 
-application = live_session()
+from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler  # noqa: E402
+from django.urls import path  # noqa: E402
+from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
+from channels.auth import AuthMiddlewareStack  # noqa: E402
+from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E402
+from djust.websocket import LiveViewConsumer  # noqa: E402
+
+# CSWSH defense: ``AllowedHostsOriginValidator`` rejects WebSocket
+# handshakes whose Origin header is not in ``settings.ALLOWED_HOSTS``.
+application = ProtocolTypeRouter(
+    {
+        "http": ASGIStaticFilesHandler(django_asgi_app),
+        "websocket": AllowedHostsOriginValidator(
+            AuthMiddlewareStack(
+                URLRouter(
+                    [
+                        path("ws/live/", LiveViewConsumer.as_asgi()),
+                    ]
+                )
+            )
+        ),
+    }
+)
 """
 
 # ---------------------------------------------------------------------------
@@ -418,7 +491,7 @@ MAKEFILE = """\
 .PHONY: dev test migrate check install
 
 dev:
-\tdaphne -b 127.0.0.1 -p 8000 %(app_name)s.asgi:application
+\tuvicorn %(app_name)s.asgi:application --host 127.0.0.1 --port 8000 --reload
 
 test:
 \tpython manage.py test
@@ -444,7 +517,7 @@ REQUIREMENTS_TXT = """\
 django>=5.1
 djust>=0.3.0
 channels>=4.0
-daphne>=4.0
+uvicorn[standard]>=0.30
 """
 
 # ---------------------------------------------------------------------------
