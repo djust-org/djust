@@ -63,8 +63,9 @@ def test_arm_recovery_call_site_count_matches_known_send_paths():
     arm leaves the count unchanged, but is caught by
     ``test_render_send_paths_route_through_arm_recovery`` extended with its name.
 
-    Known sites (4): _run_async_work patches-branch + full-HTML-fallback,
-    handle_event, server_push.
+    Known sites (5): _run_async_work patches-branch + full-HTML-fallback,
+    handle_event patches-branch, handle_event full-HTML (html_update) fallback
+    (#1785), server_push.
     """
     import inspect
 
@@ -72,8 +73,8 @@ def test_arm_recovery_call_site_count_matches_known_send_paths():
 
     src = inspect.getsource(ws_mod)
     call_sites = src.count("self._arm_recovery(")
-    assert call_sites == 4, (
-        f"expected 4 self._arm_recovery() call sites (the known render-send "
+    assert call_sites == 5, (
+        f"expected 5 self._arm_recovery() call sites (the known render-send "
         f"paths), found {call_sites}. If you added a render-send path, arm the "
         f"recovery baseline there and update this count + the enumerated list "
         f"(#1655/#1645/#1639)."
