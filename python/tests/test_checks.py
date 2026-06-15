@@ -92,6 +92,109 @@ class TestT004CheckIntegration:
         assert len(t004_errors) == 0
 
 
+class TestT004DocumentDispatchedEvents:
+    """#1809: T004 must NOT flag djust: events that djust itself dispatches
+    on `document` (navigate-*, hvr-*, layout-changed, ws-reconnected,
+    time-travel-*). Those listeners are CORRECT on `document` and would
+    BREAK if switched to `window` per the old fix_hint.
+
+    The authoritative document-dispatched set is sourced from the client
+    bundle's `document.dispatchEvent(new CustomEvent('djust:...'))` sites
+    (see `_DOC_DISPATCHED_DJUST_EVENTS` in checks.py for the cites).
+    """
+
+    def _scan(self, tmp_path, settings, body):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "t.html").write_text("<script>%s</script>" % body)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        return [e for e in errors if e.id == "djust.T004"]
+
+    def test_navigate_end_not_flagged(self, tmp_path, settings):
+        """document.addEventListener('djust:navigate-end', ...) is CORRECT."""
+        t004 = self._scan(
+            tmp_path,
+            settings,
+            "document.addEventListener('djust:navigate-end', (e) => {});",
+        )
+        assert t004 == [], "navigate-end is document-dispatched; T004 must not fire: %r" % t004
+
+    def test_all_document_dispatched_events_not_flagged(self, tmp_path, settings):
+        """Every event in the document-dispatched family is exempt."""
+        from djust.checks import _DOC_DISPATCHED_DJUST_EVENTS
+
+        for ev in sorted(_DOC_DISPATCHED_DJUST_EVENTS):
+            t004 = self._scan(
+                tmp_path / ev,  # unique subdir per event so the tpl dir is fresh
+                settings,
+                "document.addEventListener('djust:%s', (e) => {});" % ev,
+            )
+            assert t004 == [], "djust:%s is document-dispatched; T004 must not fire: %r" % (
+                ev,
+                t004,
+            )
+
+    def test_window_dispatched_event_still_flagged(self, tmp_path, settings):
+        """A genuinely window-dispatched djust: event on `document` STILL
+        warns — the legit purpose of T004 is preserved. `djust:push_event`
+        is dispatched via `window.dispatchEvent` in the client bundle."""
+        t004 = self._scan(
+            tmp_path,
+            settings,
+            "document.addEventListener('djust:push_event', (e) => {});",
+        )
+        assert len(t004) == 1, "push_event is window-dispatched; T004 must still fire: %r" % t004
+
+
+class TestT004Suppress:
+    """#1809: T004 emission must honor DJUST_CONFIG['suppress_checks'].
+
+    Mirrors the C013/T002 suppress pattern. Before the fix, the T004 loop
+    did not consult `_is_check_suppressed`, so suppression was a no-op.
+    """
+
+    def _scan(self, tmp_path, settings):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        # push_event is window-dispatched, so T004 fires absent suppression.
+        (tpl_dir / "t.html").write_text(
+            "<script>document.addEventListener('djust:push_event', (e) => {});</script>"
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        return [e for e in errors if e.id == "djust.T004"]
+
+    def test_t004_fires_without_suppression(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {}
+        t004 = self._scan(tmp_path, settings)
+        assert len(t004) == 1, "T004 should fire normally: %r" % t004
+
+    def test_t004_suppressed_short_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["T004"]}
+        t004 = self._scan(tmp_path, settings)
+        assert t004 == [], "T004 should be silenced by suppress_checks=['T004']: %r" % t004
+
+    def test_t004_suppressed_qualified_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.T004"]}
+        t004 = self._scan(tmp_path, settings)
+        assert t004 == [], "T004 should be silenced by suppress_checks=['djust.T004']: %r" % t004
+
+
 class TestT016DjNavigateWithoutRoutes:
     """T016 (#1733) — dj-navigate used but no LiveView routes in URLconf.
 

@@ -2672,7 +2672,37 @@ _DJ_ACTIVITY_NAME_RE = re.compile(
 _DJ_ROOT_RE = re.compile(r"dj-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
-_DOC_DJUST_EVENT_RE = re.compile(r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:""")
+# T004 (#1809) — `document.addEventListener('djust:...')`. The matcher captures
+# the event name (group 1) so the emission site can exempt the djust: events
+# that djust itself dispatches on `document` (see _DOC_DISPATCHED_DJUST_EVENTS).
+# Those listeners are CORRECT on `document`; flagging them and telling the user
+# to switch to `window` would BREAK the listener (it would never fire).
+_DOC_DJUST_EVENT_RE = re.compile(
+    r"""document\s*\.\s*addEventListener\s*\(\s*['"]djust:([a-zA-Z0-9_-]*)"""
+)
+# Authoritative set of djust: events that the client bundle dispatches on
+# `document` (NOT `window`). Sourced from client.js
+# `document.dispatchEvent(new CustomEvent('djust:...'))` sites:
+#   - 'djust:ws-reconnected'    python/djust/static/djust/client.js:670
+#   - 'djust:hvr-applied'       python/djust/static/djust/client.js:1463
+#   - 'djust:time-travel-state' python/djust/static/djust/client.js:1483
+#   - 'djust:time-travel-event' python/djust/static/djust/client.js:1501
+#   - 'djust:navigate-start'    python/djust/static/djust/client.js:10865
+#   - 'djust:navigate-end'      python/djust/static/djust/client.js:10877
+#   - 'djust:layout-changed'    python/djust/static/djust/client.js:13855
+# (mirrored in src modules 03-websocket.js / 18-navigation.js / 40-dj-layout.js).
+# A listener for any of these on `document` is correct and must NOT trigger T004.
+_DOC_DISPATCHED_DJUST_EVENTS = frozenset(
+    {
+        "ws-reconnected",
+        "hvr-applied",
+        "time-travel-state",
+        "time-travel-event",
+        "navigate-start",
+        "navigate-end",
+        "layout-changed",
+    }
+)
 _NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
 _DJ_EVENT_DIRECTIVES_RE = re.compile(
     r"dj-(click|input|change|submit|blur|focus|keydown|keyup|mouseenter|mouseleave|window-\w+|document-\w+|click-away|shortcut)="
@@ -3224,25 +3254,33 @@ def check_templates(app_configs, **kwargs):
                     )
 
         # T004 -- document.addEventListener('djust:...') should be window
-        for match in _DOC_DJUST_EVENT_RE.finditer(content):
-            lineno = content[: match.start()].count("\n") + 1
-            errors.append(
-                DjustWarning(
-                    "%s:%d -- document.addEventListener for djust: event." % (relpath, lineno),
-                    hint=(
-                        "djust custom events (djust:push_event, djust:navigate, etc.) "
-                        "are dispatched on window, not document. "
-                        "Change to: window.addEventListener('djust:...')"
-                    ),
-                    id="djust.T004",
-                    fix_hint=(
-                        "Replace `document.addEventListener` with "
-                        "`window.addEventListener` at line %d in `%s`." % (lineno, relpath)
-                    ),
-                    file_path=filepath,
-                    line_number=lineno,
+        # (#1809) — except for the djust: events djust itself dispatches on
+        # `document` (navigate-*, hvr-*, layout-changed, ws-reconnected,
+        # time-travel-*), where `document` is CORRECT. Also honor
+        # suppress_checks (mirrors T002/C013).
+        if not _is_check_suppressed("djust.T004"):
+            for match in _DOC_DJUST_EVENT_RE.finditer(content):
+                event_name = match.group(1)
+                if event_name in _DOC_DISPATCHED_DJUST_EVENTS:
+                    continue
+                lineno = content[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- document.addEventListener for djust: event." % (relpath, lineno),
+                        hint=(
+                            "djust custom events (djust:push_event, djust:navigate, etc.) "
+                            "are dispatched on window, not document. "
+                            "Change to: window.addEventListener('djust:...')"
+                        ),
+                        id="djust.T004",
+                        fix_hint=(
+                            "Replace `document.addEventListener` with "
+                            "`window.addEventListener` at line %d in `%s`." % (lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
                 )
-            )
 
         # T005 -- dj-view and dj-root on different elements
         if has_djust_view and has_djust_root:
