@@ -115,16 +115,50 @@ class TestParallelRender:
 
     @pytest.mark.asyncio
     async def test_total_wall_clock_is_max_not_sum(self, rf, make_parent):
-        """Three thunks with 50ms sleep each. Sequential render takes
-        ≥ 150ms; parallel takes ≈ 50ms. Generous 100ms tolerance — the
-        invariant we're checking is "well below the sequential
-        baseline", not exact wall-clock."""
+        """Parallel render wall-clock ≈ max(thunk durations), NOT the
+        sum. Three thunks with 50ms sleep each: a sequential render
+        takes ≈ 3 × 50ms = 150ms, a parallel render ≈ 50ms.
+
+        The invariant under test is the *speedup property*, so the
+        assertion is RELATIVE — never an absolute millisecond ceiling.
+        An absolute bound (the old ``elapsed < 0.10``) false-fails under
+        CPU load (#1795): the sleeps are real time, but the surrounding
+        scheduling overhead inflates with load, pushing a genuinely
+        parallel render past any fixed ceiling (observed 104–112ms during
+        full ``make test`` runs; passed in isolation).
+
+        Instead we measure a SERIAL baseline in the same process under
+        the same load (awaiting N identical thunks one at a time), then
+        assert the parallel render is meaningfully faster. Load inflates
+        both measurements roughly proportionally, so the ratio stays
+        stable across machines and load. A sequential implementation
+        would make parallel ≈ serial; we require parallel to be at most
+        HALF the serial baseline — a margin a real sequential loop can
+        never hit, and one that tolerates heavy scheduler jitter for a
+        real parallel loop (true speedup is ~3×, so even a 1.5×
+        degradation still passes).
+        """
+        sleep_s = 0.05
+        slot_ids = ("slot-x", "slot-y", "slot-z")
+        n = len(slot_ids)
+
+        # --- Serial baseline: await the same N thunks one at a time. ---
+        # Captures this machine's per-thunk cost (sleep + scheduling +
+        # current load) so the comparison below is load-relative, not an
+        # absolute millisecond ceiling.
+        serial_thunks = [_make_sleeping_thunk(vid, sleep_s) for vid in slot_ids]
+        t0 = time.perf_counter()
+        for thunk in serial_thunks:
+            await thunk()
+        serial_elapsed = time.perf_counter() - t0
+
+        # --- Parallel render via arender_chunks / as_completed. ---
         parent = make_parent()
         parent.request = rf.get("/")
         emitter = ChunkEmitter(parent.request)
 
-        for vid in ("slot-x", "slot-y", "slot-z"):
-            emitter.register_thunk(vid, _make_sleeping_thunk(vid, 0.05))
+        for vid in slot_ids:
+            emitter.register_thunk(vid, _make_sleeping_thunk(vid, sleep_s))
 
         async def _drain():
             chunks: List[bytes] = []
@@ -137,12 +171,21 @@ class TestParallelRender:
         await parent.arender_chunks(parent.template, emitter)
         await emitter.close()
         await consumer
-        elapsed = time.perf_counter() - t0
+        parallel_elapsed = time.perf_counter() - t0
 
-        # 3 × 50ms sequential = 150ms baseline. Parallel: ~50ms +
-        # overhead. 100ms ceiling proves parallel even on slow
-        # workers.
-        assert elapsed < 0.10, f"expected parallel render under 100ms, took {elapsed * 1000:.1f}ms"
+        # Relative invariant: a parallel render finishes in roughly the
+        # time of the slowest single thunk, so it must be well under the
+        # serial sum of N thunks. Require ≤ 50% of the serial baseline:
+        # impossible for a sequential implementation (parallel ≈ serial),
+        # comfortably satisfied by a real parallel one (true ratio ≈ 1/n
+        # = 1/3) even under generous scheduler jitter.
+        threshold = serial_elapsed / 2
+        assert parallel_elapsed < threshold, (
+            "expected parallel render << serial sum (speedup property): "
+            f"parallel={parallel_elapsed * 1000:.1f}ms, "
+            f"serial baseline (n={n})={serial_elapsed * 1000:.1f}ms, "
+            f"threshold (serial/2)={threshold * 1000:.1f}ms"
+        )
 
     @pytest.mark.asyncio
     async def test_parallel_thunk_failure_does_not_stall_others(self, rf, make_parent):
