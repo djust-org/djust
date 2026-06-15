@@ -69,6 +69,46 @@ _SERVICE_INSTANCE_KEYWORDS = re.compile(r"(Service|Client|Session|API|Connection
 
 _DJ_VIEW_RE = re.compile(r"dj-view")
 
+# V012 (#1803) — match a REAL ``<div ... dj-view ...>`` opening tag (a
+# standalone ``dj-view`` attribute), not the bare substring ``_DJ_VIEW_RE``
+# uses. Anchoring to an actual tag with the negative-lookbehind / lookahead
+# guards (mirrors ``mixins/template.py:_DJ_VIEW_RE``) means prose / comment
+# text that merely mentions ``dj-view`` (e.g. the "do not add another
+# ``dj-view`` here" note in the sticky example template) does NOT false-match —
+# only an authored attribute on a real element does.
+_DJ_VIEW_TAG_RE = re.compile(
+    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
+    re.IGNORECASE,
+)
+
+# V012 (#1803) — comment regions to strip before the ``<div ... dj-view ...>``
+# root scan. A sticky-child template commonly documents the wrapper it lives
+# inside (the demo's ``audio_player.html`` comment literally shows
+# ``<div dj-view dj-sticky-view="audio-player" ...>``); that example tag is
+# inside a comment, not the real root, so it must NOT trigger V012. Covers
+# Django block comments, Django inline comments, and HTML comments.
+_DJANGO_COMMENT_BLOCK_RE = re.compile(
+    r"\{%\s*comment\b[^%]*%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL
+)
+_DJANGO_INLINE_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _strip_template_comments(content: str) -> str:
+    """Remove Django/HTML comment regions so a commented-out / documented
+    example tag never false-matches the V012 root scan.
+
+    Returns ``content`` unchanged when no comment region is present (the
+    common case). Line numbers are not preserved (V012 reports the class
+    source line, not a template line, so alignment is unnecessary here).
+    """
+    if "{%" not in content and "{#" not in content and "<!--" not in content:
+        return content
+    content = _DJANGO_COMMENT_BLOCK_RE.sub("", content)
+    content = _DJANGO_INLINE_COMMENT_RE.sub("", content)
+    content = _HTML_COMMENT_RE.sub("", content)
+    return content
+
 
 def _is_check_suppressed(check_id: str) -> bool:
     """Return True if the user has suppressed *check_id* via settings.
@@ -1840,6 +1880,149 @@ def check_sticky_child_optin(app_configs, **kwargs):
                         line_number=child_line,
                     )
                 )
+
+    return errors
+
+
+def _sticky_child_template_source(cls):
+    """Return the raw template source for a sticky-child view, or None.
+
+    Reads ``cls.template`` (inline string) directly, otherwise resolves
+    ``cls.template_name`` via Django's template loader. Returns None on any
+    failure (missing template, loader error, no template configured) — V012
+    must skip conservatively rather than raise from a startup check.
+
+    Consulted via ``__dict__`` for ``template`` / ``template_name`` so the
+    own-declaration is read, mirroring how V001 looks up ``template_name``.
+    """
+    inline = cls.__dict__.get("template")
+    if isinstance(inline, str) and inline:
+        return inline
+    tpl_name = cls.__dict__.get("template_name")
+    if not tpl_name:
+        # Fall back to an inherited template_name (a subclass may inherit it).
+        tpl_name = getattr(cls, "template_name", None)
+    if not isinstance(tpl_name, str) or not tpl_name:
+        return None
+    try:
+        from django.template import loader
+
+        return loader.get_template(tpl_name).template.source
+    except Exception:
+        # TemplateDoesNotExist, backend errors, missing engine, etc. — the
+        # template-resolution problem is V001/runtime's concern, not V012's.
+        return None
+
+
+@register("djust")
+def check_sticky_child_own_dj_view(app_configs, **kwargs):
+    """V012 (Warning): a sticky-child LiveView declares its own ``dj-view`` on
+    its template root — a nested/duplicate binding footgun (closes #1803).
+
+    A sticky child is embedded via ``{% live_render "...Path" sticky=True %}``,
+    which makes the framework emit the wrapper element itself::
+
+        <div dj-view dj-sticky-view="<id>" dj-sticky-root
+             data-djust-embedded="<id>">…child HTML…</div>
+
+    (see ``static/djust/src/45-child-view.js``). If the child's OWN template
+    root ALSO carries a ``dj-view`` attribute, the rendered page ends up with a
+    nested/duplicate ``dj-view`` inside the wrapper. The child's client-side
+    mount breaks and its ``dj-click`` / ``dj-input`` events silently don't bind.
+
+    The footgun is subtle precisely because normal *page* views REQUIRE
+    ``dj-view="<path>"`` on their root to be browser-mountable — so authors
+    (and code-generating agents) reasonably add it everywhere, including sticky
+    children, where it is wrong. V012 converts the silent footgun into a
+    ``manage.py check`` warning.
+
+    Discovery + false-positive guards:
+
+    - Only ``LiveView`` subclasses with a truthy ``sticky`` attribute are
+      scanned. Normal page views (which legitimately declare ``dj-view``) are
+      NEVER inspected, so V012 cannot false-positive on them.
+    - The scan uses an anchored ``<div ... dj-view ...>`` opening-tag regex,
+      not a bare substring — comment/prose text that merely mentions
+      ``dj-view`` (e.g. the "do not add another dj-view here" note in the
+      sticky example template) does not match.
+    - Internal djust classes are skipped unless their module is a test/example
+      module (mirrors ``check_liveviews``).
+    - Conservatively skipped (no false positives): views with no resolvable
+      template, unresolvable ``template_name``, and any loader/IO failure.
+
+    Suppress with ``DJUST_CONFIG = {'suppress_checks': ['V012']}``.
+    """
+    errors = []
+
+    if _is_check_suppressed("djust.V012"):
+        return errors
+
+    try:
+        from djust.live_view import LiveView
+    except ImportError:
+        return errors
+
+    for cls in sorted(
+        _walk_subclasses(LiveView),
+        key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
+    ):
+        # Only sticky children can hit this footgun — the wrapper that supplies
+        # the duplicate dj-view is only emitted for sticky embeds.
+        if not getattr(cls, "sticky", False):
+            continue
+
+        module = getattr(cls, "__module__", "") or ""
+        if module.startswith("djust.") or module.startswith("djust_"):
+            # Skip internal djust classes — only check user classes (but still
+            # check classes in djust's own tests/examples).
+            if "test" not in module and "example" not in module:
+                continue
+
+        source = _sticky_child_template_source(cls)
+        if not source:
+            continue
+
+        # Strip comment regions first: a sticky-child template commonly
+        # documents the wrapper it lives inside (which itself shows a
+        # ``<div dj-view ...>`` example), and that example must not false-match.
+        if not _DJ_VIEW_TAG_RE.search(_strip_template_comments(source)):
+            continue
+
+        cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        cls_file = ""
+        cls_line = None
+        try:
+            cls_file = inspect.getfile(cls)
+            cls_line = inspect.getsourcelines(cls)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for some classes.
+
+        errors.append(
+            DjustWarning(
+                "%s: sticky child template declares its own 'dj-view' on its root "
+                "— this nests a duplicate dj-view inside the sticky wrapper and "
+                "breaks the child's client-side mount (its events won't bind)." % cls_label,
+                hint=(
+                    "A sticky child is embedded via {% live_render ... sticky=True %}, "
+                    "which makes the framework emit the wrapper element itself: "
+                    '<div dj-view dj-sticky-view="<id>" dj-sticky-root ...>. That '
+                    "wrapper already provides the dj-view binding, so the child's "
+                    "template must NOT declare its own dj-view (unlike a normal page "
+                    "view, which requires dj-view on its root). Remove the dj-view "
+                    "attribute from this sticky child's root element. Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['V012']} if you have a "
+                    "deliberate reason."
+                ),
+                id="djust.V012",
+                fix_hint=(
+                    "Remove the `dj-view` attribute from the root element of `%s`'s "
+                    "template — the {%% live_render ... sticky=True %%} wrapper provides "
+                    "it." % cls.__qualname__
+                ),
+                file_path=cls_file,
+                line_number=cls_line,
+            )
+        )
 
     return errors
 
