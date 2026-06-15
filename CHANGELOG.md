@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Flaky `test_total_wall_clock_is_max_not_sum` made deterministic (#1795).** The parallel-lazy-render concurrency test asserted a wall-clock *ratio* (`parallel < serial/2`); under full `make test -n auto` CPU saturation the 3 concurrent thunks couldn't get dedicated cores and the speedup ratio drifted past 0.5, false-failing the release `make test` (observed parallel=88.1ms vs threshold=85.8ms at the 1.0.5rc5 cut; passed in isolation). It now proves concurrency via deterministic interval **overlap** — each thunk records its `[start, end]` and a concurrent render satisfies `max(start) < min(end)` (all thunks start before any finishes), immune to timing jitter because launching N coroutines takes microseconds regardless of load. A new gate-off sibling, `TestParallelRender::test_overlap_proof_rejects_a_serial_loop`, pins that a serial loop does NOT overlap, so the proof stays non-tautological. Test-only; no production change.
+
 ## [1.0.5rc5] - 2026-06-15
 
 ### Fixed

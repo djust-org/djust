@@ -42,6 +42,30 @@ def _make_sleeping_thunk(view_id: str, sleep_s: float):
     return _thunk
 
 
+def _make_timed_thunk(view_id: str, sleep_s: float, records: list):
+    """Like :func:`_make_sleeping_thunk`, but records this thunk's
+    ``(view_id, start, end)`` ``perf_counter`` interval into ``records``.
+
+    Lets a test prove the thunks' execution intervals OVERLAP (concurrency)
+    via event ordering — ``max(start) < min(end)`` — rather than asserting on
+    absolute or ratio'd wall-clock durations, which are inherently flaky under
+    CPU load (#1795).
+    """
+
+    async def _thunk():
+        start = time.perf_counter()
+        await asyncio.sleep(sleep_s)
+        end = time.perf_counter()
+        records.append((view_id, start, end))
+        return (
+            f'<template id="djl-fill-{view_id}" data-target="{view_id}" '
+            f'data-status="ok"><span>{view_id}</span></template>'
+            f'<script>window.djust.lazyFill("{view_id}")</script>'
+        ).encode("utf-8")
+
+    return _thunk
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -115,42 +139,30 @@ class TestParallelRender:
 
     @pytest.mark.asyncio
     async def test_total_wall_clock_is_max_not_sum(self, rf, make_parent):
-        """Parallel render wall-clock ≈ max(thunk durations), NOT the
-        sum. Three thunks with 50ms sleep each: a sequential render
-        takes ≈ 3 × 50ms = 150ms, a parallel render ≈ 50ms.
+        """Parallel render wall-clock ≈ max(thunk durations), NOT the sum.
 
-        The invariant under test is the *speedup property*, so the
-        assertion is RELATIVE — never an absolute millisecond ceiling.
-        An absolute bound (the old ``elapsed < 0.10``) false-fails under
-        CPU load (#1795): the sleeps are real time, but the surrounding
-        scheduling overhead inflates with load, pushing a genuinely
-        parallel render past any fixed ceiling (observed 104–112ms during
-        full ``make test`` runs; passed in isolation).
+        Proven DETERMINISTICALLY via interval OVERLAP, not a wall-clock
+        threshold. Each of three 50ms thunks records its ``[start, end]``
+        interval; a concurrent render starts every thunk before any finishes
+        its sleep, so ``max(start) < min(end)`` — the intervals share a common
+        instant. A sequential loop can NEVER satisfy this (thunk k+1 starts
+        only after thunk k ends), so the assertion still rejects a serial
+        implementation (see ``test_overlap_proof_rejects_a_serial_loop``).
 
-        Instead we measure a SERIAL baseline in the same process under
-        the same load (awaiting N identical thunks one at a time), then
-        assert the parallel render is meaningfully faster. Load inflates
-        both measurements roughly proportionally, so the ratio stays
-        stable across machines and load. A sequential implementation
-        would make parallel ≈ serial; we require parallel to be at most
-        HALF the serial baseline — a margin a real sequential loop can
-        never hit, and one that tolerates heavy scheduler jitter for a
-        real parallel loop (true speedup is ~3×, so even a 1.5×
-        degradation still passes).
+        This replaces two earlier timing-threshold formulations that both
+        false-failed under CPU load (#1795): the original absolute ceiling
+        (``elapsed < 0.10``) and its relative successor
+        (``parallel < serial/2``, PR #1797). The latter still drifted past
+        0.5 under full ``make test -n auto`` saturation — when the 3 thunks
+        can't get dedicated cores, the speedup ratio degrades (observed
+        parallel=88.1ms vs threshold=85.8ms at the 1.0.5rc5 cut). Event
+        ordering is immune to that jitter: scheduling N coroutines takes
+        microseconds regardless of load, always well under the 50ms sleep.
         """
         sleep_s = 0.05
         slot_ids = ("slot-x", "slot-y", "slot-z")
         n = len(slot_ids)
-
-        # --- Serial baseline: await the same N thunks one at a time. ---
-        # Captures this machine's per-thunk cost (sleep + scheduling +
-        # current load) so the comparison below is load-relative, not an
-        # absolute millisecond ceiling.
-        serial_thunks = [_make_sleeping_thunk(vid, sleep_s) for vid in slot_ids]
-        t0 = time.perf_counter()
-        for thunk in serial_thunks:
-            await thunk()
-        serial_elapsed = time.perf_counter() - t0
+        records: list = []
 
         # --- Parallel render via arender_chunks / as_completed. ---
         parent = make_parent()
@@ -158,33 +170,59 @@ class TestParallelRender:
         emitter = ChunkEmitter(parent.request)
 
         for vid in slot_ids:
-            emitter.register_thunk(vid, _make_sleeping_thunk(vid, sleep_s))
+            emitter.register_thunk(vid, _make_timed_thunk(vid, sleep_s, records))
 
         async def _drain():
-            chunks: List[bytes] = []
-            async for c in emitter:
-                chunks.append(c)
-            return chunks
+            async for _c in emitter:
+                pass
 
         consumer = asyncio.create_task(_drain())
-        t0 = time.perf_counter()
         await parent.arender_chunks(parent.template, emitter)
         await emitter.close()
         await consumer
-        parallel_elapsed = time.perf_counter() - t0
 
-        # Relative invariant: a parallel render finishes in roughly the
-        # time of the slowest single thunk, so it must be well under the
-        # serial sum of N thunks. Require ≤ 50% of the serial baseline:
-        # impossible for a sequential implementation (parallel ≈ serial),
-        # comfortably satisfied by a real parallel one (true ratio ≈ 1/n
-        # = 1/3) even under generous scheduler jitter.
-        threshold = serial_elapsed / 2
-        assert parallel_elapsed < threshold, (
-            "expected parallel render << serial sum (speedup property): "
-            f"parallel={parallel_elapsed * 1000:.1f}ms, "
-            f"serial baseline (n={n})={serial_elapsed * 1000:.1f}ms, "
-            f"threshold (serial/2)={threshold * 1000:.1f}ms"
+        # Deterministic overlap invariant: a concurrent render starts EVERY
+        # thunk before ANY finishes its sleep, so the latest start precedes
+        # the earliest end — all N intervals share a common instant. A
+        # sequential loop can never satisfy this (thunk k+1 starts only after
+        # thunk k ends). Event ordering is immune to CPU-saturation jitter:
+        # launching N coroutines takes microseconds, far under the 50ms sleep,
+        # regardless of load — unlike the old ``parallel < serial/2`` ratio,
+        # which still false-failed under full ``-n auto`` saturation (#1795).
+        assert len(records) == n, f"expected all {n} thunks to run, got {len(records)}: {records}"
+        t0 = min(r[1] for r in records)
+        latest_start = max(r[1] for r in records)
+        earliest_end = min(r[2] for r in records)
+        assert latest_start < earliest_end, (
+            "expected the lazy-child thunks to OVERLAP (concurrent render: all "
+            "start before any finishes) — total wall-clock is max(), not sum(). "
+            f"latest start={(latest_start - t0) * 1000:.1f}ms >= earliest "
+            f"end={(earliest_end - t0) * 1000:.1f}ms; "
+            f"intervals(ms)={[(r[0], round((r[1] - t0) * 1000, 1), round((r[2] - t0) * 1000, 1)) for r in records]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_overlap_proof_rejects_a_serial_loop(self):
+        """Gate-off for :meth:`test_total_wall_clock_is_max_not_sum`: the same
+        timed thunks awaited ONE AT A TIME (a sequential loop) must NOT
+        overlap — ``max(start) >= min(end)`` — proving the overlap assertion
+        actually distinguishes parallel from serial (it is not a tautology
+        that any execution would satisfy). If this ever fails, the overlap
+        proof above is meaningless.
+        """
+        sleep_s = 0.02
+        records: list = []
+        thunks = [_make_timed_thunk(vid, sleep_s, records) for vid in ("a", "b", "c")]
+        for thunk in thunks:  # serial: await one at a time
+            await thunk()
+
+        latest_start = max(r[1] for r in records)
+        earliest_end = min(r[2] for r in records)
+        assert latest_start >= earliest_end, (
+            "a serial loop must NOT overlap (thunk k+1 starts only after thunk k "
+            "ends) — if this fails, the overlap proof in "
+            "test_total_wall_clock_is_max_not_sum is tautological. "
+            f"intervals={records}"
         )
 
     @pytest.mark.asyncio
