@@ -334,11 +334,105 @@ issue or be explicitly closed with a reason.
 | 292 | Canonicalize: pre-commit stash/restore can silently DROP unstaged working-tree files across a commit cycle; recover from `~/.cache/pre-commit/patch*` | Retro v1.1.0 | — | Closed | **Resolved this retro** (CLAUDE.md "Pre-commit can drop unstaged files"). Case study: the user's uncommitted `BEST_PRACTICES*.md` drafts vanished after a pipeline commit (pre-commit stashes UNSTAGED files, runs hooks on staged, restores — a failed restore leaves them only in the patch cache). Recovered by `git apply ~/.cache/pre-commit/patch<newest>`. |
 | 293 | Reproduce a production incident locally before infra/theory changes | Retro v1.0.5-1 / PR #1789 | — | Closed | **Resolved this retro** (CLAUDE.md "Reproduce a production incident LOCALLY before changing infra or theorizing"). #1785 /insights/ reload: OOM (mem bump) + multi-pod (scale-to-1) + template theories all wasted; bug was single-process-reproducible via WebsocketCommunicator the whole time. |
 | 294 | Worktree-subagent drain pattern with symptom-up briefs | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | — | Closed | **Resolved this retro** (CLAUDE.md "Worktree-subagent drain pattern"). Each subagent caught a brief error: real scaffolder + two ERRORs (#1787); parallel-path twin (#1784, #1646); exact leak path (#1786). |
-| 295 | pre-push hook hardcodes `.venv/bin/python` — fails in git worktrees (forces `--no-verify`) | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | #1796 | Open | Subagents pushed `--no-verify`; gates run manually, CI authoritative. |
-| 296 | Scaffold warning-cleanliness (C012/S005/A030/Y001/Y003) + deprecated `cli.py` startproject twin | PR #1790 (#1787) | #1791 | Open | Follow-up: #1787 fixed the boot blockers; warnings deferred. |
-| 297 | Serial-pytest order pollutes `test_checks` S005 + `auto_navigate_meta` (leaked `settings.DATABASES`) | Retro v1.0.5-1 (recurred across drain) | #1794 | Open | Passes isolated + under parallel `make test`; pre-existing on main. |
-| 298 | Flaky `test_total_wall_clock_is_max_not_sum` (absolute 100ms threshold false-fails under load) | Retro v1.0.5-1 (release `make test`) | #1795 | Open | Make it relative (parallel ≈ max not sum). |
+| 295 | pre-push hook hardcodes `.venv/bin/python` — fails in git worktrees (forces `--no-verify`) | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | #1796 | Closed | **Resolved in v1.0.5-2** (PR #1798 — `scripts/run-with-venv-python.sh` resolves the venv from any worktree root; fixed the hook + ~31 Makefile targets, exit 127 → 0). GitHub #1796 closed. Remaining editable-install gap → row #301 (#1810). |
+| 296 | Scaffold warning-cleanliness (C012/S005/A030/Y001/Y003) + deprecated `cli.py` startproject twin | PR #1790 (#1787) | #1791 | Closed | **Resolved in v1.0.5-2** (PR #1799 — default scaffold reports "no issues"; C012/S005/A030/Y001/Y003 cleared; `cli.py` startproject deprecated + delegated to `generate_project()`, a #1646 twin). GitHub #1791 closed. |
+| 297 | Serial-pytest order pollutes `test_checks` S005 + `auto_navigate_meta` (leaked `settings.DATABASES`) | Retro v1.0.5-1 (recurred across drain) | #1794 | Closed | **Resolved in v1.0.5-2** (PR #1800 — TWO polluters, NOT the hypothesized `settings.DATABASES` leak: module-level `_PublicView` subclass leak → S005, + `importlib.reload(djust.config)` singleton rebind → auto_navigate. 3-clean-runs gate #1174 verified 7692×3). GitHub #1794 closed. |
+| 298 | Flaky `test_total_wall_clock_is_max_not_sum` (absolute 100ms threshold false-fails under load) | Retro v1.0.5-1 (release `make test`) | #1795 | Closed | **Resolved in v1.0.5-2** (PR #1797 — relative speedup assertion parallel < serial/2, load-stable; gate-off non-tautological). GitHub #1795 closed. |
 | 299 | Consumer-owned monotonic VDOM send-version (removes recovery round-trip on `html_update`) | PR #1789 (#1785) follow-up | #1788 | Open | Deferred — optimization not bug post-#1785; carries drift risk. |
+| 300 | Read-only review subagent must never mutate the main checkout / `core.bare` (use `isolation: worktree` or read-only `gh pr diff`) | Retro v1.0.5-2 / PR #1804 | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-2 retro arc"). Self-applied one PR later in #1806's read-only review. Verify `git config core.bare` after any subagent. |
+| 301 | Worktree pre-push tests the MAIN source tree (editable install), not the linked worktree — still forces `--no-verify` | Retro v1.0.5-2 / PR #1804 (follow-up to #1796) | #1810 | Open | #1798 fixed interpreter resolution; editable `djust` still imports from main checkout. CI authoritative. Low priority. |
+
+## v1.0.5-3 — Sticky-child interactivity + DX drain (PRs #1806, #1807, #1808)
+
+**Date**: 2026-06-15
+**Scope**: Drained sticky-child interactivity (#1802 — embedded `{% live_render sticky=True %}` events returned a bare `noop`) + two DX issues (#1803 V012 footgun check, #1805 `is_dir` collector parity). Shipped in 1.0.5rc4.
+**Tests at close**: 4594 Python / 1686 JS (parallel `make test`)
+
+### What We Learned
+
+**1. Skip-render change-detection snapshotted the parent, not the routed child (#1802).**
+`handle_event`'s auto-skip-render block snapshotted public assigns on `self.view_instance` (the parent), but embedded sticky-child events route `target_view` to the CHILD via `view_id`. The child's mutation left the parent's assigns unchanged → `skip_render=True` → `_send_noop` fired before the `embedded_update` branch — so sticky widgets were render-only. Fix binds one `change_target = target_view` and routes every snapshot/flag through it.
+**Action taken**: Closed — shipped in PR #1808; third instance of the #1467 (LiveComponent `component_id` vs sticky-child `view_id` routing) / #1722 (change-detection on the wrong target) class, reinforcing that canon.
+
+**2. parallel-path-drift recurred again (#1805).**
+`utils._get_template_dirs_cached` guarded app-template dirs with `.exists()` while `DjustTemplateBackend._get_template_dirs` used `.is_dir()`; a file literally named `templates` would be wrongly collected by one path. 1-line `is_dir()` parity fix.
+**Action taken**: Closed — shipped in PR #1806; #1646 canon (the 4th recurrence this release cycle — see v1.0.5-2 Insights).
+
+**3. The V012 footgun check converts a silent sticky-child misconfig into a `manage.py check` warning (#1803).**
+A sticky child declaring its own root `dj-view` produces a nested duplicate binding that silently breaks the child's mount/events. V012 walks `sticky=True` views, strips comments, scans for a root `dj-view`, with false-positive guards (sticky-only, anchored regex, comment-stripping) + an empirical canary (#1459) and gate-off self-test (#1468).
+**Action taken**: Closed — shipped in PR #1807.
+
+### Insights
+
+- All three PRs were clean closes (0 🔴, gate-off confirmed each) — a high-quality small drain. The worktree-subagent pattern (#294) held up; each subagent traced symptom-up and the orchestrator reviewed read-only via `gh pr diff` (no main-checkout mutation, post-#1804).
+- #1802 is the third "change-detection/render-decision keyed on the wrong view object" bug (#1467, #1722, #1802). Durable cure: bind the routed `target_view` once and read all state through it in `handle_event`-adjacent code.
+
+### Review Stats
+
+| Metric | #1806 | #1807 | #1808 | Total |
+|--------|-------|-------|-------|-------|
+| Issue | #1805 | #1803 | #1802 | 3 |
+| 🔴 at review | 0 | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | yes | 3/3 |
+| Required CI | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: core.bare review-agent rule (shared v1.0.5-2 arc) applied here read-only.
+**Releases**: shipped in 1.0.5rc4.
+
+### Open Items
+
+- (none — all three closed clean)
+
+## v1.0.5-2 — Render-path + cleanup drain (PRs #1797, #1798, #1799, #1800, #1804)
+
+**Date**: 2026-06-15
+**Scope**: Drained the render-path regression #1801 (`{% extends %}` pages lose the base `<head>` on initial GET — every template-inheritance page incl. the scaffold) + four cleanup issues surfaced by the v1.0.5-1 drain (#1795 flaky perf test, #1796 worktree pre-push, #1791 scaffold warnings + `cli.py` twin, #1794 serial-order pollution). Shipped in 1.0.5rc4.
+**Tests at close**: ~7704 (parallel `make test`)
+
+### What We Learned
+
+**1. The #1801 first-paint regression was a silent-catch + parallel-path double-bug.**
+A broad `except Exception` in `get_template()` swallowed a real `resolve_template_inheritance` "Template not found" (logged only at DEBUG → `_full_template=None` → `dj-root`-fragment render with no `<head>`); the underlying error came from the dir-collection hardcoding `BACKEND == DjangoTemplates`, dropping app-template dirs for the scaffold's `DjustTemplateBackend` + `APP_DIRS=True`. Symptom-up triage overrode the issue's cited path. The fix de-silenced the catch (WARNING, scoping only the resolution call) AND unified all THREE parallel dir-collection paths via one `get_template_dirs()` + `_APP_DIRS_TEMPLATE_BACKENDS` set.
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.5-2 retro arc" (the silent-catch + #1646 double-bug rule). Fix shipped in PR #1804; parallel-path-drift is canon (#1646).
+
+**2. A read-only Code Review subagent left `core.bare=true` on the main checkout.**
+PR #1804's reviewer set `git config core.bare true` to repoint PyO3 at a built artifact, breaking the parent session's working tree (`git checkout`/`status` failed "must be run in a work tree") until recovered with `core.bare false`. The verdict was sound; the side effect was a repo-corruption incident the orchestrator cleaned up mid-drain.
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.5-2 retro arc" (read-only review subagent must never mutate the main checkout / `core.bare`; use `isolation: worktree` or `gh pr diff`; verify `core.bare` after any subagent). Tracker #300 Closed.
+
+**3. Two non-obvious serial-order polluters, neither the hypothesized leak (#1794).**
+Module-level `_PublicView` LiveView subclass (permanent in `__subclasses__()` → S005) + `importlib.reload(djust.config)` rebinding the config singleton while `live_tags` held the old ref (auto_navigate meta dropped). The 3-clean-runs gate (#1174) verified the fix (7692×3).
+**Action taken**: Closed — shipped in PR #1800; 3-clean-runs gate is canon (#1174). GitHub #1794 closed.
+
+**4. The worktree pre-push fix is interpreter-resolution only; it still tests the main tree.**
+#1798's `run-with-venv-python.sh` resolves the venv from any worktree (fixing exit-127), but editable `djust` still imports from the main checkout, so a worktree pre-push runs the suite against the wrong tree → subagents still `--no-verify`.
+**Action taken**: Open — tracked in Action Tracker #301 (GitHub #1810).
+
+### Insights
+
+- #1795's lesson — replace absolute timing thresholds with relative assertions (parallel < serial/2) — is the durable fix for load-fragile perf tests; the gate-off (a simulated sequential render exceeds serial/2) keeps it from going tautological.
+- #1791 corrected the issue's own hypothesis (A030 is not `DEBUG`-gated); the scaffold's two project-generation paths (`cli.py` startproject vs `generate_project()`) were a #1646 twin — deprecated + delegated to one template set.
+- **#1646 parallel-path-drift recurred 4× this release cycle** (#1784 render twin, #1801 three collectors, #1791 `cli.py` twin, #1805 `is_dir` parity). It is the single most-recurring class; "grep every parallel implementation of the invariant" is now the Stage-4 reflex for render-path changes.
+- The #1804 `core.bare` incident was self-corrected one PR later: #1806's reviewer used read-only `gh pr diff` explicitly "to avoid the #1804 core.bare incident" — the canon was being applied before it was written.
+
+### Review Stats
+
+| Metric | #1797 | #1798 | #1799 | #1800 | #1804 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Issue | #1795 | #1796 | #1791 | #1794 | #1801 | 5 |
+| 🔴 at review | 0 | 0 | 0 | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | yes | yes | yes | 5/5 |
+| Required CI | green | green | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.5-2 retro arc" (core.bare review-agent rule; silent-catch + #1646 double-bug).
+**Releases**: shipped in 1.0.5rc4 (with #1801, #1802, #1803, #1805).
+
+### Open Items
+
+- [ ] Worktree pre-push editable-install gap — Action Tracker #301 (GitHub #1810)
 
 ## v1.0.5-1 — Production-incident drain: WS recovery + render-path + scaffold (PRs #1789, #1790, #1792, #1793)
 
@@ -383,10 +477,10 @@ It hardcodes `.venv/bin/python`; inside a git worktree (no `.venv`) it fails, so
 
 ### Open Items
 
-- [ ] pre-push worktree portability — Action Tracker #295 (GitHub #1796)
-- [ ] scaffold warning-cleanliness + `cli.py` twin — Action Tracker #296 (GitHub #1791)
-- [ ] `test_checks` S005 / `auto_navigate` pollution — Action Tracker #297 (GitHub #1794)
-- [ ] flaky wall-clock perf test — Action Tracker #298 (GitHub #1795)
+- [x] pre-push worktree portability — Action Tracker #295 (GitHub #1796) — resolved in v1.0.5-2 (PR #1798); editable-install gap → #301 (#1810)
+- [x] scaffold warning-cleanliness + `cli.py` twin — Action Tracker #296 (GitHub #1791) — resolved in v1.0.5-2 (PR #1799)
+- [x] `test_checks` S005 / `auto_navigate` pollution — Action Tracker #297 (GitHub #1794) — resolved in v1.0.5-2 (PR #1800)
+- [x] flaky wall-clock perf test — Action Tracker #298 (GitHub #1795) — resolved in v1.0.5-2 (PR #1797)
 - [ ] consumer-owned VDOM send-version (deferred) — Action Tracker #299 (GitHub #1788)
 
 ## v1.0.4 — Security hardening & navigation arc (rc1; PRs #1775, #1776, #1780, #1781, #1782, #1783)

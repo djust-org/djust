@@ -1185,6 +1185,54 @@ bugs.
   `--no-verify` after running gates manually; CI is the authoritative gate.
   Tracked at #1796.
 
+## Process canonicalizations from v1.0.5-2 retro arc (render-path + cleanup drain)
+
+Two rules from the v1.0.5-2 drain (PRs #1797, #1798, #1799, #1800, #1804 —
+the render-path + cleanup bucket that, with v1.0.5-1, shipped in 1.0.5rc1–rc4).
+
+- **A read-only review subagent must NEVER mutate the main checkout —
+  especially `git config core.bare` (#1804 retro).** A Code Review subagent
+  that needs to *run* code (exercise the compiled PyO3 Rust extension,
+  reproduce a fix, gate-off-verify) must do so in its own `git worktree`
+  (`isolation: worktree`) or not at all — a pure-inspection review uses
+  `gh pr diff` and touches nothing. PR #1804's reviewer set
+  `git config core.bare true` on the **main** checkout to repoint PyO3 at a
+  built artifact; that broke the parent session's working tree —
+  `git checkout` / `git status` failed with *"this operation must be run in a
+  work tree"* — until recovered with `git config core.bare false`. The review
+  verdict itself was sound (APPROVE, gate-off empirically validated), but the
+  side effect was a repo-corruption incident the orchestrator had to clean up
+  mid-drain. This generalizes the **Worktree-restore reflex (#36)** from
+  *working-tree dirtiness* (reverted/staged files) to *git-config mutation*
+  (`core.bare`, `core.worktree`, `core.hooksPath`). **Rules:**
+  1. Give a review subagent `isolation: worktree` whenever it must build/run;
+     never let it `git config`/`git checkout` the main checkout.
+  2. Default reviews to read-only `gh pr diff` (the #1806 reviewer did exactly
+     this — *"read-only review via `gh pr diff` … avoiding the #1804 core.bare
+     incident"* — so the canon was already self-applied one PR later).
+  3. After ANY subagent that could touch git config, verify
+     `git config core.bare` returns `false`/empty as a reflex (the orchestrator
+     ran this check at the top of every subsequent merge in the drain).
+
+- **`{% extends %}` first-paint regressions are a silent-catch + parallel-path
+  double-bug — de-silence AND unify (#1801 / PR #1804).** The
+  template-inheritance head-loss (#1801) was two known classes stacked: a broad
+  `except Exception` in `get_template()` swallowed a real
+  `resolve_template_inheritance` *"Template not found"* (logged only at DEBUG,
+  set `_full_template=None`, fell through to a `dj-root`-fragment render with no
+  `<head>`), and the underlying *"Template not found"* came from the dir-collection
+  hardcoding `BACKEND == django.template.backends.django.DjangoTemplates` —
+  dropping app-template dirs for projects on djust's own `DjustTemplateBackend`
+  + `APP_DIRS=True` (the `djust new` scaffold's config). The fix de-silenced the
+  catch (now WARNING, scoping only the resolution call) AND unified all **three**
+  parallel dir-collection paths through one `get_template_dirs()` +
+  `_APP_DIRS_TEMPLATE_BACKENDS` set (parallel-path-drift, #1646). Reinforces both
+  the existing **Reproduction fidelity / "are we sure it isn't a silent catch?"**
+  triage instinct and **#1646** — and #1646 recurred *four* times this release
+  cycle (#1784 render twin, #1801 three collectors, #1791 `cli.py` startproject
+  twin, #1805 `is_dir` parity), so treat "grep every parallel implementation of
+  the invariant" as the default Stage-4 reflex for any render-path change.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
