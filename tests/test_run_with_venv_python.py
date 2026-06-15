@@ -209,5 +209,194 @@ def test_makefile_routes_through_resolver() -> None:
     )
 
 
+class TestWorktreePythonpath:
+    """`--worktree-pythonpath` mode (closes #1810).
+
+    #1796 fixed interpreter *resolution* from a worktree, but the editable
+    install (`maturin develop` -> a plain ``djust.pth`` appending the MAIN
+    checkout's ``python/`` to ``sys.path``) meant a worktree push ran the
+    pre-push pytest suite against the MAIN tree's source, not the worktree's
+    changes. ``--worktree-pythonpath`` emits the path to PREPEND to
+    ``PYTHONPATH`` so the worktree's ``python/`` wins (PYTHONPATH is inserted
+    before ``.pth`` processing), and symlinks the matching compiled ``.so`` so
+    ``import djust._rust`` keeps resolving.
+    """
+
+    @staticmethod
+    def _seed_python_pkg(root: Path) -> None:
+        """Create a minimal ``python/djust/__init__.py`` under ``root``."""
+        pkg = root / "python" / "djust"
+        pkg.mkdir(parents=True, exist_ok=True)
+        (pkg / "__init__.py").write_text("# djust package stub\n")
+
+    def test_emits_worktree_python_from_worktree(self, tmp_path: Path) -> None:
+        """From a linked worktree (with a ``python/djust`` pkg) it emits the
+        worktree's ``python/`` dir — the path the pre-push hook prepends."""
+        main, _ = _make_repo_with_venv(tmp_path)
+        self._seed_python_pkg(main)
+        _git(main, "add", "-A").check_returncode()
+        _git(main, "commit", "-q", "-m", "add pkg").check_returncode()
+
+        worktree = tmp_path / "wt"
+        _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree)).check_returncode()
+
+        res = _run_resolver(worktree, "--worktree-pythonpath")
+        assert res.returncode == 0, res.stderr
+        assert res.stdout.strip() == str(worktree / "python"), res.stdout
+
+    def test_emits_nothing_from_main_checkout(self, tmp_path: Path) -> None:
+        """From the editable-install target (main checkout) it is a no-op: the
+        ``.pth`` already points at the right source, so no shadow is needed."""
+        main, _ = _make_repo_with_venv(tmp_path)
+        self._seed_python_pkg(main)
+        res = _run_resolver(main, "--worktree-pythonpath")
+        assert res.returncode == 0, res.stderr
+        assert res.stdout.strip() == "", (
+            "Expected empty output in the main checkout — emitting a path here "
+            "would needlessly double-add python/ to PYTHONPATH."
+        )
+
+    def test_emits_nothing_when_worktree_has_no_python_pkg(self, tmp_path: Path) -> None:
+        """A worktree without a ``python/djust`` package has nothing to shadow
+        -> no-op (defends a non-djust-layout repo from a spurious prepend)."""
+        main, _ = _make_repo_with_venv(tmp_path)  # no python/ pkg seeded
+        worktree = tmp_path / "wt"
+        _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree)).check_returncode()
+        res = _run_resolver(worktree, "--worktree-pythonpath")
+        assert res.returncode == 0, res.stderr
+        assert res.stdout.strip() == "", res.stdout
+
+    def test_prepended_pythonpath_shadows_worktree_source(self, tmp_path: Path) -> None:
+        """The behavior-meaningful test (gate-off self-test, #1468): with the
+        emitted path PREPENDED to PYTHONPATH, importing ``djust`` must resolve
+        the WORKTREE's source, not the main checkout's.
+
+        This needs a REAL python interpreter (the fake bash venv can't import).
+        We simulate the editable ``.pth`` by appending the MAIN tree's
+        ``python/`` to PYTHONPATH (lower precedence than the prepended worktree
+        path), then assert the worktree's distinct sentinel wins.
+
+        Gate-off: WITHOUT the prepend (PYTHONPATH = main python only), the main
+        sentinel wins — proving the prepend is load-bearing.
+        """
+        import sys
+
+        main, _ = _make_repo_with_venv(tmp_path)
+        # Give the two trees DISTINCT djust packages so we can tell which wins.
+        self._seed_python_pkg(main)
+        (main / "python" / "djust" / "__init__.py").write_text("WHICH = 'main'\n")
+        _git(main, "add", "-A").check_returncode()
+        _git(main, "commit", "-q", "-m", "add pkg").check_returncode()
+
+        worktree = tmp_path / "wt"
+        _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree)).check_returncode()
+        (worktree / "python" / "djust" / "__init__.py").write_text("WHICH = 'worktree'\n")
+
+        emitted = _run_resolver(worktree, "--worktree-pythonpath").stdout.strip()
+        assert emitted == str(worktree / "python"), emitted
+
+        main_python = str(main / "python")  # stands in for the editable .pth
+        probe = "import djust; print(djust.WHICH)"
+        real_py = sys.executable
+
+        # WITH the prepend: worktree source wins (the fix).
+        env_fixed = os.environ.copy()
+        env_fixed["PYTHONPATH"] = os.pathsep.join([emitted, main_python])
+        with_fix = subprocess.run(
+            [real_py, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env_fixed,
+            cwd=str(tmp_path),
+        )
+        assert with_fix.returncode == 0, with_fix.stderr
+        assert with_fix.stdout.strip() == "worktree", (
+            f"Expected worktree source to win, got {with_fix.stdout!r}"
+        )
+
+        # GATE-OFF: WITHOUT the prepend (only the .pth-equivalent main path),
+        # the MAIN source wins — this is exactly the #1810 bug.
+        env_broken = os.environ.copy()
+        env_broken["PYTHONPATH"] = main_python
+        without_fix = subprocess.run(
+            [real_py, "-c", probe],
+            capture_output=True,
+            text=True,
+            env=env_broken,
+            cwd=str(tmp_path),
+        )
+        assert without_fix.returncode == 0, without_fix.stderr
+        assert without_fix.stdout.strip() == "main", (
+            "Gate-off failed: main source did NOT win without the prepend — "
+            "the test no longer proves the prepend is load-bearing."
+        )
+
+    def test_symlinks_rust_so_into_worktree(self, tmp_path: Path) -> None:
+        """When a matching compiled ``.so`` exists in the main tree, the mode
+        symlinks it into the worktree's ``python/djust/`` so ``import
+        djust._rust`` keeps working after the Python source is shadowed.
+
+        Uses a REAL interpreter so ``sys.implementation.cache_tag`` resolves
+        (the fake bash venv returns no cache tag and the symlink step no-ops).
+        """
+        import sys
+
+        main = tmp_path / "main"
+        main.mkdir()
+        _git(main, "init", "-q", "-b", "main").check_returncode()
+        _git(main, "config", "user.email", "test@example.com").check_returncode()
+        _git(main, "config", "user.name", "Test").check_returncode()
+        (main / "scripts").mkdir()
+        shutil.copy(RESOLVER, main / "scripts" / RESOLVER.name)
+        self._seed_python_pkg(main)
+
+        # Real venv interpreter so the resolver finds it AND cache_tag works.
+        venv_bin = main / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "python").symlink_to(sys.executable)
+
+        # A fake compiled extension named with THIS interpreter's cache tag.
+        cache_tag = sys.implementation.cache_tag
+        so_name = f"_rust.{cache_tag}-fake.so"
+        (main / "python" / "djust" / so_name).write_bytes(b"\x00fake-so\x00")
+
+        _git(main, "add", "-A").check_returncode()
+        _git(main, "commit", "-q", "-m", "init").check_returncode()
+
+        worktree = tmp_path / "wt"
+        _git(main, "worktree", "add", "-q", "-b", "feature", str(worktree)).check_returncode()
+
+        res = _run_resolver(worktree, "--worktree-pythonpath")
+        assert res.returncode == 0, res.stderr
+
+        linked = worktree / "python" / "djust" / so_name
+        assert linked.is_symlink(), f"{so_name} was not symlinked into worktree"
+        assert linked.resolve() == (main / "python" / "djust" / so_name).resolve()
+
+    def test_config_pytest_hook_uses_worktree_pythonpath(self) -> None:
+        """Source-pin: the pre-push pytest hook must wire in the worktree
+        shadow (#1810). Gate-off self-test (#1468): a future edit that drops
+        the ``--worktree-pythonpath`` plumbing fails this assertion.
+
+        We match on the hook's ``entry:`` LINE specifically (not the whole
+        file) so an explanatory comment mentioning the flag can't make this
+        pass on its own — the load-bearing wiring is the entry command.
+        """
+        config = (REPO_ROOT / ".pre-commit-config.yaml").read_text()
+        entry_lines = [
+            ln
+            for ln in config.splitlines()
+            if ln.lstrip().startswith("entry:") and "pytest tests/" in ln
+        ]
+        assert entry_lines, "Could not find the pytest pre-push hook entry line."
+        assert any("--worktree-pythonpath" in ln for ln in entry_lines), (
+            "The pre-push pytest hook ENTRY must prepend the worktree's "
+            "python/ to PYTHONPATH via "
+            "`run-with-venv-python.sh --worktree-pythonpath` so a worktree "
+            "push tests the worktree's source (#1810). Found entry line(s): "
+            f"{entry_lines!r}"
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-v"]))
