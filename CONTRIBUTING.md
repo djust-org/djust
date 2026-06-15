@@ -57,6 +57,41 @@ The wrapper runs pre-commit against your staged files first; if hooks
 rewrote anything it re-stages and commits. The bare `git commit` path
 still works — the wrapper is opt-in. Closes #1464.
 
+### Working in a `git worktree`
+
+A linked `git worktree` has no `.venv` of its own and the editable
+`maturin develop` install binds Python imports to the **main** checkout's
+`python/` (via a plain `djust.pth`). Two helpers make worktree work behave:
+
+- **Interpreter resolution (#1796).** The pre-push hook and `make` targets
+  resolve the interpreter from the main checkout via
+  `scripts/run-with-venv-python.sh`, so they no longer fail with exit-127 in
+  a worktree — no `--no-verify` needed for that reason alone.
+- **Python-source gating (#1810).** The pre-push pytest hook prepends the
+  worktree's `python/` to `PYTHONPATH` (it wins over `djust.pth`) and
+  symlinks the matching compiled `_rust.*.so` from the main checkout, so a
+  worktree `git push` runs the suite against the **worktree's** Python
+  changes — not the main tree's. (`PYTHONPATH` is inserted before `.pth`
+  processing, so the worktree source wins; the symlinked `.so` is gitignored
+  and never shows in `git status`.)
+
+> **Caveat — Rust changes.** This shadows only **Python** source. If your
+> worktree changes Rust (`crates/`, anything compiled into `djust._rust`),
+> the symlinked `.so` is still the main checkout's build. Run
+> `maturin develop` against the worktree before relying on the pre-push gate
+> for Rust changes, or build + verify in the worktree manually. CI is the
+> authoritative gate either way.
+
+To reproduce the gated PYTHONPATH manually from a worktree:
+
+```bash
+WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"
+PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q
+```
+
+`--worktree-pythonpath` prints the path to prepend (empty in the main
+checkout, so the same command is a no-op there).
+
 ## Code Style
 
 ### Python

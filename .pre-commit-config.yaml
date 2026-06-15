@@ -184,9 +184,14 @@ repos:
   - repo: local
     hooks:
       # Python tests
+      # PREPEND the current worktree's python/ to PYTHONPATH so a worktree
+      # push tests the worktree's source, not the MAIN checkout's (the editable
+      # `djust.pth` points at the main tree). `--worktree-pythonpath` emits the
+      # path to prepend (empty in the main checkout) and symlinks the matching
+      # compiled `.so` so `import djust._rust` keeps working. See #1810.
       - id: pytest
         name: pytest
-        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q'
+        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q'
         language: system
         types: [python]
         pass_filenames: false
