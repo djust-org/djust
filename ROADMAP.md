@@ -3661,6 +3661,12 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.6-1 — consumer-owned VDOM send-version (drain bucket → ships in 1.0.6)
+
+*Goal:* Land the deferred #1788 (Action Tracker #299) — the wire-version optimization that removes the recovery round-trip on `html_update` baseline-loss. Ships in the next patch (1.0.6).
+
+**#1788 — Consumer-owned monotonic VDOM send-version so `html_update` fallback is accepted without a recovery round-trip (P2, optimization, drift-risk)** — The wire `version` is currently the Rust view's `self.version` (`crates/djust_live/src/lib.rs:582`), coupled to the Rust-view object lifetime, not the connection. On a baseline loss `render_with_diff` returns `patches=None` + a `version` that fails the client's `clientVdomVersion === data.version - 1` check (`static/djust/src/02-response-handler.js:58`) → `request_html` → recovery round-trip (harmless since #1785, but avoidable). Fix (Option 2): track `self._last_sent_version` on the consumer and stamp every outbound frame with `_last_sent_version + 1`, the single source of truth across ALL ~7 send paths (`handle_event`, `server_push`, `_run_async_work`, `handle_request_html`, hvr). **Drift caveat (the load-bearing risk, why this was deferred #299):** the client checks `data.version - 1` on EVERY frame, so the counter must stay consistent across every send path or the NEXT successful diff is rejected → recovery storm. Mirror the existing `_hvr_version` consumer-owned-counter precedent (`websocket.py:4239`). Reproduce-first against a real `WebsocketCommunicator`: baseline-loss → assert `html_update` accepted directly (no `request_html`) AND the next successful diff's version is still accepted (drift guard).
+
 ### Milestone: v1.0.5-5 — sticky-child recovery state-loss (P0 data loss) (drain bucket → ships in 1.0.5)
 
 *Goal:* Fix the P0 data-loss bug #1813 — an `html_recovery` on a live connection wipes an embedded sticky child's user-interacted state back to `mount()` defaults. Ships in 1.0.5 (warrants a 1.0.5rc5).
