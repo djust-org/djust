@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Consumer-owned monotonic VDOM send-version (#1788).** The WebSocket
+  ``version`` stamped on every client-checked frame was the Rust view's
+  internal counter, which resets on a mid-session VDOM baseline loss (e.g. the
+  patch-compression ``_rust_view.reset()`` path). The resulting non-sequential
+  version failed the client's ``clientVdomVersion === data.version - 1`` check,
+  forcing an ``html_update`` → ``request_html`` recovery round-trip (a full page
+  reload before #1785). The consumer now owns a monotonic per-connection
+  counter (``_next_version()``) used as the single source of truth across every
+  client-checked send path (events, async work, mount, server_push, db_notify,
+  ticks, time-travel, hot-reload patches, and ``StreamingMixin.push_state``), so
+  a post-baseline-loss ``html_update`` stays in sequence and the client accepts
+  it directly with no recovery round-trip. Recovery (``html_recovery``) now
+  carries the consumer version of the frame it replaces. New regression tests in
+  ``python/djust/tests/test_ws_send_version_1788.py`` pin the monotonic sequence
+  across the baseline-loss boundary plus the send-path call-site coverage.
+
 ## [1.0.5] - 2026-06-15
 
 ### Added
