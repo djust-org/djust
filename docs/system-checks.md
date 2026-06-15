@@ -26,6 +26,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
 | V007 | LiveView | Warning | Event handler missing **kwargs |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
+| V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -249,6 +250,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Relationship to V006**: V008 is the broader, lower-confidence counterpart to V006. V006 covers high-confidence service patterns at **Warning** level; V008 catches all remaining non-primitive assignments at **Info** level. V008 explicitly skips assignments matching V006's keyword patterns to avoid duplicate messages
 - **Suppression**: `# noqa: V008` inline on the assignment
 - **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
+
+### V012 — Sticky child declares its own `dj-view`
+- **Severity**: Warning
+- **Method**: Runtime (walks `LiveView` subclasses with `sticky = True`, scans each one's template root)
+- **What it detects**: A sticky-child view (`sticky = True`, embedded via `{% live_render ... sticky=True %}`) whose own template root carries a `dj-view` attribute. The `live_render` wrapper already emits `<div dj-view dj-sticky-view="<id>" ...>`, so the child's own `dj-view` nests a **duplicate** binding inside the wrapper — the child's client-side mount breaks and its events silently don't bind.
+- **Why it's subtle**: normal page views *require* `dj-view="<path>"` on their root to be mountable, so authors (and code-generating agents) reasonably add it everywhere — including sticky children, where it's wrong.
+- **Fix**: remove `dj-view` from the sticky child's root element; the wrapper provides it. See the [sticky LiveViews guide](website/guides/sticky-liveviews.md#v012-system-check).
+- **False positives**: none on normal page views — only `sticky = True` views are inspected. A `dj-view` appearing only inside a `{% comment %}` block (e.g. documenting the wrapper) is ignored (comments are stripped before scanning).
+- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V012']}`
+- Added in v1.0.5-3 (#1803)
 
 ---
 
