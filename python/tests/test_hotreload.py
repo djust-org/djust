@@ -163,7 +163,12 @@ class TestHotReloadMessage:
 
         assert call_args["type"] == "patch"
         assert call_args["patches"] == patches
-        assert call_args["version"] == 2
+        # #1788: the hotreload patch frame stamps the CONSUMER-owned wire version
+        # (1 — the first frame on this fresh consumer), NOT the Rust version (2).
+        # The hotreload path WRITES clientVdomVersion (02-response-handler.js:77)
+        # even though it's exempt from the version check, so it must use the
+        # consumer counter to keep subsequent events in sequence (HIDDEN #1).
+        assert call_args["version"] == 1
         assert call_args["hotreload"] is True
         assert call_args["file"] == "test.html"
 
@@ -436,7 +441,9 @@ class TestHotReloadIntegration:
 
         assert call_args["type"] == "patch"
         assert call_args["patches"] == patches
-        assert call_args["version"] == 3
+        # #1788: consumer-owned wire version (1 — first frame on this fresh
+        # consumer), decoupled from the Rust version (3). See HIDDEN #1.
+        assert call_args["version"] == 1
         assert call_args["hotreload"] is True
         assert call_args["file"] == "templates/index.html"
 

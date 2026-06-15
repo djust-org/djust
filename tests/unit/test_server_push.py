@@ -197,18 +197,22 @@ class TestServerPushHandler:
         await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
 
         assert consumer._recovery_html == "<div>rendered-after-push</div>"
-        assert consumer._recovery_version == 42
+        # #1788: _recovery_version is the CONSUMER-owned wire version (1 after a
+        # single push), decoupled from the Rust version (42).
+        assert consumer._recovery_version == 1
 
     @pytest.mark.asyncio
     async def test_recovery_html_refreshed_across_multiple_pushes(self):
         """Consecutive pushes must each refresh _recovery_html so a stale
         render from an earlier broadcast isn't served on a later recovery."""
         consumer = self._make_consumer()
+        # #1788: NON-sequential Rust versions (10, 20, 30) prove the recovery
+        # version tracks the CONSUMER counter (1, 2, 3 across three pushes).
         consumer.view_instance.render_with_diff = MagicMock(
             side_effect=[
-                ("<div>first</div>", '[{"op":"replace","v":"first"}]', 1),
-                ("<div>second</div>", '[{"op":"replace","v":"second"}]', 2),
-                ("<div>third</div>", '[{"op":"replace","v":"third"}]', 3),
+                ("<div>first</div>", '[{"op":"replace","v":"first"}]', 10),
+                ("<div>second</div>", '[{"op":"replace","v":"second"}]', 20),
+                ("<div>third</div>", '[{"op":"replace","v":"third"}]', 30),
             ]
         )
 
@@ -216,6 +220,7 @@ class TestServerPushHandler:
             await consumer.server_push({"state": {"x": 1}, "handler": None, "payload": None})
 
         assert consumer._recovery_html == "<div>third</div>"
+        # Consumer counter after 3 pushes == 3 (decoupled from Rust version 30).
         assert consumer._recovery_version == 3
 
     @pytest.mark.asyncio

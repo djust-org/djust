@@ -19,7 +19,13 @@ from djust.websocket import LiveViewConsumer
 
 def test_arm_recovery_sets_both_fields():
     consumer = LiveViewConsumer()
-    consumer._arm_recovery("<div>x</div>", 7)
+    # #1788: _arm_recovery no longer takes a version arg — it captures the
+    # consumer's current _last_sent_version (the version of the frame being
+    # armed), so the html_recovery frame carries the consumer version of the
+    # frame it replaces (the client sets clientVdomVersion = data.version
+    # directly on html_recovery).
+    consumer._last_sent_version = 7
+    consumer._arm_recovery("<div>x</div>")
     assert consumer._recovery_html == "<div>x</div>"
     assert consumer._recovery_version == 7
 

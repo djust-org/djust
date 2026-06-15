@@ -85,7 +85,11 @@ async def test_async_render_stores_recovery_html():
 
     consumer._send_update.assert_awaited_once()
     assert consumer._recovery_html == "<div>after-async</div>"
-    assert consumer._recovery_version == 42
+    # #1788: _recovery_version is now the CONSUMER-owned wire version
+    # (_last_sent_version after one _next_version() in this single async render),
+    # NOT the Rust version (42). Decoupling the wire version from the Rust
+    # baseline is the whole point of #1788.
+    assert consumer._recovery_version == 1
 
 
 @pytest.mark.asyncio
@@ -93,11 +97,14 @@ async def test_recovery_html_refreshed_across_multiple_async_renders():
     """Consecutive async renders must each refresh the recovery baseline so a
     stale earlier render is never served on a later recovery."""
     consumer = _make_consumer(None)
+    # #1788: use NON-sequential Rust versions (10, 20, 30) to prove the
+    # recovery version tracks the CONSUMER counter (1, 2, 3 across three
+    # renders), not the Rust version.
     consumer.view_instance.render_with_diff = MagicMock(
         side_effect=[
-            ("<div>first</div>", '[{"type":"SetText","v":1}]', 1),
-            ("<div>second</div>", '[{"type":"SetText","v":2}]', 2),
-            ("<div>third</div>", '[{"type":"SetText","v":3}]', 3),
+            ("<div>first</div>", '[{"type":"SetText","v":1}]', 10),
+            ("<div>second</div>", '[{"type":"SetText","v":2}]', 20),
+            ("<div>third</div>", '[{"type":"SetText","v":3}]', 30),
         ]
     )
 
@@ -105,6 +112,7 @@ async def test_recovery_html_refreshed_across_multiple_async_renders():
         await _run(consumer)
 
     assert consumer._recovery_html == "<div>third</div>"
+    # Consumer counter after 3 renders == 3 (decoupled from Rust version 30).
     assert consumer._recovery_version == 3
 
 
@@ -119,7 +127,8 @@ async def test_async_full_html_fallback_stores_recovery_html():
     consumer._send_update.assert_awaited_once()
     # The async else-branch sends full HTML; recovery baseline must match it.
     assert consumer._recovery_html == "<div>full-html-fallback</div>"
-    assert consumer._recovery_version == 7
+    # #1788: consumer-owned wire version (1 after one render), not Rust 7.
+    assert consumer._recovery_version == 1
 
 
 @pytest.mark.asyncio
