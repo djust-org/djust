@@ -328,9 +328,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### T004 — document.addEventListener for djust events (use window)
 - **Severity**: Warning
 - **Method**: Regex (template/JS scan)
-- **What it detects**: `document.addEventListener("djust:..."` — djust events are dispatched on `window`, not `document`
-- **Suppression**: `# noqa: T004` or `SILENCED_SYSTEM_CHECKS = ["djust.T004"]`
-- **False positives**: None; djust events always bubble to `window`
+- **What it detects**: `document.addEventListener("djust:..."` for a djust event that is dispatched on `window` (e.g. `djust:push_event`, `djust:before-navigate`, `djust:error`, `djust:shell-swapped`, `djust:vdom-cache-applied`, `djust:upload:*`) — those listeners belong on `window`, not `document`
+- **Exempt (#1809)**: The djust events that the client dispatches on `document` are **not** flagged — `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`, `djust:time-travel-state`, `djust:time-travel-event`. Listening for these on `document` is correct.
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T004"]` or `DJUST_CONFIG = {"suppress_checks": ["T004"]}` (the `suppress_checks` form was a no-op before #1809)
+- **False positives**: None for the window-dispatched events; the document-dispatched family above is exempt as of #1809
 
 ### T005 — dj-view and dj-root on different elements
 - **Severity**: Warning

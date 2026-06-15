@@ -590,14 +590,16 @@ class PublicCounterView(LiveView):
 
 **Severity**: Warning
 
-**What causes it**: A template uses `document.addEventListener('djust:...')` for djust custom events. All `djust:*` events are dispatched on `window`, not `document`.
+**What causes it**: A template uses `document.addEventListener('djust:...')` for a djust custom event that is dispatched on `window` (e.g. `djust:push_event`, `djust:before-navigate`, `djust:error`, `djust:shell-swapped`, `djust:vdom-cache-applied`, `djust:upload:*`).
 
 **What you see**: The event listener never fires. No error in the console -- completely silent failure.
+
+> **Exempt (#1809)**: djust dispatches a second family of events on `document` (not `window`): `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`, `djust:time-travel-state`, `djust:time-travel-event`. Listening for those on `document` is **correct** and is no longer flagged by T004.
 
 **Fix**:
 
 ```html
-<!-- WRONG -- event never fires -->
+<!-- WRONG -- window-dispatched event, never fires on document -->
 <script>
 document.addEventListener('djust:push_event', (e) => { ... });
 </script>
@@ -606,7 +608,14 @@ document.addEventListener('djust:push_event', (e) => { ... });
 <script>
 window.addEventListener('djust:push_event', (e) => { ... });
 </script>
+
+<!-- ALSO CORRECT -- navigate-end is dispatched on document, not window -->
+<script>
+document.addEventListener('djust:navigate-end', (e) => { ... });
+</script>
 ```
+
+**Suppress globally**: `DJUST_CONFIG = {"suppress_checks": ["T004"]}` (works as of #1809) or `SILENCED_SYSTEM_CHECKS = ["djust.T004"]`.
 
 ---
 
