@@ -50,7 +50,22 @@ class _LoginRequiredView(LiveView):
 
 
 class _PublicView(LiveView):
-    """A public view used to prove a batch survives a login-redirecting sibling."""
+    """A public view used to prove a batch survives a login-redirecting sibling.
+
+    ``login_required = False`` is load-bearing for test isolation, not just
+    documentation: this is a *module-level* ``LiveView`` subclass, so it
+    permanently joins ``LiveView.__subclasses__()`` and is walked by the
+    ``djust.S005`` system check (LiveView exposes state without auth). Without
+    the explicit ``login_required = False`` ("intentionally public"), S005 sees
+    ``login_required is None`` + exposed state (``self.ok``) and fires on
+    ``_PublicView``, polluting any later serial test that asserts the S005
+    result set (issue #1794:
+    ``test_s005_suppressed_with_login_required_false`` matched
+    ``"PublicView" in msg``). Marking it public both reflects the view's actual
+    contract and tells S005 the auth decision was made.
+    """
+
+    login_required = False
 
     template = (
         '<div dj-view="djust.tests.test_ws_auth_close_socket._PublicView" dj-id="0">pub</div>'
