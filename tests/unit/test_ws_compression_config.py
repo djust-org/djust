@@ -9,16 +9,43 @@ Verifies:
 
 from __future__ import annotations
 
-import importlib
-
+import pytest
 from django.test import override_settings
 
 
-def _fresh_config():
-    """Re-import ``djust.config`` so the DefaultConfig picks up current settings."""
-    import djust.config
+@pytest.fixture(autouse=True)
+def _reset_djust_config():
+    """Restore the shared ``config`` singleton after each test.
 
-    return importlib.reload(djust.config).config
+    These tests re-read settings into the singleton via ``config.reset()``
+    inside an ``override_settings`` block; this fixture re-reads the
+    *restored* settings afterwards so a ``DJUST_WS_COMPRESSION`` override
+    does not leak into later tests via the singleton's ``_config``.
+    """
+    yield
+    from djust.config import config
+
+    config.reset()
+
+
+def _fresh_config():
+    """Re-read current Django settings into the shared ``config`` singleton.
+
+    Must NOT ``importlib.reload(djust.config)`` — reloading the module
+    rebinds ``djust.config.config`` to a brand-new object while every
+    ``from djust.config import config`` consumer (e.g.
+    ``djust.templatetags.live_tags``) keeps its reference to the OLD
+    singleton. That orphaning silently breaks unrelated config-driven
+    tests later in a serial run (issue #1794:
+    ``auto_navigate`` <meta> went missing because ``live_tags`` read the
+    stale singleton). ``config.reset()`` mutates the one shared singleton
+    in place, achieving the same "re-pick-up settings" effect with no
+    divergence.
+    """
+    from djust.config import config
+
+    config.reset()
+    return config
 
 
 def test_default_is_true():
