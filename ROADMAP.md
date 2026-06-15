@@ -74,6 +74,7 @@ keeps the 1.0 docs/canon honest.
 
 | Priority | Issue | Summary |
 |---|---|---|
+| **P1** | #1801 | fix: `{% extends %}` pages render WITHOUT the base `<head>` on initial HTTP GET — served as dj-root fragment only (silent-catch sets `_full_template=None`) |
 | **P1** | #1785 | fix(websocket): WS recovery forces full page reload — DJE-053 `html_update` path omits `_arm_recovery` (VERIFIED; breaks djust.org /insights/ on 1.0.4) |
 | **P1** | #1784 | fix: embedded `{% live_render %}` 500s on initial HTTP render — sticky-view pages cannot be served |
 | **P1** | #1787 | fix: `djust new` scaffold does not boot (asgi misuses `live_session`; scaffold trips its own system checks) |
@@ -3656,6 +3657,12 @@ the old placement still serves during blue/green). `djust deploy` should print
 "rolling out" until it's `True` so users stop re-testing stale rootfs.
 
 ---
+
+### Milestone: v1.0.5-2 — render-path + cleanup drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Post-rc2 follow-ups. Cleanups #1791/#1794/#1795/#1796 already merged (in 1.0.5rc3); this entry tracks the render-path bug #1801. Ships in 1.0.5.
+
+**#1801 — `{% extends %}` pages render without the base `<head>` on initial HTTP GET (P1, bug)** — every template-inheritance page (incl. the scaffold) renders unstyled on first paint: the served GET is the dj-root fragment only, no `<!doctype>`/`<head>`. Root cause (triaged symptom-up): `get_template`'s broad `except` (`python/djust/mixins/template.py:193`) swallows a post-resolution error → `_full_template = None` → `_render_full_template_inner`'s `else` (`:1022`) returns `self.render()` (fragment only). Fix: surface + fix the swallowed error so `_full_template` = the resolved full doc, AND narrow/log the `except` so a render-path error can never again silently degrade to fragment-only. Reproduce-first to capture what is swallowed.
 
 ### Milestone: v1.0.5-1 — WS recovery + render-path hardening drain (drain bucket → ships in 1.0.5)
 
