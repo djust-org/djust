@@ -9,6 +9,27 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+# Template backends that honor Django's APP_DIRS app-template discovery
+# (``<app>/templates/``). The stock Django backend AND djust's own Rust
+# backend both subclass ``BaseEngine`` with ``app_dirname = "templates"`` and
+# resolve ``APP_DIRS`` the same way. Collecting app-template dirs ONLY for the
+# stock backend name silently dropped every app's templates whenever a project
+# configured ``djust.template.backend.DjustTemplateBackend`` (the case the
+# ``djust new`` scaffold ships) — the Rust ``resolve_template_inheritance``
+# couldn't find the child template and ``{% extends %}`` pages degraded to
+# fragment-only on the initial GET (#1801).
+#
+# ``djust.template_backend.DjustTemplateBackend`` is a back-compat shim that
+# re-exports the same class, so both dotted paths are recognized.
+_APP_DIRS_TEMPLATE_BACKENDS = frozenset(
+    {
+        "django.template.backends.django.DjangoTemplates",
+        "djust.template.backend.DjustTemplateBackend",
+        "djust.template_backend.DjustTemplateBackend",
+    }
+)
+
+
 def is_model_list(value: Any) -> bool:
     """Check if value is a non-empty list of Django Model instances."""
     from django.db import models
@@ -260,9 +281,12 @@ def _get_template_dirs_cached() -> tuple[str, ...]:
         if "DIRS" in template_config:
             template_dirs.extend(template_config["DIRS"])
 
-    # Step 2: Add app template directories (only for DjangoTemplates with APP_DIRS=True)
+    # Step 2: Add app template directories for any APP_DIRS-honoring backend
+    # (Django's stock backend OR djust's Rust backend — see
+    # ``_APP_DIRS_TEMPLATE_BACKENDS``). Gating on the stock backend name alone
+    # dropped every app's templates under djust's own backend (#1801).
     for template_config in settings.TEMPLATES:
-        if template_config["BACKEND"] == "django.template.backends.django.DjangoTemplates":
+        if template_config["BACKEND"] in _APP_DIRS_TEMPLATE_BACKENDS:
             if template_config.get("APP_DIRS", False):
                 from django.apps import apps
 

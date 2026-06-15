@@ -102,22 +102,16 @@ class JITMixin:
             # Try Rust template inheritance resolution first
             try:
                 from djust._rust import resolve_template_inheritance
-                from django.conf import settings
-                from pathlib import Path
 
-                template_dirs = []
-                for tpl_cfg in getattr(settings, "TEMPLATES", []):
-                    if "DIRS" in tpl_cfg:
-                        template_dirs.extend(str(d) for d in tpl_cfg["DIRS"])
-                    backend = tpl_cfg.get("BACKEND", "")
-                    if backend == "django.template.backends.django.DjangoTemplates":
-                        if tpl_cfg.get("APP_DIRS", False):
-                            from django.apps import apps
+                # Use the shared get_template_dirs() helper so JIT extraction
+                # resolves templates with the SAME search-dir collection (incl.
+                # djust's own backend under APP_DIRS) as get_template() and
+                # render_full_template — a hardcoded DjangoTemplates-only check
+                # here dropped app-template dirs under the djust backend, the
+                # same defect class as #1801 (#1646 parallel-path cure).
+                from ..utils import get_template_dirs
 
-                            for app_config in apps.get_app_configs():
-                                tpl_dir = Path(app_config.path) / "templates"
-                                if tpl_dir.exists():
-                                    template_dirs.append(str(tpl_dir))
+                template_dirs = get_template_dirs()
 
                 resolved = resolve_template_inheritance(self.template_name, template_dirs)
                 if resolved:
