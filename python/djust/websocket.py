@@ -3152,16 +3152,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                     # Wrap everything in a root "Event Processing" tracker
                     with tracker.track("Event Processing"):
+                        # #1802: the auto-skip-render decision must be made
+                        # against the view the handler actually mutates. For a
+                        # top-level event ``target_view IS self.view_instance``;
+                        # for an embedded ``{% live_render %}`` child (sticky or
+                        # not) ``target_view`` is the CHILD. Snapshotting the
+                        # parent here meant an embedded child's state change was
+                        # invisible — pre/post assigns compared equal → the
+                        # render was skipped → the event returned a bare ``noop``
+                        # and the child's DOM never updated (sticky widgets were
+                        # render-only). Bind a single ``change_target`` and use
+                        # it for every snapshot/flag below.
+                        change_target = target_view
                         # Snapshot public assigns before the handler to detect
                         # unchanged state and auto-skip the render cycle.
-                        pre_assigns = _snapshot_assigns(self.view_instance)
+                        pre_assigns = _snapshot_assigns(change_target)
                         # Identity snapshot: {attr: id(value)} for the
                         # push_commands-only auto-skip (#700). Immune to
                         # deep-copy sentinel issues on non-copyable objects.
-                        _fw_attrs = getattr(self.view_instance, "_framework_attrs", frozenset())
+                        _fw_attrs = getattr(change_target, "_framework_attrs", frozenset())
                         pre_identity = {
                             k: id(v)
-                            for k, v in self.view_instance.__dict__.items()
+                            for k, v in change_target.__dict__.items()
                             if k not in _fw_attrs
                         }
 
@@ -3453,11 +3465,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # reassigned, auto-skip the render (eliminates DJE-053).
                         # In-place mutations (list.append) are NOT detected and
                         # will still trigger a render — this is the safe default.
-                        skip_render = getattr(self.view_instance, "_skip_render", False)
+                        # #1802: read flags + snapshot from ``change_target`` (the
+                        # handler's view), not the parent, so an embedded child's
+                        # state change is detected and is NOT skipped.
+                        skip_render = getattr(change_target, "_skip_render", False)
                         # Never skip if the view explicitly requests full HTML
-                        force_html = getattr(self.view_instance, "_force_full_html", False)
+                        force_html = getattr(change_target, "_force_full_html", False)
                         if not skip_render and not force_html:
-                            post_assigns = _snapshot_assigns(self.view_instance)
+                            post_assigns = _snapshot_assigns(change_target)
                             if pre_assigns == post_assigns:
                                 skip_render = True
                                 logger.debug(
@@ -3467,7 +3482,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                             else:
                                 # Phoenix-style: track which keys actually changed
                                 # so _sync_state_to_rust can skip unchanged values
-                                self.view_instance._changed_keys = _compute_changed_keys(
+                                change_target._changed_keys = _compute_changed_keys(
                                     pre_assigns, post_assigns
                                 )
 
@@ -3482,11 +3497,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # of each public attr is unchanged — if so, the handler
                         # didn't touch any state and we can safely skip.
                         if not skip_render and not force_html:
-                            pending = getattr(self.view_instance, "_pending_push_events", None)
+                            pending = getattr(change_target, "_pending_push_events", None)
                             if pending:
                                 post_identity = {
                                     k: id(v)
-                                    for k, v in self.view_instance.__dict__.items()
+                                    for k, v in change_target.__dict__.items()
                                     if k not in _fw_attrs
                                 }
                                 if pre_identity == post_identity:
@@ -3498,10 +3513,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                                     )
 
                         if skip_render:
-                            self.view_instance._skip_render = False
-                            has_async = (
-                                getattr(self.view_instance, "_async_pending", None) is not None
-                            )
+                            change_target._skip_render = False
+                            has_async = getattr(change_target, "_async_pending", None) is not None
                             await self._flush_all_pending()
                             await self._send_noop(async_pending=has_async, ref=event_ref)
                             if has_async:
