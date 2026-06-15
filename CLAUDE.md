@@ -1233,6 +1233,39 @@ the render-path + cleanup bucket that, with v1.0.5-1, shipped in 1.0.5rc1–rc4)
   twin, #1805 `is_dir` parity), so treat "grep every parallel implementation of
   the invariant" as the default Stage-4 reflex for any render-path change.
 
+## Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc (DX drain + sticky-recovery P0)
+
+One rule from the final 1.0.5 drains (v1.0.5-4: PRs #1811/#1812; v1.0.5-5:
+PRs #1814/#1815). The other findings reinforced existing canon (the #1813
+structural cure reinforced #1646; the #1810 empirical mechanism-bisection
+reinforced #1529/#1516; the #300 `core.bare` review discipline held across
+all four PRs) — see RETRO.md Insights. The new rule:
+
+- **A concurrency test asserts a logical ORDERING invariant, never a
+  wall-clock duration/ratio (#1795 / PR #1815, a two-release flaky
+  recurrence).** A test that proves concurrency by asserting on wall-clock
+  durations or ratios — `elapsed < 100ms`, `parallel < serial/2` — is
+  fundamentally flaky under CPU saturation: when the concurrent work can't
+  get dedicated cores (full `make test -n auto`), the speedup degrades and
+  the ratio drifts past any fixed threshold. `test_total_wall_clock_is_max_not_sum`
+  was "fixed" once (PR #1797: absolute→relative ratio) and STILL false-failed
+  TWO releases later (parallel=88.1ms vs serial/2=85.8ms at the 1.0.5rc5 cut;
+  passed 3/3 in isolation). The durable fix replaces the timing threshold with
+  a deterministic logical property — **interval overlap / event ordering**:
+  each unit records its `[start, end]`; a concurrent run satisfies
+  `max(start) < min(end)` (every unit starts before any finishes), which a
+  serial loop can NEVER satisfy. Event ordering is immune to saturation jitter
+  (scheduling N coroutines is microseconds, far under the work duration), so
+  the assertion is load-independent. Pair it with an in-suite **gate-off
+  sibling** that runs the same units SERIALLY and asserts they do NOT overlap
+  — proving the assertion distinguishes parallel from serial (non-tautological
+  by construction, per #1200/#1468). **Rule:** never assert a duration/ratio to
+  prove concurrency; assert an ordering invariant. Canonical case:
+  `tests/integration/test_chunks_overlap.py::TestParallelRender` (PR #1815).
+  Generalizes the v1.0.5-2 lesson that the prior #1795 fix treated the symptom
+  (absolute→relative) rather than the class (timing assertions are flaky under
+  saturation).
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

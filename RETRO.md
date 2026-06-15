@@ -340,7 +340,88 @@ issue or be explicitly closed with a reason.
 | 298 | Flaky `test_total_wall_clock_is_max_not_sum` (absolute 100ms threshold false-fails under load) | Retro v1.0.5-1 (release `make test`) | #1795 | Closed | **Resolved in v1.0.5-2** (PR #1797 — relative speedup assertion parallel < serial/2, load-stable; gate-off non-tautological). GitHub #1795 closed. |
 | 299 | Consumer-owned monotonic VDOM send-version (removes recovery round-trip on `html_update`) | PR #1789 (#1785) follow-up | #1788 | Open | Deferred — optimization not bug post-#1785; carries drift risk. |
 | 300 | Read-only review subagent must never mutate the main checkout / `core.bare` (use `isolation: worktree` or read-only `gh pr diff`) | Retro v1.0.5-2 / PR #1804 | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-2 retro arc"). Self-applied one PR later in #1806's read-only review. Verify `git config core.bare` after any subagent. |
-| 301 | Worktree pre-push tests the MAIN source tree (editable install), not the linked worktree — still forces `--no-verify` | Retro v1.0.5-2 / PR #1804 (follow-up to #1796) | #1810 | Open | #1798 fixed interpreter resolution; editable `djust` still imports from main checkout. CI authoritative. Low priority. |
+| 301 | Worktree pre-push tests the MAIN source tree (editable install), not the linked worktree — still forces `--no-verify` | Retro v1.0.5-2 / PR #1804 (follow-up to #1796) | #1810 | Closed | **Resolved in v1.0.5-4** (PR #1812 — `run-with-venv-python.sh --worktree-pythonpath` prepends the worktree's `python/` (beats the plain `djust.pth`) + symlinks the main `.so`, so a worktree pre-push tests the worktree's source). GitHub #1810 closed. |
+| 302 | Concurrency tests assert a logical ordering invariant (interval overlap), never a wall-clock duration/ratio | Retro v1.0.5-5 / PR #1815 (#1795) | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc"). #1795 rewritten to `max(start)<min(end)` + a serial gate-off sibling; ends a two-release flaky recurrence. |
+
+## v1.0.5-5 — Sticky-child recovery P0 + flaky-test hardening (PRs #1814, #1815)
+
+**Date**: 2026-06-15
+**Scope**: Fixed the P0 data-loss bug #1813 (`html_recovery` wiped embedded sticky-child state) + hardened the recurring flaky test #1795 (PR #1815). Shipped in 1.0.5rc5 (#1813) and stable 1.0.5 (#1795).
+**Tests at close**: ~7800 (parallel `make test`)
+
+### What We Learned
+
+**1. Structural cure over a point fix for the P0 (#1813).**
+Investigation found a sharper root cause than the report: the `is_embedded_child` branch never armed recovery AND `{% live_render sticky=True %}` fresh-mounted the child on every parent render (ADR-018 persistence is gated behind `enable_state_snapshot`, default off). The fix is a live-instance-reuse hatch making EVERY parent render faithful to the live child's current state — curing the data loss for ALL recovery causes, not just the cited prerender-morph trigger. (b2) re-render-at-recovery was chosen empirically (correct only BECAUSE b1 makes the render faithful — else parallel-path drift). A worktree-isolated Code Review empirically gate-off-verified all three fixes (revert b1 → 2 data-loss tests fail; revert b2 → recovery `TimeoutError`; revert a → 2 JS tests fail) — no tautologies.
+**Action taken**: Closed — shipped in PR #1814. Reinforces #1646 (structural cure over N point fixes), #1467 (sticky-child `view_id` routing), #1471 (sticky persistence).
+
+**2. A concurrency test asserts an ORDERING invariant, not a timing ratio (#1795 / PR #1815).**
+The flaky `test_total_wall_clock_is_max_not_sum` was "fixed" once (PR #1797: absolute→relative ratio) and STILL false-failed two releases later under `make test -n auto` saturation (parallel=88.1ms vs serial/2=85.8ms; passed 3/3 in isolation). The durable fix replaces the timing threshold with deterministic interval **overlap** (`max(start) < min(end)` — every thunk starts before any finishes), immune to saturation jitter, plus an in-suite gate-off sibling proving a serial loop does NOT overlap (non-tautological by construction).
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc" (concurrency tests assert ordering, never duration/ratio). Tracker #302 Closed.
+
+### Insights
+
+- The P0 reproduced server-side WITHOUT the client trigger — the load-bearing test forced `handle_request_html` directly. Reproduction fidelity (the harness exercised the real recovery path) is why the root cause came out sharper than the report.
+- The worktree-isolated reviewer ran the full empirical gate-off (the gold standard for a P0) without touching the main checkout — the #300 `core.bare` discipline held; `core.bare=false` was verified after every subagent.
+- The single 🟡 from the #1814 review (error-message `view_path` drift in the extracted helper) was fixed before merge (`2a9099da`), not deferred.
+
+### Review Stats
+
+| Metric | #1814 | #1815 | Total |
+|--------|-------|-------|-------|
+| Issue | #1813 | #1795 | 2 |
+| 🔴 at review | 0 | 0 | 0 |
+| 🟡 at review | 1 (fixed) | 0 | 1 |
+| Gate-off confirmed | yes (3 fixes) | yes (+ serial sibling) | yes |
+| Required CI | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc" (concurrency-test ordering-invariant rule).
+**Releases**: #1813 shipped in 1.0.5rc5; #1795 in stable 1.0.5.
+
+### Open Items
+
+- (none)
+
+## v1.0.5-4 — System-check DX + worktree tooling drain (PRs #1811, #1812)
+
+**Date**: 2026-06-15
+**Scope**: Drained two post-rc4 DX/tech-debt issues — #1809 (T004 false-positive for document-dispatched `djust:` events + unsuppressible) and #1810 (worktree pre-push tested the main source tree). Shipped in 1.0.5rc5 → stable 1.0.5.
+**Tests at close**: ~7800 (parallel `make test`)
+
+### What We Learned
+
+**1. Derive the check's data set from SOURCE, not the brief (#1809).**
+T004 flagged `document.addEventListener('djust:...')` as "should be window", but djust dispatches a whole family (navigate-*/hvr-*/layout-changed/ws-reconnected/time-travel-*) on `document`. The implementer derived the 7 document-dispatched event names by grepping `document.dispatchEvent(new CustomEvent('djust:` in `client.js` (NOT from the brief's list), built `_DOC_DISPATCHED_DJUST_EVENTS` from that, and fixed both defects (allowlist exclusion + the missing `_is_check_suppressed("djust.T004")` guard) with gate-off on both halves.
+**Action taken**: Closed — shipped in PR #1811. Reinforces reproduction-fidelity / derive-from-source; scope held to T004 (the ~30-site suppress sweep stays with #1607, per #1079).
+
+**2. Empirically bisect a tooling mechanism before architecting (#1810).**
+The worktree pre-push fix hinged on whether `PYTHONPATH` beats the editable install. Rather than assume, the implementer proved it: the editable install is a plain `djust.pth` (appends to `sys.path`), NOT an `__editable__` meta-path finder, so `PYTHONPATH` (prepended) wins — verified with a sentinel in the worktree's `__init__.py` (invisible without the prepend, visible with it). The gitignored-`.so`-missing wrinkle was handled with a symlink. CASE A was confirmed empirically, not assumed.
+**Action taken**: Closed — shipped in PR #1812 (closes Action Tracker #301 / GitHub #1810). Reinforces #1529 (empirically bisect before architecting) + #1516 (verify environment premises via active falsification).
+
+### Insights
+
+- Both PRs landed via worktree-isolated subagents, reviewed read-only via `gh pr diff` — the #300 `core.bare` discipline (from v1.0.5-2) held; the orchestrator verified `core.bare=false` after each subagent.
+- The CHANGELOG keep-both conflict between the two drain PRs was resolved IN the agent's worktree (not the main checkout), keeping the main checkout + the user's BEST_PRACTICES drafts untouched.
+
+### Review Stats
+
+| Metric | #1811 | #1812 | Total |
+|--------|-------|-------|-------|
+| Issue | #1809 | #1810 | 2 |
+| 🔴 at review | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | 2/2 |
+| Required CI | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (shared v1.0.5-4/-5 arc section — see v1.0.5-5).
+**Releases**: shipped in 1.0.5rc5 → stable 1.0.5.
+
+### Open Items
+
+- (none — both closed; Action Tracker #301 closed by PR #1812)
 
 ## v1.0.5-3 — Sticky-child interactivity + DX drain (PRs #1806, #1807, #1808)
 
