@@ -1309,6 +1309,64 @@ def _stamp_view_id(html: str, view_id: str) -> str:
     return _MASK_PLACEHOLDER_RE.sub(_unmask, stamped)
 
 
+def _render_sticky_child_html(
+    child: Any,
+    view_id: str,
+    sticky_id_value: str,
+    request: Any,
+) -> Any:
+    """Render an ALREADY-mounted/registered sticky child to its wrapped HTML.
+
+    Shared by the fresh-mount eager path (steps 6-9 of :func:`live_render`)
+    and the #1813 (b1) live-instance-reuse hatch, so both paths produce
+    byte-identical wrapper markup (parallel-path-drift guard, #1646). The
+    caller is responsible for instance lifecycle: this helper does NOT mount
+    or register — it only renders the child's CURRENT ``get_context_data()``,
+    stamps ``view_id`` on event-bearing elements, and wraps in the sticky
+    ``[dj-view][dj-sticky-view][dj-sticky-root]`` container.
+    """
+    from django.template.loader import get_template
+
+    child_context: Dict[str, Any] = {}
+    get_ctx = getattr(child, "get_context_data", None)
+    if callable(get_ctx):
+        try:
+            child_context = dict(get_ctx())
+        except Exception:  # noqa: BLE001 — fall back to empty context on error
+            logger.exception(
+                "live_render: child %s.get_context_data raised; rendering with empty context",
+                type(child).__name__,
+            )
+            child_context = {}
+    child_context.setdefault("request", request)
+    child_context.setdefault("view", child)
+
+    inline = getattr(child, "template", None)
+    if inline:
+        rendered_inner = Template(inline).render(Context(child_context))
+    else:
+        template_name = getattr(child, "template_name", None)
+        if not template_name:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} child %r has neither ``template`` nor "
+                "``template_name`` set" % type(child).__name__
+            )
+        rendered_inner = get_template(template_name).render(child_context, request)
+
+    rendered_stamped = _stamp_view_id(rendered_inner, view_id)
+    escaped_id = escape(view_id)
+    escaped_sticky_id = escape(sticky_id_value)
+    return mark_safe(
+        '<div dj-view dj-sticky-view="'
+        + escaped_sticky_id
+        + '" dj-sticky-root data-djust-embedded="'
+        + escaped_id
+        + '">'
+        + rendered_stamped
+        + "</div>"
+    )
+
+
 # Context-render-local scratch key for tracking sticky_ids already
 # registered in the current parent render pass. Used to raise
 # TemplateSyntaxError on ``{% live_render 'X' sticky=True %}`` collisions.
@@ -1838,6 +1896,71 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             + "</dj-lazy-slot>"
         )
 
+    # 4-pre. (#1813 (b1)) Live-instance-reuse hatch — the STRUCTURAL CURE for
+    #     sticky-child state loss on parent re-render.
+    #
+    #     ``render_with_diff()`` (and ``render_full_template`` on the GET path)
+    #     re-execute this tag on EVERY parent render with ``parent`` set to the
+    #     LIVE parent view (via ``active_parent_view(self)``). The parent's
+    #     :class:`StickyChildRegistry` (``_child_views``, keyed by ``sticky_id``
+    #     since ``preferred_view_id = sticky_id`` above) therefore still holds
+    #     the child instance that was mounted on a PRIOR render — carrying any
+    #     state the user mutated via embedded-child events.
+    #
+    #     Without this hatch the tag always builds a FRESH ``child_cls()`` +
+    #     ``mount()``, so every parent re-render (and every ``_recovery_html``
+    #     snapshot taken during a parent event) renders the child at mount
+    #     defaults. When the client later falls back to ``request_html``
+    #     recovery, the sticky child is reset and the user's interactions are
+    #     discarded — the #1813 data-loss bug.
+    #
+    #     The two pre-existing escape hatches do NOT cover this:
+    #       * ``_sticky_preserved`` auto-reattach (above) only fires on a
+    #         live_redirect/navigation (the #1471 reconnect path);
+    #       * ``restore_sticky_child_state`` (below) is gated behind
+    #         ``enable_state_snapshot=True`` on BOTH parent + child and reads
+    #         from the session — inert in the default config.
+    #
+    #     This hatch is INDEPENDENT of those: it reuses the in-memory live
+    #     instance the parent already holds. It composes with — does not bypass
+    #     — the others, because it only fires when the registry already has a
+    #     live child for this ``sticky_id`` (i.e. on the SECOND and later
+    #     renders of a long-lived WS parent). On the first render the registry
+    #     is empty, so we fall through to the existing fresh-mount / restore
+    #     path. It is keyed by ``sticky_id`` (== ``preferred_view_id`` for a
+    #     sticky child) so it only applies to sticky children — non-sticky
+    #     ``{% live_render %}`` re-creates per render exactly as before.
+    if sticky_kwarg and preferred_view_id is not None:
+        existing_child = None
+        get_child = getattr(parent, "_get_child_view", None)
+        if callable(get_child):
+            try:
+                existing_child = get_child(preferred_view_id)
+            except Exception:  # noqa: BLE001 — never break the parent render
+                logger.exception(
+                    "live_render: live-instance lookup for sticky %r failed; mounting fresh",
+                    preferred_view_id,
+                )
+                existing_child = None
+        # Only reuse a genuine sticky instance of the EXPECTED class. A class
+        # mismatch (two embeds sharing a sticky_id across different child
+        # classes — already rejected for one render pass by the uniqueness
+        # check, but defensive across renders) falls through to fresh mount.
+        if (
+            isinstance(existing_child, child_cls)
+            and getattr(existing_child, "sticky_id", None) == sticky_id_value
+        ):
+            # Refresh the live request so handlers/middleware-populated attrs
+            # (auth, session) read from the CURRENT parent render's request —
+            # mirrors the ``_sticky_preserved`` auto-reattach path above.
+            existing_child.request = request
+            return _render_sticky_child_html(
+                existing_child,
+                preferred_view_id,
+                sticky_id_value,
+                request,
+            )
+
     child = child_cls()
     child.request = request
 
@@ -1905,9 +2028,24 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     view_id = parent._assign_view_id(preferred_view_id)
     parent._register_child(view_id, child)
 
-    # 6. Build the child's render context and render its template.
-    #    The child gets its own context, independent of the parent's —
-    #    each embedded view manages its own state.
+    # 6-9. Sticky branch: render via the shared helper so the fresh-mount path
+    #      and the #1813 (b1) live-instance-reuse hatch emit byte-identical
+    #      wrapper markup (parallel-path-drift guard, #1646). The helper builds
+    #      the child's context, renders its template, stamps the view_id, and
+    #      wraps in the ``[dj-view][dj-sticky-view][dj-sticky-root]`` container.
+    #
+    #      The sticky wrapper carries ``dj-sticky-view`` + ``dj-sticky-root``:
+    #      the client's ``45-child-view.js`` walks ``[dj-sticky-view]`` before a
+    #      live_redirect, detaches the subtree into an in-memory stash, and
+    #      re-attaches each at ``[dj-sticky-slot="<id>"]`` via ``replaceWith()``
+    #      after the new mount arrives (the #1471 reconnect path).
+    if sticky_kwarg:
+        return _render_sticky_child_html(child, view_id, sticky_id_value, request)
+
+    # Non-sticky branch (the Phase A contract) — unchanged. Build the child's
+    # context, render its template, stamp the view_id, and wrap in a plain
+    # ``[dj-view]`` container carrying ``data-djust-embedded`` (the client's DOM
+    # walker reads ``dataset.djustEmbedded`` to surface ``view_id`` on events).
     child_context: Dict[str, Any] = {}
     get_ctx = getattr(child, "get_context_data", None)
     if callable(get_ctx):
@@ -1922,9 +2060,6 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     child_context.setdefault("request", request)
     child_context.setdefault("view", child)
 
-    # 7. Resolve + render the child's template. Prefer the inline
-    #    ``template`` attribute when set (used pervasively in tests);
-    #    otherwise fall through to Django's ``template_name`` resolver.
     inline = getattr(child, "template", None)
     if inline:
         rendered_inner = Template(inline).render(Context(child_context))
@@ -1937,37 +2072,8 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             )
         rendered_inner = get_template(template_name).render(child_context, request)
 
-    # 8. Stamp view_id on every event-attribute-bearing element in the
-    #    rendered HTML so inbound events route to this child.
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
-
-    # 9. Wrap in a [dj-view] container carrying ``data-djust-embedded`` —
-    #    the client's DOM walker (``getEmbeddedViewId`` in
-    #    01-dom-helpers-turbo.js) reads ``dataset.djustEmbedded`` to
-    #    surface the id on outbound events as ``view_id``.
-    #
-    #    Phase B sticky branch: also carries ``dj-sticky-view="<id>"`` +
-    #    ``dj-sticky-root`` attributes. The client's
-    #    ``45-child-view.js`` module walks ``[dj-sticky-view]`` before a
-    #    live_redirect is sent and detaches the subtree into an
-    #    in-memory stash; after the new mount arrives, the server sends
-    #    a ``sticky_hold`` frame listing surviving ids and the client
-    #    re-attaches each stashed subtree at ``[dj-sticky-slot="<id>"]``
-    #    in the new DOM via ``replaceWith()``.
-    #
-    #    Non-sticky branch behavior is unchanged (the Phase A contract).
     escaped_id = escape(view_id)
-    if sticky_kwarg:
-        escaped_sticky_id = escape(sticky_id_value)
-        return mark_safe(
-            '<div dj-view dj-sticky-view="'
-            + escaped_sticky_id
-            + '" dj-sticky-root data-djust-embedded="'
-            + escaped_id
-            + '">'
-            + rendered_stamped
-            + "</div>"
-        )
     return mark_safe(
         '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
     )

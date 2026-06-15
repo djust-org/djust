@@ -538,6 +538,56 @@ async function handleServerResponse(data, eventName, triggerElement) {
 // WebSocket LiveView Client
 // ============================================================================
 
+/**
+ * #1813 (a): id-keyed reconciliation pass run AFTER the #1610 prerender
+ * `skipMountHtml` morph. Embedded-view wrappers
+ * (`<div dj-view [dj-sticky-view dj-sticky-root] data-djust-embedded="<id>">`)
+ * carry NO `id`, so morphChildren can only align them positionally
+ * (Strategy 2). When a preceding sibling count diverges, the wrapper never
+ * aligns → morphElement never runs on it → the server's `dj-id` is never
+ * copied onto the live wrapper. The very next parent patch that targets the
+ * wrapper by `dj-id` then misses and falls back to a positional path that
+ * breaks once the child subtree drifts, triggering html_recovery.
+ *
+ * This pass matches each server-side wrapper to the LIVE wrapper by its
+ * STABLE `data-djust-embedded` value (the same selector 45-child-view.js
+ * uses) — independent of sibling position — and copies the server `dj-id`
+ * onto it. Safe and idempotent: it only sets `dj-id` when the server side
+ * has one and only when the live value differs.
+ *
+ * @param {Element} liveContainer  - the morphed live DOM container
+ * @param {Element} serverTemplate - the <div> holding the parsed server HTML
+ */
+function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
+    if (!liveContainer || !serverTemplate) return;
+    const _esc = (globalThis.CSS && typeof CSS.escape === 'function')
+        ? (v) => CSS.escape(v)
+        : (v) => String(v).replace(/([^A-Za-z0-9_-])/g, '\\$1');
+    let serverWrappers;
+    try {
+        serverWrappers = serverTemplate.querySelectorAll('[data-djust-embedded], [dj-sticky-view]');
+    } catch (_err) {
+        return;
+    }
+    for (const serverWrapper of serverWrappers) {
+        const embeddedId = serverWrapper.getAttribute('data-djust-embedded');
+        if (!embeddedId) continue;
+        const serverDjId = serverWrapper.getAttribute('dj-id');
+        if (!serverDjId) continue;
+        let liveWrapper;
+        try {
+            liveWrapper = liveContainer.querySelector(
+                '[dj-view][data-djust-embedded="' + _esc(embeddedId) + '"]'
+            );
+        } catch (_err) {
+            continue;
+        }
+        if (liveWrapper && liveWrapper.getAttribute('dj-id') !== serverDjId) {
+            liveWrapper.setAttribute('dj-id', serverDjId);
+        }
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -905,6 +955,22 @@ class LiveViewWebSocket {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             _morphTemp.innerHTML = data.html;
                             morphChildren(_morphContainer, _morphTemp);
+                            // #1813 (a): embedded-view wrappers
+                            // (<div dj-view dj-sticky-view dj-sticky-root
+                            //  data-djust-embedded=...>) carry NO `id`, so
+                            // morphChildren can only align them positionally
+                            // (Strategy 2). If sibling counts diverge before a
+                            // wrapper, it never aligns → morphElement never runs
+                            // → the server's dj-id is never copied onto the live
+                            // wrapper. The first parent patch then targets the
+                            // wrapper by dj-id, finds nothing, falls back to a
+                            // positional path, and breaks once the child subtree
+                            // drifts → triggers html_recovery (the trigger half
+                            // of the sticky-child data-loss bug). Reconcile by
+                            // the STABLE `data-djust-embedded` value (the same
+                            // selector 45-child-view.js uses) and copy the
+                            // server's dj-id onto the live wrapper.
+                            _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found

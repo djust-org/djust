@@ -4666,6 +4666,33 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error("Error handling cursor move: %s", e)
 
+    def _has_live_sticky_children(self) -> bool:
+        """True if the parent view currently holds at least one registered
+        sticky child (a ``{% live_render sticky=True %}`` embed).
+
+        Used by :meth:`handle_request_html` to decide whether the cached
+        ``_recovery_html`` is trustworthy. The cached snapshot is taken on the
+        last PARENT render-send (mount / parent event); embedded-child events
+        deliberately do NOT re-arm it (they send a scoped ``embedded_update``,
+        not a full parent render). So after a child interaction the cached HTML
+        holds an OLD child state — replaying it would reset the sticky child to
+        that stale state (#1813). For pages WITH live sticky children we
+        re-render the parent FRESH at recovery time instead; the (b1)
+        live-instance-reuse hatch in ``live_tags.py`` makes that re-render
+        faithful to the child's current state.
+        """
+        view = self.view_instance
+        if view is None:
+            return False
+        get_all = getattr(view, "_get_all_child_views", None)
+        if not callable(get_all):
+            return False
+        try:
+            children = get_all()
+        except Exception:  # noqa: BLE001 — defensive: never break recovery
+            return False
+        return any(getattr(child, "sticky_id", None) for child in children.values())
+
     async def handle_request_html(self, data: Dict[str, Any]):
         """
         Handle client request for full HTML when VDOM patches fail.
@@ -4673,13 +4700,46 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         The client sends {"type": "request_html"} when applyPatches() returns
         false (e.g., due to {% if %} blocks shifting DOM structure). Server
         responds with the last rendered HTML for client-side DOM morphing.
+
+        #1813 (b2)(ii): when the parent has live sticky children, the cached
+        ``_recovery_html`` may be stale (it is NOT re-armed on embedded-child
+        events, which send scoped ``embedded_update`` frames rather than a full
+        parent render). Replaying it would reset the sticky child to mount /
+        pre-interaction state — the data-loss bug. For such pages we re-render
+        the parent FRESH here; the (b1) live-instance-reuse hatch in
+        ``live_tags.py`` makes the fresh render faithful to the live child's
+        current state. Recovery is rare and child events frequent, so paying
+        the re-render cost on recovery (not on every child event) is also the
+        lowest-overhead choice. Non-sticky pages keep the cached-replay path
+        unchanged.
         """
         if not self.view_instance:
             await self.send_error("View not mounted")
             return
 
-        html = getattr(self, "_recovery_html", None)
         version = getattr(self, "_recovery_version", 0)
+
+        if self._has_live_sticky_children():
+            # Re-render the parent fresh so the recovery HTML reflects the live
+            # sticky child's CURRENT state (#1813). Mirrors the sync/render
+            # sequence used by the async-result path (sync state to Rust, then
+            # render_with_diff for the full raw HTML).
+            def _sync_and_render():
+                if hasattr(self.view_instance, "_sync_state_to_rust"):
+                    self.view_instance._sync_state_to_rust()
+                fresh_html, _patches, fresh_version = self.view_instance.render_with_diff()
+                return fresh_html, fresh_version
+
+            try:
+                html, version = await sync_to_async(_sync_and_render)()
+            except Exception:  # noqa: BLE001 — fall back to cached snapshot
+                logger.exception(
+                    "[djust] request_html fresh re-render failed; falling back "
+                    "to cached recovery HTML"
+                )
+                html = getattr(self, "_recovery_html", None)
+        else:
+            html = getattr(self, "_recovery_html", None)
 
         if not html:
             await self.send_error(
