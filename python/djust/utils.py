@@ -292,7 +292,11 @@ def _get_template_dirs_cached() -> tuple[str, ...]:
 
                 for app_config in apps.get_app_configs():
                     templates_dir = Path(app_config.path) / "templates"
-                    if templates_dir.exists():
+                    # Use ``is_dir()`` (not ``exists()``) to match djust's own
+                    # ``DjustTemplateBackend._get_template_dirs`` (the parallel
+                    # APP_DIRS dir collector). ``exists()`` would wrongly include
+                    # a plain file literally named ``templates`` (#1805).
+                    if templates_dir.is_dir():
                         template_dirs.append(str(templates_dir))
 
     return tuple(str(d) for d in template_dirs)

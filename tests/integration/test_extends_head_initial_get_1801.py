@@ -260,6 +260,73 @@ def test_app_template_dirs_collected_for_djust_backend():
     )
 
 
+class TestCollectorIsDirGuard:
+    """#1805 — ``utils._get_template_dirs_cached`` must guard each app's
+    ``templates`` path with ``is_dir()`` (matching djust's own
+    ``DjustTemplateBackend._get_template_dirs``), NOT ``exists()``. A path that
+    ``.exists()`` but is a plain FILE named ``templates`` (no extension) must be
+    excluded. Gates off cleanly: with the pre-fix ``exists()`` guard the file
+    path would be wrongly appended and the assertion fails.
+    """
+
+    @pytest.mark.django_db
+    def test_file_named_templates_is_excluded_by_collector(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from django.apps import apps as django_apps
+
+        from djust.utils import clear_template_dirs_cache, get_template_dirs
+
+        # An app whose path contains a FILE (not a dir) literally named
+        # ``templates`` — what ``exists()`` would wrongly include.
+        file_app_path = tmp_path / "file_app"
+        file_app_path.mkdir()
+        (file_app_path / "templates").write_text("not a directory\n")
+        file_templates = str(file_app_path / "templates")
+
+        # A control app with a real ``templates/`` directory — must still be
+        # collected, proving the guard rejects only the file, not all paths.
+        dir_app_path = tmp_path / "dir_app"
+        (dir_app_path / "templates").mkdir(parents=True)
+        dir_templates = str(dir_app_path / "templates")
+
+        # The cached helper does ``from django.apps import apps`` then
+        # ``apps.get_app_configs()`` — patch that method to return our two
+        # synthetic apps, isolating the guard from the real installed apps.
+        fake_configs = [
+            SimpleNamespace(path=str(file_app_path)),
+            SimpleNamespace(path=str(dir_app_path)),
+        ]
+
+        override = override_settings(
+            TEMPLATES=[
+                {
+                    "BACKEND": _DJUST_BACKEND,
+                    "DIRS": [],
+                    "APP_DIRS": True,
+                    "OPTIONS": {"context_processors": []},
+                }
+            ]
+        )
+        override.enable()
+        clear_template_dirs_cache()
+        monkeypatch.setattr(django_apps, "get_app_configs", lambda: fake_configs)
+        try:
+            dirs = get_template_dirs()
+        finally:
+            override.disable()
+            clear_template_dirs_cache()
+
+        assert file_templates not in dirs, (
+            "A plain FILE named 'templates' must NOT be collected; the guard "
+            "must use is_dir(), not exists() (#1805)."
+        )
+        assert dir_templates in dirs, (
+            "A real templates/ directory must still be collected — the is_dir() "
+            "guard must reject only non-directories (#1805)."
+        )
+
+
 @pytest.mark.django_db
 def test_resolution_failure_is_logged_not_silent(rf, _djust_backend_app_templates, caplog):
     """When the template-inheritance resolution path genuinely fails, the
@@ -273,6 +340,13 @@ def test_resolution_failure_is_logged_not_silent(rf, _djust_backend_app_template
     view = ExtendsHeadView()
     view.mount(rf.get("/"))
 
+    # NOTE: this monkeypatch target works ONLY because
+    # ``from djust._rust import resolve_template_inheritance`` lives INSIDE
+    # ``get_template()`` in mixins/template.py (the import-inside-try). If that
+    # import is ever hoisted to module top, ``mixins.template`` binds its own
+    # name and patching ``_rust.resolve_template_inheritance`` has no effect —
+    # the patch target must then become
+    # ``djust.mixins.template.resolve_template_inheritance`` (#1804/#1805).
     orig = _rust.resolve_template_inheritance
 
     def _boom(*args, **kwargs):
