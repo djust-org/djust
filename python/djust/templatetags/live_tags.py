@@ -1314,6 +1314,7 @@ def _render_sticky_child_html(
     view_id: str,
     sticky_id_value: str,
     request: Any,
+    view_path: str,
 ) -> Any:
     """Render an ALREADY-mounted/registered sticky child to its wrapped HTML.
 
@@ -1349,7 +1350,7 @@ def _render_sticky_child_html(
         if not template_name:
             raise TemplateSyntaxError(
                 "{%% live_render %%} child %r has neither ``template`` nor "
-                "``template_name`` set" % type(child).__name__
+                "``template_name`` set" % view_path
             )
         rendered_inner = get_template(template_name).render(child_context, request)
 
@@ -1959,6 +1960,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 preferred_view_id,
                 sticky_id_value,
                 request,
+                view_path,
             )
 
     child = child_cls()
@@ -2040,7 +2042,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     #      re-attaches each at ``[dj-sticky-slot="<id>"]`` via ``replaceWith()``
     #      after the new mount arrives (the #1471 reconnect path).
     if sticky_kwarg:
-        return _render_sticky_child_html(child, view_id, sticky_id_value, request)
+        return _render_sticky_child_html(child, view_id, sticky_id_value, request, view_path)
 
     # Non-sticky branch (the Phase A contract) — unchanged. Build the child's
     # context, render its template, stamp the view_id, and wrap in a plain
