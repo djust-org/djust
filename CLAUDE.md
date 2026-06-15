@@ -1137,6 +1137,54 @@ Two rules from the v1.1.0 security/nav arc (WS auth threat model + fixes,
   `git apply ~/.cache/pre-commit/patch<newest>` to restore. Prefer staging or
   stashing such work yourself before a commit so it never enters this window.
 
+## Process canonicalizations from v1.0.5-1 retro arc (production-incident drain)
+
+Two rules from the v1.0.5-1 drain (PRs #1789/#1790/#1792/#1793), which started
+from a live djust.org `/insights/` production incident and drained four open
+bugs.
+
+- **Reproduce a production incident LOCALLY before changing infra or theorizing
+  (#1789 / #1785).** The `/insights/`-reload incident burned three wrong
+  theories — OOM (bumped the pod memory limit), multi-pod state loss (scaled to
+  1 replica), and the template's variable-length DOM — before a local
+  WebSocket reproduction settled it frame-by-frame (mount `v1` → `set_period`
+  `html_update` `v1` → client version-mismatch → `request_html` → `_recovery_html`
+  None → reload). The bug was reproducible on a **single local process the whole
+  time**; every infra experiment was wasted motion because the trigger was
+  framework code, not deployment. **Rule:** for a production incident, stand up
+  the smallest faithful local reproduction (for WS/VDOM bugs, a
+  `WebsocketCommunicator` capturing the actual frames + versions) BEFORE editing
+  k8s resources, replica counts, or proposing an architecture theory. Each
+  "maybe it's X" that costs an infra change or a deploy must first survive "does
+  the local repro show X?" This is the deploy-axis companion to the existing
+  Bug-report triage + Reproduction-fidelity rules: distrust not just the cited
+  path but the cited *environment cause* until the local repro reproduces it.
+  Empirically: the memory-bump and scale-to-1 experiments both failed to fix it
+  (the user confirmed "still failing"), which is exactly the signal that the
+  cause is single-process/framework, not infra.
+
+- **Worktree-subagent drain pattern with symptom-up briefs (#1790/#1792/#1793).**
+  The three follow-on drain bugs were each implemented by a `general-purpose`
+  subagent in its own `git worktree` (isolation: `worktree`), given a
+  prescriptive brief (root cause + the exact reference pattern to lift +
+  reproduce-first + gate-off + two-commit shape + verification steps). Every one
+  caught a real error the brief got wrong, precisely because the brief told them
+  to trace symptom-up rather than trust it: #1787 found the real scaffolder is
+  `scaffolding/templates.py` (not the cited deprecated `cli.py`) and that there
+  were TWO blocking errors (A014 **and** admin.E403); #1784 found the
+  parallel-path twin (`render_full_template` AND `render_with_diff` both re-run
+  the tag on GET — #1646); #1786 pinned the exact leak path
+  (`_sync_state_to_rust` → `_apply_context_processors`, not the
+  `get_state`/`_snapshot_assigns` paths). **Rule:** for a multi-issue drain,
+  one worktree-isolated subagent per issue (parallel-safe per #180), each brief
+  carrying (a) the reference impl to lift verbatim (#1077), (b) an explicit
+  "verify the cited path/environment symptom-up" instruction, and (c) the
+  gate-off self-test (#1468). Review every resulting PR (CI + diff) before
+  merge — do not rubber-stamp. Caveat surfaced: the native pre-push hook
+  hardcodes `.venv/bin/python` and fails inside a worktree, so subagents push
+  `--no-verify` after running gates manually; CI is the authoritative gate.
+  Tracked at #1796.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

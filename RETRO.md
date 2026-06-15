@@ -332,6 +332,62 @@ issue or be explicitly closed with a reason.
 | 290 | Dogfood `dj-navigate` cross-view flow + a client-hook (3rd-party lib) in the demo so demo-checks catches nav/hydration/hook regressions | Retro v1.0.2 nav arc (PRs #1736, #1739, #1740) | #1742 | Closed | **Resolved in v1.0.2-3 (PR #1744).** Added 2 dj-navigate demo views + a DjustHooks widget + playwright guard (3 non-tautological assertions: no-reload sentinel, no-flash churn=0, hook-survives-nav); confirmed #1733 needs zero wiring. Guard-hardening → #1745. |
 | 291 | Canonicalize: a transport-level `close()` / state mutation is unsafe on a **multiplexed / collector** path — gate it on batch context | Retro v1.1.0 / PR #1780 review | — | Closed | **Resolved this retro** (CLAUDE.md "Multiplexed-path transport rule"). Case study: PR #1780's auth fix called `self.close(4403)` inside `handle_mount`; `handle_mount_batch._mount_one` swaps `send_json` to a collector but NOT `close()`, so the close fired mid-loop on the shared socket and killed sibling mounts. Fixed by gating the close on a `_mounting_in_batch` flag (clear `view_instance` always; close only when not batching). |
 | 292 | Canonicalize: pre-commit stash/restore can silently DROP unstaged working-tree files across a commit cycle; recover from `~/.cache/pre-commit/patch*` | Retro v1.1.0 | — | Closed | **Resolved this retro** (CLAUDE.md "Pre-commit can drop unstaged files"). Case study: the user's uncommitted `BEST_PRACTICES*.md` drafts vanished after a pipeline commit (pre-commit stashes UNSTAGED files, runs hooks on staged, restores — a failed restore leaves them only in the patch cache). Recovered by `git apply ~/.cache/pre-commit/patch<newest>`. |
+| 293 | Reproduce a production incident locally before infra/theory changes | Retro v1.0.5-1 / PR #1789 | — | Closed | **Resolved this retro** (CLAUDE.md "Reproduce a production incident LOCALLY before changing infra or theorizing"). #1785 /insights/ reload: OOM (mem bump) + multi-pod (scale-to-1) + template theories all wasted; bug was single-process-reproducible via WebsocketCommunicator the whole time. |
+| 294 | Worktree-subagent drain pattern with symptom-up briefs | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | — | Closed | **Resolved this retro** (CLAUDE.md "Worktree-subagent drain pattern"). Each subagent caught a brief error: real scaffolder + two ERRORs (#1787); parallel-path twin (#1784, #1646); exact leak path (#1786). |
+| 295 | pre-push hook hardcodes `.venv/bin/python` — fails in git worktrees (forces `--no-verify`) | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | #1796 | Open | Subagents pushed `--no-verify`; gates run manually, CI authoritative. |
+| 296 | Scaffold warning-cleanliness (C012/S005/A030/Y001/Y003) + deprecated `cli.py` startproject twin | PR #1790 (#1787) | #1791 | Open | Follow-up: #1787 fixed the boot blockers; warnings deferred. |
+| 297 | Serial-pytest order pollutes `test_checks` S005 + `auto_navigate_meta` (leaked `settings.DATABASES`) | Retro v1.0.5-1 (recurred across drain) | #1794 | Open | Passes isolated + under parallel `make test`; pre-existing on main. |
+| 298 | Flaky `test_total_wall_clock_is_max_not_sum` (absolute 100ms threshold false-fails under load) | Retro v1.0.5-1 (release `make test`) | #1795 | Open | Make it relative (parallel ≈ max not sum). |
+| 299 | Consumer-owned monotonic VDOM send-version (removes recovery round-trip on `html_update`) | PR #1789 (#1785) follow-up | #1788 | Open | Deferred — optimization not bug post-#1785; carries drift risk. |
+
+## v1.0.5-1 — Production-incident drain: WS recovery + render-path + scaffold (PRs #1789, #1790, #1792, #1793)
+
+**Date**: 2026-06-14
+**Scope**: Drained the djust.org `/insights/` production incident (#1785) + four follow-on open bugs (#1787 scaffold boot, #1784 embedded `live_render` 500, #1786 state pollution; #1788 deferred). Shipped in **1.0.5rc1** (#1785) and **1.0.5rc2** (#1787/#1784/#1786).
+**Tests at close**: ~7688 (parallel `make test`)
+
+### What We Learned
+
+**1. Reproduce a production incident locally before changing infra or theorizing.**
+The `/insights/` reload (#1785) burned three wrong theories — OOM (bumped pod memory 512Mi→1Gi), multi-pod state loss (scaled to 1 replica), and the template's variable-length DOM — before a local `WebsocketCommunicator` repro nailed it frame-by-frame: the DJE-053 `html_update` fallback never armed recovery, so a client version-mismatch → `request_html` → "Recovery HTML unavailable" → reload. It was single-process-reproducible the whole time; the memory bump and scale-to-1 both failed (user confirmed "still failing") — the signal that the cause was framework, not infra.
+**Action taken**: Added CLAUDE.md canon (#293, Closed) — "Reproduce a production incident LOCALLY before changing infra or theorizing."
+
+**2. Worktree-subagent drain pattern with symptom-up briefs catches brief errors.**
+#1787/#1784/#1786 each landed via a worktree-isolated `general-purpose` subagent given a lift-the-reference brief + "verify the cited path symptom-up" + gate-off. Each caught a real error the brief got wrong: #1787 — the live scaffolder is `scaffolding/templates.py` (not the cited deprecated `cli.py`) and there were TWO blocking ERRORs (A014 + admin.E403); #1784 — the parallel-path twin (`render_full_template` AND `render_with_diff`, #1646); #1786 — the exact leak path (`_sync_state_to_rust` → `_apply_context_processors`).
+**Action taken**: Added CLAUDE.md canon (#294, Closed) — "Worktree-subagent drain pattern with symptom-up briefs."
+
+**3. The pre-push hook is not worktree-portable.**
+It hardcodes `.venv/bin/python`; inside a git worktree (no `.venv`) it fails, so all three subagents pushed `--no-verify` after running the gates manually against the main `.venv` (CI is the authoritative gate).
+**Action taken**: Open — tracked in Action Tracker #295 (GitHub #1796).
+
+### Insights
+
+- The CHANGELOG conflict between the two parallel drain PRs (#1784 + #1786, both adding to `[Unreleased]` `### Fixed`) was a trivial markers-only "keep both" resolution — the two-commit shape (#181) keeps impl off the CHANGELOG, so only the docs commit conflicts.
+- The `_arm_recovery` call-site count-guard (#1645/#1125) did double duty in #1785: it forced a conscious count bump for the new arming site AND caught a false count from a `self._arm_recovery(` literal inside a docstring (naive `src.count`) — reworded the comment so the guard stays accurate.
+- `gh issue create --label <nonexistent>` fails ("label not found") and a piped `| grep -oE '[0-9]+$'` then yields empty — it *looks* filed but isn't (the S005 issue had to be refiled as #1794). Verify the parsed issue number is non-empty.
+- Every PR carried its per-PR retro comment on merge, so this retro hit **zero** `RETRO_GATE_VIOLATION`s.
+
+### Review Stats
+
+| Metric | #1789 | #1790 | #1792 | #1793 | Total |
+|--------|-------|-------|-------|-------|-------|
+| Issue | #1785 | #1787 | #1784 | #1786 | 4 |
+| 🔴 at review | 0 | 0 | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | yes | yes | 4/4 |
+| Required CI | green | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.5-1 retro arc" (reproduce-prod-incident-locally; worktree-subagent drain).
+**Releases**: 1.0.5rc1 (#1785) + 1.0.5rc2 (#1787/#1784/#1786); djust.org deployed onto rc1 (insights verified by the user) + pinned to `==1.0.5rc2`.
+
+### Open Items
+
+- [ ] pre-push worktree portability — Action Tracker #295 (GitHub #1796)
+- [ ] scaffold warning-cleanliness + `cli.py` twin — Action Tracker #296 (GitHub #1791)
+- [ ] `test_checks` S005 / `auto_navigate` pollution — Action Tracker #297 (GitHub #1794)
+- [ ] flaky wall-clock perf test — Action Tracker #298 (GitHub #1795)
+- [ ] consumer-owned VDOM send-version (deferred) — Action Tracker #299 (GitHub #1788)
 
 ## v1.0.4 — Security hardening & navigation arc (rc1; PRs #1775, #1776, #1780, #1781, #1782, #1783)
 
