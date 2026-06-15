@@ -3661,6 +3661,14 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.5-4 — system-check DX + worktree tooling drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Drain two post-rc4 DX/tech-debt issues: a misleading + unsuppressible T004 system check, and the worktree pre-push gap left after #1798. Ships in 1.0.5.
+
+**#1809 — T004 false positive for document-dispatched `djust:` events + ignores `suppress_checks` (P1, bug)** — T004 (`_DOC_DJUST_EVENT_RE`, `python/djust/checks.py`) flags `document.addEventListener('djust:navigate-end' | 'hvr-*' | 'layout-changed' | …)` as "should be window", but djust itself dispatches that family on `document` (`client.js`: `document.dispatchEvent(new CustomEvent('djust:navigate-end'))`), so the `fix_hint` would break correct listeners. Separately, the T004 emission site (`checks.py:3237`) doesn't call `_is_check_suppressed("djust.T004")` (contrast the V004 gate), so `DJUST_CONFIG["suppress_checks"]=["T004"]` is a no-op. Fix BOTH: scope T004 to the window-dispatched event family (allowlist; exclude navigate-*/hvr-*/layout-changed/ws-reconnected/time-travel-*) AND add the suppress guard. Scope to T004 only — the broader ~30-site sweep is #1607; file a follow-up if more sites are found (#1079).
+
+**#1810 — worktree pre-push tests the MAIN source tree, not the linked worktree (P2, tech-debt)** — #1798 fixed interpreter resolution from any worktree, but editable `djust` still imports from the main checkout, so a worktree pre-push runs the suite against the wrong tree → subagents still `--no-verify`. Evaluate PYTHONPATH-shadowing the worktree `python/` in the hook vs accept-and-document. Low priority (CI authoritative).
+
 ### Milestone: v1.0.5-3 — sticky-child interactivity + DX drain (drain bucket → ships in 1.0.5)
 
 *Goal:* Drain the post-rc3 sticky-child findings from the LLM eval harness (siblings of #1784/#1801) + a code-review nit. Ships in 1.0.5.
