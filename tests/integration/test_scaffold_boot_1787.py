@@ -120,3 +120,60 @@ def test_scaffold_asgi_imports_and_check_passes(tmp_path):
     assert "admin.E403" not in combined, (
         "admin.E403 fired — no DjangoTemplates backend configured for admin"
     )
+
+
+class TestScaffoldWarningClean1791:
+    """#1791: a fresh ``djust new`` project must pass ``manage.py check`` with
+    ZERO warnings, not merely exit 0.
+
+    #1787 (PR #1790) fixed the boot blockers (errors). The warning-level
+    remainders it deferred — djust.C012 (manual client.js in base.html),
+    djust.S005 (demo view exposes state without auth), djust.Y001 / djust.Y003
+    (icon-only button / unlabeled input accessibility), and djust.A030
+    (django.contrib.admin without brute-force protection) — are fixed here:
+
+    - C012: base.html uses ``{% djust_client_config %}`` (client.js is
+      auto-injected by the LiveView pipeline); no manual ``<script>`` tag.
+    - S005: the in-memory demo view declares ``login_required = False`` to
+      acknowledge it is intentionally public.
+    - Y001 / Y003: the index template's icon-only buttons get ``aria-label``s
+      and the inputs get ``aria-label``s.
+    - A030: the default scaffold no longer installs ``django.contrib.admin``
+      (it is opt-in via ``--with-db`` / ``--from-schema``), so the brute-force
+      warning does not fire on a plain project.
+
+    This test fails against the pre-#1791 templates (which warned on all five).
+    """
+
+    APP = "warnclean1791"
+
+    @pytest.mark.slow
+    def test_check_emits_zero_warnings(self, tmp_path):
+        proj = generator.generate_project(self.APP, target_dir=str(tmp_path), auto_setup=False)
+
+        base_env = dict(os.environ)
+        base_env["DJANGO_SETTINGS_MODULE"] = f"{self.APP}.settings"
+        base_env["PYTHONPATH"] = os.pathsep.join(
+            [str(proj), base_env.get("PYTHONPATH", "")]
+        ).rstrip(os.pathsep)
+
+        chk = _run([sys.executable, "manage.py", "check"], proj, base_env)
+        if chk.returncode != 0 and _missing_deps(chk.stderr):
+            pytest.skip(
+                f"generated project deps not installed in this env: {chk.stderr.strip()[-200:]}"
+            )
+        combined = chk.stdout + chk.stderr
+
+        # Must still exit 0 (no ERRORS) — the #1787 invariant.
+        assert chk.returncode == 0, f"scaffolded `manage.py check` did not exit 0:\n{combined}"
+
+        # And must be WARNING-clean — the #1791 invariant.
+        assert "WARNINGS:" not in combined, (
+            f"scaffolded `manage.py check` emitted warnings (#1791 regression):\n{combined}"
+        )
+
+        # Belt-and-suspenders: each specific deferred warning ID is absent.
+        for warn_id in ("djust.C012", "djust.S005", "djust.Y001", "djust.Y003", "djust.A030"):
+            assert warn_id not in combined, (
+                f"{warn_id} fired on a fresh scaffold (#1791 regression):\n{combined}"
+            )

@@ -157,6 +157,23 @@ def _build_context(
     if with_streaming:
         template_extra += T.STREAMING_TEMPLATE_EXTRA
 
+    # django.contrib.admin is opt-in: only wired when the project ships models
+    # (--with-db / --from-schema), which register a ModelAdmin. The default
+    # in-memory scaffold omits admin so a fresh `manage.py check` is warning-
+    # clean (no djust.A030 brute-force-protection warning, no admin.E403
+    # second-template-backend requirement).
+    needs_admin = bool(with_db or schema)
+    if needs_admin:
+        admin_app = T.ADMIN_APP_ENTRY
+        admin_template_backend = T.ADMIN_TEMPLATE_BACKEND
+        admin_url_import = T.ADMIN_URL_IMPORT
+        admin_url = T.ADMIN_URL_ENTRY
+    else:
+        admin_app = ""
+        admin_template_backend = ""
+        admin_url_import = ""
+        admin_url = ""
+
     ctx = {
         "app_name": app_name,
         "app_class": app_class,
@@ -173,6 +190,10 @@ def _build_context(
         "extra_urls": extra_urls,
         "nav_extra": nav_extra,
         "template_extra": template_extra,
+        "admin_app": admin_app,
+        "admin_template_backend": admin_template_backend,
+        "admin_url_import": admin_url_import,
+        "admin_url": admin_url,
         "with_auth": with_auth,
         "with_db": with_db,
         "with_presence": with_presence,
@@ -293,6 +314,11 @@ def _create_db_views(pkg_dir: Path, tpl_dir: Path, app_name: str, ctx: Dict[str,
     content += "\n\n"
     content += "class %s(%s):\n" % (ctx["view_class"], view_bases)
     content += '    template_name = "%s/index.html"\n' % app_name
+    content += "\n"
+    # This starter demo to-do list has no per-user data, so it is intentionally
+    # public. ``login_required = False`` acknowledges that explicitly (silences
+    # djust.S005). Set ``login_required = True`` when you add user-scoped state.
+    content += "    login_required = False\n"
     content += "\n"
     content += "    def mount(self, request, **kwargs):\n"
     content += '        self.search_query = ""\n'
