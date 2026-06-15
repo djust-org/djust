@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Flaky parallel-render timing test made load-relative (#1795).** `TestParallelRender::test_total_wall_clock_is_max_not_sum` in `tests/integration/test_chunks_overlap.py` asserted an absolute wall-clock ceiling (`elapsed < 0.10`, 100ms) that false-failed under CPU load — observed 104–112ms during full `make test` runs while passing in isolation. The thunk sleeps are real time, but the surrounding async scheduling overhead inflates with load, pushing a genuinely parallel render past any fixed millisecond ceiling. The assertion is now **relative**: it measures a serial baseline in the same process under the same load (awaiting N identical thunks one at a time), then asserts the parallel render is at most half that baseline (`parallel < serial / 2`). Load inflates both measurements proportionally so the speedup ratio stays stable across machines and load; a sequential implementation (parallel ≈ serial) can never satisfy `serial/2`, while a real parallel render (true ratio ≈ 1/3) passes with a generous jitter margin. Gate-off self-test verifies non-tautology — a simulated sequential render fails the assertion. No production code change; test-only.
+
 ## [1.0.5rc2] - 2026-06-14
 
 ### Fixed
