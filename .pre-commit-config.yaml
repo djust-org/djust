@@ -160,7 +160,7 @@ repos:
     hooks:
       - id: check-doc-snippets
         name: check doc snippets + version/size claims (#1500, #1707)
-        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/check-doc-snippets.py'
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/check-doc-snippets.py'
         language: system
         files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$
         pass_filenames: false
@@ -186,7 +186,7 @@ repos:
       # Python tests
       - id: pytest
         name: pytest
-        entry: bash -c 'PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -q'
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q'
         language: system
         types: [python]
         pass_filenames: false
@@ -195,7 +195,7 @@ repos:
       # Rust tests
       - id: cargo-test
         name: cargo test
-        entry: bash -c 'PYO3_PYTHON=$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live --release -q'
+        entry: bash -c 'PYO3_PYTHON="$(bash scripts/run-with-venv-python.sh --print)" cargo test --workspace --exclude djust_live --release -q'
         language: system
         types: [rust]
         pass_filenames: false
@@ -226,7 +226,7 @@ repos:
       # Pairs with `make docs-lint` for manual / CI invocation.
       - id: docs-lint
         name: docs stale-MD-ref check
-        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/docs-lint.py'
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/docs-lint.py'
         language: system
         files: ^docs/.*\.md$
         pass_filenames: false
@@ -240,7 +240,7 @@ repos:
       # the def line with `# noqa: dead-method-allowed`.
       - id: check-no-dead-private-methods
         name: check no dead private methods
-        entry: bash -c '.venv/bin/python scripts/check-no-dead-private-methods.py'
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-no-dead-private-methods.py'
         language: system
         types: [python]
         pass_filenames: false
@@ -252,7 +252,7 @@ repos:
       # PR #1225 + PR #1226 both bit this in 24 hours; the fix is structural.
       - id: check-no-comma-list-closes
         name: check no comma-list Closes
-        entry: bash -c '.venv/bin/python scripts/check-no-comma-list-closes.py'
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-no-comma-list-closes.py'
         language: system
         always_run: true
         pass_filenames: false
@@ -263,7 +263,7 @@ repos:
       # bugs before they reach CI (#1290).
       - id: check-handler-contracts
         name: check handler contracts
-        entry: bash -c '.venv/bin/python scripts/check-handler-contracts.py'
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-handler-contracts.py'
         language: system
         always_run: true
         pass_filenames: false
