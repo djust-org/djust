@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pre-push hook (and `make` targets) now resolve the project venv from any git worktree (#1796).** The native pre-push hook entries in `.pre-commit-config.yaml` — and ~31 `make` targets — hardcoded `.venv/bin/python` relative to the current working directory. A `git worktree` (e.g. the ones pipeline-drain subagents create under `.claude/worktrees/`) has no `.venv` of its own, so the hook failed with `bash: .venv/bin/python: No such file or directory` (exit 127), forcing `git push --no-verify` and skipping the real gates. New `scripts/run-with-venv-python.sh` resolves the interpreter relative to the MAIN working tree root (`dirname` of the absolute `--git-common-dir`, which points at `<main-root>/.git` for both the main checkout and every linked worktree), falling back to `uv run python` then `python3` on PATH when no `.venv` exists (CI, fresh clone). All 7 hook entries route through it, and the Makefile's hardcoded references collapse to a single `$(PYTHON)` variable computed once via the resolver — so the pre-push gates and `make test` both run from any worktree instead of erroring. 6 regression cases in `tests/test_run_with_venv_python.py` (real `git worktree` resolution, main-checkout no-regression, `python3` fallback, no-interpreter error, plus source-pins on the config and Makefile); the worktree case fails against the pre-#1796 resolver via the gate-off self-test.
+
 ## [1.0.5rc2] - 2026-06-14
 
 ### Fixed
