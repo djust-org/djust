@@ -74,6 +74,9 @@ keeps the 1.0 docs/canon honest.
 
 | Priority | Issue | Summary |
 |---|---|---|
+| **P1** | #1802 | fix: embedded sticky-child (`{% live_render sticky=True %}`) events return `noop` — handler runs but no patch is sent, so sticky widgets are render-only/non-interactive |
+| **P2** | #1803 | DX/check: a sticky-child template with its OWN `dj-view` creates a nested/duplicate view binding (events silently don't bind) — add a system check, only warned in an example comment today |
+| **P2** | #1805 | tech-debt: `get_template_dirs` uses `.exists()` while `DjustTemplateBackend._get_template_dirs` uses `.is_dir()` for the app templates dir |
 | **P1** | #1801 | fix: `{% extends %}` pages render WITHOUT the base `<head>` on initial HTTP GET — served as dj-root fragment only (silent-catch sets `_full_template=None`) |
 | **P1** | #1785 | fix(websocket): WS recovery forces full page reload — DJE-053 `html_update` path omits `_arm_recovery` (VERIFIED; breaks djust.org /insights/ on 1.0.4) |
 | **P1** | #1784 | fix: embedded `{% live_render %}` 500s on initial HTTP render — sticky-view pages cannot be served |
@@ -3657,6 +3660,16 @@ the old placement still serves during blue/green). `djust deploy` should print
 "rolling out" until it's `True` so users stop re-testing stale rootfs.
 
 ---
+
+### Milestone: v1.0.5-3 — sticky-child interactivity + DX drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Drain the post-rc3 sticky-child findings from the LLM eval harness (siblings of #1784/#1801) + a code-review nit. Ships in 1.0.5.
+
+**#1802 — embedded sticky-child events return `noop` (P1, bug)** — a `{% live_render "Child" sticky=True %}` widget's `dj-click` routes to the child handler and the handler runs, but the consumer returns a bare `noop` (no patch produced/sent), so the DOM never updates — sticky widgets are render-only/non-interactive. Adjacent to the #1467 sticky-child event-routing investigation (events route via `view_id` at `websocket.py:2689`). Reproduce-first: a sticky child with a state-mutating `@event_handler`, click → assert a patch is sent.
+
+**#1803 — sticky-child with its own `dj-view` → nested view binding (P2, DX/check)** — the sticky wrapper already emits `<div dj-view dj-sticky-view=…>` (`static/djust/src/45-child-view.js:24-26`); if the child template ALSO puts `dj-view` on its root, the output nests a duplicate `dj-view` and the child's client mount breaks (events silently don't bind). Only warned in an example-template comment today. Add a system check (and document on the `dj-sticky-view` reference).
+
+**#1805 — `.exists()` vs `.is_dir()` collector nit (P2, tech-debt)** — from #1804 review: `utils._get_template_dirs_cached` guards the app `templates/` dir with `.exists()` while `DjustTemplateBackend._get_template_dirs` (`template/backend.py:69`) uses `.is_dir()`; the two parallel collectors should agree. Switch the cached helper to `is_dir()`.
 
 ### Milestone: v1.0.5-2 — render-path + cleanup drain (drain bucket → ships in 1.0.5)
 
