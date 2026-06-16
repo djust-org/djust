@@ -11,14 +11,18 @@ djust provides `live_patch()` and `live_redirect()` for managing URL state witho
 
 ## Quick Start
 
-### 1. Add NavigationMixin to your view
+### 1. Subclass LiveView (navigation is built in)
+
+`NavigationMixin` is already included in `LiveView`, so its navigation helpers are always
+available — just subclass `LiveView`. Do **not** also inherit `NavigationMixin`
+(`class ProductListView(NavigationMixin, LiveView)`): it is already in `LiveView`'s bases, so
+that raises `TypeError: Cannot create a consistent method resolution`.
 
 ```python
 from djust import LiveView
-from djust.mixins.navigation import NavigationMixin
 from djust.decorators import event_handler
 
-class ProductListView(NavigationMixin, LiveView):
+class ProductListView(LiveView):
     template_name = 'products/list.html'
 
     def mount(self, request, **kwargs):
@@ -149,7 +153,7 @@ Declarative `live_redirect`. On click, navigates to a different view over the We
 ### Filtering with URL Params
 
 ```python
-class SearchView(NavigationMixin, LiveView):
+class SearchView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'search.html'
 
     def mount(self, request, **kwargs):
@@ -196,7 +200,7 @@ class SearchView(NavigationMixin, LiveView):
 ### Multi-Page App Navigation
 
 ```python
-class DashboardView(NavigationMixin, LiveView):
+class DashboardView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'dashboard.html'
 
     def mount(self, request, **kwargs):

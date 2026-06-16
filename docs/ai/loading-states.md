@@ -31,10 +31,12 @@
 
 ```python
 from djust import LiveView
-from djust.mixins.async_work import AsyncWorkMixin
 from djust.decorators import event_handler
 
-class MyView(AsyncWorkMixin, LiveView):
+# AsyncWorkMixin is already included in LiveView — just subclass LiveView.
+# (Inheriting it explicitly, e.g. `class MyView(AsyncWorkMixin, LiveView)`, raises
+#  TypeError: Cannot create a consistent method resolution.)
+class MyView(LiveView):
     def mount(self, request, **kwargs):
         self.loading = False
         self.result = ""
@@ -81,7 +83,7 @@ def _do_work(self):
 ## Complete Example
 
 ```python
-class ReportView(AsyncWorkMixin, LiveView):
+class ReportView(LiveView):  # AsyncWorkMixin is built into LiveView
     template_name = "report.html"
 
     def mount(self, request, **kwargs):
