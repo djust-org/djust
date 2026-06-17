@@ -42,13 +42,11 @@ All handlers in `python/djust/websocket.py` process untrusted client data:
 - ✅ **Rate limiting** (line 552): Global message rate limit
 
 **Potential Issues**:
-- ⚠️ **URL injection** (line 755): `data.get("url", "/")` used directly in request path - could contain path traversal (`../../`) or XSS payloads if not sanitized downstream
+- ✅ **URL injection** (#1819, FIXED): the client-supplied `data.get("url", "/")` is now validated by the shared `_validate_mount_url()` helper at both `RequestFactory` sites (`handle_mount` + the `live_redirect` request rebuild) before reaching `RequestFactory.get()` / `resolve()` / logs. Empirically confirmed `RequestFactory().get()` does **not** normalize `..` (so `../../admin/` leaked into `request.path` as `/..../admin/` and `request.path_info` verbatim), and silently accepts absolute / protocol-relative URLs; Django *does* strip bare CR/LF from the path. The helper rejects non-`/`-prefixed, CR/LF-bearing, absolute/protocol-relative, and `..`-segment URLs → falls back to `/`.
 - ⚠️ **Params dict** (line 618): Arbitrary dict passed to mount() without schema validation - malicious keys could exploit bugs in mount() implementations
-- 🔍 **Need to verify**: Does `RequestFactory().get()` sanitize the URL path?
 
 **Test Coverage**:
-- ✅ `test_security_mount_validation.py` - Tests type validation (rejects `builtins.dict`, `os.system`, `pathlib.Path`)
-- ❌ **Missing**: URL injection tests
+- ✅ `test_security_mount_validation.py` - URL-injection tests (#1819): path traversal (`../../admin/`, `/foo/../../etc/passwd`), CR/LF injection, absolute / protocol-relative URLs all normalized to `/`; legitimate `/dashboard?q=1` preserved; both-call-site source pin; gate-off verified
 - ❌ **Missing**: Malicious params dict tests
 
 ---

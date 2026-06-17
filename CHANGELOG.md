@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Validate client-supplied mount/redirect URL (#1819).** The WebSocket
+  ``mount`` and sticky-child ``live_redirect`` frames carry the current page
+  URL, which the consumer fed straight into ``RequestFactory.get()``,
+  ``resolve()``, query-string concatenation, and log statements at two sites in
+  ``python/djust/websocket.py`` without validation. ``RequestFactory`` does not
+  normalize ``..`` segments, so a crafted ``url`` of ``../../admin/`` landed in
+  ``request.path`` as ``/..../admin/`` (path traversal; an auth/routing
+  decision keyed on ``request.path`` would see the traversed path); absolute
+  (``https://evil.com/page``) and protocol-relative (``//evil.com/page``) URLs
+  were silently accepted as relative requests, and the raw value flowed into
+  logs and ``urlencode`` concatenation (CRLF / log-injection surface). A shared
+  module-level helper ``_validate_mount_url()`` is now applied at both mount
+  sites (one helper, two call sites — the structural cure per #1646): it rejects
+  any url that is empty / non-string / does not start with ``/``, contains a
+  carriage-return or line-feed, is absolute or protocol-relative, or contains a
+  ``..`` path segment — falling back to ``/``. Legitimate site-relative URLs
+  (e.g. ``/dashboard?q=1``) pass through unchanged. New regression cases in
+  ``python/djust/tests/test_security_mount_validation.py`` pin the empirical
+  Django behavior, the helper's reject/preserve contract, the
+  validated-url-is-safe-for-``RequestFactory`` end-to-end property, and a
+  both-sites-validate source guard.
+
 ### Fixed
 
 - **Consumer-owned monotonic VDOM send-version (#1788).** The WebSocket
