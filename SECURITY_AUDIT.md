@@ -69,15 +69,15 @@ All handlers in `python/djust/websocket.py` process untrusted client data:
 - ✅ **Component lookup** (line 1088): Validates component exists before routing
 
 **Potential Issues**:
-- ⚠️ **Type coercion** (line 1017, 1108, 1149): `coerce=True` by default - could allow unexpected type conversions leading to logic bugs
-  - Example: Attacker sends `{"id": "999 OR 1=1"}` with coercion → might bypass validation if not careful
+- ✅ **Type coercion** (line 1017, 1108, 1149): `coerce=True` by default — AUDITED SAFE (#1820). Malformed strings (`"999 OR 1=1"`, hex `"0x41"`, `"3.14 OR 1=1"`) fail coercion (`int()`/`float()` raise), are kept as the original string, then rejected by type validation (`valid is False`) — the handler is NOT invoked. No silent truncation to `999`. See "Type Coercion Contract" below.
+  - Example: Attacker sends `{"id": "999 OR 1=1"}` with coercion → `int()` raises → event rejected, handler never runs.
 - ⚠️ **Positional args** (line 981): `params.pop("_args", [])` - arbitrary list merged into params - could override named params
 - ⚠️ **Embedded view routing** (line 989-1000): `view_id` lookup - what if view_id is a crafted string attempting injection?
-- 🔍 **Need to review**: `validate_handler_params()` implementation for edge cases
+- ✅ **Reviewed** (#1820): `validate_handler_params()` implementation edge cases — audited safe (see "Type Coercion Contract" below).
 
 **Test Coverage**:
 - ✅ `test_event_security.py` - Extensive event handler security tests
-- ❌ **Missing**: Type coercion edge case tests (e.g., SQL injection via coerced strings)
+- ✅ **Type coercion edge cases** (#1820): `TestCoercionSecurityEdgeCases` in `python/tests/test_validation.py` (incl. SQL-injection-style strings, hex, bool allowlist, float overflow, typed-list)
 - ❌ **Missing**: Positional args override tests
 
 ---
@@ -335,7 +335,7 @@ Later: `self.api_client.call()` → `AttributeError: 'str' object has no attribu
 
 ### High Priority
 
-5. ⚠️ **TODO**: Review `validate_handler_params()` type coercion edge cases
+5. ✅ **DONE** (#1820): Reviewed `validate_handler_params()` type coercion edge cases — see "Type Coercion Contract" below. Audited safe: malformed `int`/`float` inputs are rejected (not truncated); `bool` uses an allowlist (not `bool(non_empty_string)`); typed-list malformed elements are not partially coerced. Pinned by `TestCoercionSecurityEdgeCases` in `python/tests/test_validation.py`.
 6. ⚠️ **TODO**: Add runtime state serialization validation (`_is_serializable()`)
 7. ⚠️ **TODO**: Search codebase for `|safe` filter usage (potential XSS)
 8. ⚠️ **TODO**: Verify Rust template engine handles JavaScript context properly
@@ -367,7 +367,7 @@ Later: `self.api_client.call()` → `AttributeError: 'str' object has no attribu
 
 - ❌ **URL injection** tests
 - ❌ **File upload security** tests
-- ❌ **Type coercion edge cases**
+- ✅ **Type coercion edge cases** (#1820): `TestCoercionSecurityEdgeCases` in `python/tests/test_validation.py` (11 cases)
 - ❌ **Positional args override** tests
 - ❌ **Template XSS** tests (Rust side)
 
@@ -428,6 +428,33 @@ if not isinstance(user_id, int):  # ✅ Strict type check
     raise ValueError("ID must be integer")
 User.objects.filter(id=user_id)
 ```
+
+#### Type Coercion Contract (`validate_handler_params`, audited #1820)
+
+djust coerces event-handler params by default (`coerce=True`) because Template
+`data-*` attributes always arrive as strings. The coercion was audited (#1820)
+and is **safe by design** — it does NOT silently convert adversarial strings
+into valid-looking values. Empirically verified behavior per target type
+(`python/djust/validation.py:_coerce_single_value` →
+`validate_parameter_types`):
+
+| Target type | Coercion | Malformed input (e.g.) | Outcome |
+|---|---|---|---|
+| `int` | `int(value)` (base-10) | `"999 OR 1=1"`, `"0x41"` | `int()` raises → original string kept → type validation fails → **event rejected, handler NOT called** (no truncation to `999`) |
+| `float` | `float(value)` | `"3.14 OR 1=1"` | raises → **rejected** |
+| `float` | `float(value)` | `"1e309"`, `"inf"`, `"nan"` | valid Python floats → **accepted** (intentional). Handlers doing bound checks/arithmetic on a coerced `float` must guard non-finite values (`math.isfinite`) themselves |
+| `bool` | **ALLOWLIST**: `value.lower() in ("true","1","yes","on")` | `"true; DROP TABLE"`, `"false"`, `"0"` | → `False`. This is NOT `bool(non_empty_string)`, so non-allowlisted strings are falsy — **no truthiness logic-bypass** |
+| `Decimal` / `UUID` | `Decimal(value)` / `UUID(value)` | malformed | raises → original kept → rejected |
+| `List[T]` | element-wise coerce | `"1,2,OR 1=1"` | inner coercion raises → **whole** coercion abandoned, original string kept (no partial `[1,2]`). `List[T]` is a subscripted generic so `validate_parameter_types` skips it — the handler receives the unmodified original string; type your handler defensively |
+
+Rejected events are logged (`sanitize_for_log`) and the handler is never
+invoked. The strictest posture is `@event_handler(coerce_types=False)` (read by
+`get_handler_coerce_setting` in `python/djust/websocket_utils.py` and passed as
+`coerce=False`), under which ANY string for a typed param is rejected outright —
+this is the existing knob that fulfills the role of a "strict types" option, so
+no separate `@strict_types` decorator was added.
+
+Pinned by `TestCoercionSecurityEdgeCases` in `python/tests/test_validation.py`.
 
 ### Rule 4: Escape at Render Time, Not Storage
 
