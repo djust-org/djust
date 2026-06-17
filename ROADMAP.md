@@ -3661,6 +3661,18 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.6-2 — security + DX drain (drain bucket → ships in 1.0.6)
+
+*Goal:* Drain two security hardening items + a lint, all from `SECURITY_AUDIT.md`. The `checks.py` modularization (#1822) is tracked here but handled as a SEPARATE PR after #1821 (it interacts with S007 placement; LOW pri, 4,221-LOC pure refactor — not bundled with the security work).
+
+**#1819 — Validate URL parameter in `handle_mount()` to prevent path traversal / CRLF injection (P0, security)** — `handle_mount` uses `data.get("url", "/")` in `RequestFactory.get()` without validation (TWO sites: `websocket.py:1955` AND `:4691` — parallel-path #1646). A crafted WS mount `url` with `../../admin/` or `\r\n` could set request context to an admin path (auth-bypass risk if a view inspects `request.path`), inject CRLF, or pollute logs. Fix: validate the url (must start with `/`, no `\r`/`\n`, reject absolute URLs) at BOTH sites — prefer a shared helper. Reproduce-first: verify what `RequestFactory.get()` actually does with each malicious input (the issue says "needs verification") before asserting the fix is load-bearing. Regression tests per the issue (`../../admin/`, CRLF, absolute URL).
+
+**#1820 — Audit type-coercion edge cases in `validate_handler_params()` (P0, security)** — handler params coerce by default (`coerce=True`). Audit all coercion paths (str→int/float/bool) for malformed inputs (`"999 OR 1=1"`, `"true; DROP TABLE"`, `"1e308"`, `"0x41"`). Likely already safe (Python `int("999 OR 1=1")` RAISES, not truncates) — but VERIFY empirically, document the behavior, add security regression tests proving malformed inputs raise (not silently coerce), and consider a `@strict_types` option. May be investigation + test-hardening rather than a behavior change — let the audit determine.
+
+**#1821 — Add S007 static check for `upload_entry.client_name|safe` patterns (P2, lint)** — client-supplied upload filenames are auto-escaped by default, but `{{ upload_entry.client_name|safe }}` bypasses escaping → stored XSS. Add check `S007` (WARNING) flagging `client_name|safe` in templates. Empirical canary (#1459): construct a synthetic `client_name|safe` template + confirm S007 fires; confirm a non-`|safe` use does not. Honor `_is_check_suppressed("djust.S007")`. New IDs after the existing S001–S005.
+
+**#1822 — Modularize `checks.py` (4,221 LOC) into submodules (LOW, refactor — SEPARATE PR)** — pure refactor; preserve all check IDs + Django `AppConfig.checks` discovery via `__init__.py` re-exports. Single-script transformation (#1312). Handle AFTER #1821 lands (so S007 modularizes with the rest). Not part of the security drain wave.
+
 ### Milestone: v1.0.6-1 — consumer-owned VDOM send-version (drain bucket → ships in 1.0.6)
 
 *Goal:* Land the deferred #1788 (Action Tracker #299) — the wire-version optimization that removes the recovery round-trip on `html_update` baseline-loss. Ships in the next patch (1.0.6).
