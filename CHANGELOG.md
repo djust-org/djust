@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **dj-if ``MoveSubtree`` keyed on RELATIVE position, not absolute offset
+  (#1826).** A ``{% if %}``-wrapped element inside a ``{% for %}`` loop dropped
+  a table row per toggle (P0 regression in 1.0.6rc1). ``diff_html``'s
+  matched-boundary move-decision in ``crates/djust_vdom/src/diff.rs`` compared
+  ABSOLUTE child offsets (``old_off + ob.open`` vs ``new_off + nb.open``).
+  Filling an EARLIER empty dj-if body inserts nodes that shift the absolute
+  index of every LATER boundary even though those boundaries did NOT move
+  relative to their siblings — so the differ emitted spurious
+  ``MoveSubtree { id: "if-b-0" / "if-c-0" }`` ops the client could not pair
+  (``close marker not found``), ~15/22 patches failed, and an ``html_recovery``
+  morph dropped a row. The decision now keys on the boundary's position
+  RELATIVE to its non-boundary siblings (a new ``non_boundary_count_before``
+  helper over the existing ``excluded`` mask) plus its ordinal among same-level
+  boundaries; both are invariant to a sibling boundary's span-length change, so
+  only a GENUINE reposition (a real element inserted/removed before the
+  boundary, or a boundary reorder) emits a move. The move TARGET index is
+  unchanged. The ``#text``-flattening also seen in #1826 (Defect 1) is an
+  html5ever foster-parenting artifact of a bare ``<tbody>`` fragment (no
+  ``<table>`` ancestor); it does not reproduce in production and is scoped out
+  to follow-up #1827. Covered by the Rust reproducer
+  ``crates/djust_vdom/tests/test_dj_if_loop_spurious_move_1826.rs``
+  (loop-fill no-spurious-move + client-faithful round-trip + genuine-reposition
+  guard; gate-off verified per #1468) and 4 regression cases in
+  ``python/djust/tests/test_diff_html_if_marker_rows_1826.py``. The two #1666
+  guards and the proptest / torture dj-if round-trip nets stay green.
+
 ## [1.0.6rc1] - 2026-06-17
 
 ### Added
