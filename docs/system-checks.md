@@ -32,6 +32,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
 | S004 | Security | Warning | DEBUG=True with non-localhost ALLOWED_HOSTS |
 | S005 | Security | Warning | LiveView exposes state without authentication |
+| S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -299,6 +300,21 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: LiveView `mount()` does not check `request.user.is_authenticated`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.S005"]`
 - **False positives**: Intentionally public views (anonymous landing pages, public dashboards)
+
+### S007 — `client_name|safe` renders an unsanitised upload filename
+- **Severity**: Warning
+- **Method**: Template scan (regex over template files)
+- **What it detects**: `{{ <expr>.client_name|safe }}` (whitespace around `|` is
+  tolerated). An upload entry's `client_name` is the attacker-controlled
+  original filename, stored without sanitisation. `|safe` disables Django's
+  auto-escaping, so a `<script>`-bearing filename renders as live HTML —
+  a stored-XSS vector.
+- **Fix**: Remove `|safe` (auto-escaping is the safe default), or sanitise the
+  value first with `django.utils.html.escape()`.
+- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['S007']}` (or
+  `'djust.S007'`) — only when the rendered value is pre-sanitised.
+- **False positives**: A `client_name` value that has already been sanitised
+  server-side before reaching the template.
 
 ---
 
