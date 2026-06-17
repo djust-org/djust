@@ -131,6 +131,75 @@ def _is_allowed_origin(origin: Optional[bytes]) -> bool:
     return validate_host(match_host, allowed_hosts)
 
 
+def _validate_mount_url(url: Optional[str]) -> str:
+    """
+    Validate a client-supplied mount/redirect URL, falling back to ``"/"``.
+
+    The client sends the current page URL in the WebSocket ``mount`` /
+    ``live_redirect`` frames so the server can rebuild a faithful
+    ``HttpRequest`` (via ``RequestFactory``). That value is fully
+    attacker-controlled, so it must be a *site-relative path* before it is
+    fed to ``RequestFactory.get()``, ``resolve()``, log statements, or string
+    concatenation with a query string.
+
+    This is defense-in-depth. Django's WSGI path parsing already strips bare
+    ``\\r``/``\\n`` from the path and discards the scheme/host of an absolute
+    URL, but it does NOT normalize ``..`` segments (``"../../admin/"`` lands
+    in ``request.path`` as ``/..../admin/`` and in ``request.path_info``
+    verbatim as ``../../admin/``), and it silently *accepts* an absolute or
+    protocol-relative URL by dropping the authority. A view that inspects
+    ``request.path`` for an auth/routing decision would see the traversed
+    path. We reject all of those shapes here rather than relying on every
+    downstream consumer to re-sanitize.
+
+    Rejected (all fall back to ``"/"``):
+      * empty / non-string / not starting with ``"/"`` (relative path,
+        traversal such as ``"../../admin/"``)
+      * protocol-relative (``"//evil.com/page"``) -- ``urlparse`` reports a netloc
+      * absolute (``"https://evil.com/page"``) -- ``urlparse`` reports a scheme
+      * contains a ``\\r`` or ``\\n`` (CRLF / header / log injection)
+      * contains a ``".."`` path segment (path traversal)
+
+    Accepted (returned unchanged): a site-relative path, optionally with a
+    query string and/or fragment, e.g. ``"/dashboard?q=1"``.
+
+    See #1819 (unvalidated mount URL -- path traversal / CRLF / log injection).
+    """
+    if not url or not isinstance(url, str):
+        return "/"
+    # CRLF / log / header injection -- reject before any further parsing.
+    if "\r" in url or "\n" in url:
+        return "/"
+    # Must be a site-relative absolute path. Rejects relative paths
+    # ("../../admin/", "foo") and is the first half of the protocol-relative
+    # ("//evil.com") rejection (completed by the netloc check below).
+    if not url.startswith("/"):
+        return "/"
+    from urllib.parse import unquote, urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "/"
+    # Absolute ("https://evil.com/page") or protocol-relative ("//evil.com").
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    # Path traversal: reject any ".." path segment. ``RequestFactory.get()``
+    # percent-DECODES the path once, so a raw-segment check on ``parsed.path``
+    # would miss "/%2e%2e/admin/" — which lands in ``request.path`` as
+    # "/../admin/" after Django decodes it (#1819 review: encoded-traversal
+    # bypass). Decode once here (matching RequestFactory's single decode)
+    # before the segment check, and reject backslashes / control bytes that
+    # decode into alternate separators or null bytes ("/..%5cadmin",
+    # "/foo/..%00/admin").
+    decoded_path = unquote(parsed.path)
+    if "\\" in decoded_path or any(ord(ch) < 0x20 for ch in decoded_path):
+        return "/"
+    if ".." in decoded_path.split("/"):
+        return "/"
+    return url
+
+
 def _should_expose_timing() -> bool:
     """
     Whether VDOM patch responses may include server-side timing/performance data.
@@ -1951,8 +2020,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             factory = RequestFactory()
             # Include URL query params (e.g., ?sender=80) in the request
             query_string = urlencode(params) if params else ""
-            # Use the actual page URL from the client, not hardcoded "/"
-            page_url = data.get("url", "/")
+            # Use the actual page URL from the client, not hardcoded "/".
+            # The client-supplied URL is attacker-controlled — validate it
+            # against path traversal / CRLF / absolute-URL injection (#1819).
+            page_url = _validate_mount_url(data.get("url", "/"))
             path_with_query = f"{page_url}?{query_string}" if query_string else page_url
             request = factory.get(path_with_query)
 
@@ -4688,7 +4759,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         from django.urls import resolve, Resolver404
 
         factory = RequestFactory()
-        page_url = data.get("url", "/")
+        # The client-supplied URL is attacker-controlled — validate it against
+        # path traversal / CRLF / absolute-URL injection before it reaches
+        # RequestFactory.get(), resolve(), and the log statements below (#1819).
+        page_url = _validate_mount_url(data.get("url", "/"))
         request = factory.get(page_url)
         # Session — same source as handle_mount.
         try:

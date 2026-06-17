@@ -7,9 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **System check S007 — unsafe ``client_name|safe`` stored-XSS detection
+  (#1821).** A new template static-analysis check (severity WARNING) flags
+  ``{{ <expr>.client_name|safe }}`` patterns in template files. An upload
+  entry's ``client_name`` is the attacker-controlled original filename, stored
+  without sanitisation; auto-escaping is the only default protection, and
+  ``|safe`` bypasses it — turning a ``<script>``-bearing filename into a stored
+  XSS vector. The matcher is anchored on the ``{{ ... }}`` variable form (not a
+  bare substring), tolerates whitespace around the pipe, and word-boundary
+  guards reject ``notclient_name`` / ``client_name_foo``. Honours
+  ``DJUST_CONFIG['suppress_checks']`` (``S007`` or ``djust.S007``). New cases in
+  ``TestS007ClientNameSafeRegex`` and ``TestS007CheckIntegration`` in
+  ``python/tests/test_checks.py``.
+
 ### Security
 
+- **Validate client-supplied mount/redirect URL (#1819).** The WebSocket
+  ``mount`` and sticky-child ``live_redirect`` frames carry the current page
+  URL, which the consumer fed straight into ``RequestFactory.get()``,
+  ``resolve()``, query-string concatenation, and log statements at two sites in
+  ``python/djust/websocket.py`` without validation. ``RequestFactory`` does not
+  normalize ``..`` segments, so a crafted ``url`` of ``../../admin/`` landed in
+  ``request.path`` as ``/..../admin/`` (path traversal; an auth/routing
+  decision keyed on ``request.path`` would see the traversed path); absolute
+  (``https://evil.com/page``) and protocol-relative (``//evil.com/page``) URLs
+  were silently accepted as relative requests, and the raw value flowed into
+  logs and ``urlencode`` concatenation (CRLF / log-injection surface). A shared
+  module-level helper ``_validate_mount_url()`` is now applied at both mount
+  sites (one helper, two call sites — the structural cure per #1646): it rejects
+  any url that is empty / non-string / does not start with ``/``, contains a
+  carriage-return or line-feed, is absolute or protocol-relative, or contains a
+  ``..`` path segment — falling back to ``/``. Legitimate site-relative URLs
+  (e.g. ``/dashboard?q=1``) pass through unchanged. New regression cases in
+  ``python/djust/tests/test_security_mount_validation.py`` pin the empirical
+  Django behavior, the helper's reject/preserve contract, the
+  validated-url-is-safe-for-``RequestFactory`` end-to-end property, and a
+  both-sites-validate source guard.
+
 - **Audited event-handler type-coercion edge cases — no bypass found, behavior pinned (#1820).** `validate_handler_params()` coerces event params by default (`coerce=True`) because Template `data-*` attributes always arrive as strings. The audit empirically exercised the malformed/adversarial inputs from the issue against the real coercion code and confirmed the paths are **safe by design** — no code change was required: **(int)** `page="999 OR 1=1"` and hex `id="0x41"` make `int()` raise, so the original string is kept and type validation rejects the event (`valid is False`, handler **not** invoked) — there is no silent truncation to `999`; **(bool)** the dangerous case — `active="true; DROP TABLE"` — coerces to `False` because bool coercion is an **allowlist** (`value.lower() in {"true","1","yes","on"}`), NOT `bool(non_empty_string)`, so the falsy-but-non-empty `"false"`/`"0"` are also `False` (no truthiness logic-bypass); **(float)** malformed strings are rejected, while `"1e309"`/`"inf"`/`"nan"` are accepted as the valid Python floats they are (intentional, documented contract — handlers doing bound checks or arithmetic on a coerced `float` must guard non-finite values themselves); **(List[T])** a malformed element abandons the whole coercion (no partial `[1,2]`) and the subscripted generic is skipped by the type validator, so the handler receives the unmodified original string. The strictest posture remains `@event_handler(coerce_types=False)`, which rejects any string for a typed param outright (so no separate `@strict_types` decorator was added). The audited contract is documented in `SECURITY_AUDIT.md` (Type Coercion Contract table) and pinned by `TestCoercionSecurityEdgeCases` (11 characterization cases) in `python/tests/test_validation.py`; non-tautology was verified (#1468) by mutating the coercion to the unsafe variants and confirming 5 of the new tests fail with the exact dangerous symptoms.
+
 
 ### Fixed
 

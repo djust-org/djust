@@ -536,6 +536,42 @@ class PublicCounterView(LiveView):
 
 ---
 
+### S007: Unsafe rendering of a client-supplied filename
+
+**Severity**: Warning
+
+**What causes it**: A template renders an upload entry's `client_name` with the
+`|safe` filter, e.g. `{{ upload_entry.client_name|safe }}`. The `client_name` is
+the attacker-controlled original filename of an upload, stored without
+sanitisation; `|safe` disables Django's auto-escaping, so a filename containing
+`<script>...</script>` renders as live HTML — a **stored XSS** vector.
+
+**Fix**: Remove the `|safe` filter so auto-escaping (the safe default) applies:
+
+```html
+<!-- Unsafe: filename is attacker-controlled -->
+{{ upload_entry.client_name|safe }}
+
+<!-- Safe: auto-escaping neutralises HTML in the filename -->
+{{ upload_entry.client_name }}
+```
+
+If the value is genuinely pre-sanitised server-side, escape it explicitly with
+`django.utils.html.escape()` before rendering, or suppress the check:
+
+```python
+# settings.py — only if client_name is pre-sanitised
+DJUST_CONFIG = {"suppress_checks": ["S007"]}  # or "djust.S007"
+```
+
+**Detection**: matches `{{ <expr>.client_name|safe }}` (whitespace around `|`
+tolerated); word-boundary guards mean `notclient_name` and `client_name_foo` do
+not trigger it.
+
+**Related**: [#1821](https://github.com/djust-org/djust/issues/1821), S001 (`mark_safe()` with f-string)
+
+---
+
 ## Template Errors (T0xx)
 
 ### T001: Deprecated @event syntax
