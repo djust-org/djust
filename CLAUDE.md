@@ -1266,6 +1266,55 @@ all four PRs) — see RETRO.md Insights. The new rule:
   (absolute→relative) rather than the class (timing assertions are flaky under
   saturation).
 
+## Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc (wire-version + security drain)
+
+Two rules from the first 1.0.6 drains (v1.0.6-1: PR #1816 / #1788; v1.0.6-2:
+PRs #1823/#1824/#1825 + the rc1-cut benchmark fix). Other findings reinforced
+existing canon (the #1788 single-`_next_version()` helper + the implementer
+catching 3 send sites the design missed reinforced #1646/#294; the #1820 audit
+declining to add `@strict_types` reinforced #1079) — see RETRO.md Insights.
+
+- **A security validation/sanitization fix MUST have its review empirically
+  probe encoding-bypass variants — the downstream consumer often DECODES after
+  validation (#1819 / PR #1825 review).** PR #1825's first pass validated the
+  mount URL by checking for a literal `..` segment in `urlparse(url).path` —
+  but `RequestFactory.get()` percent-DECODES the path *after* validation, so
+  `/%2e%2e/admin/` sailed past the check and landed in `request.path` as
+  `/../admin/`. The fix's own CHANGELOG/SECURITY_AUDIT claimed traversal was
+  blocked; it was false for any `%2e%2e`/`%2f`/`%5c` payload. The adversarial
+  Code Review caught it ONLY because the brief explicitly told it to feed
+  encoded variants through the helper AND the downstream sink (`RequestFactory`)
+  and check the *final* `request.path` — an inspection-only review would have
+  rubber-stamped the literal-`..` check. **Rule:** when reviewing any input-
+  validation / sanitization / escaping fix, the review's empirical probe must
+  include the ENCODED and ALTERNATE-REPRESENTATION forms of the attack
+  (percent-encoding `%2e`/`%2f`/`%5c`, double-encoding, alternate separators,
+  case variants, unicode look-alikes) fed end-to-end through the real downstream
+  consumer — because validation that runs *before* a decode/normalize step is
+  defeated by the encoded form. Fix shape: decode/normalize to the same
+  canonical form the sink uses (here, `unquote` once) BEFORE the check. Same
+  family as the empirical-canary rule (#1459) but for the security-validation
+  subclass: the canary must be the encoded bypass, not just the literal attack.
+
+- **A latency-SLA benchmark asserts on MEDIAN, not the outlier-sensitive mean
+  (#1795 family, v1.0.6rc1 cut).** `tests/benchmarks/conftest.py`'s
+  `_assert_benchmark_under` asserted `benchmark.stats["mean"] < target`. The
+  mean is dragged past the SLA by a handful of GC / scheduling-pause outliers
+  (a single ~34ms spike among thousands of ~4ms rounds), so the serial pre-push
+  false-failed two VDOM-diff benchmarks on a loaded machine while median/min
+  (~3.8ms) were comfortably under the 5ms target — and the VDOM path was
+  untouched since the last green release, confirming non-regression. Fixed to
+  assert the **median** (`tests/benchmarks/conftest.py`, commit `49893831`):
+  the median reflects the actual per-call cost and is immune to those outliers,
+  the right statistic for a latency SLA. This is the same outlier-sensitivity
+  class as the v1.0.5-4/-5 concurrency-test rule above — generalize both as:
+  **never assert a pass/fail gate on an outlier-sensitive statistic (mean,
+  raw wall-clock) when a robust one (median, event-ordering) measures the same
+  property.** Caveat surfaced: the threshold is *skipped under `-n auto`* (xdist
+  disables `benchmark.stats`), so `make test` and CI never enforce it — it only
+  bites the local serial pre-push, which is why a fragile mean-threshold could
+  pass one release by luck and fail the next.
+
 ## Additional Documentation
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist

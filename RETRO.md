@@ -342,6 +342,95 @@ issue or be explicitly closed with a reason.
 | 300 | Read-only review subagent must never mutate the main checkout / `core.bare` (use `isolation: worktree` or read-only `gh pr diff`) | Retro v1.0.5-2 / PR #1804 | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-2 retro arc"). Self-applied one PR later in #1806's read-only review. Verify `git config core.bare` after any subagent. |
 | 301 | Worktree pre-push tests the MAIN source tree (editable install), not the linked worktree — still forces `--no-verify` | Retro v1.0.5-2 / PR #1804 (follow-up to #1796) | #1810 | Closed | **Resolved in v1.0.5-4** (PR #1812 — `run-with-venv-python.sh --worktree-pythonpath` prepends the worktree's `python/` (beats the plain `djust.pth`) + symlinks the main `.so`, so a worktree pre-push tests the worktree's source). GitHub #1810 closed. |
 | 302 | Concurrency tests assert a logical ordering invariant (interval overlap), never a wall-clock duration/ratio | Retro v1.0.5-5 / PR #1815 (#1795) | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc"). #1795 rewritten to `max(start)<min(end)` + a serial gate-off sibling; ends a two-release flaky recurrence. |
+| 303 | `_recovery_version` can go stale vs `_last_sent_version` across non-arming send paths | Retro v1.0.6-1 / PR #1816 review | #1817 | Open | Pre-existing 🟡, low severity (extra round-trip, not data loss); not CI-enforced. Watch-don't-fix until observed. |
+| 304 | Modularize `checks.py` (4,221 LOC) into submodules | Issue #1822 (post-S007) | #1822 | Open | Deferred follow-on to the v1.0.6-2 S007 wave; its own single-script-transformation PR (#1312), after #1821 landed. |
+| 305 | Security validation review must empirically probe ENCODING-bypass variants (consumer decodes after validation) | Retro v1.0.6-2 / PR #1825 | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc"). #1819 `%2e%2e` bypass caught by the adversarial review's encoded end-to-end probe; fixed in the #1825 fix-pass (`unquote` before the `..` check). |
+| 306 | Latency-SLA benchmark asserts MEDIAN, not outlier-sensitive mean | Retro v1.0.6-2 / commit 49893831 | — | Closed | **Resolved this retro** (CLAUDE.md same arc section; fixed in `49893831`). #1795 outlier-sensitivity family; mean dragged past SLA by GC spikes on a loaded machine while median was well under. |
+
+## v1.0.6-2 — Security + DX drain (PRs #1823, #1824, #1825)
+
+**Date**: 2026-06-17
+**Scope**: Two security-hardening items + a lint, all from `SECURITY_AUDIT.md`: #1819 (mount-URL path-traversal/CRLF), #1820 (type-coercion audit), #1821 (S007 stored-XSS lint). Shipped in 1.0.6rc1. (#1822 `checks.py` modularization deferred to a separate PR.)
+**Tests at close**: ~7741 (combined `make test`)
+
+### What We Learned
+
+**1. The adversarial review caught a real path-traversal bypass IN the security fix (#1819).**
+PR #1825's first pass checked for a literal `..` segment against the raw percent-encoded `urlparse(url).path`, but `RequestFactory.get()` percent-DECODES the path AFTER validation — so `/%2e%2e/admin/` (and `/foo%2f..%2fadmin`, `/..%5cadmin`, …) reached `request.path` as `/../admin/`, defeating the fix's own CHANGELOG/SECURITY_AUDIT guarantee. The worktree-isolated review caught it ONLY because the brief told it to feed ENCODED variants end-to-end through the downstream sink (`RequestFactory`) and check the *final* `request.path` — an inspection-only review would have rubber-stamped the literal-`..` check. Fix-pass: `unquote` once before the segment check + reject backslash/control bytes; +14 regression cases (encoded reject + e2e), gate-off-verified.
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc" (security validation review must empirically probe encoding-bypass variants — decode-after-validation). Tracker #305 Closed.
+
+**2. The coercion audit found all paths already safe → test-hardening, no new API.**
+#1820 empirically verified (not inspection): `int("999 OR 1=1")` raises (not truncated → handler not called), bool uses an allowlist (`"false"`/`"0"` → False — no truthiness bypass), typed-lists are not partially coerced. No production change; 11 characterization tests pin the safe behavior, with a mutate-to-unsafe gate-off (5 fail) proving non-tautology. `@strict_types` correctly NOT added — `@event_handler(coerce_types=False)` already provides the strict posture (#1079, no new API for zero capability).
+**Action taken**: Closed — shipped in PR #1824 (test-hardening; SECURITY_AUDIT TODO closed).
+
+**3. A fragile mean-based perf benchmark false-failed the rc1 pre-push.**
+At the 1.0.6rc1 cut, two VDOM-diff benchmarks (median 3.8ms, well under the 5ms SLA) tripped `_assert_benchmark_under`'s **mean** threshold (5.9ms, outlier-dragged by ~34ms GC spikes) in the serial pre-push on a marathon-session-loaded machine. The VDOM path was untouched since 1.0.5 (non-regression), and the threshold is skipped under `-n auto` (so CI never enforced it — it only bites the local serial pre-push). The user's "don't bypass `--no-verify`" rule forced the investigation that surfaced the fragility rather than routing around it.
+**Action taken**: CLAUDE.md — added the median-not-mean perf-SLA rule (same arc section); fixed in commit `49893831`. Tracker #306 Closed.
+
+### Insights
+
+- S007 (#1821) shipped with the mandatory empirical canary (#1459) + a gate-off; 0 false positives dogfooding the demo (#1060).
+- #1822 (`checks.py` modularization) was deliberately held out of the security wave — it interacts with S007 placement and is a 4,221-LOC pure refactor deserving its own focused PR (#1079 scope discipline). Tracked at #304.
+- The `core.bare` review discipline (#300) held across all worktree-isolated reviews; the main checkout was never mutated, verified after each subagent.
+- "Don't bypass `--no-verify`" earned its keep: the pre-push failure was the *only* signal of the fragile benchmark (CI doesn't run the threshold), and forcing the investigation produced a real fix instead of a silent bypass.
+
+### Review Stats
+
+| Metric | #1823 | #1824 | #1825 | Total |
+|--------|-------|-------|-------|-------|
+| Issue | #1821 | #1820 | #1819 | 3 |
+| 🔴 at review | 0 | 0 | 1 (bypass, fixed) | 1 |
+| Gate-off confirmed | yes | yes (mutate-to-unsafe) | yes | 3/3 |
+| Required CI | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc" (security encoding-bypass review probe; perf-SLA median-not-mean).
+**Releases**: shipped in 1.0.6rc1 (two security fixes + S007 + #1788).
+
+### Open Items
+
+- [ ] `checks.py` modularization — Action Tracker #304 (GitHub #1822)
+
+## v1.0.6-1 — Consumer-owned VDOM send-version (PR #1816)
+
+**Date**: 2026-06-17
+**Scope**: Landed the deferred #1788 (Action #299) — a consumer-owned monotonic wire-version that removes the recovery round-trip on an `html_update` baseline-loss. Shipped in 1.0.6rc1.
+**Tests at close**: ~7741 (combined `make test`)
+
+### What We Learned
+
+**1. Drift-safe wire-protocol change via a single helper — and the worktree implementer caught 3 send sites the DESIGN missed.**
+The deep investigation mapped the full version handshake and flagged the drift risk as WORSE than the issue stated (the hotreload patch frame + `streaming.py push_state` are hidden client-checked participants). The fix is a single `_next_version()` helper across all client-checked send paths (the structural cure, #1646); the implementer additionally migrated 3 time-travel send paths the design's enumeration missed, reasoning from the drift caveat (#294 — the worktree-subagent catching brief gaps). Empirical gate-off (`[1,2,1,4]` version discontinuity when reverted) + an INDEPENDENT regression confirmation (the reviewer ran the combined suite on both branches: +7 tests, identical failure sets) validated it.
+**Action taken**: Closed — shipped in PR #1816; reinforces #1646 (single helper) + #294 (brief-gap catch). Rust `lib.rs` untouched (counter stays internal).
+
+**2. Recovery-version staleness across non-arming send paths (pre-existing 🟡).**
+The review surfaced that `_recovery_version` can go stale vs `_last_sent_version` when a non-arming send (deferred-activity / tick / time-travel) advances the counter between an arming frame and a `request_html` — structurally identical pre-#1788, low severity (extra round-trip, not data loss), not CI-enforced.
+**Action taken**: Open — tracked in Action Tracker #303 (GitHub #1817).
+
+### Insights
+
+- #1788 was deferred (Action #299) for drift risk; pulling it in with #1813-level rigor (deep investigation → worktree impl → adversarial worktree review with empirical gate-off + independent regression confirmation) landed it cleanly. The rigor was the price of the drift risk the user opted into by pulling it off the deferred list.
+- The existing `_hvr_version` consumer-owned counter was the precedent the helper mirrored — the Stage-4 first-principles grep (#168) found it and avoided a NIH design.
+
+### Review Stats
+
+| Metric | #1816 |
+|--------|-------|
+| Issue | #1788 |
+| 🔴 at review | 0 |
+| 🟡 at review | 1 (#1817, deferred) |
+| Gate-off confirmed | yes (+ independent regression confirm) |
+| Required CI | green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (shared v1.0.6-1/-2 arc section — see v1.0.6-2).
+**Releases**: shipped in 1.0.6rc1.
+
+### Open Items
+
+- [ ] Recovery-version staleness — Action Tracker #303 (GitHub #1817)
 
 ## v1.0.5-5 — Sticky-child recovery P0 + flaky-test hardening (PRs #1814, #1815)
 
