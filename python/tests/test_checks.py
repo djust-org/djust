@@ -4711,3 +4711,125 @@ class TestParsePsycopgVersion:
         from djust.checks import _parse_psycopg_version
 
         assert _parse_psycopg_version("not-a-version") == (0, 0)
+
+
+class TestS007ClientNameSafeRegex:
+    """S007 (#1821) -- regex unit tests for `client_name|safe` detection.
+
+    The matcher is anchored on the `{{ ... }}` variable form (NOT a bare
+    substring) and tolerates whitespace around `|` (mirrors _LIVEVIEW_CONTENT_RE).
+    """
+
+    def test_matches_upload_entry_dotted(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ upload_entry.client_name|safe }}")
+
+    def test_matches_short_alias_dotted(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name|safe }}")
+
+    def test_matches_whitespace_around_pipe(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name | safe }}")
+
+    def test_matches_deeply_nested_path(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ obj.uploads.0.client_name|safe }}")
+
+    def test_matches_bare_client_name(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{client_name|safe}}")
+
+    def test_no_match_without_safe(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ upload_entry.client_name }}")
+
+    def test_no_match_other_var(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ other_var|safe }}")
+
+    def test_no_match_word_boundary(self):
+        """`notclient_name` is a different variable -- must NOT match."""
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ notclient_name|safe }}")
+
+    def test_no_match_trailing_attr(self):
+        """`client_name_foo` shares a prefix but is a different attribute."""
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name_foo|safe }}")
+
+    def test_no_match_other_filter(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name|escape }}")
+
+
+class TestS007CheckIntegration:
+    """S007 (#1821) -- EMPIRICAL CANARY (#1459): construct the stored-XSS
+    template shape and assert the check FIRES; construct the safe shapes and
+    assert it does NOT fire. Plus suppression (#1468 gate-off: disabling the
+    S007 emission makes the positive tests fail)."""
+
+    def _scan(self, tmp_path, settings, body):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "uploads.html").write_text(body)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        return [e for e in errors if e.id == "djust.S007"]
+
+    def test_s007_fires_on_client_name_safe(self, tmp_path, settings):
+        """CANARY positive: `{{ upload_entry.client_name|safe }}` -> S007 fires."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
+        assert len(s007) == 1, "S007 should fire for client_name|safe: %r" % s007
+        assert "client_name" in s007[0].msg
+        assert "user-controlled" in s007[0].msg
+        assert s007[0].line_number == 1
+
+    def test_s007_silent_without_safe(self, tmp_path, settings):
+        """CANARY negative: no `|safe` -> auto-escaping protects -> no S007."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name }}</p>")
+        assert s007 == [], "S007 must NOT fire without |safe: %r" % s007
+
+    def test_s007_silent_for_other_var(self, tmp_path, settings):
+        """CANARY negative: a different var with |safe is not client_name."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ other_var|safe }}</p>")
+        assert s007 == [], "S007 must NOT fire for a non-client_name var: %r" % s007
+
+    def test_s007_fires_whitespace_variant(self, tmp_path, settings):
+        """CANARY positive: `{{ entry.client_name | safe }}` (spaced pipe) fires."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ entry.client_name | safe }}</p>")
+        assert len(s007) == 1, "S007 should fire for the spaced-pipe variant: %r" % s007
+
+    def test_s007_reports_correct_line(self, tmp_path, settings):
+        """Line number points at the offending {{ ... }} expression."""
+        body = "<div>\n  <span>ok</span>\n  {{ entry.client_name|safe }}\n</div>"
+        s007 = self._scan(tmp_path, settings, body)
+        assert len(s007) == 1
+        assert s007[0].line_number == 3
+
+    def test_s007_suppressed_short_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["S007"]}
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
+        assert s007 == [], "S007 should be silenced by suppress_checks=['S007']: %r" % s007
+
+    def test_s007_suppressed_qualified_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.S007"]}
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
+        assert s007 == [], "S007 should be silenced by suppress_checks=['djust.S007']: %r" % s007
