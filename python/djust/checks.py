@@ -2672,6 +2672,22 @@ _DJ_ACTIVITY_NAME_RE = re.compile(
 _DJ_ROOT_RE = re.compile(r"dj-root")
 _INCLUDE_RE = re.compile(r"\{%\s*include\s+")
 _LIVEVIEW_CONTENT_RE = re.compile(r"\{\{\s*liveview_content\s*\|\s*safe\s*\}\}")
+# S007 (#1821) — `{{ <expr>.client_name|safe }}` stored-XSS scanner. Upload
+# entries (djust.uploads.UploadEntry, field defined at uploads/__init__.py:483)
+# store the client-supplied filename UNSANITISED — auto-escaping is the only
+# thing protecting templates that render `client_name`. Marking it `|safe`
+# bypasses that protection, so an attacker-controlled filename containing
+# `<script>...</script>` becomes a stored-XSS vector. We anchor on the
+# `{{ ... }}` variable form (NOT a bare `client_name|safe` substring) and
+# require `client_name` to be the rendered variable or its trailing attribute:
+#   - `[\w.]*\bclient_name` matches `entry.client_name`,
+#     `upload_entry.client_name`, `obj.uploads.0.client_name`, and bare
+#     `client_name`.
+#   - The `\b` word boundary rejects `notclient_name`; the trailing `\s*\|`
+#     rejects `client_name_foo` (a different attribute sharing the prefix).
+# Whitespace around `|` is tolerated (mirrors _LIVEVIEW_CONTENT_RE), so both
+# `client_name|safe` and `client_name | safe` are flagged.
+_CLIENT_NAME_SAFE_RE = re.compile(r"\{\{\s*[\w.]*\bclient_name\s*\|\s*safe\s*\}\}")
 # T004 (#1809) — `document.addEventListener('djust:...')`. The matcher captures
 # the event name (group 1) so the emission site can exempt the djust: events
 # that djust itself dispatches on `document` (see _DOC_DISPATCHED_DJUST_EVENTS).
@@ -3200,6 +3216,37 @@ def check_templates(app_configs, **kwargs):
                     line_number=lineno,
                 )
             )
+
+        # S007 (#1821) -- `{{ <expr>.client_name|safe }}` stored-XSS.
+        # An upload entry's `client_name` is the attacker-controlled original
+        # filename, stored without sanitisation; `|safe` disables Django's
+        # auto-escaping, so a `<script>`-bearing filename renders as live HTML.
+        # WARNING (not Error): a pre-sanitised value is a legitimate, if rare,
+        # use case. Honours DJUST_CONFIG['suppress_checks'] (mirrors T004/S004).
+        if not _is_check_suppressed("djust.S007"):
+            for match in _CLIENT_NAME_SAFE_RE.finditer(content):
+                lineno = content[: match.start()].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- potentially unsafe rendering of client-supplied "
+                        "filename. `client_name` is user-controlled — using `|safe` "
+                        "bypasses XSS protection." % (relpath, lineno),
+                        hint=(
+                            "Use auto-escaping (remove `|safe`) or explicitly "
+                            "sanitize with django.utils.html.escape() first. "
+                            "Suppress with DJUST_CONFIG = {'suppress_checks': "
+                            "['S007']} if the value is pre-sanitised."
+                        ),
+                        id="djust.S007",
+                        fix_hint=(
+                            "Remove the `|safe` filter from `client_name` at "
+                            "line %d in `%s` (auto-escaping is the safe default)."
+                            % (lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
 
         # T002 -- LiveView template missing dj-root (informational)
         # Since PR #297, dj-root is auto-inferred from dj-view on both

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **System check S007 — unsafe ``client_name|safe`` stored-XSS detection
+  (#1821).** A new template static-analysis check (severity WARNING) flags
+  ``{{ <expr>.client_name|safe }}`` patterns in template files. An upload
+  entry's ``client_name`` is the attacker-controlled original filename, stored
+  without sanitisation; auto-escaping is the only default protection, and
+  ``|safe`` bypasses it — turning a ``<script>``-bearing filename into a stored
+  XSS vector. The matcher is anchored on the ``{{ ... }}`` variable form (not a
+  bare substring), tolerates whitespace around the pipe, and word-boundary
+  guards reject ``notclient_name`` / ``client_name_foo``. Honours
+  ``DJUST_CONFIG['suppress_checks']`` (``S007`` or ``djust.S007``). New cases in
+  ``TestS007ClientNameSafeRegex`` and ``TestS007CheckIntegration`` in
+  ``python/tests/test_checks.py``.
+
 ### Security
 
 - **Validate client-supplied mount/redirect URL (#1819).** The WebSocket
@@ -30,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Django behavior, the helper's reject/preserve contract, the
   validated-url-is-safe-for-``RequestFactory`` end-to-end property, and a
   both-sites-validate source guard.
+
 
 ### Fixed
 
