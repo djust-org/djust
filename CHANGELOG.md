@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Audited event-handler type-coercion edge cases — no bypass found, behavior pinned (#1820).** `validate_handler_params()` coerces event params by default (`coerce=True`) because Template `data-*` attributes always arrive as strings. The audit empirically exercised the malformed/adversarial inputs from the issue against the real coercion code and confirmed the paths are **safe by design** — no code change was required: **(int)** `page="999 OR 1=1"` and hex `id="0x41"` make `int()` raise, so the original string is kept and type validation rejects the event (`valid is False`, handler **not** invoked) — there is no silent truncation to `999`; **(bool)** the dangerous case — `active="true; DROP TABLE"` — coerces to `False` because bool coercion is an **allowlist** (`value.lower() in {"true","1","yes","on"}`), NOT `bool(non_empty_string)`, so the falsy-but-non-empty `"false"`/`"0"` are also `False` (no truthiness logic-bypass); **(float)** malformed strings are rejected, while `"1e309"`/`"inf"`/`"nan"` are accepted as the valid Python floats they are (intentional, documented contract — handlers doing bound checks or arithmetic on a coerced `float` must guard non-finite values themselves); **(List[T])** a malformed element abandons the whole coercion (no partial `[1,2]`) and the subscripted generic is skipped by the type validator, so the handler receives the unmodified original string. The strictest posture remains `@event_handler(coerce_types=False)`, which rejects any string for a typed param outright (so no separate `@strict_types` decorator was added). The audited contract is documented in `SECURITY_AUDIT.md` (Type Coercion Contract table) and pinned by `TestCoercionSecurityEdgeCases` (11 characterization cases) in `python/tests/test_validation.py`; non-tautology was verified (#1468) by mutating the coercion to the unsafe variants and confirming 5 of the new tests fail with the exact dangerous symptoms.
+
 ### Fixed
 
 - **Consumer-owned monotonic VDOM send-version (#1788).** The WebSocket
