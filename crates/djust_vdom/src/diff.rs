@@ -106,6 +106,20 @@ fn find_top_level_boundaries(children: &[VNode]) -> (Vec<Boundary>, Vec<bool>) {
     (boundaries, excluded)
 }
 
+/// Count how many NON-boundary siblings precede the local index `open`.
+///
+/// `excluded` is the mask from [`find_top_level_boundaries`] (index `k` is
+/// `true` when it falls inside ANY boundary marker span). This collapses the
+/// boundary spans so that a boundary's "significant position" is measured
+/// against its real (non-marker) siblings ONLY — not the absolute child
+/// index, which shifts whenever an EARLIER boundary body fills/empties
+/// (#1826). Two renders that keep the same non-boundary neighborhood around a
+/// boundary yield the same count even if an earlier sibling boundary changed
+/// span length.
+fn non_boundary_count_before(excluded: &[bool], open: usize) -> usize {
+    (0..open).filter(|&k| !excluded[k]).count()
+}
+
 /// Serialize a boundary's full marker-pair span (open..=close, inclusive) to
 /// HTML for `InsertSubtree.html`.
 fn serialize_boundary_html(children: &[VNode], open: usize, close: usize) -> String {
@@ -297,21 +311,51 @@ fn diff_children(
             new_boundaries.iter().map(|b| (b.id.as_str(), b)).collect();
         let old_ids: AHashMap<&str, &Boundary> =
             old_boundaries.iter().map(|b| (b.id.as_str(), b)).collect();
+        // Ordinal of each NEW boundary among same-level boundaries (its index
+        // in `new_boundaries`). Paired with the non-boundary-sibling count to
+        // decide MoveSubtree by RELATIVE position (#1826).
+        let new_ordinals: AHashMap<&str, usize> = new_boundaries
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.id.as_str(), i))
+            .collect();
 
-        for ob in &old_boundaries {
+        for (old_ordinal, ob) in old_boundaries.iter().enumerate() {
             if let Some(nb) = new_ids.get(ob.id.as_str()) {
-                // Matched in both. If the boundary's significant position
-                // shifted (siblings changed around it), emit MoveSubtree to
-                // relocate the id-less marker span — a plain MoveChild can't
-                // target the markers (#1666). Then recurse into the body.
-                let old_open_abs = old_off + ob.open;
-                let new_open_abs = new_off + nb.open;
-                if old_open_abs != new_open_abs {
+                // Matched in both. Emit MoveSubtree to relocate the id-less
+                // marker span ONLY when the boundary actually repositioned
+                // relative to its real (non-marker) siblings — a plain
+                // MoveChild can't target the markers (#1666). Then recurse
+                // into the body.
+                //
+                // #1826: the decision must NOT use the absolute child offset
+                // (`old_off + ob.open` vs `new_off + nb.open`). Filling an
+                // EARLIER empty dj-if body inserts nodes that shift the
+                // absolute index of every LATER boundary even though those
+                // boundaries did NOT move relative to their siblings — which
+                // emitted spurious MoveSubtree ops the client couldn't pair
+                // (`close marker not found`). Instead key on (count of
+                // non-boundary siblings before the boundary, ordinal among
+                // same-level boundaries): both are invariant to a sibling
+                // boundary's span-length change, so only a GENUINE reposition
+                // (a real element inserted/removed before the boundary, or a
+                // boundary reorder) flips the key and emits the move.
+                let old_key = (
+                    non_boundary_count_before(&old_excluded, ob.open),
+                    old_ordinal,
+                );
+                let new_key = (
+                    non_boundary_count_before(&new_excluded, nb.open),
+                    new_ordinals[ob.id.as_str()],
+                );
+                if old_key != new_key {
                     out.push(Patch::MoveSubtree {
                         id: ob.id.clone(),
                         path: ppath.to_vec(),
                         d: pid.map(|s| s.to_string()),
-                        index: new_open_abs,
+                        // The move TARGET stays the absolute new index — only
+                        // the move DECISION was wrong, not this value.
+                        index: new_off + nb.open,
                     });
                 }
                 // Matched in both -> recurse into the body slice.
