@@ -175,7 +175,7 @@ def _validate_mount_url(url: Optional[str]) -> str:
     # ("//evil.com") rejection (completed by the netloc check below).
     if not url.startswith("/"):
         return "/"
-    from urllib.parse import urlparse
+    from urllib.parse import unquote, urlparse
 
     try:
         parsed = urlparse(url)
@@ -184,8 +184,18 @@ def _validate_mount_url(url: Optional[str]) -> str:
     # Absolute ("https://evil.com/page") or protocol-relative ("//evil.com").
     if parsed.scheme or parsed.netloc:
         return "/"
-    # Path traversal: reject any ".." path segment.
-    if ".." in parsed.path.split("/"):
+    # Path traversal: reject any ".." path segment. ``RequestFactory.get()``
+    # percent-DECODES the path once, so a raw-segment check on ``parsed.path``
+    # would miss "/%2e%2e/admin/" — which lands in ``request.path`` as
+    # "/../admin/" after Django decodes it (#1819 review: encoded-traversal
+    # bypass). Decode once here (matching RequestFactory's single decode)
+    # before the segment check, and reject backslashes / control bytes that
+    # decode into alternate separators or null bytes ("/..%5cadmin",
+    # "/foo/..%00/admin").
+    decoded_path = unquote(parsed.path)
+    if "\\" in decoded_path or any(ord(ch) < 0x20 for ch in decoded_path):
+        return "/"
+    if ".." in decoded_path.split("/"):
         return "/"
     return url
 

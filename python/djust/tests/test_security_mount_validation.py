@@ -98,6 +98,16 @@ class TestValidateMountUrlRejects:
             "javascript:alert(1)",  # scheme, does not start with "/"
             "relative/path",  # relative, no leading slash
             "",  # empty
+            # Percent-encoded traversal (#1819 review): RequestFactory decodes
+            # the path AFTER validation, so a raw-segment check missed these.
+            "/%2e%2e/admin/",  # encoded ".." segment
+            "/foo/%2e%2e/admin",  # encoded interior traversal
+            "/foo%2f..%2fadmin",  # encoded separators around literal ".."
+            "/..%2f..%2fadmin",  # encoded separators, leading ".."
+            "/.%2e/admin",  # mixed literal-dot + encoded-dot ".."
+            "/%2e./admin",  # mixed encoded-dot + literal-dot ".."
+            "/..%5cadmin",  # encoded backslash separator
+            "/foo/..%00/admin",  # encoded null byte
         ],
     )
     def test_malicious_url_normalized_to_root(self, malicious):
@@ -159,6 +169,29 @@ class TestValidatedUrlIsSafeForRequestFactory:
         req = RequestFactory().get(safe)
         assert req.path == "/dashboard"
         assert req.META.get("QUERY_STRING") == "q=1"
+
+    @pytest.mark.parametrize(
+        "encoded_traversal",
+        [
+            "/%2e%2e/admin/",
+            "/foo/%2e%2e/admin",
+            "/foo%2f..%2fadmin",
+            "/..%2f..%2fadmin",
+            "/.%2e/admin",
+            "/..%5cadmin",
+        ],
+    )
+    def test_encoded_traversal_after_validation_builds_root_request(self, encoded_traversal):
+        # The #1819 review bypass: RequestFactory percent-DECODES the path, so
+        # an un-decoded ".." segment check let "/%2e%2e/admin/" through and it
+        # landed in request.path as "/../admin/". After the fix, validation
+        # decodes first → returns "/" → the built request can never carry a
+        # traversed path.
+        safe = _validate_mount_url(encoded_traversal)
+        req = RequestFactory().get(safe)
+        assert req.path == "/"
+        assert ".." not in req.path
+        assert ".." not in req.path_info
 
 
 # --------------------------------------------------------------------------- #
