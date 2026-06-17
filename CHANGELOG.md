@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6rc1] - 2026-06-17
+
 ### Added
 
 - **System check S007 — unsafe ``client_name|safe`` stored-XSS detection
