@@ -253,13 +253,17 @@ fn nested_if_distinct_ids() {
 }
 
 // ---------------------------------------------------------------------------
-// {% for %}{% if %} — same ID across iterations (parse-time stable)
+// {% for %}{% if %} — UNIQUE ID per iteration (#1832)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn for_if_iteration_stable_id() {
+fn for_if_iteration_unique_id_1832() {
     // The if inside the for body has marker_id assigned ONCE at parse
-    // time. Each loop iteration emits the SAME id.
+    // time (`if-<hash>-0`). BEFORE #1832 every loop iteration emitted that
+    // SAME id, duplicating it N times and producing unpairable MoveSubtree
+    // patches on re-render. After #1832 each iteration appends the loop
+    // path (`-<index>`) so the ids are unique AND stable across re-renders
+    // that don't change loop structure.
     let template =
         "{% for i in items %}{% if i.show %}<div>{{ i.name }}</div>{% endif %}{% endfor %}";
     let mut c = Context::new();
@@ -274,11 +278,16 @@ fn for_if_iteration_stable_id() {
         Value::List(vec![Value::Object(item1), Value::Object(item2)]),
     );
     let result = render(template, &c);
-    // Both iterations use if-0 (the parser only saw ONE Node::If).
+    // The per-template hash prefix is replaced with a fixed token so the
+    // assertion reads the per-iteration loop-path suffix (`-0`, `-1`).
+    let re = regex::Regex::new(r#"id="if-[0-9a-f]{8}-(\d+-\d+)""#).expect("regex");
+    let normalized = re.replace_all(&result, r#"id="if-$1""#).to_string();
     assert_eq!(
-        strip_prefix(&result),
-        r#"<!--dj-if id="if-0"--><div>a</div><!--/dj-if--><!--dj-if id="if-0"--><div>b</div><!--/dj-if-->"#
+        normalized,
+        r#"<!--dj-if id="if-0-0"--><div>a</div><!--/dj-if--><!--dj-if id="if-0-1"--><div>b</div><!--/dj-if-->"#
     );
+    // Render twice and confirm the looped ids are byte-stable.
+    assert_eq!(result, render(template, &c));
 }
 
 // ---------------------------------------------------------------------------
