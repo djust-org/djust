@@ -3661,6 +3661,14 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.7-2 — retro follow-up drain (DX check + actor-path arming) (drain bucket → ships in 1.0.7)
+
+*Goal:* Drain the two tracked tech-debt follow-ups the v1.0.7-1 retro filed (#1837, #1840). The two `priority:low` bug-capture feature epics (#1561, #1562) remain held for v1.1.0.
+
+**#1837 — system check: warn when `dj-view`/`dj-root` is on a table-section element (Action #307, P2, tech-debt)** — A LiveView whose root element is `<tbody>`/`<thead>`/`<tfoot>`/`<tr>`/`<td>`/`<th>`/`<caption>`/`<col>`/`<colgroup>` renders to silent garbage: html5ever foster-parents the table elements at render time, so `<tbody dj-view>{% for %}<tr>…` renders as `<html><body>text</body></html>` (all rows dropped) with no error. Surfaced closing #1827. Add a new T-series template-scan check (WARNING) flagging `dj-view`/`dj-root` on a table-section tag, fix-hint "put the attribute on a wrapping element (the `<table>` or a surrounding `<div>`)". Lives in `python/djust/checks/templates.py` (next free `djust.T0xx` after T016). Honor `_is_check_suppressed`. Empirical canary (#1459): a `<tbody dj-view>` template fires it; a `<div dj-view><table>…` does not.
+
+**#1840 — arm recovery on the actor event path (`use_actors=True`) once its html shape is verified (Action #308, P2/low, tech-debt — investigate first)** — PR #1838 routed every render-send path through `_next_version_armed(html)` EXCEPT the actor event path (`websocket.py:3100`, bare `_next_version()`), because its `result['html']` (Rust actor output) shape isn't guaranteed to be the pre-strip render the recovery path expects. **Investigate first:** verify the actor `result['html']` shape. If it is (or can be normalized to) the pre-strip full render → route through `_next_version_armed(html)` + add a `use_actors=True` `WebsocketCommunicator` recovery-version test (mirror `test_time_travel_jump_recovery_version_is_current`). If it's already-extracted content that the recovery path can't strip → document why it must stay bare (and adjust the recovery path or leave as accepted-LOW). Severity low (experimental opt-in path; extra round-trip, not data loss).
+
 ### Milestone: v1.0.7-1 — post-1.0.6 open-issue drain (tech-debt + VDOM follow-up) ✅ DRAINED (drain bucket → ships in 1.0.7)
 
 *Outcome:* #1817 ✅ PR #1838 (structural `_next_version_armed` helper — recovery armed on all render-send paths); #1830 ✅ PR #1839 (deterministic rAF-controlled dj-transition test); #1827 ✅ closed-without-code (no prod repro; DX follow-up #1837 filed). #1561/#1562 held for v1.1.0.
