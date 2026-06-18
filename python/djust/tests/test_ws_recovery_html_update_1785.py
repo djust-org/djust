@@ -137,13 +137,20 @@ def test_html_update_branch_arms_recovery_source():
     """Belt-and-suspenders source pin: ``handle_event`` must arm recovery on BOTH the
     patches branch and the ``html_update`` (patches=None) fallback branch.
 
-    If a future refactor drops the ``_arm_recovery`` call from the html_update branch,
-    this fails fast even if the integration test is skipped under some CI config.
+    If a future refactor drops the recovery arming from the html_update branch, this
+    fails fast even if the integration test is skipped under some CI config.
+
+    #1817: both branches now arm via the shared ``_next_version_armed(html)`` helper
+    (which advances the wire version AND arms recovery in one step) rather than a bare
+    ``_arm_recovery(html)`` line. Count either form so the pin survives the refactor
+    while still enforcing that BOTH branches arm.
     """
     import djust.websocket as ws_mod
 
     source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
-    assert source.count("self._arm_recovery(") >= 2, (
+    arms = source.count("self._arm_recovery(") + source.count("self._next_version_armed(")
+    assert arms >= 2, (
         "handle_event must arm recovery in BOTH the patches branch and the html_update "
-        "fallback branch (#1785) — found fewer than 2 _arm_recovery calls."
+        "fallback branch (#1785) — via self._next_version_armed(html) (#1817) or a bare "
+        f"self._arm_recovery(html). Found {arms} arming calls (need >= 2)."
     )

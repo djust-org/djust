@@ -6,6 +6,12 @@ assignment at every send path (handle_event, server_push, _run_async_work). That
 is exactly the drift that caused #1639 — the async path was added without the
 arming. This pins the consolidation: the assignment lives in one helper, and
 every render-send path routes through it.
+
+#1817 extends the consolidation: render-send paths now allocate the wire version
+AND arm recovery in a SINGLE step via ``_next_version_armed(html)`` (which calls
+``_arm_recovery`` internally), so the version allocation and recovery baseline
+can never drift apart either. ``_arm_recovery`` therefore now has exactly one
+direct call site — the ``_next_version_armed`` helper body.
 """
 
 from __future__ import annotations
@@ -46,32 +52,41 @@ def test_arm_recovery_is_the_only_arming_mechanism():
 
 
 def test_render_send_paths_route_through_arm_recovery():
-    """Each render-send path must call _arm_recovery rather than hand-assign."""
+    """Each render-send path must arm the recovery baseline (#1645).
+
+    #1817: render-send paths now arm via the shared ``_next_version_armed(html)``
+    helper (which advances the wire version AND calls ``_arm_recovery`` in one
+    step) rather than a hand-copied ``_next_version()`` + ``_arm_recovery(html)``
+    pair. Accept either form so the pin survives the #1817 consolidation while
+    still enforcing that each path arms and never hand-assigns ``_recovery_html``.
+    """
     for name in ("handle_event", "server_push", "_run_async_work"):
         method_src = inspect.getsource(getattr(LiveViewConsumer, name))
-        assert "_arm_recovery(" in method_src, (
-            f"{name} must arm the recovery baseline via self._arm_recovery(...) "
-            f"so it can't drift from the other send paths (#1645)."
+        arms = "_arm_recovery(" in method_src or "_next_version_armed(" in method_src
+        assert arms, (
+            f"{name} must arm the recovery baseline via self._next_version_armed(html) "
+            f"(#1817) or self._arm_recovery(...) so it can't drift from the other send "
+            f"paths (#1645)."
         )
         # And must NOT hand-assign _recovery_html directly anymore.
         assert "_recovery_html =" not in method_src, (
             f"{name} still hand-assigns _recovery_html; route it through "
-            f"_arm_recovery instead (#1645)."
+            f"_arm_recovery / _next_version_armed instead (#1645)."
         )
 
 
 def test_arm_recovery_call_site_count_matches_known_send_paths():
     """Count-based guard (#1655, Action #1125): pin the number of
-    ``self._arm_recovery(...)`` call sites so a NEW render-send path can't be
-    added without consciously arming the recovery baseline (the #1639 shape:
-    a send path that renders+sends but forgets to arm). A new path that arms
-    bumps this count (update the list + N below); a new path that FORGETS to
-    arm leaves the count unchanged, but is caught by
-    ``test_render_send_paths_route_through_arm_recovery`` extended with its name.
+    ``self._arm_recovery(...)`` call sites so the single-source-of-truth helper
+    invariant can't silently regress.
 
-    Known sites (5): _run_async_work patches-branch + full-HTML-fallback,
-    handle_event patches-branch, handle_event full-HTML (html_update) fallback
-    (#1785), server_push.
+    #1817 consolidation: after #1817 every render-send path arms via the shared
+    ``_next_version_armed(html)`` helper, which is the ONLY place that calls
+    ``_arm_recovery(html)`` directly. So the direct ``self._arm_recovery(`` count
+    collapses to exactly 1 (the helper body). The render-send call-site count is
+    now pinned by ``_next_version_armed`` invocations in
+    ``test_ws_send_version_1788.test_every_client_checked_send_path_uses_next_version``
+    — a NEW render-send path that forgets to arm trips THAT count test.
     """
     import inspect
 
@@ -79,9 +94,18 @@ def test_arm_recovery_call_site_count_matches_known_send_paths():
 
     src = inspect.getsource(ws_mod)
     call_sites = src.count("self._arm_recovery(")
-    assert call_sites == 5, (
-        f"expected 5 self._arm_recovery() call sites (the known render-send "
-        f"paths), found {call_sites}. If you added a render-send path, arm the "
-        f"recovery baseline there and update this count + the enumerated list "
-        f"(#1655/#1645/#1639)."
+    assert call_sites == 1, (
+        f"expected exactly 1 self._arm_recovery() call site — the _next_version_armed "
+        f"helper body, the single source of truth for recovery arming after the #1817 "
+        f"consolidation; found {call_sites}. A direct _arm_recovery() call outside the "
+        f"helper means a path bypassed _next_version_armed (re-route it), and the "
+        f"render-send call-site count is pinned by the _next_version_armed count test "
+        f"in test_ws_send_version_1788 (#1655/#1645/#1639/#1817)."
+    )
+
+    # The single direct call site lives in the _next_version_armed helper.
+    helper_src = inspect.getsource(ws_mod.LiveViewConsumer._next_version_armed)
+    assert helper_src.count("self._arm_recovery(") == 1, (
+        "the single _arm_recovery() call site must be inside _next_version_armed "
+        "(the consolidated render-send arming helper, #1817)."
     )
