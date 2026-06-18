@@ -3661,6 +3661,12 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.6-4 — `checks.py` modularization (#1822) (drain bucket → ships in 1.0.6)
+
+*Goal:* Split the 4,268-LOC `python/djust/checks.py` monolith into a `checks/` package (submodules per check family) for navigability/contributor-experience. Pure refactor — preserve every check ID (S001–S007, C/V/T/A/Q/Y/D series) and Django `AppConfig.checks` discovery. Now unblocked: #1821 (S007) has landed.
+
+**#1822 — Modularize `checks.py` (4,268 LOC) into submodules (LOW, refactor)** — Convert `checks.py` → a `checks/` package via single-script transformation (#1312). **Load-bearing constraint surfaced at plan time:** the issue's premise "`__init__.py` re-exports maintain compatibility" is *incomplete* — re-exports preserve `from djust.checks import X` but NOT the ~50 `patch("djust.checks._get_project_app_dirs")` / `_has_multiple_permission_groups` monkeypatch-by-path sites (a moved check resolves bare names in its own module globals, not the patched `djust.checks` namespace). Zero-test-change design: keep the two monkeypatched helpers defined in `checks/__init__.py` and have moved checks reference them through the root module (`import djust.checks as _root; _root._get_project_app_dirs()`) so the patch still takes effect at call time; re-export every public+private symbol the tests import (`_strip_verbatim_blocks`, `_DJ_ACTIVITY_NAME_RE`, `_CLIENT_NAME_SAFE_RE`, `_PII_NAME_PATTERN`, `_parse_psycopg_version`, `_routed_liveview_classes`, the three `_check_*`/`_build_*` mount helpers, `_DOC_DJUST_EVENT_RE`, `_DOC_DISPATCHED_DJUST_EVENTS`, exceptions). Invariant gate: registered-check-ID set + `manage.py check` output identical before/after; full `test_checks*` suite green untouched.
+
 ### Milestone: v1.0.6-3 — VDOM dj-if MoveSubtree latent bug (P0, drops rows; since v1.0.0) (drain bucket → ships in 1.0.6)
 
 *Goal:* Fix the P0 VDOM-engine regression #1826 — `diff_html` emits unpairable `MoveSubtree` + flattens inserted elements to `#text` for `{% if %}`-wrapped rows in a loop, dropping a table row per toggle. Warrants 1.0.6rc2.
