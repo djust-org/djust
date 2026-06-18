@@ -54,7 +54,7 @@ djust/
 │   ├── uploads.py          # File uploads (binary WebSocket frames)
 │   ├── routing.py          # live_session() URL routing helper
 │   ├── testing.py          # LiveViewTestClient, SnapshotTestMixin, LiveViewSmokeTest
-│   ├── checks.py           # Django system checks (C/V/S/T/Q categories)
+│   ├── checks/             # Django system checks (C/V/S/T/Q/A/Y categories), split by family (#1822): utils, configuration, integrations, components, security, templates, accessibility, quality
 │   ├── management/commands/ # djust_audit (security audit), djust_check (system checks)
 │   ├── mixins/             # LiveView mixins (navigation, model binding, etc.)
 │   ├── templatetags/       # Django template tags
