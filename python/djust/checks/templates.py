@@ -133,6 +133,34 @@ _LIVE_RENDER_LAZY_TRUTHY_RE = re.compile(
 )
 _LIVE_RENDER_LAZY_FALSY_RE = re.compile(r"""\blazy\s*=\s*(?:False|"\s*"|'\s*'|0)\b""")
 
+# T017 (#1837) — `dj-view` / `dj-root` placed on an HTML table-section element.
+# Such a view renders to SILENT GARBAGE: html5ever foster-parents the table
+# elements out of the tree at render time, so
+# `<tbody dj-view="…">{% for %}<tr>…{% endfor %}</tbody>` renders as
+# `<html><head></head><body>text</body></html>` (all rows dropped) with NO
+# error. The fix is to put the root attribute on a wrapping element (the
+# `<table>` or a surrounding `<div>`).
+#
+# Detection: match an OPENING table-section tag that carries `dj-view=` or
+# `dj-root=` ON THE SAME TAG. The `[^>]*` attribute span stops at the tag's
+# own `>` (opening tags can't contain a literal `>` in attributes), so the
+# attribute must be on the table-section tag itself — `<div dj-view><table>
+# <tbody>…` does NOT match because the `dj-view` is on the `<div>`, not on
+# any table-section opening tag. The `\b` word-boundary after the tag name
+# rejects `<tablefoo` / `<trx`. Attribute order/whitespace is tolerated:
+# both `<tbody dj-view=…>` and `<tbody class="x" dj-root>` match.
+#
+# `col` / `colgroup` are matched too — they're self-closing-ish but the same
+# `<col …>` opening-tag shape applies. We list the alternatives longest-first
+# (`colgroup` before `col`, `tfoot`/`thead` before `td`/`th`/`tr`) so the
+# alternation prefers the longer name; the trailing `(?![\w-])` boundary
+# makes ordering immaterial but the explicit order keeps the intent clear.
+_DJ_TABLE_SECTION_ROOT_RE = re.compile(
+    r"<(tbody|thead|tfoot|colgroup|caption|col|tr|td|th)(?![\w-])"
+    r"[^>]*?\b(dj-view|dj-root)\b",
+    re.IGNORECASE,
+)
+
 
 @register("djust")
 def check_templates(app_configs, **kwargs):
@@ -356,6 +384,9 @@ def check_templates(app_configs, **kwargs):
 
         # T015 -- legacy data-djust-root / data-djust-view root attributes
         _check_legacy_root_attrs(content, relpath, filepath, errors)
+
+        # T017 -- dj-view / dj-root on a table-section element (#1837)
+        _check_table_section_root(content, relpath, filepath, errors)
 
         # A070 / A071 -- {% dj_activity %} name validation (v0.7.0).
         # A070 (Warning): tag with no name arg — renders a no-op wrapper
@@ -739,6 +770,61 @@ def _check_legacy_root_attrs(content, relpath, filepath, errors):
                 fix_hint=(
                     "Replace '%s' with '%s' at line %d in `%s`."
                     % (old_attr, new_attr, lineno, relpath)
+                ),
+                file_path=filepath,
+                line_number=lineno,
+            )
+        )
+
+
+def _check_table_section_root(content, relpath, filepath, errors):
+    """T017 (#1837): Detect dj-view / dj-root on an HTML table-section element.
+
+    A LiveView whose root element is a table-section element (``<tbody>``,
+    ``<thead>``, ``<tfoot>``, ``<tr>``, ``<td>``, ``<th>``, ``<caption>``,
+    ``<col>``, ``<colgroup>``) renders to *silently broken* output:
+    html5ever foster-parents the table elements out of the tree at render
+    time. Empirically, a ``<tbody dj-view="...">{% for %}<tr>...{% endfor %}
+    </tbody>`` template renders as ``<html><head></head><body>text</body>
+    </html>`` -- all the ``<tr>`` / ``<td>`` structure is dropped, leaving
+    only text, with NO error (#1837).
+
+    The match is scoped to the SAME tag: ``[^>]*?`` stops at the
+    table-section tag's own ``>``, so ``<div dj-view><table><tbody>...`` (the
+    root attribute on a wrapping element) never false-matches. The
+    word-boundary on the tag name rejects ``<tablefoo`` / ``<trx``.
+
+    SCOPE: this is a static system check only. It does not change the
+    renderer's foster-parenting behavior (that is html5ever's HTML5-spec
+    parsing); it warns the developer at startup so the silent failure is
+    caught before a request hits.
+    """
+    if _is_check_suppressed("djust.T017"):
+        return
+    for match in _DJ_TABLE_SECTION_ROOT_RE.finditer(content):
+        lineno = content[: match.start()].count("\n") + 1
+        tag_name = match.group(1).lower()
+        attr = match.group(2).lower()
+        errors.append(
+            DjustWarning(
+                "%s:%d -- '%s' is on a <%s> table-section element, which is "
+                "foster-parented out of the tree at render time (the rendered "
+                "output silently drops the table rows, with no error)."
+                % (relpath, lineno, attr, tag_name),
+                hint=(
+                    "A table-section element (<tbody>, <thead>, <tfoot>, <tr>, "
+                    "<td>, <th>, <caption>, <col>, <colgroup>) cannot be a "
+                    "standalone parse root -- html5ever foster-parents it. Put "
+                    "%s on a wrapping element (the <table> or a surrounding "
+                    "<div>) instead. Suppress this check with "
+                    "DJUST_CONFIG = {'suppress_checks': ['T017']}." % attr
+                ),
+                id="djust.T017",
+                fix_hint=(
+                    "Put `dj-view`/`dj-root` on a wrapping element (the "
+                    "`<table>` or a surrounding `<div>`); a table-section "
+                    "element is foster-parented at render time and cannot be "
+                    "a parse root. (line %d in `%s`)" % (lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,
