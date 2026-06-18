@@ -621,6 +621,27 @@ def update_rent(self, value: str = "", **kwargs):
 </form>
 ```
 
+### WebSocket auth
+
+Auth runs at mount. An unauthorized or anonymous mount of a `login_required` /
+`PermissionRequiredMixin` view is rejected and the socket is closed — events
+never reach a view that failed auth.
+
+- **Test WS auth with a raw client** (`WebsocketCommunicator` / the `websockets`
+  library), not just a browser.
+- For mid-session logout / permission loss, enable per-event re-check:
+  `LIVEVIEW_CONFIG['reauth_on_event'] = True` (default OFF — costs one session
+  read per event).
+- Set `LIVEVIEW_ALLOWED_MODULES` to restrict which view classes a client may
+  mount over the WebSocket.
+- Gate **non-LiveView endpoints** (plain `django.views.View`, OAuth callbacks)
+  with Django's own `LoginRequiredMixin` — `login_required` is LiveView-only.
+- Don't let the login page extend a base whose `dj-view` root mounts a
+  `login_required` view (redirect loop) — give it a standalone template.
+
+You can use `{{ user }}`, `{% csrf_token %}`, and context-processor variables
+directly inside `dj-view` templates; they render on WebSocket updates.
+
 ---
 
 ## 7. Performance Optimization 🚀

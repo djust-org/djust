@@ -574,6 +574,29 @@ class AdminView(PermissionRequiredMixin, LiveView):
     permission_required = "myapp.change_settings"
 ```
 
+### WebSocket authentication
+
+Auth runs at mount on both the HTTP and WebSocket paths. A `login_required` /
+`PermissionRequiredMixin` view that fails the check is rejected and the
+WebSocket is closed, so event handlers are never reached on a view that failed
+auth. Practices to follow:
+
+- **Test WebSocket auth with a raw client** (`WebsocketCommunicator` or the
+  `websockets` library), not just a browser — a browser follows the redirect and
+  can mask a gap in your auth setup.
+- Auth is **mount-time** by default. To also reject events after a *mid-session*
+  logout or permission change, enable a per-event re-check:
+  `LIVEVIEW_CONFIG['reauth_on_event'] = True` (default OFF — it costs one session
+  read per event).
+- Set **`LIVEVIEW_ALLOWED_MODULES`** to restrict which view classes a client may
+  mount over the WebSocket; per-view `check_view_auth` remains the real gate.
+- **Non-LiveView endpoints** — a plain `django.views.View` (e.g. an OAuth
+  callback) is NOT covered by `login_required` / `check_view_auth`; gate it with
+  Django's own `LoginRequiredMixin`.
+- Don't let the **login page extend a base** whose `dj-view` root mounts a
+  `login_required` view, or it redirect-loops — give the login view a standalone
+  template.
+
 ### Authorization in event handlers
 
 Always re-verify permissions in event handlers — the initial `mount()` check isn't enough for stateful views:
@@ -613,6 +636,24 @@ def select_service(self, service_id="", **kwargs):
 - Use `format_html()` for server-generated HTML with interpolated values
 - Use `json.dumps()` for values injected into JavaScript contexts
 - Always include `{% csrf_token %}` in forms
+
+### Auth and CSRF UI in `dj-view` templates
+
+`{{ user }}`, `{% csrf_token %}`, and context-processor variables render
+correctly on WebSocket updates, so auth UI — a logout form, a username chip, a
+CSRF'd inline form — can live directly inside the `dj-view` root and stays
+intact across live updates:
+
+```html
+<div dj-view="myapp.views.DashboardView">
+  ...nav, content...
+  {% if user.is_authenticated %}
+  <form method="post" action="{% url 'logout' %}">{% csrf_token %}
+    <button>log out {{ user.username }}</button>
+  </form>
+  {% endif %}
+</div>
+```
 
 ---
 
@@ -696,7 +737,7 @@ class MyView(LiveView):
 Then handle URL changes in `handle_params()`:
 
 ```python
-class MyView(NavigationMixin, LiveView):
+class MyView(LiveView):  # NavigationMixin is built into LiveView — don't inherit it (MRO error)
     def handle_params(self, params, uri):
         tab = params.get("tab", "overview")
         if tab in ("overview", "settings", "logs"):
