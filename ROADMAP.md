@@ -3661,6 +3661,12 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.6-5 — VDOM dj-if duplicate marker id in `{% for %}` loops (#1832) (P0, drops rows; drain bucket → ships in 1.0.6)
+
+*Goal:* Fix `{% if %}` inside `{% for %}` reusing ONE compile-time-ordinal `dj-if` marker id across all iterations → duplicate ids → unpairable `MoveSubtree` (`close marker not found`) → most patches fail → recovery morph drops a row per toggle. Distinct from #1826/#1828 (relative-vs-absolute move decision); this is duplicate *marker ids within a loop*.
+
+**#1832 — dj-if marker ids must be unique per rendered loop iteration (P0, bugfix)** — Root cause: `crates/djust_templates/src/renderer.rs:556` emits `<!--dj-if id="if-<hash>-N"-->` where `N` is the parser's compile-time ordinal; the `For` node (renderer.rs:564) renders the same `If` node once per iteration, duplicating the id. Fix: thread a loop-index path through the render `Context` (mirroring the existing `__djust_cycle_counter` save/restore in the For loop) and append it to the marker id at emission so it is unique per iteration AND stable across re-renders that don't change the loop (diff still pairs when only sibling state toggles). Close marker has no id; strip-regex + VDOM differ treat ids as opaque. Reproduced server-side via `render_with_diff()` (the issue's repro: 16 rows → `if-<hash>-0/-1` each ×16, toggling table class → 15 unpairable MoveSubtree).
+
 ### Milestone: v1.0.6-4 — `checks.py` modularization (#1822) ✅ SHIPPED (PR #1833) (drain bucket → ships in 1.0.6)
 
 *Goal:* Split the 4,268-LOC `python/djust/checks.py` monolith into a `checks/` package (submodules per check family) for navigability/contributor-experience. Pure refactor — preserve every check ID (S001–S007, C/V/T/A/Q/Y/D series) and Django `AppConfig.checks` discovery. Now unblocked: #1821 (S007) has landed.
