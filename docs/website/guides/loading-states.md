@@ -107,11 +107,13 @@ When an event handler does slow work (API calls, AI generation, file processing)
 
 ```python
 from djust import LiveView
-from djust.mixins.async_work import AsyncWorkMixin
 from djust.decorators import event_handler
 
 
-class ReportView(AsyncWorkMixin, LiveView):
+# AsyncWorkMixin is already included in LiveView — just subclass LiveView.
+# (Inheriting it explicitly, e.g. `class ReportView(AsyncWorkMixin, LiveView)`, raises
+#  TypeError: Cannot create a consistent method resolution.)
+class ReportView(LiveView):
     template_name = "report.html"
 
     def mount(self, request, **kwargs):
@@ -359,10 +361,10 @@ For simple text replacement on submit buttons, use `dj-disable-with` instead of 
 
 ### Progress with Streaming
 
-For operations where you want incremental progress (not just a spinner), combine `start_async()` with [StreamingMixin](streaming.md):
+For operations where you want incremental progress (not just a spinner), combine `start_async()` with the [streaming](streaming.md) helpers. Both `AsyncWorkMixin` and `StreamingMixin` are already built into `LiveView`, so just subclass `LiveView` — do not inherit them explicitly (it raises an MRO `TypeError`):
 
 ```python
-class ImportView(AsyncWorkMixin, StreamingMixin, LiveView):
+class ImportView(LiveView):  # AsyncWorkMixin + StreamingMixin are built in
     @event_handler()
     def start_import(self, **kwargs):
         self.importing = True
