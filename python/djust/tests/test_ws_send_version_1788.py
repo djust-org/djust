@@ -174,9 +174,7 @@ async def test_baseline_loss_html_update_stays_monotonic_no_recovery():
         assert m == 1, f"happy-path mount baseline must be 1, got {m!r}"
 
         # Normal diff event — should be a patch frame at m+1.
-        await communicator.send_json_to(
-            {"type": "event", "event": "bump", "params": {}, "ref": 1}
-        )
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         ev1 = await _receive_until(communicator, "patch")
         assert ev1.get("type") == "patch", f"normal bump should patch, got {ev1!r}"
         v1 = _frame_version(ev1)
@@ -224,9 +222,7 @@ async def test_version_sequence_strictly_monotonic_across_baseline_boundary():
         communicator, mount_frame = await _connect_and_mount()
         m = _frame_version(mount_frame)
 
-        await communicator.send_json_to(
-            {"type": "event", "event": "bump", "params": {}, "ref": 1}
-        )
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         f1 = await _receive_until(communicator, "patch")
 
         await communicator.send_json_to(
@@ -236,9 +232,7 @@ async def test_version_sequence_strictly_monotonic_across_baseline_boundary():
 
         # After a reset(), the next diff has a fresh baseline so this normal
         # event produces patches again.
-        await communicator.send_json_to(
-            {"type": "event", "event": "bump", "params": {}, "ref": 3}
-        )
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 3})
         f3 = await _receive_until(communicator, "patch")
 
         seq = [m, _frame_version(f1), _frame_version(f2), _frame_version(f3)]
@@ -269,15 +263,11 @@ async def test_hotreload_frame_advances_consumer_counter_then_event_passes():
     _HVR_TEMPLATE_BODY[0] = "Count: {{ count }}"
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
-        communicator, mount_frame = await _connect_and_mount(
-            view_suffix="_WSHvrView", url="/hvr/"
-        )
+        communicator, mount_frame = await _connect_and_mount(view_suffix="_WSHvrView", url="/hvr/")
         m = _frame_version(mount_frame)
 
         # Normal event first to advance the counter to m+1.
-        await communicator.send_json_to(
-            {"type": "event", "event": "bump", "params": {}, "ref": 1}
-        )
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         ev1 = await _receive_until(communicator, "patch")
         v1 = _frame_version(ev1)
         assert v1 == m + 1
@@ -290,9 +280,7 @@ async def test_hotreload_frame_advances_consumer_counter_then_event_passes():
         # it WRITES clientVdomVersion even though it's exempt from the check.
         _HVR_TEMPLATE_BODY[0] = "Counter is now: {{ count }}"
         channel_layer = get_channel_layer()
-        await channel_layer.group_send(
-            "djust_hotreload", {"type": "hotreload", "file": "x.html"}
-        )
+        await channel_layer.group_send("djust_hotreload", {"type": "hotreload", "file": "x.html"})
 
         hvr = await _receive_until(communicator, "patch")
         assert hvr.get("type") == "patch" and hvr.get("hotreload") is True, (
@@ -307,9 +295,7 @@ async def test_hotreload_frame_advances_consumer_counter_then_event_passes():
 
         # Next normal event must chain off the consumer counter (proves the
         # hotreload frame did NOT drift the wire version).
-        await communicator.send_json_to(
-            {"type": "event", "event": "bump", "params": {}, "ref": 2}
-        )
+        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 2})
         ev2 = await _receive_until(communicator, "patch")
         v2 = _frame_version(ev2)
         assert v2 == vh + 1, (
@@ -357,12 +343,21 @@ def test_next_version_is_monotonic():
 
 def test_every_client_checked_send_path_uses_next_version():
     """Source-pin: every ``_send_update(...)`` call that stamps a client-checked frame
-    must pass ``version=self._next_version()`` (NOT the Rust ``version``), and the two
-    HIDDEN participants (hotreload, streaming) must route through the consumer counter.
+    must route through the consumer counter — RENDER-SEND paths via
+    ``self._next_version_armed(html)`` (#1817) and the NON-render baseline paths via
+    bare ``self._next_version()`` — and the two HIDDEN participants (hotreload via the
+    armed helper, streaming) must route through the consumer counter.
 
     Pins the migrated call-site count so a future send path that forgets the helper
-    trips this test (#1125). OUT-OF-SCOPE paths are explicitly excluded: child_update /
-    sticky_update (per-child Map) and mount_batch per-target object are NOT counted.
+    trips this test (#1125 / #1448). OUT-OF-SCOPE paths are explicitly excluded:
+    child_update / sticky_update (per-child Map) and mount_batch per-target object are
+    NOT counted.
+
+    #1817: the bare ``_next_version()`` is reserved for NON-render frames (the mount
+    baseline) plus the one path deliberately left unarmed pending follow-up (the actor
+    event path — its ``result['html']`` shape is not the pre-strip render the recovery
+    path expects). The shared helper ``_next_version_armed(html)`` (which internally
+    calls ``_next_version()`` once) is the canonical primitive for render-send paths.
     """
     import re
 
@@ -371,45 +366,72 @@ def test_every_client_checked_send_path_uses_next_version():
 
     ws_src = inspect.getsource(ws_mod)
 
-    # Count every INVOCATION of self._next_version() — both the inline kwarg
-    # form ``version=self._next_version()`` and the assignment form
-    # ``X = self._next_version()`` (used where _arm_recovery must capture the
-    # same version, or where a local Rust ``version`` is also needed for
-    # telemetry). Excludes the docstring reference inside _arm_recovery (which
-    # is prose, not a call: ``v = self._next_version()`` rendered in backticks).
-    inline = len(re.findall(r"version=self\._next_version\(\)", ws_src))
-    assign = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)", ws_src))
-    # The _arm_recovery docstring contains one prose ``v = self._next_version()``
-    # that matches the assignment regex; subtract it.
-    assign_doc_refs = ws_src.count("``v = self._next_version()``")
-    real_invocations = inline + assign - assign_doc_refs
+    # --- RENDER-SEND paths: must route through _next_version_armed(html) (#1817) ---
+    # Both the inline kwarg form ``version=self._next_version_armed(html)`` and the
+    # assignment form ``X = self._next_version_armed(html)`` (where a local is reused
+    # below — e.g. wire_version for telemetry / a separate strip/extract).
+    armed_inline = len(re.findall(r"version=self\._next_version_armed\(", ws_src))
+    armed_assign = len(re.findall(r"\b[a-z_]+ = self\._next_version_armed\(", ws_src))
+    armed_invocations = armed_inline + armed_assign
 
-    # Pin: every client-checked send path routes through the helper.
-    # Sites (verified at implementation, see PR #1788):
-    #   INLINE (version=self._next_version()), 11:
-    #     _run_async_work error arms: 2
-    #     _dispatch_single_event: 2
-    #     actor event path: 1
+    # Render-send sites routed through the armed helper (verified at #1817):
+    #   INLINE (version=self._next_version_armed(html)), 10:
+    #     _run_async_work error arms: 2 (patch + html fallback)
+    #     deferred-activity render: 2 (patch + html fallback)
     #     handle_hot_reload (HIDDEN #1): 1
     #     handle_time_travel_jump: 1
     #     handle_time_travel_component_jump: 1
     #     handle_forward_replay: 1
     #     db_notify: 1
     #     _run_tick: 1
-    #   ASSIGNMENT (X = self._next_version()), 6:
-    #     _run_async_work success arms: 2 (version, before _arm_recovery)
-    #     handle_mount: 1 (mount frame; covers actor mount)
-    #     handle_event patch + html fallback: 2 (wire_version, before _arm_recovery)
-    #     server_push: 1 (wire_version, before _arm_recovery)
-    # Total real invocations = 17.
-    EXPECTED_NEXT_VERSION_INVOCATIONS = 17
-    assert real_invocations == EXPECTED_NEXT_VERSION_INVOCATIONS, (
-        f"expected {EXPECTED_NEXT_VERSION_INVOCATIONS} self._next_version() invocations "
-        f"across client-checked send paths; found {real_invocations} "
-        f"(inline={inline}, assign={assign}, doc_refs={assign_doc_refs}). A new "
-        "client-checked send path must route through self._next_version() (#1788), or an "
-        "existing one drifted off it. Update this count ONLY if you intentionally "
-        "added/removed a client-checked send path."
+    #   ASSIGNMENT (X = self._next_version_armed(html)), 5:
+    #     _run_async_work success arms: 2
+    #     handle_event patch + html fallback: 2 (wire_version)
+    #     server_push: 1 (wire_version)
+    # Total armed invocations = 15.
+    EXPECTED_ARMED_INVOCATIONS = 15
+    assert armed_invocations == EXPECTED_ARMED_INVOCATIONS, (
+        f"expected {EXPECTED_ARMED_INVOCATIONS} self._next_version_armed() invocations "
+        f"across RENDER-SEND paths; found {armed_invocations} "
+        f"(inline={armed_inline}, assign={armed_assign}). Every render-send path must "
+        "arm recovery via self._next_version_armed(html) so _recovery_version stays "
+        "current (#1817). Update this count ONLY if you intentionally added/removed a "
+        "render-send path."
+    )
+
+    # --- NON-render / pending paths: bare self._next_version() ---
+    # The bare form is now reserved for: the helper body's single delegated call, the
+    # mount baseline (non-render), and the actor event path (left unarmed, #1817
+    # follow-up). Count send-site bare invocations EXCLUDING the helper-internal one.
+    bare_inline = len(re.findall(r"version=self\._next_version\(\)", ws_src))
+    bare_assign = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)(?!_armed)", ws_src))
+    # The helper body contains one ``version = self._next_version()`` delegation;
+    # exclude it so this counts only true send-site baseline allocations.
+    helper_src = inspect.getsource(ws_mod.LiveViewConsumer._next_version_armed)
+    helper_internal = len(re.findall(r"\b[a-z_]+ = self\._next_version\(\)", helper_src))
+    bare_send_sites = bare_inline + bare_assign - helper_internal
+
+    # Bare send-site invocations (verified at #1817):
+    #   INLINE: 1 — actor event path (left unarmed pending follow-up).
+    #   ASSIGNMENT: 1 — handle_mount baseline (non-render; covers actor mount).
+    EXPECTED_BARE_SEND_SITES = 2
+    assert bare_send_sites == EXPECTED_BARE_SEND_SITES, (
+        f"expected {EXPECTED_BARE_SEND_SITES} bare self._next_version() send-site "
+        f"invocations (mount baseline + actor event path); found {bare_send_sites} "
+        f"(inline={bare_inline}, assign={bare_assign}, helper_internal={helper_internal}). "
+        "A render-send path on the BARE helper is the #1817 drift — route it through "
+        "self._next_version_armed(html). Update this count ONLY if you intentionally "
+        "added/removed a non-render baseline path."
+    )
+
+    # The armed helper must exist and delegate to _next_version + _arm_recovery (#1817).
+    assert hasattr(ws_mod.LiveViewConsumer, "_next_version_armed"), (
+        "LiveViewConsumer must define _next_version_armed(html) — the canonical "
+        "render-send primitive that advances the wire version AND arms recovery (#1817)."
+    )
+    assert "self._next_version()" in helper_src and "self._arm_recovery(" in helper_src, (
+        "_next_version_armed must delegate to _next_version() AND _arm_recovery(html) "
+        "so the version allocation and recovery baseline can never drift (#1817)."
     )
 
     # The mount frame must stamp the consumer counter (covers actor mount too).

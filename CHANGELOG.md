@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **WebSocket: recovery version no longer goes stale across non-arming
+  render-send paths (#1817).** After #1816 (#1788) every client-checked
+  outbound frame stamps the consumer-owned `_last_sent_version`, and
+  `_arm_recovery` captures `_recovery_version = _last_sent_version` at arm time;
+  `handle_request_html` sends the `html_recovery` frame stamped with that
+  `_recovery_version`. But several render-send paths advanced the wire version
+  WITHOUT arming recovery — the async-result error arms, the deferred-activity
+  render, the hotreload frame, the time-travel jumps (`handle_time_travel_jump`
+  / `handle_time_travel_component_jump` / `handle_forward_replay`), and the
+  tick / `db_notify` broadcasts. After such a frame the client's applied version
+  was ahead of `_recovery_version`, so a later `request_html` returned an
+  `html_recovery` stamped with the stale `_recovery_version` — the client reset
+  `clientVdomVersion` backwards and the next successful diff's `data.version - 1`
+  no longer matched, forcing an extra recovery round-trip (severity low,
+  post-#1785: an extra round-trip, not data loss). Structural cure (#1646
+  parallel-path discipline): one helper, `_next_version_armed(html)`, advances
+  the wire version AND arms recovery in a single step, and every render-send
+  path is routed through it; non-render baselines (mount) stay on bare
+  `_next_version()`. The actor event path is left on bare `_next_version()`
+  pending follow-up (its `result['html']` is not the pre-strip render the
+  recovery path expects). New end-to-end regression test
+  `test_time_travel_jump_recovery_version_is_current` (a real
+  `WebsocketCommunicator` round-trip) plus helper-level unit tests in
+  `python/djust/tests/test_recovery_version_staleness_1817.py`; the
+  `_next_version_armed` render-send call-site count is pinned by
+  `test_every_client_checked_send_path_uses_next_version` in
+  `python/djust/tests/test_ws_send_version_1788.py`, and the consolidated single
+  `_arm_recovery` call site is pinned by
+  `test_arm_recovery_call_site_count_matches_known_send_paths` in
+  `tests/unit/test_arm_recovery_helper_1645.py`.
+
 ## [1.0.6] - 2026-06-18
 
 Stable release consolidating 1.0.6rc1–rc3. Headline: two P0 VDOM data-loss

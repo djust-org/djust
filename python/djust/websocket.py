@@ -1038,10 +1038,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # "Recovery HTML unavailable", and the client freezes at the
                 # transitional state even though the backend advanced (#1636).
                 # Stamp the consumer-owned wire version (#1788), discarding the
-                # Rust ``version`` for the wire. Order: _next_version() THEN
-                # _arm_recovery (so _recovery_version == this frame's version).
-                version = self._next_version()
-                self._arm_recovery(html)
+                # Rust ``version`` for the wire, AND arm recovery in one step so
+                # _recovery_version == this frame's version (#1817).
+                version = self._next_version_armed(html)
                 await self._send_update(
                     patches=patch_list,
                     version=version,
@@ -1060,9 +1059,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )(html)
                 # The fallback sends the full render to the client, so the
                 # recovery baseline must track it too (#1636). Consumer-owned
-                # wire version (#1788); order: _next_version() THEN _arm_recovery.
-                version = self._next_version()
-                self._arm_recovery(html)
+                # wire version + recovery arm in one step (#1788, #1817).
+                version = self._next_version_armed(html)
                 await self._send_update(
                     html=html_content,
                     version=version,
@@ -1097,9 +1095,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
                     if patches is not None:
                         patch_list = fast_json_loads(patches) if patches else []
+                        # Render-send: arm recovery so _recovery_version tracks
+                        # this error re-render's version (#1817). ``html`` is the
+                        # pre-strip render from render_with_diff() above.
                         await self._send_update(
                             patches=patch_list,
-                            version=self._next_version(),  # consumer-owned (#1788)
+                            version=self._next_version_armed(html),
                             event_name=event_name,
                             source="async",
                         )
@@ -1114,7 +1115,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         )(html)
                         await self._send_update(
                             html=html_content,
-                            version=self._next_version(),  # consumer-owned (#1788)
+                            version=self._next_version_armed(html),
                             event_name=event_name,
                             source="async",
                         )
@@ -1166,6 +1167,47 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         self._recovery_html = html
         self._recovery_version = getattr(self, "_last_sent_version", 0)
+
+    def _next_version_armed(self, html: str) -> int:
+        """Advance the wire version AND refresh the recovery baseline in one step.
+
+        This is the canonical primitive for every RENDER-SEND path — any frame
+        that ships a freshly-rendered patch/HTML the client applies as new
+        display state (and that WRITES ``clientVdomVersion = data.version``,
+        ``static/djust/src/02-response-handler.js:77``). It folds the
+        ``_next_version()`` allocation and the ``_arm_recovery(html)`` capture
+        into a single call so the two can never drift apart.
+
+        Why this exists (#1817): before #1816 (#1788) several render-send paths —
+        the async-result error arms, the deferred-activity render, the hotreload
+        frame, the time-travel jumps, and the tick / db_notify broadcasts —
+        advanced ``_next_version()`` WITHOUT arming recovery. After such a frame
+        the client's applied version was ahead of ``_recovery_version``, so a
+        later ``request_html`` returned an ``html_recovery`` stamped with the
+        STALE ``_recovery_version`` (``handle_request_html`` uses
+        ``self._recovery_version`` for the wire). The client then reset
+        ``clientVdomVersion`` backwards (``03-websocket.js:727``) and the NEXT
+        successful diff's ``data.version - 1`` no longer matched — forcing an
+        extra recovery round-trip. Routing every render-send path through this
+        helper keeps ``_recovery_version == _last_sent_version`` after each
+        applied frame, so recovery always resets the client to the version it is
+        actually on (#1646 parallel-path discipline: one helper, not N hand-copied
+        two-line pairs).
+
+        ``html`` MUST be the full PRE-STRIP HTML returned by
+        ``render_with_diff()`` (before ``_strip_comments_and_whitespace`` /
+        ``_extract_liveview_content``) — ``handle_request_html`` strips and
+        extracts the cached ``_recovery_html`` on demand, so arming with the
+        already-stripped/extracted content would double-process it.
+
+        NON-render frames (the mount baseline, ``navigate`` / ``reload`` /
+        error-only frames with no new render HTML) must stay on the bare
+        ``_next_version()`` — they advance the wire sequence but have no
+        client-applied display HTML to recover to.
+        """
+        version = self._next_version()
+        self._arm_recovery(html)
+        return version
 
     async def _send_update(
         self,
@@ -1424,9 +1466,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         has_async = getattr(self.view_instance, "_async_pending", None) is not None
         if patch_list is not None:
+            # Render-send: arm recovery so _recovery_version tracks this deferred
+            # render's version (#1817). ``html`` is the pre-strip render.
             await self._send_update(
                 patches=patch_list,
-                version=self._next_version(),  # consumer-owned (#1788)
+                version=self._next_version_armed(html),
                 event_name=event_name,
                 async_pending=has_async,
                 source="event",
@@ -1437,6 +1481,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # VDOM diff returned no patches — send full HTML like the
             # main path does. Mirrors the fallback branch so clients
             # behave identically for deferred vs live events.
+            # Capture the PRE-STRIP html for recovery arming BEFORE the
+            # strip/extract reassigns ``html`` (#1817 — _arm_recovery expects
+            # the unstripped render, which handle_request_html strips on demand).
+            recovery_html = html
             try:
 
                 def _sync_strip_and_extract(raw_html):
@@ -1450,7 +1498,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
             await self._send_update(
                 html=html_content,
-                version=self._next_version(),  # consumer-owned (#1788)
+                version=self._next_version_armed(recovery_html),
                 event_name=event_name,
                 async_pending=has_async,
                 source="event",
@@ -3864,11 +3912,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # Store rendered HTML for on-demand recovery.
                         # Client sends request_html when applyPatches() fails
                         # (e.g., {% if %} blocks shifting DOM structure).
-                        # Consumer-owned wire version (#1788): allocate it, THEN
-                        # arm recovery (so _recovery_version == this frame's
-                        # version — recovery sets clientVdomVersion directly).
-                        wire_version = self._next_version()
-                        self._arm_recovery(html)
+                        # Consumer-owned wire version + recovery arm in one step
+                        # (#1788, #1817): _recovery_version == this frame's version
+                        # (recovery sets clientVdomVersion directly).
+                        wire_version = self._next_version_armed(html)
 
                         await self._send_update(
                             patches=patch_list,
@@ -3898,11 +3945,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         # #1788 path: a baseline loss makes the Rust ``version``
                         # non-sequential, but ``wire_version`` stays monotonic so
                         # the client accepts the html_update without recovery.
-                        # Allocate it BEFORE _arm_recovery (so _recovery_version
-                        # == this frame's version). The Rust ``version`` is still
-                        # used below for the DJE-053 warning + telemetry reason.
-                        wire_version = self._next_version()
-                        self._arm_recovery(html)
+                        # Allocate the wire version AND arm recovery in one step
+                        # (#1788, #1817) so _recovery_version == this frame's
+                        # version, arming with the RAW pre-strip ``html`` before
+                        # the strip/extract below reassigns it. The Rust
+                        # ``version`` is still used below for the DJE-053 warning
+                        # + telemetry reason.
+                        wire_version = self._next_version_armed(html)
 
                         # Batch strip + extract into a single thread hop
                         # to avoid two separate sync_to_async crossings.
@@ -4467,9 +4516,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # the consumer counter — otherwise the NEXT normal event would be
                 # rejected against a stale client version. The separate
                 # ``_hvr_version`` (``hvr-applied`` telemetry frame) is untouched.
+                # Render-send: the hotreload frame is exempt from the client
+                # version CHECK but it still WRITES clientVdomVersion (#1788,
+                # HIDDEN #1), so it advances the client past _recovery_version.
+                # Arm recovery so a later request_html serves the post-HVR HTML,
+                # not a stale pre-HVR baseline (#1817). ``html`` is the pre-strip
+                # render from render_with_diff() above.
                 await self._send_update(
                     patches=patches,
-                    version=self._next_version(),  # consumer-owned (#1788, HIDDEN #1)
+                    version=self._next_version_armed(html),
                     hotreload=True,
                     file_path=file_path,
                 )
@@ -5096,7 +5151,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._send_update(
                 patches=patch_list,
                 html=html,
-                version=self._next_version(),  # consumer-owned (#1788)
+                # Render-send: arm recovery so _recovery_version tracks this
+                # jump's version (#1817). ``html`` is the pre-strip render.
+                version=self._next_version_armed(html),
                 event_name="__time_travel_jump__",
             )
         except Exception as exc:  # noqa: BLE001 — dev-only, log + report
@@ -5169,7 +5226,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._send_update(
                 patches=patch_list,
                 html=html,
-                version=self._next_version(),  # consumer-owned (#1788)
+                # Render-send: arm recovery so _recovery_version tracks this
+                # component-jump's version (#1817). ``html`` is the pre-strip render.
+                version=self._next_version_armed(html),
                 event_name="__time_travel_component_jump__",
             )
         except Exception as exc:  # noqa: BLE001 — dev-only, log + report
@@ -5261,7 +5320,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._send_update(
                 patches=patch_list,
                 html=html,
-                version=self._next_version(),  # consumer-owned (#1788)
+                # Render-send: arm recovery so _recovery_version tracks this
+                # forward-replay's version (#1817). ``html`` is the pre-strip render.
+                version=self._next_version_armed(html),
                 event_name="__forward_replay__",
             )
         except Exception as exc:  # noqa: BLE001 — dev-only, log + report
@@ -5394,11 +5455,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # handle_event. Without this, request_html after a failed
                     # broadcast-triggered patch finds _recovery_html=None and
                     # forces a page reload. See #1202.
-                    # Consumer-owned wire version (#1788); order: _next_version()
-                    # THEN _arm_recovery (so _recovery_version == this frame's
-                    # version).
-                    wire_version = self._next_version()
-                    self._arm_recovery(html)
+                    # Consumer-owned wire version + recovery arm in one step
+                    # (#1788, #1817): _recovery_version == this frame's version.
+                    wire_version = self._next_version_armed(html)
                     await self._send_update(
                         patches=patches,
                         version=wire_version,
@@ -5508,9 +5567,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if patches is not None:
                     if isinstance(patches, str):
                         patches = fast_json_loads(patches)
+                    # Render-send: arm recovery so _recovery_version tracks this
+                    # db_notify broadcast's version (#1817), mirroring server_push.
+                    # ``html`` is the pre-strip render from render_with_diff() above.
                     await self._send_update(
                         patches=patches,
-                        version=self._next_version(),  # consumer-owned (#1788)
+                        version=self._next_version_armed(html),
                         broadcast=True,
                         source="broadcast",
                     )
@@ -5601,9 +5663,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                         if patches is not None:
                             if isinstance(patches, str):
                                 patches = fast_json_loads(patches)
+                            # Render-send: arm recovery so _recovery_version
+                            # tracks this tick's version (#1817). ``html`` is the
+                            # pre-strip render from render_with_diff() above.
                             await self._send_update(
                                 patches=patches,
-                                version=self._next_version(),  # consumer-owned (#1788)
+                                version=self._next_version_armed(html),
                                 event_name="tick",
                                 source="tick",
                             )
