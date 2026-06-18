@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **dj-if ``MoveSubtree`` keyed on RELATIVE position, not absolute offset
   (#1826).** A ``{% if %}``-wrapped element inside a ``{% for %}`` loop dropped
-  a table row per toggle (P0 regression in 1.0.6rc1). ``diff_html``'s
+  a table row per toggle (P0; latent since v1.0.0 — introduced with the
+  ``MoveSubtree`` feature in #1666, not new in 1.0.6rc1; the reporter happened
+  to hit it on 1.0.6rc1). ``diff_html``'s
   matched-boundary move-decision in ``crates/djust_vdom/src/diff.rs`` compared
   ABSOLUTE child offsets (``old_off + ob.open`` vs ``new_off + nb.open``).
   Filling an EARLIER empty dj-if body inserts nodes that shift the absolute
