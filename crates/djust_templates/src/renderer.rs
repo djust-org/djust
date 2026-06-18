@@ -554,7 +554,26 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 && (nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes))
             {
                 if let Some(id) = marker_id {
-                    return Ok(format!("<!--dj-if id=\"{id}\"-->{body}<!--/dj-if-->"));
+                    // Append the per-iteration loop path (#1832) so an
+                    // `{% if %}` rendered inside a `{% for %}` gets a UNIQUE
+                    // id per iteration (the parser-assigned `if-<hash>-N` is
+                    // the SAME compile-time ordinal for every iteration, so
+                    // without this suffix the id is duplicated N times,
+                    // producing unpairable MoveSubtree patches on re-render).
+                    // Outside any loop the path is absent/empty, so the id is
+                    // unchanged `if-<hash>-N` (backward compatible). Inside a
+                    // loop iteration the open marker becomes
+                    // `if-<hash>-N-<path>` (e.g. `if-<hash>-0-0`); the close
+                    // marker stays `<!--/dj-if-->` (it carries no id). The id
+                    // is treated as an opaque string by the Rust differ and
+                    // the JS client — neither parses the `-N` structure.
+                    let loop_path = match context.get("__djust_if_loop_path") {
+                        Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+                        _ => "",
+                    };
+                    return Ok(format!(
+                        "<!--dj-if id=\"{id}{loop_path}\"-->{body}<!--/dj-if-->"
+                    ));
                 }
             }
 
@@ -600,11 +619,36 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // Save outer cycle counter for nested loop support
                     let saved_cycle_counter = ctx.get("__djust_cycle_counter").cloned();
 
+                    // Save outer dj-if loop path for nested-loop composition
+                    // and per-iteration uniqueness of `{% if %}` marker ids
+                    // (#1832). The parent path (empty outside any loop) is
+                    // read once; each iteration appends `-<index>` so a
+                    // `{% if %}` rendered inside this loop gets a UNIQUE id
+                    // per iteration that is also STABLE across re-renders
+                    // that don't change loop structure. Uses the ORIGINAL
+                    // item index (not the enumerate counter) so ids stay
+                    // stable under `{% for ... reversed %}`. Mirrors the
+                    // cycle-counter save/restore pattern above/below.
+                    let parent_if_loop_path = match ctx.get("__djust_if_loop_path") {
+                        Some(Value::String(s)) => s.clone(),
+                        _ => String::new(),
+                    };
+                    let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
+
                     for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
                         // Set __djust_cycle_counter for {% cycle %} tag support
                         ctx.set(
                             "__djust_cycle_counter".to_string(),
                             Value::Integer(counter as i64),
+                        );
+
+                        // Set the per-iteration dj-if loop path (#1832).
+                        // Composes for nested loops: an inner For reads this
+                        // (non-empty) path and appends its own `-<index>`,
+                        // yielding e.g. `-3-2`.
+                        ctx.set(
+                            "__djust_if_loop_path".to_string(),
+                            Value::String(format!("{parent_if_loop_path}-{index}")),
                         );
 
                         // Handle tuple unpacking: {% for a, b in items %}
@@ -643,6 +687,19 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // Restore outer cycle counter (for nested loops)
                     if let Some(saved) = saved_cycle_counter {
                         ctx.set("__djust_cycle_counter".to_string(), saved);
+                    }
+
+                    // Restore outer dj-if loop path (#1832). There is no
+                    // public Context::remove for an arbitrary key, so when
+                    // there was no parent path we reset to the empty string,
+                    // which Node::If treats as "no path" (it appends only a
+                    // non-empty path). Otherwise restore the saved value.
+                    match saved_if_loop_path {
+                        Some(saved) => ctx.set("__djust_if_loop_path".to_string(), saved),
+                        None => ctx.set(
+                            "__djust_if_loop_path".to_string(),
+                            Value::String(String::new()),
+                        ),
                     }
 
                     // Clear loop mappings after the loop
