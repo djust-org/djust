@@ -1127,9 +1127,7 @@ class TestCoercionSecurityEdgeCases:
         def handler(self, active: bool = False, **kwargs):
             pass
 
-        result = validate_handler_params(
-            handler, {"active": "true; DROP TABLE"}, "toggle"
-        )
+        result = validate_handler_params(handler, {"active": "true; DROP TABLE"}, "toggle")
         # bool coercion never raises -> always a valid bool -> valid is True.
         assert result["valid"] is True
         assert result["coerced_params"]["active"] is False
@@ -1160,9 +1158,7 @@ class TestCoercionSecurityEdgeCases:
         for truthy in ("true", "True", "TRUE", "1", "yes", "YES", "on", "ON"):
             result = validate_handler_params(handler, {"active": truthy}, "toggle")
             assert result["valid"] is True
-            assert result["coerced_params"]["active"] is True, (
-                f"{truthy!r} must coerce to True"
-            )
+            assert result["coerced_params"]["active"] is True, f"{truthy!r} must coerce to True"
 
     # --- str -> float (issue #1820 case 3) ---------------------------------
 

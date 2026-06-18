@@ -61,13 +61,17 @@ def test_div_loop_fill_emits_no_spurious_move_subtree():
     move later boundaries, and the inserted body node is the real element."""
     patches = json.loads(diff := rust.diff_html(_div_dom(False), _div_dom(True)))
     moves = [p for p in patches if p["type"] == "MoveSubtree"]
-    assert not moves, f"spurious MoveSubtree for later dj-if boundaries (#1826): {[m.get('id') for m in moves]}\n{diff}"
+    assert not moves, (
+        f"spurious MoveSubtree for later dj-if boundaries (#1826): {[m.get('id') for m in moves]}\n{diff}"
+    )
 
     inserts = [p for p in patches if p["type"] == "InsertChild"]
     # Three boundary bodies filled -> three element inserts, none flattened.
     assert len(inserts) == 3, f"expected 3 detail inserts, got {len(inserts)}: {diff}"
     flattened = [p for p in inserts if (p.get("node") or {}).get("tag") == "#text"]
-    assert not flattened, f"non-table container must insert the <span> element, not #text: {flattened}"
+    assert not flattened, (
+        f"non-table container must insert the <span> element, not #text: {flattened}"
+    )
     assert all((p.get("node") or {}).get("tag") == "span" for p in inserts), diff
 
 
