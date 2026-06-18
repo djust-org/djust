@@ -14,6 +14,36 @@ import djust.checks as _root
 
 logger = logging.getLogger(__name__)
 
+# Shared surface this module provides to the sibling check submodules
+# (configuration, components, templates, …). Declared explicitly because
+# some of these — notably the ``_LIVE_RENDER_*`` regexes — are consumed only
+# by sibling modules (templates.py + components.py) and never read within
+# utils.py itself, so they read as module-unused to static analysis even
+# though they are live shared constants. Listing them here documents the
+# contract and marks them as exported.
+__all__ = [
+    # result classes
+    "DjustError",
+    "DjustWarning",
+    "DjustInfo",
+    # discovery / parsing helpers
+    "_is_check_suppressed",
+    "_get_project_app_dirs",
+    "_get_template_dirs",
+    "_iter_python_files",
+    "_iter_template_files",
+    "_iter_js_files",
+    "_parse_python_file",
+    "_has_noqa",
+    "_walk_subclasses",
+    "_strip_verbatim_blocks",
+    # shared scanner regexes
+    "_LIVE_RENDER_TAG_RE",
+    "_LIVE_RENDER_STICKY_TRUTHY_RE",
+    "_LIVE_RENDER_STICKY_FALSY_RE",
+    "_VERBATIM_BLOCK_RE",
+]
+
 
 class _DjustCheckMixin:
     """Mixin that adds fix_hint, file_path, and line_number to check results."""
