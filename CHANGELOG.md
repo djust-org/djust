@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6rc3] - 2026-06-18
+
 ### Fixed
 
 - **VDOM: `{% if %}` inside `{% for %}` no longer drops a row on re-render (#1832, P0 data-loss).** A conditional inside a loop was wrapped in `<!--dj-if id="if-<hash>-N"-->` markers where `N` is the parser's compile-time ordinal, so every loop iteration reused the **same** id. A later re-render that repositioned one boundary emitted a `MoveSubtree` whose id matched N identical markers — the client got N unpairable moves (`close marker not found`), most patches failed, and the recovery morph visibly dropped a row per toggle. Fix: the renderer now threads a per-iteration loop-index path through the render context (mirroring the existing `{% cycle %}` counter save/restore) and appends it to the marker id, so each rendered `{% if %}` boundary inside a loop gets a **unique** id (`if-<hash>-N-<index>`, composing for nested loops) that is **stable** across re-renders which don't change loop structure. Ids outside any loop are unchanged (`if-<hash>-N`); the id is treated as an opaque string by the strip regex, the Rust differ, and the JS client. Distinct from #1826/#1828 (relative-vs-absolute move decision). Rust + Python regression tests added; two pre-existing tests that asserted the duplicate-id behavior were corrected.
