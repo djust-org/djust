@@ -7,23 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.6rc3] - 2026-06-18
+## [1.0.6] - 2026-06-18
 
-### Fixed
+Stable release consolidating 1.0.6rc1–rc3. Headline: two P0 VDOM data-loss
+fixes for `{% if %}` inside `{% for %}` (#1826 relative-position move decision,
+#1832 unique per-iteration marker ids), a new stored-XSS system check (S007),
+WebSocket URL validation, the consumer-owned VDOM send-version, the `checks.py`
+package modularization, and a transitive-dependency security sweep.
 
-- **VDOM: `{% if %}` inside `{% for %}` no longer drops a row on re-render (#1832, P0 data-loss).** A conditional inside a loop was wrapped in `<!--dj-if id="if-<hash>-N"-->` markers where `N` is the parser's compile-time ordinal, so every loop iteration reused the **same** id. A later re-render that repositioned one boundary emitted a `MoveSubtree` whose id matched N identical markers — the client got N unpairable moves (`close marker not found`), most patches failed, and the recovery morph visibly dropped a row per toggle. Fix: the renderer now threads a per-iteration loop-index path through the render context (mirroring the existing `{% cycle %}` counter save/restore) and appends it to the marker id, so each rendered `{% if %}` boundary inside a loop gets a **unique** id (`if-<hash>-N-<index>`, composing for nested loops) that is **stable** across re-renders which don't change loop structure. Ids outside any loop are unchanged (`if-<hash>-N`); the id is treated as an opaque string by the strip regex, the Rust differ, and the JS client. Distinct from #1826/#1828 (relative-vs-absolute move decision). Rust + Python regression tests added; two pre-existing tests that asserted the duplicate-id behavior were corrected.
+### Added
+
+- **System check S007 — unsafe ``client_name|safe`` stored-XSS detection
+  (#1821).** A new template static-analysis check (severity WARNING) flags
+  ``{{ <expr>.client_name|safe }}`` patterns in template files. An upload
+  entry's ``client_name`` is the attacker-controlled original filename, stored
+  without sanitisation; auto-escaping is the only default protection, and
+  ``|safe`` bypasses it — turning a ``<script>``-bearing filename into a stored
+  XSS vector. The matcher is anchored on the ``{{ ... }}`` variable form (not a
+  bare substring), tolerates whitespace around the pipe, and word-boundary
+  guards reject ``notclient_name`` / ``client_name_foo``. Honours
+  ``DJUST_CONFIG['suppress_checks']`` (``S007`` or ``djust.S007``). New cases in
+  ``TestS007ClientNameSafeRegex`` and ``TestS007CheckIntegration`` in
+  ``python/tests/test_checks.py``.
 
 ### Changed
 
 - **Modularized `checks.py` (4,268 LOC) into a `checks/` package (#1822).** Pure refactor, no behavior change: the monolithic system-checks module is split by check family into `checks/{utils,configuration,integrations,components,security,templates,accessibility,quality}.py`, with `checks/__init__.py` firing every `@register("djust")` for Django `AppConfig.checks` discovery and re-exporting every public + private symbol. All 13 registered checks, 72 check IDs, and the full public/private import surface are preserved; the entire `test_checks*` suite passes **untouched** (zero test edits). The six helpers the suite monkeypatches by package path (`_get_project_app_dirs`, `_has_asgi_server`, `_has_multiple_permission_groups`, `_check_tailwind_cdn_in_production`, `_check_missing_compiled_css`, `_check_manual_client_js`) are referenced from their callers via the root module so `patch("djust.checks.<helper>")` keeps working. New regression guard in `python/tests/test_checks_package_structure_1822.py` pins the discovery, import-surface, and monkeypatch-by-path contracts.
 
-### Security
-
-- **Bumped four transitive dependencies to clear 12 Dependabot advisories (4 high, 3 moderate, 5 low).** Lockfile-only (`uv.lock`) — none are direct djust dependencies, so the published wheel's declared dependencies are unchanged; this secures djust's own resolved / CI environment. `cryptography` 46.0.7 → 49.0.0 (GHSA-537c-gmf6-5ccf), `pyjwt` 2.12.1 → 2.13.0 (GHSA-xgmm-8j9v-c9wx, GHSA-993g-76c3-p5m4, GHSA-w7vc-732c-9m39, GHSA-jq35-7prp-9v3f, GHSA-fhv5-28vv-h8m8), `python-multipart` 0.0.29 → 0.0.32 (GHSA-5rvq-cxj2-64vf, GHSA-6jv3-5f52-599m, GHSA-vffw-93wf-4j4q, GHSA-v9pg-7xvm-68hf), `starlette` 1.2.1 → 1.3.1 (GHSA-82w8-qh3p-5jfq, GHSA-jp82-jpqv-5vv3). Full suite green against the bumped versions (Python + Rust; the one JS flake was the unrelated rAF-timing `dj_transition` test, #1830).
-
-## [1.0.6rc2] - 2026-06-17
-
 ### Fixed
+
+- **VDOM: `{% if %}` inside `{% for %}` no longer drops a row on re-render (#1832, P0 data-loss).** A conditional inside a loop was wrapped in `<!--dj-if id="if-<hash>-N"-->` markers where `N` is the parser's compile-time ordinal, so every loop iteration reused the **same** id. A later re-render that repositioned one boundary emitted a `MoveSubtree` whose id matched N identical markers — the client got N unpairable moves (`close marker not found`), most patches failed, and the recovery morph visibly dropped a row per toggle. Fix: the renderer now threads a per-iteration loop-index path through the render context (mirroring the existing `{% cycle %}` counter save/restore) and appends it to the marker id, so each rendered `{% if %}` boundary inside a loop gets a **unique** id (`if-<hash>-N-<index>`, composing for nested loops) that is **stable** across re-renders which don't change loop structure. Ids outside any loop are unchanged (`if-<hash>-N`); the id is treated as an opaque string by the strip regex, the Rust differ, and the JS client. Distinct from #1826/#1828 (relative-vs-absolute move decision). Rust + Python regression tests added; two pre-existing tests that asserted the duplicate-id behavior were corrected.
 
 - **dj-if ``MoveSubtree`` keyed on RELATIVE position, not absolute offset
   (#1826).** A ``{% if %}``-wrapped element inside a ``{% for %}`` loop dropped
@@ -63,22 +76,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closing the JS-apply coverage gap the server-only tests left open (the real
   client passes all four; no client change needed).
 
-## [1.0.6rc1] - 2026-06-17
-
-### Added
-
-- **System check S007 — unsafe ``client_name|safe`` stored-XSS detection
-  (#1821).** A new template static-analysis check (severity WARNING) flags
-  ``{{ <expr>.client_name|safe }}`` patterns in template files. An upload
-  entry's ``client_name`` is the attacker-controlled original filename, stored
-  without sanitisation; auto-escaping is the only default protection, and
-  ``|safe`` bypasses it — turning a ``<script>``-bearing filename into a stored
-  XSS vector. The matcher is anchored on the ``{{ ... }}`` variable form (not a
-  bare substring), tolerates whitespace around the pipe, and word-boundary
-  guards reject ``notclient_name`` / ``client_name_foo``. Honours
-  ``DJUST_CONFIG['suppress_checks']`` (``S007`` or ``djust.S007``). New cases in
-  ``TestS007ClientNameSafeRegex`` and ``TestS007CheckIntegration`` in
-  ``python/tests/test_checks.py``.
+- **Consumer-owned monotonic VDOM send-version (#1788).** The WebSocket
+  ``version`` stamped on every client-checked frame was the Rust view's
+  internal counter, which resets on a mid-session VDOM baseline loss (e.g. the
+  patch-compression ``_rust_view.reset()`` path). The resulting non-sequential
+  version failed the client's ``clientVdomVersion === data.version - 1`` check,
+  forcing an ``html_update`` → ``request_html`` recovery round-trip (a full page
+  reload before #1785). The consumer now owns a monotonic per-connection
+  counter (``_next_version()``) used as the single source of truth across every
+  client-checked send path (events, async work, mount, server_push, db_notify,
+  ticks, time-travel, hot-reload patches, and ``StreamingMixin.push_state``), so
+  a post-baseline-loss ``html_update`` stays in sequence and the client accepts
+  it directly with no recovery round-trip. Recovery (``html_recovery``) now
+  carries the consumer version of the frame it replaces. New regression tests in
+  ``python/djust/tests/test_ws_send_version_1788.py`` pin the monotonic sequence
+  across the baseline-loss boundary plus the send-path call-site coverage.
 
 ### Security
 
@@ -104,26 +116,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated-url-is-safe-for-``RequestFactory`` end-to-end property, and a
   both-sites-validate source guard.
 
+- **Bumped four transitive dependencies to clear 12 Dependabot advisories (4 high, 3 moderate, 5 low) (#1831).** Lockfile-only (`uv.lock`) — none are direct djust dependencies, so the published wheel's declared dependencies are unchanged; this secures djust's own resolved / CI environment. `cryptography` 46.0.7 → 49.0.0 (GHSA-537c-gmf6-5ccf), `pyjwt` 2.12.1 → 2.13.0 (GHSA-xgmm-8j9v-c9wx, GHSA-993g-76c3-p5m4, GHSA-w7vc-732c-9m39, GHSA-jq35-7prp-9v3f, GHSA-fhv5-28vv-h8m8), `python-multipart` 0.0.29 → 0.0.32 (GHSA-5rvq-cxj2-64vf, GHSA-6jv3-5f52-599m, GHSA-vffw-93wf-4j4q, GHSA-v9pg-7xvm-68hf), `starlette` 1.2.1 → 1.3.1 (GHSA-82w8-qh3p-5jfq, GHSA-jp82-jpqv-5vv3). Full suite green against the bumped versions.
+
 - **Audited event-handler type-coercion edge cases — no bypass found, behavior pinned (#1820).** `validate_handler_params()` coerces event params by default (`coerce=True`) because Template `data-*` attributes always arrive as strings. The audit empirically exercised the malformed/adversarial inputs from the issue against the real coercion code and confirmed the paths are **safe by design** — no code change was required: **(int)** `page="999 OR 1=1"` and hex `id="0x41"` make `int()` raise, so the original string is kept and type validation rejects the event (`valid is False`, handler **not** invoked) — there is no silent truncation to `999`; **(bool)** the dangerous case — `active="true; DROP TABLE"` — coerces to `False` because bool coercion is an **allowlist** (`value.lower() in {"true","1","yes","on"}`), NOT `bool(non_empty_string)`, so the falsy-but-non-empty `"false"`/`"0"` are also `False` (no truthiness logic-bypass); **(float)** malformed strings are rejected, while `"1e309"`/`"inf"`/`"nan"` are accepted as the valid Python floats they are (intentional, documented contract — handlers doing bound checks or arithmetic on a coerced `float` must guard non-finite values themselves); **(List[T])** a malformed element abandons the whole coercion (no partial `[1,2]`) and the subscripted generic is skipped by the type validator, so the handler receives the unmodified original string. The strictest posture remains `@event_handler(coerce_types=False)`, which rejects any string for a typed param outright (so no separate `@strict_types` decorator was added). The audited contract is documented in `SECURITY_AUDIT.md` (Type Coercion Contract table) and pinned by `TestCoercionSecurityEdgeCases` (11 characterization cases) in `python/tests/test_validation.py`; non-tautology was verified (#1468) by mutating the coercion to the unsafe variants and confirming 5 of the new tests fail with the exact dangerous symptoms.
-
-
-### Fixed
-
-- **Consumer-owned monotonic VDOM send-version (#1788).** The WebSocket
-  ``version`` stamped on every client-checked frame was the Rust view's
-  internal counter, which resets on a mid-session VDOM baseline loss (e.g. the
-  patch-compression ``_rust_view.reset()`` path). The resulting non-sequential
-  version failed the client's ``clientVdomVersion === data.version - 1`` check,
-  forcing an ``html_update`` → ``request_html`` recovery round-trip (a full page
-  reload before #1785). The consumer now owns a monotonic per-connection
-  counter (``_next_version()``) used as the single source of truth across every
-  client-checked send path (events, async work, mount, server_push, db_notify,
-  ticks, time-travel, hot-reload patches, and ``StreamingMixin.push_state``), so
-  a post-baseline-loss ``html_update`` stays in sequence and the client accepts
-  it directly with no recovery round-trip. Recovery (``html_recovery``) now
-  carries the consumer version of the frame it replaces. New regression tests in
-  ``python/djust/tests/test_ws_send_version_1788.py`` pin the monotonic sequence
-  across the baseline-loss boundary plus the send-path call-site coverage.
 
 ## [1.0.5] - 2026-06-15
 
