@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6rc2] - 2026-06-17
+
 ### Fixed
 
 - **dj-if ``MoveSubtree`` keyed on RELATIVE position, not absolute offset
