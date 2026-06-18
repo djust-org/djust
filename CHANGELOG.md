@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7rc1] - 2026-06-18
+
 ### Added
 
 - **System check T017 — warn on ``dj-view`` / ``dj-root`` on a table-section
