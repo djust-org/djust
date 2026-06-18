@@ -35,7 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (loop-fill no-spurious-move + client-faithful round-trip + genuine-reposition
   guard; gate-off verified per #1468) and 4 regression cases in
   ``python/djust/tests/test_diff_html_if_marker_rows_1826.py``. The two #1666
-  guards and the proptest / torture dj-if round-trip nets stay green.
+  guards and the proptest / torture dj-if round-trip nets stay green. The
+  ORIGINAL #1826 symptom was CLIENT-side (``applyMoveSubtree`` →
+  ``_findDjIfCloseMarker`` → ``close marker not found``), and the Rust
+  ``apply_all`` harness is not faithful to the JS client's document-wide
+  depth-counting ``TreeWalker``; new cases in the ``dj-if MoveSubtree —
+  JS-client apply (#1826 follow-up)`` describe block
+  (``tests/js/dj_if_movesubtree_client_apply_1826.test.js``) exercise the REAL
+  ``src/12-vdom-patch.js`` against the corrected ``diff_html`` patch streams for
+  the all-fill, genuine-reposition, redundant-move, and nested-boundary shapes —
+  closing the JS-apply coverage gap the server-only tests left open (the real
+  client passes all four; no client change needed).
 
 ## [1.0.6rc1] - 2026-06-17
 
