@@ -44,6 +44,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
 | T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
+| T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -411,6 +412,30 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   are never flagged.
 - **Scope**: Static check only — djust 1.0's runtime does not accept the
   legacy attributes; the template must be migrated to the `dj-` spelling.
+
+### T017 — dj-view / dj-root on a table-section element
+- **Severity**: Warning
+- **Method**: Regex (template scan)
+- **What it detects**: A `dj-view` or `dj-root` attribute placed on an HTML
+  table-section element (`<tbody>`, `<thead>`, `<tfoot>`, `<tr>`, `<td>`,
+  `<th>`, `<caption>`, `<col>`, `<colgroup>`). Such a view renders to **silent
+  garbage**: html5ever foster-parents the table elements out of the tree at
+  render time, so `<tbody dj-view="…">{% for %}<tr>…{% endfor %}</tbody>`
+  renders as `<html><head></head><body>text</body></html>` (all rows dropped)
+  with **no error** (#1837).
+- **Fix**: Put `dj-view` / `dj-root` on a wrapping element (the `<table>` or a
+  surrounding `<div>`); a table-section element is foster-parented at render
+  time and cannot be a standalone parse root.
+- **Suppression**: Fix the templates; or
+  `DJUST_CONFIG = {"suppress_checks": ["T017"]}`
+- **False positives**: None expected; the match is scoped to the same tag
+  (`[^>]*?` stops at the table-section tag's own `>`), so a `<div dj-view>`
+  wrapping a `<table><tbody>` is never flagged, and a word-boundary on the tag
+  name rejects `<trx` / `<tablefoo`. `<table dj-view>` (the recommended wrap
+  target) is intentionally not flagged.
+- **Scope**: Static check only — it does not change html5ever's HTML5-spec
+  foster-parenting; it warns at startup so the silent failure is caught before
+  a request hits.
 
 ---
 

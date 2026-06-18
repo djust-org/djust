@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **System check T017 — warn on ``dj-view`` / ``dj-root`` on a table-section
+  element (#1837).** A new template static-analysis check (severity WARNING)
+  flags a ``dj-view`` or ``dj-root`` attribute placed on an HTML table-section
+  element (``<tbody>``, ``<thead>``, ``<tfoot>``, ``<tr>``, ``<td>``, ``<th>``,
+  ``<caption>``, ``<col>``, ``<colgroup>``). Such a view renders to *silent
+  garbage*: html5ever foster-parents the table elements out of the tree at
+  render time, so ``<tbody dj-view="…">{% for %}<tr>…{% endfor %}</tbody>``
+  renders as ``<html><head></head><body>text</body></html>`` (all rows
+  dropped) with NO error. The matcher is same-tag-scoped (a ``<div dj-view>``
+  wrapping a ``<table><tbody>`` does NOT false-match — the attribute must be on
+  the table-section opening tag itself), word-boundaries the tag name so
+  ``<trx`` / ``<tablefoo`` don't match, and tolerates attribute order /
+  whitespace / case. The fix hint points the developer to a wrapping element
+  (the ``<table>`` or a surrounding ``<div>``). Honors
+  ``DJUST_CONFIG['suppress_checks']`` for both the short (``T017``) and
+  fully-qualified (``djust.T017``) id forms. Covered by ``TestT017TableSectionRegex``
+  and ``TestT017CheckIntegration`` in
+  ``python/tests/test_checks_t017_table_section_1837.py`` (regex word-boundary /
+  attribute-order cases, fires/no-false-positive empirical canary per #1459, and
+  suppression).
+
 ### Fixed
 
 - **WebSocket: recovery version no longer goes stale across non-arming
