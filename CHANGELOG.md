@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Bumped four transitive dependencies to clear 12 Dependabot advisories (4 high, 3 moderate, 5 low).** Lockfile-only (`uv.lock`) — none are direct djust dependencies, so the published wheel's declared dependencies are unchanged; this secures djust's own resolved / CI environment. `cryptography` 46.0.7 → 49.0.0 (GHSA-537c-gmf6-5ccf), `pyjwt` 2.12.1 → 2.13.0 (GHSA-xgmm-8j9v-c9wx, GHSA-993g-76c3-p5m4, GHSA-w7vc-732c-9m39, GHSA-jq35-7prp-9v3f, GHSA-fhv5-28vv-h8m8), `python-multipart` 0.0.29 → 0.0.32 (GHSA-5rvq-cxj2-64vf, GHSA-6jv3-5f52-599m, GHSA-vffw-93wf-4j4q, GHSA-v9pg-7xvm-68hf), `starlette` 1.2.1 → 1.3.1 (GHSA-82w8-qh3p-5jfq, GHSA-jp82-jpqv-5vv3). Full suite green against the bumped versions (Python + Rust; the one JS flake was the unrelated rAF-timing `dj_transition` test, #1830).
+
 ## [1.0.6rc2] - 2026-06-17
 
 ### Fixed
