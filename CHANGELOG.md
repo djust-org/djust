@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Modularized `checks.py` (4,268 LOC) into a `checks/` package (#1822).** Pure refactor, no behavior change: the monolithic system-checks module is split by check family into `checks/{utils,configuration,integrations,components,security,templates,accessibility,quality}.py`, with `checks/__init__.py` firing every `@register("djust")` for Django `AppConfig.checks` discovery and re-exporting every public + private symbol. All 13 registered checks, 72 check IDs, and the full public/private import surface are preserved; the entire `test_checks*` suite passes **untouched** (zero test edits). The six helpers the suite monkeypatches by package path (`_get_project_app_dirs`, `_has_asgi_server`, `_has_multiple_permission_groups`, `_check_tailwind_cdn_in_production`, `_check_missing_compiled_css`, `_check_manual_client_js`) are referenced from their callers via the root module so `patch("djust.checks.<helper>")` keeps working. New regression guard in `python/tests/test_checks_package_structure_1822.py` pins the discovery, import-surface, and monkeypatch-by-path contracts.
+
 ### Security
 
 - **Bumped four transitive dependencies to clear 12 Dependabot advisories (4 high, 3 moderate, 5 low).** Lockfile-only (`uv.lock`) — none are direct djust dependencies, so the published wheel's declared dependencies are unchanged; this secures djust's own resolved / CI environment. `cryptography` 46.0.7 → 49.0.0 (GHSA-537c-gmf6-5ccf), `pyjwt` 2.12.1 → 2.13.0 (GHSA-xgmm-8j9v-c9wx, GHSA-993g-76c3-p5m4, GHSA-w7vc-732c-9m39, GHSA-jq35-7prp-9v3f, GHSA-fhv5-28vv-h8m8), `python-multipart` 0.0.29 → 0.0.32 (GHSA-5rvq-cxj2-64vf, GHSA-6jv3-5f52-599m, GHSA-vffw-93wf-4j4q, GHSA-v9pg-7xvm-68hf), `starlette` 1.2.1 → 1.3.1 (GHSA-82w8-qh3p-5jfq, GHSA-jp82-jpqv-5vv3). Full suite green against the bumped versions (Python + Rust; the one JS flake was the unrelated rAF-timing `dj_transition` test, #1830).
