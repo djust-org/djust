@@ -1884,18 +1884,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("Missing view path in mount request")
             return
 
-        # Security: Check if view is in allowed modules
-        allowed_modules = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", [])
-        if allowed_modules:
-            # Check if view_path starts with any allowed module
-            if not any(view_path.startswith(module) for module in allowed_modules):
-                logger.warning(
-                    "Blocked attempt to mount view from unauthorized module: %s", view_path
-                )
-                await self.send_error(
-                    _safe_error(f"View {view_path} is not in allowed modules", "View not found")
-                )
-                return
+        # Security (GHSA — unauthenticated arbitrary module import): refuse to
+        # __import__ a client-supplied module that isn't already loaded unless it
+        # is explicitly allowlisted. Importing a not-yet-loaded module executes
+        # its top-level code; this gate must run BEFORE __import__ below.
+        # Fail-CLOSED (replaces the prior fail-open `if allowed_modules:` check).
+        from ._view_resolution import is_view_import_allowed
+
+        if not is_view_import_allowed(view_path):
+            logger.warning("Blocked attempt to mount disallowed/uninitialized view: %s", view_path)
+            await self.send_error(_safe_error(f"View {view_path} is not allowed", "View not found"))
+            return
 
         # Import the view class
         module = None
@@ -1903,8 +1902,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         class_name = ""
         try:
             module_path, class_name = view_path.rsplit(".", 1)
-            module = __import__(module_path, fromlist=[class_name])
-            view_class = getattr(module, class_name)
+            import importlib
+
+            # importlib.import_module (NO fromlist), NOT __import__(fromlist=[class_name]):
+            # __import__'s fromlist handling does hasattr(module, class_name), which
+            # triggers a module-level __getattr__ (PEP 562) / submodule import for a
+            # client-controlled class_name (GHSA-7prp-2623-8g45 follow-up). import_module
+            # returns the gated module without consulting the class name.
+            module = importlib.import_module(module_path)
+            # __dict__ lookup, NOT getattr — a client-controlled class_name must
+            # not trigger a module-level __getattr__ (PEP 562), which on some
+            # already-loaded modules imports a submodule (GHSA-7prp-2623-8g45
+            # follow-up). Real LiveView classes are top-level-defined / imported
+            # into the module, so they live in __dict__; a name served only by
+            # __getattr__ resolves to None and is rejected as "class not found".
+            view_class = vars(module).get(class_name)
+            if view_class is None:
+                raise AttributeError(class_name)
         except ValueError:
             error_msg = (
                 f"Invalid view path format: {view_path}. Expected format: module.path.ClassName"
@@ -1923,14 +1937,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             hint = None
             if getattr(settings, "DEBUG", False):
                 try:
-                    import inspect as _inspect
-
                     from .live_view import LiveView as _LV
 
+                    # Enumerate via __dict__ (vars), NOT inspect.getmembers /
+                    # getattr — a module-level __getattr__ (PEP 562) must not be
+                    # triggered during the error hint either (GHSA-7prp-2623-8g45
+                    # follow-up). LiveView classes are top-level-defined → in
+                    # __dict__.
                     available = [
                         name
-                        for name, obj in _inspect.getmembers(module, _inspect.isclass)
-                        if issubclass(obj, _LV) and obj is not _LV
+                        for name, obj in vars(module).items()
+                        if isinstance(obj, type) and issubclass(obj, _LV) and obj is not _LV
                     ]
                     if available:
                         hint = "Available LiveView classes in %s: %s" % (

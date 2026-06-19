@@ -263,17 +263,20 @@ class ViewRuntime:
             await self.transport.send_error("Missing view path in mount request")
             return
 
-        # ---- Security: module allowlist ----
-        from django.conf import settings
+        # ---- Security (GHSA — unauthenticated arbitrary module import) ----
+        # Fail-CLOSED gate (replaces the prior fail-open `if allowed_modules:`
+        # check): refuse to __import__ a client-supplied module that isn't
+        # already loaded unless explicitly allowlisted. _instantiate_view gates
+        # again as defense in depth; this rejects earlier with a clean frame.
+        from ._view_resolution import is_view_import_allowed
 
-        allowed_modules = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", [])
-        if allowed_modules and not any(view_path.startswith(m) for m in allowed_modules):
+        if not is_view_import_allowed(view_path):
             logger.warning(
-                "Blocked attempt to mount view from unauthorized module: %s",
+                "Blocked attempt to mount disallowed/uninitialized view: %s",
                 sanitize_for_log(view_path),
             )
             await self.transport.send_error(
-                _safe_error(f"View {view_path} is not in allowed modules", "View not found")
+                _safe_error(f"View {view_path} is not allowed", "View not found")
             )
             return
 
@@ -617,10 +620,44 @@ class ViewRuntime:
         failure and returns ``None``. Override-friendly for tests.
         """
 
+        # Security (GHSA — unauthenticated arbitrary module import): defense in
+        # depth — refuse to __import__ a client-supplied module that isn't
+        # already loaded unless explicitly allowlisted, even if a caller forgot
+        # to gate. Fail-CLOSED. See djust._view_resolution.
+        from ._view_resolution import is_view_import_allowed
+
+        if not is_view_import_allowed(view_path):
+            logger.warning(
+                "Blocked attempt to load disallowed/uninitialized view: %s",
+                sanitize_for_log(view_path),
+            )
+            asyncio.ensure_future(
+                self.transport.send(
+                    {
+                        "type": "error",
+                        "error": _safe_error(f"View {view_path} is not allowed", "View not found"),
+                    }
+                )
+            )
+            return None
+
         try:
             module_path, class_name = view_path.rsplit(".", 1)
-            module = __import__(module_path, fromlist=[class_name])
-            view_class = getattr(module, class_name)
+            import importlib
+
+            # importlib.import_module (NO fromlist), NOT __import__(fromlist=[class_name]):
+            # the fromlist hasattr(module, class_name) triggers a module-level
+            # __getattr__ / submodule import for a client class_name
+            # (GHSA-7prp-2623-8g45 follow-up).
+            module = importlib.import_module(module_path)
+            # __dict__ lookup, NOT getattr — a client-controlled class_name must
+            # not trigger a module-level __getattr__ (PEP 562), which on some
+            # already-loaded modules imports a submodule (GHSA-7prp-2623-8g45
+            # follow-up). Real LiveView classes live in __dict__; a name served
+            # only by __getattr__ resolves to None → rejected as "class not found".
+            view_class = vars(module).get(class_name)
+            if view_class is None:
+                raise AttributeError(class_name)
         except (ValueError, ImportError, AttributeError) as exc:
             error_msg = f"Failed to load view {view_path}: {exc}"
             logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)

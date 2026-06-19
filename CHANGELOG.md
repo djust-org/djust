@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fixed unauthenticated arbitrary module import via the WebSocket/SSE view-mount path (GHSA-7prp-2623-8g45, CWE-470).** The live transport resolved the LiveView to mount from a client-supplied dotted path via `__import__(module_path)` — executing that module's top-level code — *before* the `LiveView`-subclass check and per-view auth, and the `LIVEVIEW_ALLOWED_MODULES` guard was fail-open (skipped when unset, the default) with loose `startswith` matching. An unauthenticated client could cause the server to import (and run the import-time side effects of) any importable module by name. Fixed with a fail-**closed** gate (`djust._view_resolution.is_view_import_allowed`) applied before `__import__` at all three sinks (`handle_mount`, `ViewRuntime.dispatch_mount`/`_instantiate_view`, SSE): a client view path resolves only if its module is already loaded (so resolving runs no new code — URL-routed views keep working with zero config) or it matches `LIVEVIEW_ALLOWED_MODULES` on a module-segment boundary (no longer `startswith`). The class is resolved via `importlib.import_module` (no `fromlist`) + `vars(module).get(class_name)` so a client-controlled class name cannot trigger a module-level `__getattr__` (PEP 562) submodule import. Regression: `test_security_view_import_failclosed.py`.
+
 ## [1.0.7rc1] - 2026-06-18
 
 ### Added

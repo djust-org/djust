@@ -165,21 +165,22 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     - No channel groups, presence tracking, or actor-based state.
     - No pre-rendered content optimisation (SSE always sends fresh HTML).
     """
-    from django.conf import settings
 
-    # ---- Security: module allowlist ----
-    allowed_modules = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", [])
-    if allowed_modules and not any(view_path.startswith(m) for m in allowed_modules):
+    # ---- Security (GHSA — unauthenticated arbitrary module import) ----
+    # Fail-CLOSED gate (replaces the prior fail-open `if allowed_modules:`
+    # check): refuse to __import__ a client-supplied module that isn't already
+    # loaded unless explicitly allowlisted. Must run BEFORE __import__ below.
+    from ._view_resolution import is_view_import_allowed
+
+    if not is_view_import_allowed(view_path):
         logger.warning(
-            "SSE: blocked attempt to mount view from unauthorized module: %s",
+            "SSE: blocked attempt to mount disallowed/uninitialized view: %s",
             sanitize_for_log(view_path),
         )
         session.push(
             {
                 "type": "error",
-                "error": _safe_error(
-                    f"View {view_path} is not in allowed modules", "View not found"
-                ),
+                "error": _safe_error(f"View {view_path} is not allowed", "View not found"),
             }
         )
         return
@@ -187,8 +188,21 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     # ---- Import view class ----
     try:
         module_path, class_name = view_path.rsplit(".", 1)
-        module = __import__(module_path, fromlist=[class_name])
-        view_class = getattr(module, class_name)
+        import importlib
+
+        # importlib.import_module (NO fromlist), NOT __import__(fromlist=[class_name]):
+        # the fromlist hasattr(module, class_name) triggers a module-level
+        # __getattr__ / submodule import for a client class_name
+        # (GHSA-7prp-2623-8g45 follow-up).
+        module = importlib.import_module(module_path)
+        # __dict__ lookup, NOT getattr — a client-controlled class_name must not
+        # trigger a module-level __getattr__ (PEP 562), which on some already-
+        # loaded modules imports a submodule (GHSA-7prp-2623-8g45 follow-up).
+        # Real LiveView classes live in __dict__; a name served only by
+        # __getattr__ resolves to None → rejected as "class not found".
+        view_class = vars(module).get(class_name)
+        if view_class is None:
+            raise AttributeError(class_name)
     except (ValueError, ImportError, AttributeError) as exc:
         error_msg = "Failed to load view %s: %s" % (view_path, exc)
         logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)
