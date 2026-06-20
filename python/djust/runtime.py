@@ -563,6 +563,24 @@ class ViewRuntime:
         try:
             await sync_to_async(self.view_instance.handle_params)(params, uri)
 
+            # Object-permission re-check (ADR-017) after the client-supplied URL
+            # params may have changed the access-determining state. Without this,
+            # url_change navigates to a denied object and re-renders it
+            # (finding #10). No-op for views that don't override get_object.
+            from django.core.exceptions import PermissionDenied
+
+            from .auth.core import enforce_object_permission
+
+            try:
+                await sync_to_async(enforce_object_permission)(
+                    self.view_instance, getattr(self.view_instance, "request", None)
+                )
+            except PermissionDenied:
+                await self.transport.send_error(
+                    "Access denied for this object.", code="permission_denied"
+                )
+                return
+
             if hasattr(self.view_instance, "_sync_state_to_rust"):
                 await sync_to_async(self.view_instance._sync_state_to_rust)()
 

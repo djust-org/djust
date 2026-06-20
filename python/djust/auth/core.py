@@ -325,6 +325,55 @@ def check_object_permission(view_instance, request) -> None:
     view_instance._object = obj
 
 
+def enforce_object_permission(view_instance, request) -> None:
+    """Run the ADR-017 post-mount object-permission check on ANY render path.
+
+    A shared chokepoint so object-level authorization is enforced uniformly,
+    not just on the WS mount + event paths. Before this, the initial HTTP GET
+    render (:meth:`RequestMixin.get`/``aget``), SPA ``url_change`` navigation
+    (:meth:`ViewRuntime.dispatch_url_change`), and ``{% live_render %}``
+    embedded children rendered an object-scoped view WITHOUT the object-level
+    check, leaking denied objects (findings #10 / #11 / #12).
+
+    Semantics:
+
+    * No-op when the view does not opt into the lifecycle (no custom
+      ``get_object`` override) — same as :func:`check_object_permission`.
+    * Raises :class:`~django.core.exceptions.PermissionDenied` on denial.
+    * **Fail-closed**: a ``None`` request (cannot authorize) or any
+      non-``PermissionDenied`` exception from the developer's ``get_object`` /
+      ``has_object_permission`` is treated as denial — mirroring the event-path
+      handling in ``websocket_utils._validate_event_security`` (#1380, #1638).
+
+    Callers translate the raised ``PermissionDenied`` into the transport's
+    natural denial shape (HTTP 403, a ``permission_denied`` error frame, or a
+    refused embed).
+    """
+    if not _has_custom_get_object(view_instance):
+        return
+
+    if request is None:
+        # Object-scoped view but no request to authorize against → fail closed
+        # (mirrors the #1380 sticky-child handling on the event path).
+        logger.warning(
+            "Object-permission check skipped (no request) for %s; failing closed",
+            view_instance.__class__.__name__,
+        )
+        raise PermissionDenied("Access denied for this object.")
+
+    try:
+        check_object_permission(view_instance, request)
+    except PermissionDenied:
+        raise
+    except Exception as exc:  # noqa: BLE001 — fail-closed by design
+        logger.exception(
+            "Object-permission check raised a non-PermissionDenied exception "
+            "for %s; failing closed (denying)",
+            view_instance.__class__.__name__,
+        )
+        raise PermissionDenied("Access denied for this object.") from exc
+
+
 def check_view_auth_lightweight(view_instance, request) -> bool:
     """Return True if ``view_instance`` is allowed to mount under ``request``.
 

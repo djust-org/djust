@@ -25,6 +25,7 @@ from typing import Any, Dict, Optional
 
 from django import template
 from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
@@ -1763,6 +1764,15 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 mount_fn = getattr(child, "mount", None)
                 if callable(mount_fn):
                     mount_fn(request, **captured_kwargs)
+                # Object-permission check (ADR-017) for the lazy embedded child
+                # — same as the eager path (finding #12). No-op unless the child
+                # overrides get_object; fail-closed otherwise.
+                from ..auth.core import enforce_object_permission
+
+                try:
+                    enforce_object_permission(child, request)
+                except PermissionDenied:
+                    raise PermissionError("child %r denied access (object permission)" % view_path)
                 # Don't re-register the child by view_id — _assign_view_id
                 # already incremented the counter; calling _register_child
                 # here is what locks the slot. The lazy-fill DOM ends up
@@ -2024,6 +2034,21 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         mount = getattr(child, "mount", None)
         if callable(mount):
             mount(request, **kwargs)
+
+    # 4c. Object-permission check (ADR-017) for the embedded child. The child's
+    #     view-level auth ran above (check_view_auth); the object-level step
+    #     must run too, or an embedded object-scoped child renders a denied
+    #     object (finding #12). No-op for children that don't override
+    #     get_object. Fail-closed: deny the embed rather than leak.
+    from ..auth.core import enforce_object_permission
+
+    try:
+        enforce_object_permission(child, request)
+    except PermissionDenied:
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r denied access: object-level permission "
+            "check failed for the requested object." % view_path
+        )
 
     # 5. Assign the view_id and register on the parent. _register_child
     #    wires parent/view_id back-references on the child.
