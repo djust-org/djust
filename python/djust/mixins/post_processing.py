@@ -253,10 +253,18 @@ class PostProcessingMixin:
         debug_info_script = ""
         debug_css_link = ""
         if settings.DEBUG:
+            from ..security import escape_json_for_script
+
             debug_info = self.get_debug_info()
+            # get_debug_info() includes repr()s of user-controlled public view
+            # attributes; json.dumps does NOT escape </script>, so a value
+            # containing "</script><script>…" would break out of this inline
+            # block (finding #8, CWE-79). escape_json_for_script() neutralizes
+            # <, >, & (and U+2028/2029).
+            debug_info_json = escape_json_for_script(json.dumps(debug_info))
             debug_info_script = f"""
             <script data-turbo-track="reload">
-                window.DJUST_DEBUG_INFO = {json.dumps(debug_info)};
+                window.DJUST_DEBUG_INFO = {debug_info_json};
             </script>
             """
             debug_css_link = '<link rel="stylesheet" href="/static/djust/debug-panel.css" data-turbo-track="reload">'

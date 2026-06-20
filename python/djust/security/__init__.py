@@ -44,6 +44,7 @@ from .error_handling import (
     handle_exception,
 )
 from .event_guard import is_safe_event_name
+from .json_script import escape_json_for_script
 
 __all__ = [
     # Attribute guard
@@ -62,4 +63,6 @@ __all__ = [
     "handle_exception",
     # Event guard
     "is_safe_event_name",
+    # Script-safe JSON
+    "escape_json_for_script",
 ]
