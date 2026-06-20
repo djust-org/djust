@@ -60,7 +60,9 @@ def test_render_send_paths_route_through_arm_recovery():
     pair. Accept either form so the pin survives the #1817 consolidation while
     still enforcing that each path arms and never hand-assigns ``_recovery_html``.
     """
-    for name in ("handle_event", "server_push", "_run_async_work"):
+    # Finding #6: ``handle_event`` is now a thin tenant-context wrapper around
+    # ``_handle_event_inner``; the arm-recovery code lives in the inner method.
+    for name in ("_handle_event_inner", "server_push", "_run_async_work"):
         method_src = inspect.getsource(getattr(LiveViewConsumer, name))
         arms = "_arm_recovery(" in method_src or "_next_version_armed(" in method_src
         assert arms, (

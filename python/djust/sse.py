@@ -60,7 +60,7 @@ from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import DjangoJSONEncoder
 from .validation import validate_handler_params
-from .websocket import _snapshot_assigns, _compute_changed_keys
+from .websocket import _snapshot_assigns, _compute_changed_keys, _tenant_context, _bind_tenant
 from .websocket_utils import (
     _call_handler,
     _safe_error,
@@ -268,6 +268,27 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
     except Exception as exc:
         logger.warning("SSE: auth check error: %s", exc)
 
+    # ---- Resolve + bind tenant (Finding #6) ----
+    # The legacy SSE mount path (unlike the HTTP path) has no TenantMiddleware to
+    # bind the tenant, so resolve it via the view's TenantMixin hook and bind it
+    # into the ContextVar so mount() + the initial render see the correct tenant
+    # in the tenant-scoped managers (fail-closed/empty otherwise). Re-bound per
+    # event in _sse_handle_event.
+    if hasattr(view_instance, "_ensure_tenant"):
+        try:
+            await sync_to_async(view_instance._ensure_tenant)(request)
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="mount",
+                view_class=view_path,
+                logger=logger,
+                log_message="Error resolving tenant for %s" % sanitize_for_log(view_path),
+            )
+            session.push(response)
+            return
+    _bind_tenant(getattr(view_instance, "_tenant", None))
+
     # ---- Resolve URL kwargs (for path-based params like pk, slug) ----
     mount_kwargs: Dict[str, Any] = {}
     page_url = request.path
@@ -365,6 +386,21 @@ def _extract_cache_config(view_instance) -> Optional[Dict[str, Any]]:
 
 
 async def _sse_handle_event(session: SSESession, event_name: str, params: Dict[str, Any]) -> None:
+    """Dispatch a client event over the legacy SSE path, tenant-scoped.
+
+    Thin wrapper that binds the tenant context (Finding #6) for the duration of
+    the event so the handler + render see the correct tenant in the
+    tenant-scoped managers. Cleared on exit.
+    """
+    view_instance = session.view_instance
+    tenant = getattr(view_instance, "_tenant", None) if view_instance else None
+    with _tenant_context(tenant):
+        await _sse_handle_event_inner(session, event_name, params)
+
+
+async def _sse_handle_event_inner(
+    session: SSESession, event_name: str, params: Dict[str, Any]
+) -> None:
     """
     Dispatch a client event to the mounted LiveView and push the result.
 

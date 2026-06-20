@@ -147,7 +147,9 @@ def test_html_update_branch_arms_recovery_source():
     """
     import djust.websocket as ws_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
+    # Finding #6: handle_event is a thin tenant-context wrapper; the arming
+    # branches live in _handle_event_inner now.
+    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
     arms = source.count("self._arm_recovery(") + source.count("self._next_version_armed(")
     assert arms >= 2, (
         "handle_event must arm recovery in BOTH the patches branch and the html_update "

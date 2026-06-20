@@ -58,6 +58,40 @@ from .websocket_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _tenant_context(tenant):
+    """Bind *tenant* as the current tenant for a runtime dispatch (Finding #6).
+
+    The runtime drives the SSE mount/event/url-change path and the WS
+    url-change path. ``TenantMiddleware`` only binds the tenant on the HTTP
+    path, so without this the tenant-scoped managers see ``None`` here and
+    (fail-closed) return empty querysets. Lazily imports the canonical
+    ``tenant_context`` and falls back to a no-op when tenants is unavailable.
+    """
+    try:
+        from .tenants.middleware import tenant_context
+
+        return tenant_context(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+
+def _bind_tenant(tenant):
+    """Set the current tenant ContextVar for the runtime path (Finding #6).
+
+    Mirrors :func:`djust.websocket._bind_tenant` — used on the SSE mount path
+    after the view resolves its tenant, so ``mount()`` + initial render see the
+    correct tenant. No-op when tenants is unavailable.
+    """
+    try:
+        from .tenants.middleware import set_current_tenant
+
+        set_current_tenant(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        pass
+
+
 # ------------------------------------------------------------------ #
 # Transport Protocol + adapters
 # ------------------------------------------------------------------ #
@@ -343,6 +377,28 @@ class ViewRuntime:
             self.view_instance = None
             return
 
+        # ---- Resolve + bind tenant (Finding #6) ----
+        # TenantMixin views resolve the tenant via _ensure_tenant; the SSE/runtime
+        # mount path (unlike the HTTP path) has no TenantMiddleware to bind it, so
+        # do it here. Bind the resolved tenant into the ContextVar so mount() and
+        # the initial render see the correct tenant in the tenant-scoped managers
+        # (fail-closed / empty otherwise). Re-bound per event in dispatch_event.
+        if hasattr(view_instance, "_ensure_tenant"):
+            try:
+                await sync_to_async(view_instance._ensure_tenant)(request)
+            except Exception as exc:
+                response = handle_exception(
+                    exc,
+                    error_type="mount",
+                    view_class=view_path,
+                    logger=logger,
+                    log_message=f"Error resolving tenant for {sanitize_for_log(view_path)}",
+                )
+                await self.transport.send(response)
+                self.view_instance = None
+                return
+        _bind_tenant(getattr(view_instance, "_tenant", None))
+
         # ---- Mount kwargs ----
         mount_kwargs = dict(params)
         url_kwargs = self._resolve_url_kwargs(page_url)
@@ -442,7 +498,16 @@ class ViewRuntime:
         Returns ``noop`` on no-state-change, ``patch`` on diff-able render,
         ``html_update`` otherwise. Mirrors the simplified single-view path
         from the legacy ``_sse_handle_event``.
+
+        Wrapped in the tenant context (Finding #6) so the handler + render see
+        the correct tenant in the tenant-scoped managers, cleared on exit.
         """
+        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
+        with _tenant_context(tenant):
+            await self._dispatch_event_inner(data)
+
+    async def _dispatch_event_inner(self, data: Dict[str, Any]) -> None:
+        """Event dispatch body (see :meth:`dispatch_event` for the tenant wrapper)."""
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
             return
@@ -552,7 +617,16 @@ class ViewRuntime:
         Calls ``handle_params(params, uri)`` then re-renders + sends patches.
         Mirrors the legacy ``LiveViewConsumer.handle_url_change`` (now a
         thin shim over this method).
+
+        Wrapped in the tenant context (Finding #6) so handle_params + the
+        object-permission re-check + render see the correct tenant.
         """
+        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
+        with _tenant_context(tenant):
+            await self._dispatch_url_change_inner(data)
+
+    async def _dispatch_url_change_inner(self, data: Dict[str, Any]) -> None:
+        """URL-change body (see :meth:`dispatch_url_change` for the tenant wrapper)."""
         if not self.view_instance:
             await self.transport.send_error("View not mounted")
             return

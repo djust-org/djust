@@ -429,6 +429,67 @@ def _check_multi_tenant_asgi_set_calls(errors):
     )
 
 
+def _check_tenant_strict_mode_disabled(errors):
+    """S006 — DJUST_TENANTS['STRICT_MODE'] explicitly False (fail-open tenancy).
+
+    Finding #6 (CWE-862/CWE-636). djust's tenant-scoped managers
+    (``TenantManager`` / ``TenantQuerySet.as_manager``) fail CLOSED by default:
+    when no tenant is bound to the current context they return ``.none()`` so a
+    missing tenant can never leak another tenant's rows. Setting
+    ``DJUST_TENANTS['STRICT_MODE'] = False`` flips this to fail-OPEN — a query
+    with no tenant bound returns ALL tenants' rows.
+
+    This is especially dangerous on the live (WebSocket/SSE) path: the tenant is
+    bound from the resolved view tenant, but any code path that queries a
+    tenant-scoped model WITHOUT a tenant in context (a bug, an un-resolved
+    tenant, a background task) discloses every tenant's data instead of erroring
+    closed. Warn so the operator confirms the opt-out is intentional.
+
+    Suppress with DJUST_CONFIG = {'suppress_checks': ['S006']} (or 'djust.S006').
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.S006"):
+        return
+
+    djust_tenants = getattr(settings, "DJUST_TENANTS", {}) or {}
+    # Only fire when STRICT_MODE is *explicitly* set to a falsy value — absence
+    # means the safe default (fail-closed) is in effect.
+    if "STRICT_MODE" not in djust_tenants:
+        return
+    if djust_tenants.get("STRICT_MODE"):
+        return
+
+    errors.append(
+        DjustWarning(
+            "DJUST_TENANTS['STRICT_MODE'] is set to False — djust tenant "
+            "isolation is fail-OPEN. Tenant-scoped queries that run without a "
+            "tenant bound to the current context will return EVERY tenant's "
+            "rows instead of an empty set, risking cross-tenant data "
+            "disclosure (especially on the WebSocket/SSE live path).",
+            hint=(
+                "Remove DJUST_TENANTS['STRICT_MODE'] (or set it to True) to "
+                "keep fail-closed isolation: with no tenant in context, "
+                "tenant-scoped managers return .none(). STRICT_MODE=False is a "
+                "backwards-compat escape hatch only — if you rely on it, scope "
+                "every query explicitly (Model.objects.unscoped(reason=...) for "
+                "deliberate cross-tenant reads) and ensure the tenant is always "
+                "resolved on the live path. Suppress with "
+                "DJUST_CONFIG = {'suppress_checks': ['S006']} if the fail-open "
+                "behaviour is genuinely intended."
+            ),
+            id="djust.S006",
+            fix_hint=(
+                "In your Django settings, remove the "
+                "`DJUST_TENANTS['STRICT_MODE'] = False` line (the default is "
+                "True / fail-closed), or set it to True. Only keep it False if "
+                "you have audited every tenant-scoped query for an explicit "
+                "tenant filter."
+            ),
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Configuration checks (C0xx)
 # ---------------------------------------------------------------------------
@@ -531,6 +592,9 @@ def check_configuration(app_configs, **kwargs):
 
     # C014 -- Multi-tenant ASGI without TENANT_LIMIT_SET_CALLS (closes #1556)
     _check_multi_tenant_asgi_set_calls(errors)
+
+    # S006 -- DJUST_TENANTS['STRICT_MODE']=False disables fail-closed tenancy
+    _check_tenant_strict_mode_disabled(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

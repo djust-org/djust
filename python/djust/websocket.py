@@ -30,6 +30,46 @@ from .signals import full_html_update, liveview_server_error
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
 
+
+def _tenant_context(tenant):
+    """Bind *tenant* as the current tenant for a live dispatch (Finding #6).
+
+    Lazily imports ``djust.tenants.middleware.tenant_context`` so the WS path
+    establishes the tenant ContextVar around mount + every event/url dispatch.
+    ``TenantMiddleware`` only runs on the HTTP path, so without this the
+    tenant-scoped managers see ``None`` on the live path and (fail-closed)
+    return empty querysets — or, pre-fix, disclosed every tenant's rows.
+
+    Falls back to a no-op context if the tenants module is unavailable, so the
+    consumer keeps working for non-tenant deployments.
+    """
+    try:
+        from .tenants.middleware import tenant_context
+
+        return tenant_context(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+
+def _bind_tenant(tenant):
+    """Set the current tenant ContextVar for the live path (Finding #6).
+
+    Used on the mount path: after the view resolves its tenant via
+    ``_ensure_tenant``, bind it so ``mount()`` and the initial render — which
+    run later in the same consumer task — see the correct tenant in the
+    tenant-scoped managers. Cleared in :meth:`disconnect`. No-op when tenants
+    is unavailable.
+    """
+    try:
+        from .tenants.middleware import set_current_tenant
+
+        set_current_tenant(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        pass
+
+
 __all__ = [
     "LiveViewConsumer",
     "_check_event_security",
@@ -1622,6 +1662,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection"""
+        # Clear the tenant ContextVar bound at mount (Finding #6) so the
+        # consumer task doesn't carry a stale tenant if the executor/context is
+        # reused. No-op when tenants is unavailable.
+        _bind_tenant(None)
+
         # Release observability registry entry first — it's weakly-held
         # anyway but explicit cleanup avoids a brief stale entry window.
         session_id = getattr(self, "session_id", None)
@@ -2200,6 +2245,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             #   See: https://github.com/djust-org/djust/issues/342
             if hasattr(self.view_instance, "_ensure_tenant"):
                 await sync_to_async(self.view_instance._ensure_tenant)(request)
+
+            # Bind the resolved tenant into the ContextVar for the rest of the
+            # mount (mount() + initial render run later in this same consumer
+            # task). Finding #6: TenantMiddleware only binds the tenant on the
+            # HTTP path; without this the tenant-scoped managers see None and
+            # (fail-closed) return empty querysets on the live mount. Cleared in
+            # disconnect(). Sourced from the view's resolved _tenant (None for
+            # non-tenant views — a no-op).
+            _bind_tenant(getattr(self.view_instance, "_tenant", None))
 
             # --- on_mount hooks (after auth, before mount) ---
             from .hooks import run_on_mount_hooks
@@ -2918,7 +2972,23 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_json(frame)
 
     async def handle_event(self, data: Dict[str, Any]):
-        """Handle client events"""
+        """Handle client events.
+
+        Thin wrapper that establishes the tenant context for the duration of
+        the event dispatch (Finding #6). ``TenantMiddleware`` only binds the
+        tenant on the HTTP path; on the WebSocket path the tenant is resolved
+        onto ``view_instance._tenant`` at mount, but the tenant-scoped managers
+        read it from a ContextVar. Bind it here so every handler + render inside
+        the event sees the correct tenant — and so the tenant-aware managers
+        fail CLOSED (empty queryset) rather than disclosing other tenants' rows
+        when the view is NOT tenant-aware. Cleared on exit via try/finally.
+        """
+        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
+        with _tenant_context(tenant):
+            await self._handle_event_inner(data)
+
+    async def _handle_event_inner(self, data: Dict[str, Any]):
+        """Handle client events (see :meth:`handle_event` for the tenant wrapper)."""
         import time
         from djust.performance import PerformanceTracker
 

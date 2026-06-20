@@ -286,7 +286,9 @@ def test_save_block_present_in_handle_event_source():
     """
     import djust.websocket as ws_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
+    # Finding #6: handle_event is a thin tenant-context wrapper; the save block
+    # lives in _handle_event_inner now.
+    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
 
     # Critical markers from the inserted block. Use a whitespace-tolerant
     # check so re-indentation (e.g. the Stage 11 fix that nested the block
@@ -627,7 +629,9 @@ def test_save_block_gates_on_enable_state_snapshot_source():
     """
     import djust.websocket as ws_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
+    # Finding #6: handle_event is a thin tenant-context wrapper; the gated save
+    # block lives in _handle_event_inner now.
+    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
     source_collapsed = " ".join(source.split())
 
     # The exact form of the gate: AND'd with the existing top-level

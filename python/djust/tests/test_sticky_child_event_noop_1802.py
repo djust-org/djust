@@ -251,7 +251,9 @@ def test_handle_event_autoskip_snapshots_target_view_source():
     """
     import djust.websocket as ws_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_event)
+    # Finding #6: handle_event is a thin tenant-context wrapper; the auto-skip
+    # block lives in _handle_event_inner now.
+    source = inspect.getsource(ws_mod.LiveViewConsumer._handle_event_inner)
     # The auto-skip block binds ``change_target = target_view`` and snapshots
     # against it — so an embedded child's mutations are detected. (For a
     # top-level event ``target_view IS self.view_instance``, so this is a no-op

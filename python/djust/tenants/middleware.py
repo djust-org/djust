@@ -1,31 +1,67 @@
 """Tenant middleware for automatically resolving and injecting tenant into requests."""
 
-from threading import local
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.http import Http404
 
 from .resolvers import get_tenant_resolver
 
-# Thread-local storage for current tenant
-_thread_locals = local()
+# Per-(async-task / thread) storage for the current tenant.
+#
+# SECURITY (Finding #6, CWE-636/CWE-862): this MUST be a ``contextvars.ContextVar``,
+# NOT ``threading.local()``. The live (WebSocket/SSE) path runs view code via
+# ``asgiref.sync.sync_to_async(thread_sensitive=True)``, which dispatches EVERY
+# connection's sync work onto a SINGLE shared executor thread. With
+# ``threading.local`` that thread's tenant value is shared across all concurrent
+# connections — connection B can read the tenant connection A just set (a
+# cross-tenant data-disclosure clobber). ``ContextVar`` is scoped to the current
+# async task / context: ``sync_to_async`` copies the caller's ``contextvars``
+# context into the executor call (and back), so each connection's tenant stays
+# isolated. ``ContextVar`` also behaves correctly on the plain-sync HTTP path.
+_current_tenant: "ContextVar" = ContextVar("djust_current_tenant", default=None)
 
 
 def get_current_tenant():
-    """Get the current tenant from thread-local storage.
+    """Get the current tenant from the context-local storage.
 
     Returns:
         TenantInfo or None: Current tenant or None if not set
     """
-    return getattr(_thread_locals, "tenant", None)
+    return _current_tenant.get()
 
 
 def set_current_tenant(tenant):
-    """Set the current tenant in thread-local storage.
+    """Set the current tenant in the context-local storage.
 
     Args:
         tenant (TenantInfo or None): Tenant to set
     """
-    _thread_locals.tenant = tenant
+    _current_tenant.set(tenant)
+
+
+@contextmanager
+def tenant_context(tenant):
+    """Bind *tenant* as the current tenant for the duration of the ``with`` block.
+
+    Sets the :data:`_current_tenant` ContextVar on entry and restores the
+    previous value on exit (via :meth:`ContextVar.reset`), so set/clear can't
+    drift across the many early-return paths of the live event/mount handlers.
+
+    Use this at every WebSocket/SSE mount and event-dispatch site so the
+    tenant-scoped managers (:class:`~djust.tenants.managers.TenantManager`,
+    :class:`~djust.tenants.managers.TenantQuerySet`) see the resolved tenant
+    during live-path queries — without it they fall back to fail-closed
+    (empty) querysets under STRICT_MODE (the safe default).
+
+    Args:
+        tenant (TenantInfo or None): Tenant to bind for the block.
+    """
+    token = _current_tenant.set(tenant)
+    try:
+        yield
+    finally:
+        _current_tenant.reset(token)
 
 
 class TenantMiddleware:
