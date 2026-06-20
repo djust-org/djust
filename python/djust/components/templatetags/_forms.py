@@ -14,6 +14,7 @@ from ._registry import (
     _resolve,
     _parse_kv_args,
     conditional_escape,
+    safe_url,
     mark_safe,
     uuid,
     CURRENCY_SYMBOLS,
@@ -1190,7 +1191,7 @@ def dj_form(
         return ""
 
     e_class = conditional_escape(custom_class)
-    e_action = conditional_escape(action)
+    e_action = safe_url(action)
     e_method = conditional_escape(method)
     e_submit_label = conditional_escape(submit_label)
     e_submit_event = conditional_escape(submit_event)

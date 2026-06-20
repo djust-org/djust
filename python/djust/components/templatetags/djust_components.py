@@ -19,6 +19,8 @@ import uuid
 
 from django import template
 from django.utils.html import conditional_escape
+
+from ._registry import safe_url
 from django.utils.safestring import mark_safe
 
 
@@ -1527,7 +1529,7 @@ def breadcrumb(items=None):
             lbl, url, active = str(item), "", False
 
         e_lbl = conditional_escape(lbl)
-        e_url = conditional_escape(url)
+        e_url = safe_url(url)
 
         if active or not url:
             crumb = f'<span class="breadcrumb-item breadcrumb-active">{e_lbl}</span>'
@@ -5629,7 +5631,7 @@ class SidebarNode(template.Node):
         else:
             trigger = (
                 f'<a class="dj-sidebar__link{active_cls}{level_cls}" '
-                f'href="{conditional_escape(href)}">'
+                f'href="{safe_url(href)}">'
                 f'{icon_html}<span class="dj-sidebar__label">'
                 f"{conditional_escape(label)}</span></a>"
             )
@@ -5776,7 +5778,7 @@ class NavMenuNode(template.Node):
 
         return (
             f'<li class="dj-nav__item{active_cls}">'
-            f'<a class="dj-nav__link" href="{conditional_escape(href)}">'
+            f'<a class="dj-nav__link" href="{safe_url(href)}">'
             f"{conditional_escape(label)}</a></li>"
         )
 
@@ -5804,7 +5806,7 @@ class NavMenuNode(template.Node):
 
         return (
             f'<li class="dj-nav__dropdown-item{active_cls}">'
-            f'<a class="dj-nav__dropdown-link" href="{conditional_escape(href)}">'
+            f'<a class="dj-nav__dropdown-link" href="{safe_url(href)}">'
             f"{conditional_escape(label)}{desc_html}</a></li>"
         )
 
@@ -5827,7 +5829,7 @@ class NavMenuNode(template.Node):
         brand_html = ""
         if brand:
             brand_html = (
-                f'<a class="dj-nav__brand" href="{conditional_escape(brand_href)}">'
+                f'<a class="dj-nav__brand" href="{safe_url(brand_href)}">'
                 f"{conditional_escape(brand)}</a>"
             )
 
@@ -6921,7 +6923,7 @@ class SourceCitationNode(template.Node):
             idx = 1
 
         e_title = conditional_escape(str(title)) if title else ""
-        e_url = conditional_escape(str(url)) if url else ""
+        e_url = safe_url(str(url)) if url else ""
         e_class = conditional_escape(str(custom_class))
 
         cls = "dj-citation"
@@ -8236,7 +8238,7 @@ class CookieConsentNode(template.Node):
 
         privacy_html = ""
         if privacy_url:
-            e_url = conditional_escape(str(privacy_url))
+            e_url = safe_url(str(privacy_url))
             privacy_html = f' <a href="{e_url}" class="dj-cookie-consent__link">Privacy Policy</a>'
 
         buttons = [
