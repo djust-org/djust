@@ -1547,15 +1547,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             logger.debug("Failed to attach debug payload: %s", e)
 
     def _get_client_ip(self) -> Optional[str]:
-        """Extract client IP from scope, with X-Forwarded-For support."""
+        """Extract the trustworthy client IP from the ASGI scope.
+
+        Defaults to the real socket peer; ``X-Forwarded-For`` is honored only
+        when ``DJUST_TRUSTED_PROXY_COUNT`` is set (peeled from the right). See
+        :func:`djust._client_ip.resolve_client_ip` — this keeps a client from
+        spoofing XFF to bypass per-IP rate limiting or poison a cooldown.
+        """
+        from ._client_ip import resolve_client_ip
+
         headers = dict(self.scope.get("headers", []))
         forwarded = headers.get(b"x-forwarded-for")
-        if forwarded:
-            return forwarded.decode("utf-8").split(",")[0].strip()
+        fwd = forwarded.decode("utf-8") if forwarded else None
         client = self.scope.get("client")
-        if client:
-            return client[0]
-        return None
+        peer = client[0] if client else None
+        return resolve_client_ip(fwd, peer)
 
     async def connect(self):
         """Handle WebSocket connection"""

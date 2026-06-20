@@ -3,6 +3,8 @@
 import threading
 import time
 
+from django.test import override_settings
+
 
 class TestEventGuard:
     """Proposal 1: Event name guard tests."""
@@ -586,7 +588,23 @@ class TestIPExtraction:
         consumer.scope = {"client": ("10.0.0.1", 12345), "headers": []}
         assert consumer._get_client_ip() == "10.0.0.1"
 
-    def test_get_client_ip_from_x_forwarded_for(self):
+    def test_get_client_ip_ignores_x_forwarded_for_by_default(self):
+        # Security (finding #5): X-Forwarded-For is client-spoofable, so by
+        # default the real socket peer is used and XFF is ignored — otherwise a
+        # client rotates XFF to bypass per-IP rate limiting / poison a cooldown.
+        from djust.websocket import LiveViewConsumer
+
+        consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+        consumer.scope = {
+            "client": ("127.0.0.1", 80),
+            "headers": [(b"x-forwarded-for", b"203.0.113.50, 70.41.3.18")],
+        }
+        assert consumer._get_client_ip() == "127.0.0.1"
+
+    @override_settings(DJUST_TRUSTED_PROXY_COUNT=2)
+    def test_get_client_ip_honors_x_forwarded_for_behind_trusted_proxies(self):
+        # With the trusted-proxy hop count configured, XFF IS honored — the
+        # original client is peeled from the right (chain[-2] here).
         from djust.websocket import LiveViewConsumer
 
         consumer = LiveViewConsumer.__new__(LiveViewConsumer)

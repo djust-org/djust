@@ -141,10 +141,19 @@ def _get_session(session_id: str) -> Optional["SSESession"]:
 
 
 def _client_ip_from_request(request) -> Optional[str]:
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR")
+    """Trustworthy client IP for the SSE transport.
+
+    Defaults to ``REMOTE_ADDR``; ``X-Forwarded-For`` is honored only when
+    ``DJUST_TRUSTED_PROXY_COUNT`` is set (peeled from the right). Shared with
+    the WS path via :func:`djust._client_ip.resolve_client_ip` so the two
+    transports can't drift (finding #5).
+    """
+    from ._client_ip import resolve_client_ip
+
+    return resolve_client_ip(
+        request.META.get("HTTP_X_FORWARDED_FOR"),
+        request.META.get("REMOTE_ADDR"),
+    )
 
 
 # ------------------------------------------------------------------ #
