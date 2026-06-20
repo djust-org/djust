@@ -51,7 +51,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from asgiref.sync import sync_to_async
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import HttpResponseForbidden, JsonResponse, StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
@@ -60,7 +60,13 @@ from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import DjangoJSONEncoder
 from .validation import validate_handler_params
-from .websocket import _snapshot_assigns, _compute_changed_keys, _tenant_context, _bind_tenant
+from .websocket import (
+    _bind_tenant,
+    _compute_changed_keys,
+    _is_allowed_origin,
+    _snapshot_assigns,
+    _tenant_context,
+)
 from .websocket_utils import (
     _call_handler,
     _safe_error,
@@ -750,6 +756,44 @@ async def _sse_execute_async_task(
 # ------------------------------------------------------------------ #
 
 
+def _sse_origin_allowed(request) -> bool:
+    """
+    SSE CSRF defense: validate the request ``Origin`` against ALLOWED_HOSTS.
+
+    This is the SSE transport's *real* CSRF protection — the same model as the
+    WebSocket transport's CSWSH check (``_is_allowed_origin`` /
+    ``AllowedHostsOriginValidator``, #653). The client→server SSE endpoints are
+    ``@csrf_exempt`` (no Django CSRF cookie/token), so without an Origin check a
+    cross-origin page could drive a victim-cookie-authenticated SSE session
+    (mount views, fire state-changing handlers) using ``credentials: include``
+    (Finding #7, CWE-352).
+
+    A browser ALWAYS sends ``Origin`` on a cross-origin request, so an attacker
+    page's Origin won't match ALLOWED_HOSTS and is rejected. Same-origin requests
+    pass. Non-browser clients (curl, native, tests) send no Origin and are
+    allowed — the helper allows missing/empty Origin by design.
+    """
+    origin = request.META.get("HTTP_ORIGIN")
+    # ``_is_allowed_origin`` takes the Origin as bytes (WS layer passes header
+    # bytes). For SSE the header is an str, so encode it; missing -> b"" -> allowed.
+    return _is_allowed_origin((origin or "").encode("utf-8", "surrogatepass"))
+
+
+def _sse_content_type_is_json(request) -> bool:
+    """
+    Defense-in-depth: require ``Content-Type: application/json`` on SSE POSTs.
+
+    Closes the CORS *simple-request* bypass: a JSON body sent with
+    ``Content-Type: text/plain`` is a CORS simple request that needs no preflight
+    and can be sent cross-origin from an attacker page. Requiring a custom
+    (non-simple) content type forces a CORS preflight cross-origin, which the
+    attacker's page cannot satisfy. (The real djust client always POSTs
+    ``application/json``.)
+    """
+    content_type = (request.content_type or "").lower()
+    return content_type == "application/json"
+
+
 class DjustSSEStreamView(View):
     """
     GET endpoint that establishes an SSE stream and mounts the LiveView.
@@ -769,6 +813,28 @@ class DjustSSEStreamView(View):
     """
 
     async def get(self, request, session_id: str):
+        # ---- SSE CSRF defense: reject cross-origin handshakes (Finding #7) ----
+        # Must run BEFORE creating/mounting the session: an attacker page driving
+        # GET ?view=... would otherwise mount a LiveView as the victim via cookies.
+        #
+        # Known limitation (mirrors the WebSocket transport's missing-Origin
+        # policy): a *no-Origin* cross-origin GET (e.g. via <img>/<iframe>/top-
+        # nav, which send cookies but no Origin) still reaches session-create +
+        # mount. This is acceptable because (a) the two-step CSRF attack is
+        # broken at the POST step — every client->server POST is Origin-gated
+        # below; (b) the attacker cannot read the opaque cross-origin
+        # text/event-stream; and (c) _sse_mount_view enforces the view-import
+        # allowlist + check_view_auth, so only victim-authorized views mount and
+        # only mount-time write side effects remain (the same residual as the
+        # framework's HTTP GET-render path). Requiring an Origin on GET would
+        # break legitimate non-browser SSE clients (curl, native).
+        if not _sse_origin_allowed(request):
+            logger.warning(
+                "SSE: rejected stream GET from disallowed origin %s",
+                sanitize_for_log(request.META.get("HTTP_ORIGIN", "")),
+            )
+            return HttpResponseForbidden("Origin not allowed")
+
         # Validate session_id is a valid UUID to prevent path traversal.
         # Use the canonical string form to break the taint chain from the URL parameter.
         try:
@@ -834,14 +900,28 @@ class DjustSSEEventView(View):
 
     Response: ``{"ok": true}`` — the actual DOM update is pushed via SSE.
 
-    CSRF is exempted because:
-    1. The SSE session ID in the URL acts as an opaque CSRF token.
-    2. The client JS sends the session ID it received from the server.
-    3. Simple-request POST bodies (``application/json``) are blocked by browsers
-       for cross-origin requests unless CORS headers allow them.
+    ``@csrf_exempt`` removes Django's CSRF cookie/token check, so this endpoint's
+    CSRF defense is the **Origin allowlist** (``_sse_origin_allowed``) — the same
+    model as the WebSocket transport's CSWSH check (``AllowedHostsOriginValidator``
+    / ``_is_allowed_origin``, #653). The session_id in the URL is NOT a CSRF token:
+    it is client-chosen (``DjustSSEStreamView.get`` only validates UUID *format*),
+    so it provides no cross-origin protection. The Origin check + the
+    ``application/json`` content-type requirement together close Finding #7
+    (CWE-352): a cross-origin page cannot forge a same-origin ``Origin`` and cannot
+    send a custom content type without a CORS preflight it can't satisfy.
     """
 
     async def post(self, request, session_id: str):
+        # ---- SSE CSRF defense (Finding #7): Origin allowlist + JSON content type ----
+        if not _sse_origin_allowed(request):
+            logger.warning(
+                "SSE: rejected event POST from disallowed origin %s",
+                sanitize_for_log(request.META.get("HTTP_ORIGIN", "")),
+            )
+            return HttpResponseForbidden("Origin not allowed")
+        if not _sse_content_type_is_json(request):
+            return JsonResponse({"error": "Content-Type must be application/json"}, status=415)
+
         session = _get_session(session_id)
         if not session:
             return JsonResponse(
@@ -889,9 +969,25 @@ class DjustSSEMessageView(View):
 
     The legacy ``DjustSSEEventView`` (``/event/``) remains as a deprecated
     alias for back-compat.
+
+    ``@csrf_exempt`` removes Django's CSRF check; the real CSRF defense is the
+    **Origin allowlist** (``_sse_origin_allowed``) plus the ``application/json``
+    content-type requirement — the same model as the WebSocket transport's CSWSH
+    check (#653). The URL session_id is client-chosen and is NOT a CSRF token.
+    See Finding #7 (CWE-352).
     """
 
     async def post(self, request, session_id: str):
+        # ---- SSE CSRF defense (Finding #7): Origin allowlist + JSON content type ----
+        if not _sse_origin_allowed(request):
+            logger.warning(
+                "SSE: rejected message POST from disallowed origin %s",
+                sanitize_for_log(request.META.get("HTTP_ORIGIN", "")),
+            )
+            return HttpResponseForbidden("Origin not allowed")
+        if not _sse_content_type_is_json(request):
+            return JsonResponse({"error": "Content-Type must be application/json"}, status=415)
+
         session = _get_session(session_id)
         if not session:
             return JsonResponse(
