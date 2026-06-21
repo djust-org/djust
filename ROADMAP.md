@@ -3661,6 +3661,141 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.7-3 — transport-path consolidation + secure-by-default hardening (drain bucket → ships in 1.0.7)
+
+> ⚠️ **SECURITY — COORDINATE DISCLOSURE BEFORE PUSHING PUBLIC.** The detailed
+> specs, reproductions, and CWE classifications for the items below live in the
+> **private** `scratch/sec-audit/FINDING-*.md` docs (gitignored) and will be
+> filed as **private GitHub Security Advisories**. This milestone entry is
+> deliberately written at the *remediation/architecture* level and must **not**
+> be enriched with exploit detail in this public-tracked file (origin =
+> `djust-org/djust`) ahead of a coordinated fix/release. Land the fixes on the
+> private staging remote, publish the GHSAs, then push to public origin + cut the
+> patch release together. Finding tags below (`[F16]`…`[F25]`) map to the private
+> docs and are opaque to outside readers — implementers/pipeline read the spec
+> from `scratch/sec-audit/`.
+
+*Goal:* Close a cluster of audit findings whose **root cause is parallel-path
+drift** (Action #1646): the framework grew its security controls on the
+WebSocket transport one pentest at a time (#653 CSWSH, #1819 mount-URL traversal,
+#107 rate-limit, the WS-mount auth fixes), then added the SSE/runtime transport
+as a *second* dispatch path that re-implemented the happy path but **did not
+inherit the accumulated hardening**. `ViewRuntime` (`runtime.py`) already exists
+as the transport-agnostic chokepoint and is ~30% adopted (WS `handle_url_change`
+and the SSE message endpoint route through it; WS mount/event and the SSE
+GET/event endpoints do NOT). This milestone **finishes that migration** so every
+security-relevant operation happens exactly once, inside `ViewRuntime`, with a
+**transport-parity test that makes future drift mechanically detectable** — then
+fixes the handful of findings that are genuinely single-path secure-by-default
+gaps (which consolidation alone would NOT fix).
+
+*Architectural principle to enforce:* a transport may only `send` and expose
+`session_id` / `client_ip` / **authenticated principal**; it may NOT mount,
+dispatch, validate, or apply state. Transports become structurally incapable of
+skipping a control, so a future transport (or a refactor) cannot re-open the
+class. (See the design analysis captured in this session.)
+
+*Finding → work-unit map (specifics PRIVATE):*
+
+| Finding (private) | Class | Closed by |
+|---|---|---|
+| [F19] | secure-by-default (single path) | WU6 |
+| [F24] | transport control missing on SSE | WU5 |
+| [F22] | duplicated gate + insecure default | WU2 |
+| [F23] | parallel-path drift (validator) | WU2/WU4 |
+| [F25] | transport control missing on SSE | WU5 |
+| [F21] | divergence from `safe_setattr` discipline | WU2 |
+| [F20] | secure-by-default (single path) | WU7 |
+| [F18] | divergence from central error path | WU8 |
+| [F17] | single gate skipped on one path | WU5 |
+| [F16] | parallel-path drift (client nav) | WU9 |
+
+**WU1 — Transport-parity enforcement net (P0, test-infra; build FIRST).** Before
+refactoring, add the guard that makes drift detectable (the second half of
+#1646). (a) A parity suite that drives identical payloads through **both** WS
+(`WebsocketCommunicator`) and SSE (async HTTP client) and asserts identical
+security *outcomes* (mount-URL traversal neutralised, cross-origin/`javascript:`
+redirect rejected, view-resolution allowlist enforced + fail-closed, auth
+required at mount, cross-principal event rejected, abuse rate-limit fires). (b) A
+single-chokepoint **structural test** (mirrors the count-test pattern #1125):
+assert no `__import__(client_input)` / raw `setattr(view, client_key)` /
+`factory.get(client_url)` exists outside `runtime.py` + `security/`. (c)
+Stage-4/Stage-11 checklist rule: "new transport or message handler MUST route
+through `ViewRuntime`; new security control MUST live in the runtime/`security/`,
+never a transport" — operationalizes #1646 as a gate.
+
+**WU2 — Finish the `ViewRuntime` chokepoint (P0, foundation; split-foundation
+#1122 — ship + soak before WU3/WU4 stack on it).** Move the controls that today
+live only in `websocket.py`'s inline handlers down into
+`ViewRuntime.dispatch_mount`/`dispatch_event`, extracting shared validators into a
+`security/` module both transports import: mount-URL validation (one shared
+`_validate_mount_url`); **registry-based view resolution** (build a registry of
+mountable `LiveView`s at startup; look up `view_path` — never `__import__` a
+client string) with a single **fail-closed-when-unset, module-boundary-matched**
+allowlist; a shared `safe_setattr`-based state-apply helper. [F21][F22][F23]
+
+**WU3 — Migrate WS handlers to thin runtime shims (P1, large; incremental).**
+Rewrite `handle_mount` → `handle_event` → `handle_mount_batch` →
+`handle_live_redirect_mount` as shims over `runtime.dispatch_*`, exactly like
+`handle_url_change` already is (the #1237 pattern). WS-only concerns (channel
+groups, presence, actors, time-travel, pre-render optimisation) stay in the
+consumer but wrap the runtime call. Do **mount first** (smaller), then **event**
+(`handle_event` is ~1000 LOC — the riskiest; WU1's parity suite + existing WS
+tests are the safety net). `server_push` (channel-layer) routes its state-apply
+through the WU2 shared helper. [F21]
+
+**WU4 — Migrate SSE direct paths to the runtime (P1, smaller, high-value).**
+Replace `_sse_mount_view` → `session.runtime.dispatch_mount` and
+`_sse_handle_event` → `session.runtime.dispatch_event` (SSE already holds a
+`ViewRuntime` and its message endpoint already uses it — mostly deletion).
+Auto-aligns SSE mount/event with the hardened chokepoint. [F23]
+
+**WU5 — SSE/transport-edge security controls (P0/P1).** The controls WS gets
+implicitly that SSE lacks: (a) **principal-binding** — add an
+`authenticated_principal` to the transport abstraction; the runtime verifies it
+on every dispatch; WS fills it from Channels `scope["user"]`, SSE binds the
+owner at mount + **server-issues** the session token (no client-chosen id);
+(b) per-IP/global **session caps + creation rate-limit + register-after-mount**
+for SSE, mirroring the WS connection rate-limiter/abuse-disconnect; (c) route WS
+**binary frames through rate accounting** (separate upload bucket) so the gate
+isn't bypassed. [F24][F25][F17]
+
+**WU6 — Serializer secure-by-default field exposure (P0, single-path,
+INDEPENDENT — can ship first as the highest-severity quick win).** Add a
+sensitive-field denylist (always-exclude `password` + configurable
+`DJUST_SENSITIVE_FIELDS`) and a per-model allowlist opt-in to the model
+serializer; make the JIT serializer's no-template-path fallback emit only the
+safe identity subset (`pk`/`__str__`/`__model__`), not every field. (Consolidation
+does NOT fix this — the single path is itself the gap.) [F19]
+
+**WU7 — Upload content-validation fail-closed + active-content handling (P1,
+single-path).** Flip the magic-byte validator's unknown-type default to
+fail-closed (or an explicit `allow_unsignatured` opt-in); stop treating SVG as a
+default-benign image (explicit opt-in + sanitise on the active-content path);
+document upload serving hygiene. [F20]
+
+**WU8 — Central-path error rendering for embedded children (P1).** Route the
+embedded-child render-error path through the existing
+`handle_exception`/`create_safe_error_response` (generic in prod) + `escape()`,
+instead of its own raw error string. [F18]
+
+**WU9 — Shared client navigation-target validation (P1, client JS).** One
+`safeNavigationTarget()` helper (allow same-origin path + http(s) absolute;
+reject `javascript:`/`data:`/protocol-relative/opaque-origin) applied at every
+`location.href` navigation sink on both transports; refactor the existing WS
+inline guard to use it so the two can't drift again. [F16]
+
+*Sequencing:* WU1 (enforcement net) first — everything after is verified against
+it. **WU6 in parallel/immediately** (worst finding, single-path, no dependency).
+Then WU2 (foundation, soaks) → WU3 → WU4 (consolidation auto-aligns the drift
+cluster) → WU5 (transport-edge controls) → WU7/WU8/WU9 (independent secure-default
++ client fixes). Do NOT bundle the consolidation into one PR (split-foundation
+#1122). Net: ~7 of 10 findings close as a side-effect of finishing a migration
+that's already 30% done, and can't recur (parity suite + structural gate +
+"transports do I/O only" boundary).
+
+---
+
 ### Milestone: v1.0.7-2 — retro follow-up drain (DX check + actor-path arming) ✅ DRAINED (drain bucket → ships in 1.0.7)
 
 *Goal:* Drain the two tracked tech-debt follow-ups the v1.0.7-1 retro filed (#1837, #1840). The two `priority:low` bug-capture feature epics (#1561, #1562) remain held for v1.1.0.
