@@ -18,8 +18,20 @@ Usage:
         def handle_event(self, event, params):
             if event == 'save':
                 for entry in self.consume_uploaded_entries('avatar'):
-                    path = default_storage.save(f'avatars/{entry.client_name}', entry.file)
+                    # Use safe_client_name for the storage key (basename-only,
+                    # path-traversal-neutralised). entry.client_name is the RAW
+                    # attacker-controlled filename — never put it in a path.
+                    path = default_storage.save(
+                        f'avatars/{entry.safe_client_name}', entry.file)
                     self.avatar_url = path
+
+Security:
+    ``entry.client_name`` is the RAW, attacker-controlled original filename.
+    Never use it directly in a storage path/key (``default_storage.save``,
+    ``os.path.join``, an object-store key) — that is a path/object-key
+    injection sink (CWE-22 / CWE-73). Use ``entry.safe_client_name`` for
+    paths. For *display*, ``client_name`` is fine through HTML auto-escaping
+    (or ``escape()``) — never render it with ``|safe`` (see system check S007).
 """
 
 import io
@@ -28,6 +40,7 @@ import os
 import struct
 import tempfile
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -514,6 +527,62 @@ class UploadEntry:
     def file(self) -> io.BytesIO:
         """Get the file as a file-like object (BytesIO)."""
         return io.BytesIO(self.data)
+
+    @property
+    def safe_client_name(self) -> str:
+        """Path-safe basename derived from the client-supplied filename.
+
+        SECURITY: ``client_name`` is the RAW, attacker-controlled original
+        filename. Never interpolate it into a storage destination key/path
+        (e.g. ``default_storage.save(f'avatars/{entry.client_name}', ...)``):
+        a value like ``../../../etc/x`` raises ``SuspiciousFileOperation`` on
+        ``FileSystemStorage`` (DoS) and is a *valid* key on object stores
+        (S3/GCS/Azure), letting the attacker overwrite or mis-place objects
+        (CWE-22 path traversal / CWE-73 external control of file name/path).
+
+        Use ``safe_client_name`` for any path/key. It returns a basename only,
+        with directory components, control bytes, and ``..``/dotfile tricks
+        neutralised — mirroring the intent of Django's ``Storage.get_valid_name``
+        and werkzeug's ``secure_filename``, while keeping ordinary names
+        readable (``my report (1).png`` is preserved). Falls back to
+        ``"upload"`` if nothing safe remains.
+
+        For *display* (Content-Disposition, UI), ``client_name`` is fine as
+        long as it goes through HTML auto-escaping (or ``escape()``); never
+        render it with ``|safe`` (see system check S007).
+        """
+        raw = self.client_name or ""
+        # Normalise Unicode compatibility lookalikes to their canonical ASCII
+        # forms FIRST — before the separator/basename/dot passes. Otherwise a
+        # fullwidth solidus (U+FF0F "／"), division slash (U+2215), fullwidth
+        # full stop (U+FF0E "．"), etc. slip through here unchanged and a
+        # downstream NFKC-normalising layer later expands them back into a real
+        # "../../" traversal. NFKC maps these (and only compatibility forms) to
+        # ASCII, so the existing "\\"->"/", basename, and lstrip(".") logic then
+        # catches them; it never turns an ordinary letter into a separator.
+        raw = unicodedata.normalize("NFKC", raw)
+        # Drop every Unicode control/format/surrogate/private/unassigned char
+        # (category starts with "C"): NUL + C0 controls (truncate/confuse the
+        # storage layer), C1 controls, DEL, zero-width chars, and bidirectional
+        # overrides (U+202E — Trojan-source filename spoofing). Visible,
+        # legitimate filename characters are never category "C".
+        raw = "".join(ch for ch in raw if unicodedata.category(ch)[0] != "C")
+        # Map backslashes to "/": PurePosixPath/Path(...).name does NOT split on
+        # "\\", so "..\\..\\x" would otherwise survive as a single component.
+        raw = raw.replace("\\", "/")
+        # Basename only — strips every directory component, "/etc/passwd" -> "passwd".
+        base = Path(raw).name
+        # Strip leading dots so the result can't become "..", "." or a dotfile
+        # (e.g. "....//x" -> after basename "x"; ".bashrc" -> "bashrc").
+        base = base.lstrip(".")
+        # Strip trailing dots/spaces: Windows strips these at the FS layer, so
+        # "evil.png." would otherwise collide with "evil.png" and reserved-name
+        # normalisation. Done after lstrip so an all-dots name still collapses.
+        base = base.rstrip(". ")
+        # Collapse any whitespace-only / now-empty result to a safe default.
+        if not base.strip():
+            return "upload"
+        return base
 
     @property
     def progress(self) -> int:

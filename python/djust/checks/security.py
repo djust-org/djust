@@ -14,6 +14,7 @@ from djust.checks.utils import (
     DjustError,
     DjustWarning,
     _has_noqa,
+    _is_check_suppressed,
     _iter_python_files,
     _parse_python_file,
 )
@@ -210,6 +211,129 @@ def check_security(app_configs, **kwargs):
                             line_number=auth_dispatch.lineno,
                         )
                     )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# S008 (#15) -- upload `client_name` interpolated into a storage path/key.
+#
+# `UploadEntry.client_name` is the RAW, attacker-controlled original filename.
+# Using it directly in a storage destination is a path / object-key injection
+# sink (CWE-22 / CWE-73): `../../../etc/x` raises SuspiciousFileOperation on
+# FileSystemStorage (DoS) and is a *valid* key on object stores (overwrite /
+# mis-place). The safe accessor is `entry.safe_client_name`.
+#
+# This is a Python-AST check (S007 is the TEMPLATE-side sibling for the
+# `{{ ...client_name|safe }}` stored-XSS sink). It is deliberately PRECISE to
+# keep false positives near zero: it only flags `client_name` (NOT
+# `safe_client_name`) attribute access that lands as an argument to a
+# `<...>.save(...)` call (Django storage) or an `os.path.join(...)` call —
+# the two canonical path/key-construction sinks. Plain display interpolation
+# (`f'Uploaded: {entry.client_name}'`) is NOT flagged.
+# ---------------------------------------------------------------------------
+
+# Call-func attribute names treated as path/key-construction sinks.
+_PATH_SINK_ATTRS = frozenset({"save"})  # default_storage.save / storage.save
+
+
+def _is_raw_client_name_attr(node: "ast.AST") -> bool:
+    """True if *node* is an attribute access of ``.client_name`` (not ``safe_*``)."""
+    return isinstance(node, ast.Attribute) and node.attr == "client_name"
+
+
+def _joinedstr_has_raw_client_name(node: "ast.AST") -> bool:
+    """True if an f-string interpolates ``<expr>.client_name`` anywhere."""
+    if not isinstance(node, ast.JoinedStr):
+        return False
+    for value in node.values:
+        if isinstance(value, ast.FormattedValue):
+            for sub in ast.walk(value.value):
+                if _is_raw_client_name_attr(sub):
+                    return True
+    return False
+
+
+def _arg_uses_raw_client_name(arg: "ast.AST") -> bool:
+    """True if *arg* is (or interpolates) a raw ``.client_name``."""
+    if _is_raw_client_name_attr(arg):
+        return True
+    if _joinedstr_has_raw_client_name(arg):
+        return True
+    # String concatenation: 'avatars/' + entry.client_name
+    if isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Add):
+        return any(_is_raw_client_name_attr(s) for s in ast.walk(arg))
+    return False
+
+
+def _is_os_path_join(func: "ast.AST") -> bool:
+    """True if *func* is ``os.path.join`` (or ``path.join`` / a bare ``join``)."""
+    return isinstance(func, ast.Attribute) and func.attr == "join"
+
+
+def _scan_client_name_path_sink(tree, source_lines, relpath):
+    """Return DjustWarnings for raw ``client_name`` used in a path/key sink.
+
+    Extracted as a standalone, side-effect-free function so it can be unit
+    tested directly against a synthetic AST (empirical-canary discipline, #1459).
+    """
+    findings = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        # Sink 1: <...>.save(<arg>, ...) where save is a storage save.
+        is_save_sink = isinstance(func, ast.Attribute) and func.attr in _PATH_SINK_ATTRS
+        # Sink 2: os.path.join(..., <arg>) / path.join(...).
+        is_join_sink = _is_os_path_join(func)
+        if not (is_save_sink or is_join_sink):
+            continue
+        flagged = any(_arg_uses_raw_client_name(a) for a in node.args)
+        if not flagged:
+            continue
+        if _has_noqa(source_lines, node.lineno, "S008"):
+            continue
+        findings.append(
+            DjustWarning(
+                "%s:%d -- upload `client_name` used in a storage path/key. "
+                "`client_name` is the raw attacker-controlled original filename "
+                "(path/object-key injection: CWE-22 / CWE-73)." % (relpath, node.lineno),
+                hint=(
+                    "Use `entry.safe_client_name` (basename-only, "
+                    "traversal-neutralised) for the path/key; keep `client_name` "
+                    "only for display (auto-escaped). Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['S008']} if the value is "
+                    "pre-sanitised."
+                ),
+                id="djust.S008",
+                fix_hint=(
+                    "Replace `client_name` with `safe_client_name` in the storage "
+                    "path at line %d in `%s`." % (node.lineno, relpath)
+                ),
+                line_number=node.lineno,
+            )
+        )
+    return findings
+
+
+@register("djust")
+def check_upload_client_name_path_sink(app_configs, **kwargs):
+    """S008 -- raw upload ``client_name`` interpolated into a storage path/key."""
+    errors = []
+    if _is_check_suppressed("djust.S008"):
+        return errors
+    app_dirs = _root._get_project_app_dirs()
+    if not app_dirs:
+        return errors
+
+    for filepath in _iter_python_files(app_dirs):
+        tree, source_lines = _parse_python_file(filepath)
+        if tree is None:
+            continue
+        relpath = os.path.relpath(filepath)
+        for finding in _scan_client_name_path_sink(tree, source_lines, relpath):
+            finding.file_path = filepath
+            errors.append(finding)
 
     return errors
 
