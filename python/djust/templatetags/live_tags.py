@@ -27,7 +27,7 @@ from django import template
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 
 from .._html import build_tag
@@ -732,10 +732,16 @@ def live_input(field_type: str = "text", **kwargs) -> Any:
         "checkbox",
         "radio",
     ):
-        return mark_safe(
-            f"<!-- ERROR: {{% live_input %}} unknown field_type "
-            f"{field_type!r} — supported: text, textarea, select, password, "
-            f"email, number, url, tel, search, hidden, checkbox, radio -->"
+        # Defense-in-depth (#1646 / finding #18): field_type is a template-author
+        # literal (not attacker input), but mark_safe(f"... {field_type!r} ...")
+        # interpolates a variable into an HTML comment without escaping ``-->``.
+        # format_html escapes the interpolated value, so the comment can't be
+        # broken out of regardless of source.
+        return format_html(
+            "<!-- ERROR: {{% live_input %}} unknown field_type "
+            "{} — supported: text, textarea, select, password, "
+            "email, number, url, tel, search, hidden, checkbox, radio -->",
+            repr(field_type),
         )
 
     if not handler and field_type != "hidden":

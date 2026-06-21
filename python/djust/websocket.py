@@ -4222,7 +4222,21 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return html
         except Exception as e:
             logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
-            return f"<!-- Error rendering embedded child: {e} -->"
+            # SECURITY (#1646 parallel-path drift): this site bypassed the
+            # central handle_exception / create_safe_error_response path, which
+            # is DEBUG-gated and generic in production. Returning the raw str(e)
+            # here (a) leaked exception detail into the live page in production
+            # (CWE-209) and (b) was unescaped, so an attacker-influenced message
+            # containing ``-->`` broke out of the HTML comment into live DOM
+            # (CWE-79 DOM XSS). escape() neutralises the comment-breakout and any
+            # tag injection in BOTH modes; production additionally emits no
+            # detail. Mirrors the DEBUG gate in simple_live_view.render_template.
+            from django.conf import settings
+            from django.utils.html import escape
+
+            if getattr(settings, "DEBUG", False):
+                return f"<!-- Error rendering embedded child: {escape(str(e))} -->"
+            return "<!-- Error rendering embedded child -->"
 
     # ========================================================================
     # File Upload Handling
