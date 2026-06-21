@@ -1145,6 +1145,204 @@ pub fn extract_template_variables(
     Ok(variables)
 }
 
+/// Collect the set of `dj-model="<field>"` attribute *values* that appear as
+/// literal developer-authored markup in a template.
+///
+/// # Security: this is the immune source for the dj-model mass-assignment
+/// allowlist (CWE-915, finding #3)
+///
+/// Static `dj-model="<field>"` bindings live ENTIRELY inside [`Node::Text`]
+/// literals — the raw, developer-authored template text. Attacker-controlled
+/// data only ever reaches the output through [`Node::Variable`] substitution at
+/// render time; it can NEVER appear in a `Node::Text` literal. So collecting
+/// `dj-model` values from `Node::Text` content is structurally immune to every
+/// rendered-HTML poisoning vector that defeated the previous approach (parsing
+/// the rendered output): attacker text that *looks* like `dj-model="is_admin"`
+/// (in a comment, username, chat message), an unquoted-interpolated attribute
+/// `<div data-x={{ comment }}>` whose value carries `dj-model=is_admin`, or a
+/// `|safe` value containing `<input dj-model=is_admin>`. None of those land in a
+/// `Node::Text` literal, so none can widen this allowlist.
+///
+/// A *dynamic* binding `dj-model="{{ field }}"` straddles a `Node::Text`
+/// (`dj-model="`) and a `Node::Variable` (`field`) — its resolved value is NOT
+/// captured here. That is the intended fail-closed behavior: such fields must be
+/// opted in via `allowed_model_fields`.
+///
+/// `{% extends %}` is covered when the caller passes the inheritance-resolved
+/// source (the merged tree contains the base template's `Node::Text`). For
+/// `{% include %}`, a `loader` may be supplied so the included template's text
+/// is walked too; a missing/unresolvable include simply contributes nothing
+/// (fail-closed). A dynamic include name (`{% include some_var %}`) likewise
+/// resolves to nothing.
+pub fn collect_dj_model_fields<L: crate::inheritance::TemplateLoader>(
+    nodes: &[Node],
+    loader: Option<&L>,
+    fields: &mut HashSet<String>,
+) {
+    // Bound include recursion to mirror the inheritance-chain depth cap and
+    // defend against pathological / cyclic include graphs.
+    collect_dj_model_fields_depth(nodes, loader, fields, 0);
+}
+
+const MAX_INCLUDE_DEPTH: usize = 10;
+
+fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
+    nodes: &[Node],
+    loader: Option<&L>,
+    fields: &mut HashSet<String>,
+    depth: usize,
+) {
+    for node in nodes {
+        match node {
+            // The immune source: developer template text literals.
+            Node::Text(text) => scan_dj_model_in_text(text, fields),
+
+            // Recurse into every child-bearing variant so a `dj-model` binding
+            // inside an `{% if %}`/`{% for %}`/`{% block %}`/etc. is captured.
+            // Mirrors the recursion set in `assign_if_marker_ids`.
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => {
+                collect_dj_model_fields_depth(true_nodes, loader, fields, depth);
+                collect_dj_model_fields_depth(false_nodes, loader, fields, depth);
+            }
+            Node::For {
+                nodes: body,
+                empty_nodes,
+                ..
+            } => {
+                collect_dj_model_fields_depth(body, loader, fields, depth);
+                collect_dj_model_fields_depth(empty_nodes, loader, fields, depth);
+            }
+            Node::Block { nodes: body, .. }
+            | Node::With { nodes: body, .. }
+            | Node::Spaceless { nodes: body, .. } => {
+                collect_dj_model_fields_depth(body, loader, fields, depth);
+            }
+            Node::BlockCustomTag { children, .. } | Node::ReactComponent { children, .. } => {
+                collect_dj_model_fields_depth(children, loader, fields, depth);
+            }
+
+            // `{% include "child.html" %}` — load and walk the included
+            // template's own text so its `dj-model` bindings are covered. The
+            // parser already strips the surrounding quotes (#1396), so
+            // `template` is the bare path — load it exactly the way the renderer
+            // does (renderer.rs `Node::Include`). djust's Rust engine treats the
+            // include name as a literal path (no dynamic includes), and that
+            // path is developer-authored template text, so this stays immune to
+            // poisoning. Fail-closed: a missing/unresolvable include simply
+            // contributes nothing.
+            Node::Include { template, .. } => {
+                if depth >= MAX_INCLUDE_DEPTH {
+                    continue;
+                }
+                if let Some(loader) = loader {
+                    let name = template.trim_matches(|c| c == '"' || c == '\'');
+                    if !name.is_empty() {
+                        if let Ok(included) = loader.load_template(name) {
+                            collect_dj_model_fields_depth(
+                                &included,
+                                Some(loader),
+                                fields,
+                                depth + 1,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Leaf / non-child variants carry no template Text. Note
+            // `RustComponent`, `CustomTag`, `AssignTag`, `Variable`, etc. never
+            // hold raw `dj-model=` markup, so there is nothing to scan.
+            _ => {}
+        }
+    }
+}
+
+/// Scan a single `Node::Text` literal for `dj-model="<field>"` / `dj-model='…'`
+/// REAL attributes and add each value to `fields`.
+///
+/// An attribute is recognized only when `dj-model` is a standalone attribute
+/// name — preceded by an ASCII-whitespace boundary (or start-of-string) and
+/// directly followed by `=` and a quoted value. This rejects `data-dj-model=…`
+/// and `xdj-model=…` (the over-match the old serialized-HTML regex had) while
+/// staying purely a string scan over developer-authored text. There is no
+/// security dependence on this being a *perfect* HTML parser: `Node::Text` is
+/// never attacker-controlled, so even a benign developer-prose false-positive
+/// (e.g. the bytes `dj-model="x"` shown as documentation) is harmless — it can
+/// only widen the allowlist with a field the developer themselves typed.
+fn scan_dj_model_in_text(text: &str, fields: &mut HashSet<String>) {
+    const ATTR: &str = "dj-model";
+    let bytes = text.as_bytes();
+    let mut search_from = 0usize;
+
+    while let Some(rel) = text[search_from..].find(ATTR) {
+        let start = search_from + rel;
+        let after = start + ATTR.len();
+        // Advance past this match for the next iteration regardless of outcome.
+        search_from = after;
+
+        // Boundary BEFORE `dj-model`: start-of-string or ASCII whitespace.
+        // This is what distinguishes a real attribute (`<input dj-model=…>`)
+        // from a substring of another attribute name (`data-dj-model=…`,
+        // `xdj-model=…`).
+        let left_ok = start == 0
+            || bytes
+                .get(start - 1)
+                .is_some_and(|b| b.is_ascii_whitespace());
+        if !left_ok {
+            continue;
+        }
+
+        // Immediately after the name must be `=` (HTML allows no space before
+        // `=` in the canonical form djust renders; a value-less `dj-model`
+        // binds nothing and is ignored).
+        if bytes.get(after) != Some(&b'=') {
+            continue;
+        }
+
+        // The value must be quoted; capture up to the matching quote.
+        let quote = match bytes.get(after + 1) {
+            Some(&b'"') => b'"',
+            Some(&b'\'') => b'\'',
+            // Unquoted dj-model=foo — not a form djust emits; skip
+            // (fail-closed; developer can use allowed_model_fields).
+            _ => continue,
+        };
+        let value_start = after + 2;
+        if let Some(end_rel) = text[value_start..].find(quote as char) {
+            let value = &text[value_start..value_start + end_rel];
+            if !value.is_empty() {
+                fields.insert(value.to_string());
+            }
+            search_from = value_start + end_rel + 1;
+        }
+    }
+}
+
+/// Tokenize + parse `source`, then collect every static `dj-model="<field>"`
+/// binding from the resulting AST (recursing into `{% include %}` via `loader`).
+///
+/// This is the convenience entry point mirrored from
+/// [`extract_template_variables`]: a caller passes raw template source and gets
+/// back the sorted, deduplicated set of bindable field names. See
+/// [`collect_dj_model_fields`] for the security rationale (the source is
+/// developer-authored template text, immune to rendered-output poisoning).
+pub fn extract_dj_model_fields<L: crate::inheritance::TemplateLoader>(
+    source: &str,
+    loader: Option<&L>,
+) -> Result<Vec<String>> {
+    let tokens = crate::lexer::tokenize(source)?;
+    let nodes = parse(&tokens)?;
+    let mut fields: HashSet<String> = HashSet::new();
+    collect_dj_model_fields(&nodes, loader, &mut fields);
+    let mut out: Vec<String> = fields.into_iter().collect();
+    out.sort();
+    Ok(out)
+}
+
 /// Extract per-node dependency sets from a list of AST nodes.
 ///
 /// Returns one `HashSet<String>` per node, containing the top-level context
@@ -1599,6 +1797,144 @@ pub fn strip_filter_arg_quotes(arg: &str) -> &str {
 mod tests {
     use super::*;
     use crate::lexer::tokenize;
+
+    // ---- dj-model allowlist (CWE-915, finding #3) -------------------------
+
+    /// A loader with no entries — exercises the "no include resolution" path.
+    struct NoIncludeLoader;
+    impl crate::inheritance::TemplateLoader for NoIncludeLoader {
+        fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+            Err(djust_core::DjangoRustError::TemplateError(format!(
+                "no template: {name}"
+            )))
+        }
+    }
+
+    /// A HashMap-backed loader for `{% include %}` coverage tests.
+    struct MapLoader {
+        templates: std::collections::HashMap<String, String>,
+    }
+    impl MapLoader {
+        fn new() -> Self {
+            Self {
+                templates: std::collections::HashMap::new(),
+            }
+        }
+        fn add(&mut self, name: &str, src: &str) {
+            self.templates.insert(name.to_string(), src.to_string());
+        }
+    }
+    impl crate::inheritance::TemplateLoader for MapLoader {
+        fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+            match self.templates.get(name) {
+                Some(src) => {
+                    let tokens = tokenize(src)?;
+                    parse_with_source(&tokens, src)
+                }
+                None => Err(djust_core::DjangoRustError::TemplateError(format!(
+                    "not found: {name}"
+                ))),
+            }
+        }
+    }
+
+    fn fields(source: &str) -> Vec<String> {
+        extract_dj_model_fields::<NoIncludeLoader>(source, None).unwrap()
+    }
+
+    #[test]
+    fn dj_model_basic_attribute_collected() {
+        assert_eq!(
+            fields(r#"<div dj-root><input dj-model="search"></div>"#),
+            vec!["search".to_string()]
+        );
+    }
+
+    #[test]
+    fn dj_model_single_and_double_quotes() {
+        let mut got = fields(r#"<input dj-model="x"><input dj-model='y'>"#);
+        got.sort();
+        assert_eq!(got, vec!["x".to_string(), "y".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_data_prefix_not_overmatched() {
+        // `data-dj-model="is_admin"` must NOT widen the allowlist.
+        let got = fields(r#"<input dj-model="search" data-dj-model="is_admin">"#);
+        assert_eq!(got, vec!["search".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_nested_in_if_and_for_collected() {
+        let src = r#"
+            {% if flag %}<input dj-model="a">{% else %}<input dj-model="b">{% endif %}
+            {% for it in items %}<input dj-model="c">{% endfor %}
+        "#;
+        let mut got = fields(src);
+        got.sort();
+        assert_eq!(got, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_text_node_poison_is_immune_via_variable() {
+        // The poisoning vector arrives as a `{{ var }}` substitution, which is
+        // a `Node::Variable`, never a `Node::Text` literal — so it cannot be
+        // captured. Static `dj-model="search"` still is.
+        let src = r#"<input dj-model="search"><p>{{ comment }}</p>"#;
+        assert_eq!(fields(src), vec!["search".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_dynamic_binding_not_captured() {
+        // `dj-model="{{ field }}"` straddles Text + Variable — the literal value
+        // is the empty between the quotes, so nothing is captured (fail-closed).
+        let src = r#"<input dj-model="{{ field }}">"#;
+        assert!(fields(src).is_empty());
+    }
+
+    #[test]
+    fn dj_model_extends_merged_source_covered() {
+        // Caller resolves {% extends %} into one merged source; a base-template
+        // dj-model binding (now in a Node::Text of the merged tree) is captured.
+        let merged = r#"<html><body><input dj-model="base_field">
+            <div dj-root><input dj-model="child_field"></div></body></html>"#;
+        let mut got = fields(merged);
+        got.sort();
+        assert_eq!(
+            got,
+            vec!["base_field".to_string(), "child_field".to_string()]
+        );
+    }
+
+    #[test]
+    fn dj_model_include_resolved_via_loader() {
+        let mut loader = MapLoader::new();
+        loader.add("partial.html", r#"<input dj-model="from_include">"#);
+        let src = r#"<input dj-model="main">{% include "partial.html" %}"#;
+        let mut got = extract_dj_model_fields(src, Some(&loader)).unwrap();
+        got.sort();
+        assert_eq!(got, vec!["from_include".to_string(), "main".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_unknown_include_name_fails_closed() {
+        // djust's Rust engine treats the include name as a literal path (no
+        // dynamic includes). A name the loader doesn't know simply fails to
+        // resolve and contributes nothing — fail-closed.
+        let mut loader = MapLoader::new();
+        loader.add("partial.html", r#"<input dj-model="from_include">"#);
+        let src = r#"<input dj-model="main">{% include "unknown.html" %}"#;
+        let got = extract_dj_model_fields(src, Some(&loader)).unwrap();
+        assert_eq!(got, vec!["main".to_string()]);
+    }
+
+    #[test]
+    fn dj_model_missing_include_fails_closed() {
+        let loader = MapLoader::new(); // empty
+        let src = r#"<input dj-model="main">{% include "nope.html" %}"#;
+        let got = extract_dj_model_fields(src, Some(&loader)).unwrap();
+        assert_eq!(got, vec!["main".to_string()]);
+    }
 
     #[test]
     fn test_parse_simple() {

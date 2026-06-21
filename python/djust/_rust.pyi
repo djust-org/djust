@@ -222,6 +222,33 @@ def compute_template_hash(source: str) -> str:
     """
     ...
 
+def dj_model_fields_from_template(
+    template_source: str,
+    template_dirs: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    Collect fields bound via static ``dj-model="<field>"`` from a raw template
+    source string (and any ``{% include %}``d templates resolvable in
+    ``template_dirs``).
+
+    Module-level companion to :meth:`RustLiveView.dj_model_fields` for callers
+    that have a template source but no live view — notably embedded
+    ``{% live_render %}`` children. The immune source for the dj-model
+    mass-assignment allowlist (CWE-915): values come from the parsed template
+    AST's ``Node::Text`` literals (developer-authored template text), not the
+    rendered output. A dynamic ``dj-model="{{ var }}"`` binding is NOT captured
+    (fail-closed); a parse error or unresolvable include yields no fields for
+    that branch (fail-closed).
+
+    Args:
+        template_source: Raw template source string.
+        template_dirs: Search dirs for ``{% include %}`` resolution.
+
+    Returns:
+        Sorted, deduplicated list of bindable field names.
+    """
+    ...
+
 def serialize_queryset(
     objects: List[Any],
     field_paths: List[str],
@@ -721,6 +748,25 @@ class RustLiveView:
         """
         ...
 
+    def dj_model_fields(self) -> List[str]:
+        """
+        Return the fields bound via static ``dj-model="<field>"`` in this
+        view's CURRENT template source (and any ``{% include %}``d templates).
+
+        The immune source for the dj-model mass-assignment allowlist
+        (CWE-915): values come from the parsed template AST's ``Node::Text``
+        literals — developer-authored template text that attacker data can
+        never reach (it flows only through ``{{ }}`` ``Node::Variable``
+        substitution). A dynamic ``dj-model="{{ var }}"`` binding is NOT
+        captured (fail-closed). Cf. :func:`dj_model_fields_from_template` for
+        the module-level entry point used by callers (embedded children) that
+        have a template source but no view instance.
+
+        Returns:
+            Sorted, deduplicated list of bindable field names.
+        """
+        ...
+
     def clear_fragment_cache(self) -> None:
         """
         Clear the partial-render fragment cache, forcing the next render to
@@ -888,6 +934,7 @@ __all__ = [
     "fast_json_dumps",
     "extract_template_variables",
     "compute_template_hash",
+    "dj_model_fields_from_template",
     "serialize_queryset",
     "serialize_context",
     "serialize_models_fast",

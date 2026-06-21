@@ -37,6 +37,21 @@ class RestrictedView(ModelBindingMixin):
 class TestModelBindingMixin:
     def setup_method(self):
         self.view = FakeView()
+        # The mass-assignment guard (CWE-915) is fail-closed: only fields the
+        # developer bound via dj-model="<field>" in the TEMPLATE SOURCE
+        # (auto-allowlist) or listed in allowed_model_fields are bindable.
+        # These coercion/setattr-machinery tests pre-date that guard and call
+        # update_model directly on a never-rendered FakeView, so populate the
+        # auto-allowlist from a template SOURCE binding the test fields via the
+        # real collection path (ModelBindingMixin._record_dj_model_fields_from_source,
+        # backed by the Rust template walker). RestrictedView tests below use
+        # the explicit allowed_model_fields path instead.
+        self.view._record_dj_model_fields_from_source(
+            '<input dj-model="search_query">'
+            '<input dj-model="count">'
+            '<input dj-model="price">'
+            '<input dj-model="active">'
+        )
 
     def test_update_string_field(self):
         self.view.update_model(field="search_query", value="hello")

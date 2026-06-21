@@ -37,6 +37,47 @@ from ..utils import get_csp_nonce
 register = template.Library()
 logger = logging.getLogger(__name__)
 
+
+def _record_child_dj_model_allowlist(child) -> None:
+    """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
+    from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
+
+    Single shared helper for all three live_render render sites (eager,
+    lazy, sticky) so the same invariant can't drift across them
+    (parallel-path cure, #1646). The child renders through Django's template
+    engine (bypassing ``render_with_diff``), so its allowlist must be derived
+    here. Source is preferred via ``child.get_template()`` (fully resolves
+    ``{% extends %}``); falls back to the inline ``template`` / raw
+    ``template_name`` source. Derivation is from the Rust template AST
+    (Text-node literals only), immune to rendered-output poisoning.
+    """
+    if not hasattr(child, "_record_dj_model_fields_from_source"):
+        return
+    try:
+        from ..utils import get_template_dirs
+
+        source = None
+        get_tmpl = getattr(child, "get_template", None)
+        if callable(get_tmpl):
+            source = get_tmpl()
+        else:
+            inline = getattr(child, "template", None)
+            if inline:
+                source = inline
+            else:
+                template_name = getattr(child, "template_name", None)
+                if template_name:
+                    from django.template import loader as _loader
+
+                    source = _loader.get_template(template_name).template.source
+        child._record_dj_model_fields_from_source(source, get_template_dirs())
+    except Exception:  # noqa: BLE001 — never let allowlist collection break a render
+        # Fail closed: the child's _record_dj_model_fields_from_source already
+        # resets to an empty frozenset on its own error path; guard the
+        # source-resolution above too.
+        logger.warning("[dj-model] child auto-allowlist collection failed; failing closed")
+
+
 # Matches </script> with any letter casing. Used by the `{% colocated_hook %}`
 # body-escape defense to prevent a template-author typo from prematurely
 # closing the <script> block that carries the hook body.
@@ -1355,6 +1396,11 @@ def _render_sticky_child_html(
             )
         rendered_inner = get_template(template_name).render(child_context, request)
 
+    # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
+    # so child update_model events (gated on the child's _dj_model_fields)
+    # accept its dj-model inputs — this render bypasses render_with_diff
+    # (#3 Stage-11 review, #1646 parallel-path).
+    _record_child_dj_model_allowlist(child)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     escaped_sticky_id = escape(sticky_id_value)
@@ -1804,6 +1850,12 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                             "``template_name`` set" % view_path
                         )
                     rendered_inner = get_template(template_name).render(child_context, request)
+                # Record the child's dj-model auto-allowlist from its own
+                # TEMPLATE SOURCE so child update_model events (gated on the
+                # child's _dj_model_fields) accept its dj-model inputs — this
+                # render bypasses render_with_diff (#3 Stage-11 review, #1646
+                # parallel-path).
+                _record_child_dj_model_allowlist(child)
                 rendered_stamped = _stamp_view_id(rendered_inner, view_id)
                 # Wrap in a [dj-view] container so events route via
                 # data-djust-embedded just like the eager path.
@@ -2099,6 +2151,11 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             )
         rendered_inner = get_template(template_name).render(child_context, request)
 
+    # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
+    # so child update_model events (gated on the child's _dj_model_fields)
+    # accept its dj-model inputs — this render bypasses render_with_diff
+    # (#3 Stage-11 review, #1646 parallel-path).
+    _record_child_dj_model_allowlist(child)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     return mark_safe(

@@ -251,6 +251,33 @@ impl RustLiveViewBackend {
         djust_templates::parser::template_hash_hex(&self.template_source)
     }
 
+    /// Return the set of fields bound via static `dj-model="<field>"` in this
+    /// view's CURRENT template source (and any `{% include %}`d templates).
+    ///
+    /// This is the immune source for the dj-model mass-assignment allowlist
+    /// (CWE-915, finding #3). The values are collected from the parsed template
+    /// AST's `Node::Text` literals — developer-authored template text that
+    /// attacker data can NEVER reach (it only ever flows through `{{ }}`
+    /// `Node::Variable` substitution at render time). This replaces the prior
+    /// approach of parsing the RENDERED HTML, which was attacker-influenceable
+    /// (text nodes, unquoted-interpolated attrs, `|safe`).
+    ///
+    /// `{% extends %}` is covered because `template_source` is the
+    /// inheritance-resolved source the renderer uses; `{% include %}` is covered
+    /// by loading included templates from `template_dirs`. A dynamic binding
+    /// `dj-model="{{ field }}"` is NOT captured (fail-closed; opt in via
+    /// `allowed_model_fields`). An unresolvable include or a parse error yields
+    /// no fields for that branch (fail-closed) — it never widens the allowlist.
+    fn dj_model_fields(&self) -> Vec<String> {
+        use djust_templates::inheritance::FilesystemTemplateLoader;
+        let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+        // Fail-closed: any error (parse failure, etc.) leaves the auto-allowlist
+        // empty rather than over-allowing. The explicit `allowed_model_fields`
+        // path on the Python side still applies.
+        djust_templates::extract_dj_model_fields(&self.template_source, Some(&loader))
+            .unwrap_or_default()
+    }
+
     /// Clear the partial-render fragment cache, forcing the next render to
     /// do a full collecting render. Keeps `last_vdom` intact so the diff
     /// baseline is preserved. Used by the partial-render correctness harness
@@ -2740,6 +2767,39 @@ fn extract_template_variables_py(py: Python, template: String) -> PyResult<Py<Py
     Ok(py_dict.into())
 }
 
+/// Collect the set of fields bound via static `dj-model="<field>"` from a raw
+/// template source string (and any `{% include %}`d templates resolvable in
+/// `template_dirs`).
+///
+/// This is the module-level companion to [`RustLiveViewBackend::dj_model_fields`]
+/// for callers that have a template source but no live `RustLiveView` — notably
+/// embedded `{% live_render %}` children, whose dj-model allowlist must be
+/// derived from the CHILD's own template source (its events gate against the
+/// child's `_dj_model_fields`).
+///
+/// Security (CWE-915, finding #3): the values come from the parsed template
+/// AST's `Node::Text` literals — developer-authored template text immune to
+/// rendered-output poisoning. A dynamic `dj-model="{{ field }}"` is not captured
+/// (fail-closed). A parse error or unresolvable include yields no fields for
+/// that branch (fail-closed) — it never widens the allowlist.
+#[pyfunction(name = "dj_model_fields_from_template")]
+#[pyo3(signature = (template_source, template_dirs=None))]
+fn dj_model_fields_from_template(
+    template_source: String,
+    template_dirs: Option<Vec<String>>,
+) -> Vec<String> {
+    use djust_templates::inheritance::FilesystemTemplateLoader;
+    let dirs: Vec<PathBuf> = template_dirs
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let loader = FilesystemTemplateLoader::new(dirs);
+    // Fail-closed: any error leaves the auto-allowlist empty rather than
+    // over-allowing (the explicit allowed_model_fields path still applies).
+    djust_templates::extract_dj_model_fields(&template_source, Some(&loader)).unwrap_or_default()
+}
+
 /// Compute the canonical 8-hex template-source hash from a raw source
 /// string, without instantiating a [`RustLiveViewBackend`]. Used by the
 /// Python state-backend cache-key construction in
@@ -2777,6 +2837,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;

@@ -234,6 +234,12 @@ class TemplateMixin:
         self._sync_state_to_rust()
         html = self._rust_view.render()
 
+        # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
+        # mass-assignment guard). Derived from the Rust template engine's parsed
+        # AST (Text-node literals only) — immune to rendered-output poisoning;
+        # see ModelBindingMixin._record_dj_model_fields_from_rust.
+        self._record_dj_model_fields_from_rust(self._rust_view)
+
         # Post-process to hydrate React components
         html = self._hydrate_react_components(html)
 
@@ -905,6 +911,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
             liveview_html = self._rust_view.render()
+            # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
+            # mass-assignment guard). Derived from the Rust template AST
+            # (Text-node literals) — reflects exactly the developer-exposed
+            # static bindings; immune to rendered-output poisoning.
+            self._record_dj_model_fields_from_rust(self._rust_view)
             liveview_html = self._hydrate_react_components(liveview_html)
 
             # #1737: normalize the rendered dj-root so the initial-GET output
@@ -1072,6 +1083,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         with active_parent_view(self):
             result = self._rust_view.render_with_diff()
         html, patches_json, version = result
+
+        # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
+        # mass-assignment guard). This is the dominant render path — HTTP-GET
+        # baseline, every WS mount, and every WS event re-render all funnel
+        # through here — so the allowlist tracks the currently-exposed static
+        # bindings on every render. Derived from the Rust template AST
+        # (Text-node literals only via ``dj_model_fields()``), which reflects any
+        # ``update_template`` done above for dynamic templates; immune to
+        # rendered-output poisoning (text nodes, interpolated attrs, ``|safe``).
+        self._record_dj_model_fields_from_rust(self._rust_view)
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
         self._rust_render_timing = self._rust_view.get_render_timing()

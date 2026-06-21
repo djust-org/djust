@@ -4174,6 +4174,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             engine = engines["django"] if "django" in engines else list(engines.all())[0]
             tmpl = engine.from_string(template_str)
             html = tmpl.render(context)
+            # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
+            # SOURCE — child update_model events gate against the child's
+            # _dj_model_fields, and this is the child's only render path (it
+            # bypasses render_with_diff). Derived from the Rust template AST
+            # (Text-node literals), immune to rendered-output poisoning
+            # (#3 review #1646).
+            if hasattr(child_view, "_record_dj_model_fields_from_source"):
+                from .utils import get_template_dirs
+
+                child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
             return html
         except Exception as e:
             logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
