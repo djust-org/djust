@@ -20,6 +20,71 @@ logger = logging.getLogger(__name__)
 # Try to use orjson for faster JSON operations (2-3x faster than stdlib)
 HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 
+# Sensitive-field denylist (finding #19 / CWE-200 / CWE-359).
+#
+# When a Django Model instance is assigned to a *public* (non-``_``) LiveView
+# attribute, every concrete field is auto-serialized and sent to the client.
+# Without a denylist this leaks ``password`` hashes, privilege flags, and PII
+# the moment a developer writes the very natural ``self.user = request.user``.
+#
+# ``_ALWAYS_EXCLUDED_FIELDS`` is the secure-by-default floor for the
+# *auto-serialization* paths — the full model dump, the JIT empty-paths
+# fallback, the state snapshot, and get_state — where a whole Model is
+# serialized without the developer naming any field. On those paths these names
+# are dropped regardless of settings, UNLESS a per-model
+# ``djust_serializable_fields`` allowlist explicitly opts one back in.
+# It does NOT (and cannot) cover a template that *explicitly* references a
+# field: ``{{ user.password }}`` flows through the compiled JIT serializer,
+# which emits exactly the paths the template names — that is a
+# developer-initiated disclosure which already renders into server-side HTML.
+# The match is name-EXACT: it covers ``password`` but not a ``get_password()``
+# accessor or a differently-named ``@property`` — use ``DJUST_SENSITIVE_FIELDS``
+# / per-model ``djust_exclude_fields`` for those.
+# ``DJUST_SENSITIVE_FIELDS`` (settings) is UNIONED with this floor for
+# project-wide additions. Per-model ``djust_exclude_fields`` (denylist) and
+# ``djust_serializable_fields`` (allowlist) give developers field-level control;
+# a model-level ``to_dict()`` is the full opt-out (developer takes ownership of
+# what ships to the client).
+#
+# The floor covers Django's auth model: the ``password`` hash plus the privilege
+# flags (``is_superuser``/``is_staff``) — all explicitly called out in finding
+# #19 as leaked to the browser via ``self.user = request.user``.
+_ALWAYS_EXCLUDED_FIELDS = frozenset({"password", "is_superuser", "is_staff"})
+
+# Identity keys that are ALWAYS allowed even under a per-model allowlist —
+# the client relies on these for {% if %} comparisons and __str__ display.
+_IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
+
+
+def _resolve_sensitive_fields():
+    """Return the set of field names to always drop during model serialization.
+
+    Unions the built-in ``_ALWAYS_EXCLUDED_FIELDS`` floor with the optional
+    ``settings.DJUST_SENSITIVE_FIELDS`` (any iterable of field names). Resolved
+    defensively: a missing setting, an unconfigured Django, or a non-iterable
+    value all degrade gracefully to just the built-in floor — serialization
+    must never raise because of this lookup.
+    """
+    try:
+        from django.conf import settings
+
+        configured = getattr(settings, "DJUST_SENSITIVE_FIELDS", None)
+    except Exception:
+        configured = None
+
+    if not configured:
+        return _ALWAYS_EXCLUDED_FIELDS
+
+    try:
+        return _ALWAYS_EXCLUDED_FIELDS | frozenset(configured)
+    except TypeError:
+        logger.warning(
+            "DJUST_SENSITIVE_FIELDS is not iterable (got %s); "
+            "falling back to the built-in denylist only.",
+            type(configured).__name__,
+        )
+        return _ALWAYS_EXCLUDED_FIELDS
+
 
 def fast_json_loads(s):
     """Parse JSON string using orjson if available, stdlib json otherwise."""
@@ -160,7 +225,26 @@ class DjangoJSONEncoder(json.JSONEncoder):
         Only accesses related objects if they were prefetched via
         select_related() or prefetch_related(). Otherwise, only includes
         the FK ID without triggering a database query.
+
+        Sensitive-field filtering (finding #19): fields named in the built-in
+        denylist, ``settings.DJUST_SENSITIVE_FIELDS``, or a per-model
+        ``djust_exclude_fields`` are dropped. A per-model
+        ``djust_serializable_fields`` allowlist, when present, restricts output
+        to exactly those fields (plus identity keys). A model-level
+        ``to_dict()`` overrides everything (developer opt-out).
         """
+        # Model-level to_dict() override — developer takes full ownership of the
+        # client-bound payload (intentional opt-out from the denylist).
+        to_dict = getattr(type(obj), "to_dict", None)
+        if callable(to_dict):
+            try:
+                return obj.to_dict()
+            except Exception:
+                logger.debug(
+                    "Model %s.to_dict() raised; falling back to safe serialization",
+                    type(obj).__name__,
+                )
+
         result = {
             "id": obj.pk,  # Native type (int/UUID) for {% if %} comparisons
             "pk": obj.pk,
@@ -168,11 +252,19 @@ class DjangoJSONEncoder(json.JSONEncoder):
             "__model__": obj.__class__.__name__,
         }
 
+        # Resolve the effective denylist / allowlist once per call.
+        denied = self._get_denied_fields(obj)
+        allowed = self._get_allowlist_fields(obj)
+
         for field in obj._meta.get_fields():
             if not hasattr(field, "name"):
                 continue
 
             field_name = field.name
+
+            # Sensitive-field filter (finding #19). Identity keys always pass.
+            if not self._field_is_serializable(field_name, denied, allowed):
+                continue
 
             # Skip all reverse relations (ManyToOneRel, OneToOneRel, ManyToManyRel)
             # and many-to-many fields (forward or backward)
@@ -227,6 +319,64 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         return result
 
+    @staticmethod
+    def _get_denied_fields(obj):
+        """Effective set of field names to drop for *obj* (finding #19).
+
+        Union of the global denylist (built-in floor + DJUST_SENSITIVE_FIELDS)
+        and the per-model ``djust_exclude_fields`` iterable, if defined.
+        """
+        denied = _resolve_sensitive_fields()
+        per_model = getattr(type(obj), "djust_exclude_fields", None)
+        if per_model:
+            try:
+                denied = denied | frozenset(per_model)
+            except TypeError:
+                logger.warning(
+                    "%s.djust_exclude_fields is not iterable; ignoring it.",
+                    type(obj).__name__,
+                )
+        return denied
+
+    @staticmethod
+    def _get_allowlist_fields(obj):
+        """Per-model ``djust_serializable_fields`` allowlist, or None.
+
+        When present, ONLY these field names (plus identity keys) are
+        serialized. Returns ``None`` when no allowlist is defined (the common
+        case — denylist semantics apply instead).
+        """
+        allowlist = getattr(type(obj), "djust_serializable_fields", None)
+        if not allowlist:
+            return None
+        try:
+            return frozenset(allowlist)
+        except TypeError:
+            logger.warning(
+                "%s.djust_serializable_fields is not iterable; ignoring it.",
+                type(obj).__name__,
+            )
+            return None
+
+    @staticmethod
+    def _field_is_serializable(field_name, denied, allowed):
+        """Return True if *field_name* may be serialized (finding #19).
+
+        Precedence:
+        1. Identity keys (pk/id/__str__/__model__) always pass.
+        2. If a per-model allowlist (*allowed*) is set, it is the developer's
+           explicit declaration of exactly what ships — only those fields pass
+           (and it can opt a denied field back in, e.g. allowlist ``is_staff``).
+        3. Otherwise, a field passes unless it is in *denied*.
+        """
+        if field_name in _IDENTITY_KEYS:
+            return True
+        if allowed is not None:
+            return field_name in allowed
+        if field_name in denied:
+            return False
+        return True
+
     def _is_relation_prefetched(self, obj, field_name):
         """Check if a relation was loaded via select_related/prefetch_related.
 
@@ -268,6 +418,11 @@ class DjangoJSONEncoder(json.JSONEncoder):
 
         model_class = obj.__class__
 
+        # Sensitive-field filter (finding #19): a get_*/property added below must
+        # also respect the denylist + allowlist (e.g. a get_password() getter).
+        denied = self._get_denied_fields(obj)
+        allowed = self._get_allowlist_fields(obj)
+
         for attr_name in dir(obj):
             if attr_name.startswith("_") or attr_name in result:
                 continue
@@ -276,6 +431,8 @@ class DjangoJSONEncoder(json.JSONEncoder):
             if any(attr_name.startswith(p) for p in SKIP_PREFIXES):
                 continue
             if attr_name in SKIP_METHODS:
+                continue
+            if not self._field_is_serializable(attr_name, denied, allowed):
                 continue
 
             # Only include methods explicitly defined on the model class
@@ -327,7 +484,14 @@ class DjangoJSONEncoder(json.JSONEncoder):
             cache = {}
             obj._djust_prop_cache = cache
 
+        # Sensitive-field filter (finding #19): a @property named password (or
+        # any denied/non-allowlisted name) must not be serialized.
+        denied = self._get_denied_fields(obj)
+        allowed = self._get_allowlist_fields(obj)
+
         for attr_name in DjangoJSONEncoder._property_cache[model_class]:
+            if not self._field_is_serializable(attr_name, denied, allowed):
+                continue
             if attr_name not in result:
                 if attr_name in cache:
                     result[attr_name] = cache[attr_name]

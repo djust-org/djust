@@ -293,7 +293,19 @@ class JITMixin:
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
-                return normalize_django_value(obj)
+                # Finding #19: the whole-object / not-field-referenced case
+                # (e.g. ``{{ user }}`` relying on __str__, or a public attr used
+                # only in handlers). Emit ONLY the safe identity subset —
+                # least-exposure, since no field of the object is referenced in
+                # the template. The other fallbacks (JIT unavailable, extraction
+                # None, exception) still call normalize_django_value because they
+                # genuinely need the data; the denylist there keeps them safe.
+                return {
+                    "pk": obj.pk,
+                    "id": obj.pk,
+                    "__str__": str(obj),
+                    "__model__": obj.__class__.__name__,
+                }
 
             model_class = obj.__class__
             _tc_id = id(template_content)
