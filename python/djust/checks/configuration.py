@@ -834,6 +834,42 @@ def check_configuration(app_configs, **kwargs):
                 )
             )
 
+        # A031 -- observability endpoints wired but the localhost middleware
+        # is not installed (defense-in-depth recommendation; the in-view gate
+        # in observability.views._gate is the authoritative localhost check,
+        # so this is a WARNING, not an error). Finding #9.
+        try:
+            from django.urls import NoReverseMatch, reverse
+
+            try:
+                reverse("djust_observability:health")
+                _obs_wired = True
+            except NoReverseMatch:
+                _obs_wired = False
+            if _obs_wired:
+                mw = getattr(settings, "MIDDLEWARE", []) or []
+                if not any("LocalhostOnlyObservabilityMiddleware" in m for m in mw):
+                    errors.append(
+                        DjustWarning(
+                            "djust observability endpoints (_djust/observability/) are "
+                            "wired but LocalhostOnlyObservabilityMiddleware is not in "
+                            "MIDDLEWARE.",
+                            hint=(
+                                "The endpoints self-gate to localhost in-view, so this is "
+                                "defense-in-depth — but the middleware rejects non-localhost "
+                                "requests before the view runs. Add it under DEBUG."
+                            ),
+                            id="djust.A031",
+                            fix_hint=(
+                                "In settings.py under `if DEBUG:` add "
+                                "'djust.observability.middleware.LocalhostOnlyObservabilityMiddleware' "
+                                "to the start of MIDDLEWARE."
+                            ),
+                        )
+                    )
+        except Exception:  # noqa: BLE001 — never let a check crash the suite
+            pass
+
     # S005 -- LiveView exposes state without authentication
     try:
         from djust.live_view import LiveView

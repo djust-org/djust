@@ -9,6 +9,7 @@ import json
 import pytest
 from django.test import RequestFactory, override_settings
 
+from djust.decorators import event_handler
 from djust.observability.dry_run import DryRunContext, DryRunViolation
 from djust.observability.registry import _clear_registry, register_view
 from djust.observability.views import eval_handler
@@ -205,6 +206,7 @@ class _FakeViewPure:
     def __init__(self):
         self.count = 0
 
+    @event_handler
     def increment(self):
         self.count += 1
 
@@ -215,6 +217,7 @@ class _FakeViewWithHttp:
     def __init__(self):
         self.count = 0
 
+    @event_handler
     def fetch_and_increment(self):
         import requests
 
@@ -234,6 +237,7 @@ class _FakeViewWithRecordableSideEffect:
     def __init__(self):
         self.count = 0
 
+    @event_handler
     def fetch_and_increment(self):
         import requests
 
