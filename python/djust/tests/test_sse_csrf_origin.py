@@ -68,8 +68,26 @@ FOREIGN_ORIGIN = "https://attacker.example"
 ALLOWED_ORIGIN = "https://example.com"
 
 
+# Owner pk the mock sessions are bound to (Finding #24 owner-binding). The
+# happy-path requests below stamp request.user with this same pk via
+# _attach_owner() so they pass the owner check; cross-user/anonymous requests
+# do not, so they are 403 (the security boundary, exercised in
+# test_sse_session_binding_f24_f25.py).
+_OWNER_PK = 4242
+
+
+def _attach_owner(request, pk=_OWNER_PK):
+    """Stamp request.user so the request owns a _make_mounted_session()."""
+    request.user = MagicMock(is_authenticated=True, pk=pk)
+    return request
+
+
 def _make_mounted_session() -> SSESession:
-    """Create + register an SSE session with a mounted (mock) view + runtime."""
+    """Create + register an SSE session with a mounted (mock) view + runtime.
+
+    Bound to _OWNER_PK so the owner-binding check (Finding #24) passes for
+    requests stamped via _attach_owner().
+    """
     from djust.runtime import ViewRuntime, SSESessionTransport
 
     sid = str(uuid.uuid4())
@@ -77,6 +95,7 @@ def _make_mounted_session() -> SSESession:
     session.view_instance = MagicMock()  # marked as mounted
     session.runtime = ViewRuntime(SSESessionTransport(session))
     session.runtime.view_instance = session.view_instance
+    session._owner_user_pk = _OWNER_PK
     _sse_sessions[sid] = session
     return session
 
@@ -192,6 +211,7 @@ class TestSSEMessageOrigin:
             content_type="application/json",
             HTTP_ORIGIN=ALLOWED_ORIGIN,
         )
+        _attach_owner(request)
         view = DjustSSEMessageView()
         response = await view.post(request, session_id=session.session_id)
 
@@ -210,6 +230,7 @@ class TestSSEMessageOrigin:
             data=json.dumps({"type": "event", "event": "increment", "params": {}}),
             content_type="application/json",
         )
+        _attach_owner(request)
         view = DjustSSEMessageView()
         response = await view.post(request, session_id=session.session_id)
 
@@ -249,6 +270,7 @@ class TestSSEMessageOrigin:
             content_type="application/json",
             HTTP_ORIGIN=ALLOWED_ORIGIN,
         )
+        _attach_owner(request)
         view = DjustSSEMessageView()
         response = await view.post(request, session_id=session.session_id)
 
@@ -268,6 +290,7 @@ class TestSSEMessageOrigin:
             content_type="application/json; charset=utf-8",
             HTTP_ORIGIN=ALLOWED_ORIGIN,
         )
+        _attach_owner(request)
         view = DjustSSEMessageView()
         response = await view.post(request, session_id=session.session_id)
 
@@ -320,6 +343,7 @@ class TestSSEEventOrigin:
             content_type="application/json",
             HTTP_ORIGIN=ALLOWED_ORIGIN,
         )
+        _attach_owner(request)
         view = DjustSSEEventView()
         from unittest.mock import patch
 

@@ -87,6 +87,34 @@ _KEEPALIVE_TIMEOUT = 25.0
 # Allows in-flight event POSTs to still find the session briefly.
 _SESSION_LINGER_S = 5.0
 
+# ---- Resource-exhaustion caps (Finding #25, CWE-770/CWE-400) ----------------
+# The WebSocket transport throttles abusive clients via ConnectionRateLimiter;
+# the SSE stream-GET path had no equivalent ceiling, so a scripted client could
+# allocate unbounded long-lived sessions (each a registered SSESession + queue +
+# mounted view). These caps bound that growth. Both are module constants with
+# sensible defaults, overridable per-project via settings.
+#
+# Per-client cap is keyed by owner principal (authenticated user pk, else the
+# anonymous Django session key — see Finding #24), falling back to client IP.
+# Exceeding it returns HTTP 429. The global cap on len(_sse_sessions) returns
+# HTTP 503 when the whole process is saturated.
+_MAX_SESSIONS_PER_CLIENT = 20
+_MAX_SESSIONS_TOTAL = 10_000
+
+
+def _max_sessions_per_client() -> int:
+    """Per-client live-session cap (settings-overridable)."""
+    from django.conf import settings
+
+    return int(getattr(settings, "DJUST_SSE_MAX_SESSIONS_PER_CLIENT", _MAX_SESSIONS_PER_CLIENT))
+
+
+def _max_sessions_total() -> int:
+    """Global live-session cap (settings-overridable)."""
+    from django.conf import settings
+
+    return int(getattr(settings, "DJUST_SSE_MAX_SESSIONS_TOTAL", _MAX_SESSIONS_TOTAL))
+
 
 class SSESession:
     """
@@ -107,6 +135,19 @@ class SSESession:
         self.active = True
         self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
         self._client_ip: Optional[str] = None
+
+        # ---- Owner binding (Finding #24, CWE-639/CWE-862) -------------------
+        # The client-chosen session_id alone is NOT an authorization capability:
+        # whoever learns it could otherwise drive this view with the MOUNTER's
+        # captured request.user. We bind the session to its creating principal
+        # at stream-GET creation and re-verify on every event/message POST.
+        #
+        #   * authenticated mounter -> bound by user pk (_owner_user_pk)
+        #   * anonymous mounter      -> bound by Django session key
+        #     (_owner_session_key; forced non-None at GET so anonymous sessions
+        #     are tied to the browser session cookie)
+        self._owner_user_pk: Optional[Any] = None
+        self._owner_session_key: Optional[str] = None
 
         # Lazy: avoid circular import at module load. The runtime is the
         # transport-agnostic dispatcher (#1237) and is shared with the WS
@@ -146,6 +187,79 @@ def _get_session(session_id: str) -> Optional["SSESession"]:
     return _sse_sessions.get(session_id)
 
 
+def _request_user_pk(request) -> Optional[Any]:
+    """Authenticated user pk for *request*, or None for anonymous/no-auth."""
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        return getattr(user, "pk", None)
+    return None
+
+
+def _request_session_key(request) -> Optional[str]:
+    """Django session key for *request*, or None when there is no session."""
+    session = getattr(request, "session", None)
+    if session is None:
+        return None
+    return getattr(session, "session_key", None)
+
+
+def _request_owns_session(request, session: "SSESession") -> bool:
+    """Return True iff *request* is from the principal that created *session*.
+
+    Owner-binding check shared by BOTH SSE POST endpoints (Finding #24 —
+    don't duplicate, per the parallel-path-drift rule). The simplest correct
+    rule:
+
+      * Authenticated owner (``_owner_user_pk`` is not None): the POSTer must
+        be authenticated as the SAME user pk.
+      * Anonymous owner (``_owner_user_pk`` is None): the POSTer must present
+        the SAME Django session key the stream-GET was bound to. (The GET
+        forces a non-None session key for anonymous clients, so this binds the
+        session to the browser session cookie.)
+
+    A leaked ``session_id`` is therefore useless without also presenting the
+    owner's auth/session cookie.
+    """
+    if session._owner_user_pk is not None:
+        return _request_user_pk(request) == session._owner_user_pk
+    # Anonymous owner: bound by session key (forced non-None at GET).
+    if session._owner_session_key is None:
+        # Defensive: an unbound session can't be owned by anyone.
+        return False
+    return _request_session_key(request) == session._owner_session_key
+
+
+def _client_cap_key(request) -> str:
+    """Per-client key for the concurrency cap (Finding #25).
+
+    Keyed by owner principal — authenticated user pk, else the anonymous
+    Django session key (the same identity used for owner-binding, Finding #24)
+    — falling back to client IP when neither is available.
+    """
+    user_pk = _request_user_pk(request)
+    if user_pk is not None:
+        return f"user:{user_pk}"
+    session_key = _request_session_key(request)
+    if session_key:
+        return f"session:{session_key}"
+    return f"ip:{_client_ip_from_request(request) or 'unknown'}"
+
+
+def _count_sessions_for_client(cap_key: str) -> int:
+    """Number of live registered sessions owned by *cap_key* (Finding #25)."""
+    count = 0
+    for session in _sse_sessions.values():
+        if session._owner_user_pk is not None:
+            key = f"user:{session._owner_user_pk}"
+        elif session._owner_session_key:
+            key = f"session:{session._owner_session_key}"
+        else:
+            key = f"ip:{session._client_ip or 'unknown'}"
+        if key == cap_key:
+            count += 1
+    return count
+
+
 def _client_ip_from_request(request) -> Optional[str]:
     """Trustworthy client IP for the SSE transport.
 
@@ -167,7 +281,7 @@ def _client_ip_from_request(request) -> Optional[str]:
 # ------------------------------------------------------------------ #
 
 
-async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
+async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
     """
     Mount a LiveView into *session* and push the initial ``mount`` message.
 
@@ -198,7 +312,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
                 "error": _safe_error(f"View {view_path} is not allowed", "View not found"),
             }
         )
-        return
+        return False
 
     # ---- Import view class ----
     try:
@@ -222,7 +336,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         error_msg = "Failed to load view %s: %s" % (view_path, exc)
         logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)
         session.push({"type": "error", "error": _safe_error(error_msg, "View not found")})
-        return
+        return False
 
     # ---- Security: must be a LiveView subclass ----
     from .live_view import LiveView
@@ -231,7 +345,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         error_msg = "Security: %s is not a LiveView subclass." % view_path
         logger.error("Security: %s is not a LiveView subclass.", sanitize_for_log(view_path))
         session.push({"type": "error", "error": _safe_error(error_msg, "Invalid view class")})
-        return
+        return False
 
     # ---- Instantiate view ----
     try:
@@ -245,7 +359,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             log_message="Failed to instantiate %s" % view_path,
         )
         session.push(response)
-        return
+        return False
 
     # Mark this view as using the SSE transport (for introspection / limits)
     view_instance._sse_session_id = session.session_id
@@ -266,11 +380,15 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             redirect_url = await sync_to_async(check_view_auth)(view_instance, request)
         except PermissionDenied:
             session.push({"type": "error", "error": "Permission denied"})
-            return
+            return False
 
         if redirect_url:
             session.push({"type": "navigate", "to": redirect_url})
-            return
+            # Auth succeeded but the view redirects elsewhere — no usable view is
+            # mounted, so this is treated as a non-mount: the navigate message is
+            # delivered over the stream, then the session is torn down and never
+            # registered for POST routing (Finding #25 register-after-mount).
+            return False
     except Exception as exc:
         logger.warning("SSE: auth check error: %s", exc)
 
@@ -292,7 +410,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
                 log_message="Error resolving tenant for %s" % sanitize_for_log(view_path),
             )
             session.push(response)
-            return
+            return False
     _bind_tenant(getattr(view_instance, "_tenant", None))
 
     # ---- Resolve URL kwargs (for path-based params like pk, slug) ----
@@ -326,7 +444,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             log_message="Error in %s.mount()" % sanitize_for_log(view_path),
         )
         session.push(response)
-        return
+        return False
 
     # ---- Initial render ----
     try:
@@ -344,7 +462,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
             log_message="Error rendering %s" % sanitize_for_log(view_path),
         )
         session.push(response)
-        return
+        return False
 
     # ---- Push mount message ----
     mount_msg: Dict[str, Any] = {
@@ -367,6 +485,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> None:
         sanitize_for_log(view_path),
         sanitize_for_log(session.session_id),
     )
+    return True
 
 
 def _extract_cache_config(view_instance) -> Optional[Dict[str, Any]]:
@@ -846,19 +965,80 @@ class DjustSSEStreamView(View):
         if not view_path:
             return JsonResponse({"error": "Missing required ?view= parameter"}, status=400)
 
-        # Create session and register it
+        # ---- Owner binding (Finding #24) ----
+        # Capture the creating principal so event/message POSTs can be verified
+        # against it. For anonymous clients, force a Django session key to exist
+        # BEFORE reading it so the session is bound to the browser session
+        # cookie (an unbound owner is unownable).
+        owner_user_pk = _request_user_pk(request)
+        owner_session_key = _request_session_key(request)
+        if owner_user_pk is None and owner_session_key is None:
+            django_session = getattr(request, "session", None)
+            if django_session is not None:
+                await sync_to_async(django_session.save)()
+                owner_session_key = django_session.session_key
+
+        # ---- Resource-exhaustion caps (Finding #25) ----
+        # Reject (without allocating/registering a session) when the process is
+        # globally saturated (503) or this client already holds too many live
+        # sessions (429). Checked BEFORE creation so a flood leaves no live
+        # session behind.
+        if len(_sse_sessions) >= _max_sessions_total():
+            logger.warning(
+                "SSE: global session cap reached (%d) — rejecting stream GET",
+                len(_sse_sessions),
+            )
+            return JsonResponse(
+                {"error": "Server is at capacity. Please try again later."},
+                status=503,
+            )
+        cap_key = _client_cap_key(request)
+        if _count_sessions_for_client(cap_key) >= _max_sessions_per_client():
+            logger.warning(
+                "SSE: per-client session cap reached for %s — rejecting stream GET",
+                sanitize_for_log(cap_key),
+            )
+            return JsonResponse(
+                {"error": "Too many concurrent SSE sessions for this client."},
+                status=429,
+            )
+
+        # Create the session and bind it to its owner. NOTE: not yet registered
+        # in _sse_sessions — registration happens only after a successful mount
+        # (Finding #25 register-after-mount), so an unauthorized/errored mount
+        # leaves no POST-routable session behind.
         session = SSESession(session_id)
         session._client_ip = _client_ip_from_request(request)
-        _sse_sessions[session_id] = session
+        session._owner_user_pk = owner_user_pk
+        session._owner_session_key = owner_session_key
 
-        # Mount the view; pushes "mount" message (or "error") to the queue
-        await _sse_mount_view(session, request, view_path)
+        # Mount the view; pushes "mount" message (or "error"/"navigate") to the
+        # queue. Returns True only when a usable view is fully mounted.
+        mounted = await _sse_mount_view(session, request, view_path)
+        if mounted:
+            _sse_sessions[session_id] = session
+        else:
+            # Failed/unauthorized/redirecting mount: do NOT register the session
+            # (no POST can drive it; it isn't counted against the caps). The
+            # stream below still drains the queued error/navigate message, then
+            # closes promptly.
+            session.shutdown()
 
         async def event_stream():
             # Send connection acknowledgment immediately
             yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
 
             try:
+                # Drain any messages already queued before streaming begins (the
+                # "mount"/"error"/"navigate" pushed synchronously above). When the
+                # mount failed, shutdown() already queued the sentinel, so this
+                # delivers the error/navigate even though session.active is False.
+                while not session.queue.empty():
+                    msg = session.queue.get_nowait()
+                    if msg is None:
+                        break
+                    yield f"data: {json.dumps(msg, cls=DjangoJSONEncoder)}\n\n"
+
                 while session.active:
                     try:
                         msg = await asyncio.wait_for(
@@ -872,9 +1052,11 @@ class DjustSSEStreamView(View):
                         # SSE keepalive comment — prevents proxy timeout
                         yield ": keepalive\n\n"
             finally:
-                # Linger briefly so in-flight event POSTs can still find the session
-                await asyncio.sleep(_SESSION_LINGER_S)
-                _sse_sessions.pop(session_id, None)
+                if mounted:
+                    # Linger briefly so in-flight event POSTs can still find the
+                    # session (only meaningful for registered/mounted sessions).
+                    await asyncio.sleep(_SESSION_LINGER_S)
+                    _sse_sessions.pop(session_id, None)
                 logger.debug("SSE: session %s closed", sanitize_for_log(session_id))
 
         response = StreamingHttpResponse(
@@ -927,6 +1109,17 @@ class DjustSSEEventView(View):
             return JsonResponse(
                 {"error": "SSE session not found or expired. Please reload the page."}, status=404
             )
+
+        # ---- Owner binding (Finding #24): the POSTer must own the session ----
+        # The client-chosen session_id is not an authorization capability; a
+        # leaked id must not let a third party drive the mounter's view with the
+        # mounter's captured request.user.
+        if not _request_owns_session(request, session):
+            logger.warning(
+                "SSE: rejected event POST for session %s — requester is not the owner",
+                sanitize_for_log(session_id),
+            )
+            return JsonResponse({"error": "forbidden"}, status=403)
 
         if not session.view_instance:
             return JsonResponse({"error": "View not mounted yet"}, status=503)
@@ -994,6 +1187,17 @@ class DjustSSEMessageView(View):
                 {"error": "SSE session not found or expired. Please reload the page."},
                 status=404,
             )
+
+        # ---- Owner binding (Finding #24): the POSTer must own the session ----
+        # Same shared check as the legacy /event/ endpoint (don't duplicate the
+        # rule — #1646). A leaked session_id must not let a third party drive
+        # the mounter's view with the mounter's captured request.user.
+        if not _request_owns_session(request, session):
+            logger.warning(
+                "SSE: rejected message POST for session %s — requester is not the owner",
+                sanitize_for_log(session_id),
+            )
+            return JsonResponse({"error": "forbidden"}, status=403)
 
         try:
             body = json.loads(request.body)
