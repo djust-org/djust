@@ -348,8 +348,82 @@ issue or be explicitly closed with a reason.
 | 306 | Latency-SLA benchmark asserts MEDIAN, not outlier-sensitive mean | Retro v1.0.6-2 / commit 49893831 | — | Closed | **Resolved this retro** (CLAUDE.md same arc section; fixed in `49893831`). #1795 outlier-sensitivity family; mean dragged past SLA by GC spikes on a loaded machine while median was well under. |
 | 307 | System check to warn when `dj-view`/`dj-root` is on a table-section element (`<tbody>`/`<tr>`/…) — silently foster-parented to garbage at render time | Retro v1.0.7-1 / #1827 investigation | #1837 | Open | Surfaced closing #1827: a `<tbody dj-view>` template renders as `<html><body>text</body></html>` (all rows dropped), no error. The actionable DX fix the #1827 diff_html flattening pointed at. |
 | 308 | Arm recovery on the actor event path (`use_actors=True`, `websocket.py:3100`) once its `result['html']` shape is verified | Retro v1.0.7-1 / PR #1838 (#1817 punt) | #1840 | Closed | **Investigated in v1.0.7-2, deferred (no code change)**: traced that `result['html']` is the already-extracted/client-ready shape, so arming `_recovery_html` with it would make `handle_request_html` double-strip → corrupt recovery (worse than the LOW drift). Proper fix needs the experimental actor to expose its raw pre-strip render; deferred until `use_actors` graduates. Bare site pinned by `test_every_client_checked_send_path_uses_next_version`. #1840 closed. |
-| 309 | Browser-smoke coverage for downstream interactive paths — runtime breaks (mount-path allowlist; inline-script-under-morph) are invisible to the pytest suite + HTTP smoke; only browser testing of the deployed app catches them | Retro v1.0.7-3+4 / demo dj-view break + #1848 | #1849 | Open | Two real 1.0.7-upgrade breaks (demo `views_old` dj-view; djust.org examples tab/copy) passed the 8237-green suite + HTTP-200 smoke; caught only by driving the live page in a browser. Canonicalized in CLAUDE.md (v1.0.7-3+4 retro arc); concrete test-harness tracked in #1849. |
-| 310 | Inline `<script>` inside dj-root not executed after the #1610 WS-mount morph — page JS handlers silently never register (1.0.7 regression) | Retro v1.0.7-3+4 / djust.org examples page | #1848 | Open | Fix: re-execute classic `<script>` on the mount morph like the `live_redirect` path (#1635/#1650) already does, OR a system-check warning. Downstream workaround (move JS to a block outside dj-root) applied on djust.org `v0.9.32`. Documented in CLAUDE.md (v1.0.7-3+4 retro arc) + [[project_djust_inline_script_in_djroot]]. |
+| 309 | Browser-smoke coverage for downstream interactive paths — runtime breaks (mount-path allowlist; inline-script-under-morph) are invisible to the pytest suite + HTTP smoke; only browser testing of the deployed app catches them | Retro v1.0.7-3+4 / demo dj-view break + #1848 | #1849 | Closed | Browser-smoke harness delivered in v1.0.8-1 PR #1866 (`tests/playwright/test_browser_smoke.py` — hard mount canary + #1848-shape inline-script xfail reproducing the open regression live); shipped non-gating per #1534, promotion to a hard merge gate tracked in #1869. Two real 1.0.7-upgrade breaks (demo `views_old` dj-view; djust.org examples tab/copy) passed the 8237-green suite + HTTP-200 smoke; caught only by driving the live page in a browser. |
+| 310 | Inline `<script>` inside dj-root not executed after the #1610 WS-mount morph — page JS handlers silently never register (1.0.7 regression) | Retro v1.0.7-3+4 / djust.org examples page | #1848 | Open | Fix: re-execute classic `<script>` on the mount morph like the `live_redirect` path (#1635/#1650) already does, OR a system-check warning. Downstream workaround (move JS to a block outside dj-root) applied on djust.org `v0.9.32`. Documented in CLAUDE.md (v1.0.7-3+4 retro arc) + [[project_djust_inline_script_in_djroot]]. v1.0.8-1 added S011 detection + a browser-smoke xfail (PR #1864/#1866); framework fix still pending. |
+| 311 | Test-ordering pollution: `tests/unit/test_demo_views.py::TestDemoRegistration` — 4 urlconf-resolution failures under full `-n auto` | PR #1861 / v1.0.8-1 retro | #1862 | Open | Pre-existing; surfaced during T1-A. Passes in isolation; needs the polluter found (urlconf state leak). |
+| 312 | `_get_project_app_dirs()` returns 0 dirs when `manage.py check` runs from inside the djust repo tree (the `/djust/` path filter) — blinds S009/S011 dogfooding | PR #1864 / v1.0.8-1 retro | #1865 | Open | Pre-existing; makes in-repo dogfood of the new checks see 0 app dirs. Dogfood worked via the demo project instead. |
+| 313 | Per-model `djust_serializable_fields` allowlist can re-expose the sensitive-field floor (`password`/`is_superuser`/`is_staff`) — allowlist wins over `_ALWAYS_EXCLUDED_FIELDS` | PR #1867 / v1.0.8-1 retro | #1868 | Open | Surfaced by writing SECURE_DEFAULTS.md (`serialization.py:362`). Doc now states accurate precedence + WARNING; code-hardening question (make floor unconditional?) tracked here. |
+| 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Open | Shipped non-gating per #1534 (new gate needs a runner-green pass before it blocks). |
+
+## v1.0.8-1 — Security-drift prevention program (PRs #1859, #1860, #1861, #1863, #1864, #1866, #1867)
+
+**Date**: 2026-06-22
+**Scope**: Post-disclosure prevention program built on the security-audit root-cause analysis (F1–F29 → 1.0.7 + 13 GHSAs). Three tiers: **Tier 1 — convergence** (make the parallel-path-drift class structurally impossible where cheap), **Tier 2 — mechanical detection** (extend the anti-drift nets + add author-side system checks + make the right CI legs blocking), **Tier 3 — codify defaults** (a secure-by-default pattern catalog + PR-checklist + audit cadence). 8 milestone issues closed (#1850–#1857); developed and merged on the PUBLIC repo (disclosure already complete, no secrecy needed). Plan: `~/.claude/plans/buzzing-sleeping-koala.md`.
+**Tests at close**: ~8303 pytest (8237 at the 1.0.7 close + structural/parity/check/object-perm regression tests) + a new non-gating Playwright browser-smoke leg.
+
+### What We Learned
+
+**1. An anti-drift test or pin is decorative unless it is load-bearing.**
+The *prevention* milestone itself twice shipped anti-drift artifacts that protected nothing, each caught only by the adversarial gate-off (#1468), never by the green suite: PR #1859's three `test_all_transports_agree_*` methods compared a single already-converged chokepoint's output to itself (`distinct=1` adapters — no seam, can never go red); PR #1860's `RUNTIME_OWNED_VERBS` set was a coincidental test-pin that `receive()` never consulted. The real protection is the call-site pin (Concern 4) + gate-off-proven deny/allow rows, and a pinned constant must be membership-checked in the production path. The sharpest form of the tautology class (#1200/#1468) — applied to test/pin *design*.
+
+**Action taken**: Updated `CLAUDE.md` — new section "Process canonicalizations from v1.0.8-1 retro arc" (rule 1: load-bearing-pin / distinct-seam). In-PR fixes removed the 3 tautological tests (#1859) and made `RUNTIME_OWNED_VERBS` load-bearing (#1860, `websocket.py:1933`).
+
+**2. A convergence plan's "these two paths are the same" is a hypothesis the implementer must falsify before merging — converge the shared SEQUENCE, not the whole handler.**
+The plan asserted the WS mount path was a thin shim from `ViewRuntime.dispatch_mount`; the Stage-4 Explore confirmed the leaf chokepoints, but the implementer's symptom-up trace found `runtime.dispatch_*` is NOT a superset of the WS handlers (~16 WS-only behaviors). T1-B narrowed to routing only `url_change`; T1-A re-scoped to extracting the shared pre-mount auth+tenant sequence into one `run_pre_mount_auth` helper (`auth/core.py:396`) all three paths call — the #1646 cure without merging the fat bodies.
+
+**Action taken**: Updated `CLAUDE.md` — same section (rule 2: falsify the "same path" premise at Stage 5; converge the sequence, not the handler).
+
+**3. Documenting a secure default falsification-tests it; the act surfaces real code weaknesses.**
+Writing `docs/SECURE_DEFAULTS.md` Pattern-1 ("the serialization floor is unconditional") forced a read of `serialization.py:362` and revealed the claim is FALSE — the per-model allowlist wins over the floor, so `djust_serializable_fields=['password']` re-exposes a floor field. The #1197 review caught it (all 23 *other* citations were exact; only the *claim* was wrong), and the act of documenting surfaced a genuine secure-by-default question.
+
+**Action taken**: Open — tracked in Action Tracker #313 (GitHub #1868). Also updated `CLAUDE.md` — same section (rule 3: extend #1516 active-falsification to prose invariants).
+
+**4. Convergence (#1646) applied 3× closed two latent security gaps the point-fix would have missed.**
+T1-A's `run_pre_mount_auth` extraction closed a runtime/SSE auth **fail-OPEN** (a non-`PermissionDenied` auth error was previously logged-and-proceeded; now fail-closed, matching WS). T1-C, re-scoped per the T1-A reviewer's finding, closed an **IDOR** on the HTTP-API + SSE-legacy object-permission twins — and the implementer caught the `dispatch_server_function` twin too (3 call sites, all no-op for non-object-scoped views).
+
+**Action taken**: Closed — fail-open fixed in PR #1861 (#1853); IDOR fixed in PR #1863 (#1857). Both regression-tested (denial tests fail pre-fix / pass post-fix) and mechanically pinned via Concern 4.
+
+**5. Tooling/CI gates need dual validation + runner-green-before-blocking.**
+S011 (#1864) reached 0 false-positives only because the dogfood pass (#1060) against the demo flagged 8 correctly-placed scripts and drove the dj-root-subtree balancing fix; the empirical canary (#1459) confirmed it catches the real #1848 shape. bandit was made blocking only after verifying a 0-HIGH baseline; the browser-smoke ships non-gating per #1534 until runner-green; the #1236 governance gate fired correctly on the release-workflow change. The dogfood also surfaced a check-discovery blind spot.
+
+**Action taken**: Open — tracked in Action Tracker #312 (GitHub #1865, dogfood blind spot) and #314 (GitHub #1869, promote browser-smoke to a hard gate once runner-green).
+
+### Insights
+
+- **The adversarial review earned its keep every single group.** 7/7 PRs went through worktree-isolated implementer → independent gate-off / empirical-canary / citation-discipline review. It caught a real defect in 3 of 7 (2× 🟡 non-load-bearing artifacts, 1× 🔴 false doc invariant) — every one invisible to the 8300-green suite. A prevention milestone with no adversarial layer would have shipped decorative protection and a misleading secure-defaults doc.
+- **A prevention program's own artifacts are subject to the failure classes it's preventing.** An anti-drift milestone shipped non-load-bearing pins; a secure-defaults doc mis-stated a default. Self-application (gate-off your own gate, falsify your own invariant) is non-optional.
+- **The #1646 parallel-path cure recurred 3× this milestone** (run_pre_mount_auth, the API/SSE/server-function object-perm twins, Concern-4 pinning the new sites) — consistent with it recurring 4× the prior release cycle. "Grep every parallel implementation of the invariant" is now reflexively the Stage-4 default for any control-touching change.
+- **The worktree-restore reflex (#36/#1804) held every time** — multiple `git checkout <path>` gate-off incidents and a core.bare scare across the drain, all recovered; main checkout `core.bare=false` verified after each. The discipline is load-bearing under heavy parallel worktree use.
+
+### Review Stats
+
+| Metric | #1859 | #1860 | #1861 | #1863 | #1864 | #1866 | #1867 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|-------|
+| Quality | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 4/5 | — |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| 🟡 Findings | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
+| Findings fixed | 1 | 1 | 0 | 0 | 0 | 0 | 1 | 3 |
+| Latent bugs closed | 0 | 0 | 1 | 1 | 0 | 0 | 0 | 2 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0* | 0 | 0 |
+
+\* PR #1866's #1236 governance gate (release-workflow change needs the `release-workflow-reviewed` label) showed red until the adversarial review served as the risk review and the label was added → green. Working as designed, not a CI failure.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New section "Process canonicalizations from v1.0.8-1 retro arc" — 3 rules (load-bearing-pin / distinct-seam; falsify the convergence premise + converge the sequence; falsification-test prose invariants).
+**docs/SECURE_DEFAULTS.md**: New (PR #1867) — 4-pattern secure-by-default catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + the snapshot private-attr signing boundary.
+**docs/PULL_REQUEST_CHECKLIST.md**: New "Secure defaults" subsection (PR #1867).
+**System checks**: S009 (event-handler-needs-auth) + S011 (inline-script/CSP) added to `checks/security.py` (PR #1864).
+**Anti-drift nets**: `test_transport_parity_security.py` extended with 4 control axes; `test_mount_chokepoint_structural.py` Concern 4 (mount-orchestration pin) added (PR #1859), extended to the new object-perm sites (PR #1863).
+**CI**: bandit promoted to blocking on new high-severity (PR #1866); Playwright browser-smoke added (non-gating per #1534).
+
+### Open Items
+
+- [ ] Test-ordering pollution in `test_demo_views.py::TestDemoRegistration` — Action Tracker #311 (GitHub #1862)
+- [ ] `_get_project_app_dirs()` blind from inside the repo tree — Action Tracker #312 (GitHub #1865)
+- [ ] Allowlist can re-expose the serialization floor — Action Tracker #313 (GitHub #1868)
+- [ ] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869)
+- [ ] Framework fix for #1848 (re-execute classic `<script>` on the mount morph) — Action Tracker #310 (GitHub #1848), carried from v1.0.7-3+4
 
 ## v1.0.7-3 + v1.0.7-4 — Security audit drain + coordinated disclosure (private PRs #165–#177 → djust 1.0.7 + 13 GHSAs)
 
@@ -394,7 +468,7 @@ issue or be explicitly closed with a reason.
 **Issues filed**: #1848 (inline-script-in-dj-root regression); #1849 (browser-smoke coverage for downstream interactive paths). #177 Stage-14 retro backfilled (was a gate violation).
 
 ### Open Items
-- [ ] Browser-smoke coverage for downstream interactive paths — Action Tracker #309 (GitHub #1849)
+- [x] Browser-smoke coverage for downstream interactive paths — Action Tracker #309 (GitHub #1849) — resolved in v1.0.8-1 (PR #1866; harness shipped non-gating per #1534, promotion tracked in #1869)
 - [ ] #1848 framework fix (re-execute classic scripts on the mount morph, or system-check warning) — Action Tracker #310 (GitHub #1848)
 
 ## v1.0.7-1 — Post-1.0.6 open-issue drain (PRs #1838, #1839)
