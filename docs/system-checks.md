@@ -33,6 +33,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S004 | Security | Warning | DEBUG=True with non-localhost ALLOWED_HOSTS |
 | S005 | Security | Warning | LiveView exposes state without authentication |
 | S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
+| S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
+| S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -316,6 +318,56 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   `'djust.S007'`) — only when the rendered value is pre-sanitised.
 - **False positives**: A `client_name` value that has already been sanitised
   server-side before reaching the template.
+
+### S009 — Event handler needs per-handler authorization
+- **Severity**: Warning
+- **Method**: AST (LiveView class + decorator walk)
+- **What it detects**: A LiveView that declares **view-level** authorization
+  (a truthy `login_required` / `permission_required` class attribute, a
+  `check_permissions()` override, a Django/djust `AccessMixin`-family base such
+  as `LoginRequiredMixin` / `PermissionRequiredMixin`, or an auth-gated
+  `dispatch`) **and** exposes a **public** `@event_handler` / `@action` method
+  with **no per-handler gate** (`@permission_required`) and no class-level
+  `check_handler_permission()` override. View-level auth only runs at mount; a
+  user who passes it can call any public handler. If a sensitive handler needs
+  finer authorization, the mount gate alone is not enough.
+- **Fix**: Add `@permission_required("app.perm")` above `@event_handler` on the
+  sensitive handler, add a `check_handler_permission()` override that inspects
+  the event, or rename the method with a leading `_` if it is not a
+  client-callable handler.
+- **Suppression**: `# noqa: S009` on the handler (its `def` or its decorator
+  line), or `DJUST_CONFIG = {'suppress_checks': ['S009']}` when the view-level
+  auth is sufficient for every handler.
+- **False positives**: Conservative by design — private (`_`-prefixed) handlers
+  and read-only-looking handlers (`load_` / `get_` / `list_` / `search_` / …)
+  are exempt, and a falsy `login_required = False` does not count as view auth.
+
+### S011 — Inline `<script>` inside a `dj-root` without a CSP
+- **Severity**: Warning
+- **Method**: Template scan (regex + dj-root subtree balancing)
+- **What it detects**: An inline executable `<script>` placed **inside a real
+  `dj-root` / `dj-view` subtree** when no Content-Security-Policy is configured
+  (no django-csp middleware, no `CONTENT_SECURITY_POLICY` / `CSP_*` /
+  `SECURE_CSP*` setting). This is the #1848 class: morphdom does **not**
+  re-execute `<script>` tags it inserts/re-creates, so an inline script inside
+  the dj-root silently never runs after the WS-mount morph — and a strict CSP
+  would block it regardless.
+- **Fix**: Move page JS into a static module (served from `static/`, registered
+  on `DOMContentLoaded` + a `MutationObserver` for morph-managed regions), or
+  into a base-template block rendered **after** the dj-root `</div>` (e.g.
+  `{% block extra_scripts %}`). If the inline script is intentional, add a CSP
+  nonce (`nonce="{{ request.csp_nonce }}"` with django-csp) or place it outside
+  the dj-root.
+- **Suppression**: `{# noqa: S011 #}` on the script line, or
+  `DJUST_CONFIG = {'suppress_checks': ['S011']}`.
+- **False positives**: Low by construction — external `<script src>`,
+  nonce-bearing scripts, and data blocks (`type="application/json"` /
+  `"text/template"` / …) are skipped, `<pre>`/`<code>` example markup is
+  ignored, and a script **after** the dj-root closes (the recommended pattern)
+  is not flagged.
+
+> **Note**: `S010` (rate-limit-presence) is intentionally not shipped as a
+> default-on check — it is advisory/opt-in only (high false-positive risk).
 
 ---
 
