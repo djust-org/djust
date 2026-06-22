@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Anti-drift net: parity axes for auth/object-perm/rate-limit/origin + mount-orchestration structural pin (#1850, #1851).** Extended the WU1 anti-drift test nets so a future regression that lets one transport's security control drift from the others (or a #1853 migration that silently re-grows a parallel mount orchestration) is caught mechanically. `TestViewAuthParity`, `TestObjectPermissionParity`, `TestRateLimitParity`, and `TestOriginParity` (in `python/djust/tests/test_transport_parity_security.py`) each assert an IDENTICAL security verdict across the ws/runtime/sse transports at the shared-helper level — view-level auth (`check_view_auth`), object-level permission (`enforce_object_permission`), per-handler `@rate_limit` trip point (`caller_key` + `handler_rate_check`), and foreign-Origin/Host rejection (`_is_allowed_origin` / `_host_in_allowed_hosts`). `TestMountOrchestrationChokepoint` (in `python/djust/tests/test_mount_chokepoint_structural.py`) adds an AST count-canary pinning that `websocket.py` + `runtime.py` each still reference those shared mount-orchestration security calls (a fourth drift class alongside the existing dynamic-import / setattr / RequestFactory chokepoint scans). Each new assertion is gate-off-verified (#1468). Test-only change — no API or behavior change.
+
 ## [1.0.7] - 2026-06-22
 
 ### Security

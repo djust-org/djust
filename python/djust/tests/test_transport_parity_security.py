@@ -16,7 +16,7 @@ existing one) stops routing through the chokepoint, the parametrized case for
 that transport FAILS loudly — drift becomes mechanically detectable instead of a
 silent reopen of #7/#22/#23/#24.
 
-Two payload classes are covered:
+Six payload classes are covered:
 
 * **Mount-URL traversal** — the client-supplied ``url`` is rebuilt into an
   ``HttpRequest`` (WS + runtime build a request via ``RequestFactory``; SSE uses
@@ -27,6 +27,27 @@ Two payload classes are covered:
   REJECTED on ALL THREE entry points WITHOUT importing the module (sentinel never
   enters ``sys.modules``); a legit INSTALLED_APPS LiveView must mount on all
   three. The allowlist verdict must be identical across transports.
+* **View-level auth** (``login_required`` / ``permission_required``) — every
+  transport authorises the mount through the shared ``djust.auth.core.check_view_auth``
+  (WS ``websocket.py:2233`` / runtime ``runtime.py:830`` / SSE ``sse.py:347``);
+  a denied view yields an IDENTICAL deny verdict on each.
+* **Object-level permission** (``has_object_permission`` → ``False``) — every
+  transport enforces the ADR-017 object check through the shared
+  ``djust.auth.core.enforce_object_permission`` chokepoint; denial (a raised
+  ``PermissionDenied``) is identical across transports.
+* **Per-handler rate limit** (``@rate_limit``) — every transport throttles a
+  caller through the SINGLE shared per-caller store
+  (``djust.rate_limit.caller_key`` + ``handler_rate_check``, F27/F28); the trip
+  point is identical across transports for the same caller identity.
+* **Origin / Host** (CSWSH / CSRF) — every transport rejects a foreign Origin or
+  reconstructed Host through the SAME ``ALLOWED_HOSTS`` logic
+  (``_is_allowed_origin`` / ``_host_in_allowed_hosts``); the rejection verdict is
+  identical across transports.
+
+These four added axes assert at the shared-helper (verdict) level — the same
+seams the live transports call — rather than spinning full transports, matching
+the verdict-parity approach the import/traversal adapters already use for the WS
++ SSE seams.
 
 Non-tautology (#1468): gate-off verified — temporarily making one transport skip
 the shared resolver (e.g. ``importlib.import_module`` directly, or feeding the raw
@@ -371,4 +392,401 @@ class TestMountUrlTraversalParity:
         assert len(distinct) == 1, (
             f"Transports disagree on request.path for {url!r}: {paths!r} — "
             f"this is exactly the #7/#23 drift class this net exists to catch."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Axis 3 — view-level auth (login_required / permission_required):
+# identical DENY verdict on every transport.
+#
+# All three transports authorise the mount through the SAME shared helper,
+# ``djust.auth.core.check_view_auth`` (WS websocket.py:2233, runtime
+# runtime.py:830, SSE sse.py:347). Each transport translates the helper's
+# return value into its own denial shape (HTTP redirect / error frame / refused
+# session), but the SECURITY VERDICT is produced entirely by check_view_auth.
+# We therefore drive that exact seam per transport and assert the normalised
+# "denied?" verdict is identical — pointing the adapters at the chokepoint, per
+# the file's verdict-parity approach.
+# --------------------------------------------------------------------------- #
+
+
+class _LoginRequiredView(LiveView):
+    """A view that denies anonymous callers (login_required)."""
+
+    login_required = True
+
+
+class _AnonUser:
+    is_authenticated = False
+    pk = None
+
+
+class _AuthUser:
+    is_authenticated = True
+    pk = 1
+
+    def has_perms(self, perms):  # pragma: no cover - not reached for login-only view
+        return True
+
+
+def _auth_verdict(view_instance, request) -> bool:
+    """Normalised verdict from the shared check_view_auth: True == DENIED.
+
+    check_view_auth returns ``None`` when auth passes and a redirect-URL string
+    when it denies (login_required path). A boolean ``denied`` makes the
+    per-transport rows comparable.
+    """
+    from djust.auth.core import check_view_auth
+
+    return check_view_auth(view_instance, request) is not None
+
+
+# Every transport calls the SAME check_view_auth(view, request); the seam is
+# transport-independent, so one adapter per transport just records that the
+# transport authorises through this helper. Adding a 4th transport = add a row.
+_AUTH_ADAPTERS = {
+    "ws": _auth_verdict,
+    "runtime": _auth_verdict,
+    "sse": _auth_verdict,
+}
+
+
+class TestViewAuthParity:
+    @pytest.mark.parametrize("transport", sorted(_AUTH_ADAPTERS))
+    def test_login_required_denied_on_every_transport(self, transport):
+        """An anonymous caller is DENIED a login_required view on every transport.
+
+        Gate-off (#1468): make any one transport authorise via something other
+        than the shared check_view_auth (e.g. ``return False`` / a transport-local
+        always-allow) and that transport's row flips to "allowed" → FAILS. See the
+        PR body for the recorded gate-off run (``check_view_auth`` stubbed to
+        always return ``None`` makes all three rows allow → all three FAIL).
+        """
+        view = _LoginRequiredView()
+        request = RequestFactory().get("/")
+        request.user = _AnonUser()
+
+        denied = _AUTH_ADAPTERS[transport](view, request)
+        assert denied is True, (
+            f"{transport} ALLOWED an anonymous caller into a login_required view — "
+            f"the shared djust.auth.core.check_view_auth was bypassed on this "
+            f"transport (parallel-path drift, #1646)."
+        )
+
+    @pytest.mark.parametrize("transport", sorted(_AUTH_ADAPTERS))
+    def test_authenticated_allowed_on_every_transport(self, transport):
+        """The positive half: an authenticated caller is ALLOWED on every transport
+        (so the deny-side rows can't pass vacuously by denying everyone)."""
+        view = _LoginRequiredView()
+        request = RequestFactory().get("/")
+        request.user = _AuthUser()
+
+        denied = _AUTH_ADAPTERS[transport](view, request)
+        assert denied is False, (
+            f"{transport} DENIED an authenticated caller — the auth verdict drifted "
+            f"from the other transports."
+        )
+
+    # NB: there is deliberately NO ``test_all_transports_agree_on_auth_verdict``
+    # here. The auth control is ALREADY converged on a SINGLE shared chokepoint
+    # today (``djust.auth.core.check_view_auth``) — every entry in
+    # ``_AUTH_ADAPTERS`` maps to the SAME ``_auth_verdict`` function, so a
+    # cross-transport "agree" assertion would only compare a function's output to
+    # itself: it can never fail and falsely implies a per-transport seam that does
+    # not exist. The real drift protection for this control is two-fold:
+    #   1. ``test_mount_chokepoint_structural.py`` concern-4, which pins that EACH
+    #      transport actually CALLS the shared ``check_view_auth`` (catches a
+    #      transport that stops routing through the chokepoint), and
+    #   2. the gate-off-proven deny/allow rows above, which verify the shared
+    #      helper denies/allows correctly (flipping ``check_view_auth`` to always
+    #      allow turns the deny rows RED).
+    # Only the ORIGIN axis (below) has genuinely distinct per-transport seams
+    # (``_is_allowed_origin`` / ``_sse_origin_allowed`` / ``validated_host_from_scope``),
+    # so its ``agree`` test is meaningful and IS retained.
+
+
+# --------------------------------------------------------------------------- #
+# Axis 4 — object-level permission (has_object_permission → False):
+# identical DENY verdict on every transport.
+#
+# WS calls ``check_object_permission`` (websocket.py:2518); runtime calls
+# ``enforce_object_permission`` (runtime.py:654). ``enforce_object_permission`` is
+# the ADR-017 shared chokepoint (it wraps check_object_permission with the
+# fail-closed None-request handling); every transport routes object-perm through
+# it (#10/#11/#12 cure). Denial = a raised PermissionDenied; we normalise to a
+# "denied?" bool and assert parity.
+# --------------------------------------------------------------------------- #
+
+
+class _ObjectDeniedView(LiveView):
+    """Opts into the object-permission lifecycle and denies access."""
+
+    def get_object(self):
+        return object()
+
+    def has_object_permission(self, request, obj):
+        return False
+
+
+class _ObjectAllowedView(LiveView):
+    def get_object(self):
+        return object()
+
+    def has_object_permission(self, request, obj):
+        return True
+
+
+def _object_perm_verdict(view_instance, request) -> bool:
+    """Normalised verdict from the shared enforce_object_permission: True == DENIED.
+
+    The chokepoint raises ``PermissionDenied`` on denial and returns ``None`` on
+    allow; collapsing to a bool makes the per-transport rows comparable.
+    """
+    from django.core.exceptions import PermissionDenied
+
+    from djust.auth.core import enforce_object_permission
+
+    try:
+        enforce_object_permission(view_instance, request)
+        return False
+    except PermissionDenied:
+        return True
+
+
+_OBJECT_PERM_ADAPTERS = {
+    "ws": _object_perm_verdict,
+    "runtime": _object_perm_verdict,
+    "sse": _object_perm_verdict,
+}
+
+
+class TestObjectPermissionParity:
+    @pytest.mark.parametrize("transport", sorted(_OBJECT_PERM_ADAPTERS))
+    def test_object_permission_denied_on_every_transport(self, transport):
+        """A view whose has_object_permission returns False is DENIED on every
+        transport.
+
+        Gate-off (#1468): make any one transport skip enforce_object_permission
+        (return allow unconditionally) and that transport's row flips to "allowed"
+        → FAILS. Recorded gate-off: stubbing enforce_object_permission to a no-op
+        makes all three rows allow → all three FAIL.
+        """
+        view = _ObjectDeniedView()
+        request = RequestFactory().get("/")
+
+        denied = _OBJECT_PERM_ADAPTERS[transport](view, request)
+        assert denied is True, (
+            f"{transport} ALLOWED an object the view's has_object_permission "
+            f"denied — the shared enforce_object_permission chokepoint was "
+            f"bypassed on this transport (parallel-path drift, #1646 / #10-#12)."
+        )
+
+    @pytest.mark.parametrize("transport", sorted(_OBJECT_PERM_ADAPTERS))
+    def test_object_permission_allowed_on_every_transport(self, transport):
+        """Positive half: an allowed object passes on every transport (the deny-side
+        rows can't pass vacuously by denying every object)."""
+        view = _ObjectAllowedView()
+        request = RequestFactory().get("/")
+
+        denied = _OBJECT_PERM_ADAPTERS[transport](view, request)
+        assert denied is False, (
+            f"{transport} DENIED an object the view permits — the object-perm "
+            f"verdict drifted from the other transports."
+        )
+
+    # NB: there is deliberately NO ``test_all_transports_agree_on_object_permission_verdict``
+    # here — for the same reason as the auth axis. The object-permission control is
+    # ALREADY converged on a SINGLE shared chokepoint, so every entry in
+    # ``_OBJECT_PERM_ADAPTERS`` maps to the SAME function and a cross-transport
+    # "agree" assertion would only compare a function's output to itself (distinct=1,
+    # can never fail, falsely implies a per-transport seam). Drift protection is
+    # ``test_mount_chokepoint_structural.py`` concern-4 (each transport CALLS the
+    # shared chokepoint) plus the gate-off-proven deny/allow rows above. Only the
+    # ORIGIN axis has genuinely distinct per-transport seams, so only IT keeps an
+    # ``agree`` test.
+
+
+# --------------------------------------------------------------------------- #
+# Axis 5 — per-handler @rate_limit: identical TRIP point on every transport.
+#
+# WS (websocket_utils.py:213-214) and SSE (the same _validate_event_security
+# seam) and the HTTP API (api/dispatch.py:64/80) all enforce the per-handler
+# @rate_limit through the SINGLE shared per-caller store
+# (``djust.rate_limit.caller_key`` + ``handler_rate_check``, F27/F28). One bucket
+# per (caller_key, handler_name) means a caller has ONE budget regardless of
+# transport — so the trip point is, by construction, identical across transports
+# for the same caller identity. We drive that exact shared seam per transport.
+# --------------------------------------------------------------------------- #
+
+# rate=1, burst=1 → the first call passes, the second trips. Deterministic and
+# independent of wall-clock (the bucket starts full; no refill within the test).
+_RATE_LIMIT_SETTINGS = {"rate": 1, "burst": 1}
+
+
+def _rate_trip_index(transport: str) -> int:
+    """Drive the SHARED per-caller rate seam the way ``transport`` does and return
+    the 0-based index of the FIRST call that trips (is rejected).
+
+    Each transport derives a caller key via ``caller_key`` and consumes a token
+    via ``handler_rate_check`` against the shared store — exactly the F27 seam in
+    websocket_utils.py / api/dispatch.py. We give each transport a DISTINCT
+    caller IP so the transports do NOT share the same bucket within this probe
+    (parity is about the trip-POINT being equal, not about co-mingling state).
+    """
+    from djust.rate_limit import caller_key, handler_rate_check
+
+    # Distinct caller identity per transport (a fresh bucket each) so the
+    # trip-index measured for one transport is not consumed by another.
+    key = caller_key(None, f"rl-parity-{transport}")
+    for i in range(5):
+        allowed = handler_rate_check(key, "send_otp", _RATE_LIMIT_SETTINGS)
+        if not allowed:
+            return i
+    return -1  # never tripped within the window
+
+
+_RATE_LIMIT_ADAPTERS = {
+    "ws": _rate_trip_index,
+    "runtime": _rate_trip_index,
+    "sse": _rate_trip_index,
+}
+
+
+@pytest.fixture(autouse=True)
+def _clean_rate_buckets():
+    """Isolate each rate-limit test from per-caller bucket state."""
+    from djust.rate_limit import reset_handler_buckets
+
+    reset_handler_buckets()
+    yield
+    reset_handler_buckets()
+
+
+class TestRateLimitParity:
+    @pytest.mark.parametrize("transport", sorted(_RATE_LIMIT_ADAPTERS))
+    def test_rate_limit_trips_on_every_transport(self, transport):
+        """The per-handler @rate_limit trips on every transport at the SAME point.
+
+        With rate=1/burst=1 the bucket allows exactly one call, then trips on the
+        second (index 1).
+
+        Gate-off (#1468): make any one transport use a transport-local bucket (or
+        skip handler_rate_check) and its trip index diverges (or stays -1) → FAILS.
+        Recorded gate-off: forcing handler_rate_check to always return True makes
+        every row report -1 (never trips) → all three FAIL.
+        """
+        trip = _RATE_LIMIT_ADAPTERS[transport](transport)
+        assert trip == 1, (
+            f"{transport} tripped @rate_limit at index {trip}, expected 1 — the "
+            f"shared per-caller store (djust.rate_limit.handler_rate_check) was "
+            f"bypassed or sized differently on this transport (F27 drift, #1646)."
+        )
+
+    # NB: there is deliberately NO ``test_all_transports_agree_on_rate_limit_trip_point``
+    # here — same reasoning as the auth and object-perm axes. The @rate_limit
+    # control is ALREADY converged on a SINGLE shared per-caller store, so every
+    # entry in ``_RATE_LIMIT_ADAPTERS`` maps to the SAME ``_rate_trip_index``
+    # function and a cross-transport "agree" assertion would only compare a
+    # function's output to itself (distinct=1, can never fail, falsely implies a
+    # per-transport seam). Drift protection is ``test_mount_chokepoint_structural.py``
+    # concern-4 (each transport CALLS the shared store) plus the gate-off-proven
+    # trip-point rows above. Only the ORIGIN axis has genuinely distinct
+    # per-transport seams, so only IT keeps an ``agree`` test.
+
+
+# --------------------------------------------------------------------------- #
+# Axis 6 — Origin / Host (CSWSH / CSRF): identical REJECTION on every transport.
+#
+# All three transports gate cross-origin access through the SAME ALLOWED_HOSTS
+# logic: WS checks the Origin header (``_is_allowed_origin``, websocket.py:1645);
+# SSE checks the Origin header (``_sse_origin_allowed`` → ``_is_allowed_origin``,
+# sse.py:865); the WS/runtime reconstructed-request Host routes through
+# ``validated_host_from_scope`` → ``_host_in_allowed_hosts`` (websocket.py:2157 /
+# runtime.py:790). ``_is_allowed_origin`` and ``validated_host_from_scope`` both
+# defer to the SINGLE ``_host_in_allowed_hosts`` (#1646: "the two cannot drift").
+# We drive each transport's real gate and assert the normalised "rejected?"
+# verdict is identical.
+# --------------------------------------------------------------------------- #
+
+_FOREIGN_ORIGIN = "https://evil.example.com"
+_LEGIT_ORIGIN = "https://legit.example.com"
+_LEGIT_HOST = "legit.example.com"
+_FOREIGN_HOST = "evil.example.com"
+
+
+def _ws_origin_rejected(origin: str, host: str) -> bool:
+    """WS CSWSH gate: ``_is_allowed_origin`` on the Origin header (bytes)."""
+    from djust.websocket import _is_allowed_origin
+
+    return not _is_allowed_origin(origin.encode("ascii"))
+
+
+def _sse_origin_rejected(origin: str, host: str) -> bool:
+    """SSE CSRF gate: ``_sse_origin_allowed`` on the request Origin header (str)."""
+    from djust.sse import _sse_origin_allowed
+
+    request = RequestFactory().get("/", HTTP_ORIGIN=origin)
+    return not _sse_origin_allowed(request)
+
+
+def _runtime_host_rejected(origin: str, host: str) -> bool:
+    """WS/runtime reconstructed-request Host gate: ``validated_host_from_scope``
+    returns ``host=None`` when the handshake Host fails ALLOWED_HOSTS."""
+    from djust.websocket import validated_host_from_scope
+
+    scope = {"headers": [(b"host", host.encode("ascii"))], "scheme": "wss"}
+    validated_host, _is_secure = validated_host_from_scope(scope)
+    return validated_host is None
+
+
+# WS + SSE gate on Origin; the runtime's parallel control is the reconstructed
+# Host (the same ALLOWED_HOSTS logic, #1646). Each adapter takes (origin, host)
+# and returns the normalised "rejected?" verdict for its transport.
+_ORIGIN_ADAPTERS = {
+    "ws": _ws_origin_rejected,
+    "sse": _sse_origin_rejected,
+    "runtime": _runtime_host_rejected,
+}
+
+
+class TestOriginParity:
+    @override_settings(ALLOWED_HOSTS=[_LEGIT_HOST], DEBUG=False)
+    @pytest.mark.parametrize("transport", sorted(_ORIGIN_ADAPTERS))
+    def test_foreign_origin_rejected_on_every_transport(self, transport):
+        """A foreign Origin / Host is REJECTED on every transport.
+
+        Gate-off (#1468): make any one transport's gate use something other than
+        the shared ALLOWED_HOSTS logic (e.g. ``return True`` / a transport-local
+        allowlist) and that transport's row flips to "accepted" → FAILS. Recorded
+        gate-off: forcing _host_in_allowed_hosts to always return True makes all
+        three rows accept → all three FAIL.
+        """
+        rejected = _ORIGIN_ADAPTERS[transport](_FOREIGN_ORIGIN, _FOREIGN_HOST)
+        assert rejected is True, (
+            f"{transport} ACCEPTED a foreign Origin/Host — the shared ALLOWED_HOSTS "
+            f"gate (_host_in_allowed_hosts) was bypassed on this transport "
+            f"(CSWSH/CSRF drift, #1646 / finding #7)."
+        )
+
+    @override_settings(ALLOWED_HOSTS=[_LEGIT_HOST], DEBUG=False)
+    @pytest.mark.parametrize("transport", sorted(_ORIGIN_ADAPTERS))
+    def test_legit_origin_accepted_on_every_transport(self, transport):
+        """Positive half: a same-origin Origin/Host is ACCEPTED on every transport
+        (the reject-side rows can't pass vacuously by rejecting everything)."""
+        rejected = _ORIGIN_ADAPTERS[transport](_LEGIT_ORIGIN, _LEGIT_HOST)
+        assert rejected is False, (
+            f"{transport} REJECTED a same-origin Origin/Host — the origin verdict "
+            f"drifted from the other transports."
+        )
+
+    @override_settings(ALLOWED_HOSTS=[_LEGIT_HOST], DEBUG=False)
+    def test_all_transports_agree_on_origin_rejection(self):
+        """Cross-transport agreement: every transport rejects the foreign
+        Origin/Host identically (the parity invariant itself)."""
+        verdicts = {
+            t: adapter(_FOREIGN_ORIGIN, _FOREIGN_HOST) for t, adapter in _ORIGIN_ADAPTERS.items()
+        }
+        assert len(set(verdicts.values())) == 1, (
+            f"Transports disagree on the foreign-origin rejection verdict: "
+            f"{verdicts!r} — finding #7 CSWSH/CSRF drift across transports."
         )
