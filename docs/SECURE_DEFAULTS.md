@@ -30,54 +30,70 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 `python/djust/serialization.py`:
 
 - `_ALWAYS_EXCLUDED_FIELDS = frozenset({"password", "is_superuser", "is_staff"})`
-  (line 52) — the secure-by-default **floor**. Dropped on the auto-serialization
-  paths regardless of `settings.DJUST_SENSITIVE_FIELDS` configuration — but **a
-  per-model `djust_serializable_fields` allowlist can re-expose floor fields**
-  (see precedence and the warning below; module comment lines 30–35).
-- `_resolve_sensitive_fields()` (line 59) — **unions** the floor with the
+  (line 56) — the secure-by-default **floor**. Dropped on the auto-serialization
+  paths regardless of `settings.DJUST_SENSITIVE_FIELDS` configuration **and
+  regardless of a per-model `djust_serializable_fields` allowlist** (#1868 — the
+  floor is now UNCONDITIONAL; an allowlist may only NARROW, never re-expose a
+  floor field; module comment lines 30–40).
+- `_resolve_sensitive_fields()` (line 63) — **unions** the floor with the
   optional project-wide `settings.DJUST_SENSITIVE_FIELDS`. Degrades gracefully
   (a missing setting, unconfigured Django, or non-iterable value falls back to
   the floor — serialization never raises because of this lookup).
-- `_serialize_model_safely(self, obj)` (line 222) — the serializer entry point.
-  A model-level `to_dict()` (read at line 238) is the full opt-out and overrides
+- `_serialize_model_safely(self, obj)` (line 226) — the serializer entry point.
+  A model-level `to_dict()` (read at line 242) is the full opt-out and overrides
   everything. Otherwise it resolves the effective denylist
-  (`_get_denied_fields`, line 323 — floor ∪ `DJUST_SENSITIVE_FIELDS` ∪ per-model
-  `djust_exclude_fields`, read at line 330) and the per-model
-  `djust_serializable_fields` **allowlist** (`_get_allowlist_fields`, line 342 —
-  read at line 349), then decides each field via `_field_is_serializable`
-  (line 362).
-- `_field_is_serializable(field_name, denied, allowed)` (line 362) — the actual
-  per-field precedence, **and it is allowlist-first, not floor-first**
-  (lines 372–378):
+  (`_get_denied_fields`, line 329 — floor ∪ `DJUST_SENSITIVE_FIELDS` ∪ per-model
+  `djust_exclude_fields`, read at line 336), the per-model
+  `djust_serializable_fields` **allowlist** (`_get_allowlist_fields`, line 348 —
+  read at line 355), and the per-model `djust_serialize_sensitive_fields`
+  **opt-out** (`_get_sensitive_optout_fields`, line 368 — read at line 378),
+  then decides each field via `_field_is_serializable` (line 391).
+- `_field_is_serializable(field_name, denied, allowed, optout=frozenset())`
+  (line 391) — the actual per-field precedence, **floor-first (#1868)**
+  (body lines 406–417):
   1. **Identity keys** (`_IDENTITY_KEYS = {"pk", "id", "__str__", "__model__"}`,
-     line 56) always pass.
-  2. **If a per-model allowlist is set, it WINS** — the field passes iff it is
-     listed in `djust_serializable_fields`. An allowlisted field is emitted
-     **even if it is in the floor** (e.g. `djust_serializable_fields = ['is_staff',
-     'password']` re-exposes those floor fields). This is intentional — the code
-     docstring at lines 367–369 says the allowlist "can opt a denied field back
-     in," and the module comment at lines 34–35 confirms the floor is dropped
-     "UNLESS a per-model `djust_serializable_fields` allowlist explicitly opts one
-     back in."
-  3. **Only when there is NO allowlist** does the denylist apply — a field is
-     dropped iff it is in `denied` (floor + `DJUST_SENSITIVE_FIELDS` +
-     `djust_exclude_fields`).
+     line 60) always pass.
+  2. **The floor wins first.** If `field_name` is in `denied` (floor ∪
+     `DJUST_SENSITIVE_FIELDS` ∪ `djust_exclude_fields`) it is dropped
+     **regardless of any allowlist** — UNLESS the developer deliberately
+     re-includes it via the per-model `djust_serialize_sensitive_fields`
+     opt-out (`optout`). A `djust_serializable_fields` allowlist **alone can NOT
+     re-expose** a floor field (e.g. `djust_serializable_fields = ['is_staff',
+     'password']` no longer ships those fields).
+  3. **If a per-model allowlist is set, it NARROWS** the remaining (now
+     floor-cleared) fields — a field passes iff it is in the allowlist (or was
+     explicitly opted in via `optout`).
   4. Otherwise the field is serialized.
 
-> [!WARNING]
-> **The floor is the default safety net for the common (no-allowlist) case — it
-> is NOT an unconditional invariant.** As shown above (`_field_is_serializable`,
-> lines 372–378), a per-model `djust_serializable_fields` **allowlist currently
-> takes precedence and CAN re-expose floor fields** — a model with
-> `djust_serializable_fields = ['is_staff', 'password']` will serialize those
-> fields. Do **not** rely on the floor to catch a field you list in an allowlist:
-> the floor only fires when there is no allowlist. Whether the floor should
-> become unconditional (or emit a system-check warning when an allowlist names a
-> floor field) is the open follow-up [#1868](https://github.com/johnrtipton/djust/issues/1868).
+> [!IMPORTANT]
+> **The floor is now an unconditional invariant (#1868).** A per-model
+> `djust_serializable_fields` allowlist may only **narrow** the serialized set —
+> it can never opt a hardcore-floor field (`password` / `is_superuser` /
+> `is_staff`) back in. The **only** way to re-include a floor field is the
+> deliberate, loudly-named per-model **`djust_serialize_sensitive_fields`**
+> opt-out (default is always deny). This was the open question surfaced by the
+> #1867 review and resolved in
+> [#1868](https://github.com/johnrtipton/djust/issues/1868) by making the floor
+> win — the prior allowlist-first behavior (where
+> `djust_serializable_fields = ['is_staff', 'password']` re-exposed those fields)
+> is gone. **Migration:** a model that previously relied on the allowlist to
+> ship a floor field must now name it in `djust_serialize_sensitive_fields` as
+> well — a second, explicit declaration that you accept the disclosure.
 
-**Recommended shape for your own code** that serializes user/model data. This is
-a *recommendation for code you write* — making the floor always win — NOT a
-description of the current framework behavior (which is allowlist-first, above):
+**Deliberate opt-out — re-include a floor field only when you mean it:**
+
+```python
+class AuditEntry(models.Model):
+    # The allowlist narrows what ships; it can NOT re-expose the floor on its own.
+    djust_serializable_fields = ["actor", "action", "is_staff"]
+    # The floor still drops is_staff above — UNLESS you also opt it in explicitly:
+    djust_serialize_sensitive_fields = ["is_staff"]   # I accept shipping this flag.
+    # `password` / `is_superuser` are NOT opted in → they stay dropped forever.
+```
+
+**Recommended shape for your own code** that serializes user/model data — the
+framework now does floor-first internally, but if you hand-roll a serializer,
+mirror it: read the floor FIRST and let it win.
 
 ```python
 # Read the global denylist FIRST — never start from "expose all fields".
@@ -89,25 +105,22 @@ from djust.serialization import (
 denied = _resolve_sensitive_fields()
 denied |= frozenset(getattr(type(obj), "djust_exclude_fields", ()) or ())
 allow = getattr(type(obj), "djust_serializable_fields", None)
-
-# Floor-always-wins: intersect the allowlist with the safe set so a developer's
-# allowlist can never opt password/is_superuser/is_staff back in. (The framework
-# serializer does NOT do this today — see the warning above and #1868.)
-if allow is not None:
-    allow = frozenset(allow) - _ALWAYS_EXCLUDED_FIELDS
+# Mirror the framework's deliberate opt-out: only this set lifts the floor.
+optout = frozenset(getattr(type(obj), "djust_serialize_sensitive_fields", ()) or ())
 
 for name, value in fields(obj):
-    if name in denied:
+    # Floor wins first — unless deliberately opted in.
+    if name in denied and name not in optout:
         continue
-    if allow is not None and name not in allow:
+    # Allowlist only narrows the remaining set.
+    if allow is not None and name not in allow and name not in optout:
         continue
     emit(name, value)
 ```
 
-The recommendation: build your own filter as *intersection with the safe set*
-(`allowed_safe = set(allowlist) - _ALWAYS_EXCLUDED_FIELDS`), not *subtraction
-from everything* — so the floor wins in code you control even though the
-framework serializer is allowlist-first.
+The principle: the floor must win **before** the allowlist is consulted, so a
+developer's allowlist can never silently re-expose `password` / `is_superuser` /
+`is_staff` — only the explicit `djust_serialize_sensitive_fields` opt-out can.
 
 ---
 
