@@ -295,57 +295,24 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
     - No pre-rendered content optimisation (SSE always sends fresh HTML).
     """
 
-    # ---- Security (GHSA — unauthenticated arbitrary module import) ----
-    # Fail-CLOSED gate (replaces the prior fail-open `if allowed_modules:`
-    # check): refuse to __import__ a client-supplied module that isn't already
-    # loaded unless explicitly allowlisted. Must run BEFORE __import__ below.
-    from ._view_resolution import is_view_import_allowed
+    # ---- Security (F22 — unsafe reflection / arbitrary module import) ----
+    # Resolve the client-supplied dotted view path through the single shared
+    # resolver: shape-check → allowlist BEFORE importing anything (fail-closed
+    # to LIVEVIEW_ALLOWED_MODULES, else INSTALLED_APPS roots + djust) →
+    # import_module + vars() (PEP 562-safe) → LiveView subclass check. Shared
+    # with the WebSocket / runtime paths so they cannot drift (#1646).
+    from .security.mount import resolve_view_class
 
-    if not is_view_import_allowed(view_path):
+    resolution = resolve_view_class(view_path)
+    if not resolution:
         logger.warning(
-            "SSE: blocked attempt to mount disallowed/uninitialized view: %s",
+            "SSE: blocked/failed mount of view: %s (%s)",
             sanitize_for_log(view_path),
+            resolution.generic,
         )
-        session.push(
-            {
-                "type": "error",
-                "error": _safe_error(f"View {view_path} is not allowed", "View not found"),
-            }
-        )
+        session.push({"type": "error", "error": _safe_error(resolution.detail, resolution.generic)})
         return False
-
-    # ---- Import view class ----
-    try:
-        module_path, class_name = view_path.rsplit(".", 1)
-        import importlib
-
-        # importlib.import_module (NO fromlist), NOT __import__(fromlist=[class_name]):
-        # the fromlist hasattr(module, class_name) triggers a module-level
-        # __getattr__ / submodule import for a client class_name
-        # (GHSA-7prp-2623-8g45 follow-up).
-        module = importlib.import_module(module_path)
-        # __dict__ lookup, NOT getattr — a client-controlled class_name must not
-        # trigger a module-level __getattr__ (PEP 562), which on some already-
-        # loaded modules imports a submodule (GHSA-7prp-2623-8g45 follow-up).
-        # Real LiveView classes live in __dict__; a name served only by
-        # __getattr__ resolves to None → rejected as "class not found".
-        view_class = vars(module).get(class_name)
-        if view_class is None:
-            raise AttributeError(class_name)
-    except (ValueError, ImportError, AttributeError) as exc:
-        error_msg = "Failed to load view %s: %s" % (view_path, exc)
-        logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)
-        session.push({"type": "error", "error": _safe_error(error_msg, "View not found")})
-        return False
-
-    # ---- Security: must be a LiveView subclass ----
-    from .live_view import LiveView
-
-    if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
-        error_msg = "Security: %s is not a LiveView subclass." % view_path
-        logger.error("Security: %s is not a LiveView subclass.", sanitize_for_log(view_path))
-        session.push({"type": "error", "error": _safe_error(error_msg, "Invalid view class")})
-        return False
+    view_class = resolution.view_class
 
     # ---- Instantiate view ----
     try:

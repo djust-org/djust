@@ -28,10 +28,21 @@ from djust._view_resolution import is_view_import_allowed
 # Unit tests of the fail-closed gate (gate-off-sensitive by construction).
 # --------------------------------------------------------------------------
 class TestIsViewImportAllowed:
-    def test_already_imported_module_is_allowed(self):
-        # `os` is always loaded; resolving it runs no new code.
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=[])
+    def test_stdlib_module_is_rejected_when_allowlist_unset(self):
+        # BEHAVIOR CHANGE (F22 consolidation): the gate no longer allows a path
+        # merely because the module is already imported (the old sys.modules
+        # rule, which `os` — always loaded — defeated). With the allowlist unset
+        # it falls back to INSTALLED_APPS roots + "djust", so a stdlib module
+        # like `os` is REJECTED even though it is loaded. This is the F22 fix.
         assert "os" in sys.modules
-        assert is_view_import_allowed("os.SomethingNotAView") is True
+        assert is_view_import_allowed("os.SomethingNotAView") is False
+
+    @override_settings(LIVEVIEW_ALLOWED_MODULES=[])
+    def test_djust_and_installed_apps_allowed_when_allowlist_unset(self):
+        # The non-breaking fallback admits the framework package + installed
+        # apps (demo apps are in the test settings' INSTALLED_APPS).
+        assert is_view_import_allowed("djust.tests.test_runtime._FakeView") is True
 
     @override_settings(LIVEVIEW_ALLOWED_MODULES=[])
     def test_not_yet_imported_module_is_rejected_when_allowlist_unset(self):
@@ -171,17 +182,24 @@ async def test_ws_mount_does_not_trigger_module_getattr(getattr_sentinel_module)
     from djust.websocket import LiveViewConsumer
 
     name = getattr_sentinel_module
+    # Allowlist the sentinel module explicitly so resolution actually reaches the
+    # class-lookup step — otherwise the F22 allowlist would reject this
+    # non-installed-app module BEFORE the import/getattr, making the
+    # "__getattr__ didn't run" assertion tautological (it would also pass if
+    # resolution used getattr, because resolution is never reached).
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
 
-    # Module is already loaded (gate passes); class_name is attacker-chosen.
-    await comm.send_json_to({"type": "mount", "view": f"{name}.AnyAttr", "url": "/"})
-    for _ in range(3):
-        try:
-            await asyncio.wait_for(comm.receive_from(), timeout=1)
-        except BaseException:  # noqa: BLE001
-            break
+    # Module is already loaded + allowlisted (gate passes); class_name is
+    # attacker-chosen.
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[name]):
+        await comm.send_json_to({"type": "mount", "view": f"{name}.AnyAttr", "url": "/"})
+        for _ in range(3):
+            try:
+                await asyncio.wait_for(comm.receive_from(), timeout=1)
+            except BaseException:  # noqa: BLE001
+                break
 
     # Resolution must use vars()/__dict__, NOT getattr — so __getattr__ never ran.
     # (With the pre-fix getattr, _DJ_GETATTR_HIT would be set to "AnyAttr".)

@@ -171,73 +171,12 @@ def _is_allowed_origin(origin: Optional[bytes]) -> bool:
     return validate_host(match_host, allowed_hosts)
 
 
-def _validate_mount_url(url: Optional[str]) -> str:
-    """
-    Validate a client-supplied mount/redirect URL, falling back to ``"/"``.
-
-    The client sends the current page URL in the WebSocket ``mount`` /
-    ``live_redirect`` frames so the server can rebuild a faithful
-    ``HttpRequest`` (via ``RequestFactory``). That value is fully
-    attacker-controlled, so it must be a *site-relative path* before it is
-    fed to ``RequestFactory.get()``, ``resolve()``, log statements, or string
-    concatenation with a query string.
-
-    This is defense-in-depth. Django's WSGI path parsing already strips bare
-    ``\\r``/``\\n`` from the path and discards the scheme/host of an absolute
-    URL, but it does NOT normalize ``..`` segments (``"../../admin/"`` lands
-    in ``request.path`` as ``/..../admin/`` and in ``request.path_info``
-    verbatim as ``../../admin/``), and it silently *accepts* an absolute or
-    protocol-relative URL by dropping the authority. A view that inspects
-    ``request.path`` for an auth/routing decision would see the traversed
-    path. We reject all of those shapes here rather than relying on every
-    downstream consumer to re-sanitize.
-
-    Rejected (all fall back to ``"/"``):
-      * empty / non-string / not starting with ``"/"`` (relative path,
-        traversal such as ``"../../admin/"``)
-      * protocol-relative (``"//evil.com/page"``) -- ``urlparse`` reports a netloc
-      * absolute (``"https://evil.com/page"``) -- ``urlparse`` reports a scheme
-      * contains a ``\\r`` or ``\\n`` (CRLF / header / log injection)
-      * contains a ``".."`` path segment (path traversal)
-
-    Accepted (returned unchanged): a site-relative path, optionally with a
-    query string and/or fragment, e.g. ``"/dashboard?q=1"``.
-
-    See #1819 (unvalidated mount URL -- path traversal / CRLF / log injection).
-    """
-    if not url or not isinstance(url, str):
-        return "/"
-    # CRLF / log / header injection -- reject before any further parsing.
-    if "\r" in url or "\n" in url:
-        return "/"
-    # Must be a site-relative absolute path. Rejects relative paths
-    # ("../../admin/", "foo") and is the first half of the protocol-relative
-    # ("//evil.com") rejection (completed by the netloc check below).
-    if not url.startswith("/"):
-        return "/"
-    from urllib.parse import unquote, urlparse
-
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return "/"
-    # Absolute ("https://evil.com/page") or protocol-relative ("//evil.com").
-    if parsed.scheme or parsed.netloc:
-        return "/"
-    # Path traversal: reject any ".." path segment. ``RequestFactory.get()``
-    # percent-DECODES the path once, so a raw-segment check on ``parsed.path``
-    # would miss "/%2e%2e/admin/" — which lands in ``request.path`` as
-    # "/../admin/" after Django decodes it (#1819 review: encoded-traversal
-    # bypass). Decode once here (matching RequestFactory's single decode)
-    # before the segment check, and reject backslashes / control bytes that
-    # decode into alternate separators or null bytes ("/..%5cadmin",
-    # "/foo/..%00/admin").
-    decoded_path = unquote(parsed.path)
-    if "\\" in decoded_path or any(ord(ch) < 0x20 for ch in decoded_path):
-        return "/"
-    if ".." in decoded_path.split("/"):
-        return "/"
-    return url
+# F23 (#1819 traversal fix) is now implemented once in
+# ``djust.security.mount.validate_mount_url`` so the WebSocket, SSE, and
+# ``ViewRuntime`` mount paths share a single validator and cannot drift
+# (#1646). ``_validate_mount_url`` is kept as a module-level alias because
+# existing tests and call sites reference it by this name.
+from .security.mount import validate_mount_url as _validate_mount_url  # noqa: E402
 
 
 def _should_expose_timing() -> bool:
@@ -1963,92 +1902,35 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("Missing view path in mount request")
             return
 
-        # Security (GHSA — unauthenticated arbitrary module import): refuse to
-        # __import__ a client-supplied module that isn't already loaded unless it
-        # is explicitly allowlisted. Importing a not-yet-loaded module executes
-        # its top-level code; this gate must run BEFORE __import__ below.
-        # Fail-CLOSED (replaces the prior fail-open `if allowed_modules:` check).
-        from ._view_resolution import is_view_import_allowed
+        # Security (F22 — unsafe reflection / arbitrary module import + insecure
+        # default allowlist + boundary-less prefix match): resolve the
+        # client-supplied dotted view path through the single shared resolver.
+        # It validates the path SHAPE, checks the allowlist BEFORE importing
+        # anything (fail-closed to LIVEVIEW_ALLOWED_MODULES, else INSTALLED_APPS
+        # roots + djust), imports via import_module + vars() (PEP 562-safe), and
+        # confirms the LiveView subclass. Shared with the runtime/SSE paths so
+        # they cannot drift (#1646). See djust.security.mount.
+        from .security.mount import available_liveview_names, resolve_view_class
 
-        if not is_view_import_allowed(view_path):
-            logger.warning("Blocked attempt to mount disallowed/uninitialized view: %s", view_path)
-            await self.send_error(_safe_error(f"View {view_path} is not allowed", "View not found"))
-            return
-
-        # Import the view class
-        module = None
-        module_path = ""
-        class_name = ""
-        try:
-            module_path, class_name = view_path.rsplit(".", 1)
-            import importlib
-
-            # importlib.import_module (NO fromlist), NOT __import__(fromlist=[class_name]):
-            # __import__'s fromlist handling does hasattr(module, class_name), which
-            # triggers a module-level __getattr__ (PEP 562) / submodule import for a
-            # client-controlled class_name (GHSA-7prp-2623-8g45 follow-up). import_module
-            # returns the gated module without consulting the class name.
-            module = importlib.import_module(module_path)
-            # __dict__ lookup, NOT getattr — a client-controlled class_name must
-            # not trigger a module-level __getattr__ (PEP 562), which on some
-            # already-loaded modules imports a submodule (GHSA-7prp-2623-8g45
-            # follow-up). Real LiveView classes are top-level-defined / imported
-            # into the module, so they live in __dict__; a name served only by
-            # __getattr__ resolves to None and is rejected as "class not found".
-            view_class = vars(module).get(class_name)
-            if view_class is None:
-                raise AttributeError(class_name)
-        except ValueError:
-            error_msg = (
-                f"Invalid view path format: {view_path}. Expected format: module.path.ClassName"
+        resolution = resolve_view_class(view_path)
+        if not resolution:
+            logger.warning(
+                "Blocked/failed mount of view: %s (%s)",
+                sanitize_for_log(view_path),
+                resolution.generic,
             )
-            logger.error(error_msg)
-            await self.send_error(_safe_error(error_msg, "View not found"))
-            return
-        except ImportError as e:
-            error_msg = f"Failed to import module {module_path}: {str(e)}"
-            logger.error(error_msg)
-            await self.send_error(_safe_error(error_msg, "View not found"))
-            return
-        except AttributeError:
-            error_msg = f"Class {class_name} not found in module {module_path}"
-            logger.error(error_msg)
             hint = None
-            if getattr(settings, "DEBUG", False):
-                try:
-                    from .live_view import LiveView as _LV
-
-                    # Enumerate via __dict__ (vars), NOT inspect.getmembers /
-                    # getattr — a module-level __getattr__ (PEP 562) must not be
-                    # triggered during the error hint either (GHSA-7prp-2623-8g45
-                    # follow-up). LiveView classes are top-level-defined → in
-                    # __dict__.
-                    available = [
-                        name
-                        for name, obj in vars(module).items()
-                        if isinstance(obj, type) and issubclass(obj, _LV) and obj is not _LV
-                    ]
-                    if available:
-                        hint = "Available LiveView classes in %s: %s" % (
-                            module_path,
-                            ", ".join(sorted(available)),
-                        )
-                except Exception as exc:
-                    logger.debug("Could not enumerate LiveView classes: %s", exc)
-            await self.send_error(_safe_error(error_msg, "View not found"), hint=hint)
+            # DEBUG-only enumeration hint for the "class not found" case — only
+            # meaningful once the module imported (allowlist passed). Enumerate
+            # via vars()/__dict__ (PEP 562-safe), never getattr.
+            if getattr(settings, "DEBUG", False) and resolution.generic == "View not found":
+                names = available_liveview_names(view_path)
+                if names:
+                    module_path = view_path.rsplit(".", 1)[0]
+                    hint = "Available LiveView classes in %s: %s" % (module_path, ", ".join(names))
+            await self.send_error(_safe_error(resolution.detail, resolution.generic), hint=hint)
             return
-
-        # Security: Validate that the class is actually a LiveView
-        from .live_view import LiveView
-
-        if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
-            error_msg = (
-                f"Security: {view_path} is not a LiveView subclass. "
-                f"Only LiveView classes can be mounted via WebSocket."
-            )
-            logger.error(error_msg)
-            await self.send_error(_safe_error(error_msg, "Invalid view class"))
-            return
+        view_class = resolution.view_class
 
         # Instantiate the view
         try:

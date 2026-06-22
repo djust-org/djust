@@ -290,21 +290,26 @@ class ViewRuntime:
 
         view_path = data.get("view")
         params: Dict[str, Any] = data.get("params", {}) or {}
-        page_url = data.get("url", "/")
+        # F23 (#1819 traversal fix, parallel-path-drift #1646): the client URL is
+        # attacker-controlled and is fed to RequestFactory.get() / resolve() /
+        # logs / build_absolute_uri below. Validate it through the SAME shared
+        # validator the WebSocket path uses (websocket.handle_mount), so the SSE
+        # / runtime path neutralises "/%2e%2e/admin/" identically. _build_request
+        # validates again defensively.
+        from .security.mount import is_view_path_allowed, validate_mount_url
+
+        page_url = validate_mount_url(data.get("url", "/"))
         client_timezone = data.get("client_timezone")
 
         if not view_path:
             await self.transport.send_error("Missing view path in mount request")
             return
 
-        # ---- Security (GHSA — unauthenticated arbitrary module import) ----
-        # Fail-CLOSED gate (replaces the prior fail-open `if allowed_modules:`
-        # check): refuse to __import__ a client-supplied module that isn't
-        # already loaded unless explicitly allowlisted. _instantiate_view gates
-        # again as defense in depth; this rejects earlier with a clean frame.
-        from ._view_resolution import is_view_import_allowed
-
-        if not is_view_import_allowed(view_path):
+        # ---- Security (F22 — unsafe reflection / arbitrary module import) ----
+        # Shape + allowlist gate (no import) for a clean early reject frame even
+        # when a test overrides _instantiate_view. The full resolver
+        # (resolve_view_class) runs inside _instantiate_view as defense in depth.
+        if not is_view_path_allowed(view_path):
             logger.warning(
                 "Blocked attempt to mount disallowed/uninitialized view: %s",
                 sanitize_for_log(view_path),
@@ -712,66 +717,28 @@ class ViewRuntime:
         failure and returns ``None``. Override-friendly for tests.
         """
 
-        # Security (GHSA — unauthenticated arbitrary module import): defense in
-        # depth — refuse to __import__ a client-supplied module that isn't
-        # already loaded unless explicitly allowlisted, even if a caller forgot
-        # to gate. Fail-CLOSED. See djust._view_resolution.
-        from ._view_resolution import is_view_import_allowed
+        # Security (F22 — unsafe reflection / arbitrary module import): resolve
+        # through the single shared resolver (shape-check → allowlist-before-
+        # import → import_module + vars() PEP 562-safe lookup → LiveView subclass
+        # check). Fail-closed; defense in depth even if a caller forgot to gate.
+        # Shared with the WebSocket/SSE paths (#1646). See djust.security.mount.
+        from .security.mount import resolve_view_class
 
-        if not is_view_import_allowed(view_path):
-            logger.warning(
-                "Blocked attempt to load disallowed/uninitialized view: %s",
-                sanitize_for_log(view_path),
+        resolution = resolve_view_class(view_path)
+        if not resolution:
+            logger.error(
+                "Failed to load view %s: %s", sanitize_for_log(view_path), resolution.detail
             )
             asyncio.ensure_future(
                 self.transport.send(
                     {
                         "type": "error",
-                        "error": _safe_error(f"View {view_path} is not allowed", "View not found"),
+                        "error": _safe_error(resolution.detail, resolution.generic),
                     }
                 )
             )
             return None
-
-        try:
-            module_path, class_name = view_path.rsplit(".", 1)
-            import importlib
-
-            # importlib.import_module (NO fromlist), NOT __import__(fromlist=[class_name]):
-            # the fromlist hasattr(module, class_name) triggers a module-level
-            # __getattr__ / submodule import for a client class_name
-            # (GHSA-7prp-2623-8g45 follow-up).
-            module = importlib.import_module(module_path)
-            # __dict__ lookup, NOT getattr — a client-controlled class_name must
-            # not trigger a module-level __getattr__ (PEP 562), which on some
-            # already-loaded modules imports a submodule (GHSA-7prp-2623-8g45
-            # follow-up). Real LiveView classes live in __dict__; a name served
-            # only by __getattr__ resolves to None → rejected as "class not found".
-            view_class = vars(module).get(class_name)
-            if view_class is None:
-                raise AttributeError(class_name)
-        except (ValueError, ImportError, AttributeError) as exc:
-            error_msg = f"Failed to load view {view_path}: {exc}"
-            logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)
-            asyncio.ensure_future(
-                self.transport.send(
-                    {"type": "error", "error": _safe_error(error_msg, "View not found")}
-                )
-            )
-            return None
-
-        # Must be a LiveView subclass.
-        from .live_view import LiveView
-
-        if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
-            error_msg = f"Security: {view_path} is not a LiveView subclass."
-            logger.error("Security: %s is not a LiveView subclass.", sanitize_for_log(view_path))
-            asyncio.ensure_future(
-                self.transport.send(
-                    {"type": "error", "error": _safe_error(error_msg, "Invalid view class")}
-                )
-            )
-            return None
+        view_class = resolution.view_class
 
         try:
             return view_class()
@@ -798,6 +765,12 @@ class ViewRuntime:
         from django.test import RequestFactory
         from urllib.parse import urlencode
 
+        from .security.mount import validate_mount_url
+
+        # F23 (#1819 / #1646): validate defensively here too, so the request is
+        # never built from a traversed URL even if a future caller reaches
+        # _build_request without going through dispatch_mount's validation.
+        page_url = validate_mount_url(page_url)
         factory = RequestFactory()
         query_string = urlencode(params) if params else ""
         path_with_query = f"{page_url}?{query_string}" if query_string else page_url
