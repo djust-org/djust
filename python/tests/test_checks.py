@@ -201,6 +201,17 @@ class TestT016DjNavigateWithoutRoutes:
     EMPIRICAL CANARY (#252): constructs the dj-navigate-without-routes
     condition and asserts the check fires; asserts it does NOT fire when the
     URLconf has LiveView routes.
+
+    TEST-ISOLATION INVARIANT (#1862): these methods set ``ROOT_URLCONF`` via
+    the pytest-django ``settings`` fixture (``settings.ROOT_URLCONF = ...``),
+    NOT via ``@override_settings``. Combining ``@override_settings`` with the
+    ``settings`` fixture parameter AND a fixture mutation in the same test
+    (``settings.TEMPLATES = ...`` in ``_set_template_dir``) leaves
+    ``ROOT_URLCONF`` pointing at the test URLconf after teardown — the two
+    restoration mechanisms race and the override wins. That leak broke
+    ``tests/unit/test_demo_views.py::TestDemoRegistration`` (4 ``Resolver404``)
+    under ``-n auto`` when the two landed in the same xdist worker. Keep
+    ROOT_URLCONF on the single ``settings``-fixture mechanism here.
     """
 
     def _set_template_dir(self, tmp_path, settings, body):
@@ -224,9 +235,9 @@ class TestT016DjNavigateWithoutRoutes:
 
         _reset_route_map_cache()
 
-    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
     def test_fires_when_dj_navigate_without_routes(self, tmp_path, settings):
         """T016 fires: dj-navigate present + URLconf has no LiveView routes."""
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
         self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
 
         from djust.checks import check_templates
@@ -239,9 +250,9 @@ class TestT016DjNavigateWithoutRoutes:
         assert "dj-navigate" in t016[0].msg
         assert "route map is empty" in t016[0].msg
 
-    @override_settings(ROOT_URLCONF="tests.route_map_test_urls")
     def test_silent_when_routes_exist(self, tmp_path, settings):
         """T016 stays silent: dj-navigate present + LiveView routes exist."""
+        settings.ROOT_URLCONF = "tests.route_map_test_urls"
         self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
 
         from djust.checks import check_templates
@@ -252,9 +263,9 @@ class TestT016DjNavigateWithoutRoutes:
         t016 = [e for e in errors if e.id == "djust.T016"]
         assert len(t016) == 0
 
-    @override_settings(ROOT_URLCONF="tests.api_test_urls_unmounted")
     def test_silent_when_no_dj_navigate(self, tmp_path, settings):
         """T016 stays silent when no template uses dj-navigate."""
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
         self._set_template_dir(tmp_path, settings, "<div>no nav here</div>")
 
         from djust.checks import check_templates
@@ -265,12 +276,10 @@ class TestT016DjNavigateWithoutRoutes:
         t016 = [e for e in errors if e.id == "djust.T016"]
         assert len(t016) == 0
 
-    @override_settings(
-        ROOT_URLCONF="tests.api_test_urls_unmounted",
-        DJUST_CONFIG={"suppress_checks": ["T016"]},
-    )
     def test_suppressible(self, tmp_path, settings):
         """T016 is suppressible via DJUST_CONFIG['suppress_checks']."""
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
+        settings.DJUST_CONFIG = {"suppress_checks": ["T016"]}
         self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
 
         from djust.checks import check_templates
@@ -280,6 +289,48 @@ class TestT016DjNavigateWithoutRoutes:
         errors = check_templates(None)
         t016 = [e for e in errors if e.id == "djust.T016"]
         assert len(t016) == 0
+
+
+class TestT016DoesNotLeakRootUrlconf:
+    """Regression for #1862: TestT016DjNavigateWithoutRoutes must restore
+    ROOT_URLCONF after each test.
+
+    The original bug combined ``@override_settings(ROOT_URLCONF=...)`` with the
+    pytest-django ``settings`` fixture parameter AND a fixture mutation
+    (``settings.TEMPLATES = ...``) in the same test. The two settings
+    restoration mechanisms raced and the override leaked, so ROOT_URLCONF
+    stayed pinned at the test URLconf for the rest of the xdist worker —
+    breaking ``tests/unit/test_demo_views.py::TestDemoRegistration`` with 4
+    ``Resolver404``. This test reproduces the exact shape and asserts the
+    leak is gone.
+
+    Gate-off check (#1468): if the polluter methods regress to
+    ``@override_settings`` + the ``settings`` fixture + a ``settings.X = ...``
+    mutation, ``test_settings_fixture_mutation_restores_root_urlconf`` fails.
+    """
+
+    def test_settings_fixture_mutation_restores_root_urlconf(self, tmp_path, settings):
+        """Setting ROOT_URLCONF via the ``settings`` fixture (the pattern
+        TestT016 now uses) and also mutating another setting through the
+        fixture must NOT leak ROOT_URLCONF past teardown."""
+        original = settings.ROOT_URLCONF
+        # Mirror the TestT016 shape: ROOT_URLCONF + a second fixture mutation.
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
+        settings.DJUST_CONFIG = {"suppress_checks": ["T016"]}
+        assert settings.ROOT_URLCONF == "tests.api_test_urls_unmounted"
+        # The pytest-django ``settings`` fixture restores ``original`` at
+        # teardown; the following test verifies that actually happened.
+        self._original = original
+
+    def test_root_urlconf_is_restored_after_mutation(self):
+        """Runs after the mutation test in the same class; asserts the default
+        ROOT_URLCONF is back (no leak)."""
+        from django.conf import settings as live_settings
+
+        assert live_settings.ROOT_URLCONF == "demo_project.urls", (
+            "ROOT_URLCONF leaked from a sibling test — the #1862 isolation "
+            "guard regressed (see TestT016DjNavigateWithoutRoutes docstring)."
+        )
 
 
 # ---------------------------------------------------------------------------

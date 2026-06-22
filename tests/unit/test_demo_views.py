@@ -520,7 +520,24 @@ class TestPWADemoView:
 
 
 class TestDemoRegistration:
-    """Verify demo views are registered in the URL config."""
+    """Verify demo views are registered in the URL config.
+
+    Order-independence guard (#1862): these tests resolve against the default
+    ``demo_project.urls`` ROOT_URLCONF. A polluting test that sets ROOT_URLCONF
+    to a routeless test URLconf and fails to restore it (or leaves a stale
+    cached resolver) would make every ``resolve()`` here raise ``Resolver404``
+    under xdist when the two land in the same worker. ``setup_method`` clears
+    Django's URL-resolver caches before each test so this class never depends
+    on a clean cache left by whatever ran before it.
+    """
+
+    def setup_method(self):
+        # Drop any resolver cached by a prior test under a different
+        # ROOT_URLCONF so resolution below always reflects the current
+        # (restored) ROOT_URLCONF rather than a leaked cache entry.
+        from django.urls import clear_url_caches
+
+        clear_url_caches()
 
     def test_pwa_view_in_urlconf(self):
         """PWA demo URL resolves."""
