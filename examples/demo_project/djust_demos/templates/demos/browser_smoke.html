@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% comment %}
+Browser-smoke canary (#1849 / #1848).
+
+Smallest faithful reproduction surface for the two 1.0.7 runtime-break
+classes the pytest suite is blind to. Exercised by
+tests/playwright/test_browser_smoke.py.
+
+NOTE the inline <script> below lives INSIDE the dj-root ON PURPOSE — it is the
+exact #1848 bug-shape the canary guards (a delegated listener registered by an
+inline script inside the morph-managed region). Production templates must keep
+page JS OUTSIDE the dj-root (CLAUDE.md CSP-strict defaults). Do not "fix" this
+by moving the script out — that would make the #1848 guard tautological.
+{% endcomment %}
+
+{% block title %}Browser Smoke Canary (djust){% endblock %}
+
+{% block content %}
+<div dj-root dj-view="djust_demos.views.smoke_demo.BrowserSmokeView"
+     style="padding: 6rem 2rem 2rem; max-width: 720px; margin: 0 auto;">
+
+    <h1 id="smoke-heading" style="font-size: 2rem; font-weight: 700;">
+        Browser Smoke Canary
+    </h1>
+
+    {# --- Class 1: LiveView mount canary. dj-click round-trips over the WS.
+           If mount is refused, clicking does nothing and {{ clicks }} stays 0. #}
+    <div style="margin: 1.5rem 0;">
+        <button id="smoke-bump" dj-click="bump" class="btn-primary-modern">Bump</button>
+        <span id="smoke-count" style="margin-left: 0.75rem; font-weight: 700;">{{ clicks }}</span>
+    </div>
+
+    {# --- Class 2: inline-in-dj-root <script> control (#1848). The delegated
+           click listener below toggles .active between the two tabs. #}
+    <div class="smoke-tabs" role="tablist" style="margin: 1.5rem 0;">
+        <button id="smoke-tab-1" class="smoke-tab-button active" data-tab="1"
+                style="padding: 0.5rem 1rem;">Tab 1</button>
+        <button id="smoke-tab-2" class="smoke-tab-button" data-tab="2"
+                style="padding: 0.5rem 1rem;">Tab 2</button>
+    </div>
+    <div>
+        <section id="smoke-panel-1" class="smoke-panel active" data-tab="1">Panel One</section>
+        <section id="smoke-panel-2" class="smoke-panel" data-tab="2"
+                 style="display: none;">Panel Two</section>
+    </div>
+
+    <script>
+    // #1848 canary: a delegated document click listener registered by an inline
+    // <script> INSIDE the dj-root. If the #1610 mount morph re-creates this
+    // <script> without executing it, the listener never registers and the tab
+    // toggle silently fails — which is exactly what this guard catches.
+    (function () {
+        if (window.__smokeTabsWired) {
+            return;
+        }
+        window.__smokeTabsWired = true;
+        document.addEventListener("click", function (e) {
+            var btn = e.target.closest && e.target.closest(".smoke-tab-button");
+            if (!btn) {
+                return;
+            }
+            var tab = btn.getAttribute("data-tab");
+            document.querySelectorAll(".smoke-tab-button").forEach(function (b) {
+                b.classList.toggle("active", b.getAttribute("data-tab") === tab);
+            });
+            document.querySelectorAll(".smoke-panel").forEach(function (p) {
+                var on = p.getAttribute("data-tab") === tab;
+                p.classList.toggle("active", on);
+                p.style.display = on ? "" : "none";
+            });
+            window.__smokeTabsHandled = (window.__smokeTabsHandled || 0) + 1;
+        });
+    })();
+    </script>
+</div>
+{% endblock %}

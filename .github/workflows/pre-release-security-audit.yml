@@ -59,7 +59,7 @@ jobs:
       - name: Install security tools
         run: uv pip install bandit safety pip-audit
 
-      - name: Run Bandit (full scan, no skips)
+      - name: Run Bandit (full scan, advisory)
         id: bandit
         run: |
           echo "## Bandit Results" > bandit-report.md
@@ -71,6 +71,41 @@ jobs:
 
           # Also produce JSON for machine-readable output
           uv run bandit -r python/djust/ -ll -f json -o bandit-results.json || true
+
+      # Blocking gate: FAIL the job on any NEW high-severity Bandit finding.
+      # Uses the repo's reviewed skip list (the same `-s`/`-x` set the
+      # pre-commit `bandit` hook uses — single source of truth) so the gate
+      # measures against a 0-HIGH/0-MEDIUM reviewed baseline. Findings that
+      # the codebase has already reviewed and intentionally accepted are:
+      #   B703,B308  mark_safe — expected in a templating framework
+      #   B324       MD5 — used only for non-security cache keys
+      #   B301       pickle — JIT function caching
+      #   B102       exec — JIT code generation
+      # and the test trees (tests/, python/tests/, python/djust/tests/) are
+      # excluded (e.g. a B613 bidi-char fixture in an upload-safety test).
+      # Any high-severity finding OUTSIDE those reviewed exceptions is NEW and
+      # blocks the release. To accept a new finding, add an explicit `# nosec`
+      # with justification or extend the skip list in BOTH the pre-commit hook
+      # and this step — do not weaken the gate.
+      - name: Bandit high-severity gate (blocking)
+        run: |
+          set -euo pipefail
+          # -lll = report ONLY high-severity; reviewed skips applied so the
+          # baseline is 0 high-severity. Emit JSON regardless of exit code,
+          # then count high-severity results ourselves (robust vs exit codes).
+          uv run bandit -r python/djust \
+            -lll -ii \
+            -x tests/,python/tests/,python/djust/tests/ \
+            -s B703,B308,B324,B301,B102 \
+            -f json -o bandit-high.json || true
+          HIGH=$(python -c "import json; d=json.load(open('bandit-high.json')); print(sum(1 for r in d['results'] if r['issue_severity']=='HIGH'))")
+          echo "Bandit high-severity findings (after reviewed skips): $HIGH"
+          if [ "$HIGH" -gt 0 ]; then
+            echo "::error::Bandit found $HIGH NEW high-severity issue(s). See bandit-high.json / bandit-report.md."
+            python -c "import json; d=json.load(open('bandit-high.json')); [print(f\"  {r['test_id']} {r['filename']}:{r['line_number']} {r['issue_text']}\") for r in d['results'] if r['issue_severity']=='HIGH']"
+            exit 1
+          fi
+          echo "OK: 0 new high-severity Bandit findings."
 
       - name: Run Safety (dependency vulnerabilities)
         id: safety
@@ -93,12 +128,16 @@ jobs:
           echo '```' >> pip-audit-report.md
 
       - name: Upload Python security reports
+        # Upload even when the high-severity gate blocks the job, so a new
+        # finding can be triaged from the artifacts.
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: python-security-reports
           path: |
             bandit-report.md
             bandit-results.json
+            bandit-high.json
             safety-report.md
             pip-audit-report.md
 
