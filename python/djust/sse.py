@@ -408,6 +408,23 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
         session.push(response)
         return False
 
+    # ---- Object-permission check (ADR-017, post-mount) ----
+    # mount() has populated the access-determining state (e.g. self.<x>_id) that
+    # get_object() reads; enforce the object-level check HERE — after view-level
+    # auth (run_pre_mount_auth above), before the initial render — so the legacy
+    # SSE transport can't render a DENIED object (IDOR; finding #10/#11/#12 on
+    # the SSE transport). Mirrors the WS handle_mount post-mount check. No-op for
+    # views without a custom get_object; fail-closed on denial / None request /
+    # any non-PermissionDenied exception (see enforce_object_permission). Denial
+    # maps to the SSE error-frame + abort shape (matching the auth-denial above).
+    from .auth.core import enforce_object_permission
+
+    try:
+        await sync_to_async(enforce_object_permission)(view_instance, request)
+    except PermissionDenied:
+        session.push({"type": "error", "error": "Permission denied"})
+        return False
+
     # ---- Initial render ----
     try:
         await sync_to_async(view_instance._initialize_rust_view)(request)
