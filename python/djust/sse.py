@@ -61,7 +61,6 @@ from .security import handle_exception, sanitize_for_log
 from .serialization import DjangoJSONEncoder
 from .validation import validate_handler_params
 from .websocket import (
-    _bind_tenant,
     _compute_changed_keys,
     _is_allowed_origin,
     _snapshot_assigns,
@@ -338,47 +337,43 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
 
     session.view_instance = view_instance
 
-    # ---- Auth check ----
+    # ---- Pre-mount security sequence (auth + tenant resolve/bind) ----
+    # Single-sourced through djust.auth.core.run_pre_mount_auth so this legacy
+    # SSE mount path cannot drift from the WS (handle_mount) + runtime
+    # (dispatch_mount) paths in WHICH checks run or in WHAT ORDER (#1646 / #1853).
+    # The helper runs the same leaf chokepoints this path used inline before:
+    # check_view_auth (may raise PermissionDenied / return a redirect URL), then
+    # — only on auth success — _ensure_tenant + the tenant ContextVar bind. The
+    # SSE-specific verdict→envelope mapping (error/navigate push, return False)
+    # stays here. A tenant-resolution failure (or a buggy custom check_permissions
+    # hook raising a non-PermissionDenied) gets the mount-error envelope and
+    # aborts (fail-closed), consolidating the legacy split tenant/auth catches.
+    from .auth import run_pre_mount_auth
+    from django.core.exceptions import PermissionDenied
+
     try:
-        from .auth import check_view_auth
-        from django.core.exceptions import PermissionDenied
+        redirect_url = await sync_to_async(run_pre_mount_auth)(view_instance, request)
+    except PermissionDenied:
+        session.push({"type": "error", "error": "Permission denied"})
+        return False
+    except Exception as exc:  # noqa: BLE001 — fail-closed (tenant / auth-hook error)
+        response = handle_exception(
+            exc,
+            error_type="mount",
+            view_class=view_path,
+            logger=logger,
+            log_message="Error in pre-mount security sequence for %s" % sanitize_for_log(view_path),
+        )
+        session.push(response)
+        return False
 
-        try:
-            redirect_url = await sync_to_async(check_view_auth)(view_instance, request)
-        except PermissionDenied:
-            session.push({"type": "error", "error": "Permission denied"})
-            return False
-
-        if redirect_url:
-            session.push({"type": "navigate", "to": redirect_url})
-            # Auth succeeded but the view redirects elsewhere — no usable view is
-            # mounted, so this is treated as a non-mount: the navigate message is
-            # delivered over the stream, then the session is torn down and never
-            # registered for POST routing (Finding #25 register-after-mount).
-            return False
-    except Exception as exc:
-        logger.warning("SSE: auth check error: %s", exc)
-
-    # ---- Resolve + bind tenant (Finding #6) ----
-    # The legacy SSE mount path (unlike the HTTP path) has no TenantMiddleware to
-    # bind the tenant, so resolve it via the view's TenantMixin hook and bind it
-    # into the ContextVar so mount() + the initial render see the correct tenant
-    # in the tenant-scoped managers (fail-closed/empty otherwise). Re-bound per
-    # event in _sse_handle_event.
-    if hasattr(view_instance, "_ensure_tenant"):
-        try:
-            await sync_to_async(view_instance._ensure_tenant)(request)
-        except Exception as exc:
-            response = handle_exception(
-                exc,
-                error_type="mount",
-                view_class=view_path,
-                logger=logger,
-                log_message="Error resolving tenant for %s" % sanitize_for_log(view_path),
-            )
-            session.push(response)
-            return False
-    _bind_tenant(getattr(view_instance, "_tenant", None))
+    if redirect_url:
+        session.push({"type": "navigate", "to": redirect_url})
+        # Auth succeeded but the view redirects elsewhere — no usable view is
+        # mounted, so this is treated as a non-mount: the navigate message is
+        # delivered over the stream, then the session is torn down and never
+        # registered for POST routing (Finding #25 register-after-mount).
+        return False
 
     # ---- Resolve URL kwargs (for path-based params like pk, slug) ----
     mount_kwargs: Dict[str, Any] = {}

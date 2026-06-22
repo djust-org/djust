@@ -77,19 +77,10 @@ def _tenant_context(tenant):
         return nullcontext()
 
 
-def _bind_tenant(tenant):
-    """Set the current tenant ContextVar for the runtime path (Finding #6).
-
-    Mirrors :func:`djust.websocket._bind_tenant` — used on the SSE mount path
-    after the view resolves its tenant, so ``mount()`` + initial render see the
-    correct tenant. No-op when tenants is unavailable.
-    """
-    try:
-        from .tenants.middleware import set_current_tenant
-
-        set_current_tenant(tenant)
-    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
-        pass
+# The tenant *bind* step (set_current_tenant) for the mount path is now
+# single-sourced in djust.auth.core._bind_current_tenant, invoked by the shared
+# run_pre_mount_auth sequence; the runtime no longer carries its own copy. The
+# per-event / url-change re-bind still uses the _tenant_context manager above.
 
 
 # ------------------------------------------------------------------ #
@@ -375,34 +366,19 @@ class ViewRuntime:
             self.view_instance = None
             return
 
-        # ---- Auth check ----
+        # ---- Pre-mount security sequence (auth + tenant resolve/bind) ----
+        # _check_auth runs the shared djust.auth.core.run_pre_mount_auth sequence
+        # (auth via check_view_auth, then — only on auth success — _ensure_tenant
+        # + the tenant ContextVar bind). Single-sourcing the SEQUENCE with the WS
+        # + SSE mount paths means a future edit cannot reorder the steps or drop
+        # one on this path (#1646 / #1853). The runtime-specific verdict→frame
+        # mapping (error frame / navigate frame / tenant-error envelope) stays
+        # inside _check_auth; it remains the mockable auth seam tests stub.
         redirect_or_block = await self._check_auth(request)
         if redirect_or_block is not None:
             # _check_auth already pushed the appropriate frame.
             self.view_instance = None
             return
-
-        # ---- Resolve + bind tenant (Finding #6) ----
-        # TenantMixin views resolve the tenant via _ensure_tenant; the SSE/runtime
-        # mount path (unlike the HTTP path) has no TenantMiddleware to bind it, so
-        # do it here. Bind the resolved tenant into the ContextVar so mount() and
-        # the initial render see the correct tenant in the tenant-scoped managers
-        # (fail-closed / empty otherwise). Re-bound per event in dispatch_event.
-        if hasattr(view_instance, "_ensure_tenant"):
-            try:
-                await sync_to_async(view_instance._ensure_tenant)(request)
-            except Exception as exc:
-                response = handle_exception(
-                    exc,
-                    error_type="mount",
-                    view_class=view_path,
-                    logger=logger,
-                    log_message=f"Error resolving tenant for {sanitize_for_log(view_path)}",
-                )
-                await self.transport.send(response)
-                self.view_instance = None
-                return
-        _bind_tenant(getattr(view_instance, "_tenant", None))
 
         # ---- Mount kwargs ----
         mount_kwargs = dict(params)
@@ -818,25 +794,55 @@ class ViewRuntime:
         return request
 
     async def _check_auth(self, request) -> Optional[bool]:
-        """Run auth check. Returns:
+        """Run the shared pre-mount security sequence. Returns:
         - ``None`` if mount may proceed.
-        - Truthy value if auth blocked (and a navigate/error frame was sent).
+        - Truthy value if blocked (and a navigate/error/mount-error frame was sent).
+
+        Routes through ``djust.auth.core.run_pre_mount_auth`` so the auth call,
+        the ``_ensure_tenant`` resolve, the tenant ContextVar bind, and the
+        "skip tenant on auth denial" rule are single-sourced with the WS + SSE
+        mount paths (#1646 / #1853) — a future edit cannot reorder the steps or
+        drop one on this path. The runtime-specific verdict→frame mapping stays
+        here:
+
+        * auth ``PermissionDenied`` (raised inside the helper) →
+          ``{"type": "error", ...}`` (then abort) — matches the legacy auth
+          inner-try.
+        * auth redirect URL (returned by the helper) → ``{"type": "navigate", ...}``
+          (then abort) — matches the legacy redirect branch.
+        * any OTHER exception (a tenant-resolution failure such as ``Http404``
+          from ``_ensure_tenant``, or a buggy custom ``check_permissions`` hook
+          raising a non-``PermissionDenied``) → the ``handle_exception``
+          mount-error envelope (then abort, fail-closed). This consolidates the
+          legacy split — the dedicated tenant try/except that used to live in
+          ``dispatch_mount`` AND the auth ``except Exception`` — into one
+          fail-closed envelope, matching the WebSocket mount path which already
+          aborts on any non-auth-verdict exception during this sequence.
         """
+        from .auth import run_pre_mount_auth
+        from django.core.exceptions import PermissionDenied
+
         try:
-            from .auth import check_view_auth
-            from django.core.exceptions import PermissionDenied
+            redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
+        except PermissionDenied:
+            await self.transport.send({"type": "error", "error": "Permission denied"})
+            return True
+        except Exception as exc:  # noqa: BLE001 — fail-closed (tenant / auth-hook error)
+            response = handle_exception(
+                exc,
+                error_type="mount",
+                view_class=self.view_instance.__class__.__name__,
+                logger=logger,
+                log_message="Error in pre-mount security sequence for %s"
+                % sanitize_for_log(self.view_instance.__class__.__name__),
+            )
+            await self.transport.send(response)
+            return True
 
-            try:
-                redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
-            except PermissionDenied:
-                await self.transport.send({"type": "error", "error": "Permission denied"})
-                return True
+        if redirect_url:
+            await self.transport.send({"type": "navigate", "to": redirect_url})
+            return True
 
-            if redirect_url:
-                await self.transport.send({"type": "navigate", "to": redirect_url})
-                return True
-        except Exception as exc:
-            logger.warning("Runtime: auth check error: %s", exc)
         return None
 
     def _resolve_url_kwargs(self, page_url: str) -> Dict[str, Any]:
