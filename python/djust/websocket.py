@@ -1893,7 +1893,55 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
-            if msg_type == "event":
+            # ---- Frame routing (#1852) -------------------------------------
+            # Runtime-owned verbs are routed through the SINGLE
+            # ``ViewRuntime.dispatch_message`` chokepoint (runtime.py:246) so a
+            # future security/policy control added there auto-applies to the WS
+            # transport (the SSE transport already routes every inbound frame
+            # through ``dispatch_message``). Everything else is an explicit,
+            # documented WS-only extension set delegated to bespoke consumer
+            # handlers.
+            #
+            # ROUTED via dispatch_message (RUNTIME_OWNED_VERBS):
+            #   * url_change  — wire-blind, fully shared with SSE since #1237.
+            #
+            # NOT YET ROUTED (runtime owns the verb but the WS handler still
+            # carries behavior the runtime path does not yet implement):
+            #   * mount  — the WS ``handle_mount`` does sticky-child
+            #     preservation, signed ``state_snapshot`` restore, and actor
+            #     channel-layer wiring that ``ViewRuntime.dispatch_mount`` does
+            #     NOT (it even refuses ``use_actors``). Routing it now would
+            #     bypass those. Folded into runtime hooks by T1-A (#1853).
+            #   * event  — the WS ``handle_event`` carries ~16 WS-only
+            #     behaviors the runtime ``dispatch_event`` lacks: event-``ref``
+            #     echo (#560), the actor path, ``view_id`` sticky-child and
+            #     ``component_id`` LiveComponent routing, ``dj_activity``
+            #     gating, time-travel recording, the tick render-lock, push
+            #     origin-channel tagging (#1677), SQL observability, waiter
+            #     notification, session state-save (#1466), sticky-child
+            #     state-save (ADR-018), identity-snapshot push-only auto-skip
+            #     (#700), patch compression, ``_force_full_html`` and
+            #     ``embedded_update`` framing. Routing it now would regress all
+            #     of those. Deferred until the runtime grows those hooks.
+            #
+            # WS-ONLY EXTENSION SET (no runtime equivalent; binary upload
+            # frames 0x01/0x02/0x03 are handled above before decode):
+            #   mount_batch, ping, live_redirect_mount, upload_register,
+            #   upload_resume, presence_heartbeat, cursor_move, request_html,
+            #   debug_panel_open, debug_panel_close, time_travel_jump,
+            #   time_travel_component_jump, forward_replay.
+            if msg_type in self.RUNTIME_OWNED_VERBS:
+                # Runtime-owned: route through the dispatch_message chokepoint
+                # rather than calling dispatch_url_change directly, so future
+                # chokepoint-level controls cover this verb on the WS path. The
+                # membership check (not a hardcoded ``== "url_change"``) makes
+                # ``RUNTIME_OWNED_VERBS`` LOAD-BEARING (#1852): adding a verb to
+                # the set automatically routes it here, and the contract test
+                # (``TestRuntimeOwnedVerbsContract``) fails if the set and this
+                # arm ever drift. This is the FIRST elif-arm, so it cannot shadow
+                # ``event``/``mount``/etc. — those verbs are not in the set.
+                await self._dispatch_runtime_owned(data)
+            elif msg_type == "event":
                 await self.handle_event(data)
             elif msg_type == "mount":
                 await self.handle_mount(data)
@@ -1901,8 +1949,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.handle_mount_batch(data)
             elif msg_type == "ping":
                 await self.send_json({"type": "pong"})
-            elif msg_type == "url_change":
-                await self.handle_url_change(data)
             elif msg_type == "live_redirect_mount":
                 await self.handle_live_redirect_mount(data)
             elif msg_type == "upload_register":
@@ -4753,6 +4799,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
         return self._runtime
 
+    #: Inbound frame verbs that ``receive()`` routes through the single
+    #: :meth:`ViewRuntime.dispatch_message` chokepoint (#1852) rather than a
+    #: bespoke consumer handler. Keeping this as an explicit set lets a
+    #: regression test pin exactly which verbs go through the chokepoint, so a
+    #: future addition that forgets the routing is caught. ``mount`` and
+    #: ``event`` are runtime-owned verbs too but are deliberately NOT in this
+    #: set yet — see the routing comment in :meth:`receive` (T1-A #1853 for
+    #: ``mount``; the runtime ``dispatch_event`` lacks the WS-only behaviors
+    #: for ``event``).
+    RUNTIME_OWNED_VERBS = frozenset({"url_change"})
+
+    async def _dispatch_runtime_owned(self, data: Dict[str, Any]) -> None:
+        """Route a runtime-owned frame through :meth:`ViewRuntime.dispatch_message`.
+
+        This is the WS-side seam for #1852: the runtime-owned subset of
+        ``receive()``'s verbs flows through the SINGLE ``dispatch_message``
+        chokepoint so a future security/policy control added there auto-applies
+        to the WebSocket transport. The consumer's ``view_instance`` is mirrored
+        onto the shared runtime before dispatch (the runtime is the source of
+        truth for ``view_instance`` once mount migrates in T1-A).
+        """
+        runtime = self._get_runtime()
+        runtime.view_instance = self.view_instance
+        await runtime.dispatch_message(data)
+
     async def handle_url_change(self, data: Dict[str, Any]):
         """
         Handle URL change from browser back/forward (popstate) or dj-patch clicks.
@@ -4760,6 +4831,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         #1237: this is now a thin shim over :meth:`ViewRuntime.dispatch_url_change`
         so the WS and SSE transports share one code path. The runtime owns the
         handle_params + re-render + send_update orchestration.
+
+        #1852: ``receive()`` no longer calls this directly — it routes
+        ``url_change`` through :meth:`_dispatch_runtime_owned` →
+        :meth:`ViewRuntime.dispatch_message` so the verb passes the shared
+        chokepoint. This method is retained as a stable public entry point /
+        backward-compatible shim for callers that dispatch ``url_change``
+        directly; it remains behaviorally identical (``dispatch_message`` routes
+        ``url_change`` straight to ``dispatch_url_change``).
         """
         if not self.view_instance:
             await self.send_error("View not mounted")
