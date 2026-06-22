@@ -3661,6 +3661,74 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.8-2 — post-prevention open-issue drain (render-path bugs + check/test hygiene) (drain bucket → ships in 1.0.8)
+
+*Goal:* Drain the five actionable open issues left after the v1.0.8-1 prevention
+program — two render-path correctness regressions (both 1.0.7) plus three
+check/test/serialization hygiene follow-ups surfaced by the prevention work. Two
+of the five are **#1646 parallel-path twins** (the recurring class), so each fix
+must converge the shared invariant, not patch one site. Public, post-disclosure.
+
+**WU1 — `url_change`/`dj-patch` wire-version drift (P1, bug) [#1858].** `mount`
+and `event` frames stamp the consumer-owned `_next_version()` counter (#1788), but
+`url_change` (dj-patch clicks + popstate) is delegated to `ViewRuntime`
+(`handle_url_change` → `dispatch_url_change` `runtime.py:679`; `_emit_event_render`
+`runtime.py:885`), which stamps the **Rust render counter** instead — so the first
+`url_change` version disagrees with the mount baseline, the
+`clientVdomVersion === version - 1` check fails, and the client force-reloads.
+`dj-click` works, `dj-patch` doesn't — the fingerprint. **#1788 parallel-path twin**
+(#1646): #1788 wired the consumer counter into `handle_event` but not the runtime
+delegate paths. Fix: route the runtime render-send paths through one shared
+monotonic version source (give `Transport`/`ViewRuntime` a `next_version()` the
+WS + SSE paths share, or have `WSConsumerTransport.send` rewrite `version` for
+client-checked frame types). Carry the `_next_version_armed` recovery-arming
+discipline (#1817). Reproduce-first with a real `WebsocketCommunicator` capturing
+mount + url_change versions. Touches `runtime.py`, `websocket.py`.
+
+**WU2 — inline `<script>` in dj-root not executed after the #1610 mount morph
+(P1, bug) [#1848].** morphdom does not execute `<script>` it re-creates, so an
+inline script inside dj-root (the morphdom-managed region) silently never runs on
+mount — page handlers never register, no console error. 1.0.7 regression. djust
+already re-executes classic `<script>` on the `live_redirect`/navigation morph
+(#1635/#1650) — **parallel-path twin** (#1646): apply the same re-execution to the
+initial mount morph (#1610) so mount and navigation behave consistently. Reproduce
+with two real `<script>` elements through the mount-morph path (NOT `eval`×2 — see
+the #1650 reproduction-fidelity rule). Optionally also a system-check warning.
+Touches the client morph path (`static/djust/src/`). Downstream workaround already
+applied (djust.org moved JS outside dj-root, v0.9.32).
+
+**WU3 — allowlist re-exposes the serialization floor (P1, security/DX) [#1868].**
+`serialization.py:362 _field_is_serializable` checks the per-model `allowed`
+allowlist BEFORE the `_ALWAYS_EXCLUDED_FIELDS` floor, so
+`djust_serializable_fields=['password']` re-exposes a floor field
+(`password`/`is_superuser`/`is_staff`). Surfaced writing `docs/SECURE_DEFAULTS.md`.
+Decide + implement the secure-by-default shape: make the floor unconditional
+(allowlist can only narrow, never re-expose floor fields) with a documented opt-out
+for the genuine edge case, OR keep current behavior + a loud system-check warning.
+Plan stage resolves the design question; reproduce-first + gate-off. Touches
+`serialization.py`, `docs/SECURE_DEFAULTS.md`.
+
+**WU4 — test-ordering pollution in `test_demo_views` (P2, tech-debt) [#1862].**
+`tests/unit/test_demo_views.py::TestDemoRegistration` — 4 urlconf-resolution
+failures under full `-n auto`; passes in isolation. Find the polluter (urlconf
+state leak). **Pollution-class fix → the 3-clean-runs verification gate applies**
+(#1174). Touches the offending test setup/teardown.
+
+**WU5 — `_get_project_app_dirs()` blind from inside the repo tree (P2, tech-debt)
+[#1865].** Returns 0 dirs when `manage.py check` runs from inside the djust repo
+tree (the `/djust/` path filter), blinding S009/S011 dogfooding from the repo
+itself (the demo project was used instead). Fix the path filter so in-repo
+dogfooding sees app dirs. Touches the check-discovery helper.
+
+*Sequencing:* All five are largely file-disjoint → parallel-safe (one
+worktree-isolated implementer per issue, #180). WU1/WU2 (render-path bugs) are the
+highest value; WU3 is security-sensitive (planning resolves the design question);
+WU4 needs the 3-clean-runs gate; WU5 is small. Bugs ship as individual PRs (never
+grouped). Each closes with reproduce-first + gate-off (#1468) + the #1646
+parallel-path audit where applicable.
+
+---
+
 ### Milestone: v1.0.8-1 — Security-drift prevention (post-F1–F29 audit) (drain bucket → ships in 1.0.8)
 
 *Goal:* Stop recurrence of the two root-cause classes the F1–F29 audit found —
