@@ -3661,6 +3661,56 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.8-1 — Security-drift prevention (post-F1–F29 audit) (drain bucket → ships in 1.0.8)
+
+*Goal:* Stop recurrence of the two root-cause classes the F1–F29 audit found —
+**parallel-path drift** (a control on one transport, missing on a parallel one) and
+**secure-by-default failures** — by **(Tier 1)** converging the residual duplicated
+dispatch so drift is structurally impossible, **(Tier 2)** extending the WU1
+anti-drift nets + system checks + CI to detect it pre-merge, and **(Tier 3)**
+codifying the secure-default patterns. The event path is ALREADY converged on
+`_validate_event_security` (do NOT re-plumb it); the residual drift is the duplicated
+mount orchestration + the custom WS frame router. Public, post-disclosure — normal
+hardening work. Full leverage analysis in the approved prevention plan.
+
+*Sequencing:* T2-B + T2-A first (the nets de-risk Tier 1) → T1-B → T1-A (now
+protected) → T1-C → T2-C / T2-D → T3.
+
+**T2-B — Pin the mount-orchestration AST net (P1) [#1850]. LAND BEFORE T1-A.** Extend
+`tests/test_mount_chokepoint_structural.py` to assert WS `handle_mount` carries no
+mount orchestration beyond delegating to `runtime.dispatch_mount`. Effort M.
+
+**T2-A — Extend the transport parity net (P1) [#1851].** Add auth / object-perm /
+rate-limit / origin parity axes to `tests/test_transport_parity_security.py`
+(identical verdict across `{ws, runtime, sse}`). Effort M.
+
+**T1-B — Route WS `receive()` through `ViewRuntime.dispatch_message` (P1) [#1852].**
+Replace the bespoke ~15-way switch for runtime-owned verbs (mount/event/url_change);
+keep genuinely WS-only frames as an explicit documented extension set. Effort M.
+
+**T1-A — Migrate `handle_mount` to a thin shim over `dispatch_mount` (P1) [#1853].**
+Highest leverage — removes the duplicated mount orchestration (the drift root cause).
+Gated behind T2-B. Effort L, high blast radius (sticky / actors / signed snapshot).
+
+**T1-C — Object-permission on the HTTP-API path (P2) [#1857].** Verify whether any
+`@expose_api` / `@server_function` handler is object-scoped → add
+`enforce_object_permission` or document by-design N/A. Effort S.
+
+**T2-C — System checks S009 (event-handler-needs-auth) + S011 (CSP/inline-script) (P2) [#1854].**
+S010 rate-limit-presence advisory/opt-in only. Reuse the S001–S008 AST scaffold. Effort M.
+
+**T2-D — Make bandit blocking + a tiny browser-smoke (P2) [#1855] (closes #1849).**
+Block on new high-severity bandit findings; add a 2–3 page Playwright canary for the
+runtime-break class (#1848/#1849) the pytest suite can't see. Effort S–M.
+
+**T3 — Codify secure defaults (P3) [#1856].** `docs/SECURE_DEFAULTS.md` (denylist /
+signed-snapshot / fail-closed-gate / safe_setattr catalog), PR-checklist "Secure
+defaults" subsection, lightweight quarterly audit cadence. Effort S. *(Related: the
+#1848 morph inline-`<script>` regression fix — re-execute classic scripts on the
+mount morph like the `live_redirect` path — rides T1-B or lands standalone.)*
+
+---
+
 ### Milestone: v1.0.7-4 — transport/API hardening drain (drain bucket → ships in 1.0.7)
 
 > ⚠️ **SECURITY — COORDINATE DISCLOSURE BEFORE PUSHING PUBLIC.** Same posture as
