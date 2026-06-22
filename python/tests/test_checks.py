@@ -4833,3 +4833,510 @@ class TestS007CheckIntegration:
         settings.DJUST_CONFIG = {"suppress_checks": ["djust.S007"]}
         s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
         assert s007 == [], "S007 should be silenced by suppress_checks=['djust.S007']: %r" % s007
+
+
+# ---------------------------------------------------------------------------
+# S009 (#1854) -- event-handler-needs-auth (AST-based)
+# ---------------------------------------------------------------------------
+
+
+class TestS009EventHandlerNeedsAuth:
+    """S009 -- a view-auth'd LiveView with a public, ungated @event_handler."""
+
+    def _scan(self, tmp_path, source):
+        py_file = tmp_path / "views.py"
+        py_file.write_text(textwrap.dedent(source))
+        from djust.checks import check_security
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            errors = check_security(None)
+        return [e for e in errors if e.id == "djust.S009"]
+
+    # ---- empirical canary: SHOULD fire ----
+
+    def test_fires_login_required_attr_plus_ungated_handler(self, tmp_path):
+        """CANARY: login_required=True + a public mutating handler with no gate."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()
+                def delete_user(self, user_id: int = 0, **kwargs):
+                    self.deleted = user_id
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire: %r" % s009
+        assert "delete_user" in s009[0].msg
+        assert "AdminPanel" in s009[0].msg
+
+    def test_fires_permission_required_attr(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                permission_required = "app.manage"
+
+                @event_handler()
+                def remove_item(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for permission_required attr: %r" % s009
+
+    def test_fires_login_required_mixin_base(self, tmp_path):
+        """CANARY: a Django auth mixin in the bases counts as view-level auth."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from django.contrib.auth.mixins import LoginRequiredMixin
+            from djust.decorators import event_handler
+
+            class AdminPanel(LoginRequiredMixin, LiveView):
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for auth-mixin base: %r" % s009
+
+    def test_fires_check_permissions_override(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                def check_permissions(self, request):
+                    return request.user.is_staff
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for check_permissions override: %r" % s009
+
+    def test_fires_for_action_decorator(self, tmp_path):
+        """@action is also an event handler — it must be gated too."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import action
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @action("destroy")
+                def destroy(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for @action handler: %r" % s009
+
+    # ---- empirical canary: SHOULD NOT fire (clean cases) ----
+
+    def test_silent_when_handler_is_gated(self, tmp_path):
+        """CANARY (clean): @permission_required on the handler closes the gap."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler, permission_required
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @permission_required("app.delete_user")
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for a gated handler: %r" % s009
+
+    def test_silent_when_no_view_auth(self, tmp_path):
+        """CANARY (clean): no view-level auth -> nothing to escalate past."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class PublicCounter(LiveView):
+                @event_handler()
+                def increment(self, **kwargs):
+                    self.count += 1
+            """,
+        )
+        assert s009 == [], "S009 must stay silent without view auth: %r" % s009
+
+    def test_silent_for_private_handler(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()
+                def _internal(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for a private handler: %r" % s009
+
+    def test_silent_for_read_only_handler(self, tmp_path):
+        """A read-only-looking handler (load_/get_/...) is exempt — conservative."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class Dashboard(LiveView):
+                login_required = True
+
+                @event_handler()
+                def load_stats(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for a read-only handler: %r" % s009
+
+    def test_silent_when_class_gates_events(self, tmp_path):
+        """A check_handler_permission override means the view gates events itself."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                def check_handler_permission(self, handler, request):
+                    return request.user.is_staff
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent when the class gates events: %r" % s009
+
+    def test_silent_when_login_required_falsy(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class Thing(LiveView):
+                login_required = False
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for falsy login_required: %r" % s009
+
+    def test_silent_for_undecorated_method(self, tmp_path):
+        """A plain method (no @event_handler) is not a client-callable handler."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must only fire for @event_handler methods: %r" % s009
+
+    # ---- suppression ----
+
+    def test_suppressed_by_noqa_on_handler(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()  # noqa: S009
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must honor a `# noqa: S009` on the handler: %r" % s009
+
+    def test_suppressed_by_config_short_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["S009"]}
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must honor suppress_checks=['S009']: %r" % s009
+
+
+# ---------------------------------------------------------------------------
+# S011 (#1854 / #1848) -- inline <script> in a LiveView template without CSP
+# ---------------------------------------------------------------------------
+
+
+class TestS011InlineScriptCsp:
+    """S011 -- inline executable <script> inside a dj-root, no CSP configured."""
+
+    def _scan(self, tmp_path, settings, html, *, no_csp=True):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir(parents=True, exist_ok=True)
+        (tpl_dir / "page.html").write_text(html)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplates",
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        ]
+        if no_csp:
+            # Ensure no CSP signal leaks in from base settings.
+            settings.MIDDLEWARE = ["django.middleware.security.SecurityMiddleware"]
+        from djust.checks import check_inline_script_csp
+
+        errors = check_inline_script_csp(None)
+        return [e for e in errors if e.id == "djust.S011"]
+
+    # ---- empirical canary: SHOULD fire ----
+
+    def test_fires_inline_exec_script_inside_dj_root(self, tmp_path, settings):
+        """CANARY: inline executable <script> inside dj-root, no CSP."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <button class='tab'>Tab</button>\n"
+            "  <script>\n"
+            "    document.addEventListener('click', e => {});\n"
+            "  </script>\n"
+            "</div>\n",
+        )
+        assert len(s011) == 1, "S011 should fire: %r" % s011
+        assert "#1848" in s011[0].msg
+
+    def test_fires_inside_nested_dj_root(self, tmp_path, settings):
+        """CANARY: script nested several elements deep but still inside the root."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <div class='a'><div class='b'>\n"
+            "    <script>document.addEventListener('click', e => {});</script>\n"
+            "  </div></div>\n"
+            "</div>\n",
+        )
+        assert len(s011) == 1, "S011 should fire for a nested-inside script: %r" % s011
+
+    def test_fires_for_dj_view_root(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-view='app.views.V'>\n  <script>var x = 1;</script>\n</div>\n",
+        )
+        assert len(s011) == 1, "S011 should fire for a dj-view root: %r" % s011
+
+    # ---- empirical canary: SHOULD NOT fire (clean cases) ----
+
+    def test_silent_for_external_src_script(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script src='/static/app.js'></script></div>",
+        )
+        assert s011 == [], "S011 must ignore external <script src>: %r" % s011
+
+    def test_silent_for_json_data_block(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            '<div dj-root><script type="application/json">{"a":1}</script></div>',
+        )
+        assert s011 == [], "S011 must ignore application/json data blocks: %r" % s011
+
+    def test_silent_for_template_data_block(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            '<div dj-root><script type="text/template"><b>x</b></script></div>',
+        )
+        assert s011 == [], "S011 must ignore text/template data blocks: %r" % s011
+
+    def test_silent_for_nonce_script(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            '<div dj-root><script nonce="{{ request.csp_nonce }}">var x=1;</script></div>',
+        )
+        assert s011 == [], "S011 must ignore nonce-bearing scripts: %r" % s011
+
+    def test_silent_when_script_after_dj_root(self, tmp_path, settings):
+        """CANARY (clean): a page script AFTER the dj-root closes is correct."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <button class='tab'>Tab</button>\n"
+            "</div> <!-- close dj-root -->\n"
+            "<script>document.addEventListener('click', e => {});</script>\n",
+        )
+        assert s011 == [], "S011 must not flag scripts after the dj-root: %r" % s011
+
+    def test_silent_for_script_in_code_block(self, tmp_path, settings):
+        """A <script> inside <pre>/<code> is documentation, not live DOM."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <pre><code>&lt;script&gt;x&lt;/script&gt;</code></pre>\n"
+            "  <code><script>var y=2;</script></code>\n"
+            "</div>\n",
+        )
+        assert s011 == [], "S011 must ignore scripts inside <pre>/<code>: %r" % s011
+
+    def test_silent_for_non_liveview_template(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div><script>var x = 1;</script></div>",
+        )
+        assert s011 == [], "S011 must only scan LiveView templates: %r" % s011
+
+    def test_silent_when_csp_middleware_configured(self, tmp_path, settings):
+        """CANARY (clean): a configured CSP middleware silences S011."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        # set CSP middleware AFTER _scan wrote TEMPLATES but it reads at call time;
+        # re-run with middleware in place:
+        settings.MIDDLEWARE = ["csp.middleware.CSPMiddleware"]
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert s011 == [], "S011 must stay silent when CSP middleware is configured: %r" % s011
+
+    def test_silent_when_csp_setting_configured(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        settings.MIDDLEWARE = ["django.middleware.security.SecurityMiddleware"]
+        settings.CONTENT_SECURITY_POLICY = {"DIRECTIVES": {"default-src": ["'self'"]}}
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert s011 == [], "S011 must stay silent when CONTENT_SECURITY_POLICY is set: %r" % s011
+
+    def test_silent_when_legacy_csp_directive_setting(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        settings.MIDDLEWARE = ["django.middleware.security.SecurityMiddleware"]
+        settings.CSP_DEFAULT_SRC = ["'self'"]
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert s011 == [], "S011 must stay silent for a legacy CSP_* directive: %r" % s011
+
+    def test_csrf_middleware_does_not_count_as_csp(self, tmp_path, settings):
+        """`csrf` must not be mistaken for `csp` — S011 still fires."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        settings.MIDDLEWARE = ["django.middleware.csrf.CsrfViewMiddleware"]
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert len(s011) == 1, "csrf middleware must not be read as CSP: %r" % s011
+
+    # ---- suppression ----
+
+    def test_suppressed_by_noqa_on_script_line(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n  <script>var x = 1;</script>  {# noqa: S011 #}\n</div>\n",
+        )
+        assert s011 == [], "S011 must honor `{# noqa: S011 #}` on the script line: %r" % s011
+
+    def test_suppressed_by_config(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["S011"]}
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+        )
+        assert s011 == [], "S011 must honor suppress_checks=['S011']: %r" % s011
+
+    def test_reports_correct_line(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n  <span>ok</span>\n  <script>var x=1;</script>\n</div>\n",
+        )
+        assert len(s011) == 1
+        assert s011[0].line_number == 3
+
+    def test_data_prefixed_attrs_do_not_count_as_real_attrs(self, tmp_path, settings):
+        """#1517 hardening: data-src / data-type / data-nonce must NOT be read as
+        the real src/type/nonce attributes (a bare `\\b` anchor would). This
+        script has inline executable JS and only data-* attrs, so it fires."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            '  <script data-src="x" data-type="application/json" data-nonce="n">\n'
+            "    var x = 1;\n"
+            "  </script>\n"
+            "</div>\n",
+        )
+        assert len(s011) == 1, "data-* attrs must not mask a real inline script: %r" % s011
