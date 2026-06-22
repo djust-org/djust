@@ -3661,6 +3661,55 @@ the old placement still serves during blue/green). `djust deploy` should print
 
 ---
 
+### Milestone: v1.0.7-4 — transport/API hardening drain (drain bucket → ships in 1.0.7)
+
+> ⚠️ **SECURITY — COORDINATE DISCLOSURE BEFORE PUSHING PUBLIC.** Same posture as
+> v1.0.7-3: detailed specs live in the PRIVATE `scratch/sec-audit/FINDING-*.md`
+> docs + will be filed as private GHSAs. Non-disclosing; do NOT enrich with
+> exploit detail in this public-tracked file ahead of a coordinated fix/release.
+> Finding tags (`[F26]`…`[F29]`) map to the private docs.
+
+*Goal:* Close the four open transport/API-layer findings surfaced after the
+v1.0.7-3 wave. Same root family as v1.0.7-3 (the live transports diverging from
+the request/auth model the HTTP path assumes), plus an API-exposure default.
+
+**WU1 — Reconstructed-request Host propagation (P1) [F26].** The WS `handle_mount`
+and runtime `_build_request` rebuild a synthetic `RequestFactory` request with no
+`HTTP_HOST` (defaults to `testserver`), so host/subdomain `TenantResolver`s
+misresolve the tenant on the live path (cross-tenant exposure under
+`STRICT_MODE=False`, broken tenancy under the default). Fix: extract the client
+Host from the WS scope, validate against `ALLOWED_HOSTS` (reuse the CSWSH
+`_is_allowed_origin`/`validate_host` logic), and pass it (plus scheme/secure) into
+the reconstructed request so resolution matches the HTTP path. Parity test
+HTTP==WS tenant. Touches `websocket.py`, `runtime.py`.
+
+**WU2 — Per-caller shared rate-limit bucket (P1) [F27][F28] (the ADR-008 refactor).**
+The per-handler `@rate_limit` is enforced via the per-CONNECTION
+`ConnectionRateLimiter` (N connections → N× allowance), and the HTTP-API limiter
+keys on raw `REMOTE_ADDR` (shared/mis-keyed behind a proxy; spoofable if
+`REMOTE_ADDR` is XFF-derived). Fix: move the per-handler `@rate_limit` to a SHARED
+process-level bucket keyed by `(caller, handler)` where `caller` = `user:<pk>`
+else `ip:<resolve_client_ip(...)>` (the #5/#28 helper honoring
+`DJUST_TRUSTED_PROXY_COUNT`), used by WS + SSE + the HTTP API so the budget is
+per-caller and uniform across transports and connections. Keep the per-connection
+`ConnectionRateLimiter` ONLY for the global per-message abuse-disconnect (#17).
+Touches `rate_limit.py`, `websocket_utils.py`, `api/dispatch.py`, `sse.py`.
+
+**WU3 — Gate the OpenAPI schema endpoint (P2) [F29].** `OpenAPISchemaView`
+(`/djust/api/openapi.json`) is served unauthenticated, enumerating every
+`expose_api` handler's URL, view-class/handler names, params, and docstrings.
+Fix: gate it (require auth, or DEBUG-only, or opt-in `DJUST_API_OPENAPI_PUBLIC`
+default off) with a non-disclosing 404 when gated — mirroring the #9 observability
+gate. Touches `api/openapi.py`, `api/urls.py`.
+
+*Sequencing:* WU1/WU2/WU3 are largely file-disjoint → run in parallel; WU2 is the
+larger refactor. Each closes with an HTTP↔WS (or anonymous-vs-authed) parity test
+extending the WU1 enforcement harness from v1.0.7-3. (Code-hygiene rider, NOT a
+security finding: a boundary-less `startswith` in the dev-only `seed_fixtures` MCP
+tool — fold into a #22 `startswith`-sweep, no GHSA.)
+
+---
+
 ### Milestone: v1.0.7-3 — transport-path consolidation + secure-by-default hardening (drain bucket → ships in 1.0.7)
 
 > ⚠️ **SECURITY — COORDINATE DISCLOSURE BEFORE PUSHING PUBLIC.** The detailed
