@@ -7,7 +7,7 @@ site that bypasses the shared chokepoint. It mirrors the #1125 count-test patter
 enumerate the EXPECTED sanctioned sites, scan the source, and fail if an
 UNEXPECTED one appears.
 
-Three drift classes are pinned by AST scans of the top-level ``python/djust/*.py``
+Four drift classes are pinned by AST scans of the top-level ``python/djust/*.py``
 modules (websocket.py, sse.py, runtime.py and their siblings):
 
 1. **Arbitrary import of a view-path-like value.** The ONLY module allowed to call
@@ -29,6 +29,23 @@ modules (websocket.py, sse.py, runtime.py and their siblings):
    derived URL must occur in a function that also calls
    ``validate_mount_url`` / ``_validate_mount_url``. A ``factory.get(literal)``
    (e.g. ``"/"``) is always fine.
+
+4. **Mount-orchestration security calls (#1850).** The mount path authorises
+   through three shared security calls — ``check_view_auth`` (view-level auth),
+   ``enforce_object_permission`` / ``check_object_permission`` (ADR-017 object
+   permission) and the reconstructed-Host binding via ``validated_host_from_scope``
+   (tenant/Host integrity). This concern PINS that the WS consumer's mount path
+   (``websocket.py``) and the generic runtime (``runtime.py``) each STILL invoke
+   these shared calls — a count-canary so that after the future #1853 migration
+   flips ``handle_mount`` to delegate to ``runtime.dispatch_mount``,
+   ``handle_mount`` cannot silently re-grow a parallel orchestration that drops
+   one of them without this test going red. Today ``handle_mount`` still has its
+   own copy of each call (pre-#1853); the canary counts the shared-chokepoint
+   reference sites across ``websocket.py`` + ``runtime.py``. When #1853 converges
+   the two paths, the expected counts move from "WS+runtime each" to "the shared
+   ``dispatch_mount`` once" — and updating the canary is the deliberate signal
+   that the convergence happened (the same prune-the-whitelist-on-purpose
+   discipline concerns 1-3 use, #1125).
 
 Empirical canary / non-tautology (#1459 / #1468): adding a dummy
 ``importlib.import_module(view_path)`` to websocket.py makes
@@ -398,3 +415,150 @@ def test_scan_covers_the_transport_modules():
 def test_transport_modules_parse(module):
     """Each scanned transport module is syntactically parseable (guards the scan)."""
     _parse(_PKG_DIR / module)
+
+
+# --------------------------------------------------------------------------- #
+# Concern 4 — mount-orchestration security calls invoked at the shared
+# chokepoints (#1850; converges under #1853).
+#
+# The mount path authorises through three shared security helpers. This concern
+# pins that the two request-building transports (websocket.py + runtime.py) each
+# STILL reference these shared calls, so a future migration that flips
+# handle_mount to delegate to runtime.dispatch_mount cannot silently leave
+# handle_mount re-growing a parallel orchestration that drops one of them.
+#
+# We count NON-IMPORT name references (a call like ``check_view_auth(view, req)``
+# OR a reference like ``sync_to_async(check_view_auth)`` — the live transports use
+# the latter shape) of each shared call, per module. Import-statement aliases
+# (``from .auth import check_view_auth``) are excluded so adding/removing the lazy
+# import does not move the count.
+# --------------------------------------------------------------------------- #
+
+# Each shared mount-orchestration security call → the modules that MUST still
+# reference it, with the minimum reference count expected on the current tree.
+# Today (pre-#1853) handle_mount (websocket.py) and the generic runtime
+# (runtime.py) each carry their own copy:
+#   * check_view_auth         — view-level auth, on WS + runtime + SSE.
+#   * object-permission        — WS uses check_object_permission (the inner step),
+#                                runtime uses enforce_object_permission (the
+#                                ADR-017 wrapper). Counted as a FAMILY (either
+#                                name satisfies a module's requirement) because
+#                                #1853 will converge them onto one call.
+#   * validated_host_from_scope — reconstructed-Host binding, on WS + runtime.
+_MOUNT_ORCHESTRATION_PINS = {
+    "check_view_auth": {"websocket.py": 1, "runtime.py": 1, "sse.py": 1},
+    # Object-permission family: any of these names counts toward the module's req.
+    ("check_object_permission", "enforce_object_permission"): {
+        "websocket.py": 1,
+        "runtime.py": 1,
+    },
+    "validated_host_from_scope": {"websocket.py": 1, "runtime.py": 1},
+}
+
+
+def _import_aliased_lines(tree: ast.Module) -> set:
+    """Line numbers that are import statements (to exclude their alias Names)."""
+    return {
+        node.lineno for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+    }
+
+
+def _count_symbol_refs(tree: ast.Module, names: "tuple | set", import_lines: set) -> int:
+    """Count non-import Load references of any name in ``names``.
+
+    Catches both the direct-call shape ``name(...)`` and the wrapped shape
+    ``sync_to_async(name)(...)`` (the live transports use the wrapped form), since
+    both surface ``name`` as an ``ast.Name`` in a Load context outside an import.
+    """
+    wanted = set(names)
+    count = 0
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and node.id in wanted
+            and isinstance(node.ctx, ast.Load)
+            and node.lineno not in import_lines
+        ):
+            count += 1
+    return count
+
+
+class TestMountOrchestrationChokepoint:
+    def test_shared_security_calls_present_at_mount_chokepoints(self):
+        """Each shared mount-orchestration security call is still referenced by the
+        WS + runtime mount paths (count-canary, #1125 / #1850).
+
+        Gate-off (#1468): deleting (or no longer referencing) ``check_view_auth`` /
+        the object-perm call / ``validated_host_from_scope`` from websocket.py OR
+        runtime.py drops that module's count below the pin → FAILS. Recorded
+        gate-off in the PR body: removing the ``check_view_auth`` reference at
+        websocket.py:2233 makes this test report "websocket.py references
+        check_view_auth 0 time(s) but expected >= 1".
+        """
+        shortfalls = []
+        for symbol, module_reqs in _MOUNT_ORCHESTRATION_PINS.items():
+            names = symbol if isinstance(symbol, tuple) else (symbol,)
+            human = " / ".join(names)
+            for label, expected in module_reqs.items():
+                path = _PKG_DIR / label
+                tree = _parse(path)
+                import_lines = _import_aliased_lines(tree)
+                found = _count_symbol_refs(tree, names, import_lines)
+                if found < expected:
+                    shortfalls.append(
+                        f"{label} references {human} {found} time(s) but expected >= {expected}"
+                    )
+        assert not shortfalls, (
+            "Mount-orchestration security call(s) dropped from a shared mount "
+            "chokepoint. The WS consumer's mount path (handle_mount) and the "
+            "generic runtime each MUST authorise through check_view_auth, the "
+            "object-permission family, and validated_host_from_scope. If this "
+            "fired because #1853 converged handle_mount onto dispatch_mount, "
+            "update _MOUNT_ORCHESTRATION_PINS deliberately (the calls should now "
+            "live once in the shared dispatch_mount). Shortfalls: " + "; ".join(shortfalls)
+        )
+
+    def test_ws_mount_reliance_on_check_view_auth_is_pinned(self):
+        """Until #1853, handle_mount carries its OWN check_view_auth reference.
+
+        This is the specific #1850 pin: the WS consumer's mount path does not yet
+        delegate auth to runtime.dispatch_mount, so a regression that drops the
+        WS-local auth call (re-opening finding #14 over WebSocket) is caught here
+        and not only by the broader concern-4 scan.
+        """
+        tree = _parse(_PKG_DIR / "websocket.py")
+        import_lines = _import_aliased_lines(tree)
+        found = _count_symbol_refs(tree, ("check_view_auth",), import_lines)
+        assert found >= 1, (
+            "websocket.py no longer references check_view_auth on the mount path. "
+            "If #1853 has converged handle_mount onto runtime.dispatch_mount, move "
+            "this pin to runtime.py and note the convergence; otherwise this is a "
+            "WS auth-bypass regression (finding #14)."
+        )
+
+    def test_object_permission_family_uses_one_name_per_module(self):
+        """Document the pre-#1853 split: WS uses check_object_permission (inner
+        step), runtime uses enforce_object_permission (ADR-017 wrapper).
+
+        Pinning the SPLIT (not just the family total) means the #1853 convergence —
+        which will route both through a single enforce_object_permission in
+        dispatch_mount — visibly changes this test, forcing a deliberate update.
+        """
+        ws_tree = _parse(_PKG_DIR / "websocket.py")
+        rt_tree = _parse(_PKG_DIR / "runtime.py")
+        ws_imports = _import_aliased_lines(ws_tree)
+        rt_imports = _import_aliased_lines(rt_tree)
+
+        ws_inner = _count_symbol_refs(ws_tree, ("check_object_permission",), ws_imports)
+        rt_wrapper = _count_symbol_refs(rt_tree, ("enforce_object_permission",), rt_imports)
+
+        assert ws_inner >= 1, (
+            "websocket.py mount path no longer references check_object_permission "
+            "(ADR-017 object-perm inner step) — finding #10/#11/#12 regression, "
+            "unless #1853 converged it (then update this pin)."
+        )
+        assert rt_wrapper >= 1, (
+            "runtime.py no longer references enforce_object_permission (the ADR-017 "
+            "shared object-perm wrapper) — finding #10/#11/#12 regression, unless "
+            "#1853 converged it (then update this pin)."
+        )
