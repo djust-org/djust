@@ -20,9 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-import threading
-from collections import OrderedDict
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
 from asgiref.sync import async_to_sync
 from django.core.exceptions import PermissionDenied
@@ -33,70 +31,62 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
+from djust._client_ip import resolve_client_ip
 from djust._log_utils import sanitize_for_log
 from djust.api.auth import resolve_auth_classes
 from djust.api.errors import api_error
 from djust.api.registry import resolve_api_view
 from djust.auth.core import check_handler_permission, check_view_auth
-from djust.rate_limit import TokenBucket, get_rate_limit_settings
+from djust.rate_limit import (
+    caller_key,
+    get_rate_limit_settings,
+    handler_rate_check,
+    reset_handler_buckets,
+)
 from djust.validation import validate_handler_params
 from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
 logger = logging.getLogger(__name__)
 
-_RATE_BUCKET_CAP = 10_000  # LRU cap: evict oldest entry when full to bound memory.
-_rate_buckets: "OrderedDict[Tuple[str, str], TokenBucket]" = OrderedDict()
-_rate_buckets_lock = threading.Lock()
-
 
 def _caller_key(request: HttpRequest) -> str:
-    user = getattr(request, "user", None)
-    if user is not None and getattr(user, "is_authenticated", False):
-        return f"user:{user.pk}"
-    # Fall back to remote addr. Note: this is coarse — behind a proxy the framework
-    # user's ``REMOTE_ADDR`` should already reflect the caller via their proxy middleware.
-    return f"ip:{request.META.get('REMOTE_ADDR', 'unknown')}"
+    """Per-caller key for the HTTP API, shared with WS/SSE (F27 + F28).
+
+    The IP fallback resolves through :func:`djust._client_ip.resolve_client_ip`
+    (honoring ``DJUST_TRUSTED_PROXY_COUNT``) — identical to the WS/SSE paths —
+    instead of trusting raw ``REMOTE_ADDR``. Behind a reverse proxy that closes
+    F28: per-real-client buckets (no shared-proxy bucket), and no XFF spoof.
+    """
+    client_ip = resolve_client_ip(
+        request.META.get("HTTP_X_FORWARDED_FOR"),
+        request.META.get("REMOTE_ADDR"),
+    )
+    return caller_key(request, client_ip)
 
 
 def _rate_limit_check(request: HttpRequest, handler_name: str, handler) -> bool:
     """Token-bucket check honoring the handler's ``@rate_limit`` settings.
 
-    Buckets are process-level and keyed on ``(caller, handler_name)``. The
-    caller key is the authenticated user's PK when available, otherwise the
-    remote IP.
-
-    Note on transport parity: the HTTP and WebSocket transports **use the same
-    ``@rate_limit`` settings but separate bucket storage** — the WS path's
-    ``ConnectionRateLimiter`` is per-connection, this dict is process-level.
-    A caller using both transports consumes from both independently. If you
-    need a unified budget across transports, set a stricter ``rate`` — or wait
-    for the shared-bucket refactor tracked alongside ADR-008.
+    Routes through the SHARED per-caller store (:func:`djust.rate_limit.handler_rate_check`)
+    so a caller has ONE budget per handler across WS, SSE, and the HTTP API
+    (F27 — no per-transport summing). The caller key is the authenticated user's
+    PK, else the anonymous session key, else the resolved client IP.
 
     Returns True if allowed, False if rate-limited.
     """
     settings = get_rate_limit_settings(handler)
     if settings is None:
         return True
-    key = (_caller_key(request), handler_name)
-    with _rate_buckets_lock:
-        bucket = _rate_buckets.get(key)
-        if bucket is None:
-            bucket = TokenBucket(rate=settings["rate"], burst=settings["burst"])
-            _rate_buckets[key] = bucket
-            # LRU eviction: cap the dict so a hostile caller cycling identities
-            # cannot inflate memory without bound.
-            while len(_rate_buckets) > _RATE_BUCKET_CAP:
-                _rate_buckets.popitem(last=False)
-        else:
-            # Touch for LRU order.
-            _rate_buckets.move_to_end(key)
-    return bucket.consume()
+    return handler_rate_check(_caller_key(request), handler_name, settings)
 
 
 def reset_rate_buckets() -> None:
-    """Clear rate-limit state — used by tests."""
-    with _rate_buckets_lock:
-        _rate_buckets.clear()
+    """Clear rate-limit state — used by tests.
+
+    Delegates to the shared store (:func:`djust.rate_limit.reset_handler_buckets`)
+    now that WS/SSE/API share one per-caller bucket store (F27).
+    """
+    reset_handler_buckets()
 
 
 def _is_exposed(handler) -> bool:
