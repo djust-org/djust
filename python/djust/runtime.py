@@ -774,7 +774,27 @@ class ViewRuntime:
         factory = RequestFactory()
         query_string = urlencode(params) if params else ""
         path_with_query = f"{page_url}?{query_string}" if query_string else page_url
-        request = factory.get(path_with_query)
+
+        # Finding #26: propagate the validated client Host (and TLS scheme) into
+        # the reconstructed request so host/subdomain TenantResolvers resolve the
+        # SAME tenant the WS mount and the HTTP (SSR) path resolve. Without
+        # HTTP_HOST the request defaults to RequestFactory's "testserver",
+        # misresolving the tenant to None on runtime-rebuilt requests (url_change
+        # etc.). Sourced from ``self.scope`` (set for WS-backed runtimes), routed
+        # through the SAME shared helper the WS handle_mount path uses
+        # (``websocket.validated_host_from_scope``) so the two reconstructed-
+        # request paths cannot drift (#1646). SSE-backed runtimes have
+        # ``scope=None`` and use the real HTTP request, so they are unaffected.
+        from .websocket import validated_host_from_scope
+
+        host, is_secure = validated_host_from_scope(self.scope)
+        request_extra = {}
+        if host:
+            request_extra["HTTP_HOST"] = host
+        if is_secure:
+            request_extra["secure"] = True
+            request_extra["HTTP_X_FORWARDED_PROTO"] = "https"
+        request = factory.get(path_with_query, **request_extra)
 
         # Wire session if available from WS scope
         try:

@@ -148,10 +148,32 @@ def _is_allowed_origin(origin: Optional[bytes]) -> bool:
         # allowed host by any definition.
         return False
 
+    return _host_in_allowed_hosts(host)
+
+
+def _host_in_allowed_hosts(host: str) -> bool:
+    """Validate a bare hostname against ``settings.ALLOWED_HOSTS``.
+
+    This is the single ALLOWED_HOSTS check shared by the CSWSH Origin gate
+    (:func:`_is_allowed_origin`) and the WS/runtime reconstructed-request Host
+    propagation (:func:`validated_host_from_scope`), so the two cannot drift
+    (#1646). The policy mirrors Django's HTTP layer exactly:
+
+      * Re-add brackets around IPv6 literals (Django stores them with brackets).
+      * Empty ALLOWED_HOSTS -> localhost variants in DEBUG, REJECT in prod.
+      * Otherwise defer to ``django.http.request.validate_host`` so wildcard
+        (".example.com", "*") semantics match HTTP verbatim.
+
+    ``host`` must already be stripped of scheme/port/path/userinfo (e.g. the
+    output of ``urlparse(...).hostname`` or a Host header split on ":").
+    """
+    if not host:
+        return False
+
     # urlparse strips the brackets from IPv6 literals, but Django's
     # ALLOWED_HOSTS / get_host() stores IPv6 addresses WITH brackets
     # (e.g. "[::1]"). Re-add them so validate_host() matches correctly.
-    if ":" in host:
+    if ":" in host and not host.startswith("["):
         match_host = f"[{host.lower()}]"
     else:
         match_host = host.lower()
@@ -169,6 +191,75 @@ def _is_allowed_origin(origin: Optional[bytes]) -> bool:
             return False
 
     return validate_host(match_host, allowed_hosts)
+
+
+def validated_host_from_scope(
+    scope: Optional[Dict[str, Any]],
+) -> "tuple[Optional[str], bool]":
+    """Extract the validated client Host (and secure flag) from an ASGI scope.
+
+    Finding #26 (WS/runtime reconstructed-request host omission): the WebSocket
+    ``handle_mount`` and ``ViewRuntime._build_request`` rebuild an ``HttpRequest``
+    via ``RequestFactory().get(...)`` with NO ``HTTP_HOST``, so
+    ``request.get_host()`` defaults to ``RequestFactory``'s ``"testserver"`` on
+    the live path. Host/subdomain ``TenantResolver``\\ s then misresolve the
+    tenant (None) — cross-tenant disclosure with ``STRICT_MODE=False`` or broken
+    tenancy with the default. The HTTP (SSR) path uses the real request and is
+    unaffected; this restores parity for the live path.
+
+    Returns ``(host, is_secure)`` where:
+
+      * ``host`` is the validated bare Host header value (no port stripped — a
+        ``host:port`` value is passed through to ``HTTP_HOST`` so Django's
+        ``get_host()`` handles it the same way it does for a real request), or
+        ``None`` if the scope has no Host header OR the Host fails
+        ALLOWED_HOSTS validation. ``None`` means "fall back to the current
+        ``RequestFactory`` default" — so non-browser clients (curl, the Python
+        ``WebsocketCommunicator``) that send no Host, and spoofed Hosts outside
+        ALLOWED_HOSTS, do not break and do not gain tenant-resolution authority
+        beyond what the HTTP layer grants.
+      * ``is_secure`` is True when the handshake was over TLS (``scope["scheme"]``
+        is ``"wss"`` / ``"https"``), so a propagated request reports
+        ``request.is_secure()`` correctly too.
+
+    Validation reuses :func:`_host_in_allowed_hosts` — the SAME ALLOWED_HOSTS
+    logic the CSWSH Origin check uses — so the WS host bound here is no weaker
+    and no stronger than the HTTP layer. A browser victim cannot spoof the
+    handshake Host (the browser sets it); a non-browser client is bounded by
+    ALLOWED_HOSTS exactly as the HTTP request would be.
+    """
+    if not scope:
+        return None, False
+
+    headers = dict(scope.get("headers", []) or [])
+    raw_host = headers.get(b"host")
+    host: Optional[str] = None
+    if raw_host:
+        try:
+            host_str = raw_host.decode("ascii")
+        except (UnicodeDecodeError, AttributeError):
+            host_str = ""
+        # Extract the bare domain with Django's own ``split_domain_port`` — the
+        # exact parser ``HttpRequest.get_host()`` runs — so this boundary rejects
+        # everything ``get_host()`` would reject (userinfo ``user@host``,
+        # leading/trailing whitespace, control chars, bad characters):
+        # ``split_domain_port`` returns ``("", "")`` for any host its strict
+        # ``host_validation_re`` doesn't match. We must parse-then-validate
+        # because ``validate_host`` alone does NOT format-validate — e.g.
+        # ``"evil.com@acme.example.com"`` ``endswith(".example.com")`` and would
+        # wrongly match a wildcard ALLOWED_HOSTS entry. The FULL header (incl.
+        # port) is passed through to HTTP_HOST when valid so ``get_host()``
+        # behaves identically to a real request (#F26 review hardening).
+        if host_str:
+            from django.http.request import split_domain_port
+
+            domain, _port = split_domain_port(host_str)
+            if domain and _host_in_allowed_hosts(domain):
+                host = host_str
+
+    scheme = (scope.get("scheme") or "").lower()
+    is_secure = scheme in ("wss", "https")
+    return host, is_secure
 
 
 # F23 (#1819 traversal fix) is now implemented once in
@@ -2051,7 +2142,35 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # against path traversal / CRLF / absolute-URL injection (#1819).
             page_url = _validate_mount_url(data.get("url", "/"))
             path_with_query = f"{page_url}?{query_string}" if query_string else page_url
-            request = factory.get(path_with_query)
+
+            # Finding #26: propagate the validated client Host (and TLS scheme)
+            # from the handshake scope into the reconstructed request so
+            # host/subdomain TenantResolvers — and every other
+            # ``request.get_host()`` consumer — resolve identically on the live
+            # path to the HTTP (SSR) path. Without HTTP_HOST the request defaults
+            # to RequestFactory's "testserver", misresolving the tenant to None
+            # (cross-tenant disclosure with STRICT_MODE=False, broken tenancy by
+            # default). ``validated_host_from_scope`` validates the Host against
+            # ALLOWED_HOSTS using the SAME logic as the CSWSH Origin check, and
+            # returns ``(None, ...)`` for absent/invalid Hosts so non-browser
+            # clients (WebsocketCommunicator) keep working.
+            host, is_secure = validated_host_from_scope(self.scope)
+            request_extra = {}
+            if host:
+                request_extra["HTTP_HOST"] = host
+            if is_secure:
+                request_extra["secure"] = True
+                request_extra["HTTP_X_FORWARDED_PROTO"] = "https"
+            request = factory.get(path_with_query, **request_extra)
+
+            # Stash the validated host on the view so runtime-rebuilt requests
+            # (``ViewRuntime._build_request`` for url_change etc.) carry the same
+            # host. Mirrors the ``_websocket_path`` stash above (#1646: one seam,
+            # both reconstructed-request paths). ``None`` when absent/invalid so
+            # the runtime falls back to the same RequestFactory default.
+            if self.view_instance is not None:
+                self.view_instance._websocket_host = host
+                self.view_instance._websocket_secure = is_secure
 
             # Add session from WebSocket scope.
             # session_key is an ATTRIBUTE of the session object, not a dict key.
