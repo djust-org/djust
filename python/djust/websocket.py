@@ -1930,10 +1930,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             #   upload_resume, presence_heartbeat, cursor_move, request_html,
             #   debug_panel_open, debug_panel_close, time_travel_jump,
             #   time_travel_component_jump, forward_replay.
-            if msg_type == "url_change":
+            if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
                 # rather than calling dispatch_url_change directly, so future
-                # chokepoint-level controls cover this verb on the WS path.
+                # chokepoint-level controls cover this verb on the WS path. The
+                # membership check (not a hardcoded ``== "url_change"``) makes
+                # ``RUNTIME_OWNED_VERBS`` LOAD-BEARING (#1852): adding a verb to
+                # the set automatically routes it here, and the contract test
+                # (``TestRuntimeOwnedVerbsContract``) fails if the set and this
+                # arm ever drift. This is the FIRST elif-arm, so it cannot shadow
+                # ``event``/``mount``/etc. — those verbs are not in the set.
                 await self._dispatch_runtime_owned(data)
             elif msg_type == "event":
                 await self.handle_event(data)

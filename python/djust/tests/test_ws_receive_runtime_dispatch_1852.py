@@ -178,19 +178,28 @@ class TestUrlChangeRoutedThroughChokepoint:
             await communicator.disconnect()
 
     def test_receive_routes_url_change_via_chokepoint_helper(self):
-        """Source-pin: the ``url_change`` arm of ``receive()`` calls
-        ``_dispatch_runtime_owned`` (which calls ``dispatch_message``) and does
-        NOT call ``handle_url_change`` (the old direct-to-dispatch_url_change
-        path). Catches an accidental revert of the routing.
+        """Source-pin: the runtime-owned arm of ``receive()`` routes by
+        ``RUNTIME_OWNED_VERBS`` membership (NOT a hardcoded ``== "url_change"``)
+        and dispatches through ``_dispatch_runtime_owned`` (which calls
+        ``dispatch_message``), NOT ``handle_url_change`` (the old
+        direct-to-dispatch_url_change path). Catches an accidental revert of the
+        routing AND a regression to a hardcoded verb check that would let
+        ``RUNTIME_OWNED_VERBS`` silently drift from the routing.
         """
         from djust.websocket import LiveViewConsumer
 
         src = inspect.getsource(LiveViewConsumer.receive)
-        assert 'msg_type == "url_change"' in src, "receive() must still handle url_change"
-        # The url_change arm must dispatch through the chokepoint helper.
+        # The runtime-owned arm must be DRIVEN by the set (load-bearing, #1852),
+        # not a hardcoded literal — so adding a verb to RUNTIME_OWNED_VERBS
+        # automatically routes it here.
+        assert "msg_type in self.RUNTIME_OWNED_VERBS" in src, (
+            "receive() must route runtime-owned verbs by RUNTIME_OWNED_VERBS "
+            'membership (load-bearing, #1852), not a hardcoded == "url_change".'
+        )
+        # The runtime-owned arm must dispatch through the chokepoint helper.
         assert "_dispatch_runtime_owned(data)" in src, (
-            "receive() must route url_change through _dispatch_runtime_owned "
-            "(→ dispatch_message), the #1852 chokepoint."
+            "receive() must route runtime-owned verbs through "
+            "_dispatch_runtime_owned (→ dispatch_message), the #1852 chokepoint."
         )
         # And must NOT call the old direct shim from receive().
         assert "self.handle_url_change(" not in src, (
@@ -474,3 +483,114 @@ class TestRuntimeOwnedVerbsContract:
                 f"no explicit branch for it — routing would hit the unknown-type "
                 f"error envelope."
             )
+
+    # -- Behavioral contract: the SET DRIVES routing (load-bearing) -------- #
+
+    @staticmethod
+    def _consumer_with_routing_spies():
+        """Build a ``LiveViewConsumer`` whose ``receive()`` switch can be driven
+        in isolation: a permissive rate limiter so dispatch is always reached,
+        and async spies replacing the three routing targets exercised here
+        (``_dispatch_runtime_owned``, ``handle_event``, ``handle_mount``).
+
+        Returns ``(consumer, routed)`` where ``routed`` is a dict mapping
+        ``"runtime"|"event"|"mount"`` → list-of-call-args, so each test asserts
+        WHICH arm a verb landed in.
+        """
+        from djust.websocket import LiveViewConsumer
+
+        consumer = LiveViewConsumer()
+
+        # Permissive rate limiter — let every frame reach the routing switch.
+        class _AllowAll:
+            def check(self, _msg_type):
+                return True
+
+            def check_upload(self):
+                return True
+
+            def should_disconnect(self):
+                return False
+
+        consumer._rate_limiter = _AllowAll()
+        consumer.view_instance = None
+
+        routed = {"runtime": [], "event": [], "mount": []}
+
+        async def _spy_runtime(data):
+            routed["runtime"].append(data)
+
+        async def _spy_event(data):
+            routed["event"].append(data)
+
+        async def _spy_mount(data, *a, **kw):
+            routed["mount"].append(data)
+
+        consumer._dispatch_runtime_owned = _spy_runtime
+        consumer.handle_event = _spy_event
+        consumer.handle_mount = _spy_mount
+        return consumer, routed
+
+    @pytest.mark.asyncio
+    async def test_every_runtime_owned_verb_routes_through_dispatch_helper(self):
+        """(a) EVERY verb in ``RUNTIME_OWNED_VERBS`` is dispatched via
+        ``_dispatch_runtime_owned`` by ``receive()`` — and lands in NO sibling
+        handler (``handle_event``/``handle_mount``).
+
+        This makes the set LOAD-BEARING: adding a verb to ``RUNTIME_OWNED_VERBS``
+        WITHOUT a routed arm (e.g. reverting the membership check to a hardcoded
+        ``== "url_change"``) makes that verb miss ``_dispatch_runtime_owned`` and
+        this test goes RED.
+        """
+        import json
+
+        from djust.websocket import LiveViewConsumer
+
+        for verb in sorted(LiveViewConsumer.RUNTIME_OWNED_VERBS):
+            consumer, routed = self._consumer_with_routing_spies()
+            await consumer.receive(text_data=json.dumps({"type": verb}))
+
+            assert [c.get("type") for c in routed["runtime"]] == [verb], (
+                f"verb {verb!r} is in RUNTIME_OWNED_VERBS but receive() did NOT "
+                f"route it through _dispatch_runtime_owned — the set has drifted "
+                f"from the routing (#1852). routed={routed!r}"
+            )
+            assert routed["event"] == [] and routed["mount"] == [], (
+                f"runtime-owned verb {verb!r} must NOT land in handle_event/"
+                f"handle_mount; routed={routed!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_runtime_owned_verbs_route_to_their_own_handlers(self):
+        """(b) Verbs NOT in ``RUNTIME_OWNED_VERBS`` are NOT dispatched via
+        ``_dispatch_runtime_owned``: ``event`` → ``handle_event``,
+        ``mount`` → ``handle_mount``.
+
+        Guards the inverse drift: if a future change adds ``event`` or ``mount``
+        to the set (or the membership arm is mis-ordered so it shadows the
+        sibling arms), this test goes RED — the verb would land in
+        ``_dispatch_runtime_owned`` instead of its bespoke WS handler.
+        """
+        import json
+
+        from djust.websocket import LiveViewConsumer
+
+        # Pre-condition: these are deliberately NOT runtime-owned today.
+        assert "event" not in LiveViewConsumer.RUNTIME_OWNED_VERBS
+        assert "mount" not in LiveViewConsumer.RUNTIME_OWNED_VERBS
+
+        # event → handle_event, not the runtime helper.
+        consumer, routed = self._consumer_with_routing_spies()
+        await consumer.receive(text_data=json.dumps({"type": "event", "event": "bump"}))
+        assert [c.get("type") for c in routed["event"]] == ["event"], routed
+        assert routed["runtime"] == [], (
+            f"'event' must route to handle_event, NOT _dispatch_runtime_owned; routed={routed!r}"
+        )
+
+        # mount → handle_mount, not the runtime helper.
+        consumer, routed = self._consumer_with_routing_spies()
+        await consumer.receive(text_data=json.dumps({"type": "mount", "view": "x"}))
+        assert [c.get("type") for c in routed["mount"]] == ["mount"], routed
+        assert routed["runtime"] == [], (
+            f"'mount' must route to handle_mount, NOT _dispatch_runtime_owned; routed={routed!r}"
+        )
