@@ -41,6 +41,13 @@ class LiveViewConfig:
             "max_warnings": 3,
             "max_connections_per_ip": 10,
             "reconnect_cooldown": 5,
+            # Dedicated higher-ceiling bucket for binary upload frames (#F17).
+            # Legitimate uploads are high-volume (a 10 MB file is ~157 64 KB
+            # chunks); this is sized to let a full single-file upload land as a
+            # burst, while a sustained flood still depletes the bucket and trips
+            # the abuse-disconnect.
+            "upload_rate": 200,
+            "upload_burst": 400,
         },
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
@@ -302,6 +309,8 @@ class LiveViewConfig:
                 "max_warnings",
                 "max_connections_per_ip",
                 "reconnect_cooldown",
+                "upload_rate",
+                "upload_burst",
             ):
                 val = rl.get(key)
                 if val is not None and (not isinstance(val, (int, float)) or val <= 0):

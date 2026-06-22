@@ -1650,6 +1650,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             rate=rl_cfg.get("rate", 100),
             burst=rl_cfg.get("burst", 20),
             max_warnings=rl_cfg.get("max_warnings", 3),
+            upload_rate=rl_cfg.get("upload_rate", 200),
+            upload_burst=rl_cfg.get("upload_burst", 400),
         )
 
         # Send connection acknowledgment
@@ -1806,6 +1808,32 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Check if this looks like an upload frame (first byte is 0x01-0x03)
                 frame_type = bytes_data[0]
                 if frame_type in (0x01, 0x02, 0x03):
+                    # Rate-account upload frames BEFORE dispatch (#F17). The
+                    # global gate below "applies to ALL message types (#107)",
+                    # but binary upload frames used to early-return here without
+                    # passing it — leaving the highest-volume message class
+                    # unthrottled and never tripping the abuse-disconnect. Use a
+                    # dedicated higher-ceiling upload bucket so legitimate
+                    # high-volume uploads aren't throttled, while a flood still
+                    # depletes the bucket → should_disconnect() → close(4429).
+                    if not self._rate_limiter.check_upload():
+                        if self._rate_limiter.should_disconnect():
+                            logger.warning("Upload-frame rate limit exceeded, disconnecting client")
+                            if getattr(self, "_client_ip", None):
+                                _rl = djust_config.get("rate_limit", {})
+                                cooldown = (
+                                    _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
+                                )
+                                ip_tracker.add_cooldown(self._client_ip, cooldown)
+                            await self.close(code=4429)
+                            return
+                        await self.send_json(
+                            {
+                                "type": "rate_limit_exceeded",
+                                "message": "Too many upload frames, some are being dropped",
+                            }
+                        )
+                        return
                     await self._handle_upload_frame(bytes_data)
                     return
 
@@ -5563,8 +5591,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # final Python state to Rust for rendering.
                 state = event.get("state")
                 if state and isinstance(state, dict):
+                    # Apply via safe_setattr — the same guard every other
+                    # state-restore sink uses (snapshot restore at ~:2311,
+                    # time_travel.py:276, mixins/request.py). A channel-layer
+                    # attacker (the framework's own stated threat model, see the
+                    # restricted handler path just below) must NOT be able to
+                    # overwrite dunders (__class__/__init__), framework internals
+                    # (_framework_attrs/_components/_rust_view), or private `_`
+                    # state via mass assignment (#F21, CWE-915/CWE-913).
+                    from .security import safe_setattr
+
                     for key, value in state.items():
-                        setattr(self.view_instance, key, value)
+                        safe_setattr(self.view_instance, key, value, allow_private=False)
 
                 # Call handler if specified — restricted to handle_* prefixed or
                 # @event_handler-decorated methods to prevent arbitrary method calls

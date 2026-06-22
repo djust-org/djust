@@ -47,12 +47,21 @@ class TokenBucket:
 
 class ConnectionRateLimiter:
     """
-    Per-connection rate limiter with a global bucket and per-handler buckets.
+    Per-connection rate limiter with a global bucket, per-handler buckets, and
+    a dedicated higher-ceiling bucket for binary upload frames.
 
     Args:
         rate: Global tokens per second (default from config).
         burst: Global burst capacity (default from config).
         max_warnings: Warnings before disconnect (default from config).
+        upload_rate: Upload-frame tokens per second. Legitimate uploads are
+            high-volume (a 10 MB file is ~157 64 KB chunk frames), so this bucket
+            is intentionally larger than the general per-message limit — but it
+            MUST exist so a binary-frame flood still trips ``should_disconnect()``
+            (#F17). Defaults to a higher ceiling than the global limit.
+        upload_burst: Upload-frame burst capacity. Sized to let a full
+            single-file upload land as one burst without throttling legit
+            throughput, while a sustained flood depletes the bucket and warns.
     """
 
     def __init__(
@@ -60,9 +69,17 @@ class ConnectionRateLimiter:
         rate: float = 100,
         burst: int = 20,
         max_warnings: int = 3,
+        upload_rate: float = 200,
+        upload_burst: int = 400,
     ):
         self.global_bucket = TokenBucket(rate, burst)
         self.handler_buckets: Dict[str, TokenBucket] = {}
+        # Dedicated bucket for binary upload frames (#F17). Without it, upload
+        # frames early-return before the global gate and so are never throttled
+        # nor counted toward the abuse-disconnect — the exact frame class an
+        # attacker would flood with. Higher ceiling than the global bucket so
+        # legitimate high-volume uploads are not throttled to nothing.
+        self.upload_bucket = TokenBucket(upload_rate, upload_burst)
         self.warnings = 0
         self.max_warnings = max_warnings
 
@@ -97,6 +114,28 @@ class ConnectionRateLimiter:
             logger.warning(
                 "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
                 sanitize_for_log(event_name),
+                self.warnings,
+                self.max_warnings,
+            )
+            return False
+
+        return True
+
+    def check_upload(self) -> bool:
+        """
+        Check a binary upload frame against the dedicated upload bucket (#F17).
+
+        Returns True if allowed, False if rate-limited. On failure this
+        increments the shared warning counter exactly like ``check()`` /
+        ``check_handler()``, so a sustained upload-frame flood trips
+        ``should_disconnect()`` → ``close(4429)`` + cooldown — closing the
+        bypass where binary upload frames were dispatched before the global
+        rate gate and so were never counted toward the abuse-disconnect.
+        """
+        if not self.upload_bucket.consume():
+            self.warnings += 1
+            logger.warning(
+                "Upload-frame rate limit exceeded (warning %d/%d)",
                 self.warnings,
                 self.max_warnings,
             )
