@@ -260,6 +260,11 @@ jobs:
           .venv/bin/python tests/playwright/test_draft_mode.py
           echo "Running nav + dj-hook regression guard (#1742)..."
           .venv/bin/python tests/playwright/test_nav_hooks.py
+          # Browser-smoke canary (#1849/#1848): mount + inline-in-dj-root
+          # script. Lives in this already-non-blocking leg per #1534 — it must
+          # go green on a runner before any promotion to a hard merge gate.
+          echo "Running browser-smoke canary (#1849/#1848)..."
+          .venv/bin/python tests/playwright/test_browser_smoke.py
 
       - name: Upload server logs on failure
         if: failure()
