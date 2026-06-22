@@ -230,8 +230,44 @@ lands verbatim on another. Keep every transport behind the shared chokepoint.
 ### Data Protection
 - [ ] **Sensitive data handling** - No passwords/keys in logs or responses
 - [ ] **Privacy considerations** - PII handling follows regulations
-- [ ] **Secure defaults** - New features are secure by default
 - [ ] **Exclusion/filter-rule changes — enumerate the OLD rule's matches** - When a change replaces a security-relevant exclusion or filter rule (file-exclusion lists, deny patterns, sanitizer allowlists), enumerate every input shape the OLD rule matched and confirm the NEW rule still matches each one. "Does the new rule reject the over-matches" is a different question from "does the new rule still reject everything the old rule rejected." PR #1519's first pass narrowed sensitive-file exclusion from substring to exact-match, which would have shipped `.env.production` / `db.sqlite3-wal` into deploy tarballs; Stage 8 caught it by constructing the falsifying case. *Source: Retro v1.0.0rc3 / GitHub #1505.*
+
+### Secure defaults for new features (#1856)
+
+A new feature is **secure-by-default** when removing every project-specific
+override still leaves it locked down. djust has four proven secure-default
+patterns; a new feature should *copy* the matching one rather than re-derive the
+controls. The full catalog (threat, canonical `file:symbol`, and copy-shape for
+each) is in [`docs/SECURE_DEFAULTS.md`](SECURE_DEFAULTS.md).
+
+- [ ] **Serializes models/user data? Start from the denylist** - Use the
+  `_resolve_sensitive_fields()` floor (`serialization.py`); never start from
+  "expose all fields". The `_ALWAYS_EXCLUDED_FIELDS` floor
+  (`password`/`is_superuser`/`is_staff`) is unconditional — an allowlist must
+  not opt it back in. *(SECURE_DEFAULTS.md pattern 1.)*
+- [ ] **Accepts state echoed back from the client? Sign + verify** - Sign on
+  emit (`sign_snapshot`), verify on receive (`unsign_snapshot`), treat a `None`
+  verdict as reject-and-fall-through. HMAC covers **public** state only — do not
+  store auth/ownership/PII in `_*` attrs expecting integrity (the private-attr
+  restore path is unsigned). *(SECURE_DEFAULTS.md pattern 2.)*
+- [ ] **Adds an endpoint / diagnostic surface? Fail closed, non-disclosing** -
+  Does this new endpoint/feature **fail closed**? Gate it with a precedence
+  ladder whose **default branch denies**, enforced inside the view, returning a
+  **non-disclosing 404** (never 403 — a 403 confirms the endpoint exists). Mirror
+  `api/openapi.py:_openapi_gate` (DEBUG → opt-in-setting → authenticated → 404)
+  or `observability/views.py:_gate` (DEBUG → localhost → 404).
+  *(SECURE_DEFAULTS.md pattern 3.)*
+- [ ] **Writes attributes from input? Use `safe_setattr`** - Route every
+  untrusted-key write through `safe_setattr(..., allow_private=False)`; pass
+  `allow_private=True` only for trusted server-side keys. *(SECURE_DEFAULTS.md
+  pattern 4.)*
+- [ ] **Adds a security control on a transport? Extend the anti-drift nets** -
+  Put the control in `security/` or `runtime.py` so every transport inherits it
+  (never per-transport — #1646). If it adds a security control on a transport,
+  did you add a parity axis in `test_transport_parity_security.py` AND a
+  concern-4 pin in `test_mount_chokepoint_structural.py`
+  (`TestMountOrchestrationChokepoint`)? See the **Transport chokepoint (#1646)**
+  subsection above.
 
 ### CSP-Strict Defaults for New Client-Side Framework Code
 

@@ -1333,6 +1333,8 @@ Three rules from the security-audit drain (private PRs #165–#177 → djust 1.0
 
 ## Additional Documentation
 
+- `docs/SECURE_DEFAULTS.md` — secure-by-default pattern catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default
+- `docs/SECURITY_GUIDELINES.md` — `djust.security` utilities, banned patterns, contributor security checklist
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
 - `CONTRIBUTING.md` — contribution guidelines
 - `QUICKSTART.md` — quick setup guide

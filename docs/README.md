@@ -97,6 +97,10 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[PyCharm Setup](ide-setup/PYCHARM_SETUP.md)** - Complete PyCharm configuration
 - **[PyCharm Quick Start](ide-setup/PYCHARM_QUICK_START.md)** - 10-minute essential setup
 
+### 🔒 Security
+- **[Secure Defaults Pattern Catalog](SECURE_DEFAULTS.md)** - The four proven secure-by-default patterns (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default
+- **[Security Guidelines](SECURITY_GUIDELINES.md)** - `djust.security` utilities, banned patterns, and the contributor security checklist
+
 ### 🚀 Development & CI/CD
 - **[AI Workflow Process](development/AI_WORKFLOW_PROCESS.md)** - AI-assisted development workflow
 - **[Definition of Done](development/DEFINITION_OF_DONE.md)** - Quality standards
