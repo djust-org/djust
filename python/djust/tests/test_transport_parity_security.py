@@ -487,17 +487,22 @@ class TestViewAuthParity:
             f"from the other transports."
         )
 
-    def test_all_transports_agree_on_auth_verdict(self):
-        """Cross-transport agreement: every transport returns the SAME deny verdict
-        for the SAME (view, request) — the parity invariant itself."""
-        view = _LoginRequiredView()
-        request = RequestFactory().get("/")
-        request.user = _AnonUser()
-        verdicts = {t: adapter(view, request) for t, adapter in _AUTH_ADAPTERS.items()}
-        assert len(set(verdicts.values())) == 1, (
-            f"Transports disagree on the check_view_auth verdict: {verdicts!r} — "
-            f"this is the finding-#14 auth-drift class this net exists to catch."
-        )
+    # NB: there is deliberately NO ``test_all_transports_agree_on_auth_verdict``
+    # here. The auth control is ALREADY converged on a SINGLE shared chokepoint
+    # today (``djust.auth.core.check_view_auth``) — every entry in
+    # ``_AUTH_ADAPTERS`` maps to the SAME ``_auth_verdict`` function, so a
+    # cross-transport "agree" assertion would only compare a function's output to
+    # itself: it can never fail and falsely implies a per-transport seam that does
+    # not exist. The real drift protection for this control is two-fold:
+    #   1. ``test_mount_chokepoint_structural.py`` concern-4, which pins that EACH
+    #      transport actually CALLS the shared ``check_view_auth`` (catches a
+    #      transport that stops routing through the chokepoint), and
+    #   2. the gate-off-proven deny/allow rows above, which verify the shared
+    #      helper denies/allows correctly (flipping ``check_view_auth`` to always
+    #      allow turns the deny rows RED).
+    # Only the ORIGIN axis (below) has genuinely distinct per-transport seams
+    # (``_is_allowed_origin`` / ``_sse_origin_allowed`` / ``validated_host_from_scope``),
+    # so its ``agree`` test is meaningful and IS retained.
 
 
 # --------------------------------------------------------------------------- #
@@ -589,16 +594,16 @@ class TestObjectPermissionParity:
             f"verdict drifted from the other transports."
         )
 
-    def test_all_transports_agree_on_object_permission_verdict(self):
-        """Cross-transport agreement: every transport returns the SAME object-perm
-        verdict for the SAME (view, request)."""
-        view = _ObjectDeniedView()
-        request = RequestFactory().get("/")
-        verdicts = {t: adapter(view, request) for t, adapter in _OBJECT_PERM_ADAPTERS.items()}
-        assert len(set(verdicts.values())) == 1, (
-            f"Transports disagree on the enforce_object_permission verdict: "
-            f"{verdicts!r} — finding #10/#11/#12 object-perm drift."
-        )
+    # NB: there is deliberately NO ``test_all_transports_agree_on_object_permission_verdict``
+    # here — for the same reason as the auth axis. The object-permission control is
+    # ALREADY converged on a SINGLE shared chokepoint, so every entry in
+    # ``_OBJECT_PERM_ADAPTERS`` maps to the SAME function and a cross-transport
+    # "agree" assertion would only compare a function's output to itself (distinct=1,
+    # can never fail, falsely implies a per-transport seam). Drift protection is
+    # ``test_mount_chokepoint_structural.py`` concern-4 (each transport CALLS the
+    # shared chokepoint) plus the gate-off-proven deny/allow rows above. Only the
+    # ORIGIN axis has genuinely distinct per-transport seams, so only IT keeps an
+    # ``agree`` test.
 
 
 # --------------------------------------------------------------------------- #
@@ -677,14 +682,16 @@ class TestRateLimitParity:
             f"bypassed or sized differently on this transport (F27 drift, #1646)."
         )
 
-    def test_all_transports_agree_on_rate_limit_trip_point(self):
-        """Cross-transport agreement: every transport trips at the SAME index for
-        the same @rate_limit settings — the parity invariant itself."""
-        trips = {t: adapter(t) for t, adapter in _RATE_LIMIT_ADAPTERS.items()}
-        assert len(set(trips.values())) == 1, (
-            f"Transports disagree on the @rate_limit trip point: {trips!r} — F27 "
-            f"per-transport-summing drift (the class the shared store retired)."
-        )
+    # NB: there is deliberately NO ``test_all_transports_agree_on_rate_limit_trip_point``
+    # here — same reasoning as the auth and object-perm axes. The @rate_limit
+    # control is ALREADY converged on a SINGLE shared per-caller store, so every
+    # entry in ``_RATE_LIMIT_ADAPTERS`` maps to the SAME ``_rate_trip_index``
+    # function and a cross-transport "agree" assertion would only compare a
+    # function's output to itself (distinct=1, can never fail, falsely implies a
+    # per-transport seam). Drift protection is ``test_mount_chokepoint_structural.py``
+    # concern-4 (each transport CALLS the shared store) plus the gate-off-proven
+    # trip-point rows above. Only the ORIGIN axis has genuinely distinct
+    # per-transport seams, so only IT keeps an ``agree`` test.
 
 
 # --------------------------------------------------------------------------- #
