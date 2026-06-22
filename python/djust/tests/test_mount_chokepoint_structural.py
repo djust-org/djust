@@ -451,6 +451,12 @@ def test_transport_modules_parse(module):
 # the helper-body pin (concern 4b) parses it explicitly below.
 _AUTH_CORE = _PKG_DIR / "auth" / "core.py"
 
+# api/dispatch.py is also a SUBPACKAGE module (outside _TOP_LEVEL_MODULES). The
+# HTTP-API + @server_function mount paths each enforce object-permission via
+# enforce_object_permission (#1857); concern 4c parses it explicitly below so a
+# future removal re-opens finding #10/#11/#12 on the API transport.
+_API_DISPATCH = _PKG_DIR / "api" / "dispatch.py"
+
 # Each pinned mount-orchestration symbol → the modules that MUST still reference
 # it, with the minimum non-import reference count expected on the current tree.
 # Post-#1853 (converged):
@@ -469,9 +475,14 @@ _MOUNT_ORCHESTRATION_PINS = {
     # 4a — the shared pre-mount auth+tenant sequence, on all three transports.
     "run_pre_mount_auth": {"websocket.py": 1, "runtime.py": 1, "sse.py": 1},
     # Object-permission family: any of these names counts toward the module's req.
+    # sse.py was added by #1857 (legacy SSE mount now enforces the post-mount
+    # object-perm check via enforce_object_permission). api/dispatch.py is a
+    # subpackage module pinned explicitly in concern 4c below (not via this dict,
+    # which path-joins labels under _PKG_DIR top-level).
     ("check_object_permission", "enforce_object_permission"): {
         "websocket.py": 1,
         "runtime.py": 1,
+        "sse.py": 1,
     },
     "validated_host_from_scope": {"websocket.py": 1, "runtime.py": 1},
 }
@@ -631,15 +642,34 @@ class TestMountOrchestrationChokepoint:
         post-mount inner step) and runtime still uses enforce_object_permission
         (the ADR-017 url-change re-check).
 
-        A regression that drops either re-opens finding #10/#11/#12.
+        Extended by #1857: the legacy SSE mount path (sse.py) and the HTTP-API
+        dispatch paths (api/dispatch.py — both dispatch_api and
+        dispatch_server_function) now enforce the object-perm check via
+        enforce_object_permission. Pin those too so a future removal re-opens
+        finding #10/#11/#12 on the SSE / API transports.
+
+        A regression that drops ANY of these re-opens finding #10/#11/#12.
+
+        Gate-off (#1468): removing the enforce_object_permission call from
+        sse.py drops its count to 0 → the SSE assertion below FAILS; removing
+        BOTH api/dispatch.py calls drops its count to 0 → the API assertion
+        FAILS (api/dispatch.py imports it lazily inside each function, so the
+        import-line exclusion leaves only the genuine call references).
         """
         ws_tree = _parse(_PKG_DIR / "websocket.py")
         rt_tree = _parse(_PKG_DIR / "runtime.py")
+        sse_tree = _parse(_PKG_DIR / "sse.py")
+        api_tree = _parse(_API_DISPATCH)
         ws_imports = _import_aliased_lines(ws_tree)
         rt_imports = _import_aliased_lines(rt_tree)
+        sse_imports = _import_aliased_lines(sse_tree)
+        api_imports = _import_aliased_lines(api_tree)
 
         ws_inner = _count_symbol_refs(ws_tree, ("check_object_permission",), ws_imports)
         rt_wrapper = _count_symbol_refs(rt_tree, ("enforce_object_permission",), rt_imports)
+        sse_wrapper = _count_symbol_refs(sse_tree, ("enforce_object_permission",), sse_imports)
+        # dispatch_api + dispatch_server_function each call it → expect >= 2.
+        api_wrapper = _count_symbol_refs(api_tree, ("enforce_object_permission",), api_imports)
 
         assert ws_inner >= 1, (
             "websocket.py mount path no longer references check_object_permission "
@@ -649,4 +679,15 @@ class TestMountOrchestrationChokepoint:
         assert rt_wrapper >= 1, (
             "runtime.py no longer references enforce_object_permission (the ADR-017 "
             "url-change object-perm re-check) — finding #10/#11/#12 regression."
+        )
+        assert sse_wrapper >= 1, (
+            "sse.py legacy mount path no longer references enforce_object_permission "
+            "(the ADR-017 post-mount object-perm check, #1857) — finding #10/#11/#12 "
+            "regression on the SSE transport."
+        )
+        assert api_wrapper >= 2, (
+            "api/dispatch.py no longer references enforce_object_permission on BOTH "
+            "the dispatch_api and dispatch_server_function mount paths (#1857) — "
+            "finding #10/#11/#12 regression on the HTTP-API transport. Expected >= 2 "
+            "call sites, found %d." % api_wrapper
         )

@@ -310,6 +310,20 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         # View demands login — in HTTP land, this is 401 not a redirect.
         return api_error(401, "login_required", "Authentication required")
 
+    # 6b. Object-permission check (ADR-017) on the HTTP-API mount path. The view
+    # is instantiated + mount()ed (step 5, so get_object()'s access-determining
+    # state exists) and request is bound; enforce the object-level check here —
+    # after view-level auth, before the handler runs — so a handler can't read/
+    # mutate a denied object (IDOR; finding #10/#11/#12 on the API transport).
+    # No-op for views without a custom get_object; fail-closed on denial / a
+    # None request / any non-PermissionDenied exception (see enforce_object_permission).
+    from djust.auth.core import enforce_object_permission
+
+    try:
+        enforce_object_permission(view, request)
+    except PermissionDenied as exc:
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+
     # 7. Look up handler + verify opt-in.
     handler = getattr(view, handler_name, None)
     if handler is None or not callable(handler):
@@ -511,6 +525,18 @@ def dispatch_server_function(
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     if redirect_url:
         return api_error(401, "login_required", "Authentication required")
+
+    # 5b. Object-permission check (ADR-017) on the @server_function mount path.
+    # Same rationale as dispatch_api step 6b: the view is mounted (request bound)
+    # so get_object() works; enforce after view-level auth, before the function
+    # runs, so a server function can't read/mutate a denied object (IDOR). No-op
+    # for views without a custom get_object; fail-closed on denial.
+    from djust.auth.core import enforce_object_permission
+
+    try:
+        enforce_object_permission(view, request)
+    except PermissionDenied as exc:
+        return api_error(403, "permission_denied", str(exc) or "Permission denied")
 
     # 6. Resolve the attribute and gate on @server_function metadata.
     fn = getattr(view, function_name, None)
