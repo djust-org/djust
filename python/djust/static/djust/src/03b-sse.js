@@ -267,10 +267,19 @@ class LiveViewSSE {
                 }
                 break;
 
-            case 'navigate':
-                // Auth redirect (sent by server when auth check fails)
-                window.location.href = data.to;
+            case 'navigate': {
+                // Auth redirect (sent by server when auth check fails).
+                // Validate scheme/origin via the shared guard so the SSE
+                // transport can't pivot to open-redirect / javascript: DOM-XSS
+                // and can't drift from the WS `navigate` path (#1646, finding #16).
+                const sseTarget = window.djust.safeNavigationTarget(data.to);
+                if (sseTarget) {
+                    window.location.href = sseTarget; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[SSE] navigate target rejected: %s', String(data.to));
+                }
                 break;
+            }
 
             case 'stream':
                 if (window.djust.handleStreamMessage) {

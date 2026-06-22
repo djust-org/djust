@@ -54,13 +54,24 @@
         // differs from the current page, fall back to a full-page
         // navigation — that's the caller's intent. (#1599)
         if (newUrl.origin !== window.location.origin) {
+            // Validate scheme/origin before the hard navigation. A
+            // `javascript:`/`data:` data.path parses to an opaque origin that
+            // is `!== location.origin`, so it lands here — reject it (finding
+            // #16, #1646). Legit absolute http(s) sister-site URLs pass.
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (!safe) {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_patch rejected unsafe target: %s', newUrl.toString());
+                }
+                return;
+            }
             if (globalThis.djustDebug) {
                 console.log(
                     '[LiveView] live_patch cross-origin → full-page nav: %s',
-                    newUrl.toString(),
+                    safe,
                 );
             }
-            window.location.href = newUrl.toString();
+            window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
         }
 
@@ -96,10 +107,25 @@
         // differs from the current page (e.g. a dj-navigate link pointing
         // at a sister site), fall back to a full-page navigation. (#1599)
         if (newUrl.origin !== window.location.origin) {
+            // Validate scheme/origin before the hard navigation. A
+            // `javascript:`/`data:` data.path parses to an opaque origin that
+            // is `!== location.origin`, so it lands here — reject it (finding
+            // #16, #1646). Legit absolute http(s) sister-site URLs pass.
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (!safe) {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect rejected unsafe target: %s', newUrl.toString());
+                }
+                // Stop the page-loading bar we started above.
+                if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+                    window.djust.pageLoading.stop?.();
+                }
+                return;
+            }
             if (globalThis.djustDebug) {
                 console.log(
                     '[LiveView] live_redirect cross-origin → full-page nav: %s',
-                    newUrl.toString(),
+                    safe,
                 );
             }
             // Stop the page-loading bar we started above; the full nav
@@ -107,7 +133,7 @@
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
                 window.djust.pageLoading.stop?.();
             }
-            window.location.href = newUrl.toString();
+            window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
         }
 
@@ -181,9 +207,17 @@
                 }
                 liveViewWS.sendMessage(outgoing);
             } else {
-                // Fallback: full page navigation if we can't resolve the view
+                // Fallback: full page navigation if we can't resolve the view.
+                // newUrl is same-origin here (cross-origin returned above), but
+                // it's still data.path-derived — validate via the shared guard
+                // for consistency (finding #16).
                 console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
-                window.location.href = newUrl.toString();
+                const safe = window.djust.safeNavigationTarget(newUrl.toString());
+                if (safe) {
+                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect fallback rejected unsafe target: %s', newUrl.toString());
+                }
             }
         }
     }
@@ -364,7 +398,15 @@
 
         // dj-patch-reload attribute forces full page navigation (opt-in escape hatch).
         if (el.hasAttribute('dj-patch-reload')) {
-            window.location.href = newUrl.toString();
+            // newUrl is derived from the dj-patch attribute value — validate via
+            // the shared guard so an attacker-influenced dj-patch can't pivot to
+            // javascript:/data: DOM-XSS or open-redirect (finding #16).
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (safe) {
+                window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else if (globalThis.djustDebug) {
+                console.warn('[LiveView] dj-patch-reload rejected unsafe target: %s', newUrl.toString());
+            }
             return;
         }
 
@@ -538,7 +580,15 @@
             // <a href> is the complete intended target). Falls back to a normal
             // load if the view isn't mounted yet.
             if (!liveViewWS.viewMounted) {
-                window.location.href = url.toString();
+                // url is already same-origin http(s) (validated at the top of
+                // this handler), but route through the shared guard for
+                // consistency across all location.href sinks (finding #16).
+                const safe = window.djust.safeNavigationTarget(url.toString());
+                if (safe) {
+                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] auto-navigate rejected unsafe target: %s', url.toString());
+                }
                 return;
             }
             window.history.pushState({ djust: true }, '', url.pathname + url.search);

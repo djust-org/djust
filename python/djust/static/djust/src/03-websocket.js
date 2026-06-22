@@ -610,27 +610,24 @@ class LiveViewWebSocket {
                     } else if (typeof window !== 'undefined' && window.location) {
                         // Fallback — hard navigation if the dispatcher
                         // isn't wired (non-LiveView pages).
-                        // Same-origin guard: server-controlled `nav.to`
-                        // is generally trusted but defense-in-depth
-                        // prevents an attacker who breaches the wire
-                        // protocol from pivoting to open-redirect /
-                        // javascript: scheme XSS. Only allow same-origin
-                        // absolute paths; reject protocol-relative
-                        // (`//evil.com`), absolute URLs to other origins,
-                        // and `javascript:` / `data:` schemes.
+                        // Scheme/origin guard via the SHARED helper so the WS
+                        // and SSE `navigate` paths route through one
+                        // implementation and can't drift (#1646, finding #16).
+                        // server-controlled `nav.to` is generally trusted but
+                        // defense-in-depth prevents an attacker who breaches the
+                        // wire protocol from pivoting to open-redirect /
+                        // javascript: scheme XSS. Allows same-origin absolute
+                        // paths and absolute http(s) URLs (#1599); rejects
+                        // protocol-relative (`//evil.com`) and `javascript:` /
+                        // `data:` schemes.
                         // Closes CodeQL js/client-side-unvalidated-url-redirection.
-                        const target = nav.to;
-                        const isSameOriginPath = (
-                            target.length > 0 &&
-                            target.charAt(0) === '/' &&
-                            target.charAt(1) !== '/'  // reject protocol-relative
-                        );
-                        if (isSameOriginPath) {
-                            window.location.href = target; // codeql[js/xss] -- target validated to same-origin path (charAt(0)==='/' && charAt(1)!=='/')
+                        const navTarget = window.djust.safeNavigationTarget(nav.to);
+                        if (navTarget) {
+                            window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
                         } else if (globalThis.djustDebug) {
                             console.warn(
-                                '[djust] live_redirect rejected non-same-origin target:',
-                                target,
+                                '[djust] live_redirect rejected unsafe target:',
+                                nav.to,
                             );
                         }
                     }
