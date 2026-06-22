@@ -1,11 +1,13 @@
-"""djust system checks — security checks (S0xx) — AST-based.
+"""djust system checks — security checks (S0xx).
 
-Split from the former monolithic ``checks.py`` (#1822). No behavior change.
+Mostly AST-based (S001-S009); S011 is a template-source scan (inline-script /
+CSP). Split from the former monolithic ``checks.py`` (#1822).
 """
 
 import ast
 import logging
 import os
+import re
 
 from django.core.checks import register
 
@@ -13,9 +15,11 @@ import djust.checks as _root
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
+    _get_template_dirs,
     _has_noqa,
     _is_check_suppressed,
     _iter_python_files,
+    _iter_template_files,
     _parse_python_file,
 )
 
@@ -211,6 +215,58 @@ def check_security(app_configs, **kwargs):
                             line_number=auth_dispatch.lineno,
                         )
                     )
+
+                # S009 (#1854) -- a LiveView that declares VIEW-level auth
+                # but exposes PUBLIC @event_handler methods with NO per-handler
+                # gate. A user who passes the view's mount-time auth could call
+                # a sensitive handler that needed finer (per-action)
+                # authorization. Conservative by design: only fires when the
+                # view *clearly* has view-auth AND a public, mutating-looking
+                # handler with no gate (no @permission_required on the handler,
+                # no class-level check_permissions/has_object_permission).
+                if not _is_check_suppressed("djust.S009"):
+                    for handler in _ungated_event_handlers(node):
+                        # Honor a "noqa S009" comment on the def line OR any of
+                        # the handler's decorator lines (the author may annotate
+                        # the @event_handler line rather than the def).
+                        noqa_lines = [handler.lineno] + [d.lineno for d in handler.decorator_list]
+                        if any(_has_noqa(source_lines, ln, "S009") for ln in noqa_lines):
+                            continue
+                        errors.append(
+                            DjustWarning(
+                                "%s:%d -- LiveView %r declares view-level auth "
+                                "but exposes the public @event_handler %r with "
+                                "no per-handler authorization gate. A user who "
+                                "passes the view's mount auth can call this "
+                                "handler." % (relpath, handler.lineno, node.name, handler.name),
+                                hint=(
+                                    "View-level auth (login_required / "
+                                    "permission_required / a Django auth mixin) "
+                                    "only gates the mount; it does NOT gate "
+                                    "individual events. If this handler needs "
+                                    "finer authorization, add "
+                                    "@permission_required(...) to it (or a "
+                                    "check_permissions() override that inspects "
+                                    "the event), or rename it with a leading "
+                                    "underscore if it is not meant to be a "
+                                    "client-callable handler. If the view-level "
+                                    "auth is sufficient for every handler, "
+                                    "suppress via DJUST_CONFIG "
+                                    "{'suppress_checks': ['S009']} or a "
+                                    "`# noqa: S009` on the handler."
+                                ),
+                                id="djust.S009",
+                                fix_hint=(
+                                    "Add @permission_required('app.perm') above "
+                                    "@event_handler on `%s` (line %d in `%s`), "
+                                    "or rename it `_%s` if it is not a "
+                                    "client-callable event handler."
+                                    % (handler.name, handler.lineno, relpath, handler.name)
+                                ),
+                                file_path=filepath,
+                                line_number=handler.lineno,
+                            )
+                        )
 
     return errors
 
@@ -444,3 +500,434 @@ def _is_dispatch_auth_method_decorator(deco) -> bool:
     elif isinstance(inner, ast.Attribute):
         inner_name = inner.attr
     return inner_name in _AUTH_DECORATOR_NAMES
+
+
+# ---------------------------------------------------------------------------
+# S009 (#1854) -- event-handler-needs-auth
+# ---------------------------------------------------------------------------
+#
+# A LiveView that gates its *mount* (view-level auth) but exposes public
+# @event_handler methods with no per-handler authorization gate. The view-auth
+# only runs once at mount; individual events are dispatched afterwards without
+# re-checking unless the handler itself carries @permission_required (which
+# ``djust.auth.check_handler_permission`` enforces). So a user who passes the
+# mount gate can call any public handler. S009 is conservative: it fires only
+# when the class CLEARLY declares view-auth AND has a public, mutating-looking
+# handler with no gate.
+
+# Django auth mixins (AccessMixin family) that, in a LiveView's bases, signal
+# view-level authorization.
+_AUTH_MIXIN_BASE_NAMES = frozenset(
+    {
+        "AccessMixin",
+        "LoginRequiredMixin",
+        "PermissionRequiredMixin",
+        "UserPassesTestMixin",
+        # djust's own auth mixins (python/djust/auth.py)
+        "LiveViewLoginRequiredMixin",
+        "LiveViewPermissionRequiredMixin",
+        "LiveViewUserPassesTestMixin",
+    }
+)
+
+# Method names that, when overridden on the view, implement a PER-EVENT
+# authorization gate (so S009 should NOT fire — the view gates events itself).
+_EVENT_GATE_METHOD_NAMES = frozenset({"check_handler_permission", "check_event_permission"})
+
+# Heuristic: a public handler is "sensitive"/"mutating-looking" unless its name
+# is clearly a read-only accessor. We stay conservative — better to under-fire
+# than to train developers to blanket-suppress. A handler is exempt (treated as
+# read-only) when its name starts with one of these verbs.
+_READ_ONLY_HANDLER_PREFIXES = (
+    "get_",
+    "load_",
+    "fetch_",
+    "list_",
+    "show_",
+    "view_",
+    "search_",
+    "filter_",
+    "render_",
+    "display_",
+    "refresh_",
+)
+
+
+def _decorator_callable_name(deco):
+    """Return the simple callable name of a decorator node (Name/Call/Attribute)."""
+    target = deco.func if isinstance(deco, ast.Call) else deco
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    return None
+
+
+def _is_event_handler_decorator(deco) -> bool:
+    """True if ``deco`` is ``@event_handler`` / ``@event_handler(...)`` / ``@action(...)``."""
+    return _decorator_callable_name(deco) in ("event_handler", "action")
+
+
+def _is_permission_required_decorator(deco) -> bool:
+    """True if ``deco`` is ``@permission_required(...)`` (the per-handler gate)."""
+    return _decorator_callable_name(deco) == "permission_required"
+
+
+def _class_attr_is_truthy(node: "ast.ClassDef", attr_name: str) -> bool:
+    """True if the class body assigns ``attr_name = <truthy-literal>``.
+
+    Conservative: only counts an assignment whose value is a constant we can
+    statically evaluate as truthy (``True``, a non-empty string, a non-zero
+    number) OR a non-empty list/tuple/set of perms. A bare-name / call value is
+    treated as truthy too (e.g. ``permission_required = SOME_PERMS``) since the
+    author clearly intends to gate.
+    """
+    for item in node.body:
+        if isinstance(item, ast.Assign):
+            targets = item.targets
+        elif isinstance(item, ast.AnnAssign):
+            targets = [item.target] if item.target is not None else []
+        else:
+            continue
+        for tgt in targets:
+            if isinstance(tgt, ast.Name) and tgt.id == attr_name:
+                value = item.value
+                if value is None:
+                    return False
+                if isinstance(value, ast.Constant):
+                    return bool(value.value)
+                if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+                    return len(value.elts) > 0
+                # Name / Call / Attribute reference -> assume an intentional gate.
+                return True
+    return False
+
+
+def _class_declares_view_auth(node: "ast.ClassDef") -> bool:
+    """True if this LiveView clearly declares view-level (mount) authorization.
+
+    Signals (any one suffices):
+      * a truthy ``login_required`` / ``permission_required`` class attribute;
+      * an overridden ``check_permissions`` method;
+      * a Django/djust auth mixin (AccessMixin family) in the bases;
+      * an auth-performing ``dispatch`` override or
+        ``@method_decorator(login_required, name="dispatch")`` on the class.
+    """
+    if _class_attr_is_truthy(node, "login_required") or _class_attr_is_truthy(
+        node, "permission_required"
+    ):
+        return True
+    for item in node.body:
+        if (
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name == "check_permissions"
+        ):
+            return True
+    for base in node.bases:
+        base_name = None
+        if isinstance(base, ast.Name):
+            base_name = base.id
+        elif isinstance(base, ast.Attribute):
+            base_name = base.attr
+        if base_name in _AUTH_MIXIN_BASE_NAMES:
+            return True
+    if _liveview_auth_dispatch_method(node) is not None:
+        return True
+    for deco in node.decorator_list:
+        if _is_dispatch_auth_method_decorator(deco):
+            return True
+    return False
+
+
+def _class_gates_events(node: "ast.ClassDef") -> bool:
+    """True if the class overrides a per-event authorization hook.
+
+    A custom ``check_handler_permission`` / ``check_event_permission`` override
+    means the view authorizes individual events itself, so S009 must stay
+    silent (avoid false positives on views with their own event-auth layer).
+    """
+    for item in node.body:
+        if (
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name in _EVENT_GATE_METHOD_NAMES
+        ):
+            return True
+    return False
+
+
+def _ungated_event_handlers(node: "ast.ClassDef"):
+    """Yield public ``@event_handler`` method nodes with no per-handler auth gate.
+
+    Yields nothing unless the class declares view-level auth (so the gap is
+    real) and does not gate events itself. A handler is yielded only when it is
+    public (name does not start with ``_``), is decorated with
+    ``@event_handler`` / ``@action``, carries no ``@permission_required``, and
+    does not look read-only (see ``_READ_ONLY_HANDLER_PREFIXES``).
+    """
+    if not _class_declares_view_auth(node):
+        return
+    if _class_gates_events(node):
+        return
+    for item in node.body:
+        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if item.name.startswith("_"):
+            continue
+        decos = item.decorator_list
+        if not any(_is_event_handler_decorator(d) for d in decos):
+            continue
+        if any(_is_permission_required_decorator(d) for d in decos):
+            continue
+        if item.name.startswith(_READ_ONLY_HANDLER_PREFIXES):
+            continue
+        yield item
+
+
+# ---------------------------------------------------------------------------
+# S011 (#1854 / #1848) -- inline <script> in a LiveView template without CSP
+# ---------------------------------------------------------------------------
+#
+# An inline <script> with executable content emitted inside a LiveView template
+# (dj-view / dj-root region) is doubly problematic:
+#   1. CSP: shipping inline executable JS means a strict Content-Security-Policy
+#      (no 'unsafe-inline', no per-script nonce) would block it.
+#   2. #1848: morphdom does NOT execute <script> tags it inserts/re-creates, so
+#      an inline <script> inside the dj-root silently never runs after the
+#      #1610 WS-mount morph -- handlers it registers never fire, no console
+#      error.
+# Both point the developer to the same fix: move page JS to a static module /
+# a base-template block rendered AFTER the dj-root, or add a CSP nonce.
+#
+# S011 fires ONLY when (a) the template is a LiveView template (has dj-view or
+# dj-root), (b) it contains an inline executable <script> (NOT src-include, NOT
+# a data block like type="application/json" / "text/template"), AND (c) no CSP
+# is configured project-wide (no django-csp middleware, no CSP/SECURE_CSP
+# setting). Low false-positive by construction; suppress with
+# ``{# noqa: S011 #}`` on the script line or globally via suppress_checks.
+
+# Matches a <script ...> OPEN tag (captures the attribute text up to '>').
+_SCRIPT_OPEN_RE = re.compile(r"<script\b([^>]*)>", re.IGNORECASE)
+# Extract a type="..."/'...' attribute value from a script open tag's attrs.
+# Anchor with ``(?<![\w-])`` not a bare ``\b`` so ``data-type`` / a custom
+# ``x-type`` attribute is not mistaken for the real ``type`` attribute (#1517).
+_SCRIPT_TYPE_RE = re.compile(r"""(?<![\w-])type\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+# Detect a src= attribute (external script — has no inline body to block/skip).
+# ``(?<![\w-])`` so ``data-src`` does not count as a real external src.
+_SCRIPT_SRC_RE = re.compile(r"""(?<![\w-])src\s*=\s*["']""", re.IGNORECASE)
+# Detect a nonce= attribute (author has opted into a CSP nonce — exempt).
+# ``(?<![\w-])`` so ``data-nonce`` is not mistaken for a real CSP nonce.
+_SCRIPT_NONCE_RE = re.compile(r"(?<![\w-])nonce\s*=", re.IGNORECASE)
+# A real HTML OPEN tag (``<div ...>``) that bears a dj-root / dj-view attribute.
+# Group 1 is the element name so we can balance the subtree. Restricted to
+# real tags (``<name``) so escaped doc examples (``&lt;div dj-root&gt;``) and
+# attribute references never match.
+_DJ_ROOT_OPEN_TAG_RE = re.compile(
+    r"<([a-zA-Z][\w-]*)\b[^>]*\bdj-(?:root|view)\b[^>]*>", re.IGNORECASE
+)
+# ``<pre>``/``<code>`` regions hold escaped example markup, not live DOM — any
+# script inside them is documentation, never executed. Blanked before scanning
+# (newlines preserved so line numbers stay accurate), mirroring
+# ``_strip_verbatim_blocks`` for verbatim regions.
+_PRE_CODE_BLOCK_RE = re.compile(r"<(pre|code)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+
+# script "type" values that hold DATA, not executable JS (CSP-irrelevant,
+# #1848-irrelevant). Anything NOT in this set (or absent / a JS type) is
+# treated as executable.
+_NON_EXECUTABLE_SCRIPT_TYPES = frozenset(
+    {
+        "application/json",
+        "application/ld+json",
+        "text/template",
+        "text/html",
+        "text/x-template",
+        "text/x-handlebars-template",
+        "text/markdown",
+        "importmap",
+        "speculationrules",
+    }
+)
+
+
+def _script_open_is_executable_inline(attrs: str) -> bool:
+    """True if a ``<script ...>`` open tag is inline executable JS.
+
+    Excludes external scripts (``src=``), nonce-bearing scripts (author opted
+    into CSP), and data blocks (``type="application/json"`` etc.). A bare
+    ``<script>`` (no type) or a JS type (``text/javascript`` / ``module``) is
+    executable.
+    """
+    if _SCRIPT_SRC_RE.search(attrs):
+        return False
+    if _SCRIPT_NONCE_RE.search(attrs):
+        return False
+    type_match = _SCRIPT_TYPE_RE.search(attrs)
+    if type_match is not None:
+        type_val = type_match.group(1).strip().lower()
+        if type_val in _NON_EXECUTABLE_SCRIPT_TYPES:
+            return False
+    return True
+
+
+def _blank_pre_code(content: str) -> str:
+    """Replace ``<pre>``/``<code>`` block bodies with spaces (newlines kept).
+
+    Escaped example markup inside docs lives in these blocks; scripts there are
+    never executed. Keeping newlines preserves line numbers for the outer scan.
+    Returns ``content`` unchanged when no such block exists (common case).
+    """
+    if "<pre" not in content.lower() and "<code" not in content.lower():
+        return content
+
+    def _redact(match: "re.Match") -> str:
+        body = match.group(0)
+        return "".join("\n" if ch == "\n" else " " for ch in body)
+
+    return _PRE_CODE_BLOCK_RE.sub(_redact, content)
+
+
+def _dj_root_ranges(content: str):
+    """Return ``[(start, end), ...]`` char ranges of each dj-root/dj-view subtree.
+
+    For each real opening tag bearing ``dj-root`` / ``dj-view`` we balance the
+    SAME element name forward to find its matching close, so a script is only
+    "inside the dj-root" if it falls within one of these ranges. This is what
+    makes S011 precise: page scripts AFTER ``</div> <!-- close dj-root -->`` or
+    inside a post-root ``{% block extra_scripts %}`` fall outside every range
+    and are not flagged. Void/self-closing roots and unbalanced markup degrade
+    safely (the range simply extends to end-of-document or is skipped).
+    """
+    ranges = []
+    for open_match in _DJ_ROOT_OPEN_TAG_RE.finditer(content):
+        tag_name = open_match.group(1).lower()
+        start = open_match.start()
+        # Self-closing (``<x ... />``) — empty subtree, nothing to contain.
+        if open_match.group(0).rstrip().endswith("/>"):
+            continue
+        # Balance <tag>/</tag> from just after this opening tag.
+        depth = 1
+        pos = open_match.end()
+        same_tag_re = re.compile(r"<(/?)" + re.escape(tag_name) + r"\b[^>]*?(/?)>", re.IGNORECASE)
+        end = len(content)
+        for m in same_tag_re.finditer(content, pos):
+            is_close = m.group(1) == "/"
+            is_self_close = m.group(2) == "/"
+            if is_close:
+                depth -= 1
+                if depth == 0:
+                    end = m.end()
+                    break
+            elif not is_self_close:
+                depth += 1
+        ranges.append((start, end))
+    return ranges
+
+
+def _csp_is_configured() -> bool:
+    """True if the project configures a Content-Security-Policy.
+
+    Detects (any one): django-csp middleware in ``MIDDLEWARE``; a django-csp
+    ``CONTENT_SECURITY_POLICY`` setting (>=4.0); any legacy ``CSP_*`` directive
+    setting; or a ``SECURE_CSP*`` setting. Conservative: any CSP signal
+    silences S011 (the author has a CSP story; let them own it).
+    """
+    try:
+        from django.conf import settings
+    except Exception:  # pragma: no cover - settings always importable in practice
+        return False
+
+    middleware = getattr(settings, "MIDDLEWARE", None) or []
+    for mw in middleware:
+        if "csp" in str(mw).lower():
+            return True
+
+    if getattr(settings, "CONTENT_SECURITY_POLICY", None):
+        return True
+
+    for name in dir(settings):
+        if name.startswith("CSP_") or name.startswith("SECURE_CSP"):
+            try:
+                if getattr(settings, name, None):
+                    return True
+            except Exception:  # pragma: no cover - defensive
+                continue
+    return False
+
+
+@register("djust")
+def check_inline_script_csp(app_configs, **kwargs):
+    """S011 (#1854 / #1848): inline executable <script> in a LiveView template
+    shipped without a CSP setting.
+
+    Separate registered check (mirrors ``check_upload_client_name_path_sink``)
+    so the template-scan stays out of the AST-only ``check_security`` walk.
+    """
+    errors = []
+    if _is_check_suppressed("djust.S011"):
+        return errors
+    if _csp_is_configured():
+        # The project has a CSP; inline-script handling is the author's call.
+        return errors
+
+    tpl_dirs = _get_template_dirs()
+    if not tpl_dirs:
+        return errors
+
+    for filepath in _iter_template_files(tpl_dirs):
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError:
+            continue
+
+        # Blank <pre>/<code> example markup so escaped/doc scripts never match.
+        scan = _blank_pre_code(content)
+
+        # Only flag scripts that fall INSIDE a real dj-root/dj-view subtree —
+        # that is the #1610/#1848 morph region. A page script after the dj-root
+        # closes (or in a post-root {% block extra_scripts %}) is outside every
+        # range and correctly ignored. This is what keeps S011 precise.
+        ranges = _dj_root_ranges(scan)
+        if not ranges:
+            continue
+
+        relpath = os.path.relpath(filepath)
+        source_lines = [""] + content.splitlines()
+        for match in _SCRIPT_OPEN_RE.finditer(scan):
+            if not _script_open_is_executable_inline(match.group(1)):
+                continue
+            pos = match.start()
+            if not any(lo <= pos < hi for lo, hi in ranges):
+                continue
+            lineno = content[:pos].count("\n") + 1
+            if _has_noqa(source_lines, lineno, "S011"):
+                continue
+            errors.append(
+                DjustWarning(
+                    "%s:%d -- inline <script> with executable JS inside a "
+                    "LiveView template and no Content-Security-Policy is "
+                    "configured. Inline scripts inside the dj-root are not "
+                    "re-executed after djust morphs the mount HTML (#1848), "
+                    "and a strict CSP would block them." % (relpath, lineno),
+                    hint=(
+                        "Move page JS into a static module (served from "
+                        "static/, registered on DOMContentLoaded + a "
+                        "MutationObserver for morph-managed regions), or into a "
+                        "base-template block rendered AFTER the dj-root "
+                        "</div>. If the inline script is intentional, add a CSP "
+                        'nonce (nonce="{{ request.csp_nonce }}" with '
+                        "django-csp) or place it outside the dj-root. Suppress "
+                        "with `{# noqa: S011 #}` on the script line or via "
+                        "DJUST_CONFIG {'suppress_checks': ['S011']}."
+                    ),
+                    id="djust.S011",
+                    fix_hint=(
+                        "Move the inline <script> at line %d in `%s` to a "
+                        "static JS module or a post-dj-root base block, or add "
+                        "a CSP nonce." % (lineno, relpath)
+                    ),
+                    file_path=filepath,
+                    line_number=lineno,
+                )
+            )
+
+    return errors
