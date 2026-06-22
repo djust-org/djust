@@ -374,6 +374,82 @@ def enforce_object_permission(view_instance, request) -> None:
         raise PermissionDenied("Access denied for this object.") from exc
 
 
+def _bind_current_tenant(tenant) -> None:
+    """Bind *tenant* into the current-tenant ContextVar (Finding #6).
+
+    Lazily imports ``djust.tenants.middleware.set_current_tenant`` and is a
+    no-op when the optional tenants module is unavailable. This is the single
+    source of the tenant-bind step previously hand-copied as ``_bind_tenant``
+    in ``websocket.py`` and ``runtime.py`` (both byte-identical). The transports
+    keep their own ``_bind_tenant`` aliases for the NON-mount paths (disconnect
+    cleanup, per-event re-bind); only the shared pre-mount sequence routes
+    through here.
+    """
+    try:
+        from ..tenants.middleware import set_current_tenant
+
+        set_current_tenant(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        pass
+
+
+def run_pre_mount_auth(view_instance, request) -> Optional[str]:
+    """Run the canonical pre-mount security sequence and return the auth verdict.
+
+    Single-sources the ORDER in which every live mount path (WebSocket
+    ``handle_mount``, generic ``ViewRuntime.dispatch_mount``, legacy SSE
+    ``_sse_mount_view``) authorises and resolves tenancy BEFORE calling
+    ``mount()``. The three transports already call the same leaf chokepoints
+    (:func:`check_view_auth`, the view's ``_ensure_tenant`` hook, and the
+    tenant ContextVar bind); this helper pins their *orchestration* so a future
+    edit cannot silently reorder them or drop a step on one path (#1646 / #1853).
+
+    Canonical sequence (matching the pre-existing per-transport copies exactly):
+
+    1. ``redirect_url = check_view_auth(view_instance, request)``. This may
+       raise :class:`~django.core.exceptions.PermissionDenied` (an authenticated
+       user lacking a required permission) — the exception PROPAGATES unchanged
+       so each transport keeps its own denial envelope (WS close 4403 / runtime
+       error frame / SSE error push).
+    2. If ``check_view_auth`` returns a redirect URL (anonymous user on a
+       ``login_required`` view), RETURN it immediately — tenant resolution is
+       SKIPPED on an auth denial, exactly as every transport did before (each
+       ``return``\\ed before ``_ensure_tenant`` on denial). The caller maps the
+       returned URL to its own navigate/redirect shape.
+    3. Resolve tenancy: ``view_instance._ensure_tenant(request)`` when the view
+       exposes the hook (TenantMixin). This may raise (e.g. ``Http404`` when a
+       required tenant is unresolved) — the exception PROPAGATES so each
+       transport keeps its own tenant-error envelope.
+    4. Bind the resolved tenant into the ContextVar via
+       :func:`_bind_current_tenant` so ``mount()`` + the initial render see the
+       correct tenant in the tenant-scoped managers (fail-closed otherwise).
+
+    Returns ``None`` when the mount may proceed, or a redirect-URL string when
+    auth denies via redirect. Raises :class:`PermissionDenied` (auth) or any
+    exception from ``_ensure_tenant`` (tenant resolution); callers wrap this in
+    their existing transport-specific envelope, unchanged.
+
+    NOTE: this is a *synchronous* helper (it calls only sync leaf functions);
+    async callers invoke it via ``sync_to_async(run_pre_mount_auth)`` exactly as
+    they previously wrapped ``check_view_auth`` / ``_ensure_tenant`` individually.
+    """
+    # 1 + 2. View-level auth (login / permission / custom / Django mixins).
+    redirect_url = check_view_auth(view_instance, request)
+    if redirect_url:
+        # Auth denied via redirect — skip tenant resolve/bind, mirroring the
+        # pre-existing per-transport early return on denial.
+        return redirect_url
+
+    # 3. Resolve tenancy (TenantMixin views only; no-op otherwise).
+    if hasattr(view_instance, "_ensure_tenant"):
+        view_instance._ensure_tenant(request)
+
+    # 4. Bind the resolved tenant for the rest of the mount.
+    _bind_current_tenant(getattr(view_instance, "_tenant", None))
+
+    return None  # Mount may proceed.
+
+
 def check_view_auth_lightweight(view_instance, request) -> bool:
     """Return True if ``view_instance`` is allowed to mount under ``request``.
 

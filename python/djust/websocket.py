@@ -2271,12 +2271,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # (Django's View.dispatch() does this for HTTP, but WS skips dispatch)
             self.view_instance.request = request
 
-            # --- Auth check (before mount) ---
-            from .auth import check_view_auth
+            # --- Pre-mount security sequence (auth + tenant resolve/bind) ---
+            # Single-sourced through djust.auth.core.run_pre_mount_auth so the
+            # WS, runtime, and SSE mount paths cannot drift in WHICH checks run
+            # or in WHAT ORDER (#1646 / #1853). The helper runs the same leaf
+            # chokepoints this path used inline before: check_view_auth (may
+            # raise PermissionDenied / return a redirect URL), then — only when
+            # auth passes — _ensure_tenant + the tenant ContextVar bind. The
+            # WS-specific verdict→envelope mapping (close 4403 / navigate frame /
+            # clear view) stays HERE; the helper only owns the sequence.
+            from .auth import run_pre_mount_auth
             from django.core.exceptions import PermissionDenied
 
             try:
-                redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
+                redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
             except PermissionDenied as exc:
                 # Authenticated user lacks permissions → 403 (not a redirect)
                 logger.info(
@@ -2309,26 +2317,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if not getattr(self, "_mounting_in_batch", False):
                     await self.close(code=4403)
                 return
-            # --- End auth check ---
-
-            # Call lifecycle hooks that must run on every WS connect regardless
-            # of whether state is restored from session or mount() is called.
-            #
-            # _ensure_tenant() — djust-tenants TenantMixin resolves the tenant.
-            #   Without this, self.tenant is always None in the live path even
-            #   though the SSR pre-render (HTTP) path works correctly.
-            #   See: https://github.com/djust-org/djust/issues/342
-            if hasattr(self.view_instance, "_ensure_tenant"):
-                await sync_to_async(self.view_instance._ensure_tenant)(request)
-
-            # Bind the resolved tenant into the ContextVar for the rest of the
-            # mount (mount() + initial render run later in this same consumer
-            # task). Finding #6: TenantMiddleware only binds the tenant on the
-            # HTTP path; without this the tenant-scoped managers see None and
-            # (fail-closed) return empty querysets on the live mount. Cleared in
-            # disconnect(). Sourced from the view's resolved _tenant (None for
-            # non-tenant views — a no-op).
-            _bind_tenant(getattr(self.view_instance, "_tenant", None))
+            # On auth success, run_pre_mount_auth has already resolved the
+            # tenant via _ensure_tenant and bound it into the ContextVar for the
+            # rest of this consumer task (mount() + initial render run later in
+            # the same task). Finding #6: TenantMiddleware only binds on the HTTP
+            # path; without the bind the tenant-scoped managers see None and
+            # (fail-closed) return empty querysets. Cleared in disconnect(). A
+            # raise from _ensure_tenant (e.g. Http404 for a required-but-missing
+            # tenant) propagates to the outer mount exception handler below —
+            # the same envelope this path produced when the call was inline.
+            # See: https://github.com/djust-org/djust/issues/342
+            # --- End pre-mount security sequence ---
 
             # --- on_mount hooks (after auth, before mount) ---
             from .hooks import run_on_mount_hooks

@@ -30,22 +30,32 @@ modules (websocket.py, sse.py, runtime.py and their siblings):
    ``validate_mount_url`` / ``_validate_mount_url``. A ``factory.get(literal)``
    (e.g. ``"/"``) is always fine.
 
-4. **Mount-orchestration security calls (#1850).** The mount path authorises
-   through three shared security calls — ``check_view_auth`` (view-level auth),
-   ``enforce_object_permission`` / ``check_object_permission`` (ADR-017 object
-   permission) and the reconstructed-Host binding via ``validated_host_from_scope``
-   (tenant/Host integrity). This concern PINS that the WS consumer's mount path
-   (``websocket.py``) and the generic runtime (``runtime.py``) each STILL invoke
-   these shared calls — a count-canary so that after the future #1853 migration
-   flips ``handle_mount`` to delegate to ``runtime.dispatch_mount``,
-   ``handle_mount`` cannot silently re-grow a parallel orchestration that drops
-   one of them without this test going red. Today ``handle_mount`` still has its
-   own copy of each call (pre-#1853); the canary counts the shared-chokepoint
-   reference sites across ``websocket.py`` + ``runtime.py``. When #1853 converges
-   the two paths, the expected counts move from "WS+runtime each" to "the shared
-   ``dispatch_mount`` once" — and updating the canary is the deliberate signal
-   that the convergence happened (the same prune-the-whitelist-on-purpose
-   discipline concerns 1-3 use, #1125).
+4. **Mount-orchestration security sequence (#1850 / #1853, CONVERGED).** The
+   pre-mount security SEQUENCE — view-level auth (``check_view_auth``), then on
+   auth success the tenant resolve (``_ensure_tenant``) + tenant ContextVar bind
+   — is now single-sourced in ONE helper, ``djust.auth.core.run_pre_mount_auth``
+   (#1853). All THREE live mount paths (``websocket.py`` ``handle_mount``,
+   ``runtime.py`` ``dispatch_mount`` via ``_check_auth``, and ``sse.py``
+   ``_sse_mount_view``) route their pre-mount auth+tenant orchestration through
+   that single helper, so a future edit cannot reorder the steps or drop one on
+   one path without all three drifting together. This concern PINS:
+     (a) each of the three transports references ``run_pre_mount_auth`` (the
+         shared sequence) — a count-canary;
+     (b) ``run_pre_mount_auth`` itself references the leaf chokepoints it now
+         single-sources (``check_view_auth`` + the tenant bind), so the sequence
+         body cannot be hollowed out;
+     (c) the controls NOT folded into the helper still live where they did —
+         the WS post-mount object-permission (``check_object_permission``), the
+         runtime url-change object-permission (``enforce_object_permission``),
+         and the reconstructed-Host binding (``validated_host_from_scope`` on WS
+         + runtime). These were deliberately LEFT in place (object-perm is
+         post-mount / url-change, not part of the pre-mount sequence; the Host
+         binding is request construction, not auth) — #1853 narrowed the
+         convergence to the genuinely-shared pre-mount auth+tenant sequence.
+   A future re-divergence (one path re-growing its own auth/tenant copy, or the
+   helper losing a step) turns this concern red. Updating these pins is the
+   deliberate signal that a further convergence/divergence happened (the same
+   prune-the-whitelist-on-purpose discipline concerns 1-3 use, #1125).
 
 Empirical canary / non-tautology (#1459 / #1468): adding a dummy
 ``importlib.import_module(view_path)`` to websocket.py makes
@@ -418,35 +428,46 @@ def test_transport_modules_parse(module):
 
 
 # --------------------------------------------------------------------------- #
-# Concern 4 — mount-orchestration security calls invoked at the shared
-# chokepoints (#1850; converges under #1853).
+# Concern 4 — mount-orchestration security sequence single-sourced at the
+# shared chokepoint (#1850; CONVERGED under #1853).
 #
-# The mount path authorises through three shared security helpers. This concern
-# pins that the two request-building transports (websocket.py + runtime.py) each
-# STILL reference these shared calls, so a future migration that flips
-# handle_mount to delegate to runtime.dispatch_mount cannot silently leave
-# handle_mount re-growing a parallel orchestration that drops one of them.
+# The pre-mount auth+tenant SEQUENCE is now single-sourced in
+# djust.auth.core.run_pre_mount_auth. This concern pins that all three live
+# mount paths (websocket.py / runtime.py / sse.py) route through that ONE helper
+# for the pre-mount sequence, that the helper itself still contains the sequence
+# body, and that the controls deliberately LEFT OUT of the helper (post-mount /
+# url-change object-permission, reconstructed-Host binding) still live where they
+# did. A future edit re-growing a per-path auth/tenant copy, or hollowing out the
+# helper, or dropping one of the un-folded controls, turns this concern red.
 #
-# We count NON-IMPORT name references (a call like ``check_view_auth(view, req)``
-# OR a reference like ``sync_to_async(check_view_auth)`` — the live transports use
-# the latter shape) of each shared call, per module. Import-statement aliases
-# (``from .auth import check_view_auth``) are excluded so adding/removing the lazy
-# import does not move the count.
+# We count NON-IMPORT name references (a call like ``run_pre_mount_auth(view, req)``
+# OR a reference like ``sync_to_async(run_pre_mount_auth)`` — the live transports
+# use the latter shape) of each symbol, per module. Import-statement aliases
+# (``from .auth import run_pre_mount_auth``) are excluded so adding/removing the
+# lazy import does not move the count.
 # --------------------------------------------------------------------------- #
 
-# Each shared mount-orchestration security call → the modules that MUST still
-# reference it, with the minimum reference count expected on the current tree.
-# Today (pre-#1853) handle_mount (websocket.py) and the generic runtime
-# (runtime.py) each carry their own copy:
-#   * check_view_auth         — view-level auth, on WS + runtime + SSE.
-#   * object-permission        — WS uses check_object_permission (the inner step),
-#                                runtime uses enforce_object_permission (the
-#                                ADR-017 wrapper). Counted as a FAMILY (either
-#                                name satisfies a module's requirement) because
-#                                #1853 will converge them onto one call.
-#   * validated_host_from_scope — reconstructed-Host binding, on WS + runtime.
+# auth/core.py is a SUBPACKAGE module, intentionally outside _TOP_LEVEL_MODULES;
+# the helper-body pin (concern 4b) parses it explicitly below.
+_AUTH_CORE = _PKG_DIR / "auth" / "core.py"
+
+# Each pinned mount-orchestration symbol → the modules that MUST still reference
+# it, with the minimum non-import reference count expected on the current tree.
+# Post-#1853 (converged):
+#   * run_pre_mount_auth        — the SHARED pre-mount auth+tenant sequence;
+#                                 every transport routes through it (WS + runtime
+#                                 via _check_auth + legacy SSE).
+#   * object-permission          — NOT part of the pre-mount sequence, left in
+#                                 place: WS uses check_object_permission (the
+#                                 post-mount inner step, websocket.py); runtime
+#                                 uses enforce_object_permission (the ADR-017
+#                                 url-change re-check, runtime.py). Counted as a
+#                                 FAMILY (either name satisfies a module's req).
+#   * validated_host_from_scope — reconstructed-Host binding (request build, not
+#                                 auth), left in place on WS + runtime.
 _MOUNT_ORCHESTRATION_PINS = {
-    "check_view_auth": {"websocket.py": 1, "runtime.py": 1, "sse.py": 1},
+    # 4a — the shared pre-mount auth+tenant sequence, on all three transports.
+    "run_pre_mount_auth": {"websocket.py": 1, "runtime.py": 1, "sse.py": 1},
     # Object-permission family: any of these names counts toward the module's req.
     ("check_object_permission", "enforce_object_permission"): {
         "websocket.py": 1,
@@ -454,6 +475,12 @@ _MOUNT_ORCHESTRATION_PINS = {
     },
     "validated_host_from_scope": {"websocket.py": 1, "runtime.py": 1},
 }
+
+# 4b — the leaf chokepoints run_pre_mount_auth itself MUST still invoke, so the
+# shared sequence body cannot be silently hollowed out. ``_bind_current_tenant``
+# is the helper-local tenant-bind step; ``check_view_auth`` is the view-level
+# auth leaf.
+_HELPER_BODY_PINS = ("check_view_auth", "_bind_current_tenant")
 
 
 def _import_aliased_lines(tree: ast.Module) -> set:
@@ -485,15 +512,20 @@ def _count_symbol_refs(tree: ast.Module, names: "tuple | set", import_lines: set
 
 class TestMountOrchestrationChokepoint:
     def test_shared_security_calls_present_at_mount_chokepoints(self):
-        """Each shared mount-orchestration security call is still referenced by the
-        WS + runtime mount paths (count-canary, #1125 / #1850).
+        """Each pinned mount-orchestration symbol is still referenced by the
+        modules that must carry it post-#1853 (count-canary, #1125 / #1850 / #1853).
 
-        Gate-off (#1468): deleting (or no longer referencing) ``check_view_auth`` /
-        the object-perm call / ``validated_host_from_scope`` from websocket.py OR
-        runtime.py drops that module's count below the pin → FAILS. Recorded
-        gate-off in the PR body: removing the ``check_view_auth`` reference at
-        websocket.py:2233 makes this test report "websocket.py references
-        check_view_auth 0 time(s) but expected >= 1".
+        Concern 4a + 4c: all three transports reference the shared
+        ``run_pre_mount_auth`` sequence; the object-permission family and
+        ``validated_host_from_scope`` (deliberately NOT folded into the helper)
+        still live on WS / runtime.
+
+        Gate-off (#1468): deleting (or no longer routing through)
+        ``run_pre_mount_auth`` from websocket.py OR runtime.py OR sse.py drops
+        that module's count below the pin → FAILS. Recorded gate-off in the PR
+        body: removing the ``run_pre_mount_auth`` reference in handle_mount makes
+        this test report "websocket.py references run_pre_mount_auth 0 time(s)
+        but expected >= 1".
         """
         shortfalls = []
         for symbol, module_reqs in _MOUNT_ORCHESTRATION_PINS.items():
@@ -509,40 +541,97 @@ class TestMountOrchestrationChokepoint:
                         f"{label} references {human} {found} time(s) but expected >= {expected}"
                     )
         assert not shortfalls, (
-            "Mount-orchestration security call(s) dropped from a shared mount "
-            "chokepoint. The WS consumer's mount path (handle_mount) and the "
-            "generic runtime each MUST authorise through check_view_auth, the "
-            "object-permission family, and validated_host_from_scope. If this "
-            "fired because #1853 converged handle_mount onto dispatch_mount, "
-            "update _MOUNT_ORCHESTRATION_PINS deliberately (the calls should now "
-            "live once in the shared dispatch_mount). Shortfalls: " + "; ".join(shortfalls)
+            "Mount-orchestration security symbol(s) dropped from a shared mount "
+            "chokepoint. Post-#1853, the WS (handle_mount), runtime "
+            "(dispatch_mount via _check_auth), and legacy SSE (_sse_mount_view) "
+            "paths each MUST route the pre-mount auth+tenant sequence through the "
+            "shared run_pre_mount_auth; the object-permission family and "
+            "validated_host_from_scope must remain where they were left. If this "
+            "fired because of a further refactor, update _MOUNT_ORCHESTRATION_PINS "
+            "deliberately. Shortfalls: " + "; ".join(shortfalls)
         )
 
-    def test_ws_mount_reliance_on_check_view_auth_is_pinned(self):
-        """Until #1853, handle_mount carries its OWN check_view_auth reference.
+    def test_all_three_transports_route_pre_mount_sequence_through_shared_helper(self):
+        """#1853 convergence pin: WS, runtime, AND legacy SSE each invoke the
+        single ``run_pre_mount_auth`` helper for the pre-mount auth+tenant
+        sequence — no transport carries its own hand-copied orchestration.
 
-        This is the specific #1850 pin: the WS consumer's mount path does not yet
-        delegate auth to runtime.dispatch_mount, so a regression that drops the
-        WS-local auth call (re-opening finding #14 over WebSocket) is caught here
-        and not only by the broader concern-4 scan.
+        This is the strengthened #1850 pin: previously each transport carried its
+        OWN ``check_view_auth`` + ``_ensure_tenant`` + tenant-bind copy; #1853
+        single-sourced the SEQUENCE so a future divergence (one path re-growing a
+        private copy of the auth/tenant order) is caught here.
+
+        Gate-off (#1468): replace ``run_pre_mount_auth`` with an inline
+        ``check_view_auth`` copy on ANY one transport and that transport's count
+        drops to 0 → FAILS.
         """
-        tree = _parse(_PKG_DIR / "websocket.py")
-        import_lines = _import_aliased_lines(tree)
-        found = _count_symbol_refs(tree, ("check_view_auth",), import_lines)
-        assert found >= 1, (
-            "websocket.py no longer references check_view_auth on the mount path. "
-            "If #1853 has converged handle_mount onto runtime.dispatch_mount, move "
-            "this pin to runtime.py and note the convergence; otherwise this is a "
-            "WS auth-bypass regression (finding #14)."
+        missing = []
+        for label in ("websocket.py", "runtime.py", "sse.py"):
+            tree = _parse(_PKG_DIR / label)
+            import_lines = _import_aliased_lines(tree)
+            found = _count_symbol_refs(tree, ("run_pre_mount_auth",), import_lines)
+            if found < 1:
+                missing.append(f"{label} references run_pre_mount_auth {found} time(s)")
+        assert not missing, (
+            "A mount transport no longer routes its pre-mount auth+tenant sequence "
+            "through the shared djust.auth.core.run_pre_mount_auth helper — it has "
+            "re-grown a private copy of the auth/tenant orchestration "
+            "(parallel-path drift, #1646 / #1853). Offenders: " + "; ".join(missing)
         )
 
-    def test_object_permission_family_uses_one_name_per_module(self):
-        """Document the pre-#1853 split: WS uses check_object_permission (inner
-        step), runtime uses enforce_object_permission (ADR-017 wrapper).
+    def test_shared_helper_body_still_invokes_the_leaf_chokepoints(self):
+        """Concern 4b: ``run_pre_mount_auth`` (in auth/core.py) MUST itself invoke
+        the leaf chokepoints it single-sources — ``check_view_auth`` (view-level
+        auth) and ``_bind_current_tenant`` (the tenant ContextVar bind) — so the
+        single source of the sequence cannot be silently hollowed out.
 
-        Pinning the SPLIT (not just the family total) means the #1853 convergence —
-        which will route both through a single enforce_object_permission in
-        dispatch_mount — visibly changes this test, forcing a deliberate update.
+        Gate-off (#1468): deleting the ``check_view_auth(...)`` call from inside
+        ``run_pre_mount_auth`` (so the helper authorises nothing yet every
+        transport happily routes through it) drops the auth/core.py count for
+        ``check_view_auth`` to 1 (only the lightweight wrapper) and would fail the
+        per-helper-scoped assertion below.
+        """
+        tree = _parse(_AUTH_CORE)
+        import_lines = _import_aliased_lines(tree)
+
+        # Locate the run_pre_mount_auth function node and scan ONLY its body, so a
+        # reference elsewhere in auth/core.py (e.g. check_view_auth's own def)
+        # cannot mask a hollowed-out helper.
+        helper = None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                node.name == "run_pre_mount_auth"
+            ):
+                helper = node
+                break
+        assert helper is not None, (
+            "run_pre_mount_auth not found in auth/core.py — the shared pre-mount "
+            "sequence helper (#1853) was removed or renamed."
+        )
+
+        body_names = {
+            n.id
+            for n in ast.walk(helper)
+            if isinstance(n, ast.Name)
+            and isinstance(n.ctx, ast.Load)
+            and n.lineno not in import_lines
+        }
+        for leaf in _HELPER_BODY_PINS:
+            assert leaf in body_names, (
+                f"run_pre_mount_auth no longer invokes {leaf!r} in its body — the "
+                f"single-sourced pre-mount sequence has been hollowed out (#1853). "
+                f"Every transport still routes through this helper, so dropping a "
+                f"leaf here silently weakens ALL of them at once."
+            )
+
+    def test_object_permission_controls_left_in_place_post_1853(self):
+        """Concern 4c: the object-permission controls were deliberately NOT folded
+        into run_pre_mount_auth (they are post-mount / url-change, not part of the
+        pre-mount sequence). Pin that WS still uses check_object_permission (the
+        post-mount inner step) and runtime still uses enforce_object_permission
+        (the ADR-017 url-change re-check).
+
+        A regression that drops either re-opens finding #10/#11/#12.
         """
         ws_tree = _parse(_PKG_DIR / "websocket.py")
         rt_tree = _parse(_PKG_DIR / "runtime.py")
@@ -554,11 +643,10 @@ class TestMountOrchestrationChokepoint:
 
         assert ws_inner >= 1, (
             "websocket.py mount path no longer references check_object_permission "
-            "(ADR-017 object-perm inner step) — finding #10/#11/#12 regression, "
-            "unless #1853 converged it (then update this pin)."
+            "(ADR-017 post-mount object-perm inner step) — finding #10/#11/#12 "
+            "regression."
         )
         assert rt_wrapper >= 1, (
             "runtime.py no longer references enforce_object_permission (the ADR-017 "
-            "shared object-perm wrapper) — finding #10/#11/#12 regression, unless "
-            "#1853 converged it (then update this pin)."
+            "url-change object-perm re-check) — finding #10/#11/#12 regression."
         )

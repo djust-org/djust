@@ -37,6 +37,7 @@ from .core import (
     check_object_permission,
     check_view_auth,
     check_view_auth_lightweight,
+    run_pre_mount_auth,
 )
 
 __all__ = [
@@ -45,6 +46,8 @@ __all__ = [
     "check_view_auth_lightweight",
     "check_object_permission",
     "check_handler_permission",
+    # Shared pre-mount security sequence (auth + tenant resolve/bind)
+    "run_pre_mount_auth",
     "LoginRequiredMixin",
     "PermissionRequiredMixin",
     # Views (lazy)
