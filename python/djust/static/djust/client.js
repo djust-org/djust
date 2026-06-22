@@ -699,6 +699,67 @@ function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
     }
 }
 
+/**
+ * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
+ * container so inline page JS inside the dj-root actually runs.
+ *
+ * Both mount paths in the `case 'mount':` handler put server HTML into the
+ * DOM in a way the browser treats as NON-executing for <script>: the
+ * pre-rendered path morphs via morphChildren (clone+insert of inert nodes),
+ * and the non-prerendered path assigns `container.innerHTML = data.html`.
+ * Per HTML spec, a <script> inserted by either mechanism is parsed but NOT
+ * evaluated — its `addEventListener` never fires, silently (#1848, a 1.0.7
+ * regression introduced when #1610 started morphing the prerender DOM).
+ *
+ * The only DOM operation that makes the browser run an already-in-tree inert
+ * <script> is to create a fresh <script> element, copy its attributes +
+ * textContent, and replace the inert node. Mirrors how the navigation/
+ * bfcache classic-script path keeps page JS alive (#1635/#1650 IIFE wrap).
+ *
+ * Scope discipline:
+ *  - Only CLASSIC scripts run: no `type`, or a recognized JS MIME type.
+ *    `type="djust/hook"` (colocated hook definitions) and other custom
+ *    types (e.g. `application/json`, `importmap`) are left untouched —
+ *    the hook system extracts djust/hook definitions separately.
+ *  - Idempotent: each re-created element is marked `data-djust-script-ran`
+ *    so a WS reconnect / re-mount on the same DOM does not double-execute.
+ *
+ * @param {Element} container - the mounted/morphed container to scan.
+ */
+function _runInsertedScripts(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    let scripts;
+    try {
+        scripts = container.querySelectorAll('script');
+    } catch (_err) {
+        return;
+    }
+    for (const old of scripts) {
+        // Skip already-executed scripts (idempotent on reconnect/re-mount)
+        // and any djust-managed marker scripts.
+        if (old.hasAttribute('data-djust-script-ran')) continue;
+        const type = (old.getAttribute('type') || '').trim().toLowerCase();
+        // Classic scripts only: empty type or a JS MIME type. Anything else
+        // (djust/hook, application/json, importmap, module-worker shims, …)
+        // is left untouched.
+        const isClassic = type === ''
+            || type === 'text/javascript'
+            || type === 'application/javascript'
+            || type === 'application/ecmascript'
+            || type === 'text/ecmascript';
+        if (!isClassic) continue;
+        const fresh = document.createElement('script');
+        for (const attr of old.attributes) {
+            fresh.setAttribute(attr.name, attr.value);
+        }
+        fresh.setAttribute('data-djust-script-ran', '');
+        // textContent (not innerHTML) — inline body is plain JS text.
+        fresh.textContent = old.textContent;
+        // replaceWith inserts the fresh node, which the browser DOES execute.
+        old.replaceWith(fresh);
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -1086,6 +1147,11 @@ class LiveViewWebSocket {
                             // selector 45-child-view.js uses) and copy the
                             // server's dj-id onto the live wrapper.
                             _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
+                            // #1848: morphChildren re-creates inline <script>
+                            // nodes inert (clone+insert never executes them).
+                            // Re-run classic page scripts inside the dj-root so
+                            // their addEventListener / init runs on mount.
+                            _runInsertedScripts(_morphContainer);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -1177,6 +1243,10 @@ class LiveViewWebSocket {
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
+                        // #1848: innerHTML never executes inserted <script>.
+                        // Re-run classic page scripts inside the dj-root so
+                        // inline page JS behaves the same as on the morph path.
+                        _runInsertedScripts(container);
                         // Post-mount sticky reattach (Phase B). No-op
                         // when stickyStash is empty.
                         if (window.djust.stickyPreserve && window.djust.stickyPreserve.reattachStickyAfterMount) {
@@ -1963,6 +2033,9 @@ class LiveViewWebSocket {
 
 // Expose LiveViewWebSocket to window for client-dev.js to wrap
 window.djust.LiveViewWebSocket = LiveViewWebSocket;
+// #1848: exposed so the mount handler (and tests) can re-execute classic
+// inline <script> inside the morphed/innerHTML'd dj-root.
+window.djust._runInsertedScripts = _runInsertedScripts;
 // Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 
