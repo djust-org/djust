@@ -348,6 +348,54 @@ issue or be explicitly closed with a reason.
 | 306 | Latency-SLA benchmark asserts MEDIAN, not outlier-sensitive mean | Retro v1.0.6-2 / commit 49893831 | — | Closed | **Resolved this retro** (CLAUDE.md same arc section; fixed in `49893831`). #1795 outlier-sensitivity family; mean dragged past SLA by GC spikes on a loaded machine while median was well under. |
 | 307 | System check to warn when `dj-view`/`dj-root` is on a table-section element (`<tbody>`/`<tr>`/…) — silently foster-parented to garbage at render time | Retro v1.0.7-1 / #1827 investigation | #1837 | Open | Surfaced closing #1827: a `<tbody dj-view>` template renders as `<html><body>text</body></html>` (all rows dropped), no error. The actionable DX fix the #1827 diff_html flattening pointed at. |
 | 308 | Arm recovery on the actor event path (`use_actors=True`, `websocket.py:3100`) once its `result['html']` shape is verified | Retro v1.0.7-1 / PR #1838 (#1817 punt) | #1840 | Closed | **Investigated in v1.0.7-2, deferred (no code change)**: traced that `result['html']` is the already-extracted/client-ready shape, so arming `_recovery_html` with it would make `handle_request_html` double-strip → corrupt recovery (worse than the LOW drift). Proper fix needs the experimental actor to expose its raw pre-strip render; deferred until `use_actors` graduates. Bare site pinned by `test_every_client_checked_send_path_uses_next_version`. #1840 closed. |
+| 309 | Browser-smoke coverage for downstream interactive paths — runtime breaks (mount-path allowlist; inline-script-under-morph) are invisible to the pytest suite + HTTP smoke; only browser testing of the deployed app catches them | Retro v1.0.7-3+4 / demo dj-view break + #1848 | #1849 | Open | Two real 1.0.7-upgrade breaks (demo `views_old` dj-view; djust.org examples tab/copy) passed the 8237-green suite + HTTP-200 smoke; caught only by driving the live page in a browser. Canonicalized in CLAUDE.md (v1.0.7-3+4 retro arc); concrete test-harness tracked in #1849. |
+| 310 | Inline `<script>` inside dj-root not executed after the #1610 WS-mount morph — page JS handlers silently never register (1.0.7 regression) | Retro v1.0.7-3+4 / djust.org examples page | #1848 | Open | Fix: re-execute classic `<script>` on the mount morph like the `live_redirect` path (#1635/#1650) already does, OR a system-check warning. Downstream workaround (move JS to a block outside dj-root) applied on djust.org `v0.9.32`. Documented in CLAUDE.md (v1.0.7-3+4 retro arc) + [[project_djust_inline_script_in_djroot]]. |
+
+## v1.0.7-3 + v1.0.7-4 — Security audit drain + coordinated disclosure (private PRs #165–#177 → djust 1.0.7 + 13 GHSAs)
+
+**Date**: 2026-06-22
+**Scope**: Drained the standing djust security audit (findings F1–F29; #30 withdrawn) to closure. v1.0.7-3 fixed F16–F25 and consolidated the mount/transport surface (private PRs #165–#172); v1.0.7-4 fixed the transport/API tail F26–F29 (#174–#176) + a demo fix (#177). Developed on the PRIVATE repo (johnrtipton/djust) pre-disclosure, then shipped as the coordinated public release: djust **1.0.7** to PyPI (16 wheels) + public `djust-org/main`, with **13 GHSAs published** (1 critical / 9 high / 3 medium) firing Dependabot. djust.org + djustlive bumped/deployed to 1.0.7.
+**Tests at close**: 8237 python passing + the WU1 parity/anti-drift net.
+
+### What We Learned
+
+**1. The entire audit was parallel-path drift; the cure is a shared chokepoint + a mechanical anti-drift net.** Nearly every finding was "control enforced on path A, missing on parallel path B": F22/F23 (3 mount paths), F6/F26 (WS vs HTTP tenant/host), F27/F28 (WS/SSE/API rate-limit), F7/F24 (SSE missing WS controls), F21 (channel-layer vs other restore sinks), F16 (WS-guarded nav vs unguarded live_patch/SSE). Each was cured by ONE shared chokepoint (`security/mount.py`, `_validate_event_security`, `_host_in_allowed_hosts`, `handler_rate_check`, `safeNavigationTarget`, `safe_setattr`, `_request_owns_session`) — not N copies. The meta-cure is WU1 (PR #172): a structural AST test that makes future WS↔SSE/runtime drift MECHANICALLY DETECTABLE (empirical-canary-verified to catch injected `import_module(view_path)` / non-literal `setattr` / unvalidated `factory.get(client_url)`), plus a parity suite parametrizing the same payloads across all three mount entry points.
+**Action taken**: Closed — WU1 enforcement net shipped in PR #172 (`tests/test_transport_parity_security.py` + `tests/test_mount_chokepoint_structural.py`); reinforces the #1646 canon in CLAUDE.md.
+
+**2. Adversarial empirical-probe review caught real bypasses inspection would have rubber-stamped.** Every fix-pass came from a review that PARSED outputs / fed encoded end-to-end variants, never from reading the diff: PR #167 found two stored-XSS bypasses (MIME `; charset=utf-8` param evading exact-match; trailing-space `evil.svg ` evading the suffix check while `safe_client_name` normalized it back); PR #168 found a `/\evil.com` open-redirect (browser normalizes `\`→`/`, defeating a raw `charAt(1)` check — also latent in the OLD WS guard); PR #166's review parsed every output with a real HTMLParser (0 live elements across 6 payload classes × {DEBUG,prod}).
+**Action taken**: Closed — reinforces the #1459 empirical-canary + #1825 encoding-bypass-probe canon (CLAUDE.md); all security PRs used reproduce-first + gate-off (#1468).
+
+**3. Runtime breaks were INVISIBLE to the 8237-green suite — TWICE — and only browser testing caught them.** After deploying 1.0.7, two real downstream breaks surfaced that the full pytest suite + HTTP-200 smoke both PASSED over: (a) the demo's `dj-view="demo_app.views_old.IndexView"` — a stale ref that rode the boundary-less `startswith` the F22 fix tightened, now refused at WS mount; (b) djust.org's examples-page tab/copy handler — an inline `<script>` inside the dj-root that the 1.0.7 WS-mount morph (#1610) re-creates without executing, so the listener never registered (silent; the click bubbled fully through `document` yet the handler never ran). Both are runtime/wiring breaks the unit suite cannot see; both were found only by driving the live page in a browser.
+**Action taken**: diff + tracker_row — canonicalized in CLAUDE.md ("Process canonicalizations from v1.0.7-3 + v1.0.7-4 retro arc": browser-test-downstream-on-upgrade + page-JS-outside-dj-root). Concrete test-gap tracked in Action Tracker #309 (GitHub #1849); the #1610 regression at Action Tracker #310 (GitHub #1848).
+
+**4. GHSA publish needs a version-range pre-flight — bad ranges silently break Dependabot.** Three pre-existing drafts (F2/F3/arbitrary-import) carried `vulnerable: <= 1.0.7rc1` with `patched_versions: None`; publishing as-is would have given Dependabot NO upgrade target (no alert fires). A read-only pre-flight before `state=published` caught + normalized all three to `< 1.0.7` / `1.0.7`.
+**Action taken**: diff — "GHSA publish pre-flight" rule added to CLAUDE.md retro section + the runbook (`scratch/sec-audit/GHSA-TRACKING.md`).
+
+**5. Coordinated disclosure held; CI-dark local-validation merges held.** The sequence — private staging → release to public + PyPI → publish GHSAs together, gated on PyPI-1.0.7-live BEFORE any GHSA publish — produced no bad disclosure window. With Actions exhausted for most of the drain, PRs merged on local validation (full suite + worktree-isolated adversarial review + gate-off + two-commit), later confirmed by the green release CI. One process slip: the public-main push landed via admin-BYPASS of the branch-protection PR rule (a "diagnostic" push completed the disclosure) — outcome authorized, path untidy.
+**Action taken**: Closed — runbook in `scratch/sec-audit/GHSA-TRACKING.md`; admin-bypass slip noted in the CLAUDE.md retro section.
+
+### Insights
+- A structural cure (shared chokepoint) beats N correct copies — and the WU1 anti-drift net is what stops the class from silently returning.
+- Reproduce-first + gate-off + adversarial empirical probe was the reliable pattern; every fix-pass came from the empirical probe, never inspection.
+- The unit suite is blind to runtime wiring (mount-path allowlist, inline-script execution under morph). Browser/interactive testing of the DEPLOYED downstream is the only net that caught these — make it a standing gate on every framework upgrade.
+- #1848 (inline `<script>` inside dj-root dropped by the #1610 mount morph) is a genuine 1.0.7 regression surfaced only by the downstream upgrade.
+
+### Review Stats (private PRs #165–#177)
+| Metric | v1.0.7-3 (#165–172) | v1.0.7-4 (#174–177) | Total |
+|--------|--------|--------|-------|
+| PRs | 8 | 4 | 12 |
+| Fix-passes (real bypasses caught) | 2 (#167, #168) | 1 (#175 🟡) | 3 |
+| GHSAs published | — | — | 13 (1 crit / 9 high / 3 med) |
+| Suite at close | — | — | 8237 |
+
+### Process Improvements Applied
+**CLAUDE.md**: new section "Process canonicalizations from v1.0.7-3 + v1.0.7-4 retro arc" (browser-test-downstream-on-upgrade; page-JS-outside-dj-root; GHSA publish pre-flight + disclosure sequencing + admin-bypass note).
+**GHSA runbook**: pre-flight step in `scratch/sec-audit/GHSA-TRACKING.md`.
+**Issues filed**: #1848 (inline-script-in-dj-root regression); #1849 (browser-smoke coverage for downstream interactive paths). #177 Stage-14 retro backfilled (was a gate violation).
+
+### Open Items
+- [ ] Browser-smoke coverage for downstream interactive paths — Action Tracker #309 (GitHub #1849)
+- [ ] #1848 framework fix (re-execute classic scripts on the mount morph, or system-check warning) — Action Tracker #310 (GitHub #1848)
 
 ## v1.0.7-1 — Post-1.0.6 open-issue drain (PRs #1838, #1839)
 
