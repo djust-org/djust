@@ -105,6 +105,10 @@ class _FakeTransport:
     async def send_error(self, error, **kwargs):
         self.sent.append({"error": error, **kwargs})
 
+    def next_client_version(self, html, rust_version):
+        # Transport Protocol hook (#1858): pass through the Rust version for this fake.
+        return rust_version
+
 
 @pytest.mark.django_db
 def test_url_change_denies_forbidden_object():

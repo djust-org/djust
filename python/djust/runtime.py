@@ -114,6 +114,23 @@ class Transport(Protocol):
 
     async def close(self, code: int = 1000) -> None: ...
 
+    def next_client_version(self, html: Optional[str], rust_version: int) -> int:
+        """Return the wire ``version`` to stamp on a client-CHECKED render frame.
+
+        Client-checked frames (``patch`` / ``html_update``) are validated by the
+        client's ``clientVdomVersion === data.version - 1`` rule, so their version
+        must come from the SAME monotonic source as ``mount`` / ``event`` for that
+        transport — never the raw Rust render counter (#1858, the #1788
+        parallel-path twin).
+
+        - WS: returns ``consumer._next_version_armed(html)`` — the per-connection
+          counter that ``handle_mount`` / ``handle_event`` use, AND arms
+          ``request_html`` recovery to that version (#1788 / #1817).
+        - SSE: returns ``rust_version`` unchanged (SSE has no consumer counter;
+          its existing behavior is preserved).
+        """
+        ...
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -149,6 +166,18 @@ class WSConsumerTransport:
     async def close(self, code: int = 1000) -> None:
         await self._consumer.close(code=code)
 
+    def next_client_version(self, html: Optional[str], rust_version: int) -> int:
+        """Stamp the consumer-owned wire version + arm recovery (#1858 / #1788 / #1817).
+
+        Routes runtime-emitted client-checked frames (``url_change`` patch /
+        html_update) through the SAME ``_next_version_armed`` helper ``handle_event``
+        uses, so the wire version stays monotonic with the mount baseline and a later
+        ``request_html`` recovery serves the matching version. ``html`` MUST be the full
+        PRE-STRIP HTML returned by ``render_with_diff()`` (see
+        ``LiveViewConsumer._next_version_armed``). ``rust_version`` is ignored on WS.
+        """
+        return self._consumer._next_version_armed(html)
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -181,6 +210,17 @@ class SSESessionTransport:
 
     async def close(self, code: int = 1000) -> None:
         await self._session.close(code=code)
+
+    def next_client_version(self, html: Optional[str], rust_version: int) -> int:
+        """SSE has no per-connection consumer counter — preserve the Rust version (#1858).
+
+        SSE stamps the raw ``render_with_diff()`` version on its frames today (see
+        ``sse.py``); the #1788 consumer-counter unification never reached SSE, so SSE
+        clients are calibrated to the Rust counter. Returning it unchanged keeps SSE
+        behavior identical. (If SSE ever adopts a consumer-owned counter, this is the
+        single place to wire it — tracked alongside #1858.)
+        """
+        return rust_version
 
 
 # ------------------------------------------------------------------ #
@@ -646,13 +686,22 @@ class ViewRuntime:
                 self.view_instance._force_full_html = False
                 patches = None
 
+            # Stamp the transport's client-checked wire version (#1858, the #1788
+            # parallel-path twin). On WS this is the consumer-owned monotonic counter
+            # + recovery arming (so the url_change frame stays in sequence with the
+            # mount baseline and a later request_html serves the matching version);
+            # on SSE this returns the Rust ``version`` unchanged. ``html`` is the RAW
+            # pre-strip render — pass it BEFORE strip/extract so WS arms recovery with
+            # the full pre-strip HTML (see LiveViewConsumer._next_version_armed).
+            wire_version = self.transport.next_client_version(html, version)
+
             if patches is not None:
                 if isinstance(patches, str):
                     patches = fast_json_loads(patches)
                 msg: Dict[str, Any] = {
                     "type": "patch",
                     "patches": patches,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": "url_change",
                 }
                 await self.transport.send(msg)
@@ -666,7 +715,7 @@ class ViewRuntime:
                 msg = {
                     "type": "html_update",
                     "html": html,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": "url_change",
                 }
                 await self.transport.send(msg)
@@ -904,6 +953,14 @@ class ViewRuntime:
         if should_reset_form:
             self.view_instance._should_reset_form = False
 
+        # Stamp the transport's client-checked wire version (#1858, the #1788
+        # parallel-path twin) from the RAW pre-strip render. WS → consumer-owned
+        # counter + recovery arming; SSE → Rust ``version`` unchanged. Computed once
+        # here so every render branch below (patch / compression-fallback html_update /
+        # no-diff html_update) stamps the same wire version. (Reached by SSE today and
+        # by any future WS migration of dispatch_event off the bespoke consumer path.)
+        wire_version = self.transport.next_client_version(html, version)
+
         if patches is not None:
             patch_list: Optional[List] = (
                 fast_json_loads(patches) if isinstance(patches, str) else patches
@@ -923,7 +980,7 @@ class ViewRuntime:
                 msg: Dict[str, Any] = {
                     "type": "patch",
                     "patches": patch_list,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": event_name,
                 }
                 if cache_request_id:
@@ -940,7 +997,7 @@ class ViewRuntime:
                 msg = {
                     "type": "html_update",
                     "html": html_content,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": event_name,
                 }
                 if cache_request_id:
@@ -959,7 +1016,7 @@ class ViewRuntime:
             msg = {
                 "type": "html_update",
                 "html": html,
-                "version": version,
+                "version": wire_version,
                 "event_name": event_name,
             }
             if cache_request_id:

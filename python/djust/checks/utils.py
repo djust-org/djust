@@ -116,6 +116,30 @@ def _is_check_suppressed(check_id: str) -> bool:
     return check_id.lower() in normalised
 
 
+def _is_within_djust_package(path):
+    """True if ``path`` is djust's own package dir or a directory inside it.
+
+    Compares against the ACTUAL djust package location
+    (``os.path.dirname(djust.__file__)``) rather than matching any path that
+    happens to contain the substring ``/djust/``. The latter is too broad: a
+    downstream project (or the repo itself) living under a ``…/djust/…`` path —
+    e.g. ``examples/demo_project`` checked from inside the repo checkout — would
+    be excluded, blinding S009/S011 and every other dir-walking check (#1865).
+    """
+    import djust as _djust_pkg
+
+    try:
+        djust_dir = os.path.realpath(os.path.dirname(_djust_pkg.__file__))
+    except (AttributeError, TypeError):
+        return False
+
+    real_path = os.path.realpath(path)
+    if real_path == djust_dir:
+        return True
+    # Inside the package: real_path is djust_dir + os.sep + <something>.
+    return real_path.startswith(djust_dir + os.sep)
+
+
 def _get_project_app_dirs():
     """Return directories for project apps (excluding third-party and djust itself)."""
     from django.apps import apps
@@ -126,8 +150,9 @@ def _get_project_app_dirs():
         # Skip site-packages / third-party
         if "site-packages" in path:
             continue
-        # Skip djust's own package
-        if path.endswith("djust") or "/djust/" in path:
+        # Skip djust's own package (its actual location, NOT any path that
+        # merely contains "/djust/" — #1865).
+        if _is_within_djust_package(path):
             continue
         if os.path.isdir(path):
             dirs.append(path)
