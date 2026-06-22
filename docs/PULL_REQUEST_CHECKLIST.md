@@ -205,6 +205,28 @@ console.error(error); // ❌ Won't be captured in production
 - [ ] **Tenant isolation maintained** - Multi-tenant security not compromised
 - [ ] **Rate limiting** considered for new endpoints
 
+### Transport chokepoint (#1646)
+
+The mount / event / state-apply surface is reached over multiple transports
+(WebSocket, SSE, the generic `ViewRuntime`). The recurring failure mode is
+parallel-path drift: one transport gains (or keeps) a security control that a
+sibling transport lacks, so the same payload is neutralized on one path and
+lands verbatim on another. Keep every transport behind the shared chokepoint.
+
+- [ ] **Route through the shared chokepoint** - Any new transport or message
+  handler routes mount / event / state-apply through the shared `djust.security`
+  chokepoint + `ViewRuntime`, not a hand-rolled per-transport path.
+- [ ] **New controls live in `security/` / `runtime.py`** - Any new security
+  control (URL validation, allowlist, key-application guard) lives in
+  `security/` or `runtime.py` so every transport inherits it — never in a
+  single transport module.
+- [ ] **Structural net is green** - New `location.href` /
+  `setattr(view, …)` / `import_module(view_path)` / `factory.get(client_url)`
+  sites are flagged by `test_mount_chokepoint_structural.py`; if you add a
+  sanctioned one, update its whitelist deliberately (with a justifying comment).
+  Add a new transport's mount entry point to the adapter registries in
+  `test_transport_parity_security.py` so the parity cases cover it.
+
 ### Data Protection
 - [ ] **Sensitive data handling** - No passwords/keys in logs or responses
 - [ ] **Privacy considerations** - PII handling follows regulations
