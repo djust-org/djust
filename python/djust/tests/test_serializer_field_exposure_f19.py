@@ -91,6 +91,61 @@ _ToDictModel = type(
     },
 )
 
+# #1868 — a model whose allowlist NAMES floor fields (password + is_staff).
+# The unconditional floor must STILL drop them; the allowlist may only narrow
+# the *non-floor* set (here, ``name``).
+_AllowlistNamesFloorModel = type(
+    "F19AllowlistNamesFloorModel",
+    (models.Model,),
+    {
+        "__module__": __name__,
+        "name": models.CharField(max_length=50, default=""),
+        "password": models.CharField(max_length=128, default=""),
+        "is_staff": models.BooleanField(default=True),
+        "is_superuser": models.BooleanField(default=True),
+        "__str__": lambda self: f"floorallow({self.pk})",
+        "Meta": type("Meta", (), {"app_label": "tests"}),
+        "djust_serializable_fields": ["name", "password", "is_staff", "is_superuser"],
+    },
+)
+
+# #1868 — the explicit, deliberate opt-out: a model that BOTH allowlists a floor
+# field AND names it in ``djust_serialize_sensitive_fields``. Only this double
+# declaration re-includes the floor field. (Default is always deny.)
+_OptOutModel = type(
+    "F19OptOutModel",
+    (models.Model,),
+    {
+        "__module__": __name__,
+        "name": models.CharField(max_length=50, default=""),
+        "is_staff": models.BooleanField(default=True),
+        "password": models.CharField(max_length=128, default=""),
+        "__str__": lambda self: f"optout({self.pk})",
+        "Meta": type("Meta", (), {"app_label": "tests"}),
+        "djust_serializable_fields": ["name", "is_staff"],
+        # Deliberate, loudly-named opt-out: re-include ``is_staff`` only.
+        "djust_serialize_sensitive_fields": ["is_staff"],
+    },
+)
+
+# #1868 — opt-out WITHOUT an allowlist: the floor still drops unless the field is
+# both allowlisted (or otherwise eligible) AND opted in. ``djust_serialize_sensitive_fields``
+# lifts the unconditional floor; normal denylist semantics still apply to the rest.
+_OptOutNoAllowlistModel = type(
+    "F19OptOutNoAllowlistModel",
+    (models.Model,),
+    {
+        "__module__": __name__,
+        "name": models.CharField(max_length=50, default=""),
+        "is_staff": models.BooleanField(default=True),
+        "password": models.CharField(max_length=128, default=""),
+        "__str__": lambda self: f"optoutnoal({self.pk})",
+        "Meta": type("Meta", (), {"app_label": "tests"}),
+        # No allowlist: opt ``is_staff`` back in via the explicit sensitive-opt-out.
+        "djust_serialize_sensitive_fields": ["is_staff"],
+    },
+)
+
 
 def _make(cls, pk=7, **field_values):
     """Instantiate a dynamic model without hitting the database."""
@@ -176,6 +231,71 @@ class TestPerModelControls:
         assert result["name"] == "ok"
         assert "secret" not in result
         assert "extra" not in result
+
+
+class TestUnconditionalFloor:
+    """#1868 — the ``_ALWAYS_EXCLUDED_FIELDS`` floor is UNCONDITIONAL.
+
+    An explicit per-model ``djust_serializable_fields`` allowlist may only
+    NARROW the serialized set; it may NOT re-expose a hardcore floor field
+    (``password``/``is_superuser``/``is_staff``). The allowlist still narrows
+    non-floor fields normally. A field re-enters the payload only via the
+    deliberate ``djust_serialize_sensitive_fields`` opt-out.
+    """
+
+    def test_allowlist_cannot_reexpose_password(self):
+        # Allowlist NAMES password — floor must still drop it (#1868).
+        obj = _make(
+            _AllowlistNamesFloorModel,
+            name="ok",
+            password="hash-should-not-ship",
+            is_staff=True,
+            is_superuser=True,
+        )
+        result = DjangoJSONEncoder()._serialize_model_safely(obj)
+        assert "password" not in result, f"password leaked: {result.get('password')!r}"
+
+    def test_allowlist_cannot_reexpose_privilege_flags(self):
+        obj = _make(
+            _AllowlistNamesFloorModel,
+            name="ok",
+            password="x",
+            is_staff=True,
+            is_superuser=True,
+        )
+        result = DjangoJSONEncoder()._serialize_model_safely(obj)
+        assert "is_staff" not in result
+        assert "is_superuser" not in result
+
+    def test_allowlist_still_narrows_non_floor_fields(self):
+        # The allowlist still works for NON-floor fields: ``name`` ships.
+        obj = _make(
+            _AllowlistNamesFloorModel,
+            name="visible",
+            password="x",
+            is_staff=True,
+            is_superuser=True,
+        )
+        result = DjangoJSONEncoder()._serialize_model_safely(obj)
+        assert result["name"] == "visible"
+        assert set(result.keys()) <= {"name", "pk", "id", "__str__", "__model__"}
+
+    def test_explicit_opt_out_reincludes_only_named_floor_field(self):
+        # The deliberate ``djust_serialize_sensitive_fields`` opt-out re-includes
+        # ``is_staff`` (and ONLY it) — ``password`` is not opted in, stays dropped.
+        obj = _make(_OptOutModel, name="ok", is_staff=True, password="secret")
+        result = DjangoJSONEncoder()._serialize_model_safely(obj)
+        assert result.get("is_staff") is True, "explicit opt-out should re-include is_staff"
+        assert "password" not in result, "password not opted in — must stay dropped"
+
+    def test_opt_out_without_allowlist_lifts_floor(self):
+        # Opt-out works even without an allowlist: ``is_staff`` re-enters, the
+        # rest follows normal denylist semantics (``password`` floor stays).
+        obj = _make(_OptOutNoAllowlistModel, name="ok", is_staff=True, password="secret")
+        result = DjangoJSONEncoder()._serialize_model_safely(obj)
+        assert result.get("is_staff") is True
+        assert "password" not in result
+        assert result["name"] == "ok"
 
 
 class TestToDictOverride:
