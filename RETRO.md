@@ -402,6 +402,8 @@ WU4 (#1862) was a pollution-class fix, so the gate ran the full suite 3× under 
 - [ ] Flaky `test_ws_auth_close_socket` under `-n auto` — Action Tracker #315 (GitHub #1875)
 - [ ] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1
 
+**Forward-link →** v1.1 planning: `/pipeline-strategy --deep` (2026-06-23) used this arc's data (#1646 = #1 recurring class, 21×) to commit the **v1.1 code-quality / single-path convergence** headline — **Path B (quality-first → ViewRuntime convergence)**. See [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md) + [ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md). Several of this arc's open items (#1875 flaky test, #1869 gate, plus #1360/#1279/#1648/#1368/#1356) feed the v1.1.0-1 quality-groundwork sub-milestone.
+
 ## v1.0.8-1 — Security-drift prevention program (PRs #1859, #1860, #1861, #1863, #1864, #1866, #1867)
 
 **Date**: 2026-06-22

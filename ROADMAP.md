@@ -474,14 +474,42 @@ through their own PRs and merged:
 Zero open tracked issues remain. Next: `/pipeline-retro --milestone v1.0.0rc6`
 and `/djust-release 1.0.0rc6`.
 
-## Next: v1.1.0 — Launch-soak interim (cleanup + pre-reqs)
+## Next: v1.1.0 — Code-quality / single-path convergence (HEADLINE) + launch-soak cleanup (parallel)
 
-> Scoped 2026-05-19 by `/pipeline-strategy --deep` (see
+> **HEADLINE re-scoped 2026-06-23 by `/pipeline-strategy --deep`** (see
+> [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md)
+> + **[ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md)**, Proposed).
+> The launch soak (v1.0.0 → v1.0.8) is complete; its data named the headline the
+> 2026-05-19 session deferred: **#1646 parallel-path-drift** was the #1 recurring
+> failure of the whole v1.0.x arc (21× in RETRO). v1.1's headline is a
+> **code-quality / DRY / single-path convergence** arc, executed **quality-first
+> (Path B)** — nets + DRY + hygiene + pattern-canon first (low-risk, build the
+> safety net), THEN the ViewRuntime dispatch convergence that retires #1646
+> structurally. Directional change vs the prior Path-E "defer"; ADR-022 records it.
+>
+> **Path-B sub-milestones (drained in order):**
+> - **v1.1.0-1 — Quality groundwork**: parity-net expansion to all controls; JS DRY
+>   (#1360 dedupe `_parseTimeMs`/`_computeTransitionTiming`, #1279 single
+>   `isSignificantChild`); sync-async + log-sanitization parity (#1648, #1368);
+>   state-backend/serialization footguns (#1356); test/CI hygiene (#1875, #1869,
+>   #1152, #1153, #1356).
+> - **v1.1.0-2 — Pattern canon + binding inventory**: #1307 (opt-in pattern canon),
+>   #1308 (Audit C ph2 bidirectional-binding inventory).
+> - **v1.1.0-3 — ViewRuntime convergence (headline)**: migrate WS `handle_mount` +
+>   `_handle_event_inner` + SSE onto one `ViewRuntime.dispatch` spine (split-foundation
+>   iterations per #1122; mount first, then event); module-organization refactor
+>   (`websocket.py`/`live_tags.py`) rides alongside. Gated behind the v1.1.0-1 nets.
+>
+> **Parallel tracks (unchanged):** the launch-soak cleanup/pre-reqs below (H5 docs
+> versioning, etc.) and the LiveView Native track (ADR-019) continue — LVN Iter-I's
+> renderer/`ViewRuntime` plumbing *aligns with* the convergence spine.
+
+> _Superseded (direction only)_: Scoped 2026-05-19 by `/pipeline-strategy --deep` (see
 > [`docs/strategy-sessions/2026-05-19-v1.1-readiness.md`](docs/strategy-sessions/2026-05-19-v1.1-readiness.md)).
-> The strategy session presented 5 paths and recommended **Path E — Defer to
-> launch soak**: refuse to commit a headline 1.1 direction (AI / DX / Platform
-> / Debug) before the 1.0.0 GA launch produces real adoption data. User
-> confirmed; no directional change vs active ADRs.
+> That session recommended **Path E — Defer to launch soak**: refuse to commit a
+> headline 1.1 direction (AI / DX / Platform / Debug) before the 1.0.0 GA launch
+> produced real adoption data. The soak is now complete and ADR-022 commits the
+> headline; the cleanup/pre-req items it scoped remain valid as the parallel track.
 
 *Goal:* Cut 1.0.0 GA. Run pre-reqs + cleanup PRs in parallel during a ~1-2
 week launch soak. Gather launch feedback (r/django + r/python comment
