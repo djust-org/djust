@@ -27,7 +27,7 @@ jobs:
   rust-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -101,7 +101,7 @@ jobs:
         python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     name: python-tests (py${{ matrix.python-version }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -170,7 +170,7 @@ jobs:
     continue-on-error: true
     name: python-tests (py3.14t free-threaded)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -211,7 +211,7 @@ jobs:
   javascript-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -242,7 +242,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't fail CI on Playwright test failures
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Shared harness: setup + build + playwright + migrate + start demo on
       # :8002. The djust_check demo dogfood was promoted out of here to its own
@@ -284,7 +284,7 @@ jobs:
   nav-hooks-guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Shared harness (setup + build + playwright + migrate + start demo on
       # :8002), identical to playwright-tests — the composite keeps the build
       # step from drifting out of one job (#1752 items 1+3).
@@ -324,7 +324,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -403,7 +403,7 @@ jobs:
   security-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -470,7 +470,7 @@ jobs:
   demo-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
