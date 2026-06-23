@@ -284,6 +284,20 @@ def check_liveviews(app_configs, **kwargs):
                 "handle_disconnect",
                 "handle_connect",
                 "handle_event",
+                # Framework-invoked lifecycle hooks (#1684). The framework calls
+                # these directly (self.X() / getattr / hasattr), NOT via the
+                # user-event router, so they must NOT carry @event_handler — but
+                # their names match the event-handler-like regex. Fix originally
+                # landed on the 1.1 branch (#1685) against the pre-split checks.py;
+                # ported here so main's split checks/ carries it too.
+                "handle_presence_join",  # presence.py track_presence()
+                "handle_presence_leave",  # presence.py untrack_presence()
+                "handle_cursor_move",  # websocket.py cursor_move (LiveCursorMixin)
+                "handle_tick",  # websocket.py tick loop (LiveView)
+                "handle_async_result",  # websocket.py/sse.py background-work completion
+                "handle_component_event",  # mixins/components.py child-component callback
+                "handle_info",  # websocket.py channel-layer/info (NotificationMixin)
+                "on_wizard_complete",  # wizard.py submit_wizard() (WizardMixin)
             ):
                 continue
             if is_event_handler(method):
