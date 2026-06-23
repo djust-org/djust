@@ -3906,6 +3906,28 @@ class TestV004LifecycleMethods:
         """handle_event() is a lifecycle method — V004 must not fire."""
         self._make_view_with_method("handle_event")
 
+    def test_v004_ignores_framework_invoked_hooks_1684(self):
+        """Framework-invoked lifecycle hooks (#1684) must not trip V004.
+
+        These are called by the framework directly (presence/cursor/tick/
+        background-work/component/info/wizard paths), not the user-event router,
+        so they must NOT carry @event_handler — but their names match the
+        event-handler-like regex. Fix landed on 1.1 via #1685; ported to main's
+        split checks/components.py. Regression for the canonical symptom
+        (handle_presence_leave, which bit djust-org/djust-start#5).
+        """
+        for method_name in (
+            "handle_presence_join",
+            "handle_presence_leave",
+            "handle_cursor_move",
+            "handle_tick",
+            "handle_async_result",
+            "handle_component_event",
+            "handle_info",
+            "on_wizard_complete",
+        ):
+            self._make_view_with_method(method_name)
+
 
 # ---------------------------------------------------------------------------
 # T013 — allow {{ ... }} Django template variable in dj-view (issue #395)
