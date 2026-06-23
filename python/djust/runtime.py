@@ -655,6 +655,16 @@ class ViewRuntime:
         event_name = data.get("event")
         params: Dict[str, Any] = dict(data.get("params") or {})
 
+        # Event ref echo (#560, ADR-022 Iter 2 Phase 2.0): the client sends a
+        # monotonic ``ref`` with each event so it can match responses to requests
+        # and distinguish event responses from out-of-band tick / broadcast /
+        # async pushes. The runtime echoes it back on BOTH the noop and the
+        # update frame (mirrors WS handle_event websocket.py:3119-3121 + the
+        # _send_noop / _send_update ref echo at websocket.py:776-780 / 1381-1403).
+        # Coerce to int to prevent type confusion (the int/float-only WS rule).
+        raw_ref = data.get("ref")
+        event_ref: Optional[int] = int(raw_ref) if isinstance(raw_ref, (int, float)) else None
+
         if not event_name:
             await self.transport.send_error("Missing 'event' field")
             return
@@ -698,6 +708,16 @@ class ViewRuntime:
         from .websocket import _compute_changed_keys, _snapshot_assigns
 
         pre_assigns = _snapshot_assigns(self.view_instance)
+        # Identity snapshot for the #700 push_commands-only auto-skip below:
+        # {attr: id(value)} over the public assigns. Immune to the deep-copy
+        # sentinel false-positives _snapshot_assigns can produce for non-copyable
+        # public attrs (querysets, file handles), so a handler that only calls
+        # push_event()/push_commands() without touching real state is detected as
+        # a true no-op (mirrors WS handle_event websocket.py:3551-3556).
+        _fw_attrs = getattr(self.view_instance, "_framework_attrs", frozenset())
+        pre_identity = {
+            k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
+        }
 
         # Call handler
         try:
@@ -714,21 +734,72 @@ class ViewRuntime:
             await self.transport.send(response)
             return
 
-        # Auto-detect unchanged state
+        # Waiter notification (ADR-002 Phase 1b): resolve any pending
+        # wait_for_event waiters on the view whose event_name matches. Runs AFTER
+        # the handler so new waiters created during this call aren't self-notified.
+        # Transport-agnostic; mirrors WS handle_event websocket.py:3608-3616 (and
+        # the deferred-event path at websocket.py:1478-1482). No-op when the view
+        # has no pending waiters. Best-effort: a waiter-callback failure must never
+        # break the event turn (matches WS posture).
+        if hasattr(self.view_instance, "_notify_waiters"):
+            try:
+                self.view_instance._notify_waiters(event_name, coerced_params or {})
+            except Exception as exc:  # noqa: BLE001 — waiter bugs must not break events
+                logger.warning(
+                    "Waiter notification for %r failed: %s",
+                    sanitize_for_log(event_name),
+                    exc,
+                )
+
+        # Auto-detect unchanged state. Never auto-skip when the view explicitly
+        # requested a full-HTML render (``_force_full_html``) — mirrors the WS
+        # ``force_html`` guard on the skip path (websocket.py:3851-3852). The
+        # render branch consumes + resets the flag (see _render_and_send).
         skip_render = getattr(self.view_instance, "_skip_render", False)
-        if not skip_render:
+        force_html = getattr(self.view_instance, "_force_full_html", False)
+        if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(self.view_instance)
             if pre_assigns == post_assigns:
                 skip_render = True
             else:
                 self.view_instance._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
+        # #700: push_commands-only handlers auto-skip the render. When push events
+        # are pending and the *identity* of every public attr is unchanged, the
+        # handler only emitted push commands (no state mutation) so a VDOM
+        # re-render is wasted work (and can trigger morphdom recovery during
+        # tours). Identity comparison sidesteps the assigns-snapshot
+        # false-positives on non-copyable attrs. Mirrors WS handle_event
+        # websocket.py:3867-3891. Guarded by force_html so an explicit
+        # full-HTML request still renders.
+        if not skip_render and not force_html:
+            pending = getattr(self.view_instance, "_pending_push_events", None)
+            if pending:
+                post_identity = {
+                    k: id(v) for k, v in self.view_instance.__dict__.items() if k not in _fw_attrs
+                }
+                if pre_identity == post_identity:
+                    skip_render = True
+
         has_async = getattr(self.view_instance, "_async_pending", None) is not None
 
         if skip_render:
             self.view_instance._skip_render = False
             self._flush_push_events()
-            noop_msg: Dict[str, Any] = {"type": "noop"}
+            # ref echo (#560) + source/event_name (#560 sequencing) on the noop
+            # frame so the client can match the ack to its pending event (clear
+            # _pendingEventRefs / stop the right loading state) and distinguish it
+            # from out-of-band pushes. WS echoes ``ref`` on its noop
+            # (_send_noop, websocket.py:776-781); ``source``/``event_name`` are a
+            # runtime ADD (the WS noop omits them) for self-describing #560
+            # sequencing — harmless extra fields the client tolerates.
+            noop_msg: Dict[str, Any] = {
+                "type": "noop",
+                "source": "event",
+                "event_name": event_name,
+            }
+            if event_ref is not None:
+                noop_msg["ref"] = event_ref
             if has_async:
                 noop_msg["async_pending"] = True
             await self.transport.send(noop_msg)
@@ -748,6 +819,8 @@ class ViewRuntime:
             event_name=event_name,
             cache_request_id=cache_request_id,
             has_async=has_async,
+            force_html=force_html,
+            event_ref=event_ref,
         )
 
         # Dispatch background work UNCONDITIONALLY after the render (WS parity,
@@ -1073,13 +1146,30 @@ class ViewRuntime:
         event_name: str,
         cache_request_id: Optional[str] = None,
         has_async: bool = False,
+        force_html: bool = False,
+        event_ref: Optional[int] = None,
     ) -> None:
         """Re-render after an event handler and emit the appropriate frame.
 
         Decides between ``patch`` (VDOM diff available) and ``html_update``
         (no diff or compression fallback). Mirrors the legacy
         ``_sse_handle_event`` render branch.
+
+        ``force_html`` (the view's ``_force_full_html`` flag, read by the
+        caller): when True, discard the VDOM patches and send a full
+        ``html_update`` instead — mirrors WS handle_event
+        (websocket.py:4039-4040). The flag is consumed (reset to False) here so
+        a single ``self._force_full_html = True`` in a handler forces exactly
+        one full render.
+
+        ``event_ref`` (#560): echoed back on every emitted frame so the client
+        can match the response to its pending event request.
         """
+        # Consume the explicit full-HTML request (#560/#700 sibling): reset the
+        # flag so it forces exactly one render, mirroring WS
+        # (websocket.py:4039-4040 / _dispatch_single_event websocket.py:1489).
+        if force_html and getattr(self.view_instance, "_force_full_html", False):
+            self.view_instance._force_full_html = False
         try:
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
         except Exception as exc:
@@ -1096,6 +1186,14 @@ class ViewRuntime:
         should_reset_form = getattr(self.view_instance, "_should_reset_form", False)
         if should_reset_form:
             self.view_instance._should_reset_form = False
+
+        # Honor the explicit full-HTML request: discard the VDOM patches so the
+        # render falls into the no-diff ``html_update`` branch below (mirrors WS
+        # handle_event websocket.py:4039-4040, which sets ``patches = None`` when
+        # ``_force_full_html`` is set). The flag itself was already consumed at
+        # the top of this method.
+        if force_html:
+            patches = None
 
         # Stamp the transport's client-checked wire version (#1858, the #1788
         # parallel-path twin) from the RAW pre-strip render. WS → consumer-owned
@@ -1126,6 +1224,7 @@ class ViewRuntime:
                     "patches": patch_list,
                     "version": wire_version,
                     "event_name": event_name,
+                    "source": "event",
                 }
                 if cache_request_id:
                     msg["cache_request_id"] = cache_request_id
@@ -1133,6 +1232,8 @@ class ViewRuntime:
                     msg["reset_form"] = True
                 if has_async:
                     msg["async_pending"] = True
+                if event_ref is not None:
+                    msg["ref"] = event_ref
                 await self.transport.send(msg)
             else:
                 # Compression fallback — send full HTML.
@@ -1143,6 +1244,7 @@ class ViewRuntime:
                     "html": html_content,
                     "version": wire_version,
                     "event_name": event_name,
+                    "source": "event",
                 }
                 if cache_request_id:
                     msg["cache_request_id"] = cache_request_id
@@ -1150,6 +1252,8 @@ class ViewRuntime:
                     msg["reset_form"] = True
                 if has_async:
                     msg["async_pending"] = True
+                if event_ref is not None:
+                    msg["ref"] = event_ref
                 await self.transport.send(msg)
         else:
             # No VDOM diff available — send HTML directly.
@@ -1162,6 +1266,7 @@ class ViewRuntime:
                 "html": html,
                 "version": wire_version,
                 "event_name": event_name,
+                "source": "event",
             }
             if cache_request_id:
                 msg["cache_request_id"] = cache_request_id
@@ -1169,6 +1274,8 @@ class ViewRuntime:
                 msg["reset_form"] = True
             if has_async:
                 msg["async_pending"] = True
+            if event_ref is not None:
+                msg["ref"] = event_ref
             await self.transport.send(msg)
 
         # Full flush-queue parity with WS (#1885 / #1646): drain ALL 8 queues

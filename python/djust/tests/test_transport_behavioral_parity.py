@@ -52,6 +52,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from django.test import override_settings
 
+from djust.decorators import event_handler
 from djust.live_view import LiveView
 
 _PKG_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -453,3 +454,447 @@ class TestWsOnlyBehaviorEnumeration:
 
         assert not hasattr(ViewRuntime, "dispatch_mount_batch")
         assert not hasattr(ViewRuntime, "handle_mount_batch")
+
+
+# --------------------------------------------------------------------------- #
+# Net 5 — runtime EVENT-spine parity grows (ADR-022 Iter 2 Phase 2.0, #1889).
+#
+# Phase 2.0 grows ``ViewRuntime._dispatch_event_inner`` / ``_render_and_send``
+# (the minimal SSE event spine) toward the WS ``_handle_event_inner`` by adding
+# the transport-agnostic shared behaviors the runtime lacked:
+#
+#   1. ``ref`` echo on BOTH the noop and the update frame (#560).
+#   2. ``source="event"`` + ``event_name`` on the noop frame (#560 sequencing).
+#   3. ``_force_full_html`` honored on the event render path (discard patches →
+#      full html_update; flag consumed). WS source: websocket.py:4039-4040.
+#   4. ``_notify_waiters`` (ADR-002) called after the handler. WS: websocket.py:3608.
+#   5. #700 identity push-only auto-skip (id()-identity variant beyond the
+#      assigns-snapshot skip). WS source: websocket.py:3867-3891.
+#
+# This file's Net 4 enumerates WS-only behaviors NOT on the runtime; this Net 5
+# pins the behaviors that Phase 2.0 MOVED ONTO the runtime — so a future drop
+# of one of them re-forks RED (mechanical drift detection, #1646 / #1125 / #1859
+# "a pin must be load-bearing"). Each behavioral pin is paired with the gate-off
+# witness (#1468) documented in its docstring.
+# --------------------------------------------------------------------------- #
+class _EventSpineMixin(_RuntimeRenderMixin):
+    """Render short-circuit + a couple of handlers for the event-spine pins.
+
+    ``render_with_diff`` returns ``(html, None, version)`` (no patches) so the
+    event render lands in the no-diff ``html_update`` branch — the branch every
+    transport reaches. The handlers below exercise the changed/unchanged/push-
+    only/force-html arms of the event spine.
+    """
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return {"count": self.count}
+
+
+def _event_runtime_with_view(view):
+    """Build a ViewRuntime with *view* already mounted (event path entry)."""
+    from djust.runtime import ViewRuntime
+
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    runtime.view_instance = view
+    return runtime, transport
+
+
+class _BumpView(_EventSpineMixin, LiveView):
+    """A handler that changes public state (forces a render)."""
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+
+
+class _NoChangeView(_EventSpineMixin, LiveView):
+    """A handler that does NOT change state (auto-skip → noop)."""
+
+    @event_handler()
+    def touch_nothing(self, **kwargs):
+        pass
+
+
+class _PushOnlyView(_EventSpineMixin, LiveView):
+    """A handler that only pushes an event — #700 identity push-only skip → noop."""
+
+    @event_handler()
+    def ping(self, **kwargs):
+        self.push_event("pong", {"x": 1})
+
+
+class _ForceHtmlView(_EventSpineMixin, LiveView):
+    """Sets ``_force_full_html`` in ``mount`` (so it is already in ``__dict__``
+    pre-handler — its identity/value is stable across the snapshot, NOT a
+    detected 'change') and the handler makes NO public-state change. Without the
+    ``not force_html`` guard on the auto-skip, this view would auto-skip to a
+    noop; WITH the guard it must render a full html_update. This makes the
+    guard's gate-off witness sharp (non-tautological, #1468): if the handler
+    instead SET ``_force_full_html`` fresh, that assignment would itself trip the
+    assigns snapshot and the auto-skip would never fire regardless of the guard.
+    """
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self._force_full_html = True  # pre-existing flag, stable across the turn
+
+    @event_handler()
+    def force(self, **kwargs):
+        # No state change — only force_html (set at mount) defeats the auto-skip.
+        pass
+
+
+class TestEventSpineRefEcho:
+    """Grow #1 + #2: ``ref`` on noop + update; ``source``/``event_name`` on noop."""
+
+    @pytest.mark.asyncio
+    async def test_update_frame_echoes_ref_source_event_name(self):
+        """A state-changing event echoes ``ref`` + ``source="event"`` +
+        ``event_name`` on the update frame (#560).
+
+        Gate-off (#1468): delete ``if event_ref is not None: msg["ref"] =
+        event_ref`` from the no-diff html_update branch in ``_render_and_send``
+        → ``ref`` drops from the frame → this FAILS.
+        """
+        runtime, transport = _event_runtime_with_view(_BumpView())
+        runtime.view_instance.count = 0
+
+        await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 42})
+
+        frames = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
+        assert frames, f"bump must emit an update frame, got {transport.sent!r}"
+        f = frames[0]
+        assert f.get("ref") == 42, f"update frame must echo the event ref (#560); got {f!r}"
+        assert f.get("source") == "event", f"update frame must carry source=event; got {f!r}"
+        assert f.get("event_name") == "bump", f"update frame must carry event_name; got {f!r}"
+
+    @pytest.mark.asyncio
+    async def test_noop_frame_echoes_ref_source_event_name(self):
+        """A no-change event echoes ``ref`` + ``source="event"`` + ``event_name``
+        on the noop frame (#560 sequencing).
+
+        Gate-off (#1468): delete ``if event_ref is not None: noop_msg["ref"] =
+        event_ref`` (or the ``source``/``event_name`` keys) from the noop branch
+        in ``_dispatch_event_inner`` → this FAILS.
+        """
+        runtime, transport = _event_runtime_with_view(_NoChangeView())
+        runtime.view_instance.count = 0
+
+        await runtime.dispatch_event(
+            {"type": "event", "event": "touch_nothing", "params": {}, "ref": 9}
+        )
+
+        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        assert noops, f"no-change event must emit a noop frame, got {transport.sent!r}"
+        n = noops[0]
+        assert n.get("ref") == 9, f"noop must echo the event ref (#560); got {n!r}"
+        assert n.get("source") == "event", f"noop must carry source=event; got {n!r}"
+        assert n.get("event_name") == "touch_nothing", f"noop must carry event_name; got {n!r}"
+
+    @pytest.mark.asyncio
+    async def test_missing_ref_is_omitted_not_null(self):
+        """When the client sends no ``ref``, neither the noop nor the update frame
+        carries a ``ref`` key (matches WS, which only sets it when present)."""
+        runtime, transport = _event_runtime_with_view(_NoChangeView())
+        runtime.view_instance.count = 0
+
+        await runtime.dispatch_event({"type": "event", "event": "touch_nothing", "params": {}})
+
+        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        assert noops, transport.sent
+        assert "ref" not in noops[0], f"absent ref must be omitted, not null; got {noops[0]!r}"
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_ref_is_coerced_to_none(self):
+        """A non-numeric ``ref`` is dropped (type-confusion guard, matches WS
+        ``int(raw_ref) if isinstance(raw_ref, (int, float))`` at
+        websocket.py:3120)."""
+        runtime, transport = _event_runtime_with_view(_NoChangeView())
+        runtime.view_instance.count = 0
+
+        await runtime.dispatch_event(
+            {"type": "event", "event": "touch_nothing", "params": {}, "ref": "evil"}
+        )
+        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        assert noops, transport.sent
+        assert "ref" not in noops[0], "non-numeric ref must be dropped, not echoed"
+
+
+class TestEventSpineForceFullHtml:
+    """Grow #3: ``_force_full_html`` honored on the event render path."""
+
+    @pytest.mark.asyncio
+    async def test_force_full_html_defeats_autoskip_and_sends_html_update(self):
+        """A handler that sets ``_force_full_html`` (without otherwise changing
+        public state) must NOT auto-skip — it sends a full ``html_update`` — and
+        the flag is consumed.
+
+        Gate-off (#1468): remove the ``not force_html`` term from the auto-skip
+        guard in ``_dispatch_event_inner`` (``if not skip_render and not
+        force_html:`` → ``if not skip_render:``) → the no-change handler
+        auto-skips to a noop → this FAILS (no html_update frame). VERIFIED RED.
+        Non-tautological because ``_force_full_html`` is pre-set (at mount) and
+        the handler makes no change, so the only thing keeping the auto-skip from
+        firing is the guard itself.
+        """
+        view = _ForceHtmlView()
+        view.count = 0
+        # Pre-existing flag (as _ForceHtmlView.mount sets it) — stable identity,
+        # not a detected change.
+        view._force_full_html = True
+        runtime, transport = _event_runtime_with_view(view)
+
+        await runtime.dispatch_event({"type": "event", "event": "force", "params": {}, "ref": 5})
+
+        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        assert not noops, (
+            f"force_full_html must defeat the auto-skip (no noop); got {transport.sent!r}"
+        )
+        updates = [f for f in transport.sent if f.get("type") == "html_update"]
+        assert updates, f"force_full_html must emit a full html_update; got {transport.sent!r}"
+        # Flag consumed so it forces exactly one render.
+        assert getattr(view, "_force_full_html", False) is False, (
+            "_force_full_html must be reset after the forced render"
+        )
+
+    @pytest.mark.asyncio
+    async def test_force_full_html_discards_patches(self):
+        """When patches ARE available but ``_force_full_html`` is set, the runtime
+        discards the patches and sends html_update (WS websocket.py:4039-4040).
+
+        Gate-off (#1468): remove the ``if force_html: patches = None`` line from
+        ``_render_and_send`` → a patch frame is emitted instead → this FAILS.
+        """
+        from djust.runtime import ViewRuntime
+
+        class _PatchForceView(_EventSpineMixin, LiveView):
+            def render_with_diff(self):
+                # A real patch list is available this render.
+                return ("<div>x</div>", [{"op": "noop"}], 1)
+
+            @event_handler()
+            def force(self, **kwargs):
+                self.count += 1  # also change state so the assigns-skip doesn't fire
+                self._force_full_html = True
+
+        view = _PatchForceView()
+        view.count = 0
+        transport = MockTransport()
+        runtime = ViewRuntime(transport)
+        runtime.view_instance = view
+
+        await runtime.dispatch_event({"type": "event", "event": "force", "params": {}})
+
+        patches = [f for f in transport.sent if f.get("type") == "patch"]
+        updates = [f for f in transport.sent if f.get("type") == "html_update"]
+        assert not patches, f"force_full_html must discard patches; got {transport.sent!r}"
+        assert updates, f"force_full_html must send html_update; got {transport.sent!r}"
+
+
+class TestEventSpineNotifyWaiters:
+    """Grow #4: ``_notify_waiters`` (ADR-002) called after the handler."""
+
+    @pytest.mark.asyncio
+    async def test_notify_waiters_called_after_handler(self):
+        """The runtime calls ``view._notify_waiters(event_name, params)`` after the
+        handler runs (ADR-002 Phase 1b, transport-agnostic; WS websocket.py:3608).
+
+        Gate-off (#1468): delete the ``_notify_waiters`` call from
+        ``_dispatch_event_inner`` → ``calls`` stays empty → this FAILS.
+        """
+        from unittest.mock import MagicMock
+
+        view = _BumpView()
+        view.count = 0
+        spy = MagicMock()
+        view._notify_waiters = spy  # instance override; runtime hasattr-guards it
+        runtime, _ = _event_runtime_with_view(view)
+
+        await runtime.dispatch_event(
+            {"type": "event", "event": "bump", "params": {"a": 1}, "ref": 1}
+        )
+
+        assert spy.called, "_notify_waiters was not called by the runtime event path"
+        called_event, called_kwargs = spy.call_args[0]
+        assert called_event == "bump"
+        assert called_kwargs == {"a": 1}, (
+            f"waiter kwargs must be the coerced params; got {called_kwargs!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_real_waiter_resolves_on_event(self):
+        """End-to-end through the REAL waiter registry: a ``wait_for_event``
+        future resolves when the matching event is dispatched through the
+        runtime (proving the spy test isn't testing a phantom API)."""
+        import asyncio
+
+        view = _BumpView()
+        view.count = 0
+        runtime, _ = _event_runtime_with_view(view)
+
+        waiter_future = asyncio.ensure_future(view.wait_for_event("bump", timeout=2))
+        await asyncio.sleep(0)  # let the waiter register
+
+        await runtime.dispatch_event({"type": "event", "event": "bump", "params": {"v": 7}})
+
+        result = await waiter_future
+        assert result == {"v": 7}, f"waiter should resolve with the event kwargs; got {result!r}"
+
+
+class TestEventSpineIdentityPushSkip:
+    """Grow #5: #700 identity push-only auto-skip → noop, not a render."""
+
+    @pytest.mark.asyncio
+    async def test_push_only_handler_auto_skips_to_noop(self):
+        """A handler that only calls ``push_event`` (no real state change) emits a
+        noop, not an html_update — even though the push-event side-effect drained
+        a push frame (#700, identity variant).
+
+        Gate-off (#1468): delete the ``#700`` identity-skip block from
+        ``_dispatch_event_inner`` → the assigns-snapshot may still detect 'no
+        change' for this simple view, so to make the gate-off witness sharp, the
+        sibling ``test_push_only_skip_is_identity_not_assigns`` uses a view whose
+        assigns-snapshot would FALSE-POSITIVE a change.
+        """
+        import asyncio
+
+        view = _PushOnlyView()
+        view.count = 0
+        runtime, transport = _event_runtime_with_view(view)
+
+        await runtime.dispatch_event({"type": "event", "event": "ping", "params": {}, "ref": 3})
+        # ``_flush_push_events`` schedules the send fire-and-forget
+        # (asyncio.ensure_future); yield once so the scheduled push frame lands.
+        await asyncio.sleep(0)
+
+        updates = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
+        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        assert not updates, f"push-only handler must NOT render; got {transport.sent!r}"
+        assert noops, f"push-only handler must emit a noop; got {transport.sent!r}"
+        # The push frame was still emitted (push_events flushed on the noop path).
+        pushes = [f for f in transport.sent if f.get("type") == "push_event"]
+        assert pushes, "the push_event side-effect must still reach the client on the noop path"
+
+    @pytest.mark.asyncio
+    async def test_push_only_skip_is_identity_not_assigns(self):
+        """The #700 skip is the IDENTITY variant — load-bearing exactly when the
+        ASSIGNS snapshot reports a change but the IDENTITY snapshot does not.
+
+        ``_snapshot_assigns`` includes a CONTENT fingerprint for list/dict attrs,
+        so an in-place mutation of a dict nested inside a list (same list object
+        id, same dict object id, different value) makes the assigns snapshot
+        differ — while the identity snapshot ``{attr: id(value)}`` stays
+        unchanged (no attr was reassigned). The #700 block recognises this as a
+        no-reassignment turn and, with push events pending, skips the render. The
+        assigns-snapshot skip ALONE cannot (it sees the fingerprint change).
+
+        Construction note (faithful to the WS quirk this ports): the assigns-else
+        branch sets ``view._changed_keys`` when assigns differ. ``_changed_keys``
+        is a framework slot on a normally-constructed view (set before the
+        ``_framework_attrs`` snapshot via the lifecycle), so it is excluded from
+        BOTH identity snapshots and does not pollute the comparison. The
+        ``_event_runtime_with_view`` helper builds the view WITHOUT running the
+        full mount lifecycle, so we add ``_changed_keys`` to ``_framework_attrs``
+        here to reproduce a mounted view's framework-attr set — otherwise the
+        else-branch's fresh ``_changed_keys`` object would itself differ the
+        identity snapshot (a test-harness artifact, not the production shape).
+
+        Gate-off (#1468): delete the #700 identity-skip block from
+        ``_dispatch_event_inner`` → the assigns snapshot's fingerprint change is
+        treated as a real change → this view RENDERS instead of noop → FAILS.
+        VERIFIED RED.
+        """
+
+        class _InPlacePushView(_EventSpineMixin, LiveView):
+            def mount(self, request, **kwargs):
+                self.count = 0
+                self.rows = [{"v": 1}]  # list-of-dict: fingerprinted by assigns
+
+            @event_handler()
+            def ping(self, **kwargs):
+                # In-place mutate the nested dict value: changes the assigns
+                # fingerprint (different content) but NOT the identity of `rows`
+                # (same list object) — the #700 false-positive the identity skip
+                # neutralizes. Plus a push so push events are pending.
+                self.rows[0]["v"] += 1
+                self.push_event("pong", {})
+
+        view = _InPlacePushView()
+        view.count = 0
+        view.rows = [{"v": 1}]
+        # Reproduce a mounted view's framework-attr set (see docstring): the
+        # assigns-else writes _changed_keys; on a live mounted view that key is a
+        # framework slot and is excluded from the identity snapshot.
+        view._framework_attrs = view._framework_attrs | {"_changed_keys"}
+        runtime, transport = _event_runtime_with_view(view)
+
+        await runtime.dispatch_event({"type": "event", "event": "ping", "params": {}})
+
+        updates = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
+        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        assert not updates, (
+            "the #700 identity skip must skip a push-only handler even when the "
+            f"assigns fingerprint reports an in-place change; got {transport.sent!r}"
+        )
+        assert noops, f"expected a noop, got {transport.sent!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Net 6 — EVENT-spine behavior enumeration (source pin, #1646 / #1125 / #1859).
+#
+# A mechanical source-level enumeration of the 5 Phase-2.0 grows inside the
+# runtime event spine. Each entry is a substring that MUST appear in the
+# relevant ``runtime.py`` method body. A future refactor that drops one of the
+# grows re-forks this RED (the pin is load-bearing: it asserts on the actual
+# production method source, not a phantom). Mirrors the AST/source style of
+# Net 1 (flush-queue enumeration).
+# --------------------------------------------------------------------------- #
+import inspect  # noqa: E402
+
+
+class TestEventSpineEnumeration:
+    def test_dispatch_event_inner_has_all_five_grows(self):
+        """Enumerate the 5 Phase-2.0 grows present in
+        ``_dispatch_event_inner`` (the spine). A dropped grow trips this pin."""
+        from djust.runtime import ViewRuntime
+
+        src = inspect.getsource(ViewRuntime._dispatch_event_inner)
+
+        # 1. ref extraction (#560).
+        assert 'data.get("ref")' in src, "event ref (#560) extraction missing from spine"
+        assert "event_ref" in src, "event_ref not threaded through the spine"
+        # 2. source + event_name on the noop frame.
+        assert '"source": "event"' in src, "source=event missing from the noop frame"
+        assert '"event_name": event_name' in src, "event_name missing from the noop frame"
+        # 3. _force_full_html honored on the skip decision.
+        assert "_force_full_html" in src, "_force_full_html guard missing from the spine"
+        assert "force_html" in src, "force_html not threaded to the render call"
+        # 4. _notify_waiters (ADR-002).
+        assert "_notify_waiters" in src, "_notify_waiters (ADR-002) missing from the spine"
+        # 5. #700 identity push-only skip.
+        assert "_pending_push_events" in src, "#700 identity push-only skip missing from the spine"
+        assert "pre_identity" in src and "post_identity" in src, (
+            "#700 identity comparison (pre_identity/post_identity) missing from the spine"
+        )
+
+    def test_render_and_send_honors_force_html_and_ref(self):
+        """``_render_and_send`` discards patches under force_html and echoes the
+        event ref on every frame."""
+        from djust.runtime import ViewRuntime
+
+        src = inspect.getsource(ViewRuntime._render_and_send)
+        assert "if force_html:" in src, "force_html patch-discard missing from _render_and_send"
+        assert "patches = None" in src, "force_html must discard patches"
+        # ref echoed on all three frame branches (patch / compression / no-diff).
+        assert src.count('msg["ref"] = event_ref') == 3, (
+            "the event ref must be echoed on all 3 update-frame branches "
+            "(patch / compression-fallback / no-diff html_update)"
+        )
+        # source=event on all three update branches.
+        assert src.count('"source": "event"') == 3, (
+            "source=event must be stamped on all 3 update-frame branches"
+        )
