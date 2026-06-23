@@ -154,10 +154,40 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
     """Regression (review of the T1/T2 fix): a login-redirecting view inside a
     mount_batch must NOT close the shared socket — the surviving public view
     mounts and the redirecting view is reported in navigate[]. (The close() is
-    suppressed inside _mount_one; view_instance is still cleared.)"""
+    suppressed inside _mount_one; view_instance is still cleared.)
+
+    Order-independence (#1875): this test was order-fragile under full
+    ``-n auto`` saturation. The original ``receive_nothing(timeout=0.5)``
+    "no mid-batch close" check was doubly racy:
+
+    1. Process-global channel layer. ``LiveViewConsumer.connect`` joins the
+       ``"djust_hotreload"`` group (websocket.py:1676) on the cached
+       process-global ``InMemoryChannelLayer`` (``get_channel_layer()``). A
+       sibling test in the same xdist worker (e.g.
+       ``test_ws_send_version_1788.test_hotreload_frame_advances_…`` does
+       ``group_send("djust_hotreload", …)``) can leave stale group membership
+       / buffered frames in that shared layer, delivering a stray
+       ``hotreload``/``reload`` frame into this test's ``receive_nothing``
+       window — failing the assert for the wrong reason. We reset the
+       channel-layer cache so this consumer connects to a FRESH layer with no
+       cross-test pollution.
+    2. Wall-clock window. ``receive_nothing(timeout=0.5)`` proves "open" by the
+       ABSENCE of a frame over a fixed wall-clock window — fundamentally flaky
+       under CPU saturation (#1830/#1795). We replace it with a DETERMINISTIC
+       openness probe: a ``ping``→``pong`` round-trip. A closed socket cannot
+       pong, so receiving a ``pong`` proves the transport stayed open without
+       racing a timer.
+    """
+    from channels.layers import channel_layers
     from channels.testing import WebsocketCommunicator
 
     from djust.websocket import LiveViewConsumer
+
+    # Isolate the process-global channel layer: drop the cached backend so this
+    # consumer connects to a fresh InMemoryChannelLayer with no stale
+    # "djust_hotreload" membership or buffered frames from a sibling test in the
+    # same xdist worker (the #1875 pollution source).
+    channel_layers.backends.clear()
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
@@ -182,8 +212,13 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
     nav_targets = [n.get("target_id") for n in resp.get("navigate", [])]
     assert "pub" in survivor_targets, f"public view dropped: {resp!r}"
     assert "secret" in nav_targets, f"login view not reported as redirect: {resp!r}"
-    # The shared socket must still be open (no mid-batch close).
-    assert await communicator.receive_nothing(timeout=0.5) is True, (
-        "shared socket received an unexpected frame (likely a websocket.close mid-batch)"
+    # The shared socket must still be open (no mid-batch close). Probe it
+    # deterministically: a closed socket cannot answer a ping. Receiving a
+    # pong proves the transport stayed open without racing a wall-clock window.
+    await communicator.send_json_to({"type": "ping"})
+    pong = await communicator.receive_json_from(timeout=3)
+    assert pong.get("type") == "pong", (
+        "shared socket did not pong after the batch — it was likely closed "
+        f"mid-batch (a websocket.close would suppress the pong); got {pong!r}"
     )
     await communicator.disconnect()
