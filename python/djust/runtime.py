@@ -443,6 +443,37 @@ class ViewRuntime:
             await self.transport.send(response)
             return
 
+        # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
+        # Iter 0 / #1885: mirrors the WS handle_mount post-mount object check
+        # (websocket.py:2554-2573) so the runtime mount path enforces the SAME
+        # ADR-017 object-level authorization. Placed AFTER mount() — so
+        # get_object() can read URL-derived attrs (e.g. self.<x>_id) that mount()
+        # populated — and BEFORE handle_params + render, so a denied object is
+        # NEVER rendered or sent to the client (latent IDOR, findings #10-#12).
+        # Routed through the shared enforce_object_permission chokepoint (the same
+        # one dispatch_url_change already uses, runtime.py + the parity net) so
+        # the runtime path cannot drift from WS/SSE/API (#1646). No-op for views
+        # that don't override get_object (behavior-preserving). Fail-closed: the
+        # chokepoint maps a None request / any non-PermissionDenied get_object
+        # failure to denial; the raised PermissionDenied becomes the runtime's
+        # natural permission_denied error frame (matching dispatch_url_change).
+        from django.core.exceptions import PermissionDenied
+
+        from .auth.core import enforce_object_permission
+
+        try:
+            await sync_to_async(enforce_object_permission)(view_instance, request)
+        except PermissionDenied:
+            logger.info(
+                "Object-permission denied for %s (runtime mount)",
+                view_instance.__class__.__name__,
+            )
+            await self.transport.send_error(
+                "Access denied for this object.", code="permission_denied"
+            )
+            self.view_instance = None
+            return
+
         # ---- handle_params (Phoenix-parity, fixes #1237 bug 3) ----
         try:
             from urllib.parse import urlencode
@@ -724,9 +755,11 @@ class ViewRuntime:
                 }
                 await self.transport.send(msg)
 
-            self._flush_push_events()
-            self._flush_navigation()
-            await self._flush_deferred()
+            # Full flush-queue parity with WS (#1885 / #1646): the url_change
+            # path is the runtime's one production user, so flash / page_metadata
+            # / layout / a11y / i18n queued during handle_params() were being
+            # silently dropped before this. Drain ALL 8 queues in canonical order.
+            await self._flush_all_pending()
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -1031,9 +1064,9 @@ class ViewRuntime:
                 msg["async_pending"] = True
             await self.transport.send(msg)
 
-        self._flush_push_events()
-        self._flush_navigation()
-        await self._flush_deferred()
+        # Full flush-queue parity with WS (#1885 / #1646): drain ALL 8 queues
+        # in canonical order, not just push_events/navigation/deferred.
+        await self._flush_all_pending()
 
     def _flush_push_events(self) -> None:
         """Drain push_events and send via the transport (sync-safe — pushes
@@ -1081,3 +1114,135 @@ class ViewRuntime:
                     view.__class__.__name__,
                     exc_info=True,
                 )
+
+    # ------------------------------------------------------------------ #
+    # Iter 0 / #1885 — full flush-queue parity with WS ``_flush_all_pending``.
+    #
+    # Before Iter 0 the runtime drained only 3 of WS's 8 queues
+    # (push_events / navigation / deferred), so the runtime's one production
+    # user (``url_change`` — dj-patch / popstate) silently dropped flash
+    # messages, page-metadata updates, layout swaps, accessibility
+    # announcements, and i18n commands queued during ``handle_params``
+    # (live #1646 instance INSIDE the convergence target). The 5 methods
+    # below + ``_flush_all_pending`` mirror WS ``websocket.py:888`` exactly:
+    # same queue set, same canonical drain order, same per-queue frame shape
+    # and ``_drain_*`` method names (including the defensively hasattr-guarded
+    # a11y/i18n hooks that core views don't provide). ``_flush_all_pending``
+    # is the single source of the turn-end drain so a future queue addition
+    # can never again be wired on one path and not the other.
+    # ------------------------------------------------------------------ #
+
+    async def _flush_flash(self) -> None:
+        """Drain pending flash messages and emit ``flash`` frames (WS parity)."""
+        view = self.view_instance
+        if not view or not hasattr(view, "_drain_flash"):
+            return
+        commands = view._drain_flash()
+        if not isinstance(commands, list):
+            return
+        for cmd in commands:
+            await self.transport.send({"type": "flash", **cmd})
+
+    async def _flush_page_metadata(self) -> None:
+        """Drain pending page-metadata commands and emit ``page_metadata`` frames."""
+        view = self.view_instance
+        if not view or not hasattr(view, "_drain_page_metadata"):
+            return
+        commands = view._drain_page_metadata()
+        if not isinstance(commands, list):
+            return
+        for cmd in commands:
+            await self.transport.send({"type": "page_metadata", **cmd})
+
+    async def _flush_pending_layout(self) -> None:
+        """Render + emit a pending ``set_layout`` swap (WS parity, v0.6.0).
+
+        Mirrors ``websocket.py:_flush_pending_layout``: render the queued
+        layout template with the view's current context and emit a
+        ``{"type": "layout", "path": ..., "html": ...}`` frame. Layout
+        template errors must never kill the live connection — ``TemplateDoesNotExist``
+        warns + skips; any other error logs (and re-raises in DEBUG so
+        programmer errors surface during development).
+        """
+        view = self.view_instance
+        if not view or not hasattr(view, "_drain_pending_layout"):
+            return
+        layout_path = view._drain_pending_layout()
+        if not layout_path:
+            return
+        from django.conf import settings as django_settings
+        from django.template.exceptions import TemplateDoesNotExist
+        from django.template.loader import render_to_string
+
+        try:
+            context = view.get_context_data() if hasattr(view, "get_context_data") else {}
+            layout_html = await sync_to_async(render_to_string)(layout_path, context)
+        except TemplateDoesNotExist:
+            logger.warning(
+                "set_layout(%r) — template not found; ignoring swap request", layout_path
+            )
+            return
+        except Exception:  # noqa: BLE001 — layout errors must not kill the wire
+            logger.exception(
+                "set_layout(%r) — template rendering raised; ignoring swap request", layout_path
+            )
+            if getattr(django_settings, "DEBUG", False):
+                raise
+            return
+        await self.transport.send({"type": "layout", "path": layout_path, "html": layout_html})
+
+    async def _flush_accessibility(self) -> None:
+        """Drain queued screen-reader announcements + focus command (WS parity)."""
+        view = self.view_instance
+        if not view:
+            return
+        if hasattr(view, "_drain_announcements"):
+            try:
+                announcements = view._drain_announcements()
+                if announcements and isinstance(announcements, list):
+                    await self.transport.send(
+                        {"type": "accessibility", "announcements": announcements}
+                    )
+            except Exception:
+                logger.warning("Failed to flush accessibility announcements", exc_info=True)
+        if hasattr(view, "_drain_focus"):
+            try:
+                focus_cmd = view._drain_focus()
+                if focus_cmd and isinstance(focus_cmd, tuple) and len(focus_cmd) == 2:
+                    selector, options = focus_cmd
+                    await self.transport.send(
+                        {"type": "focus", "selector": selector, "options": options}
+                    )
+            except Exception:
+                logger.warning("Failed to flush focus command", exc_info=True)
+
+    async def _flush_i18n(self) -> None:
+        """Drain pending i18n commands and emit ``i18n`` frames (WS parity)."""
+        view = self.view_instance
+        if not view or not hasattr(view, "_drain_i18n_commands"):
+            return
+        for cmd in view._drain_i18n_commands():
+            await self.transport.send({"type": "i18n", **cmd})
+
+    async def _flush_all_pending(self) -> None:
+        """Drain every queued client side-effect at the end of a runtime turn,
+        in WS's canonical order. Single source of truth for the turn-end drain
+        on the runtime path (mirrors ``websocket.py:_flush_all_pending``): every
+        turn-end site (event render, url_change) calls THIS so no path can drop a
+        queued command (#1646). Each ``_flush_*`` drains + clears its own queue,
+        so calling twice in one turn is a harmless no-op.
+
+        Order matches WS exactly: push_events → flash → page_metadata →
+        pending_layout → deferred → navigation → accessibility → i18n. Layout
+        (replaces ``<body>``) goes after page_metadata so head mutations land
+        first and survive the swap; deferred callbacks run after the visible
+        side-effects so they observe post-patch state.
+        """
+        self._flush_push_events()
+        await self._flush_flash()
+        await self._flush_page_metadata()
+        await self._flush_pending_layout()
+        await self._flush_deferred()
+        self._flush_navigation()
+        await self._flush_accessibility()
+        await self._flush_i18n()
