@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`V004` no longer false-fires on framework-invoked lifecycle hooks (#1684).** The `V004` system check ("public method looks like an event handler but is missing `@event_handler`") flagged user overrides of hooks the framework calls *directly* (`self.X()` / `getattr` / `hasattr`) rather than through the user-event router — these must NOT carry `@event_handler`, but their names match the event-handler-like regex and were absent from the `V004` lifecycle-skip set in `checks/components.py`. Canonical symptom: `handle_presence_leave` (bit `djust-org/djust-start#5`). Added the 8 framework-invoked hooks (`handle_presence_join`/`handle_presence_leave`/`handle_cursor_move`/`handle_tick`/`handle_async_result`/`handle_component_event`/`handle_info`/`on_wizard_complete`) to the skip set. The fix originally landed on the `1.1` branch (#1685) against the pre-`#1822`-split `checks.py`; it was never ported to `main`'s split `checks/` (so the false-positive was live through 1.0.8) — this lands it on `main`. New regression `TestV004LifecycleMethods::test_v004_ignores_framework_invoked_hooks_1684` (gate-off verified, #1468).
+
 ## [1.0.8] - 2026-06-23
 
 ### Security
