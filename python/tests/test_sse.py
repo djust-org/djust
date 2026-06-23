@@ -48,8 +48,6 @@ from djust.sse import (
     DjustSSEEventView,
     _get_session,
     _sse_sessions,
-    _sse_mount_view,
-    _sse_handle_event,
 )
 
 
@@ -186,10 +184,16 @@ class TestDjustSSEStreamViewGet:
         request = self.factory.get(f"/djust/sse/{sid}/", {"view": "nonexistent.View"})
 
         view = DjustSSEStreamView()
+
         # A successful mount registers the session (register-after-mount,
         # Finding #25). The SSE streaming response is created either way.
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = True
+        # Post-#1887 the GET stream mounts via ``session.runtime.dispatch_mount``
+        # and reads the 'mounted' gate from ``runtime.view_instance is not None``,
+        # so a successful mock mount sets ``view_instance`` on the runtime.
+        async def fake_dispatch_mount(self, data):
+            self.view_instance = MagicMock()
+
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=fake_dispatch_mount):
             response = await view.get(request, session_id=sid)
 
         assert isinstance(response, StreamingHttpResponse)
@@ -279,14 +283,17 @@ class TestDjustSSEEventViewPost:
         _attach_owner(request)
         view = DjustSSEEventView()
 
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = None
-            response = await view.post(request, session_id=session.session_id)
+        # Post-#1887 the /event/ endpoint dispatches through the shared runtime
+        # (``session.runtime.dispatch_event``) with the WS-shaped event frame.
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 200
         data = json.loads(response.content)
         assert data == {"ok": True}
-        mock_dispatch.assert_called_once_with(session, "increment", {})
+        session.runtime.dispatch_event.assert_called_once_with(
+            {"type": "event", "event": "increment", "params": {}}
+        )
 
 
 # ------------------------------------------------------------------ #
@@ -295,12 +302,27 @@ class TestDjustSSEEventViewPost:
 
 
 class TestSSEMountView:
+    """Mount-error frames over the converged runtime mount path (#1887).
+
+    Post-#1887 the SSE GET stream mounts via ``session.runtime.dispatch_mount``
+    (the same spine the /message/ endpoint + WS url_change use). These tests
+    drive that path directly with the real request stashed on the session
+    (``session._request``, as the GET view does) and assert that a blocked /
+    failed mount pushes an ``error`` frame and never sets ``view_instance``.
+    """
+
     def setup_method(self):
         _sse_sessions.clear()
         self.factory = RequestFactory()
 
     def teardown_method(self):
         _sse_sessions.clear()
+
+    async def _dispatch_mount(self, session, request, view_path):
+        session._request = request
+        await session.runtime.dispatch_mount(
+            {"type": "mount", "view": view_path, "url": request.path, "params": {}}
+        )
 
     @pytest.mark.asyncio
     async def test_pushes_error_for_invalid_view_path(self):
@@ -309,10 +331,11 @@ class TestSSEMountView:
         request.session = MagicMock()
         request.user = MagicMock()
 
-        await _sse_mount_view(session, request, "nonexistent.Module.View")
+        await self._dispatch_mount(session, request, "nonexistent.Module.View")
 
         messages = drain_queue(session)
         assert any(m.get("type") == "error" for m in messages)
+        assert session.runtime.view_instance is None
 
     @pytest.mark.asyncio
     async def test_pushes_error_when_not_liveview_subclass(self):
@@ -323,10 +346,11 @@ class TestSSEMountView:
         request.user = MagicMock()
 
         # django.views.View is not a LiveView subclass
-        await _sse_mount_view(session, request, "django.views.View")
+        await self._dispatch_mount(session, request, "django.views.View")
 
         messages = drain_queue(session)
         assert any(m.get("type") == "error" for m in messages)
+        assert session.runtime.view_instance is None
 
     @pytest.mark.asyncio
     async def test_pushes_error_when_disallowed_module(self):
@@ -334,10 +358,11 @@ class TestSSEMountView:
         request = self.factory.get("/")
 
         with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", ["myapp."]):
-            await _sse_mount_view(session, request, "otherapp.views.MyView")
+            await self._dispatch_mount(session, request, "otherapp.views.MyView")
 
         messages = drain_queue(session)
         assert any(m.get("type") == "error" for m in messages)
+        assert session.runtime.view_instance is None
 
 
 # ------------------------------------------------------------------ #
@@ -346,6 +371,14 @@ class TestSSEMountView:
 
 
 class TestSSEHandleEvent:
+    """Event-dispatch errors over the converged runtime event path (#1887).
+
+    Post-#1887 the /event/ endpoint dispatches via ``session.runtime
+    .dispatch_event``; the runtime reads ``runtime.view_instance`` (not the
+    session attr), so these tests set that and assert the same error frames the
+    legacy ``_sse_handle_event`` produced (not-mounted, unsafe event name).
+    """
+
     def setup_method(self):
         _sse_sessions.clear()
 
@@ -355,9 +388,9 @@ class TestSSEHandleEvent:
     @pytest.mark.asyncio
     async def test_pushes_error_when_view_not_mounted(self):
         session = make_session()
-        session.view_instance = None  # Not mounted
+        session.runtime.view_instance = None  # Not mounted
 
-        await _sse_handle_event(session, "increment", {})
+        await session.runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
 
         messages = drain_queue(session)
         assert any(m.get("type") == "error" for m in messages)
@@ -370,9 +403,9 @@ class TestSSEHandleEvent:
         # Create a minimal mock view
         view = MagicMock()
         view.__class__.__name__ = "FakeView"
-        session.view_instance = view
+        session.runtime.view_instance = view
 
-        await _sse_handle_event(session, "__class__", {})
+        await session.runtime.dispatch_event({"type": "event", "event": "__class__", "params": {}})
 
         messages = drain_queue(session)
         assert any(m.get("type") == "error" for m in messages)
@@ -634,11 +667,11 @@ class TestSSEMessageEndpoint:
         _attach_owner(request)
 
         view = DjustSSEEventView()
-        # Legacy view delegates to either _sse_handle_event or runtime —
-        # both are acceptable, we only assert the endpoint stays reachable.
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = None
-            response = await view.post(request, session_id=session.session_id)
+        # Post-#1887 the legacy /event/ endpoint delegates to the shared runtime
+        # (``session.runtime.dispatch_event``); we only assert the deprecated
+        # alias stays reachable + returns the {"ok": true} ack.
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 200
         data = json.loads(response.content)

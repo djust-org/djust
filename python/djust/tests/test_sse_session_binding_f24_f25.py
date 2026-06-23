@@ -92,6 +92,21 @@ def _anon_user():
     return MagicMock(is_authenticated=False, pk=None)
 
 
+# Post-#1887 (ADR-022 Iter 1) the SSE GET stream mounts via
+# ``session.runtime.dispatch_mount`` and reads the 'mounted' gate from
+# ``runtime.view_instance is not None`` (it replaced the legacy ``_sse_mount_view``
+# bool return). These stand-ins patch ``ViewRuntime.dispatch_mount`` to simulate a
+# successful mount (sets ``view_instance``) or a failed/unauthorized mount (leaves
+# it ``None``) without importing a real view — the F24/F25 owner-binding + caps +
+# register-after-mount logic is what's under test here, not the mount internals.
+async def _fake_mount_ok(self, data):  # noqa: ARG001 — signature mirrors dispatch_mount
+    self.view_instance = MagicMock()
+
+
+async def _fake_mount_fail(self, data):  # noqa: ARG001 — signature mirrors dispatch_mount
+    self.view_instance = None
+
+
 def _make_session(*, owner_user_pk=None, owner_session_key=None, mounted=True):
     """Create + register an owner-bound SSE session (mounted by default)."""
     from djust.runtime import ViewRuntime, SSESessionTransport
@@ -165,11 +180,11 @@ class TestF24OwnerBinding:
         request = _event_post(self.factory, session.session_id, user=_auth_user(2))  # user B
 
         view = DjustSSEEventView()
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 403
-        mock_dispatch.assert_not_called()
+        session.runtime.dispatch_event.assert_not_called()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -193,12 +208,11 @@ class TestF24OwnerBinding:
         request = _event_post(self.factory, session.session_id, user=_auth_user(1))
 
         view = DjustSSEEventView()
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = None
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 200
-        mock_dispatch.assert_called_once()
+        session.runtime.dispatch_event.assert_called_once()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -224,11 +238,11 @@ class TestF24OwnerBinding:
         )
 
         view = DjustSSEEventView()
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 403
-        mock_dispatch.assert_not_called()
+        session.runtime.dispatch_event.assert_not_called()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -240,12 +254,11 @@ class TestF24OwnerBinding:
         )
 
         view = DjustSSEEventView()
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            mock_dispatch.return_value = None
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 200
-        mock_dispatch.assert_called_once()
+        session.runtime.dispatch_event.assert_called_once()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -258,11 +271,11 @@ class TestF24OwnerBinding:
         )
 
         view = DjustSSEEventView()
-        with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
-            response = await view.post(request, session_id=session.session_id)
+        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 403
-        mock_dispatch.assert_not_called()
+        session.runtime.dispatch_event.assert_not_called()
 
     def test_owns_helper_rejects_unbound_session(self):
         """A session with no owner at all is unownable (defensive)."""
@@ -293,8 +306,7 @@ class TestF24OwnerCapture:
         request.session = SessionStore()
 
         view = DjustSSEStreamView()
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = True
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             response = await view.get(request, session_id=sid)
 
         assert isinstance(response, StreamingHttpResponse)
@@ -316,8 +328,7 @@ class TestF24OwnerCapture:
         assert request.session.session_key is None  # no key before
 
         view = DjustSSEStreamView()
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = True
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             await view.get(request, session_id=sid)
 
         assert sid in _sse_sessions
@@ -351,8 +362,7 @@ class TestF25Caps:
         """With the per-client cap set to 2, the 3rd GET from the SAME principal
         is 429 and registers no new session (gate-off witness for the cap)."""
         view = DjustSSEStreamView()
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = True
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             for _ in range(2):  # fill the cap
                 sid = str(uuid.uuid4())
                 resp = await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
@@ -375,8 +385,7 @@ class TestF25Caps:
     async def test_per_client_cap_is_per_principal(self):
         """A DIFFERENT principal is not blocked by another principal's count."""
         view = DjustSSEStreamView()
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = True
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             for _ in range(2):
                 sid = str(uuid.uuid4())
                 await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
@@ -394,8 +403,7 @@ class TestF25Caps:
     async def test_global_cap_returns_503_and_does_not_register(self):
         """When the global cap is reached, a new GET is 503 regardless of client."""
         view = DjustSSEStreamView()
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = True
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_ok):
             sid = str(uuid.uuid4())
             await view.get(self._get_request(sid, user=_auth_user(7)), session_id=sid)
             assert len(_sse_sessions) == 1
@@ -413,8 +421,8 @@ class TestF25Caps:
         """A stream GET whose mount FAILS (bad/nonexistent view path) must NOT
         leave an entry in _sse_sessions (register-after-mount, gate-off witness).
 
-        Uses the REAL _sse_mount_view against a nonexistent view, which fails the
-        view-import allowlist and returns False."""
+        Uses the REAL runtime mount (dispatch_mount) against a nonexistent view,
+        which fails the view-import allowlist and never sets view_instance."""
         sid = str(uuid.uuid4())
         request = self._get_request(sid, user=_auth_user(7))
         # Point at a non-importable / non-allowlisted view so the real mount fails.
@@ -438,8 +446,7 @@ class TestF25Caps:
         request = self._get_request(sid, user=_auth_user(7))
 
         view = DjustSSEStreamView()
-        with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = False  # simulate auth/permission failure
+        with patch("djust.runtime.ViewRuntime.dispatch_mount", new=_fake_mount_fail):
             resp = await view.get(request, session_id=sid)
 
         assert isinstance(resp, StreamingHttpResponse)

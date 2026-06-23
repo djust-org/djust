@@ -30,28 +30,33 @@ modules (websocket.py, sse.py, runtime.py and their siblings):
    ``validate_mount_url`` / ``_validate_mount_url``. A ``factory.get(literal)``
    (e.g. ``"/"``) is always fine.
 
-4. **Mount-orchestration security sequence (#1850 / #1853, CONVERGED).** The
-   pre-mount security SEQUENCE — view-level auth (``check_view_auth``), then on
-   auth success the tenant resolve (``_ensure_tenant``) + tenant ContextVar bind
-   — is now single-sourced in ONE helper, ``djust.auth.core.run_pre_mount_auth``
-   (#1853). All THREE live mount paths (``websocket.py`` ``handle_mount``,
-   ``runtime.py`` ``dispatch_mount`` via ``_check_auth``, and ``sse.py``
-   ``_sse_mount_view``) route their pre-mount auth+tenant orchestration through
-   that single helper, so a future edit cannot reorder the steps or drop one on
-   one path without all three drifting together. This concern PINS:
-     (a) each of the three transports references ``run_pre_mount_auth`` (the
+4. **Mount-orchestration security sequence (#1850 / #1853, CONVERGED; SSE folded
+   in #1887).** The pre-mount security SEQUENCE — view-level auth
+   (``check_view_auth``), then on auth success the tenant resolve
+   (``_ensure_tenant``) + tenant ContextVar bind — is single-sourced in ONE
+   helper, ``djust.auth.core.run_pre_mount_auth`` (#1853). Post-#1887 (ADR-022
+   Iter 1) the legacy SSE mount (``_sse_mount_view``) was DELETED and SSE now
+   mounts via ``runtime.py`` ``dispatch_mount``, so the LIVE mount modules are
+   ``websocket.py`` ``handle_mount`` + ``runtime.py`` ``dispatch_mount`` (via
+   ``_check_auth``); SSE inherits the sequence through the runtime. Both route
+   their pre-mount auth+tenant orchestration through that single helper, so a
+   future edit cannot reorder the steps or drop one on one path without both
+   drifting together. This concern PINS:
+     (a) each live mount module references ``run_pre_mount_auth`` (the
          shared sequence) — a count-canary;
      (b) ``run_pre_mount_auth`` itself references the leaf chokepoints it now
          single-sources (``check_view_auth`` + the tenant bind), so the sequence
          body cannot be hollowed out;
      (c) the controls NOT folded into the helper still live where they did —
          the WS post-mount object-permission (``check_object_permission``), the
-         runtime url-change object-permission (``enforce_object_permission``),
-         and the reconstructed-Host binding (``validated_host_from_scope`` on WS
-         + runtime). These were deliberately LEFT in place (object-perm is
-         post-mount / url-change, not part of the pre-mount sequence; the Host
-         binding is request construction, not auth) — #1853 narrowed the
-         convergence to the genuinely-shared pre-mount auth+tenant sequence.
+         runtime object-permission (``enforce_object_permission`` — BOTH the
+         dispatch_mount post-mount check, which is the converged SSE path #1887,
+         AND the url-change re-check), and the reconstructed-Host binding
+         (``validated_host_from_scope`` on WS + runtime). These were deliberately
+         LEFT in place (object-perm is post-mount / url-change, not part of the
+         pre-mount sequence; the Host binding is request construction, not auth) —
+         #1853 narrowed the convergence to the genuinely-shared pre-mount
+         auth+tenant sequence.
    A future re-divergence (one path re-growing its own auth/tenant copy, or the
    helper losing a step) turns this concern red. Updating these pins is the
    deliberate signal that a further convergence/divergence happened (the same
@@ -472,17 +477,22 @@ _API_DISPATCH = _PKG_DIR / "api" / "dispatch.py"
 #   * validated_host_from_scope — reconstructed-Host binding (request build, not
 #                                 auth), left in place on WS + runtime.
 _MOUNT_ORCHESTRATION_PINS = {
-    # 4a — the shared pre-mount auth+tenant sequence, on all three transports.
-    "run_pre_mount_auth": {"websocket.py": 1, "runtime.py": 1, "sse.py": 1},
+    # 4a — the shared pre-mount auth+tenant sequence. Post-#1887 (ADR-022 Iter 1)
+    # the legacy SSE mount (``_sse_mount_view``) was deleted: SSE now mounts via
+    # ``runtime.py`` ``dispatch_mount`` (the SAME runtime spine), so sse.py no
+    # longer carries its own ``run_pre_mount_auth`` reference — it inherits the
+    # sequence through the runtime. Two live mount modules remain (WS handle_mount
+    # + runtime dispatch_mount), each pinned here.
+    "run_pre_mount_auth": {"websocket.py": 1, "runtime.py": 1},
     # Object-permission family: any of these names counts toward the module's req.
-    # sse.py was added by #1857 (legacy SSE mount now enforces the post-mount
-    # object-perm check via enforce_object_permission). api/dispatch.py is a
-    # subpackage module pinned explicitly in concern 4c below (not via this dict,
-    # which path-joins labels under _PKG_DIR top-level).
+    # sse.py was DROPPED from this pin post-#1887: the SSE mount's post-mount
+    # object-perm check now runs inside ``runtime.py`` ``dispatch_mount`` (the
+    # converged path), not in sse.py. api/dispatch.py is a subpackage module
+    # pinned explicitly in concern 4c below (not via this dict, which path-joins
+    # labels under _PKG_DIR top-level).
     ("check_object_permission", "enforce_object_permission"): {
         "websocket.py": 1,
         "runtime.py": 1,
-        "sse.py": 1,
     },
     "validated_host_from_scope": {"websocket.py": 1, "runtime.py": 1},
 }
@@ -562,10 +572,16 @@ class TestMountOrchestrationChokepoint:
             "deliberately. Shortfalls: " + "; ".join(shortfalls)
         )
 
-    def test_all_three_transports_route_pre_mount_sequence_through_shared_helper(self):
-        """#1853 convergence pin: WS, runtime, AND legacy SSE each invoke the
-        single ``run_pre_mount_auth`` helper for the pre-mount auth+tenant
-        sequence — no transport carries its own hand-copied orchestration.
+    def test_all_live_mount_transports_route_pre_mount_sequence_through_shared_helper(self):
+        """#1853 convergence pin: every LIVE mount module invokes the single
+        ``run_pre_mount_auth`` helper for the pre-mount auth+tenant sequence — no
+        transport carries its own hand-copied orchestration.
+
+        Post-#1887 (ADR-022 Iter 1) the legacy SSE mount (``_sse_mount_view``) was
+        deleted; SSE now mounts through ``runtime.py`` ``dispatch_mount``, so the
+        live mount modules are WS (``handle_mount``) + runtime (``dispatch_mount``
+        via ``_check_auth``). sse.py is no longer a mount module and is correctly
+        NOT in this list — it inherits the shared sequence through the runtime.
 
         This is the strengthened #1850 pin: previously each transport carried its
         OWN ``check_view_auth`` + ``_ensure_tenant`` + tenant-bind copy; #1853
@@ -577,7 +593,7 @@ class TestMountOrchestrationChokepoint:
         drops to 0 → FAILS.
         """
         missing = []
-        for label in ("websocket.py", "runtime.py", "sse.py"):
+        for label in ("websocket.py", "runtime.py"):
             tree = _parse(_PKG_DIR / label)
             import_lines = _import_aliased_lines(tree)
             found = _count_symbol_refs(tree, ("run_pre_mount_auth",), import_lines)
@@ -642,32 +658,36 @@ class TestMountOrchestrationChokepoint:
         post-mount inner step) and runtime still uses enforce_object_permission
         (the ADR-017 url-change re-check).
 
-        Extended by #1857: the legacy SSE mount path (sse.py) and the HTTP-API
-        dispatch paths (api/dispatch.py — both dispatch_api and
-        dispatch_server_function) now enforce the object-perm check via
-        enforce_object_permission. Pin those too so a future removal re-opens
-        finding #10/#11/#12 on the SSE / API transports.
+        Extended by #1857, refined by #1887: the HTTP-API dispatch paths
+        (api/dispatch.py — both dispatch_api and dispatch_server_function) enforce
+        the object-perm check via enforce_object_permission; pin those so a future
+        removal re-opens finding #10/#11/#12 on the API transport. The SSE mount's
+        post-mount object-perm check was originally added to sse.py
+        (``_sse_mount_view``, #1857), but #1887 (ADR-022 Iter 1) deleted that
+        legacy mount and converged SSE onto ``runtime.py`` ``dispatch_mount`` — so
+        the SSE object-perm check now lives in the runtime (already pinned via
+        ``rt_*`` below, which includes dispatch_mount's post-mount check). sse.py
+        is therefore NOT pinned here anymore.
 
         A regression that drops ANY of these re-opens finding #10/#11/#12.
 
         Gate-off (#1468): removing the enforce_object_permission call from
-        sse.py drops its count to 0 → the SSE assertion below FAILS; removing
+        runtime.py drops its count → the runtime assertion below FAILS; removing
         BOTH api/dispatch.py calls drops its count to 0 → the API assertion
         FAILS (api/dispatch.py imports it lazily inside each function, so the
         import-line exclusion leaves only the genuine call references).
         """
         ws_tree = _parse(_PKG_DIR / "websocket.py")
         rt_tree = _parse(_PKG_DIR / "runtime.py")
-        sse_tree = _parse(_PKG_DIR / "sse.py")
         api_tree = _parse(_API_DISPATCH)
         ws_imports = _import_aliased_lines(ws_tree)
         rt_imports = _import_aliased_lines(rt_tree)
-        sse_imports = _import_aliased_lines(sse_tree)
         api_imports = _import_aliased_lines(api_tree)
 
         ws_inner = _count_symbol_refs(ws_tree, ("check_object_permission",), ws_imports)
+        # runtime.py now carries BOTH the dispatch_mount post-mount object-perm
+        # check (the converged SSE path, #1887) AND the url-change re-check → >= 2.
         rt_wrapper = _count_symbol_refs(rt_tree, ("enforce_object_permission",), rt_imports)
-        sse_wrapper = _count_symbol_refs(sse_tree, ("enforce_object_permission",), sse_imports)
         # dispatch_api + dispatch_server_function each call it → expect >= 2.
         api_wrapper = _count_symbol_refs(api_tree, ("enforce_object_permission",), api_imports)
 
@@ -676,14 +696,11 @@ class TestMountOrchestrationChokepoint:
             "(ADR-017 post-mount object-perm inner step) — finding #10/#11/#12 "
             "regression."
         )
-        assert rt_wrapper >= 1, (
-            "runtime.py no longer references enforce_object_permission (the ADR-017 "
-            "url-change object-perm re-check) — finding #10/#11/#12 regression."
-        )
-        assert sse_wrapper >= 1, (
-            "sse.py legacy mount path no longer references enforce_object_permission "
-            "(the ADR-017 post-mount object-perm check, #1857) — finding #10/#11/#12 "
-            "regression on the SSE transport."
+        assert rt_wrapper >= 2, (
+            "runtime.py must reference enforce_object_permission on BOTH the "
+            "dispatch_mount post-mount check (the converged SSE path, #1887) and the "
+            "dispatch_url_change re-check (ADR-017). Dropping either re-opens finding "
+            "#10/#11/#12 on the runtime/SSE transport. Found %d." % rt_wrapper
         )
         assert api_wrapper >= 2, (
             "api/dispatch.py no longer references enforce_object_permission on BOTH "
