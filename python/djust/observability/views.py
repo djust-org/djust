@@ -13,6 +13,7 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
+from djust._log_utils import sanitize_for_log
 from djust.observability.middleware import is_localhost
 from djust.observability.log_handler import get_recent_logs
 from djust.observability.registry import (
@@ -108,7 +109,7 @@ def _gate(request):
     if not is_localhost(request):
         logger.warning(
             "Rejected observability request from non-localhost (in-view gate): path=%s",
-            request.path,
+            sanitize_for_log(request.path),
         )
         return HttpResponse(status=404)
     return None

@@ -103,16 +103,21 @@ class Transport(Protocol):
     """
 
     @property
-    def session_id(self) -> str: ...
+    def session_id(self) -> str:
+        """Stable per-session identifier (for observability + rate-limiting)."""
 
     @property
-    def client_ip(self) -> Optional[str]: ...
+    def client_ip(self) -> Optional[str]:
+        """Resolved client IP, or ``None`` when unavailable."""
 
-    async def send(self, data: Dict[str, Any]) -> None: ...
+    async def send(self, data: Dict[str, Any]) -> None:
+        """Send an ordinary outbound frame to the client."""
 
-    async def send_error(self, error: str, **kwargs: Any) -> None: ...
+    async def send_error(self, error: str, **kwargs: Any) -> None:
+        """Send an error envelope to the client."""
 
-    async def close(self, code: int = 1000) -> None: ...
+    async def close(self, code: int = 1000) -> None:
+        """Force-disconnect the transport with the given close ``code``."""
 
     def next_client_version(self, html: Optional[str], rust_version: int) -> int:
         """Return the wire ``version`` to stamp on a client-CHECKED render frame.
@@ -129,7 +134,6 @@ class Transport(Protocol):
         - SSE: returns ``rust_version`` unchanged (SSE has no consumer counter;
           its existing behavior is preserved).
         """
-        ...
 
 
 class WSConsumerTransport:
