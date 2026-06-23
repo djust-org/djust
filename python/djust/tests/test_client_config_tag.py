@@ -438,18 +438,29 @@ def _reset_djust_config():
     config.reset()
 
 
-def test_auto_navigate_meta_absent_by_default():
-    """Default OFF: no auto-navigate <meta>, so no client behavior change."""
+def test_auto_navigate_meta_emitted_by_default():
+    """Default ON as of v1.1 (ADR-021 Stage 3): the auto-navigate <meta> is
+    emitted with no configuration — native dj-navigate is the canonical default."""
     from djust.config import config
 
     config.reset()
+    html = _render_tag()
+    assert '<meta name="djust-auto-navigate" content="1">' in html
+
+
+@override_settings(LIVEVIEW_CONFIG={"auto_navigate": False})
+def test_auto_navigate_meta_absent_when_opted_out():
+    """Opt OUT with auto_navigate=False: no <meta>, no client interception."""
+    from djust.config import config
+
+    config.reset()  # pick up the overridden LIVEVIEW_CONFIG
     html = _render_tag()
     assert "djust-auto-navigate" not in html
 
 
 @override_settings(LIVEVIEW_CONFIG={"auto_navigate": True})
 def test_auto_navigate_meta_emitted_when_enabled():
-    """LIVEVIEW_CONFIG['auto_navigate']=True emits the opt-in <meta> flag."""
+    """LIVEVIEW_CONFIG['auto_navigate']=True (the default) emits the <meta> flag."""
     from djust.config import config
 
     config.reset()  # pick up the overridden LIVEVIEW_CONFIG

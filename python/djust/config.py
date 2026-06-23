@@ -83,15 +83,22 @@ class LiveViewConfig:
         # This is also readable from settings.DJUST_CONFIG["hook_namespacing"]
         # via the template tag (kept here for discoverability / system-check tooling).
         "hook_namespacing": "lax",
-        # Automatic SPA navigation (#1734, ADR-021 Stage 2). When True,
+        # Automatic SPA navigation (#1734, ADR-021). When True,
         # {% djust_client_config %} emits a <meta name="djust-auto-navigate">
-        # flag and the client installs ONE delegated click listener that
-        # SPA-navigates plain <a href> links whose path resolves in the
-        # (auth-filtered, #1758) route map — Turbo-Drive-style, no djust
-        # attributes needed. Default OFF: opt in only after reading the
-        # opt-out matrix (modifier/middle-click, target/download, external,
-        # hash-only, data-no-navigate). Non-LiveView links full-reload as usual.
-        "auto_navigate": False,
+        # flag (and auto-emits the route map, #1733) and the client installs ONE
+        # delegated click listener that SPA-navigates plain <a href> links whose
+        # path resolves in the (auth-filtered, #1758) route map — Turbo-Drive-
+        # style, no djust attributes needed.
+        #
+        # Default ON as of v1.1 (ADR-021 Stage 3): native dj-navigate is djust's
+        # canonical SPA-navigation model, so it is the zero-config default. It
+        # degrades gracefully — links whose path does NOT resolve in the route
+        # map (external, non-LiveView, etc.) full-reload exactly as before, and
+        # the opt-out matrix still applies (modifier/middle-click, target/
+        # download, hash-only, data-no-navigate). Opt OUT with
+        # ``LIVEVIEW_CONFIG["auto_navigate"] = False`` (e.g. apps that wire their
+        # own external TurboNav). On 1.0.x this defaulted OFF (opt-in).
+        "auto_navigate": True,
         # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
         # Auth normally runs only at mount; with this OFF (default) an
         # authenticated user who logs out / loses a permission mid-session keeps
