@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.8rc1] - 2026-06-22
+
 ### Security
 
 - **`sanitize_for_log` now carries a CodeQL-recognized CR/LF barrier (#2465/#2466 — `py/log-injection`).** The first log-hardening pass wrapped the gate-rejection paths in `sanitize_for_log`, but its `isprintable()`-loop (which maps line breaks to `?`) is not a *modeled* CodeQL barrier, so the `sanitize_for_log(request.path)` calls in `api/openapi.py` + `observability/views.py` stayed flagged (the alerts re-numbered as the lines shifted). The helper's **return value** is now an explicit `.replace("\r", "").replace("\n", "")` — the form CodeQL recognizes as a log-injection sanitizer — which clears every `sanitize_for_log(<remote source>)` call site. It is a runtime no-op (line breaks are already mapped to `?` upstream), so all existing behavior and tests are unchanged. Pinned by `test_log_sanitizer_barrier_pin` (`python/djust/tests/test_log_sanitization.py`) so a "looks redundant, remove it" refactor can't silently re-open the alert (#1859); gate-off verified (#1468).
