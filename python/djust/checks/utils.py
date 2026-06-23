@@ -4,15 +4,12 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 """
 
 import ast
-import logging
 import os
 import re
 
 from django.core.checks import Error, Info, Warning
 
 import djust.checks as _root
-
-logger = logging.getLogger(__name__)
 
 # Shared surface this module provides to the sibling check submodules
 # (configuration, components, templates, …). Declared explicitly because

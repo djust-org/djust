@@ -42,10 +42,14 @@ def _trusted_proxy_count() -> int:
         coerced = max(0, int(float(raw)))
     except (TypeError, ValueError):
         coerced = 0
+    # Log the offending value's TYPE, not the value itself: the setting is read
+    # from ``settings`` (which CodeQL py/clear-text-logging-sensitive-data treats
+    # as a sensitive source) and a misconfiguration is diagnosable from the type
+    # ("you set a str, expected int") without echoing a config value to the log.
     logger.warning(
-        "DJUST_TRUSTED_PROXY_COUNT=%r is not a non-negative int; using %d. "
+        "DJUST_TRUSTED_PROXY_COUNT must be a non-negative int (got type %s); using %d. "
         "Set it to an integer hop count (0 = trust only the socket peer).",
-        raw,
+        type(raw).__name__,
         coerced,
     )
     return coerced

@@ -16,6 +16,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views import View
 
+from djust._log_utils import sanitize_for_log
 from djust.api.registry import iter_exposed_handlers
 from djust.validation import get_handler_signature_info
 
@@ -220,7 +221,7 @@ def _openapi_gate(request: HttpRequest) -> Optional[HttpResponse]:
         return None
     logger.warning(
         "Rejected unauthenticated OpenAPI schema request (gated): path=%s",
-        request.path,
+        sanitize_for_log(request.path),
     )
     return HttpResponse(status=404)
 
