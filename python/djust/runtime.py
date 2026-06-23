@@ -135,6 +135,35 @@ class Transport(Protocol):
           its existing behavior is preserved).
         """
 
+    def build_request(self) -> Optional[Any]:
+        """Return the transport's real Django request, or ``None`` to synthesize.
+
+        SSE-backed runtimes hold the REAL HTTP request that established the
+        stream (with its authenticated ``request.user``, ``request.session``,
+        cookies, and path). The pre-mount auth sequence
+        (``run_pre_mount_auth`` → ``check_view_auth``) and the post-mount
+        object-permission check (``enforce_object_permission``) all read
+        ``request.user`` / ``get_object()`` off this request, so the runtime
+        MUST mount against it — synthesizing a userless ``RequestFactory``
+        request would deny every authenticated SSE view (#1887, ADR-022 Iter 1).
+
+        - SSE: returns the real request captured at stream-GET.
+        - WS: returns ``None`` — the runtime synthesizes from ``self.scope``
+          (which carries the authenticated ``user`` + ``session``) as before.
+        """
+        return None
+
+    def on_view_mounted(self, view_instance: Any) -> None:
+        """Stamp transport-specific identity on the freshly-mounted view.
+
+        Called by ``dispatch_mount`` once ``self.view_instance`` is set, so a
+        transport can attach its own back-references the way the legacy bespoke
+        mount paths did. SSE stamps ``_sse_session_id`` / ``_sse_session`` (used
+        for introspection + limits) and the real query string; WS is a no-op
+        (its consumer already owns those attrs). Behavior-preserving extension
+        hook — the runtime stays wire-blind (#1887, ADR-022 Iter 1).
+        """
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -182,6 +211,17 @@ class WSConsumerTransport:
         """
         return self._consumer._next_version_armed(html)
 
+    def build_request(self) -> Optional[Any]:
+        """WS has no captured HTTP request — the runtime synthesizes from
+        ``self.scope`` (carrying the authenticated user + session)."""
+        return None
+
+    def on_view_mounted(self, view_instance: Any) -> None:
+        """No-op for WS: the consumer's own ``handle_mount`` already stamps the
+        WS-specific view attrs; the runtime path is only used for ``url_change``
+        on WS today, never mount (RUNTIME_OWNED_VERBS = {"url_change"})."""
+        return None
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -225,6 +265,41 @@ class SSESessionTransport:
         single place to wire it — tracked alongside #1858.)
         """
         return rust_version
+
+    def build_request(self) -> Optional[Any]:
+        """Return the REAL HTTP request that established the SSE stream.
+
+        The stream-GET view stashes the request on the session
+        (``session._request``) before driving ``dispatch_mount`` so the runtime
+        mounts against the authenticated victim/owner request — preserving the
+        legacy ``_sse_mount_view`` behavior (real ``request.user`` / session /
+        path for auth + object-perm) after convergence (#1887, ADR-022 Iter 1).
+        Returns ``None`` if no request was stashed (defensive — falls back to
+        the runtime's synthesized request).
+        """
+        return getattr(self._session, "_request", None)
+
+    def on_view_mounted(self, view_instance: Any) -> None:
+        """Stamp SSE-transport identity on the mounted view (legacy parity).
+
+        ``_sse_mount_view`` set ``session.view_instance`` (the endpoint-level
+        "is this session mounted?" reference the ``/event/`` + ``/message/``
+        guards read, plus SSE introspection) and ``_sse_session_id`` /
+        ``_sse_session`` on the view, and the real ``_websocket_query_string``
+        from the request. The runtime already sets ``_websocket_session_id`` /
+        ``_websocket_path``; this adds the SSE-only attrs so nothing the legacy
+        path exposed is lost (#1887, ADR-022 Iter 1). Setting
+        ``session.view_instance`` is load-bearing: the runtime owns
+        ``runtime.view_instance`` for dispatch, but the SSE endpoints gate on
+        ``session.view_instance`` — the two must agree after a successful mount.
+        """
+        session = self._session
+        session.view_instance = view_instance
+        view_instance._sse_session_id = session.session_id
+        view_instance._sse_session = session
+        request = getattr(session, "_request", None)
+        if request is not None:
+            view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
 
 
 # ------------------------------------------------------------------ #
@@ -379,6 +454,15 @@ class ViewRuntime:
         view_instance._websocket_session_id = self.session_id
         view_instance._websocket_path = page_url
         view_instance._websocket_query_string = ""
+
+        # Transport-specific identity hook (#1887): SSE stamps _sse_session_id /
+        # _sse_session + the real query string here so the converged runtime
+        # mount preserves everything legacy _sse_mount_view exposed. WS no-op.
+        # getattr-guarded so duck-typed test transport fakes that predate this
+        # Protocol method don't need to implement it.
+        on_view_mounted = getattr(self.transport, "on_view_mounted", None)
+        if on_view_mounted is not None:
+            on_view_mounted(view_instance)
 
         # Optional client timezone (validate IANA string).
         view_instance.client_timezone = None
@@ -648,6 +732,15 @@ class ViewRuntime:
             if has_async:
                 noop_msg["async_pending"] = True
             await self.transport.send(noop_msg)
+            # Dispatch background work UNCONDITIONALLY after the turn (matches WS
+            # handle_event websocket.py:4235, NOT the legacy SSE which gated this
+            # on has_async). ``has_async`` reflects only the legacy ``_async_pending``
+            # single-task format (never set in current code) and drives the loading
+            # UX flag — the actual dispatch must also cover the ``_async_tasks``
+            # named-task format that ``start_async`` populates, so converging onto
+            # the correct WS behavior here FIXES the legacy SSE drop of
+            # ``start_async`` work (#1887 / #1646). No-op when no tasks are queued.
+            self._dispatch_async_work(event_name)
             return
 
         # Render
@@ -656,6 +749,11 @@ class ViewRuntime:
             cache_request_id=cache_request_id,
             has_async=has_async,
         )
+
+        # Dispatch background work UNCONDITIONALLY after the render (WS parity,
+        # websocket.py:4235): start_async / @background callbacks run off-thread
+        # and stream their re-rendered result via the transport when ready.
+        self._dispatch_async_work(event_name)
 
         logger.debug(
             "Runtime: event '%s' handled in %.1fms",
@@ -818,12 +916,21 @@ class ViewRuntime:
     async def _build_request(self, *, page_url: str, params: Dict[str, Any]):
         """Build a Django request representing the mount target page.
 
-        For SSE transports we don't have a real ASGI request; we synthesize
-        one via RequestFactory. WS-backed runtimes already have a real
-        request object on the consumer; we still synthesize here for
-        symmetry — handlers should never assume the request came from a
-        socket.
+        If the transport carries a REAL request (SSE — the HTTP request that
+        established the stream, with its authenticated ``request.user`` /
+        session / cookies), use it directly: auth + object-perm read off it, so
+        synthesizing a userless ``RequestFactory`` request would deny every
+        authenticated SSE view (#1887, ADR-022 Iter 1). Otherwise (WS) we
+        synthesize one via RequestFactory, propagating the authenticated user +
+        session + validated host from ``self.scope``.
         """
+        # getattr-guarded so duck-typed test transport fakes that predate this
+        # Protocol method fall through to the synthesized request (the WS shape).
+        build_request = getattr(self.transport, "build_request", None)
+        transport_request = build_request() if build_request is not None else None
+        if transport_request is not None:
+            return transport_request
+
         from django.test import RequestFactory
         from urllib.parse import urlencode
 
@@ -1246,3 +1353,132 @@ class ViewRuntime:
         self._flush_navigation()
         await self._flush_accessibility()
         await self._flush_i18n()
+
+    # ------------------------------------------------------------------ #
+    # Background work (start_async / @background) — runtime parity (#1887).
+    #
+    # The legacy SSE event path dispatched ``start_async`` callbacks via
+    # ``_sse_run_async_work`` after the event render/noop. The runtime's
+    # ``dispatch_event`` set the ``async_pending`` wire flag but had no
+    # dispatcher, so converging SSE onto it without this would silently
+    # break ``start_async`` / ``@background`` for SSE consumers (a #1646
+    # gap inside the convergence target). These mirror the legacy SSE
+    # helpers (``sse.py:_sse_run_async_work`` / ``_sse_execute_async_task``)
+    # and the WS ``_dispatch_async_work`` / ``_run_async_work`` shape, but
+    # push through ``self.transport.send`` so they are wire-blind.
+    #
+    # Reached ONLY via ``dispatch_event`` (SSE today; WS uses its own
+    # consumer ``_dispatch_async_work`` and never routes ``event`` through
+    # the runtime — RUNTIME_OWNED_VERBS = {"url_change"}), so this is
+    # behavior-preserving for WS.
+    # ------------------------------------------------------------------ #
+
+    def _dispatch_async_work(self, event_name: Optional[str]) -> None:
+        """Schedule any ``start_async`` callbacks queued during the handler.
+
+        Supports both the named-task dict (``_async_tasks``) and the legacy
+        single-task tuple (``_async_pending``) formats, matching
+        ``LiveViewConsumer._dispatch_async_work``. Fire-and-forget: each task
+        runs in its own ``ensure_future`` so the event POST returns promptly
+        and results stream in via the transport when ready.
+        """
+        view = self.view_instance
+        if not view:
+            return
+
+        tasks = getattr(view, "_async_tasks", None)
+        if tasks:
+            for task_name, (callback, args, kwargs) in list(tasks.items()):
+                asyncio.ensure_future(
+                    self._execute_async_task(task_name, callback, args, kwargs, event_name)
+                )
+            view._async_tasks = {}
+
+        pending = getattr(view, "_async_pending", None)
+        if pending:
+            view._async_pending = None
+            callback, args, kwargs = pending
+            asyncio.ensure_future(
+                self._execute_async_task("_default", callback, args, kwargs, event_name)
+            )
+
+    async def _execute_async_task(
+        self,
+        task_name: str,
+        callback,
+        args,
+        kwargs,
+        event_name: Optional[str],
+    ) -> None:
+        """Run one background task and stream the re-rendered result.
+
+        Mirrors ``sse.py:_sse_execute_async_task``: run the callback off-thread,
+        let ``handle_async_result`` observe success/failure, re-sync + re-render,
+        and emit a ``patch`` / ``html_update`` frame plus a turn-end flush. Any
+        callback failure is logged and routed through ``handle_async_result`` so
+        the client is never left stuck in a loading state.
+        """
+        view = self.view_instance
+        if not view:
+            return
+
+        try:
+            result = await sync_to_async(callback)(*args, **kwargs)
+
+            if hasattr(view, "handle_async_result"):
+                await sync_to_async(view.handle_async_result)(task_name, result=result, error=None)
+
+            await self._render_async_result(event_name)
+
+        except Exception as exc:
+            logger.exception(
+                "Runtime: error in start_async callback '%s' on %s",
+                task_name,
+                view.__class__.__name__ if view else "?",
+            )
+            if hasattr(view, "handle_async_result"):
+                try:
+                    await sync_to_async(view.handle_async_result)(task_name, result=None, error=exc)
+                    await self._render_async_result(event_name)
+                except Exception:
+                    logger.exception(
+                        "Runtime: error in handle_async_result for task '%s'", task_name
+                    )
+
+    async def _render_async_result(self, event_name: Optional[str]) -> None:
+        """Re-sync + re-render after background work and emit the result frame.
+
+        Shared by the success + error paths of ``_execute_async_task``. Stamps
+        the transport's client-checked wire version (#1858) and drains the
+        turn-end queues so push_events / deferred / etc. scheduled inside the
+        background callback reach the client.
+        """
+        view = self.view_instance
+        if not view:
+            return
+        if hasattr(view, "_sync_state_to_rust"):
+            await sync_to_async(view._sync_state_to_rust)()
+        html, patches, version = await sync_to_async(view.render_with_diff)()
+        wire_version = self.transport.next_client_version(html, version)
+
+        if patches is not None:
+            patch_list = fast_json_loads(patches) if isinstance(patches, str) else patches
+            msg: Dict[str, Any] = {
+                "type": "patch",
+                "patches": patch_list,
+                "version": wire_version,
+                "event_name": event_name,
+            }
+        else:
+            if hasattr(view, "_strip_comments_and_whitespace"):
+                html = view._strip_comments_and_whitespace(html)
+            if hasattr(view, "_extract_liveview_content"):
+                html = view._extract_liveview_content(html)
+            msg = {
+                "type": "html_update",
+                "html": html,
+                "version": wire_version,
+                "event_name": event_name,
+            }
+        await self.transport.send(msg)
+        await self._flush_all_pending()

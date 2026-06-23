@@ -163,18 +163,28 @@ async def _runtime_request_path(url: str) -> str:
     return request.path
 
 
-# ---- SSE (_sse_mount_view) ---------------------------------------------------
-# SSE uses the real HTTP request directly (no RequestFactory) so it is NOT part of
-# the URL-traversal request-build axis; it IS part of the import-allowlist axis.
+# ---- SSE (runtime dispatch_mount) -------------------------------------------
+# Post-#1887 (ADR-022 Iter 1) the SSE mount converged onto the shared runtime
+# (``session.runtime.dispatch_mount``); the legacy ``_sse_mount_view`` is gone.
+# The import-allowlist verdict is now ``runtime.view_instance is not None`` (it
+# replaced the legacy bool return). SSE uses the real HTTP request directly (no
+# RequestFactory traversal-rebuild), stashed on the session as the GET stream
+# does — so it is NOT part of the URL-traversal axis but IS the import-allowlist
+# axis (a genuinely distinct seam from WS/runtime, keeping the parity net
+# load-bearing, #1859).
 async def _sse_import_verdict(view_path: str) -> bool:
-    from djust.sse import SSESession, _sse_mount_view
+    from djust.sse import SSESession
 
     session = SSESession(str(uuid.uuid4()))
     session._owner_user_pk = 7
     request = RequestFactory().get("/")
     request.session = MagicMock()
     request.user = MagicMock(is_authenticated=False, pk=7)
-    return await _sse_mount_view(session, request, view_path)
+    session._request = request
+    await session.runtime.dispatch_mount(
+        {"type": "mount", "view": view_path, "url": request.path, "params": {}}
+    )
+    return session.runtime.view_instance is not None
 
 
 # Adapter registries. Add a 4th transport by registering one more entry; the
