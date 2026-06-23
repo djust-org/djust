@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "1.0.0rc18"
+version = "1.0.8"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
@@ -55,7 +55,7 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = [
-    "redis>=5.0.0,<8",
+    "redis>=5.0.0,<9",
 ]
 compression = [
     "zstandard>=0.22.0,<1",  # zstd compression for state backend
@@ -71,7 +71,7 @@ performance = [
 auth = []  # No extra deps beyond djust core
 tenants = []  # No extra deps beyond djust core; use [tenants-redis] / [tenants-postgres] for backend-specific
 tenants-redis = [
-    "redis>=5.0.0,<8",
+    "redis>=5.0.0,<9",
 ]
 tenants-postgres = [
     "psycopg[binary]>=3.1,<4",
@@ -109,7 +109,7 @@ dev = [
     "ruff>=0.1,<1",
     "mypy>=1.0,<3",
     "uvicorn[standard]>=0.30.0,<1",
-    "redis>=5.0.0,<8",
+    "redis>=5.0.0,<9",
     "watchdog>=3.0.0,<7",  # File system monitoring for hot reload
     "zstandard>=0.22.0,<1",  # Compression support
     "orjson>=3.11.6,<4",

@@ -58,6 +58,31 @@ from .websocket_utils import (
 logger = logging.getLogger(__name__)
 
 
+def _tenant_context(tenant):
+    """Bind *tenant* as the current tenant for a runtime dispatch (Finding #6).
+
+    The runtime drives the SSE mount/event/url-change path and the WS
+    url-change path. ``TenantMiddleware`` only binds the tenant on the HTTP
+    path, so without this the tenant-scoped managers see ``None`` here and
+    (fail-closed) return empty querysets. Lazily imports the canonical
+    ``tenant_context`` and falls back to a no-op when tenants is unavailable.
+    """
+    try:
+        from .tenants.middleware import tenant_context
+
+        return tenant_context(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+
+# The tenant *bind* step (set_current_tenant) for the mount path is now
+# single-sourced in djust.auth.core._bind_current_tenant, invoked by the shared
+# run_pre_mount_auth sequence; the runtime no longer carries its own copy. The
+# per-event / url-change re-bind still uses the _tenant_context manager above.
+
+
 # ------------------------------------------------------------------ #
 # Transport Protocol + adapters
 # ------------------------------------------------------------------ #
@@ -78,16 +103,37 @@ class Transport(Protocol):
     """
 
     @property
-    def session_id(self) -> str: ...
+    def session_id(self) -> str:
+        """Stable per-session identifier (for observability + rate-limiting)."""
 
     @property
-    def client_ip(self) -> Optional[str]: ...
+    def client_ip(self) -> Optional[str]:
+        """Resolved client IP, or ``None`` when unavailable."""
 
-    async def send(self, data: Dict[str, Any]) -> None: ...
+    async def send(self, data: Dict[str, Any]) -> None:
+        """Send an ordinary outbound frame to the client."""
 
-    async def send_error(self, error: str, **kwargs: Any) -> None: ...
+    async def send_error(self, error: str, **kwargs: Any) -> None:
+        """Send an error envelope to the client."""
 
-    async def close(self, code: int = 1000) -> None: ...
+    async def close(self, code: int = 1000) -> None:
+        """Force-disconnect the transport with the given close ``code``."""
+
+    def next_client_version(self, html: Optional[str], rust_version: int) -> int:
+        """Return the wire ``version`` to stamp on a client-CHECKED render frame.
+
+        Client-checked frames (``patch`` / ``html_update``) are validated by the
+        client's ``clientVdomVersion === data.version - 1`` rule, so their version
+        must come from the SAME monotonic source as ``mount`` / ``event`` for that
+        transport — never the raw Rust render counter (#1858, the #1788
+        parallel-path twin).
+
+        - WS: returns ``consumer._next_version_armed(html)`` — the per-connection
+          counter that ``handle_mount`` / ``handle_event`` use, AND arms
+          ``request_html`` recovery to that version (#1788 / #1817).
+        - SSE: returns ``rust_version`` unchanged (SSE has no consumer counter;
+          its existing behavior is preserved).
+        """
 
 
 class WSConsumerTransport:
@@ -124,6 +170,18 @@ class WSConsumerTransport:
     async def close(self, code: int = 1000) -> None:
         await self._consumer.close(code=code)
 
+    def next_client_version(self, html: Optional[str], rust_version: int) -> int:
+        """Stamp the consumer-owned wire version + arm recovery (#1858 / #1788 / #1817).
+
+        Routes runtime-emitted client-checked frames (``url_change`` patch /
+        html_update) through the SAME ``_next_version_armed`` helper ``handle_event``
+        uses, so the wire version stays monotonic with the mount baseline and a later
+        ``request_html`` recovery serves the matching version. ``html`` MUST be the full
+        PRE-STRIP HTML returned by ``render_with_diff()`` (see
+        ``LiveViewConsumer._next_version_armed``). ``rust_version`` is ignored on WS.
+        """
+        return self._consumer._next_version_armed(html)
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -156,6 +214,17 @@ class SSESessionTransport:
 
     async def close(self, code: int = 1000) -> None:
         await self._session.close(code=code)
+
+    def next_client_version(self, html: Optional[str], rust_version: int) -> int:
+        """SSE has no per-connection consumer counter — preserve the Rust version (#1858).
+
+        SSE stamps the raw ``render_with_diff()`` version on its frames today (see
+        ``sse.py``); the #1788 consumer-counter unification never reached SSE, so SSE
+        clients are calibrated to the Rust counter. Returning it unchanged keeps SSE
+        behavior identical. (If SSE ever adopts a consumer-owned counter, this is the
+        single place to wire it — tracked alongside #1858.)
+        """
+        return rust_version
 
 
 # ------------------------------------------------------------------ #
@@ -264,24 +333,32 @@ class ViewRuntime:
 
         view_path = data.get("view")
         params: Dict[str, Any] = data.get("params", {}) or {}
-        page_url = data.get("url", "/")
+        # F23 (#1819 traversal fix, parallel-path-drift #1646): the client URL is
+        # attacker-controlled and is fed to RequestFactory.get() / resolve() /
+        # logs / build_absolute_uri below. Validate it through the SAME shared
+        # validator the WebSocket path uses (websocket.handle_mount), so the SSE
+        # / runtime path neutralises "/%2e%2e/admin/" identically. _build_request
+        # validates again defensively.
+        from .security.mount import is_view_path_allowed, validate_mount_url
+
+        page_url = validate_mount_url(data.get("url", "/"))
         client_timezone = data.get("client_timezone")
 
         if not view_path:
             await self.transport.send_error("Missing view path in mount request")
             return
 
-        # ---- Security: module allowlist ----
-        from django.conf import settings
-
-        allowed_modules = getattr(settings, "LIVEVIEW_ALLOWED_MODULES", [])
-        if allowed_modules and not any(view_path.startswith(m) for m in allowed_modules):
+        # ---- Security (F22 — unsafe reflection / arbitrary module import) ----
+        # Shape + allowlist gate (no import) for a clean early reject frame even
+        # when a test overrides _instantiate_view. The full resolver
+        # (resolve_view_class) runs inside _instantiate_view as defense in depth.
+        if not is_view_path_allowed(view_path):
             logger.warning(
-                "Blocked attempt to mount view from unauthorized module: %s",
+                "Blocked attempt to mount disallowed/uninitialized view: %s",
                 sanitize_for_log(view_path),
             )
             await self.transport.send_error(
-                _safe_error(f"View {view_path} is not in allowed modules", "View not found")
+                _safe_error(f"View {view_path} is not allowed", "View not found")
             )
             return
 
@@ -348,7 +425,14 @@ class ViewRuntime:
             self.view_instance = None
             return
 
-        # ---- Auth check ----
+        # ---- Pre-mount security sequence (auth + tenant resolve/bind) ----
+        # _check_auth runs the shared djust.auth.core.run_pre_mount_auth sequence
+        # (auth via check_view_auth, then — only on auth success — _ensure_tenant
+        # + the tenant ContextVar bind). Single-sourcing the SEQUENCE with the WS
+        # + SSE mount paths means a future edit cannot reorder the steps or drop
+        # one on this path (#1646 / #1853). The runtime-specific verdict→frame
+        # mapping (error frame / navigate frame / tenant-error envelope) stays
+        # inside _check_auth; it remains the mockable auth seam tests stub.
         redirect_or_block = await self._check_auth(request)
         if redirect_or_block is not None:
             # _check_auth already pushed the appropriate frame.
@@ -454,7 +538,16 @@ class ViewRuntime:
         Returns ``noop`` on no-state-change, ``patch`` on diff-able render,
         ``html_update`` otherwise. Mirrors the simplified single-view path
         from the legacy ``_sse_handle_event``.
+
+        Wrapped in the tenant context (Finding #6) so the handler + render see
+        the correct tenant in the tenant-scoped managers, cleared on exit.
         """
+        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
+        with _tenant_context(tenant):
+            await self._dispatch_event_inner(data)
+
+    async def _dispatch_event_inner(self, data: Dict[str, Any]) -> None:
+        """Event dispatch body (see :meth:`dispatch_event` for the tenant wrapper)."""
         if not self.view_instance:
             await self.transport.send_error("View not mounted. Please reload the page.")
             return
@@ -564,7 +657,16 @@ class ViewRuntime:
         Calls ``handle_params(params, uri)`` then re-renders + sends patches.
         Mirrors the legacy ``LiveViewConsumer.handle_url_change`` (now a
         thin shim over this method).
+
+        Wrapped in the tenant context (Finding #6) so handle_params + the
+        object-permission re-check + render see the correct tenant.
         """
+        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
+        with _tenant_context(tenant):
+            await self._dispatch_url_change_inner(data)
+
+    async def _dispatch_url_change_inner(self, data: Dict[str, Any]) -> None:
+        """URL-change body (see :meth:`dispatch_url_change` for the tenant wrapper)."""
         if not self.view_instance:
             await self.transport.send_error("View not mounted")
             return
@@ -574,6 +676,24 @@ class ViewRuntime:
 
         try:
             await sync_to_async(self.view_instance.handle_params)(params, uri)
+
+            # Object-permission re-check (ADR-017) after the client-supplied URL
+            # params may have changed the access-determining state. Without this,
+            # url_change navigates to a denied object and re-renders it
+            # (finding #10). No-op for views that don't override get_object.
+            from django.core.exceptions import PermissionDenied
+
+            from .auth.core import enforce_object_permission
+
+            try:
+                await sync_to_async(enforce_object_permission)(
+                    self.view_instance, getattr(self.view_instance, "request", None)
+                )
+            except PermissionDenied:
+                await self.transport.send_error(
+                    "Access denied for this object.", code="permission_denied"
+                )
+                return
 
             if hasattr(self.view_instance, "_sync_state_to_rust"):
                 await sync_to_async(self.view_instance._sync_state_to_rust)()
@@ -585,13 +705,22 @@ class ViewRuntime:
                 self.view_instance._force_full_html = False
                 patches = None
 
+            # Stamp the transport's client-checked wire version (#1858, the #1788
+            # parallel-path twin). On WS this is the consumer-owned monotonic counter
+            # + recovery arming (so the url_change frame stays in sequence with the
+            # mount baseline and a later request_html serves the matching version);
+            # on SSE this returns the Rust ``version`` unchanged. ``html`` is the RAW
+            # pre-strip render — pass it BEFORE strip/extract so WS arms recovery with
+            # the full pre-strip HTML (see LiveViewConsumer._next_version_armed).
+            wire_version = self.transport.next_client_version(html, version)
+
             if patches is not None:
                 if isinstance(patches, str):
                     patches = fast_json_loads(patches)
                 msg: Dict[str, Any] = {
                     "type": "patch",
                     "patches": patches,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": "url_change",
                 }
                 await self.transport.send(msg)
@@ -605,7 +734,7 @@ class ViewRuntime:
                 msg = {
                     "type": "html_update",
                     "html": html,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": "url_change",
                 }
                 await self.transport.send(msg)
@@ -632,32 +761,28 @@ class ViewRuntime:
         failure and returns ``None``. Override-friendly for tests.
         """
 
-        try:
-            module_path, class_name = view_path.rsplit(".", 1)
-            module = __import__(module_path, fromlist=[class_name])
-            view_class = getattr(module, class_name)
-        except (ValueError, ImportError, AttributeError) as exc:
-            error_msg = f"Failed to load view {view_path}: {exc}"
-            logger.error("Failed to load view %s: %s", sanitize_for_log(view_path), exc)
+        # Security (F22 — unsafe reflection / arbitrary module import): resolve
+        # through the single shared resolver (shape-check → allowlist-before-
+        # import → import_module + vars() PEP 562-safe lookup → LiveView subclass
+        # check). Fail-closed; defense in depth even if a caller forgot to gate.
+        # Shared with the WebSocket/SSE paths (#1646). See djust.security.mount.
+        from .security.mount import resolve_view_class
+
+        resolution = resolve_view_class(view_path)
+        if not resolution:
+            logger.error(
+                "Failed to load view %s: %s", sanitize_for_log(view_path), resolution.detail
+            )
             asyncio.ensure_future(
                 self.transport.send(
-                    {"type": "error", "error": _safe_error(error_msg, "View not found")}
+                    {
+                        "type": "error",
+                        "error": _safe_error(resolution.detail, resolution.generic),
+                    }
                 )
             )
             return None
-
-        # Must be a LiveView subclass.
-        from .live_view import LiveView
-
-        if not (isinstance(view_class, type) and issubclass(view_class, LiveView)):
-            error_msg = f"Security: {view_path} is not a LiveView subclass."
-            logger.error("Security: %s is not a LiveView subclass.", sanitize_for_log(view_path))
-            asyncio.ensure_future(
-                self.transport.send(
-                    {"type": "error", "error": _safe_error(error_msg, "Invalid view class")}
-                )
-            )
-            return None
+        view_class = resolution.view_class
 
         try:
             return view_class()
@@ -684,10 +809,36 @@ class ViewRuntime:
         from django.test import RequestFactory
         from urllib.parse import urlencode
 
+        from .security.mount import validate_mount_url
+
+        # F23 (#1819 / #1646): validate defensively here too, so the request is
+        # never built from a traversed URL even if a future caller reaches
+        # _build_request without going through dispatch_mount's validation.
+        page_url = validate_mount_url(page_url)
         factory = RequestFactory()
         query_string = urlencode(params) if params else ""
         path_with_query = f"{page_url}?{query_string}" if query_string else page_url
-        request = factory.get(path_with_query)
+
+        # Finding #26: propagate the validated client Host (and TLS scheme) into
+        # the reconstructed request so host/subdomain TenantResolvers resolve the
+        # SAME tenant the WS mount and the HTTP (SSR) path resolve. Without
+        # HTTP_HOST the request defaults to RequestFactory's "testserver",
+        # misresolving the tenant to None on runtime-rebuilt requests (url_change
+        # etc.). Sourced from ``self.scope`` (set for WS-backed runtimes), routed
+        # through the SAME shared helper the WS handle_mount path uses
+        # (``websocket.validated_host_from_scope``) so the two reconstructed-
+        # request paths cannot drift (#1646). SSE-backed runtimes have
+        # ``scope=None`` and use the real HTTP request, so they are unaffected.
+        from .websocket import validated_host_from_scope
+
+        host, is_secure = validated_host_from_scope(self.scope)
+        request_extra = {}
+        if host:
+            request_extra["HTTP_HOST"] = host
+        if is_secure:
+            request_extra["secure"] = True
+            request_extra["HTTP_X_FORWARDED_PROTO"] = "https"
+        request = factory.get(path_with_query, **request_extra)
 
         # Wire session if available from WS scope
         try:
@@ -711,25 +862,55 @@ class ViewRuntime:
         return request
 
     async def _check_auth(self, request) -> Optional[bool]:
-        """Run auth check. Returns:
+        """Run the shared pre-mount security sequence. Returns:
         - ``None`` if mount may proceed.
-        - Truthy value if auth blocked (and a navigate/error frame was sent).
+        - Truthy value if blocked (and a navigate/error/mount-error frame was sent).
+
+        Routes through ``djust.auth.core.run_pre_mount_auth`` so the auth call,
+        the ``_ensure_tenant`` resolve, the tenant ContextVar bind, and the
+        "skip tenant on auth denial" rule are single-sourced with the WS + SSE
+        mount paths (#1646 / #1853) — a future edit cannot reorder the steps or
+        drop one on this path. The runtime-specific verdict→frame mapping stays
+        here:
+
+        * auth ``PermissionDenied`` (raised inside the helper) →
+          ``{"type": "error", ...}`` (then abort) — matches the legacy auth
+          inner-try.
+        * auth redirect URL (returned by the helper) → ``{"type": "navigate", ...}``
+          (then abort) — matches the legacy redirect branch.
+        * any OTHER exception (a tenant-resolution failure such as ``Http404``
+          from ``_ensure_tenant``, or a buggy custom ``check_permissions`` hook
+          raising a non-``PermissionDenied``) → the ``handle_exception``
+          mount-error envelope (then abort, fail-closed). This consolidates the
+          legacy split — the dedicated tenant try/except that used to live in
+          ``dispatch_mount`` AND the auth ``except Exception`` — into one
+          fail-closed envelope, matching the WebSocket mount path which already
+          aborts on any non-auth-verdict exception during this sequence.
         """
+        from .auth import run_pre_mount_auth
+        from django.core.exceptions import PermissionDenied
+
         try:
-            from .auth import check_view_auth
-            from django.core.exceptions import PermissionDenied
+            redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
+        except PermissionDenied:
+            await self.transport.send({"type": "error", "error": "Permission denied"})
+            return True
+        except Exception as exc:  # noqa: BLE001 — fail-closed (tenant / auth-hook error)
+            response = handle_exception(
+                exc,
+                error_type="mount",
+                view_class=self.view_instance.__class__.__name__,
+                logger=logger,
+                log_message="Error in pre-mount security sequence for %s"
+                % sanitize_for_log(self.view_instance.__class__.__name__),
+            )
+            await self.transport.send(response)
+            return True
 
-            try:
-                redirect_url = await sync_to_async(check_view_auth)(self.view_instance, request)
-            except PermissionDenied:
-                await self.transport.send({"type": "error", "error": "Permission denied"})
-                return True
+        if redirect_url:
+            await self.transport.send({"type": "navigate", "to": redirect_url})
+            return True
 
-            if redirect_url:
-                await self.transport.send({"type": "navigate", "to": redirect_url})
-                return True
-        except Exception as exc:
-            logger.warning("Runtime: auth check error: %s", exc)
         return None
 
     def _resolve_url_kwargs(self, page_url: str) -> Dict[str, Any]:
@@ -791,6 +972,14 @@ class ViewRuntime:
         if should_reset_form:
             self.view_instance._should_reset_form = False
 
+        # Stamp the transport's client-checked wire version (#1858, the #1788
+        # parallel-path twin) from the RAW pre-strip render. WS → consumer-owned
+        # counter + recovery arming; SSE → Rust ``version`` unchanged. Computed once
+        # here so every render branch below (patch / compression-fallback html_update /
+        # no-diff html_update) stamps the same wire version. (Reached by SSE today and
+        # by any future WS migration of dispatch_event off the bespoke consumer path.)
+        wire_version = self.transport.next_client_version(html, version)
+
         if patches is not None:
             patch_list: Optional[List] = (
                 fast_json_loads(patches) if isinstance(patches, str) else patches
@@ -810,7 +999,7 @@ class ViewRuntime:
                 msg: Dict[str, Any] = {
                     "type": "patch",
                     "patches": patch_list,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": event_name,
                 }
                 if cache_request_id:
@@ -827,7 +1016,7 @@ class ViewRuntime:
                 msg = {
                     "type": "html_update",
                     "html": html_content,
-                    "version": version,
+                    "version": wire_version,
                     "event_name": event_name,
                 }
                 if cache_request_id:
@@ -846,7 +1035,7 @@ class ViewRuntime:
             msg = {
                 "type": "html_update",
                 "html": html,
-                "version": version,
+                "version": wire_version,
                 "event_name": event_name,
             }
             if cache_request_id:

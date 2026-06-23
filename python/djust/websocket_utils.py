@@ -16,7 +16,13 @@ from django.core.exceptions import PermissionDenied
 
 from .config import config as djust_config
 from .decorators import is_event_handler
-from .rate_limit import ConnectionRateLimiter, get_rate_limit_settings, ip_tracker
+from .rate_limit import (
+    ConnectionRateLimiter,
+    caller_key,
+    get_rate_limit_settings,
+    handler_rate_check,
+    ip_tracker,
+)
 from .security import is_safe_event_name, sanitize_for_log
 
 logger = logging.getLogger(__name__)
@@ -140,10 +146,15 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
 def _ensure_handler_rate_limit(
     rate_limiter: "ConnectionRateLimiter", event_name: str, handler
 ) -> None:
-    """Register per-handler rate limit from @rate_limit decorator metadata (once per event).
+    """Register per-handler rate limit into the per-connection limiter.
 
-    Must be called BEFORE check_handler() so the first
-    invocation is also subject to the per-handler bucket.
+    LEGACY (F27): the per-handler ``@rate_limit`` is now enforced through the
+    SHARED per-caller store (:func:`djust.rate_limit.handler_rate_check`), NOT
+    the per-connection :class:`ConnectionRateLimiter` — opening N connections no
+    longer multiplies the limit N×. This helper is retained only for backward
+    compatibility of the ``websocket.py`` re-export; it is no longer called on
+    the enforcement path. The per-connection limiter still owns the GLOBAL
+    per-message abuse-disconnect (#17), which is untouched.
     """
     if event_name not in rate_limiter.handler_buckets:
         rl_settings = get_rate_limit_settings(handler)
@@ -184,18 +195,39 @@ async def _validate_event_security(
         await ws.send_error(_safe_error(security_error))
         return None
 
-    _ensure_handler_rate_limit(rate_limiter, event_name, handler)
-    if not rate_limiter.check_handler(event_name):
-        if rate_limiter.should_disconnect():
-            client_ip = getattr(ws, "_client_ip", None)
-            if client_ip:
-                _rl = djust_config.get("rate_limit", {})
-                cooldown = _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
-                ip_tracker.add_cooldown(client_ip, cooldown)
-            await ws.close(code=4429)
+    # Per-handler @rate_limit (F27): enforce against the SHARED per-caller store
+    # so a caller has ONE budget per handler regardless of how many WS/SSE
+    # connections they open or which transport they use. Caller identity mirrors
+    # the SSE owner-principal model (user pk / anon session key / resolved IP);
+    # the IP fallback uses the transport's already-resolve_client_ip-resolved
+    # ``_client_ip`` (honors DJUST_TRUSTED_PROXY_COUNT — F28).
+    #
+    # The per-connection ``ConnectionRateLimiter`` keeps owning the GLOBAL
+    # per-message abuse-disconnect (#17, in websocket.py:receive). On a
+    # per-handler rejection we still bump that connection's warning counter so a
+    # single-connection per-handler flood trips should_disconnect() → close.
+    rl_settings = get_rate_limit_settings(handler)
+    if rl_settings:
+        client_ip = getattr(ws, "_client_ip", None)
+        owner_request = getattr(owner_instance, "request", None)
+        key = caller_key(owner_request, client_ip)
+        if not handler_rate_check(key, event_name, rl_settings):
+            rate_limiter.warnings += 1
+            logger.warning(
+                "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
+                sanitize_for_log(event_name),
+                rate_limiter.warnings,
+                rate_limiter.max_warnings,
+            )
+            if rate_limiter.should_disconnect():
+                if client_ip:
+                    _rl = djust_config.get("rate_limit", {})
+                    cooldown = _rl.get("reconnect_cooldown", 5) if isinstance(_rl, dict) else 5
+                    ip_tracker.add_cooldown(client_ip, cooldown)
+                await ws.close(code=4429)
+                return None
+            await ws.send_error("Rate limit exceeded, event dropped")
             return None
-        await ws.send_error("Rate limit exceeded, event dropped")
-        return None
 
     # Handler-level permission check
     from .auth import check_handler_permission
@@ -301,7 +333,7 @@ async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = No
         handler: The event handler method (sync or async)
         params: Optional dictionary of parameters to pass to the handler.
             Note: Empty dict {} is treated as no params (falsy check).
-            Positional args from @click="handler('value')" syntax are merged
+            Positional args from dj-click="handler('value')" syntax are merged
             into params by validate_handler_params() before calling this.
 
     Returns:

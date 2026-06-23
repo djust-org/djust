@@ -83,7 +83,7 @@ class TestTemplateInheritance:
     """Test Django template inheritance support."""
 
     @pytest.mark.django_db
-    def test_get_template_with_extends(self, tmp_path, settings):
+    def test_get_template_with_extends(self, tmp_path, settings, request):
         """Test get_template with {% extends %} extracts liveview-root from resolved template."""
         # Create temporary template directory
         templates_dir = tmp_path / "templates"
@@ -99,6 +99,17 @@ class TestTemplateInheritance:
         new_templates[0]["DIRS"] = [str(templates_dir)]
         ctx = override_settings(TEMPLATES=new_templates)
         ctx.enable()
+
+        # get_template() resolves search dirs via the cached get_template_dirs()
+        # helper (shared with render_full_template step 2 — #1646). The lru_cache
+        # doesn't observe override_settings, so clear it after enabling the
+        # override AND on teardown (this test's tmp DIRS must not leak into later
+        # tests via the cache) — the documented mechanism for tests that mutate
+        # TEMPLATES.
+        from djust.utils import clear_template_dirs_cache
+
+        clear_template_dirs_cache()
+        request.addfinalizer(clear_template_dirs_cache)
 
         # Create base template with liveview-root in block
         base_template = templates_dir / "base.html"

@@ -38,7 +38,7 @@ const STATE_LRU = new Map();
 // Defaults; client can override via VDOM_CONFIG message.
 let VDOM_TTL_MS = 1800 * 1000; // 30 minutes
 let VDOM_MAX_ENTRIES = 50;
-let STATE_MAX_ENTRIES = 50;
+const STATE_MAX_ENTRIES = 50;
 // Size cap for client-submitted state_json (defense in depth).
 const STATE_JSON_MAX_BYTES = 256 * 1024;
 
@@ -79,7 +79,7 @@ async function handleNavigate(request) {
     let cache;
     try {
         cache = await caches.open(SHELL_CACHE);
-    } catch (err) {
+    } catch {
         // Cache API unavailable (private mode on some browsers) — fall back.
         return fetch(request);
     }
@@ -118,7 +118,7 @@ async function handleNavigate(request) {
                 })
             );
         }
-    } catch (err) {
+    } catch {
         // Ignore cache-population failures — user still gets the live page.
     }
     return response;

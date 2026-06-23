@@ -33,6 +33,11 @@ use renderer::render_nodes_with_loader;
 // Re-export for JIT auto-serialization
 pub use parser::extract_template_variables;
 
+// Re-export for the dj-model mass-assignment allowlist (CWE-915, finding #3):
+// derives the bindable-field set from developer-authored template TEXT, which
+// attacker data can never reach (immune to rendered-output poisoning).
+pub use parser::{collect_dj_model_fields, extract_dj_model_fields};
+
 // These regexes may be used in future template parsing improvements
 #[allow(dead_code)]
 static VAR_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]+)\}\}").unwrap());

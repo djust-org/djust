@@ -8,7 +8,14 @@ import logging
 import time
 from contextlib import contextmanager
 
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
+from django.core.exceptions import PermissionDenied
+from django.http import (
+    HttpResponse,
+    HttpResponseForbidden,
+    HttpResponseRedirect,
+    JsonResponse,
+    StreamingHttpResponse,
+)
 from django.utils.decorators import method_decorator
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -117,6 +124,18 @@ class RequestMixin:
         uri = request.get_full_path()
         if hasattr(self, "handle_params"):
             self.handle_params(params, uri)
+
+        # Object-permission check (ADR-017) on the initial HTTP render. mount()
+        # + handle_params() have populated the access-determining state (e.g.
+        # self.<x>_id) that get_object() reads; enforce here, before render, so
+        # the first server-rendered page can't leak a denied object (finding
+        # #11). No-op for views that don't override get_object.
+        from ..auth.core import enforce_object_permission
+
+        try:
+            enforce_object_permission(self, request)
+        except PermissionDenied:
+            return HttpResponseForbidden("Access denied for this object.")
 
         # Automatically assign deterministic IDs to components based on variable names
         t0 = time.perf_counter()
@@ -362,6 +381,13 @@ class RequestMixin:
         sync_response = await sync_to_async(self.get)(request, *args, **kwargs)
 
         if isinstance(sync_response, HttpResponseRedirect):
+            return sync_response
+
+        # Error responses (e.g. the object-permission 403 that get() returns on
+        # an ADR-017 denial) must pass through with their status intact — never
+        # be re-wrapped into a default-200 StreamingHttpResponse below. (Stage-11
+        # review of #155 / finding #11 on the streaming path.)
+        if getattr(sync_response, "status_code", 200) >= 400:
             return sync_response
 
         # If streaming wasn't requested, deliver the plain HttpResponse

@@ -9,7 +9,26 @@ captures patterns surfaced during the v0.7.x check-refinement milestone
 
 djust system checks live in two places:
 
-- `python/djust/checks.py` — core framework checks (A/C/T/S/V).
+- `python/djust/checks/` — core framework checks (A/C/T/S/V/Q/Y), a package
+  split by check family (#1822). Add a new check to the submodule matching its
+  area:
+  - `configuration.py` — settings / CSS-build / ASGI validation (C###)
+  - `integrations.py` — service worker, hot-view, time-travel, admin, psycopg
+  - `components.py` — LiveView / sticky-child checks (V###)
+  - `security.py` — AST-based security checks (S###)
+  - `templates.py` — template file scanning (T###)
+  - `accessibility.py` — ARIA/WCAG template scanning (Y###)
+  - `quality.py` — AST-based code-quality checks (Q###)
+  - `utils.py` — shared helpers (file discovery, suppression, comment/verbatim
+    stripping). Add cross-family helpers here, not in a check submodule.
+
+  `checks/__init__.py` imports every submodule (firing the `@register("djust")`
+  decorators for Django's `AppConfig.checks` discovery) and re-exports every
+  public + private symbol, so `from djust.checks import <name>` keeps working.
+  **Helpers monkeypatched by tests via the package path** (e.g.
+  `_get_project_app_dirs`, `_has_asgi_server`) must be referenced from their
+  callers as `_root.<helper>()` (`import djust.checks as _root`) so
+  `patch("djust.checks.<helper>")` still takes effect at call time.
 - `python/djust/theming/checks.py` — theming-specific checks (W).
 
 Each check has an ID like `djust.A070`, `djust_theming.W001`, etc. New
@@ -33,7 +52,7 @@ before running the scan, rather than stripping the region or maintaining
 parallel offset tables.
 
 **Canonical reference**: `_strip_verbatim_blocks(content)` in
-`python/djust/checks.py` (used by A070 / A071 to ignore
+`python/djust/checks/utils.py` (used by A070 / A071 to ignore
 `{% verbatim %}...{% endverbatim %}` regions). Shipped in PR #1014
 (closes #1004).
 
@@ -161,7 +180,8 @@ is the contract under test.
 
 1. Pick a check ID from the appropriate series (and update any
    global registry / docs that enumerates IDs).
-2. Add the check function to `checks.py` (or `theming/checks.py`).
+2. Add the check function to the matching `checks/` submodule (see the
+   submodule map under "Naming and registration") — or `theming/checks.py`.
 3. Register it via `@register(Tags.compatibility)` (or the appropriate tag).
 4. Write tests using one of the patterns above.
 5. Document the check in the user-facing checks reference.
@@ -175,7 +195,7 @@ is the contract under test.
 
 - `docs/PULL_REQUEST_CHECKLIST.md` — reviewer-facing checklist that
   summarizes some of these patterns.
-- `python/djust/checks.py` — core check implementations.
+- `python/djust/checks/` — core check implementations (one submodule per family).
 - `python/djust/theming/checks.py` — theming check implementations.
 - ADR-012 (`docs/adr/012-framework-internal-attrs-filter-vs-rename.md`) —
   why we use a filter instead of a rename for framework-internal attrs.

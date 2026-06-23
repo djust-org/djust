@@ -39,7 +39,7 @@ def get_preset(name: str) -> ThemePreset:
     to the manager/registry/introspection but invisible to the CSS generator
     that ultimately renders ``--primary`` etc. into ``:root``.
     """
-    from .registry import get_registry
+    from ._registry_accessor import get_registry
 
     return get_registry().get_preset(name) or THEME_PRESETS.get(name, DEFAULT_THEME)
 

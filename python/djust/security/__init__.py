@@ -44,6 +44,21 @@ from .error_handling import (
     handle_exception,
 )
 from .event_guard import is_safe_event_name
+from .json_script import escape_json_for_script
+from .mount import (
+    ViewResolution,
+    available_liveview_names,
+    is_view_path_allowed,
+    resolve_view_class,
+    validate_mount_url,
+)
+from .state_snapshot import (
+    sign_snapshot,
+    unsign_snapshot,
+    get_max_age,
+    SNAPSHOT_SALT,
+    DEFAULT_MAX_AGE,
+)
 
 __all__ = [
     # Attribute guard
@@ -62,4 +77,18 @@ __all__ = [
     "handle_exception",
     # Event guard
     "is_safe_event_name",
+    # Script-safe JSON
+    "escape_json_for_script",
+    # Secure mount resolution (F22 unsafe reflection + F23 URL traversal)
+    "ViewResolution",
+    "available_liveview_names",
+    "is_view_path_allowed",
+    "resolve_view_class",
+    "validate_mount_url",
+    # Signed state-snapshot envelope (CWE-345/CWE-915 fix)
+    "sign_snapshot",
+    "unsign_snapshot",
+    "get_max_age",
+    "SNAPSHOT_SALT",
+    "DEFAULT_MAX_AGE",
 ]

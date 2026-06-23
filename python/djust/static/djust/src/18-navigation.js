@@ -54,13 +54,24 @@
         // differs from the current page, fall back to a full-page
         // navigation — that's the caller's intent. (#1599)
         if (newUrl.origin !== window.location.origin) {
+            // Validate scheme/origin before the hard navigation. A
+            // `javascript:`/`data:` data.path parses to an opaque origin that
+            // is `!== location.origin`, so it lands here — reject it (finding
+            // #16, #1646). Legit absolute http(s) sister-site URLs pass.
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (!safe) {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_patch rejected unsafe target: %s', newUrl.toString());
+                }
+                return;
+            }
             if (globalThis.djustDebug) {
                 console.log(
                     '[LiveView] live_patch cross-origin → full-page nav: %s',
-                    newUrl.toString(),
+                    safe,
                 );
             }
-            window.location.href = newUrl.toString();
+            window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
         }
 
@@ -96,10 +107,25 @@
         // differs from the current page (e.g. a dj-navigate link pointing
         // at a sister site), fall back to a full-page navigation. (#1599)
         if (newUrl.origin !== window.location.origin) {
+            // Validate scheme/origin before the hard navigation. A
+            // `javascript:`/`data:` data.path parses to an opaque origin that
+            // is `!== location.origin`, so it lands here — reject it (finding
+            // #16, #1646). Legit absolute http(s) sister-site URLs pass.
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (!safe) {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect rejected unsafe target: %s', newUrl.toString());
+                }
+                // Stop the page-loading bar we started above.
+                if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+                    window.djust.pageLoading.stop?.();
+                }
+                return;
+            }
             if (globalThis.djustDebug) {
                 console.log(
                     '[LiveView] live_redirect cross-origin → full-page nav: %s',
-                    newUrl.toString(),
+                    safe,
                 );
             }
             // Stop the page-loading bar we started above; the full nav
@@ -107,13 +133,17 @@
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
                 window.djust.pageLoading.stop?.();
             }
-            window.location.href = newUrl.toString();
+            window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
+
+        // Move the active-nav highlight immediately (the URL is now current),
+        // rather than waiting for the WS mount round-trip. (#1756)
+        updateAriaCurrent();
 
         // Scroll to top on navigation (or to anchor if present)
         const hash = newUrl.hash;
@@ -177,9 +207,17 @@
                 }
                 liveViewWS.sendMessage(outgoing);
             } else {
-                // Fallback: full page navigation if we can't resolve the view
+                // Fallback: full page navigation if we can't resolve the view.
+                // newUrl is same-origin here (cross-origin returned above), but
+                // it's still data.path-derived — validate via the shared guard
+                // for consistency (finding #16).
                 console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
-                window.location.href = newUrl.toString();
+                const safe = window.djust.safeNavigationTarget(newUrl.toString());
+                if (safe) {
+                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect fallback rejected unsafe target: %s', newUrl.toString());
+                }
             }
         }
     }
@@ -191,13 +229,18 @@
      * or by data attributes on the container.
      */
     function resolveViewPath(pathname) {
-        // Check the route map (populated by live_session)
+        // Check the route map. As of #1733 it is auto-derived from the
+        // Django URLconf and auto-emitted by {% djust_client_config %};
+        // live_session() entries are merged in as well.
         const routeMap = window.djust._routeMap || {};
 
-        // Try exact match first. `pathname` is user-controllable (URL
-        // path) so the lookup must be prototype-pollution-immune: walk
-        // own entries explicitly via `Object.entries` rather than
-        // indexing with `routeMap[pathname]`. Closes #1361.
+        // #1361 — `pathname` is user-controllable (URL path). With the route
+        // map now populated on EVERY page by default (#1733), the lookup must
+        // be prototype-pollution-immune. We walk OWN enumerable entries via
+        // `Object.entries` (never `routeMap[pathname]` bracket-indexing), so
+        // a polluted `Object.prototype` (e.g. `Object.prototype.toString`)
+        // and inherited keys like `constructor` can never resolve to a view.
+        // Do NOT reintroduce `routeMap[pathname]` here — it would reopen #1361.
         for (const [routePath, viewPath] of Object.entries(routeMap)) {
             if (routePath === pathname) return viewPath;
         }
@@ -247,6 +290,9 @@
      * afterwards via the normal mount handler.
      */
     window.addEventListener('popstate', async function (event) {
+        // Keep the active-nav highlight in sync on back/forward (the URL is
+        // already current here), regardless of WS state. (#1756)
+        updateAriaCurrent();
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
@@ -352,7 +398,15 @@
 
         // dj-patch-reload attribute forces full page navigation (opt-in escape hatch).
         if (el.hasAttribute('dj-patch-reload')) {
-            window.location.href = newUrl.toString();
+            // newUrl is derived from the dj-patch attribute value — validate via
+            // the shared guard so an attacker-influenced dj-patch can't pivot to
+            // javascript:/data: DOM-XSS or open-redirect (finding #16).
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (safe) {
+                window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else if (globalThis.djustDebug) {
+                console.warn('[LiveView] dj-patch-reload rejected unsafe target: %s', newUrl.toString());
+            }
             return;
         }
 
@@ -423,6 +477,153 @@
                 handleLiveRedirect({ path: path, replace: false });
             });
         });
+
+        // Keep aria-current="page" in sync with the current URL. A persistent
+        // nav usually lives OUTSIDE [dj-root], so dj-navigate's dj-root-only
+        // swap never updates a server-rendered active state — this re-derives
+        // it client-side. Runs on each call because bindNavigationDirectives is
+        // invoked from reinitAfterDOMUpdate (initial load + every SPA mount and
+        // patch), so the highlight tracks the current page. (#1756)
+        updateAriaCurrent();
+    }
+
+    /**
+     * Set ``aria-current="page"`` on the ``[dj-navigate]`` link whose path
+     * matches the current URL and remove it from the others. Only manages the
+     * ``"page"`` value this module sets (never clobbers an app-authored
+     * ``aria-current`` of a different value). Cross-origin dj-navigate targets
+     * (e.g. a sister-site link) are never "current". Apps style the active link
+     * via ``[dj-navigate][aria-current="page"]``.
+     */
+    function updateAriaCurrent() {
+        const here = window.location.pathname;
+        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+            let dest;
+            try {
+                dest = new URL(el.getAttribute('dj-navigate'), window.location.origin);
+            } catch (_e) {
+                return;
+            }
+            const isCurrent =
+                dest.origin === window.location.origin && dest.pathname === here;
+            if (isCurrent) {
+                el.setAttribute('aria-current', 'page');
+            } else if (el.getAttribute('aria-current') === 'page') {
+                el.removeAttribute('aria-current');
+            }
+        });
+    }
+
+    /**
+     * auto_navigate (#1734, ADR-021 Stage 2): opt-in Turbo-Drive-style link
+     * interception. When enabled (server emits
+     * ``<meta name="djust-auto-navigate" content="1">`` from
+     * ``LIVEVIEW_CONFIG['auto_navigate']``, default OFF), a SINGLE delegated
+     * click listener on ``document`` SPA-navigates plain ``<a href>`` links —
+     * but ONLY when the path resolves in the (auth-filtered, #1758) route map.
+     * Everything else falls through to normal browser navigation, so non-djust
+     * links (admin, logout, external, downloads) and routes the user can't
+     * access just load normally.
+     *
+     * The skip matrix below is correctness-critical (ADR-021): a wrong skip
+     * either breaks expected browser behavior (new-tab, downloads) or hijacks a
+     * link that should reload. Returning early === "let the browser handle it".
+     */
+    function _shouldSkipAutoNavigate(e, link) {
+        // Another handler already took it (e.g. dj-navigate/dj-patch above).
+        if (e.defaultPrevented) return true;
+        // Only plain left-clicks; modified clicks mean new tab/window/download.
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return true;
+        if (!link) return true;
+        // Explicit opt-outs on the link or any ancestor.
+        if (link.hasAttribute('download')) return true;
+        if (link.closest('[data-no-navigate]')) return true;
+        const target = link.getAttribute('target');
+        if (target && target !== '_self') return true;
+        const rel = (link.getAttribute('rel') || '').toLowerCase();
+        if (rel.split(/\s+/).indexOf('external') !== -1) return true;
+        return false;
+    }
+
+    function _handleAutoNavigateClick(e) {
+        const link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (_shouldSkipAutoNavigate(e, link)) return;
+
+        let url;
+        try {
+            url = new URL(link.getAttribute('href'), window.location.href);
+        } catch (_e) {
+            return; // unparseable href → let the browser deal with it
+        }
+        // External origin or non-http(s) scheme (mailto:, tel:, …) → browser.
+        if (url.origin !== window.location.origin) return;
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+        // Same-document hash-only jump → let the browser scroll, don't hijack.
+        if (
+            url.pathname === window.location.pathname &&
+            url.search === window.location.search &&
+            url.hash
+        ) {
+            return;
+        }
+        // Only intercept paths the (auth-filtered) route map knows are LiveView
+        // routes. Unknown paths (admin, plain Django views, routes the user
+        // can't access) fall through to a normal navigation the server gates.
+        if (!resolveViewPath(url.pathname)) return;
+        if (!liveViewWS || !liveViewWS.ws) return; // no socket → normal nav
+
+        e.preventDefault();
+        if (url.pathname === window.location.pathname) {
+            // Same view, query-only change → state-preserving url_change (no
+            // remount), mirroring the dj-patch wire shape but navigating to the
+            // link's EXACT query (replace, not dj-patch's param-merge — a full
+            // <a href> is the complete intended target). Falls back to a normal
+            // load if the view isn't mounted yet.
+            if (!liveViewWS.viewMounted) {
+                // url is already same-origin http(s) (validated at the top of
+                // this handler), but route through the shared guard for
+                // consistency across all location.href sinks (finding #16).
+                const safe = window.djust.safeNavigationTarget(url.toString());
+                if (safe) {
+                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] auto-navigate rejected unsafe target: %s', url.toString());
+                }
+                return;
+            }
+            window.history.pushState({ djust: true }, '', url.pathname + url.search);
+            liveViewWS.sendMessage({
+                type: 'url_change',
+                params: Object.fromEntries(url.searchParams),
+                uri: url.pathname + url.search,
+            });
+        } else {
+            // Cross-view → live_redirect over the existing WebSocket.
+            handleLiveRedirect({ path: url.pathname + url.search, replace: false });
+        }
+    }
+
+    let _autoNavigateInstalled = false;
+
+    function installAutoNavigate() {
+        if (_autoNavigateInstalled) return;
+        if (typeof document === 'undefined') return;
+        const meta = document.querySelector('meta[name="djust-auto-navigate"]');
+        if (!meta || meta.getAttribute('content') !== '1') return;
+        // One delegated listener for the whole document — survives SPA mounts
+        // (no per-element binding to re-run on reinit). Default (bubble) phase
+        // so app/dj-navigate handlers that call preventDefault run first and
+        // set e.defaultPrevented, which the skip matrix honors.
+        document.addEventListener('click', _handleAutoNavigateClick);
+        _autoNavigateInstalled = true;
+    }
+
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', installAutoNavigate);
+        } else {
+            installAutoNavigate();
+        }
     }
 
     // Expose to djust namespace
@@ -430,6 +631,12 @@
         handleNavigation: handleNavigation,
         bindDirectives: bindNavigationDirectives,
         resolveViewPath: resolveViewPath,
+        updateAriaCurrent: updateAriaCurrent,
+        installAutoNavigate: installAutoNavigate,
+        // Exposed for tests + advanced callers; the delegated listener is the
+        // supported entry point.
+        _handleAutoNavigateClick: _handleAutoNavigateClick,
+        _shouldSkipAutoNavigate: _shouldSkipAutoNavigate,
     };
 
     // Initialize route map

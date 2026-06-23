@@ -81,6 +81,14 @@ repos:
         types: [javascript]
         pass_filenames: false
 
+      - id: check-cross-iife-refs
+        name: bundle cross-IIFE bare-reference static guard (#1706)
+        entry: node scripts/check-cross-iife-refs.mjs
+        language: system
+        files: ^python/djust/static/djust/src/
+        types: [javascript]
+        pass_filenames: false
+
       - id: build-js
         name: build client.js from src/ modules
         entry: bash -c 'bash scripts/build-client.sh && git add python/djust/static/djust/client.js python/djust/static/djust/debug-panel.js'
@@ -98,7 +106,13 @@ repos:
 
       - id: eslint
         name: eslint
-        entry: npx eslint --max-warnings 0 --no-warn-ignored
+        # Gate on errors (severity 2) AND warnings (severity 1). After #1719
+        # drove the project-wide warning count to 0 (each remaining
+        # security/detect-object-injection site carries a justified
+        # eslint-disable comment), --max-warnings 0 re-introduces a ceiling
+        # so the count can only go down — any new warning blocks the commit,
+        # alongside the real XSS/no-script-url error gates.
+        entry: npx eslint --no-warn-ignored --max-warnings 0
         language: system
         files: ^python/djust/static/djust/[^/]*\.js$
         pass_filenames: true
@@ -138,15 +152,17 @@ repos:
 
   # Doc-snippet smoke test + claim assertions — catches doc-rot in fenced
   # Python snippets (syntax/phantom-import) and the Django-floor / JS
-  # bundle-size claims in README/QUICKSTART. See scripts/check-doc-snippets.py
-  # and tests/test_check_doc_snippets.py. Closes #1500 (parts a+b).
+  # bundle-size claims in README/QUICKSTART, plus symbol/import resolvability
+  # in docs/website/guides/*.md (#1707 — the guard for #1559/#1699's
+  # hallucinated djust.tenants symbols). See scripts/check-doc-snippets.py
+  # and tests/test_check_doc_snippets.py. Closes #1500 (parts a+b), #1707.
   - repo: local
     hooks:
       - id: check-doc-snippets
-        name: check doc snippets + version/size claims (#1500)
-        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/check-doc-snippets.py'
+        name: check doc snippets + version/size claims (#1500, #1707)
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/check-doc-snippets.py'
         language: system
-        files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$
+        files: ^(README|QUICKSTART)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$
         pass_filenames: false
 
   # Lockfile self-entry version sync — catches the drift class #1487 cited
@@ -168,9 +184,14 @@ repos:
   - repo: local
     hooks:
       # Python tests
+      # PREPEND the current worktree's python/ to PYTHONPATH so a worktree
+      # push tests the worktree's source, not the MAIN checkout's (the editable
+      # `djust.pth` points at the main tree). `--worktree-pythonpath` emits the
+      # path to prepend (empty in the main checkout) and symlinks the matching
+      # compiled `.so` so `import djust._rust` keeps working. See #1810.
       - id: pytest
         name: pytest
-        entry: bash -c 'PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -q'
+        entry: bash -c 'WT="$(bash scripts/run-with-venv-python.sh --worktree-pythonpath)"; PYTHONPATH="${WT:+$WT:}." bash scripts/run-with-venv-python.sh -m pytest tests/ python/tests/ -q'
         language: system
         types: [python]
         pass_filenames: false
@@ -179,7 +200,7 @@ repos:
       # Rust tests
       - id: cargo-test
         name: cargo test
-        entry: bash -c 'PYO3_PYTHON=$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live --release -q'
+        entry: bash -c 'PYO3_PYTHON="$(bash scripts/run-with-venv-python.sh --print)" cargo test --workspace --exclude djust_live --release -q'
         language: system
         types: [rust]
         pass_filenames: false
@@ -210,7 +231,7 @@ repos:
       # Pairs with `make docs-lint` for manual / CI invocation.
       - id: docs-lint
         name: docs stale-MD-ref check
-        entry: bash -c 'PYTHONPATH=. .venv/bin/python scripts/docs-lint.py'
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh scripts/docs-lint.py'
         language: system
         files: ^docs/.*\.md$
         pass_filenames: false
@@ -224,7 +245,7 @@ repos:
       # the def line with `# noqa: dead-method-allowed`.
       - id: check-no-dead-private-methods
         name: check no dead private methods
-        entry: bash -c '.venv/bin/python scripts/check-no-dead-private-methods.py'
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-no-dead-private-methods.py'
         language: system
         types: [python]
         pass_filenames: false
@@ -236,7 +257,7 @@ repos:
       # PR #1225 + PR #1226 both bit this in 24 hours; the fix is structural.
       - id: check-no-comma-list-closes
         name: check no comma-list Closes
-        entry: bash -c '.venv/bin/python scripts/check-no-comma-list-closes.py'
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-no-comma-list-closes.py'
         language: system
         always_run: true
         pass_filenames: false
@@ -247,7 +268,7 @@ repos:
       # bugs before they reach CI (#1290).
       - id: check-handler-contracts
         name: check handler contracts
-        entry: bash -c '.venv/bin/python scripts/check-handler-contracts.py'
+        entry: bash -c 'bash scripts/run-with-venv-python.sh scripts/check-handler-contracts.py'
         language: system
         always_run: true
         pass_filenames: false

@@ -22,10 +22,19 @@ TARGET_WS_MOUNT_S = 0.100  # 100 ms (20× list-update)
 
 
 def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
-    """Assert benchmark mean < target, but gracefully degrade under xdist.
+    """Assert benchmark MEDIAN < target, but gracefully degrade under xdist.
+
+    Uses the **median**, not the mean: the mean is dragged past the SLA by a
+    handful of GC / scheduling-pause outliers (a single 30ms spike among
+    thousands of ~4ms rounds), so a mean-based threshold false-fails on a
+    loaded machine even when typical performance is comfortably under target.
+    The median reflects the actual per-call cost and is immune to those
+    outliers — the right statistic for a latency SLA. (Same outlier-sensitivity
+    fragility class as the #1795 wall-clock flaky test; canonicalized in the
+    v1.0.5-4/-5 retro arc — assert a robust statistic, not an outlier-prone one.)
 
     pytest-benchmark's stats collection is disabled when running under
-    pytest-xdist (the `-n auto` CI invocation), so `benchmark.stats["mean"]`
+    pytest-xdist (the `-n auto` CI invocation), so `benchmark.stats[...]`
     raises because `stats` is empty. In that case the function is still
     executed for correctness, but the threshold assertion is skipped —
     the benchmark-gated CI job (`--benchmark-only` serial) enforces it.
@@ -33,11 +42,11 @@ def _assert_benchmark_under(benchmark, target_s: float, label: str) -> None:
     if getattr(benchmark, "disabled", False):
         return
     try:
-        mean = benchmark.stats["mean"]
+        median = benchmark.stats["median"]
     except (KeyError, TypeError, AttributeError):
         return
-    assert mean < target_s, (
-        f"{label} mean {mean * 1000:.2f}ms exceeds {target_s * 1000:.0f}ms target"
+    assert median < target_s, (
+        f"{label} median {median * 1000:.2f}ms exceeds {target_s * 1000:.0f}ms target"
     )
 
 

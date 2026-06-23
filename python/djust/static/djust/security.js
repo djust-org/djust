@@ -24,8 +24,8 @@
  */
 
 // Expose as global for non-module usage (inline scripts)
-// Using var + window assignment to ensure it's accessible as window.djustSecurity
-var djustSecurity = (function() {
+// Assigned once (IIFE result) and explicitly attached to window below.
+const djustSecurity = (function() {
     'use strict';
 
     /**
@@ -124,6 +124,10 @@ var djustSecurity = (function() {
                     // Remove dangerous URL schemes (javascript:, data:, vbscript:)
                     if (attr.value) {
                         const val = attr.value.toLowerCase().trim();
+                        // This is a denylist MATCH that strips dangerous schemes,
+                        // not a script-URL USE. The string literal is the sanitizer
+                        // pattern; suppress the false-positive no-script-url error.
+                        // eslint-disable-next-line no-script-url
                         if (val.startsWith('javascript:') ||
                             val.startsWith('data:') ||
                             val.startsWith('vbscript:')) {
@@ -169,6 +173,9 @@ var djustSecurity = (function() {
                     continue;
                 }
 
+                // Safe: `key` comes from Object.keys() own-prop iteration AND
+                // passed isSafeKey() (blocks __proto__/prototype/constructor/dunder).
+                // eslint-disable-next-line security/detect-object-injection
                 to[key] = source[key];
             }
         }
@@ -202,7 +209,11 @@ var djustSecurity = (function() {
                 continue;
             }
 
+            // Safe: `key` is from Object.keys() own-prop iteration AND passed
+            // isSafeKey() (blocks __proto__/prototype/constructor/dunder).
+            // eslint-disable-next-line security/detect-object-injection
             const sourceValue = source[key];
+            // eslint-disable-next-line security/detect-object-injection
             const targetValue = output[key];
 
             // Recursively merge nested objects
@@ -214,8 +225,11 @@ var djustSecurity = (function() {
                 typeof targetValue === 'object' &&
                 !Array.isArray(targetValue)
             ) {
+                // Safe: `key` is the same isSafeKey()-guarded own-prop key.
+                // eslint-disable-next-line security/detect-object-injection
                 output[key] = safeDeepMerge(targetValue, sourceValue);
             } else {
+                // eslint-disable-next-line security/detect-object-injection
                 output[key] = sourceValue;
             }
         }
@@ -313,11 +327,18 @@ var djustSecurity = (function() {
             const safeKey = sanitizeForLog(key, 50);
             const lowerKey = safeKey.toLowerCase();
 
+            // Safe: `result` is a fresh local {} (not a shared/prototype-bearing
+            // object), `safeKey` is a sanitized string, and `obj[key]` reads use
+            // a key from Object.keys() own-prop iteration.
             if (sensitiveKeys.has(lowerKey)) {
+                // eslint-disable-next-line security/detect-object-injection
                 result[safeKey] = '[REDACTED]';
+                // eslint-disable-next-line security/detect-object-injection
             } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+                // eslint-disable-next-line security/detect-object-injection
                 result[safeKey] = sanitizeObjectForLog(obj[key], sensitiveKeys, maxValueLength);
             } else {
+                // eslint-disable-next-line security/detect-object-injection
                 result[safeKey] = sanitizeForLog(obj[key], maxValueLength);
             }
         }

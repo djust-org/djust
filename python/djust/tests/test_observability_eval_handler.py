@@ -9,6 +9,7 @@ import json
 import pytest
 from django.test import RequestFactory, override_settings
 
+from djust.decorators import event_handler
 from djust.observability.registry import _clear_registry, register_view
 from djust.observability.views import eval_handler
 
@@ -25,19 +26,24 @@ class _FakeCounterView:
         self.count = 0
         self.label = "initial"
 
+    @event_handler
     def increment(self):
         self.count += 1
         return {"new_count": self.count}
 
+    @event_handler
     def add(self, amount: int = 1):
         self.count += amount
 
+    @event_handler
     def set_label(self, value: str = ""):
         self.label = value
 
+    @event_handler
     def explode(self):
         raise RuntimeError("handler boom")
 
+    @event_handler
     async def async_handler(self):  # noqa: RUF029
         self.count += 1
 

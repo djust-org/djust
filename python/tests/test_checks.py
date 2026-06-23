@@ -92,6 +92,247 @@ class TestT004CheckIntegration:
         assert len(t004_errors) == 0
 
 
+class TestT004DocumentDispatchedEvents:
+    """#1809: T004 must NOT flag djust: events that djust itself dispatches
+    on `document` (navigate-*, hvr-*, layout-changed, ws-reconnected,
+    time-travel-*). Those listeners are CORRECT on `document` and would
+    BREAK if switched to `window` per the old fix_hint.
+
+    The authoritative document-dispatched set is sourced from the client
+    bundle's `document.dispatchEvent(new CustomEvent('djust:...'))` sites
+    (see `_DOC_DISPATCHED_DJUST_EVENTS` in checks.py for the cites).
+    """
+
+    def _scan(self, tmp_path, settings, body):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "t.html").write_text("<script>%s</script>" % body)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        return [e for e in errors if e.id == "djust.T004"]
+
+    def test_navigate_end_not_flagged(self, tmp_path, settings):
+        """document.addEventListener('djust:navigate-end', ...) is CORRECT."""
+        t004 = self._scan(
+            tmp_path,
+            settings,
+            "document.addEventListener('djust:navigate-end', (e) => {});",
+        )
+        assert t004 == [], "navigate-end is document-dispatched; T004 must not fire: %r" % t004
+
+    def test_all_document_dispatched_events_not_flagged(self, tmp_path, settings):
+        """Every event in the document-dispatched family is exempt."""
+        from djust.checks import _DOC_DISPATCHED_DJUST_EVENTS
+
+        for ev in sorted(_DOC_DISPATCHED_DJUST_EVENTS):
+            t004 = self._scan(
+                tmp_path / ev,  # unique subdir per event so the tpl dir is fresh
+                settings,
+                "document.addEventListener('djust:%s', (e) => {});" % ev,
+            )
+            assert t004 == [], "djust:%s is document-dispatched; T004 must not fire: %r" % (
+                ev,
+                t004,
+            )
+
+    def test_window_dispatched_event_still_flagged(self, tmp_path, settings):
+        """A genuinely window-dispatched djust: event on `document` STILL
+        warns — the legit purpose of T004 is preserved. `djust:push_event`
+        is dispatched via `window.dispatchEvent` in the client bundle."""
+        t004 = self._scan(
+            tmp_path,
+            settings,
+            "document.addEventListener('djust:push_event', (e) => {});",
+        )
+        assert len(t004) == 1, "push_event is window-dispatched; T004 must still fire: %r" % t004
+
+
+class TestT004Suppress:
+    """#1809: T004 emission must honor DJUST_CONFIG['suppress_checks'].
+
+    Mirrors the C013/T002 suppress pattern. Before the fix, the T004 loop
+    did not consult `_is_check_suppressed`, so suppression was a no-op.
+    """
+
+    def _scan(self, tmp_path, settings):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        # push_event is window-dispatched, so T004 fires absent suppression.
+        (tpl_dir / "t.html").write_text(
+            "<script>document.addEventListener('djust:push_event', (e) => {});</script>"
+        )
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        return [e for e in errors if e.id == "djust.T004"]
+
+    def test_t004_fires_without_suppression(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {}
+        t004 = self._scan(tmp_path, settings)
+        assert len(t004) == 1, "T004 should fire normally: %r" % t004
+
+    def test_t004_suppressed_short_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["T004"]}
+        t004 = self._scan(tmp_path, settings)
+        assert t004 == [], "T004 should be silenced by suppress_checks=['T004']: %r" % t004
+
+    def test_t004_suppressed_qualified_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.T004"]}
+        t004 = self._scan(tmp_path, settings)
+        assert t004 == [], "T004 should be silenced by suppress_checks=['djust.T004']: %r" % t004
+
+
+class TestT016DjNavigateWithoutRoutes:
+    """T016 (#1733) — dj-navigate used but no LiveView routes in URLconf.
+
+    EMPIRICAL CANARY (#252): constructs the dj-navigate-without-routes
+    condition and asserts the check fires; asserts it does NOT fire when the
+    URLconf has LiveView routes.
+
+    TEST-ISOLATION INVARIANT (#1862): these methods set ``ROOT_URLCONF`` via
+    the pytest-django ``settings`` fixture (``settings.ROOT_URLCONF = ...``),
+    NOT via ``@override_settings``. Combining ``@override_settings`` with the
+    ``settings`` fixture parameter AND a fixture mutation in the same test
+    (``settings.TEMPLATES = ...`` in ``_set_template_dir``) leaves
+    ``ROOT_URLCONF`` pointing at the test URLconf after teardown — the two
+    restoration mechanisms race and the override wins. That leak broke
+    ``tests/unit/test_demo_views.py::TestDemoRegistration`` (4 ``Resolver404``)
+    under ``-n auto`` when the two landed in the same xdist worker. Keep
+    ROOT_URLCONF on the single ``settings``-fixture mechanism here.
+    """
+
+    def _set_template_dir(self, tmp_path, settings, body):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "nav.html").write_text(body)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+    def setup_method(self):
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+
+    def teardown_method(self):
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+
+    def test_fires_when_dj_navigate_without_routes(self, tmp_path, settings):
+        """T016 fires: dj-navigate present + URLconf has no LiveView routes."""
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
+        self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 1
+        assert "dj-navigate" in t016[0].msg
+        assert "route map is empty" in t016[0].msg
+
+    def test_silent_when_routes_exist(self, tmp_path, settings):
+        """T016 stays silent: dj-navigate present + LiveView routes exist."""
+        settings.ROOT_URLCONF = "tests.route_map_test_urls"
+        self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 0
+
+    def test_silent_when_no_dj_navigate(self, tmp_path, settings):
+        """T016 stays silent when no template uses dj-navigate."""
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
+        self._set_template_dir(tmp_path, settings, "<div>no nav here</div>")
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 0
+
+    def test_suppressible(self, tmp_path, settings):
+        """T016 is suppressible via DJUST_CONFIG['suppress_checks']."""
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
+        settings.DJUST_CONFIG = {"suppress_checks": ["T016"]}
+        self._set_template_dir(tmp_path, settings, '<a dj-navigate="/dashboard/">Go</a>')
+
+        from djust.checks import check_templates
+        from djust.routing import _reset_route_map_cache
+
+        _reset_route_map_cache()
+        errors = check_templates(None)
+        t016 = [e for e in errors if e.id == "djust.T016"]
+        assert len(t016) == 0
+
+
+class TestT016DoesNotLeakRootUrlconf:
+    """Regression for #1862: TestT016DjNavigateWithoutRoutes must restore
+    ROOT_URLCONF after each test.
+
+    The original bug combined ``@override_settings(ROOT_URLCONF=...)`` with the
+    pytest-django ``settings`` fixture parameter AND a fixture mutation
+    (``settings.TEMPLATES = ...``) in the same test. The two settings
+    restoration mechanisms raced and the override leaked, so ROOT_URLCONF
+    stayed pinned at the test URLconf for the rest of the xdist worker —
+    breaking ``tests/unit/test_demo_views.py::TestDemoRegistration`` with 4
+    ``Resolver404``. This test reproduces the exact shape and asserts the
+    leak is gone.
+
+    Gate-off check (#1468): if the polluter methods regress to
+    ``@override_settings`` + the ``settings`` fixture + a ``settings.X = ...``
+    mutation, ``test_settings_fixture_mutation_restores_root_urlconf`` fails.
+    """
+
+    def test_settings_fixture_mutation_restores_root_urlconf(self, tmp_path, settings):
+        """Setting ROOT_URLCONF via the ``settings`` fixture (the pattern
+        TestT016 now uses) and also mutating another setting through the
+        fixture must NOT leak ROOT_URLCONF past teardown."""
+        original = settings.ROOT_URLCONF
+        # Mirror the TestT016 shape: ROOT_URLCONF + a second fixture mutation.
+        settings.ROOT_URLCONF = "tests.api_test_urls_unmounted"
+        settings.DJUST_CONFIG = {"suppress_checks": ["T016"]}
+        assert settings.ROOT_URLCONF == "tests.api_test_urls_unmounted"
+        # The pytest-django ``settings`` fixture restores ``original`` at
+        # teardown; the following test verifies that actually happened.
+        self._original = original
+
+    def test_root_urlconf_is_restored_after_mutation(self):
+        """Runs after the mutation test in the same class; asserts the default
+        ROOT_URLCONF is back (no leak)."""
+        from django.conf import settings as live_settings
+
+        assert live_settings.ROOT_URLCONF == "demo_project.urls", (
+            "ROOT_URLCONF leaked from a sibling test — the #1862 isolation "
+            "guard regressed (see TestT016DjNavigateWithoutRoutes docstring)."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Configuration checks (C001-C004, S004)
 # ---------------------------------------------------------------------------
@@ -3665,43 +3906,27 @@ class TestV004LifecycleMethods:
         """handle_event() is a lifecycle method — V004 must not fire."""
         self._make_view_with_method("handle_event")
 
-    # #1684 — framework-invoked lifecycle hooks a user is meant to override.
-    # The framework calls these directly (self.X() / getattr / hasattr), not
-    # the user-event router, so they must NOT carry @event_handler — yet their
-    # names match the V004 "event-handler-like" regex. Each fails against the
-    # pre-fix allowlist and passes once the hook is added (gates the change off).
+    def test_v004_ignores_framework_invoked_hooks_1684(self):
+        """Framework-invoked lifecycle hooks (#1684) must not trip V004.
 
-    def test_v004_ignores_handle_presence_join(self):
-        """handle_presence_join() — PresenceMixin hook (presence.py track_presence). V004 must not fire."""
-        self._make_view_with_method("handle_presence_join")
-
-    def test_v004_ignores_handle_presence_leave(self):
-        """handle_presence_leave() — PresenceMixin hook (presence.py untrack_presence); the djust-start#5 symptom. V004 must not fire."""
-        self._make_view_with_method("handle_presence_leave")
-
-    def test_v004_ignores_handle_cursor_move(self):
-        """handle_cursor_move() — LiveCursorMixin hook (websocket.py cursor_move). V004 must not fire."""
-        self._make_view_with_method("handle_cursor_move")
-
-    def test_v004_ignores_handle_tick(self):
-        """handle_tick() — LiveView tick-loop hook (websocket.py tick loop). V004 must not fire."""
-        self._make_view_with_method("handle_tick")
-
-    def test_v004_ignores_handle_async_result(self):
-        """handle_async_result() — AsyncWorkMixin background-completion hook (websocket.py/sse.py). V004 must not fire."""
-        self._make_view_with_method("handle_async_result")
-
-    def test_v004_ignores_handle_component_event(self):
-        """handle_component_event() — ComponentMixin child-event hook (mixins/components.py). V004 must not fire."""
-        self._make_view_with_method("handle_component_event")
-
-    def test_v004_ignores_handle_info(self):
-        """handle_info() — NotificationMixin channel-layer hook (websocket.py). V004 must not fire."""
-        self._make_view_with_method("handle_info")
-
-    def test_v004_ignores_on_wizard_complete(self):
-        """on_wizard_complete() — WizardMixin completion hook (wizard.py submit_wizard). V004 must not fire."""
-        self._make_view_with_method("on_wizard_complete")
+        These are called by the framework directly (presence/cursor/tick/
+        background-work/component/info/wizard paths), not the user-event router,
+        so they must NOT carry @event_handler — but their names match the
+        event-handler-like regex. Fix landed on 1.1 via #1685; ported to main's
+        split checks/components.py. Regression for the canonical symptom
+        (handle_presence_leave, which bit djust-org/djust-start#5).
+        """
+        for method_name in (
+            "handle_presence_join",
+            "handle_presence_leave",
+            "handle_cursor_move",
+            "handle_tick",
+            "handle_async_result",
+            "handle_component_event",
+            "handle_info",
+            "on_wizard_complete",
+        ):
+            self._make_view_with_method(method_name)
 
 
 # ---------------------------------------------------------------------------
@@ -3787,6 +4012,139 @@ class TestT013TemplateVariableDjView:
         errors = check_templates(None)
         t013 = [e for e in errors if e.id == "djust.T013"]
         assert len(t013) == 1
+
+
+class TestT015LegacyRootAttrs:
+    """T015 must detect the pre-1.0 legacy root attributes
+    ``data-djust-root`` / ``data-djust-view`` and emit a migration hint."""
+
+    def _set_templates(self, tpl_dir, settings):
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+
+    def test_t015_fires_for_legacy_data_djust_view(self, tmp_path, settings):
+        """A template using data-djust-view must trigger exactly one T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "foo.html").write_text(
+            '<div data-djust-root data-djust-view="app.views.MyView"></div>'
+        )
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        # One finding per legacy attr occurrence (root + view).
+        assert len(t015) == 2
+        attrs = {e.msg for e in t015}
+        assert any("data-djust-view" in m for m in attrs)
+        assert any("data-djust-root" in m for m in attrs)
+
+    def test_t015_fires_for_legacy_data_djust_root_only(self, tmp_path, settings):
+        """data-djust-root on its own must trigger T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "bar.html").write_text("<div data-djust-root>content</div>")
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 1
+        assert "data-djust-root" in t015[0].msg
+
+    def test_t015_migration_hint_names_the_rename(self, tmp_path, settings):
+        """The hint must explicitly name the dj-view / dj-root rename."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "foo.html").write_text('<div data-djust-view="app.views.V"></div>')
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 1
+        hint = t015[0].hint
+        assert "dj-view" in hint
+        assert "dj-root" in hint
+        assert "data-" in hint
+
+    def test_t015_reports_relpath_attr_and_line(self, tmp_path, settings):
+        """The message must include the file relpath, the offending attr, and the line number."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(
+            '<html>\n<body>\n<div data-djust-view="app.views.V"></div>\n</body>\n</html>'
+        )
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 1
+        e = t015[0]
+        assert "page.html" in e.msg
+        assert "data-djust-view" in e.msg
+        # data-djust-view is on the third line.
+        assert ":3" in e.msg
+        assert e.line_number == 3
+
+    def test_t015_passes_for_modern_dj_view_dj_root(self, tmp_path, settings):
+        """Modern dj-view / dj-root must NOT trigger T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "modern.html").write_text('<div dj-root dj-view="app.views.MyView"></div>')
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 0
+
+    def test_t015_does_not_false_match_other_data_djust_attrs(self, tmp_path, settings):
+        """Other legitimate data-djust-* attributes (and longer suffixes of
+        root/view) must NOT trigger T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "ok.html").write_text(
+            "<div data-djust-embedded data-djust-activity "
+            'data-djust-view-model="x" data-djust-rooted></div>'
+        )
+        self._set_templates(tpl_dir, settings)
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 0, (
+            "T015 must scope to exactly data-djust-root / data-djust-view, "
+            "not other data-djust-* attributes or longer suffixes"
+        )
+
+    def test_t015_suppressed_via_suppress_checks(self, tmp_path, settings):
+        """Suppression via DJUST_CONFIG suppress_checks must silence T015."""
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "foo.html").write_text(
+            '<div data-djust-root data-djust-view="app.views.V"></div>'
+        )
+        self._set_templates(tpl_dir, settings)
+        settings.DJUST_CONFIG = {"suppress_checks": ["T015"]}
+
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        t015 = [e for e in errors if e.id == "djust.T015"]
+        assert len(t015) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -4426,3 +4784,632 @@ class TestParsePsycopgVersion:
         from djust.checks import _parse_psycopg_version
 
         assert _parse_psycopg_version("not-a-version") == (0, 0)
+
+
+class TestS007ClientNameSafeRegex:
+    """S007 (#1821) -- regex unit tests for `client_name|safe` detection.
+
+    The matcher is anchored on the `{{ ... }}` variable form (NOT a bare
+    substring) and tolerates whitespace around `|` (mirrors _LIVEVIEW_CONTENT_RE).
+    """
+
+    def test_matches_upload_entry_dotted(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ upload_entry.client_name|safe }}")
+
+    def test_matches_short_alias_dotted(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name|safe }}")
+
+    def test_matches_whitespace_around_pipe(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name | safe }}")
+
+    def test_matches_deeply_nested_path(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{ obj.uploads.0.client_name|safe }}")
+
+    def test_matches_bare_client_name(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert _CLIENT_NAME_SAFE_RE.search("{{client_name|safe}}")
+
+    def test_no_match_without_safe(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ upload_entry.client_name }}")
+
+    def test_no_match_other_var(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ other_var|safe }}")
+
+    def test_no_match_word_boundary(self):
+        """`notclient_name` is a different variable -- must NOT match."""
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ notclient_name|safe }}")
+
+    def test_no_match_trailing_attr(self):
+        """`client_name_foo` shares a prefix but is a different attribute."""
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name_foo|safe }}")
+
+    def test_no_match_other_filter(self):
+        from djust.checks import _CLIENT_NAME_SAFE_RE
+
+        assert not _CLIENT_NAME_SAFE_RE.search("{{ entry.client_name|escape }}")
+
+
+class TestS007CheckIntegration:
+    """S007 (#1821) -- EMPIRICAL CANARY (#1459): construct the stored-XSS
+    template shape and assert the check FIRES; construct the safe shapes and
+    assert it does NOT fire. Plus suppression (#1468 gate-off: disabling the
+    S007 emission makes the positive tests fail)."""
+
+    def _scan(self, tmp_path, settings, body):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir(parents=True)
+        (tpl_dir / "uploads.html").write_text(body)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        from djust.checks import check_templates
+
+        errors = check_templates(None)
+        return [e for e in errors if e.id == "djust.S007"]
+
+    def test_s007_fires_on_client_name_safe(self, tmp_path, settings):
+        """CANARY positive: `{{ upload_entry.client_name|safe }}` -> S007 fires."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
+        assert len(s007) == 1, "S007 should fire for client_name|safe: %r" % s007
+        assert "client_name" in s007[0].msg
+        assert "user-controlled" in s007[0].msg
+        assert s007[0].line_number == 1
+
+    def test_s007_silent_without_safe(self, tmp_path, settings):
+        """CANARY negative: no `|safe` -> auto-escaping protects -> no S007."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name }}</p>")
+        assert s007 == [], "S007 must NOT fire without |safe: %r" % s007
+
+    def test_s007_silent_for_other_var(self, tmp_path, settings):
+        """CANARY negative: a different var with |safe is not client_name."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ other_var|safe }}</p>")
+        assert s007 == [], "S007 must NOT fire for a non-client_name var: %r" % s007
+
+    def test_s007_fires_whitespace_variant(self, tmp_path, settings):
+        """CANARY positive: `{{ entry.client_name | safe }}` (spaced pipe) fires."""
+        s007 = self._scan(tmp_path, settings, "<p>{{ entry.client_name | safe }}</p>")
+        assert len(s007) == 1, "S007 should fire for the spaced-pipe variant: %r" % s007
+
+    def test_s007_reports_correct_line(self, tmp_path, settings):
+        """Line number points at the offending {{ ... }} expression."""
+        body = "<div>\n  <span>ok</span>\n  {{ entry.client_name|safe }}\n</div>"
+        s007 = self._scan(tmp_path, settings, body)
+        assert len(s007) == 1
+        assert s007[0].line_number == 3
+
+    def test_s007_suppressed_short_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["S007"]}
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
+        assert s007 == [], "S007 should be silenced by suppress_checks=['S007']: %r" % s007
+
+    def test_s007_suppressed_qualified_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.S007"]}
+        s007 = self._scan(tmp_path, settings, "<p>{{ upload_entry.client_name|safe }}</p>")
+        assert s007 == [], "S007 should be silenced by suppress_checks=['djust.S007']: %r" % s007
+
+
+# ---------------------------------------------------------------------------
+# S009 (#1854) -- event-handler-needs-auth (AST-based)
+# ---------------------------------------------------------------------------
+
+
+class TestS009EventHandlerNeedsAuth:
+    """S009 -- a view-auth'd LiveView with a public, ungated @event_handler."""
+
+    def _scan(self, tmp_path, source):
+        py_file = tmp_path / "views.py"
+        py_file.write_text(textwrap.dedent(source))
+        from djust.checks import check_security
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            errors = check_security(None)
+        return [e for e in errors if e.id == "djust.S009"]
+
+    # ---- empirical canary: SHOULD fire ----
+
+    def test_fires_login_required_attr_plus_ungated_handler(self, tmp_path):
+        """CANARY: login_required=True + a public mutating handler with no gate."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()
+                def delete_user(self, user_id: int = 0, **kwargs):
+                    self.deleted = user_id
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire: %r" % s009
+        assert "delete_user" in s009[0].msg
+        assert "AdminPanel" in s009[0].msg
+
+    def test_fires_permission_required_attr(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                permission_required = "app.manage"
+
+                @event_handler()
+                def remove_item(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for permission_required attr: %r" % s009
+
+    def test_fires_login_required_mixin_base(self, tmp_path):
+        """CANARY: a Django auth mixin in the bases counts as view-level auth."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from django.contrib.auth.mixins import LoginRequiredMixin
+            from djust.decorators import event_handler
+
+            class AdminPanel(LoginRequiredMixin, LiveView):
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for auth-mixin base: %r" % s009
+
+    def test_fires_check_permissions_override(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                def check_permissions(self, request):
+                    return request.user.is_staff
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for check_permissions override: %r" % s009
+
+    def test_fires_for_action_decorator(self, tmp_path):
+        """@action is also an event handler — it must be gated too."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import action
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @action("destroy")
+                def destroy(self, **kwargs):
+                    pass
+            """,
+        )
+        assert len(s009) == 1, "S009 should fire for @action handler: %r" % s009
+
+    # ---- empirical canary: SHOULD NOT fire (clean cases) ----
+
+    def test_silent_when_handler_is_gated(self, tmp_path):
+        """CANARY (clean): @permission_required on the handler closes the gap."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler, permission_required
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @permission_required("app.delete_user")
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for a gated handler: %r" % s009
+
+    def test_silent_when_no_view_auth(self, tmp_path):
+        """CANARY (clean): no view-level auth -> nothing to escalate past."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class PublicCounter(LiveView):
+                @event_handler()
+                def increment(self, **kwargs):
+                    self.count += 1
+            """,
+        )
+        assert s009 == [], "S009 must stay silent without view auth: %r" % s009
+
+    def test_silent_for_private_handler(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()
+                def _internal(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for a private handler: %r" % s009
+
+    def test_silent_for_read_only_handler(self, tmp_path):
+        """A read-only-looking handler (load_/get_/...) is exempt — conservative."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class Dashboard(LiveView):
+                login_required = True
+
+                @event_handler()
+                def load_stats(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for a read-only handler: %r" % s009
+
+    def test_silent_when_class_gates_events(self, tmp_path):
+        """A check_handler_permission override means the view gates events itself."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                def check_handler_permission(self, handler, request):
+                    return request.user.is_staff
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent when the class gates events: %r" % s009
+
+    def test_silent_when_login_required_falsy(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class Thing(LiveView):
+                login_required = False
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must stay silent for falsy login_required: %r" % s009
+
+    def test_silent_for_undecorated_method(self, tmp_path):
+        """A plain method (no @event_handler) is not a client-callable handler."""
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must only fire for @event_handler methods: %r" % s009
+
+    # ---- suppression ----
+
+    def test_suppressed_by_noqa_on_handler(self, tmp_path):
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()  # noqa: S009
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must honor a `# noqa: S009` on the handler: %r" % s009
+
+    def test_suppressed_by_config_short_id(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["S009"]}
+        s009 = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+            from djust.decorators import event_handler
+
+            class AdminPanel(LiveView):
+                login_required = True
+
+                @event_handler()
+                def delete_user(self, **kwargs):
+                    pass
+            """,
+        )
+        assert s009 == [], "S009 must honor suppress_checks=['S009']: %r" % s009
+
+
+# ---------------------------------------------------------------------------
+# S011 (#1854 / #1848) -- inline <script> in a LiveView template without CSP
+# ---------------------------------------------------------------------------
+
+
+class TestS011InlineScriptCsp:
+    """S011 -- inline executable <script> inside a dj-root, no CSP configured."""
+
+    def _scan(self, tmp_path, settings, html, *, no_csp=True):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir(parents=True, exist_ok=True)
+        (tpl_dir / "page.html").write_text(html)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplates",
+                "APP_DIRS": False,
+                "OPTIONS": {},
+            }
+        ]
+        if no_csp:
+            # Ensure no CSP signal leaks in from base settings.
+            settings.MIDDLEWARE = ["django.middleware.security.SecurityMiddleware"]
+        from djust.checks import check_inline_script_csp
+
+        errors = check_inline_script_csp(None)
+        return [e for e in errors if e.id == "djust.S011"]
+
+    # ---- empirical canary: SHOULD fire ----
+
+    def test_fires_inline_exec_script_inside_dj_root(self, tmp_path, settings):
+        """CANARY: inline executable <script> inside dj-root, no CSP."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <button class='tab'>Tab</button>\n"
+            "  <script>\n"
+            "    document.addEventListener('click', e => {});\n"
+            "  </script>\n"
+            "</div>\n",
+        )
+        assert len(s011) == 1, "S011 should fire: %r" % s011
+        assert "#1848" in s011[0].msg
+
+    def test_fires_inside_nested_dj_root(self, tmp_path, settings):
+        """CANARY: script nested several elements deep but still inside the root."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <div class='a'><div class='b'>\n"
+            "    <script>document.addEventListener('click', e => {});</script>\n"
+            "  </div></div>\n"
+            "</div>\n",
+        )
+        assert len(s011) == 1, "S011 should fire for a nested-inside script: %r" % s011
+
+    def test_fires_for_dj_view_root(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-view='app.views.V'>\n  <script>var x = 1;</script>\n</div>\n",
+        )
+        assert len(s011) == 1, "S011 should fire for a dj-view root: %r" % s011
+
+    # ---- empirical canary: SHOULD NOT fire (clean cases) ----
+
+    def test_silent_for_external_src_script(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script src='/static/app.js'></script></div>",
+        )
+        assert s011 == [], "S011 must ignore external <script src>: %r" % s011
+
+    def test_silent_for_json_data_block(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            '<div dj-root><script type="application/json">{"a":1}</script></div>',
+        )
+        assert s011 == [], "S011 must ignore application/json data blocks: %r" % s011
+
+    def test_silent_for_template_data_block(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            '<div dj-root><script type="text/template"><b>x</b></script></div>',
+        )
+        assert s011 == [], "S011 must ignore text/template data blocks: %r" % s011
+
+    def test_silent_for_nonce_script(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            '<div dj-root><script nonce="{{ request.csp_nonce }}">var x=1;</script></div>',
+        )
+        assert s011 == [], "S011 must ignore nonce-bearing scripts: %r" % s011
+
+    def test_silent_when_script_after_dj_root(self, tmp_path, settings):
+        """CANARY (clean): a page script AFTER the dj-root closes is correct."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <button class='tab'>Tab</button>\n"
+            "</div> <!-- close dj-root -->\n"
+            "<script>document.addEventListener('click', e => {});</script>\n",
+        )
+        assert s011 == [], "S011 must not flag scripts after the dj-root: %r" % s011
+
+    def test_silent_for_script_in_code_block(self, tmp_path, settings):
+        """A <script> inside <pre>/<code> is documentation, not live DOM."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            "  <pre><code>&lt;script&gt;x&lt;/script&gt;</code></pre>\n"
+            "  <code><script>var y=2;</script></code>\n"
+            "</div>\n",
+        )
+        assert s011 == [], "S011 must ignore scripts inside <pre>/<code>: %r" % s011
+
+    def test_silent_for_non_liveview_template(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div><script>var x = 1;</script></div>",
+        )
+        assert s011 == [], "S011 must only scan LiveView templates: %r" % s011
+
+    def test_silent_when_csp_middleware_configured(self, tmp_path, settings):
+        """CANARY (clean): a configured CSP middleware silences S011."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        # set CSP middleware AFTER _scan wrote TEMPLATES but it reads at call time;
+        # re-run with middleware in place:
+        settings.MIDDLEWARE = ["csp.middleware.CSPMiddleware"]
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert s011 == [], "S011 must stay silent when CSP middleware is configured: %r" % s011
+
+    def test_silent_when_csp_setting_configured(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        settings.MIDDLEWARE = ["django.middleware.security.SecurityMiddleware"]
+        settings.CONTENT_SECURITY_POLICY = {"DIRECTIVES": {"default-src": ["'self'"]}}
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert s011 == [], "S011 must stay silent when CONTENT_SECURITY_POLICY is set: %r" % s011
+
+    def test_silent_when_legacy_csp_directive_setting(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        settings.MIDDLEWARE = ["django.middleware.security.SecurityMiddleware"]
+        settings.CSP_DEFAULT_SRC = ["'self'"]
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert s011 == [], "S011 must stay silent for a legacy CSP_* directive: %r" % s011
+
+    def test_csrf_middleware_does_not_count_as_csp(self, tmp_path, settings):
+        """`csrf` must not be mistaken for `csp` — S011 still fires."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+            no_csp=False,
+        )
+        settings.MIDDLEWARE = ["django.middleware.csrf.CsrfViewMiddleware"]
+        from djust.checks import check_inline_script_csp
+
+        s011 = [e for e in check_inline_script_csp(None) if e.id == "djust.S011"]
+        assert len(s011) == 1, "csrf middleware must not be read as CSP: %r" % s011
+
+    # ---- suppression ----
+
+    def test_suppressed_by_noqa_on_script_line(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n  <script>var x = 1;</script>  {# noqa: S011 #}\n</div>\n",
+        )
+        assert s011 == [], "S011 must honor `{# noqa: S011 #}` on the script line: %r" % s011
+
+    def test_suppressed_by_config(self, tmp_path, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["S011"]}
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root><script>var x = 1;</script></div>",
+        )
+        assert s011 == [], "S011 must honor suppress_checks=['S011']: %r" % s011
+
+    def test_reports_correct_line(self, tmp_path, settings):
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n  <span>ok</span>\n  <script>var x=1;</script>\n</div>\n",
+        )
+        assert len(s011) == 1
+        assert s011[0].line_number == 3
+
+    def test_data_prefixed_attrs_do_not_count_as_real_attrs(self, tmp_path, settings):
+        """#1517 hardening: data-src / data-type / data-nonce must NOT be read as
+        the real src/type/nonce attributes (a bare `\\b` anchor would). This
+        script has inline executable JS and only data-* attrs, so it fires."""
+        s011 = self._scan(
+            tmp_path,
+            settings,
+            "<div dj-root>\n"
+            '  <script data-src="x" data-type="application/json" data-nonce="n">\n'
+            "    var x = 1;\n"
+            "  </script>\n"
+            "</div>\n",
+        )
+        assert len(s011) == 1, "data-* attrs must not mask a real inline script: %r" % s011

@@ -173,9 +173,9 @@ def calculate_monthly_per_diem(self):
 **Template:**
 ```html
 <input type="number" name="days_per_month_on_job_site"
-       @input="calculate_monthly_per_diem">
+       dj-input="calculate_monthly_per_diem">
 <input type="number" name="new_meals_per_diem_amount"
-       @input="calculate_monthly_per_diem">
+       dj-input="calculate_monthly_per_diem">
 <input type="number" name="total_monthly_meals_per_diem" readonly>
 ```
 
@@ -301,7 +301,7 @@ class StatusChangeFormView(FormMixin, LiveView):
 
 **Template:**
 ```html
-<div class="section-header" @click="toggle_section('employee_info')">
+<div class="section-header" dj-click="toggle_section('employee_info')">
     <i class="fas fa-user"></i>
     <h5>Employee Information</h5>
     <i class="fas fa-chevron-{{ sections_expanded.employee_info|yesno:'up,down' }}"></i>

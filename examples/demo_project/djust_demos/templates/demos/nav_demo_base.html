@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% comment %}
+Nav Demo shared shell (#1742).
+
+Registers the DemoWidget dj-hook ONCE in the persistent page shell. The
+registration lives outside [dj-view], so the SPA dj-navigate (which only
+replaces the [dj-view] subtree) does not re-run it — proving the #1738
+DjustHooks registry survives navigation and mounted() fires on the
+patch-inserted widget on the destination page.
+
+The hook follows the verified 19-hooks.js contract:
+  window.DjustHooks.HookName = { mounted(), destroyed() }
+  this.el  -> the DOM element the hook is attached to
+{% endcomment %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+// #1738 dj-hook registration — runs once in the persistent shell.
+// CSP-safe note: this is a demo template; production code should prefer a
+// static JS module (see CLAUDE.md CSP-strict defaults). Inline here keeps the
+// dogfood self-contained and readable for the playwright guard.
+window.DjustHooks = window.DjustHooks || {};
+window.DjustHooks.DemoWidget = {
+    mounted() {
+        // Tiny canvas draw — proves real mounted() work, no Chart.js needed.
+        try {
+            var ctx = this.el.getContext && this.el.getContext('2d');
+            if (ctx) {
+                ctx.fillStyle = '#3b82f6';
+                ctx.fillRect(0, 0, this.el.width || 40, this.el.height || 40);
+            }
+        } catch (_e) { /* canvas optional */ }
+        // Markers the playwright guard reads.
+        this.el.dataset.djustHookMounted = '1';
+        window.__demoWidgetMounted = true;
+        window.__demoWidgetMountCount = (window.__demoWidgetMountCount || 0) + 1;
+    },
+    destroyed() {
+        window.__demoWidgetDestroyCount = (window.__demoWidgetDestroyCount || 0) + 1;
+    },
+};
+</script>
+{% endblock %}

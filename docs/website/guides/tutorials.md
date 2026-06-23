@@ -457,6 +457,7 @@ A few real constraints worth knowing:
 
 - **LiveComponent events propagate to parent waiters automatically.** A step's `wait_for` matches handlers on either the LiveView itself *or* any embedded `LiveComponent`. When a component handler fires, the framework notifies the parent view's waiter registry with the handler's kwargs — plus an injected `component_id` key so a predicate can disambiguate events from multiple component instances:
 
+  <!-- doc-snippet-check: skip -->
   ```python
   # Wait for a click specifically on the project-form component
   await self.wait_for_event(

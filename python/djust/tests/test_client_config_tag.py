@@ -28,8 +28,18 @@ import tests.conftest  # noqa: F401  -- configure Django settings
 import pytest
 
 from django.template import Context, Template
-from django.test import override_settings
+from django.test import RequestFactory, override_settings
 from django.urls import clear_url_caches, set_script_prefix
+
+from djust.routing import _reset_route_map_cache
+
+
+@pytest.fixture(autouse=True)
+def _reset_route_map():
+    """Clear the URLconf-derived route-map cache around each test (#1733)."""
+    _reset_route_map_cache()
+    yield
+    _reset_route_map_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -47,10 +57,15 @@ def _reset_script_prefix():
     clear_url_caches()
 
 
-def _render_tag() -> str:
-    """Render ``{% djust_client_config %}`` against an empty Context."""
+def _render_tag(request=None) -> str:
+    """Render ``{% djust_client_config %}``.
+
+    ``request`` is optional; when provided it flows into the tag's context so
+    the route-map ``<script>`` can pick up ``request.csp_nonce`` (#1733).
+    """
     tpl = Template("{% load live_tags %}{% djust_client_config %}")
-    return tpl.render(Context({}))
+    ctx = {"request": request} if request is not None else {}
+    return tpl.render(Context(ctx))
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +296,175 @@ def test_django_and_rust_engines_emit_identical_output(settings_overrides, scrip
             "from PR #993 Stage 5b is broken. "
             f"Django: {django_output!r} | Rust: {rust_output!r}"
         )
+
+
+@override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+def test_django_and_rust_engines_emit_identical_route_map_with_nonce():
+    """Dual-engine parity for the route-map <script> AND the CSP nonce (#1733).
+
+    The other parity case (above) uses no-LiveView URLconfs and an empty
+    Rust-handler context, so it never compares the route-map <script> OR the
+    nonce across engines — the exact variant this dual-registration exists to
+    protect. Per the v1.0.0rc4 retro finding #1 (a coverage suite must
+    enumerate every variant of the surface it covers), this case exercises:
+
+    * a URLconf WITH LiveView routes (so the route-map <script> is emitted), and
+    * a request carrying a ``csp_nonce`` (so the <script nonce="..."> attribute
+      is emitted and must match across engines),
+
+    asserting the Django-engine ``{% djust_client_config %}`` output and the
+    Rust-engine ``ClientConfigTagHandler`` output are BYTE-IDENTICAL, including
+    the ``<script nonce="...">window.djust._routeMap=...</script>``.
+    """
+    from djust.template_tags.client_config import ClientConfigTagHandler
+
+    request = RequestFactory().get("/")
+    request.csp_nonce = "parity-nonce-xyz"
+
+    clear_url_caches()
+    _reset_route_map_cache()
+
+    # Django-engine render: request flows in via the template context
+    # (takes_context=True → context.get("request")).
+    django_output = _render_tag(request=request)
+
+    # Rust-engine render: request flows in via the context dict the Rust
+    # CustomTag callback passes to TagHandler.render(args, context).
+    rust_handler = ClientConfigTagHandler()
+    rust_output = rust_handler.render([], {"request": request})
+
+    # The variant under test must actually be present in BOTH outputs, or the
+    # parity assertion below would be vacuously true on an empty-script case.
+    assert "window.djust._routeMap" in django_output
+    assert 'nonce="parity-nonce-xyz"' in django_output
+
+    assert django_output == rust_output, (
+        "Django and Rust engines emitted different output for the route-map "
+        "<script> + nonce variant of {% djust_client_config %} — the "
+        "dual-registration invariant is broken for the #1733 surface. "
+        f"Django: {django_output!r} | Rust: {rust_output!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Auto-emitted route map (#1733, ADR-021 Stage 1)
+# ---------------------------------------------------------------------------
+#
+# Doc claim (navigation.md / ADR-021): the route map is auto-derived from the
+# URLconf and auto-emitted via {% djust_client_config %}, so dj-navigate works
+# with zero wiring. These tests encode that claim.
+
+
+@override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+def test_client_config_emits_route_map_script():
+    """Doc claim: {% djust_client_config %} auto-emits window.djust._routeMap.
+
+    The URLconf has LiveView routes, so the tag must append a route-map
+    <script> populating window.djust._routeMap with the derived entries.
+    """
+    html = _render_tag()
+    assert "window.djust._routeMap" in html
+    assert '"/dashboard/": "tests.route_map_test_urls.DashboardView"' in html
+    # Parameterised route is emitted in the JS-friendly form.
+    assert '"/items/:id/": "tests.route_map_test_urls.ItemDetailView"' in html
+    # The api/sse meta tags are preserved (emitted alongside the route map).
+    assert 'name="djust-api-prefix"' in html
+    assert 'name="djust-sse-prefix"' in html
+
+
+@override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+def test_client_config_route_map_with_nonce():
+    """Doc claim: the route-map <script> carries a CSP nonce when available."""
+    request = RequestFactory().get("/")
+    request.csp_nonce = "abc123nonce"
+    html = _render_tag(request=request)
+    assert 'nonce="abc123nonce"' in html
+    assert "window.djust._routeMap" in html
+
+
+@override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+def test_client_config_route_map_without_nonce():
+    """Without a nonce the route-map <script> is emitted nonce-free."""
+    html = _render_tag()
+    assert "window.djust._routeMap" in html
+    # The route-map script must not carry a stray empty nonce attribute.
+    assert 'nonce=""' not in html
+
+
+@override_settings(ROOT_URLCONF="tests.api_test_urls_default")
+def test_client_config_empty_safe_when_no_liveviews():
+    """Doc claim: empty-safe — no route-map <script> when no LiveView routes.
+
+    api_test_urls_default has no LiveView routes, so the derived map is empty
+    and NO route-map <script> is appended. The api/sse meta tags still emit.
+    """
+    html = _render_tag()
+    assert "window.djust._routeMap" not in html
+    # Meta tags unchanged.
+    assert 'name="djust-api-prefix"' in html
+    assert 'name="djust-sse-prefix"' in html
+
+
+@override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+def test_client_config_route_map_json_escaped():
+    """Security (#1078): route JSON is json.dumps-escaped (no raw <)."""
+    html = _render_tag()
+    # json.dumps escapes < > & ; the developer-defined module paths contain no
+    # HTML-special chars, but assert the script body has no unescaped angle
+    # bracket from the route data (the only < should be from the surrounding
+    # markup, never inside the JSON object literal).
+    # Extract the route-map script body and confirm it parses as JSON-safe.
+    assert "window.djust._routeMap={" in html
+    assert "</script>" in html
+
+
+# ---------------------------------------------------------------------------
+# auto_navigate flag emit (#1734, ADR-021 Stage 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_djust_config():
+    """Restore the config singleton after each test.
+
+    ``LIVEVIEW_CONFIG`` is loaded once into the ``config`` singleton at import;
+    tests that ``override_settings(LIVEVIEW_CONFIG=...)`` call ``config.reset()``
+    inside the override, so this re-reads the restored settings afterwards to
+    avoid cross-test leakage of ``auto_navigate``.
+    """
+    yield
+    from djust.config import config
+
+    config.reset()
+
+
+def test_auto_navigate_meta_absent_by_default():
+    """Default OFF: no auto-navigate <meta>, so no client behavior change."""
+    from djust.config import config
+
+    config.reset()
+    html = _render_tag()
+    assert "djust-auto-navigate" not in html
+
+
+@override_settings(LIVEVIEW_CONFIG={"auto_navigate": True})
+def test_auto_navigate_meta_emitted_when_enabled():
+    """LIVEVIEW_CONFIG['auto_navigate']=True emits the opt-in <meta> flag."""
+    from djust.config import config
+
+    config.reset()  # pick up the overridden LIVEVIEW_CONFIG
+    html = _render_tag()
+    assert '<meta name="djust-auto-navigate" content="1">' in html
+
+
+@override_settings(LIVEVIEW_CONFIG={"auto_navigate": True})
+def test_auto_navigate_meta_engines_identical():
+    """Both template engines emit the flag (dual-registration invariant)."""
+    from djust.config import config
+    from djust.template_tags.client_config import ClientConfigTagHandler
+
+    config.reset()
+    django_html = _render_tag()
+    rust_html = str(ClientConfigTagHandler().render([], {}))
+    assert "djust-auto-navigate" in django_html
+    assert django_html == rust_html

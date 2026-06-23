@@ -879,7 +879,7 @@ pub fn try_text_only_vdom_update(
 
         // Sort replacements by offset (descending) so later replacements don't
         // shift earlier offsets when we do string surgery.
-        reps.sort_by(|a, b| b.text_byte_offset.cmp(&a.text_byte_offset));
+        reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
 
         for rep in reps {
             let local_offset = rep.text_byte_offset - esc_start;
@@ -955,7 +955,7 @@ fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplace
         let current_text = node.text.as_deref().unwrap_or("");
         let mut current_escaped = html_escape(current_text);
 
-        reps.sort_by(|a, b| b.text_byte_offset.cmp(&a.text_byte_offset));
+        reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
 
         for rep in reps {
             let local_offset = rep.text_byte_offset - esc_start;
@@ -1118,7 +1118,8 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
 }
 
 /// Python bindings
-#[pyclass]
+#[pyclass(from_py_object)]
+// PyVNode is taken by value in add_child(); keep the FromPyObject derive (pyo3 0.29 made it opt-in)
 #[derive(Clone)]
 pub struct PyVNode {
     inner: VNode,

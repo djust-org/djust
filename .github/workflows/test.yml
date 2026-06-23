@@ -27,7 +27,7 @@ jobs:
   rust-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -101,7 +101,7 @@ jobs:
         python-version: ${{ github.event_name == 'push' && fromJSON('["3.12","3.13","3.14"]') || fromJSON('["3.12"]') }}
     name: python-tests (py${{ matrix.python-version }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -151,7 +151,10 @@ jobs:
       - name: ADR status/version-line consistency (#1501)
         run: .venv/bin/python scripts/check-adr-status.py
 
-      - name: Doc-snippet smoke test + claim assertions (#1500)
+      - name: Doc-snippet smoke test + claim assertions (#1500, #1707)
+        # Also scans docs/website/guides/*.md for symbol/import resolvability
+        # (#1707) — the guard for #1559/#1699's hallucinated djust.tenants
+        # symbols. Guides are scanned by default; --no-guides disables.
         run: .venv/bin/python scripts/check-doc-snippets.py
 
       - name: Lockfile self-entry version sync (#1498)
@@ -167,7 +170,7 @@ jobs:
     continue-on-error: true
     name: python-tests (py3.14t free-threaded)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: actions-rs/toolchain@v1
@@ -208,7 +211,7 @@ jobs:
   javascript-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -218,6 +221,12 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm ci
+
+      - name: Bundle init-order static lint (#1372)
+        run: node scripts/check-bundle-init-order.mjs
+
+      - name: Bundle cross-IIFE bare-reference static guard (#1706)
+        run: node scripts/check-cross-iife-refs.mjs
 
       - name: Run JavaScript tests
         run: npm test
@@ -233,67 +242,13 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true  # Don't fail CI on Playwright test failures
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Cache Python dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-python-
-
-      - name: Install Python dependencies
-        run: uv sync --extra dev
-
-      - name: Install Playwright
-        run: |
-          uv pip install playwright
-          .venv/bin/playwright install chromium
-
-      - name: Run Django migrations
-        run: |
-          cd examples/demo_project
-          uv run python manage.py migrate --noinput
-          cd ../..
-
-      - name: Start development server
-        run: |
-          cd examples/demo_project
-          nohup uv run python -m uvicorn demo_project.asgi:application \
-            --host 0.0.0.0 \
-            --port 8002 \
-            --log-level info \
-            > server.log 2>&1 &
-          echo $! > server.pid
-          cd ../..
-        env:
-          PYTHONPATH: .
-
-      - name: Wait for server to be ready
-        run: |
-          echo "Waiting for server to start..."
-          for i in {1..30}; do
-            if curl -s http://localhost:8002/ > /dev/null; then
-              echo "Server is ready!"
-              exit 0
-            fi
-            echo "Attempt $i/30: Server not ready yet..."
-            sleep 1
-          done
-          echo "Server failed to start"
-          cat examples/demo_project/server.log
-          exit 1
+      # Shared harness: setup + build + playwright + migrate + start demo on
+      # :8002. The djust_check demo dogfood was promoted out of here to its own
+      # BLOCKING `demo-checks` job (#1708/#1713); playwright stays non-blocking.
+      - name: Set up Playwright server
+        uses: ./.github/actions/djust-playwright-server
 
       - name: Run Playwright tests
         run: |
@@ -303,6 +258,13 @@ jobs:
           .venv/bin/python tests/playwright/test_cache_decorator.py
           echo "Running DraftMode tests..."
           .venv/bin/python tests/playwright/test_draft_mode.py
+          echo "Running nav + dj-hook regression guard (#1742)..."
+          .venv/bin/python tests/playwright/test_nav_hooks.py
+          # Browser-smoke canary (#1849/#1848): mount + inline-in-dj-root
+          # script. Lives in this already-non-blocking leg per #1534 — it must
+          # go green on a runner before any promotion to a hard merge gate.
+          echo "Running browser-smoke canary (#1849/#1848)..."
+          .venv/bin/python tests/playwright/test_browser_smoke.py
 
       - name: Upload server logs on failure
         if: failure()
@@ -311,6 +273,31 @@ jobs:
           name: playwright-server-logs
           path: examples/demo_project/server.log
 
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f examples/demo_project/server.pid ]; then
+            kill $(cat examples/demo_project/server.pid) || true
+            rm examples/demo_project/server.pid
+          fi
+
+  nav-hooks-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Shared harness (setup + build + playwright + migrate + start demo on
+      # :8002), identical to playwright-tests — the composite keeps the build
+      # step from drifting out of one job (#1752 items 1+3).
+      - name: Set up Playwright server
+        uses: ./.github/actions/djust-playwright-server
+      - name: Run nav + dj-hook regression guard
+        run: .venv/bin/python tests/playwright/test_nav_hooks.py
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nav-hooks-server-logs
+          path: examples/demo_project/server.log
       - name: Stop server
         if: always()
         run: |
@@ -337,7 +324,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -416,7 +403,7 @@ jobs:
   security-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -464,10 +451,66 @@ jobs:
           name: security-coverage-report
           path: coverage-security.json
 
+  # Demo djust_check dogfood — BLOCKING dedicated job (#1713, enforces
+  # CLAUDE.md #1060). #1683 shipped dead @click buttons to 1.0 GA because
+  # the demo templates were never run through djust_check in CI. The dogfood
+  # first shipped as a `continue-on-error` step inside playwright-tests
+  # (#1708); now that it has shipped green on the runner (rc4 retro finding
+  # #3: a new CI check exercising an env the dev machine can't fully mirror
+  # needs >=1 runner-only iteration budgeted), it is promoted to this
+  # dedicated BLOCKING job (no continue-on-error) and wired into the
+  # test-summary aggregate gate, so a re-introduced dead @click / legacy
+  # attribute (the #1683 bug class) red-bars the PR.
+  #
+  # The helper wraps `manage.py djust_check --json` (which itself always
+  # exits 0) and sets a real exit code. It fails ONLY on error-severity
+  # checks and the deprecated-attribute classes T001/T014/T015 (the exact
+  # #1683 bug class) — NOT on the demo's intentional warnings (public-view
+  # auth notices, partial-fragment templates).
+  demo-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-python-
+
+      - name: Install Python dependencies
+        run: uv sync --extra dev
+
+      - name: Run Django migrations (demo)
+        run: |
+          cd examples/demo_project
+          uv run python manage.py migrate --noinput
+          cd ../..
+
+      - name: Dogfood djust_check against the demo (BLOCKING)
+        run: |
+          cd examples/demo_project
+          PYTHONPATH=../.. uv run python ../../scripts/ci_djust_check_demo.py
+          cd ../..
+        env:
+          PYTHONPATH: .
+
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, security-scan, security-tests]
+    needs: [rust-tests, python-tests, javascript-tests, playwright-tests, nav-hooks-guard, security-scan, security-tests, demo-checks]
     if: always()
     steps:
       - name: Check test results
@@ -477,15 +520,20 @@ jobs:
           echo "  Python tests: ${{ needs.python-tests.result }}"
           echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
           echo "  Playwright tests: ${{ needs.playwright-tests.result }} (optional)"
+          echo "  Nav/hooks guard: ${{ needs.nav-hooks-guard.result }}"
           echo "  Security scan: ${{ needs.security-scan.result }}"
           echo "  Security tests: ${{ needs.security-tests.result }}"
+          echo "  Demo checks: ${{ needs.demo-checks.result }}"
 
-          # Core tests must pass (Rust, Python, JavaScript, Security tests)
-          # Playwright tests and security scan are informational (not blocking)
+          # Core tests must pass (Rust, Python, JavaScript, Security tests,
+          # Demo checks). Playwright tests and security scan are informational
+          # (not blocking).
           if [ "${{ needs.rust-tests.result }}" == "success" ] && \
              [ "${{ needs.python-tests.result }}" == "success" ] && \
              [ "${{ needs.javascript-tests.result }}" == "success" ] && \
-             [ "${{ needs.security-tests.result }}" == "success" ]; then
+             [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
+             [ "${{ needs.security-tests.result }}" == "success" ] && \
+             [ "${{ needs.demo-checks.result }}" == "success" ]; then
             echo "All core tests passed!"
             if [ "${{ needs.playwright-tests.result }}" != "success" ]; then
               echo "WARNING: Playwright tests failed (optional, not blocking)"

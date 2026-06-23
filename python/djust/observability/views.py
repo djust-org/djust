@@ -13,6 +13,8 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET
 
+from djust._log_utils import sanitize_for_log
+from djust.observability.middleware import is_localhost
 from djust.observability.log_handler import get_recent_logs
 from djust.observability.registry import (
     get_registered_session_count,
@@ -86,6 +88,33 @@ def _debug_gate():
     return HttpResponse(status=404)
 
 
+def _gate(request):
+    """Per-view access gate for every observability endpoint — returns a 404
+    response when the request must be refused, else ``None``.
+
+    Enforces BOTH conditions IN the view: ``settings.DEBUG`` must be on, AND the
+    request must originate from loopback. The localhost check is duplicated here
+    (it also lives in ``LocalhostOnlyObservabilityMiddleware``) on purpose: the
+    middleware is opt-in and was omitted from the documented setup, so without
+    an in-view check these endpoints — which expose live cross-session state,
+    tracebacks, logs, and a method-invocation endpoint — were reachable from any
+    host whenever DEBUG slipped on (e.g. a ``0.0.0.0``-bound staging server).
+    Defense-in-depth so the boundary holds regardless of middleware (finding #9).
+
+    Returns 404 (not 403) in both cases to avoid disclosing the endpoint's
+    existence to a non-localhost or production client.
+    """
+    if not settings.DEBUG:
+        return HttpResponse(status=404)
+    if not is_localhost(request):
+        logger.warning(
+            "Rejected observability request from non-localhost (in-view gate): path=%s",
+            sanitize_for_log(request.path),
+        )
+        return HttpResponse(status=404)
+    return None
+
+
 @csrf_exempt
 @require_GET
 def health(request):
@@ -96,8 +125,9 @@ def health(request):
 
         {"ok": true, "debug": true, "registered_sessions": 0}
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
     return JsonResponse(
         {
             "ok": True,
@@ -121,8 +151,9 @@ def view_assigns(request):
     Response (400): session_id missing.
     Response (404): DEBUG=False, or session not registered.
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     session_id = request.GET.get("session_id", "").strip()
     if not session_id:
@@ -166,8 +197,9 @@ def last_traceback(request):
     for djust-managed errors. Every handler / mount / render error ends
     up here.
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     try:
         n = int(request.GET.get("n", "1"))
@@ -192,8 +224,9 @@ def log_tail(request):
 
     Entries ordered chronologically (oldest first).
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     try:
         since_ms = int(request.GET.get("since_ms", "0"))
@@ -234,8 +267,9 @@ def handler_timings(request):
     p50_ms, p90_ms, p99_ms}. Sorted by p90 descending so the slowest
     handlers are first.
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     handler_name = request.GET.get("handler_name", "").strip() or None
 
@@ -273,8 +307,9 @@ def reset_view_state(request):
     Response (409): mount args not stashed (view predates this feature)
     Response (500): mount() raised
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=405)
@@ -374,8 +409,9 @@ def eval_handler(request):
           recorded_side_effects?: [{kind, target, details}, ...],  # block=false
         }
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=405)
@@ -427,6 +463,23 @@ def eval_handler(request):
                 "hint": "Use `get_view_schema` on the djust MCP to see available handler names.",
             },
             status=404,
+        )
+
+    # Security: only @event_handler-decorated methods may be invoked — the same
+    # allowlist the WebSocket event path enforces (_check_event_security). The
+    # `_`-prefix reject above blocks dunders/internals, but without this an
+    # arbitrary PUBLIC business method (e.g. delete_account, charge_card) would
+    # be callable with attacker params. eval_handler is an introspection aid,
+    # not a general RPC surface (finding #9).
+    from djust.decorators import is_event_handler
+
+    if not is_event_handler(handler):
+        return JsonResponse(
+            {
+                "error": f"'{handler_name}' is not an @event_handler — only decorated "
+                "event handlers may be invoked via eval_handler",
+            },
+            status=403,
         )
 
     # v1: sync handlers only.
@@ -551,8 +604,9 @@ def sql_queries(request):
     Each entry: {timestamp_ms, session_id, event_id, handler_name, sql,
     params, many, duration_ms, stack_top}. Entries chronological.
     """
-    if not settings.DEBUG:
-        return _debug_gate()
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
 
     session_id = request.GET.get("session_id", "").strip() or None
     handler_name = request.GET.get("handler_name", "").strip() or None

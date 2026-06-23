@@ -89,7 +89,7 @@ class OptimisticTodoView(LiveView):
                     <div class="todo-item {% if todo.completed %}completed{% endif %}">
                         <input
                             type="checkbox"
-                            @change="toggle_todo"
+                            dj-change="toggle_todo"
                             data-id="{{ todo.id }}"
                             {% if todo.completed %}checked{% endif %}
                         >

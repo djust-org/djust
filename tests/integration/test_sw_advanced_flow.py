@@ -166,9 +166,17 @@ async def test_multi_lazy_mount_flows_as_batch(_allow_flow_module):
 async def test_back_nav_with_state_snapshot_restores_state(_allow_flow_module):
     consumer = _FakeConsumer()
 
+    # Finding #4: the snapshot must now carry a server signature. The
+    # FakeConsumer has no session key (scope session is None), so we sign
+    # with session_key=None (anonymous binding). The signed blob is what the
+    # client echoes back verbatim as ``state_json``.
+    from djust.security import sign_snapshot
+
+    view_slug = "tests.integration.test_sw_advanced_flow._FlowSnapshotView"
+    signed = sign_snapshot(json.dumps({"n": 99}), view_slug, None)
     snapshot = {
-        "view_slug": "tests.integration.test_sw_advanced_flow._FlowSnapshotView",
-        "state_json": json.dumps({"n": 99}),
+        "view_slug": view_slug,
+        "state_json": signed,
         "ts": 0,
     }
     data = {
@@ -188,3 +196,32 @@ async def test_back_nav_with_state_snapshot_restores_state(_allow_flow_module):
     # Exactly one mount frame was sent.
     mount_frames = [f for f in consumer.sent_frames if f.get("type") == "mount"]
     assert len(mount_frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_back_nav_with_forged_unsigned_snapshot_falls_back_to_mount(
+    _allow_flow_module,
+):
+    """Finding #4 (CWE-345 → CWE-915): a forged UNSIGNED snapshot must be
+    rejected — the view falls back to ``mount()`` (n=0), not the injected
+    value. Mirrors the round-trip test above with an unsigned payload."""
+    consumer = _FakeConsumer()
+
+    view_slug = "tests.integration.test_sw_advanced_flow._FlowSnapshotView"
+    forged = {
+        "view_slug": view_slug,
+        # Plain unsigned JSON — exactly what an attacker would forge.
+        "state_json": json.dumps({"n": 99}),
+        "ts": 0,
+    }
+    data = {
+        "view": view_slug,
+        "params": {},
+        "url": "/",
+        "state_snapshot": forged,
+    }
+    await consumer.handle_live_redirect_mount(data)
+
+    # Forged snapshot rejected at the signature gate → mount() ran → n=0.
+    assert consumer.view_instance is not None
+    assert consumer.view_instance.n == 0, "Forged unsigned snapshot was applied — state injection!"

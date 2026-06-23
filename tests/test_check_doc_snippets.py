@@ -37,7 +37,15 @@ def _write_bytes(directory, name, data):
     return p
 
 
-def _run(*, readme=None, quickstart=None, pyproject=None, bundle=None):
+def _run(
+    *,
+    readme=None,
+    quickstart=None,
+    pyproject=None,
+    bundle=None,
+    guides_dir=None,
+    no_guides=False,
+):
     """Run the linter via subprocess with explicit path overrides.
 
     Returns (exit_code, stdout).
@@ -51,6 +59,10 @@ def _run(*, readme=None, quickstart=None, pyproject=None, bundle=None):
         args += ["--pyproject", str(pyproject)]
     if bundle is not None:
         args += ["--bundle", str(bundle)]
+    if guides_dir is not None:
+        args += ["--guides-dir", str(guides_dir)]
+    if no_guides:
+        args += ["--no-guides"]
     result = subprocess.run(args, capture_output=True, text=True, cwd=str(_REPO))
     return result.returncode, result.stdout
 
@@ -333,6 +345,167 @@ class TestCheckDocSnippets:
         """
         code, out = _run()
         assert code == 0, f"real docs must pass: {out}"
+        assert "OK" in out
+
+
+class TestCheckGuides:
+    """#1707 — symbol/import resolvability over docs/website/guides/*.md.
+
+    The guard that would have caught #1559/#1699's hallucinated
+    `djust.tenants` symbols. Guides get part (a) ONLY (AST + import/symbol
+    resolution); not part (b)/(c). Each `*_fails` test is tautology-guarded
+    (Action #1200 / #254): it asserts BOTH the exit code AND a substring of
+    the verdict.
+    """
+
+    def _passing_main_docs(self, d):
+        """Write a minimal passing README/QUICKSTART/pyproject/bundle set
+        (no guides) so a guides-dir override is the only variable."""
+        return _minimal_fixture(d)
+
+    def test_guide_with_hallucinated_symbol_fails(self):
+        """A guide importing a nonexistent djust.tenants symbol → exit 1
+        naming it (the #1559/#1699 bug class)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = self._passing_main_docs(d)
+            guides = d / "guides"
+            guides.mkdir()
+            _write(
+                guides,
+                "bad.md",
+                """
+                # Bad guide
+
+                ```python
+                from djust.tenants import tenant_queryset
+
+                class TenantView:
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b, guides_dir=guides)
+            assert code == 1, f"expected exit 1, got {code}: {out}"
+            assert "tenant_queryset" in out
+            assert "bad.md:" in out
+
+    def test_no_guides_flag_skips_the_scan(self):
+        """`--no-guides` skips the guide scan — the SAME bad guide that
+        fails without the flag passes with it (gate-off proof, Action #254)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = self._passing_main_docs(d)
+            guides = d / "guides"
+            guides.mkdir()
+            _write(
+                guides,
+                "bad.md",
+                """
+                # Bad guide
+
+                ```python
+                from djust.tenants import tenant_queryset
+
+                class TenantView:
+                    pass
+                ```
+                """,
+            )
+            # WITHOUT --no-guides → exit 1 (proves the guide is what's scanned).
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b, guides_dir=guides)
+            assert code == 1, f"unguarded guide must fail: {out}"
+            assert "tenant_queryset" in out
+            # WITH --no-guides → exit 0.
+            code, out = _run(
+                readme=r,
+                quickstart=q,
+                pyproject=pp,
+                bundle=b,
+                guides_dir=guides,
+                no_guides=True,
+            )
+            assert code == 0, f"--no-guides must skip the scan: {out}"
+            assert "OK" in out
+
+    def test_guide_skip_marker_respected(self):
+        """A guide block preceded by the skip marker that would otherwise
+        fail (phantom import) → skipped → exit 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = self._passing_main_docs(d)
+            guides = d / "guides"
+            guides.mkdir()
+            _write(
+                guides,
+                "illustrative.md",
+                """
+                # Illustrative guide
+
+                <!-- doc-snippet-check: skip -->
+                ```python
+                from yourapp.models import Project
+
+                class V:
+                    pass
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b, guides_dir=guides)
+            assert code == 0, f"skip-marked guide block must pass: {out}"
+            assert "OK" in out
+
+    def test_guide_submodule_import_resolves(self):
+        """`from django.db import migrations, models` — `migrations` is a
+        genuine submodule, not an attribute → must resolve, not false-fail.
+
+        Regression for the submodule-fallback path in _resolve_imports.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = self._passing_main_docs(d)
+            guides = d / "guides"
+            guides.mkdir()
+            _write(
+                guides,
+                "migration.md",
+                """
+                # Migration guide
+
+                ```python
+                from django.db import migrations, models
+
+
+                class Migration(migrations.Migration):
+                    operations = [migrations.RunPython(models.Model)]
+                ```
+                """,
+            )
+            code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b, guides_dir=guides)
+            assert code == 0, f"submodule import must resolve: {out}"
+            assert "OK" in out
+
+    def test_explicit_missing_guides_dir_is_usage_error(self):
+        """An explicitly-passed --guides-dir that does not exist → exit 2."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            r, q, pp, b = self._passing_main_docs(d)
+            code, out = _run(
+                readme=r,
+                quickstart=q,
+                pyproject=pp,
+                bundle=b,
+                guides_dir=d / "no-such-guides-dir",
+            )
+            assert code == 2, f"expected exit 2, got {code}: {out}"
+            assert "not found" in out
+
+    @pytest.mark.slow
+    def test_real_guides_pass(self):
+        """Dogfood gate (Action #1060): the real docs/website/guides/*.md
+        pass the part-(a) scan — #1707's cleanup is complete."""
+        code, out = _run()
+        assert code == 0, f"real guides must pass: {out}"
         assert "OK" in out
 
 

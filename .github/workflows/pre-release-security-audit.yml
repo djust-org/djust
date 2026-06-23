@@ -27,13 +27,21 @@ concurrency:
   group: security-audit
   cancel-in-progress: false
 
+# Disable ANSI color across all tools so console logs stay readable (no raw
+# escape sequences). CARGO_TERM_COLOR covers cargo/clippy/cargo-audit; NO_COLOR
+# is honored by eslint and most modern CLIs. Full detail is still captured in
+# the uploaded *-report.md artifacts.
+env:
+  CARGO_TERM_COLOR: never
+  NO_COLOR: "1"
+
 jobs:
   # --- Python security scanning ---
   python-security:
     name: Python Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -51,23 +59,62 @@ jobs:
       - name: Install security tools
         run: uv pip install bandit safety pip-audit
 
-      - name: Run Bandit (full scan, no skips)
+      - name: Run Bandit (full scan, advisory)
         id: bandit
         run: |
           echo "## Bandit Results" > bandit-report.md
           echo '```' >> bandit-report.md
+          echo "::group::Bandit full output"
           uv run bandit -r python/djust/ -ll -f txt 2>&1 | tee -a bandit-report.md || true
+          echo "::endgroup::"
           echo '```' >> bandit-report.md
 
           # Also produce JSON for machine-readable output
           uv run bandit -r python/djust/ -ll -f json -o bandit-results.json || true
+
+      # Blocking gate: FAIL the job on any NEW high-severity Bandit finding.
+      # Uses the repo's reviewed skip list (the same `-s`/`-x` set the
+      # pre-commit `bandit` hook uses — single source of truth) so the gate
+      # measures against a 0-HIGH/0-MEDIUM reviewed baseline. Findings that
+      # the codebase has already reviewed and intentionally accepted are:
+      #   B703,B308  mark_safe — expected in a templating framework
+      #   B324       MD5 — used only for non-security cache keys
+      #   B301       pickle — JIT function caching
+      #   B102       exec — JIT code generation
+      # and the test trees (tests/, python/tests/, python/djust/tests/) are
+      # excluded (e.g. a B613 bidi-char fixture in an upload-safety test).
+      # Any high-severity finding OUTSIDE those reviewed exceptions is NEW and
+      # blocks the release. To accept a new finding, add an explicit `# nosec`
+      # with justification or extend the skip list in BOTH the pre-commit hook
+      # and this step — do not weaken the gate.
+      - name: Bandit high-severity gate (blocking)
+        run: |
+          set -euo pipefail
+          # -lll = report ONLY high-severity; reviewed skips applied so the
+          # baseline is 0 high-severity. Emit JSON regardless of exit code,
+          # then count high-severity results ourselves (robust vs exit codes).
+          uv run bandit -r python/djust \
+            -lll -ii \
+            -x tests/,python/tests/,python/djust/tests/ \
+            -s B703,B308,B324,B301,B102 \
+            -f json -o bandit-high.json || true
+          HIGH=$(python -c "import json; d=json.load(open('bandit-high.json')); print(sum(1 for r in d['results'] if r['issue_severity']=='HIGH'))")
+          echo "Bandit high-severity findings (after reviewed skips): $HIGH"
+          if [ "$HIGH" -gt 0 ]; then
+            echo "::error::Bandit found $HIGH NEW high-severity issue(s). See bandit-high.json / bandit-report.md."
+            python -c "import json; d=json.load(open('bandit-high.json')); [print(f\"  {r['test_id']} {r['filename']}:{r['line_number']} {r['issue_text']}\") for r in d['results'] if r['issue_severity']=='HIGH']"
+            exit 1
+          fi
+          echo "OK: 0 new high-severity Bandit findings."
 
       - name: Run Safety (dependency vulnerabilities)
         id: safety
         run: |
           echo "## Safety Results" > safety-report.md
           echo '```' >> safety-report.md
+          echo "::group::Safety full report"
           uv run safety check --full-report 2>&1 | tee -a safety-report.md || true
+          echo "::endgroup::"
           echo '```' >> safety-report.md
 
       - name: Run pip-audit
@@ -75,16 +122,22 @@ jobs:
         run: |
           echo "## pip-audit Results" > pip-audit-report.md
           echo '```' >> pip-audit-report.md
+          echo "::group::pip-audit full output"
           uv run pip-audit 2>&1 | tee -a pip-audit-report.md || true
+          echo "::endgroup::"
           echo '```' >> pip-audit-report.md
 
       - name: Upload Python security reports
+        # Upload even when the high-severity gate blocks the job, so a new
+        # finding can be triaged from the artifacts.
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: python-security-reports
           path: |
             bandit-report.md
             bandit-results.json
+            bandit-high.json
             safety-report.md
             pip-audit-report.md
 
@@ -93,7 +146,7 @@ jobs:
     name: Rust Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -112,7 +165,9 @@ jobs:
         run: |
           echo "## cargo-audit Results" > cargo-audit-report.md
           echo '```' >> cargo-audit-report.md
+          echo "::group::cargo-audit full output"
           cargo audit 2>&1 | tee -a cargo-audit-report.md || true
+          echo "::endgroup::"
           echo '```' >> cargo-audit-report.md
 
           # JSON output for machine parsing
@@ -126,12 +181,14 @@ jobs:
 
           echo "## Clippy Security Lints" > clippy-report.md
           echo '```' >> clippy-report.md
+          echo "::group::clippy full output"
           cargo clippy -- \
             -W clippy::all \
             -D clippy::correctness \
             -D clippy::suspicious \
             -W clippy::complexity \
             2>&1 | tee -a clippy-report.md || true
+          echo "::endgroup::"
           echo '```' >> clippy-report.md
 
       - name: Upload Rust security reports
@@ -148,7 +205,7 @@ jobs:
     name: JavaScript Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -165,15 +222,27 @@ jobs:
           echo "## npm audit Results" > npm-audit-report.md
           echo '```' >> npm-audit-report.md
           npm audit --json > npm-audit-results.json 2>/dev/null || true
+          echo "::group::npm audit full output"
           npm audit 2>&1 | tee -a npm-audit-report.md || true
+          echo "::endgroup::"
           echo '```' >> npm-audit-report.md
 
-      - name: Run ESLint with security plugin
+      - name: Run ESLint (fails on errors, tolerates warnings)
         run: |
+          # eslint exits non-zero ONLY on errors (severity 2) by default;
+          # warnings (severity 1) leave the exit code at 0. set -o pipefail lets
+          # the eslint exit code survive the `tee` so a real error (e.g. an XSS
+          # / no-script-url regression) FAILS this step instead of being
+          # swallowed by `|| true`. The full report artifact is still written.
+          set -o pipefail
           echo "## ESLint Security Results" > eslint-report.md
           echo '```' >> eslint-report.md
-          npm run lint 2>&1 | tee -a eslint-report.md || true
+          status=0
+          echo "::group::eslint full output"
+          npm run lint 2>&1 | tee -a eslint-report.md || status=$?
+          echo "::endgroup::"
           echo '```' >> eslint-report.md
+          exit $status
 
       - name: Upload JS security reports
         uses: actions/upload-artifact@v7
@@ -195,7 +264,7 @@ jobs:
       matrix:
         language: [python, javascript]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -218,7 +287,7 @@ jobs:
       issues: write
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download all reports
         uses: actions/download-artifact@v8
@@ -275,8 +344,13 @@ jobs:
           cat "$REPORT" >> $GITHUB_STEP_SUMMARY
 
       - name: Create tracking issue
+        # Only on an explicit workflow_dispatch with create_issue=true. The old
+        # `inputs.create_issue == ''` clause was a footgun: GHA coerces a boolean
+        # `false` and `''` both to 0, so `false == ''` was TRUE and the step ran
+        # even when create_issue=false was passed. `== true` alone is correct
+        # (skips on push via the event guard; skips on dispatch when false).
         if: >-
-          (inputs.create_issue == true || inputs.create_issue == '') &&
+          inputs.create_issue == true &&
           github.event_name != 'push'
         uses: actions/github-script@v9
         with:
@@ -303,6 +377,16 @@ jobs:
               summary = 'Automated scan summary not available. Check workflow artifacts.';
             }
             body += '\n\n---\n\n## Automated Scan Results\n\n' + summary;
+
+            // GitHub rejects issue bodies over 65536 chars (HTTP 422). The
+            // aggregated scan summary can exceed that, so cap the body and
+            // point to the uploaded `security-audit-report` artifact (which
+            // always carries the full, untruncated detail).
+            const MAX_BODY = 65000;
+            if (body.length > MAX_BODY) {
+              const note = '\n\n---\n\n_Body truncated to fit GitHub\'s 65536-character issue limit. Full scan output is in the `security-audit-report` workflow artifact for this run._';
+              body = body.slice(0, MAX_BODY - note.length) + note;
+            }
 
             const { data: issue } = await github.rest.issues.create({
               owner: context.repo.owner,

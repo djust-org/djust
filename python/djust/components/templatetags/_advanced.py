@@ -11,7 +11,7 @@ import calendar as _calendar
 
 from django import template
 
-from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe
+from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe, safe_url
 
 # ---------------------------------------------------------------------------
 # Tour / Onboarding Guide
@@ -1712,7 +1712,7 @@ class ErrorPageNode(template.Node):
         e_class = conditional_escape(str(custom_class))
         e_title = conditional_escape(str(title))
         e_message = conditional_escape(str(message))
-        e_url = conditional_escape(str(action_url))
+        e_url = safe_url(str(action_url))
         e_label = conditional_escape(str(action_label))
 
         cls = "dj-error-page"
@@ -1995,7 +1995,7 @@ class BreadcrumbDropdownNode(template.Node):
             url = item.get("url", "")
             aria = ' aria-current="page"' if is_last else ""
             if url and not is_last:
-                e_url = conditional_escape(str(url))
+                e_url = safe_url(str(url))
                 content = f'<a href="{e_url}" class="dj-breadcrumb__link">{label}</a>'
             else:
                 content = f'<span class="dj-breadcrumb__current">{label}</span>'
@@ -2016,7 +2016,7 @@ class BreadcrumbDropdownNode(template.Node):
                 label = conditional_escape(str(it.get("label", "")))
                 url = it.get("url", "")
                 if url:
-                    e_url = conditional_escape(str(url))
+                    e_url = safe_url(str(url))
                     dropdown_items.append(
                         f'<li class="dj-breadcrumb__dropdown-item">'
                         f'<a href="{e_url}">{label}</a></li>'

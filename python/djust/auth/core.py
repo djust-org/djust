@@ -109,7 +109,94 @@ def check_view_auth(view_instance, request) -> Optional[str]:
             )
             return login_url
 
+    # 4. Honor Django's standard auth mixins (the AccessMixin family).
+    #    These enforce via ``dispatch()`` on the HTTP path, but the WS/SSE
+    #    mount path authorizes through this function rather than dispatch().
+    #    Without this, LoginRequiredMixin / PermissionRequiredMixin /
+    #    UserPassesTestMixin were enforced on the initial HTTP GET but
+    #    silently bypassed over WebSocket (GHSA — finding #14).
+    mixin_redirect = _check_django_access_mixins(view_instance, request, login_url)
+    if mixin_redirect is not None:
+        return mixin_redirect
+
     return None  # Auth passed
+
+
+def _check_django_access_mixins(view_instance, request, login_url):
+    """Enforce ``django.contrib.auth.mixins`` (the AccessMixin family) on the
+    WS/SSE mount path, mirroring each mixin's ``handle_no_permission()``.
+
+    Returns a login-redirect URL on an *unauthenticated* denial, raises
+    :class:`PermissionDenied` on an *authenticated* (or ``raise_exception``)
+    denial — matching Django's HTTP-path semantics — or ``None`` when the view
+    is not an AccessMixin subclass or all mixin checks pass.
+    """
+    try:
+        from django.contrib.auth.mixins import (
+            AccessMixin,
+            LoginRequiredMixin,
+            PermissionRequiredMixin,
+            UserPassesTestMixin,
+        )
+    except Exception:  # noqa: BLE001 — django.contrib.auth not installed
+        return None
+
+    if not isinstance(view_instance, AccessMixin):
+        return None
+
+    # The mixin check methods (has_permission/test_func/get_login_url) read
+    # ``self.request``; the WS mount may not have stamped it on the instance
+    # yet (``LiveView.__init__`` sets ``self.request = None``). Set it when it
+    # is absent or None, and restore the original afterwards so this auth check
+    # stays side-effect-free.
+    _MISSING = object()
+    orig_request = view_instance.__dict__.get("request", _MISSING)
+    need_set = orig_request is _MISSING or orig_request is None
+    if need_set:
+        view_instance.request = request
+    try:
+        user = getattr(request, "user", None)
+        authed = bool(user is not None and getattr(user, "is_authenticated", False))
+
+        failed = False
+        if isinstance(view_instance, LoginRequiredMixin) and not authed:
+            failed = True
+        if not failed and isinstance(view_instance, PermissionRequiredMixin):
+            failed = not view_instance.has_permission()
+        if not failed and isinstance(view_instance, UserPassesTestMixin):
+            failed = not view_instance.get_test_func()()
+        if not failed:
+            return None
+
+        logger.info(
+            "Auth denied for %s: Django auth mixin check failed (WS path)",
+            view_instance.__class__.__name__,
+        )
+        # Mirror AccessMixin.handle_no_permission(): authenticated (or
+        # raise_exception) => 403; anonymous => redirect to login.
+        if bool(getattr(view_instance, "raise_exception", False)) or authed:
+            try:
+                msg = view_instance.get_permission_denied_message()
+            except Exception:  # noqa: BLE001
+                msg = ""
+            raise PermissionDenied(msg or "Permission denied")
+        try:
+            return view_instance.get_login_url() or login_url
+        except Exception:  # noqa: BLE001 — ImproperlyConfigured etc.
+            return login_url
+    finally:
+        if need_set:
+            try:
+                if orig_request is _MISSING:
+                    view_instance.__dict__.pop("request", None)
+                else:
+                    view_instance.request = orig_request
+            except Exception as exc:  # noqa: BLE001 — best-effort restore
+                logger.debug(
+                    "check_view_auth: could not restore .request on %s: %s",
+                    view_instance.__class__.__name__,
+                    exc,
+                )
 
 
 def _has_custom_check_permissions(view_instance) -> bool:
@@ -236,6 +323,131 @@ def check_object_permission(view_instance, request) -> None:
 
     # Permission granted — populate the cache only now.
     view_instance._object = obj
+
+
+def enforce_object_permission(view_instance, request) -> None:
+    """Run the ADR-017 post-mount object-permission check on ANY render path.
+
+    A shared chokepoint so object-level authorization is enforced uniformly,
+    not just on the WS mount + event paths. Before this, the initial HTTP GET
+    render (:meth:`RequestMixin.get`/``aget``), SPA ``url_change`` navigation
+    (:meth:`ViewRuntime.dispatch_url_change`), and ``{% live_render %}``
+    embedded children rendered an object-scoped view WITHOUT the object-level
+    check, leaking denied objects (findings #10 / #11 / #12).
+
+    Semantics:
+
+    * No-op when the view does not opt into the lifecycle (no custom
+      ``get_object`` override) — same as :func:`check_object_permission`.
+    * Raises :class:`~django.core.exceptions.PermissionDenied` on denial.
+    * **Fail-closed**: a ``None`` request (cannot authorize) or any
+      non-``PermissionDenied`` exception from the developer's ``get_object`` /
+      ``has_object_permission`` is treated as denial — mirroring the event-path
+      handling in ``websocket_utils._validate_event_security`` (#1380, #1638).
+
+    Callers translate the raised ``PermissionDenied`` into the transport's
+    natural denial shape (HTTP 403, a ``permission_denied`` error frame, or a
+    refused embed).
+    """
+    if not _has_custom_get_object(view_instance):
+        return
+
+    if request is None:
+        # Object-scoped view but no request to authorize against → fail closed
+        # (mirrors the #1380 sticky-child handling on the event path).
+        logger.warning(
+            "Object-permission check skipped (no request) for %s; failing closed",
+            view_instance.__class__.__name__,
+        )
+        raise PermissionDenied("Access denied for this object.")
+
+    try:
+        check_object_permission(view_instance, request)
+    except PermissionDenied:
+        raise
+    except Exception as exc:  # noqa: BLE001 — fail-closed by design
+        logger.exception(
+            "Object-permission check raised a non-PermissionDenied exception "
+            "for %s; failing closed (denying)",
+            view_instance.__class__.__name__,
+        )
+        raise PermissionDenied("Access denied for this object.") from exc
+
+
+def _bind_current_tenant(tenant) -> None:
+    """Bind *tenant* into the current-tenant ContextVar (Finding #6).
+
+    Lazily imports ``djust.tenants.middleware.set_current_tenant`` and is a
+    no-op when the optional tenants module is unavailable. This is the single
+    source of the tenant-bind step previously hand-copied as ``_bind_tenant``
+    in ``websocket.py`` and ``runtime.py`` (both byte-identical). The transports
+    keep their own ``_bind_tenant`` aliases for the NON-mount paths (disconnect
+    cleanup, per-event re-bind); only the shared pre-mount sequence routes
+    through here.
+    """
+    try:
+        from ..tenants.middleware import set_current_tenant
+
+        set_current_tenant(tenant)
+    except Exception:  # noqa: BLE001 — tenants is optional; never break the live path
+        pass
+
+
+def run_pre_mount_auth(view_instance, request) -> Optional[str]:
+    """Run the canonical pre-mount security sequence and return the auth verdict.
+
+    Single-sources the ORDER in which every live mount path (WebSocket
+    ``handle_mount``, generic ``ViewRuntime.dispatch_mount``, legacy SSE
+    ``_sse_mount_view``) authorises and resolves tenancy BEFORE calling
+    ``mount()``. The three transports already call the same leaf chokepoints
+    (:func:`check_view_auth`, the view's ``_ensure_tenant`` hook, and the
+    tenant ContextVar bind); this helper pins their *orchestration* so a future
+    edit cannot silently reorder them or drop a step on one path (#1646 / #1853).
+
+    Canonical sequence (matching the pre-existing per-transport copies exactly):
+
+    1. ``redirect_url = check_view_auth(view_instance, request)``. This may
+       raise :class:`~django.core.exceptions.PermissionDenied` (an authenticated
+       user lacking a required permission) — the exception PROPAGATES unchanged
+       so each transport keeps its own denial envelope (WS close 4403 / runtime
+       error frame / SSE error push).
+    2. If ``check_view_auth`` returns a redirect URL (anonymous user on a
+       ``login_required`` view), RETURN it immediately — tenant resolution is
+       SKIPPED on an auth denial, exactly as every transport did before (each
+       ``return``\\ed before ``_ensure_tenant`` on denial). The caller maps the
+       returned URL to its own navigate/redirect shape.
+    3. Resolve tenancy: ``view_instance._ensure_tenant(request)`` when the view
+       exposes the hook (TenantMixin). This may raise (e.g. ``Http404`` when a
+       required tenant is unresolved) — the exception PROPAGATES so each
+       transport keeps its own tenant-error envelope.
+    4. Bind the resolved tenant into the ContextVar via
+       :func:`_bind_current_tenant` so ``mount()`` + the initial render see the
+       correct tenant in the tenant-scoped managers (fail-closed otherwise).
+
+    Returns ``None`` when the mount may proceed, or a redirect-URL string when
+    auth denies via redirect. Raises :class:`PermissionDenied` (auth) or any
+    exception from ``_ensure_tenant`` (tenant resolution); callers wrap this in
+    their existing transport-specific envelope, unchanged.
+
+    NOTE: this is a *synchronous* helper (it calls only sync leaf functions);
+    async callers invoke it via ``sync_to_async(run_pre_mount_auth)`` exactly as
+    they previously wrapped ``check_view_auth`` / ``_ensure_tenant`` individually.
+    """
+    # 1 + 2. View-level auth (login / permission / custom / Django mixins).
+    redirect_url = check_view_auth(view_instance, request)
+    if redirect_url:
+        # Auth denied via redirect — skip tenant resolve/bind, mirroring the
+        # pre-existing per-transport early return on denial.
+        return redirect_url
+
+    # 3. Resolve tenancy (TenantMixin views only; no-op otherwise).
+    if hasattr(view_instance, "_ensure_tenant"):
+        view_instance._ensure_tenant(request)
+
+    # 4. Bind the resolved tenant for the rest of the mount.
+    _bind_current_tenant(getattr(view_instance, "_tenant", None))
+
+    return None  # Mount may proceed.
 
 
 def check_view_auth_lightweight(view_instance, request) -> bool:

@@ -314,12 +314,17 @@ def test_csrf_required_for_session_auth():
 
 
 def test_rate_bucket_lru_cap_bounds_memory():
-    """Rotating caller identities cannot inflate the bucket dict without bound."""
+    """Rotating caller identities cannot inflate the bucket dict without bound.
+
+    F27: the bucket store now lives in ``djust.rate_limit`` (shared across
+    WS/SSE/API). The cap + dict are read there, not on ``api.dispatch``.
+    """
     from djust.api import dispatch as dispatch_mod
+    from djust import rate_limit as rate_limit_mod
 
     dispatch_mod.reset_rate_buckets()
-    original_cap = dispatch_mod._RATE_BUCKET_CAP
-    dispatch_mod._RATE_BUCKET_CAP = 5
+    original_cap = rate_limit_mod._HANDLER_BUCKET_CAP
+    rate_limit_mod._HANDLER_BUCKET_CAP = 5
     try:
 
         class V(LiveView):
@@ -332,7 +337,9 @@ def test_rate_bucket_lru_cap_bounds_memory():
 
         register_api_view("dispatch.lru", V)
         rf = RequestFactory(enforce_csrf_checks=False)
-        # Fire 20 requests from 20 distinct IPs — dict must not exceed 5.
+        # Fire 20 requests from 20 distinct anonymous callers — dict must not
+        # exceed 5. Each request gets a fresh saved session, so the caller key
+        # is a distinct ``session:<key>`` per iteration.
         for i in range(20):
             request = rf.post(
                 "/djust/api/dispatch.lru/ping/",
@@ -348,9 +355,9 @@ def test_rate_bucket_lru_cap_bounds_memory():
             # We can't actually call dispatch_api without an auth pass; instead
             # call the internal helper directly.
             dispatch_mod._rate_limit_check(request, "ping", V.ping)
-        assert len(dispatch_mod._rate_buckets) == 5
+        assert len(rate_limit_mod._handler_buckets) == 5
     finally:
-        dispatch_mod._RATE_BUCKET_CAP = original_cap
+        rate_limit_mod._HANDLER_BUCKET_CAP = original_cap
 
 
 def test_empty_body_defaults_to_empty_object(authenticated_request_factory):

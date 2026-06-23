@@ -129,7 +129,7 @@ pub struct RustLiveViewBackend {
     /// that are not JSON-serializable (e.g. Django model instances).
     /// Not persisted across MessagePack serialize/deserialize —
     /// Python re-populates it on each sync cycle.
-    raw_py_values: Option<HashMap<String, PyObject>>,
+    raw_py_values: Option<HashMap<String, Py<PyAny>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -220,7 +220,7 @@ impl RustLiveViewBackend {
     /// `getattr(obj, "field")` when a nested key like
     /// `{{ user.username }}` cannot be resolved via the normal
     /// value-stack path. An empty dict clears the sidecar.
-    fn set_raw_py_values(&mut self, values: HashMap<String, PyObject>) {
+    fn set_raw_py_values(&mut self, values: HashMap<String, Py<PyAny>>) {
         if values.is_empty() {
             self.raw_py_values = None;
         } else {
@@ -251,6 +251,33 @@ impl RustLiveViewBackend {
         djust_templates::parser::template_hash_hex(&self.template_source)
     }
 
+    /// Return the set of fields bound via static `dj-model="<field>"` in this
+    /// view's CURRENT template source (and any `{% include %}`d templates).
+    ///
+    /// This is the immune source for the dj-model mass-assignment allowlist
+    /// (CWE-915, finding #3). The values are collected from the parsed template
+    /// AST's `Node::Text` literals — developer-authored template text that
+    /// attacker data can NEVER reach (it only ever flows through `{{ }}`
+    /// `Node::Variable` substitution at render time). This replaces the prior
+    /// approach of parsing the RENDERED HTML, which was attacker-influenceable
+    /// (text nodes, unquoted-interpolated attrs, `|safe`).
+    ///
+    /// `{% extends %}` is covered because `template_source` is the
+    /// inheritance-resolved source the renderer uses; `{% include %}` is covered
+    /// by loading included templates from `template_dirs`. A dynamic binding
+    /// `dj-model="{{ field }}"` is NOT captured (fail-closed; opt in via
+    /// `allowed_model_fields`). An unresolvable include or a parse error yields
+    /// no fields for that branch (fail-closed) — it never widens the allowlist.
+    fn dj_model_fields(&self) -> Vec<String> {
+        use djust_templates::inheritance::FilesystemTemplateLoader;
+        let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+        // Fail-closed: any error (parse failure, etc.) leaves the auto-allowlist
+        // empty rather than over-allowing. The explicit `allowed_model_fields`
+        // path on the Python side still applies.
+        djust_templates::extract_dj_model_fields(&self.template_source, Some(&loader))
+            .unwrap_or_default()
+    }
+
     /// Clear the partial-render fragment cache, forcing the next render to
     /// do a full collecting render. Keeps `last_vdom` intact so the diff
     /// baseline is preserved. Used by the partial-render correctness harness
@@ -263,7 +290,7 @@ impl RustLiveViewBackend {
     }
 
     /// Get current state
-    fn get_state(&self, py: Python) -> PyResult<PyObject> {
+    fn get_state(&self, py: Python) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         for (k, v) in &self.state {
             dict.set_item(k, v.into_pyobject(py)?)?;
@@ -293,10 +320,10 @@ impl RustLiveViewBackend {
         for key in &self.safe_keys {
             context.mark_safe(key.clone());
         }
-        // Attach PyObject sidecar so `{{ model.attr }}` falls back
+        // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
         // to `getattr` when `attr` isn't in the JSON-serialized state.
         if let Some(raw) = &self.raw_py_values {
-            let cloned: HashMap<String, PyObject> = Python::with_gil(|py| {
+            let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
                 raw.iter()
                     .map(|(k, v)| (k.clone(), v.clone_ref(py)))
                     .collect()
@@ -331,10 +358,10 @@ impl RustLiveViewBackend {
         for key in &self.safe_keys {
             context.mark_safe(key.clone());
         }
-        // Attach PyObject sidecar so `{{ model.attr }}` falls back
+        // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
         // to `getattr` when `attr` isn't in the JSON-serialized state.
         if let Some(raw) = &self.raw_py_values {
-            let cloned: HashMap<String, PyObject> = Python::with_gil(|py| {
+            let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
                 raw.iter()
                     .map(|(k, v)| (k.clone(), v.clone_ref(py)))
                     .collect()
@@ -611,7 +638,7 @@ impl RustLiveViewBackend {
     }
 
     /// Render and return patches as MessagePack bytes
-    fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<PyObject>, u64)> {
+    fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<Py<PyAny>>, u64)> {
         use std::time::Instant;
 
         let t_start = Instant::now();
@@ -630,10 +657,10 @@ impl RustLiveViewBackend {
         for key in &self.safe_keys {
             context.mark_safe(key.clone());
         }
-        // Attach PyObject sidecar so `{{ model.attr }}` falls back
+        // Attach Py<PyAny> sidecar so `{{ model.attr }}` falls back
         // to `getattr` when `attr` isn't in the JSON-serialized state.
         if let Some(raw) = &self.raw_py_values {
-            let cloned: HashMap<String, PyObject> = Python::with_gil(|py| {
+            let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
                 raw.iter()
                     .map(|(k, v)| (k.clone(), v.clone_ref(py)))
                     .collect()
@@ -775,7 +802,7 @@ impl RustLiveViewBackend {
     /// Includes current timestamp for session age tracking.
     ///
     /// Returns: Python bytes object containing the serialized state with timestamp
-    fn serialize_msgpack(&self, py: Python) -> PyResult<PyObject> {
+    fn serialize_msgpack(&self, py: Python) -> PyResult<Py<PyAny>> {
         // Get current timestamp
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -947,7 +974,7 @@ fn render_markdown_py(
         strikethrough,
         task_lists,
     };
-    Ok(py.allow_threads(|| djust_templates::markdown::render_markdown(&src, opts)))
+    Ok(py.detach(|| djust_templates::markdown::render_markdown(&src, opts)))
 }
 
 /// Fast template rendering
@@ -1047,7 +1074,7 @@ fn fast_json_dumps(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<String> {
     let value = python_to_json_value(py, obj)?;
 
     // Release GIL and serialize to JSON string
-    py.allow_threads(|| {
+    py.detach(|| {
         serde_json::to_string(&value).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "JSON serialization error: {e}"
@@ -1072,13 +1099,13 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
             .unwrap_or(JsonValue::Null))
     } else if let Ok(s) = obj.extract::<String>() {
         Ok(JsonValue::String(s))
-    } else if let Ok(list) = obj.downcast::<PyList>() {
+    } else if let Ok(list) = obj.cast::<PyList>() {
         let mut vec = Vec::new();
         for item in list.iter() {
             vec.push(python_to_json_value(py, &item)?);
         }
         Ok(JsonValue::Array(vec))
-    } else if let Ok(dict) = obj.downcast::<PyDict>() {
+    } else if let Ok(dict) = obj.cast::<PyDict>() {
         let mut map = serde_json::Map::new();
         for (key, value) in dict.iter() {
             let key_str = key.extract::<String>()?;
@@ -1166,7 +1193,7 @@ impl SessionActorHandlePy {
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-            Python::with_gil(|py| -> PyResult<PyObject> {
+            Python::attach(|py| -> PyResult<Py<PyAny>> {
                 let dict = PyDict::new(py);
                 dict.set_item("html", result.html)?;
                 dict.set_item("session_id", result.session_id)?;
@@ -1207,7 +1234,7 @@ impl SessionActorHandlePy {
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-            Python::with_gil(|py| -> PyResult<PyObject> {
+            Python::attach(|py| -> PyResult<Py<PyAny>> {
                 let dict = PyDict::new(py);
 
                 // Add patches if available
@@ -1440,14 +1467,14 @@ pub fn create_session_actor(py: Python<'_>, session_id: String) -> PyResult<Boun
         // Use global supervisor to get or create session
         let handle = SUPERVISOR.get_or_create_session(session_id).await;
 
-        Python::with_gil(|py| -> PyResult<PyObject> {
+        Python::attach(|py| -> PyResult<Py<PyAny>> {
             Ok(Py::new(py, SessionActorHandlePy { handle })?.into_any())
         })
     })
 }
 
 /// Supervisor statistics exposed to Python
-#[pyclass(frozen)]
+#[pyclass(frozen, skip_from_py_object)] // return-only; never extracted from Python (pyo3 0.29 made the Clone auto-FromPyObject opt-in)
 #[derive(Debug, Clone)]
 pub struct SupervisorStatsPy {
     /// Number of active sessions
@@ -1517,7 +1544,7 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 
     // List
-    if let Ok(list) = obj.downcast::<PyList>() {
+    if let Ok(list) = obj.cast::<PyList>() {
         let mut vec = Vec::new();
         for item in list.iter() {
             vec.push(python_to_value(&item)?);
@@ -1526,7 +1553,7 @@ fn python_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 
     // Dict - recursively convert nested values
-    if let Ok(dict) = obj.downcast::<PyDict>() {
+    if let Ok(dict) = obj.cast::<PyDict>() {
         let mut map = HashMap::new();
         for (key, value) in dict.iter() {
             let key_str = key.extract::<String>()?;
@@ -1635,7 +1662,7 @@ enum PathNode {
 /// Convert serde_json::Value to Python object using PyO3
 ///
 /// This is faster than serializing to JSON string and parsing back!
-fn json_value_to_py(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
+fn json_value_to_py(py: Python, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
     match value {
         serde_json::Value::Null => Ok(py.None()),
         serde_json::Value::Bool(b) => Ok((*b).into_pyobject(py)?.to_owned().into_any().unbind()),
@@ -1733,7 +1760,7 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
 }
 
 /// Recursively serialize a Python value to JSON-compatible form
-fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     // Fast path: None
     if value.is_none() {
         return Ok(py.None());
@@ -1749,7 +1776,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
     // Otherwise extract::<String>() will convert them to string repr
 
     // Lists and tuples: recursively serialize
-    if let Ok(list) = value.downcast::<PyList>() {
+    if let Ok(list) = value.cast::<PyList>() {
         let result_list = PyList::empty(py);
         for item in list.iter() {
             let serialized = serialize_python_value(py, &item)?;
@@ -1758,7 +1785,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
         return Ok(result_list.into());
     }
 
-    if let Ok(tuple) = value.downcast::<PyTuple>() {
+    if let Ok(tuple) = value.cast::<PyTuple>() {
         let result_list = PyList::empty(py);
         for item in tuple.iter() {
             let serialized = serialize_python_value(py, &item)?;
@@ -1768,7 +1795,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
     }
 
     // Dicts: recursively serialize
-    if let Ok(dict) = value.downcast::<PyDict>() {
+    if let Ok(dict) = value.cast::<PyDict>() {
         let result_dict = PyDict::new(py);
         for (k, v) in dict.iter() {
             let key_str: String = k.extract()?;
@@ -1847,7 +1874,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<PyOb
             if let Ok(model_to_dict_fn) = forms_module.getattr("model_to_dict") {
                 if let Ok(model_dict) = model_to_dict_fn.call1((value,)) {
                     // Convert to PyDict so we can add method results
-                    if let Ok(result_dict) = model_dict.downcast::<PyDict>() {
+                    if let Ok(result_dict) = model_dict.cast::<PyDict>() {
                         // Call specific, known-safe get_* methods commonly used in templates
                         // This is safer than calling all get_* methods which can cause infinite recursion
                         let safe_methods = vec![
@@ -2724,7 +2751,7 @@ fn get_vdom_node_mut<'a>(vdom: &'a mut VNode, path: &[usize]) -> Option<&'a mut 
 }
 
 #[pyfunction(name = "extract_template_variables")]
-fn extract_template_variables_py(py: Python, template: String) -> PyResult<PyObject> {
+fn extract_template_variables_py(py: Python, template: String) -> PyResult<Py<PyAny>> {
     // Call Rust template parser
     let vars_map = djust_templates::extract_template_variables(&template).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
@@ -2738,6 +2765,39 @@ fn extract_template_variables_py(py: Python, template: String) -> PyResult<PyObj
     }
 
     Ok(py_dict.into())
+}
+
+/// Collect the set of fields bound via static `dj-model="<field>"` from a raw
+/// template source string (and any `{% include %}`d templates resolvable in
+/// `template_dirs`).
+///
+/// This is the module-level companion to [`RustLiveViewBackend::dj_model_fields`]
+/// for callers that have a template source but no live `RustLiveView` — notably
+/// embedded `{% live_render %}` children, whose dj-model allowlist must be
+/// derived from the CHILD's own template source (its events gate against the
+/// child's `_dj_model_fields`).
+///
+/// Security (CWE-915, finding #3): the values come from the parsed template
+/// AST's `Node::Text` literals — developer-authored template text immune to
+/// rendered-output poisoning. A dynamic `dj-model="{{ field }}"` is not captured
+/// (fail-closed). A parse error or unresolvable include yields no fields for
+/// that branch (fail-closed) — it never widens the allowlist.
+#[pyfunction(name = "dj_model_fields_from_template")]
+#[pyo3(signature = (template_source, template_dirs=None))]
+fn dj_model_fields_from_template(
+    template_source: String,
+    template_dirs: Option<Vec<String>>,
+) -> Vec<String> {
+    use djust_templates::inheritance::FilesystemTemplateLoader;
+    let dirs: Vec<PathBuf> = template_dirs
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    let loader = FilesystemTemplateLoader::new(dirs);
+    // Fail-closed: any error leaves the auto-allowlist empty rather than
+    // over-allowing (the explicit allowed_model_fields path still applies).
+    djust_templates::extract_dj_model_fields(&template_source, Some(&loader)).unwrap_or_default()
 }
 
 /// Compute the canonical 8-hex template-source hash from a raw source
@@ -2758,7 +2818,7 @@ fn compute_template_hash(source: &str) -> String {
 
 // Declared free-threaded-safe (#1432). A full thread-safety audit of every
 // global (`static`/`Lazy`/`OnceLock`), `#[pyclass]`, cross-thread
-// `Py<T>`/`PyObject`, the Tokio actor system, the template registries, and
+// `Py<T>`/`Py<PyAny>`, the Tokio actor system, the template registries, and
 // the recursive Python<->Rust converters found no shared mutable state
 // reachable through `_rust` that lacks correct synchronization. With
 // `gil_used = false`, CPython will NOT auto-re-enable the GIL on import
@@ -2777,6 +2837,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;

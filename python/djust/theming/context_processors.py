@@ -4,6 +4,7 @@ Context processors for djust_theming.
 Adds theme CSS and state to template context.
 """
 
+import logging
 from functools import lru_cache
 
 from django.contrib.staticfiles.storage import staticfiles_storage
@@ -15,6 +16,8 @@ from .manager import (
     get_css_prefix,
     get_theme_manager,
 )
+
+logger = logging.getLogger(__name__)
 
 # Anti-FOUC script — static; defined at module load (NOT per-request).
 _ANTI_FOUC_SCRIPT = """<script>
@@ -161,10 +164,74 @@ def theme_context(request):
         except Exception:
             return ""
 
-    theme_head_html = _safe_render(_theme_head_tag)
-    theme_panel_html = _safe_render(_theme_panel_tag)
-    theme_mode_toggle_html = _safe_render(_theme_mode_toggle_tag)
-    theme_preset_selector_html = _safe_render(_theme_preset_selector_tag)
+    # Request-scoped memoization of the four tag bodies (#1727).
+    #
+    # `_apply_context_processors` runs `theme_context` on EVERY WebSocket
+    # event (rust_bridge.py — completes #1722). Without memoization the
+    # four `_safe_render` calls below re-render four uncached tag bodies
+    # per event (`_render_theme_outputs` is already `@lru_cache`'d; these
+    # were not). We cache the four outputs ON THE REQUEST, keyed on the
+    # resolved theme-state tuple (the same shape `_render_theme_outputs`
+    # keys on). When theme state is unchanged across events the cache
+    # serves the four strings; when state changes (a live theme/mode/
+    # preset switch) the key differs and they recompute, so dynamic
+    # switching is preserved — we do NOT first-sync-gate (CLAUDE.md v1.0.2
+    # canon: per-event work feeding change-detection must be memoized, not
+    # skipped on later syncs).
+    #
+    # Scope is request-level (not a cross-request module cache) by design:
+    # none of the four outputs currently embed per-request data (no CSP
+    # nonce; `cookie_prefix_js` derives from the `cookie_namespace` config,
+    # not the request), but a request-scoped cache cannot leak a future
+    # per-request value across requests. On the WS path `request` is a
+    # long-lived instance attr set once in `handle_connect`, so the cache
+    # naturally spans all events of a connection and is invalidated by the
+    # state key changing on a theme switch.
+    state_key = (
+        state.theme,
+        state.preset,
+        state.pack,
+        state.mode,
+        state.resolved_mode,
+        state.layout,
+        presets_key,
+    )
+    cached = getattr(request, "_djust_theme_ctx_cache", None)
+    if cached is not None and cached[0] == state_key:
+        (
+            theme_head_html,
+            theme_panel_html,
+            theme_mode_toggle_html,
+            theme_preset_selector_html,
+        ) = cached[1]
+    else:
+        theme_head_html = _safe_render(_theme_head_tag)
+        theme_panel_html = _safe_render(_theme_panel_tag)
+        theme_mode_toggle_html = _safe_render(_theme_mode_toggle_tag)
+        theme_preset_selector_html = _safe_render(_theme_preset_selector_tag)
+        # Store on the request. Some request objects can't hold arbitrary
+        # attributes (e.g. a `__slots__` object in tests / exotic callers);
+        # in that case skip caching — correctness over the micro-optimization.
+        try:
+            request._djust_theme_ctx_cache = (
+                state_key,
+                (
+                    theme_head_html,
+                    theme_panel_html,
+                    theme_mode_toggle_html,
+                    theme_preset_selector_html,
+                ),
+            )
+        except (AttributeError, TypeError) as exc:
+            # Some request objects can't hold arbitrary attributes
+            # (a `__slots__` object in tests / exotic callers). Caching is a
+            # micro-optimization, so we skip it — but log at debug so the
+            # swallowed write is observable rather than silently dropped.
+            logger.debug(
+                "skipping theme-context cache write on %s request: %s",
+                type(request).__name__,
+                exc,
+            )
 
     return {
         "theme_head": mark_safe(theme_head_html) if theme_head_html else "",

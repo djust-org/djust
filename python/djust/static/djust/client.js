@@ -535,8 +535,230 @@ async function handleServerResponse(data, eventName, triggerElement) {
 }
 
 // ============================================================================
+// Safe navigation target validation (security finding #16)
+// ============================================================================
+//
+// Single shared scheme/origin guard applied at EVERY client-side navigation
+// sink that assigns a server- or data-derived target to `window.location.href`
+// (WS `navigate`, SSE `navigate`, and the live_patch/live_redirect cross-origin
+// fallbacks). Both transports route through THIS function so the guard cannot
+// drift apart again (#1646 — structural cure over N inline copies).
+//
+// Threat model: an attacker who influences a navigation target (a wire-protocol
+// breach, a server bug, or a developer foot-gun such as
+// `self.live_redirect(request.GET.get("next"))`) must not be able to pivot to
+// open-redirect (CWE-601) or `javascript:` / `data:` DOM-XSS (CWE-79).
+// Closes CodeQL js/client-side-unvalidated-url-redirection at every sink.
+//
+// Contract — `safeNavigationTarget(value)` returns a string SAFE to assign to
+// `window.location.href`, or `null` if the target must be rejected:
+//
+//   - SAME-ORIGIN absolute path ("/foo", "/foo?x=1#h") → re-resolved against
+//     window.location.origin and returned as pathname+search+hash. Accepted
+//     ONLY if it genuinely resolves same-origin. Protocol-relative
+//     ("//evil.com/x") and backslash/control-char tricks the WHATWG URL
+//     parser normalizes off-origin ("/\evil.com", "/\t/evil",
+//     "/\n//evil") are REJECTED.
+//   - Absolute http:/https: URL ("https://sister.example/x") → returned
+//     normalized via new URL(). This is the legitimate #1599 cross-origin
+//     sister-site case.
+//   - Everything else → null: javascript:/data:/vbscript:/blob:/file: schemes,
+//     any opaque-origin result, unparseable / empty / non-string input.
+//
+// CSP-strict: pure function, no inline scripts, no DOM writes. Published via a
+// `window.djust.*` member assignment so cross-module callers reach it by member
+// access (minification- and cross-IIFE-lint safe).
+
+(function () {
+    window.djust = window.djust || {};
+
+    function safeNavigationTarget(value) {
+        // Reject empty / non-string up front.
+        if (typeof value !== 'string' || value.length === 0) {
+            if (globalThis.djustDebug) {
+                console.warn('[djust] navigation target rejected (not a non-empty string): %o', value);
+            }
+            return null;
+        }
+
+        // Same-origin absolute path: must START with '/' (intent preserved
+        // from the original — bare relatives like "dashboard" stay rejected).
+        // A raw prefix check is NOT enough: the WHATWG URL parser normalizes
+        // '\' → '/' and strips ASCII tab/newline, so "/\evil.com",
+        // "/\/evil.com", "/\t/evil", "/\n//evil" all resolve CROSS-ORIGIN even
+        // though charAt(1) !== '/'. Canonicalize the way the sink does
+        // (#1825 — validate AFTER normalize): resolve against our own origin
+        // and accept ONLY if the result is genuinely same-origin.
+        if (value.charAt(0) === '/') {
+            let resolved;
+            try {
+                resolved = new URL(value, window.location.origin);
+            } catch (_e) {
+                if (globalThis.djustDebug) {
+                    console.warn('[djust] navigation target rejected (unparseable path): %s', value);
+                }
+                return null;
+            }
+            if (resolved.origin === window.location.origin) {
+                return resolved.pathname + resolved.search + resolved.hash;
+            }
+            // Resolved off-origin (e.g. "/\evil.com" → evil.com) → reject.
+            if (globalThis.djustDebug) {
+                console.warn('[djust] navigation target rejected (resolves cross-origin %s): %s', resolved.origin, value);
+            }
+            return null;
+        }
+
+        // Absolute URL: parse and allow only http:/https:. new URL() throws on
+        // unparseable input; javascript:/data:/blob:/file:/vbscript: parse but
+        // yield a disallowed protocol and/or an opaque ('null') origin.
+        let url;
+        try {
+            url = new URL(value);
+        } catch (_e) {
+            if (globalThis.djustDebug) {
+                console.warn('[djust] navigation target rejected (unparseable): %s', value);
+            }
+            return null;
+        }
+
+        // Opaque-origin schemes (javascript:, data:, blob:, file: in many
+        // engines) resolve to origin === 'null'. Reject defensively even if a
+        // future engine widens the http/https allow-list above.
+        if (url.origin === 'null') {
+            if (globalThis.djustDebug) {
+                console.warn('[djust] navigation target rejected (opaque origin): %s', value);
+            }
+            return null;
+        }
+
+        if (url.protocol === 'http:' || url.protocol === 'https:') {
+            return url.toString();
+        }
+
+        if (globalThis.djustDebug) {
+            console.warn('[djust] navigation target rejected (scheme %s): %s', url.protocol, value);
+        }
+        return null;
+    }
+
+    window.djust.safeNavigationTarget = safeNavigationTarget;
+})();
+
+// ============================================================================
 // WebSocket LiveView Client
 // ============================================================================
+
+/**
+ * #1813 (a): id-keyed reconciliation pass run AFTER the #1610 prerender
+ * `skipMountHtml` morph. Embedded-view wrappers
+ * (`<div dj-view [dj-sticky-view dj-sticky-root] data-djust-embedded="<id>">`)
+ * carry NO `id`, so morphChildren can only align them positionally
+ * (Strategy 2). When a preceding sibling count diverges, the wrapper never
+ * aligns → morphElement never runs on it → the server's `dj-id` is never
+ * copied onto the live wrapper. The very next parent patch that targets the
+ * wrapper by `dj-id` then misses and falls back to a positional path that
+ * breaks once the child subtree drifts, triggering html_recovery.
+ *
+ * This pass matches each server-side wrapper to the LIVE wrapper by its
+ * STABLE `data-djust-embedded` value (the same selector 45-child-view.js
+ * uses) — independent of sibling position — and copies the server `dj-id`
+ * onto it. Safe and idempotent: it only sets `dj-id` when the server side
+ * has one and only when the live value differs.
+ *
+ * @param {Element} liveContainer  - the morphed live DOM container
+ * @param {Element} serverTemplate - the <div> holding the parsed server HTML
+ */
+function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
+    if (!liveContainer || !serverTemplate) return;
+    const _esc = (globalThis.CSS && typeof CSS.escape === 'function')
+        ? (v) => CSS.escape(v)
+        : (v) => String(v).replace(/([^A-Za-z0-9_-])/g, '\\$1');
+    let serverWrappers;
+    try {
+        serverWrappers = serverTemplate.querySelectorAll('[data-djust-embedded], [dj-sticky-view]');
+    } catch (_err) {
+        return;
+    }
+    for (const serverWrapper of serverWrappers) {
+        const embeddedId = serverWrapper.getAttribute('data-djust-embedded');
+        if (!embeddedId) continue;
+        const serverDjId = serverWrapper.getAttribute('dj-id');
+        if (!serverDjId) continue;
+        let liveWrapper;
+        try {
+            liveWrapper = liveContainer.querySelector(
+                '[dj-view][data-djust-embedded="' + _esc(embeddedId) + '"]'
+            );
+        } catch (_err) {
+            continue;
+        }
+        if (liveWrapper && liveWrapper.getAttribute('dj-id') !== serverDjId) {
+            liveWrapper.setAttribute('dj-id', serverDjId);
+        }
+    }
+}
+
+/**
+ * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
+ * container so inline page JS inside the dj-root actually runs.
+ *
+ * Both mount paths in the `case 'mount':` handler put server HTML into the
+ * DOM in a way the browser treats as NON-executing for <script>: the
+ * pre-rendered path morphs via morphChildren (clone+insert of inert nodes),
+ * and the non-prerendered path assigns `container.innerHTML = data.html`.
+ * Per HTML spec, a <script> inserted by either mechanism is parsed but NOT
+ * evaluated — its `addEventListener` never fires, silently (#1848, a 1.0.7
+ * regression introduced when #1610 started morphing the prerender DOM).
+ *
+ * The only DOM operation that makes the browser run an already-in-tree inert
+ * <script> is to create a fresh <script> element, copy its attributes +
+ * textContent, and replace the inert node. Mirrors how the navigation/
+ * bfcache classic-script path keeps page JS alive (#1635/#1650 IIFE wrap).
+ *
+ * Scope discipline:
+ *  - Only CLASSIC scripts run: no `type`, or a recognized JS MIME type.
+ *    `type="djust/hook"` (colocated hook definitions) and other custom
+ *    types (e.g. `application/json`, `importmap`) are left untouched —
+ *    the hook system extracts djust/hook definitions separately.
+ *  - Idempotent: each re-created element is marked `data-djust-script-ran`
+ *    so a WS reconnect / re-mount on the same DOM does not double-execute.
+ *
+ * @param {Element} container - the mounted/morphed container to scan.
+ */
+function _runInsertedScripts(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    let scripts;
+    try {
+        scripts = container.querySelectorAll('script');
+    } catch (_err) {
+        return;
+    }
+    for (const old of scripts) {
+        // Skip already-executed scripts (idempotent on reconnect/re-mount)
+        // and any djust-managed marker scripts.
+        if (old.hasAttribute('data-djust-script-ran')) continue;
+        const type = (old.getAttribute('type') || '').trim().toLowerCase();
+        // Classic scripts only: empty type or a JS MIME type. Anything else
+        // (djust/hook, application/json, importmap, module-worker shims, …)
+        // is left untouched.
+        const isClassic = type === ''
+            || type === 'text/javascript'
+            || type === 'application/javascript'
+            || type === 'application/ecmascript'
+            || type === 'text/ecmascript';
+        if (!isClassic) continue;
+        const fresh = document.createElement('script');
+        for (const attr of old.attributes) {
+            fresh.setAttribute(attr.name, attr.value);
+        }
+        fresh.setAttribute('data-djust-script-ran', '');
+        // textContent (not innerHTML) — inline body is plain JS text.
+        fresh.textContent = old.textContent;
+        // replaceWith inserts the fresh node, which the browser DOES execute.
+        old.replaceWith(fresh);
+    }
+}
 
 class LiveViewWebSocket {
     constructor() {
@@ -845,15 +1067,19 @@ class LiveViewWebSocket {
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
 
-                // Fix #1 — stash server-emitted public view state so the
-                // state-snapshot capture on next before-navigate has
-                // something to serialize. The server includes
-                // ``public_state`` only when ``enable_state_snapshot``
-                // is True on the view class; non-opt-in views never
-                // have state cached by the SW.
-                if (data.public_state && typeof data.public_state === 'object' && data.view) {
+                // Fix #1 / Finding #4 — stash the server-emitted SIGNED
+                // state-snapshot blob so the state-snapshot capture on the
+                // next before-navigate can echo it back verbatim. The server
+                // includes ``state_snapshot_signed`` (an opaque
+                // TimestampSigner blob) only when ``enable_state_snapshot``
+                // is True on the view class; non-opt-in views never have
+                // state cached. The blob is OPAQUE — we store it as-is and
+                // never re-serialize it, so the server signature stays valid
+                // on the round-trip. Re-serializing would strip the signature
+                // and the server would (correctly) reject the snapshot.
+                if (typeof data.state_snapshot_signed === 'string' && data.state_snapshot_signed && data.view) {
                     if (!window.djust._clientState) window.djust._clientState = {};
-                    window.djust._clientState[data.view] = data.public_state;
+                    window.djust._clientState[data.view] = data.state_snapshot_signed; // codeql[js/remote-property-injection] -- data.view is a server-sent view name, not arbitrary user input
                 }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -905,6 +1131,27 @@ class LiveViewWebSocket {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             _morphTemp.innerHTML = data.html;
                             morphChildren(_morphContainer, _morphTemp);
+                            // #1813 (a): embedded-view wrappers
+                            // (<div dj-view dj-sticky-view dj-sticky-root
+                            //  data-djust-embedded=...>) carry NO `id`, so
+                            // morphChildren can only align them positionally
+                            // (Strategy 2). If sibling counts diverge before a
+                            // wrapper, it never aligns → morphElement never runs
+                            // → the server's dj-id is never copied onto the live
+                            // wrapper. The first parent patch then targets the
+                            // wrapper by dj-id, finds nothing, falls back to a
+                            // positional path, and breaks once the child subtree
+                            // drifts → triggers html_recovery (the trigger half
+                            // of the sticky-child data-loss bug). Reconcile by
+                            // the STABLE `data-djust-embedded` value (the same
+                            // selector 45-child-view.js uses) and copy the
+                            // server's dj-id onto the live wrapper.
+                            _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
+                            // #1848: morphChildren re-creates inline <script>
+                            // nodes inert (clone+insert never executes them).
+                            // Re-run classic page scripts inside the dj-root so
+                            // their addEventListener / init runs on mount.
+                            _runInsertedScripts(_morphContainer);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -996,6 +1243,10 @@ class LiveViewWebSocket {
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
+                        // #1848: innerHTML never executes inserted <script>.
+                        // Re-run classic page scripts inside the dj-root so
+                        // inline page JS behaves the same as on the morph path.
+                        _runInsertedScripts(container);
                         // Post-mount sticky reattach (Phase B). No-op
                         // when stickyStash is empty.
                         if (window.djust.stickyPreserve && window.djust.stickyPreserve.reattachStickyAfterMount) {
@@ -1075,27 +1326,24 @@ class LiveViewWebSocket {
                     } else if (typeof window !== 'undefined' && window.location) {
                         // Fallback — hard navigation if the dispatcher
                         // isn't wired (non-LiveView pages).
-                        // Same-origin guard: server-controlled `nav.to`
-                        // is generally trusted but defense-in-depth
-                        // prevents an attacker who breaches the wire
-                        // protocol from pivoting to open-redirect /
-                        // javascript: scheme XSS. Only allow same-origin
-                        // absolute paths; reject protocol-relative
-                        // (`//evil.com`), absolute URLs to other origins,
-                        // and `javascript:` / `data:` schemes.
+                        // Scheme/origin guard via the SHARED helper so the WS
+                        // and SSE `navigate` paths route through one
+                        // implementation and can't drift (#1646, finding #16).
+                        // server-controlled `nav.to` is generally trusted but
+                        // defense-in-depth prevents an attacker who breaches the
+                        // wire protocol from pivoting to open-redirect /
+                        // javascript: scheme XSS. Allows same-origin absolute
+                        // paths and absolute http(s) URLs (#1599); rejects
+                        // protocol-relative (`//evil.com`) and `javascript:` /
+                        // `data:` schemes.
                         // Closes CodeQL js/client-side-unvalidated-url-redirection.
-                        const target = nav.to;
-                        const isSameOriginPath = (
-                            target.length > 0 &&
-                            target.charAt(0) === '/' &&
-                            target.charAt(1) !== '/'  // reject protocol-relative
-                        );
-                        if (isSameOriginPath) {
-                            window.location.href = target;
+                        const navTarget = window.djust.safeNavigationTarget(nav.to);
+                        if (navTarget) {
+                            window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
                         } else if (globalThis.djustDebug) {
                             console.warn(
-                                '[djust] live_redirect rejected non-same-origin target:',
-                                target,
+                                '[djust] live_redirect rejected unsafe target:',
+                                nav.to,
                             );
                         }
                     }
@@ -1785,6 +2033,9 @@ class LiveViewWebSocket {
 
 // Expose LiveViewWebSocket to window for client-dev.js to wrap
 window.djust.LiveViewWebSocket = LiveViewWebSocket;
+// #1848: exposed so the mount handler (and tests) can re-execute classic
+// inline <script> inside the morphed/innerHTML'd dj-root.
+window.djust._runInsertedScripts = _runInsertedScripts;
 // Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 
@@ -2064,10 +2315,19 @@ class LiveViewSSE {
                 }
                 break;
 
-            case 'navigate':
-                // Auth redirect (sent by server when auth check fails)
-                window.location.href = data.to;
+            case 'navigate': {
+                // Auth redirect (sent by server when auth check fails).
+                // Validate scheme/origin via the shared guard so the SSE
+                // transport can't pivot to open-redirect / javascript: DOM-XSS
+                // and can't drift from the WS `navigate` path (#1646, finding #16).
+                const sseTarget = window.djust.safeNavigationTarget(data.to);
+                if (sseTarget) {
+                    window.location.href = sseTarget; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[SSE] navigate target rejected: %s', String(data.to));
+                }
                 break;
+            }
 
             case 'stream':
                 if (window.djust.handleStreamMessage) {
@@ -6062,6 +6322,11 @@ function morphChildren(existing, desired) {
     const existingNodes = Array.from(existing.childNodes);
     const desiredNodes = Array.from(desired.childNodes);
 
+    // #1724: whether this parent preserves whitespace (<pre>/<code>/<textarea>
+    // /<script>/<style>). Inside such elements EVERY text node is significant
+    // and must NOT be skipped during element alignment.
+    const preserveWhitespace = isWhitespacePreserving(existing);
+
     // Index existing elements by id for O(1) keyed lookup
     const existingById = new Map();
     for (const node of existingNodes) {
@@ -6080,7 +6345,42 @@ function morphChildren(existing, desired) {
             eIdx++;
         }
         // eslint-disable-next-line security/detect-object-injection
-        const eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
+        let eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
+
+        // #1724: whitespace text-node alignment. Real SSR HTML parsed into the
+        // DOM via innerHTML carries inter-element whitespace text nodes (the
+        // newlines/indentation between sibling elements). When the desired
+        // node is an element but the positional existing node is an
+        // insignificant whitespace-only text node, the old code fell through
+        // every element-matching strategy (they all require
+        // eNode.nodeType === ELEMENT_NODE) to Strategy 3 — clone+insert — and
+        // then removed the real existing element in the unmatched-cleanup
+        // loop. That is the wholesale remove+add the reporter observed (a
+        // Chart.js <canvas> on the existing subtree went blank because its
+        // ancestor element was replaced rather than morphed in place).
+        //
+        // Fix: when the desired node is an element OR a dj-if boundary comment
+        // (a significant child), skip past any insignificant whitespace-only
+        // existing text nodes so the strategies align on the next real
+        // existing element/marker. Skipped whitespace nodes stay unmatched and
+        // are pruned by the cleanup loop (they are reinserted from the desired
+        // side when the desired side carries its own whitespace). Significant
+        // text (preserveWhitespace, NBSP, non-blank) and dj-if comment markers
+        // are NOT skipped — isSignificantChild owns that rule (shared with the
+        // path/index resolvers, #1655/#1678).
+        const dNodeIsSignificantElementish =
+            dNode.nodeType === Node.ELEMENT_NODE ||
+            (dNode.nodeType === Node.COMMENT_NODE && isDjIfComment(dNode.textContent));
+        if (dNodeIsSignificantElementish) {
+            while (eNode &&
+                   eNode.nodeType === Node.TEXT_NODE &&
+                   !matched.has(eNode) &&
+                   !isSignificantChild(eNode, preserveWhitespace)) {
+                eIdx++;
+                // eslint-disable-next-line security/detect-object-injection
+                eNode = eIdx < existingNodes.length ? existingNodes[eIdx] : null;
+            }
+        }
 
         // --- Text node ---
         if (dNode.nodeType === Node.TEXT_NODE) {
@@ -9425,13 +9725,24 @@ window.djust.getActiveStreams = getActiveStreams;
         // differs from the current page, fall back to a full-page
         // navigation — that's the caller's intent. (#1599)
         if (newUrl.origin !== window.location.origin) {
+            // Validate scheme/origin before the hard navigation. A
+            // `javascript:`/`data:` data.path parses to an opaque origin that
+            // is `!== location.origin`, so it lands here — reject it (finding
+            // #16, #1646). Legit absolute http(s) sister-site URLs pass.
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (!safe) {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_patch rejected unsafe target: %s', newUrl.toString());
+                }
+                return;
+            }
             if (globalThis.djustDebug) {
                 console.log(
                     '[LiveView] live_patch cross-origin → full-page nav: %s',
-                    newUrl.toString(),
+                    safe,
                 );
             }
-            window.location.href = newUrl.toString();
+            window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
         }
 
@@ -9467,10 +9778,25 @@ window.djust.getActiveStreams = getActiveStreams;
         // differs from the current page (e.g. a dj-navigate link pointing
         // at a sister site), fall back to a full-page navigation. (#1599)
         if (newUrl.origin !== window.location.origin) {
+            // Validate scheme/origin before the hard navigation. A
+            // `javascript:`/`data:` data.path parses to an opaque origin that
+            // is `!== location.origin`, so it lands here — reject it (finding
+            // #16, #1646). Legit absolute http(s) sister-site URLs pass.
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (!safe) {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect rejected unsafe target: %s', newUrl.toString());
+                }
+                // Stop the page-loading bar we started above.
+                if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+                    window.djust.pageLoading.stop?.();
+                }
+                return;
+            }
             if (globalThis.djustDebug) {
                 console.log(
                     '[LiveView] live_redirect cross-origin → full-page nav: %s',
-                    newUrl.toString(),
+                    safe,
                 );
             }
             // Stop the page-loading bar we started above; the full nav
@@ -9478,13 +9804,17 @@ window.djust.getActiveStreams = getActiveStreams;
             if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
                 window.djust.pageLoading.stop?.();
             }
-            window.location.href = newUrl.toString();
+            window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
             return;
         }
 
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
+
+        // Move the active-nav highlight immediately (the URL is now current),
+        // rather than waiting for the WS mount round-trip. (#1756)
+        updateAriaCurrent();
 
         // Scroll to top on navigation (or to anchor if present)
         const hash = newUrl.hash;
@@ -9548,9 +9878,17 @@ window.djust.getActiveStreams = getActiveStreams;
                 }
                 liveViewWS.sendMessage(outgoing);
             } else {
-                // Fallback: full page navigation if we can't resolve the view
+                // Fallback: full page navigation if we can't resolve the view.
+                // newUrl is same-origin here (cross-origin returned above), but
+                // it's still data.path-derived — validate via the shared guard
+                // for consistency (finding #16).
                 console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
-                window.location.href = newUrl.toString();
+                const safe = window.djust.safeNavigationTarget(newUrl.toString());
+                if (safe) {
+                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect fallback rejected unsafe target: %s', newUrl.toString());
+                }
             }
         }
     }
@@ -9562,13 +9900,18 @@ window.djust.getActiveStreams = getActiveStreams;
      * or by data attributes on the container.
      */
     function resolveViewPath(pathname) {
-        // Check the route map (populated by live_session)
+        // Check the route map. As of #1733 it is auto-derived from the
+        // Django URLconf and auto-emitted by {% djust_client_config %};
+        // live_session() entries are merged in as well.
         const routeMap = window.djust._routeMap || {};
 
-        // Try exact match first. `pathname` is user-controllable (URL
-        // path) so the lookup must be prototype-pollution-immune: walk
-        // own entries explicitly via `Object.entries` rather than
-        // indexing with `routeMap[pathname]`. Closes #1361.
+        // #1361 — `pathname` is user-controllable (URL path). With the route
+        // map now populated on EVERY page by default (#1733), the lookup must
+        // be prototype-pollution-immune. We walk OWN enumerable entries via
+        // `Object.entries` (never `routeMap[pathname]` bracket-indexing), so
+        // a polluted `Object.prototype` (e.g. `Object.prototype.toString`)
+        // and inherited keys like `constructor` can never resolve to a view.
+        // Do NOT reintroduce `routeMap[pathname]` here — it would reopen #1361.
         for (const [routePath, viewPath] of Object.entries(routeMap)) {
             if (routePath === pathname) return viewPath;
         }
@@ -9618,6 +9961,9 @@ window.djust.getActiveStreams = getActiveStreams;
      * afterwards via the normal mount handler.
      */
     window.addEventListener('popstate', async function (event) {
+        // Keep the active-nav highlight in sync on back/forward (the URL is
+        // already current here), regardless of WS state. (#1756)
+        updateAriaCurrent();
         if (!liveViewWS || !liveViewWS.viewMounted) return;
         if (!isWSConnected()) return;
 
@@ -9723,7 +10069,15 @@ window.djust.getActiveStreams = getActiveStreams;
 
         // dj-patch-reload attribute forces full page navigation (opt-in escape hatch).
         if (el.hasAttribute('dj-patch-reload')) {
-            window.location.href = newUrl.toString();
+            // newUrl is derived from the dj-patch attribute value — validate via
+            // the shared guard so an attacker-influenced dj-patch can't pivot to
+            // javascript:/data: DOM-XSS or open-redirect (finding #16).
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (safe) {
+                window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else if (globalThis.djustDebug) {
+                console.warn('[LiveView] dj-patch-reload rejected unsafe target: %s', newUrl.toString());
+            }
             return;
         }
 
@@ -9794,6 +10148,153 @@ window.djust.getActiveStreams = getActiveStreams;
                 handleLiveRedirect({ path: path, replace: false });
             });
         });
+
+        // Keep aria-current="page" in sync with the current URL. A persistent
+        // nav usually lives OUTSIDE [dj-root], so dj-navigate's dj-root-only
+        // swap never updates a server-rendered active state — this re-derives
+        // it client-side. Runs on each call because bindNavigationDirectives is
+        // invoked from reinitAfterDOMUpdate (initial load + every SPA mount and
+        // patch), so the highlight tracks the current page. (#1756)
+        updateAriaCurrent();
+    }
+
+    /**
+     * Set ``aria-current="page"`` on the ``[dj-navigate]`` link whose path
+     * matches the current URL and remove it from the others. Only manages the
+     * ``"page"`` value this module sets (never clobbers an app-authored
+     * ``aria-current`` of a different value). Cross-origin dj-navigate targets
+     * (e.g. a sister-site link) are never "current". Apps style the active link
+     * via ``[dj-navigate][aria-current="page"]``.
+     */
+    function updateAriaCurrent() {
+        const here = window.location.pathname;
+        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+            let dest;
+            try {
+                dest = new URL(el.getAttribute('dj-navigate'), window.location.origin);
+            } catch (_e) {
+                return;
+            }
+            const isCurrent =
+                dest.origin === window.location.origin && dest.pathname === here;
+            if (isCurrent) {
+                el.setAttribute('aria-current', 'page');
+            } else if (el.getAttribute('aria-current') === 'page') {
+                el.removeAttribute('aria-current');
+            }
+        });
+    }
+
+    /**
+     * auto_navigate (#1734, ADR-021 Stage 2): opt-in Turbo-Drive-style link
+     * interception. When enabled (server emits
+     * ``<meta name="djust-auto-navigate" content="1">`` from
+     * ``LIVEVIEW_CONFIG['auto_navigate']``, default OFF), a SINGLE delegated
+     * click listener on ``document`` SPA-navigates plain ``<a href>`` links —
+     * but ONLY when the path resolves in the (auth-filtered, #1758) route map.
+     * Everything else falls through to normal browser navigation, so non-djust
+     * links (admin, logout, external, downloads) and routes the user can't
+     * access just load normally.
+     *
+     * The skip matrix below is correctness-critical (ADR-021): a wrong skip
+     * either breaks expected browser behavior (new-tab, downloads) or hijacks a
+     * link that should reload. Returning early === "let the browser handle it".
+     */
+    function _shouldSkipAutoNavigate(e, link) {
+        // Another handler already took it (e.g. dj-navigate/dj-patch above).
+        if (e.defaultPrevented) return true;
+        // Only plain left-clicks; modified clicks mean new tab/window/download.
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return true;
+        if (!link) return true;
+        // Explicit opt-outs on the link or any ancestor.
+        if (link.hasAttribute('download')) return true;
+        if (link.closest('[data-no-navigate]')) return true;
+        const target = link.getAttribute('target');
+        if (target && target !== '_self') return true;
+        const rel = (link.getAttribute('rel') || '').toLowerCase();
+        if (rel.split(/\s+/).indexOf('external') !== -1) return true;
+        return false;
+    }
+
+    function _handleAutoNavigateClick(e) {
+        const link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (_shouldSkipAutoNavigate(e, link)) return;
+
+        let url;
+        try {
+            url = new URL(link.getAttribute('href'), window.location.href);
+        } catch (_e) {
+            return; // unparseable href → let the browser deal with it
+        }
+        // External origin or non-http(s) scheme (mailto:, tel:, …) → browser.
+        if (url.origin !== window.location.origin) return;
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+        // Same-document hash-only jump → let the browser scroll, don't hijack.
+        if (
+            url.pathname === window.location.pathname &&
+            url.search === window.location.search &&
+            url.hash
+        ) {
+            return;
+        }
+        // Only intercept paths the (auth-filtered) route map knows are LiveView
+        // routes. Unknown paths (admin, plain Django views, routes the user
+        // can't access) fall through to a normal navigation the server gates.
+        if (!resolveViewPath(url.pathname)) return;
+        if (!liveViewWS || !liveViewWS.ws) return; // no socket → normal nav
+
+        e.preventDefault();
+        if (url.pathname === window.location.pathname) {
+            // Same view, query-only change → state-preserving url_change (no
+            // remount), mirroring the dj-patch wire shape but navigating to the
+            // link's EXACT query (replace, not dj-patch's param-merge — a full
+            // <a href> is the complete intended target). Falls back to a normal
+            // load if the view isn't mounted yet.
+            if (!liveViewWS.viewMounted) {
+                // url is already same-origin http(s) (validated at the top of
+                // this handler), but route through the shared guard for
+                // consistency across all location.href sinks (finding #16).
+                const safe = window.djust.safeNavigationTarget(url.toString());
+                if (safe) {
+                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+                } else if (globalThis.djustDebug) {
+                    console.warn('[LiveView] auto-navigate rejected unsafe target: %s', url.toString());
+                }
+                return;
+            }
+            window.history.pushState({ djust: true }, '', url.pathname + url.search);
+            liveViewWS.sendMessage({
+                type: 'url_change',
+                params: Object.fromEntries(url.searchParams),
+                uri: url.pathname + url.search,
+            });
+        } else {
+            // Cross-view → live_redirect over the existing WebSocket.
+            handleLiveRedirect({ path: url.pathname + url.search, replace: false });
+        }
+    }
+
+    let _autoNavigateInstalled = false;
+
+    function installAutoNavigate() {
+        if (_autoNavigateInstalled) return;
+        if (typeof document === 'undefined') return;
+        const meta = document.querySelector('meta[name="djust-auto-navigate"]');
+        if (!meta || meta.getAttribute('content') !== '1') return;
+        // One delegated listener for the whole document — survives SPA mounts
+        // (no per-element binding to re-run on reinit). Default (bubble) phase
+        // so app/dj-navigate handlers that call preventDefault run first and
+        // set e.defaultPrevented, which the skip matrix honors.
+        document.addEventListener('click', _handleAutoNavigateClick);
+        _autoNavigateInstalled = true;
+    }
+
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', installAutoNavigate);
+        } else {
+            installAutoNavigate();
+        }
     }
 
     // Expose to djust namespace
@@ -9801,6 +10302,12 @@ window.djust.getActiveStreams = getActiveStreams;
         handleNavigation: handleNavigation,
         bindDirectives: bindNavigationDirectives,
         resolveViewPath: resolveViewPath,
+        updateAriaCurrent: updateAriaCurrent,
+        installAutoNavigate: installAutoNavigate,
+        // Exposed for tests + advanced callers; the delegated listener is the
+        // supported entry point.
+        _handleAutoNavigateClick: _handleAutoNavigateClick,
+        _shouldSkipAutoNavigate: _shouldSkipAutoNavigate,
     };
 
     // Initialize route map
@@ -12909,11 +13416,19 @@ function _installCloseListenerOnce(el) {
         // Read at fire time so morph attribute updates take effect.
         const eventName = el.getAttribute('dj-dialog-close-event');
         if (!eventName) return;
-        // handleEvent is defined globally by 11-event-handler.js. Pass
-        // the dialog element as the trigger for loading-state and
-        // activity-gate machinery.
-        if (typeof handleEvent === 'function') {
-            handleEvent(eventName, { _targetElement: el });
+        // #1706: read the published alias, NOT the bare `handleEvent` symbol.
+        // `handleEvent` is declared in 11-event-handler.js, inside the
+        // double-load-guard `else {}` block (block-scoped); this module runs
+        // at bundle top level, OUTSIDE that block, so the bare reference is
+        // out of scope even unminified (the `typeof` guard silently returns
+        // "undefined" and the close-event never fires) and throws
+        // ReferenceError under terser-minified bundles. Reading
+        // `globalThis.djust.handleEvent` is minification-independent. Same
+        // class as #1676 / #1688. Pass the dialog element as the trigger for
+        // loading-state and activity-gate machinery.
+        const _handleEvent = globalThis.djust && globalThis.djust.handleEvent;
+        if (typeof _handleEvent === 'function') {
+            _handleEvent(eventName, { _targetElement: el });
         }
     });
 }
@@ -14809,13 +15324,19 @@ globalThis.djust.djTransitionGroup = {
      * event without tripping an exception.
      */
     async function _applyScopedPatches(patches, rootEl) {
-        if (typeof applyPatches !== "function") {
+        // #1688: reference the published alias, NOT the bare `applyPatches`
+        // symbol. `applyPatches` lives in 12-vdom-patch.js's inner IIFE and is
+        // only exposed as `globalThis.djust.applyPatches`; a bare reference is
+        // out of scope here and throws under terser-minified bundles (the
+        // #1676 class). Reading the alias is minification-independent.
+        const _ap = globalThis.djust && globalThis.djust.applyPatches;
+        if (typeof _ap !== "function") {
             if (globalThis.djustDebug) {
                 console.warn("[djust] applyPatches is not in scope; skipping");
             }
             return false;
         }
-        return applyPatches(patches, rootEl);
+        return _ap(patches, rootEl);
     }
 
     /**
@@ -15026,8 +15547,13 @@ globalThis.djust.djTransitionGroup = {
     // Also expose the top-level applyPatches under a stable name so
     // other modules (and tests) can invoke the scoped variant without
     // reaching into 12-vdom-patch.js's internals.
-    if (typeof applyPatches === "function" && !djust._applyPatches) {
-        djust._applyPatches = applyPatches;
+    // #1688: read the published alias (`globalThis.djust.applyPatches`), not the
+    // bare `applyPatches` symbol — the latter is out of this IIFE's scope and
+    // throws in the terser-minified bundle (and silently no-ops unminified,
+    // leaving `_applyPatches` unwired so emitChildMountedEvents never runs).
+    const _topApplyPatches = globalThis.djust && globalThis.djust.applyPatches;
+    if (typeof _topApplyPatches === "function" && !djust._applyPatches) {
+        djust._applyPatches = _topApplyPatches;
     }
 
     if (document.readyState === "loading") {
@@ -15087,26 +15613,21 @@ globalThis.djust.djTransitionGroup = {
     }
 
     function _serializeCurrentState(slug) {
-        // The server-side view state is mirrored client-side through the
-        // state bus (`05-state-bus.js`) for hydration hints — but the
-        // canonical record lives on `window.djust._clientState`, a
-        // per-view-slug snapshot dict populated by the mount handler
-        // when the server includes ``public_state`` in the mount frame
-        // (emitted only when ``enable_state_snapshot = True`` on the
-        // view class — see Fix #1).
+        // Finding #4 (CWE-345 → CWE-915): the canonical record on
+        // `window.djust._clientState[slug]` is now the OPAQUE
+        // server-signed snapshot blob (`state_snapshot_signed`), populated
+        // by the mount handler in 03-websocket.js when the server emits it
+        // (only for views with ``enable_state_snapshot = True``). We echo
+        // that blob back VERBATIM — never JSON.stringify it. Re-serializing
+        // would discard the server's HMAC signature, and the restore path
+        // would (correctly) reject the unsigned payload. The blob is a
+        // string by construction; anything else is treated as "no snapshot".
         if (!slug) return null;
         const bag = (globalThis.djust && globalThis.djust._clientState) || {};
         // eslint-disable-next-line security/detect-object-injection
-        const state = bag[slug];
-        if (!state) return null;
-        try {
-            return JSON.stringify(state);
-        } catch (e) {
-            if (globalThis.djustDebug) {
-                console.warn('[state-snapshot] JSON.stringify failed', e);
-            }
-            return null;
-        }
+        const signed = bag[slug];
+        if (typeof signed !== 'string' || !signed) return null;
+        return signed;
     }
 
     function _captureBeforeNavigate(event) {
@@ -15672,14 +16193,22 @@ globalThis.djust.djTransitionGroup = {
     }
 
     // Dispatch a server event by reading the event name off an element's
-    // `dj-click` attribute. handleEvent is defined globally by
-    // 11-event-handler.js (same usage as 35-dj-dialog.js).
+    // `dj-click` attribute.
+    //
+    // #1706: read the published alias `globalThis.djust.handleEvent`, NOT the
+    // bare `handleEvent` symbol. `handleEvent` is declared in
+    // 11-event-handler.js inside the double-load-guard `else {}` block
+    // (block-scoped); this module runs at bundle top level, OUTSIDE that
+    // block, so the bare reference is out of scope even unminified and throws
+    // ReferenceError under terser-minified bundles. Same class as #1676 /
+    // #1688.
     function _dispatchFrom(el) {
         if (!el) return false;
         const name = el.getAttribute('dj-click');
         if (!name) return false;
-        if (typeof handleEvent === 'function') {
-            handleEvent(name, { _targetElement: el });
+        const _handleEvent = globalThis.djust && globalThis.djust.handleEvent;
+        if (typeof _handleEvent === 'function') {
+            _handleEvent(name, { _targetElement: el });
             return true;
         }
         return false;

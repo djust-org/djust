@@ -49,26 +49,21 @@
     }
 
     function _serializeCurrentState(slug) {
-        // The server-side view state is mirrored client-side through the
-        // state bus (`05-state-bus.js`) for hydration hints — but the
-        // canonical record lives on `window.djust._clientState`, a
-        // per-view-slug snapshot dict populated by the mount handler
-        // when the server includes ``public_state`` in the mount frame
-        // (emitted only when ``enable_state_snapshot = True`` on the
-        // view class — see Fix #1).
+        // Finding #4 (CWE-345 → CWE-915): the canonical record on
+        // `window.djust._clientState[slug]` is now the OPAQUE
+        // server-signed snapshot blob (`state_snapshot_signed`), populated
+        // by the mount handler in 03-websocket.js when the server emits it
+        // (only for views with ``enable_state_snapshot = True``). We echo
+        // that blob back VERBATIM — never JSON.stringify it. Re-serializing
+        // would discard the server's HMAC signature, and the restore path
+        // would (correctly) reject the unsigned payload. The blob is a
+        // string by construction; anything else is treated as "no snapshot".
         if (!slug) return null;
         const bag = (globalThis.djust && globalThis.djust._clientState) || {};
         // eslint-disable-next-line security/detect-object-injection
-        const state = bag[slug];
-        if (!state) return null;
-        try {
-            return JSON.stringify(state);
-        } catch (e) {
-            if (globalThis.djustDebug) {
-                console.warn('[state-snapshot] JSON.stringify failed', e);
-            }
-            return null;
-        }
+        const signed = bag[slug];
+        if (typeof signed !== 'string' || !signed) return null;
+        return signed;
     }
 
     function _captureBeforeNavigate(event) {

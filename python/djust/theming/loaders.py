@@ -32,7 +32,7 @@ def get_installed_template_dirs() -> list[Path]:
     Queries the ThemeRegistry for manifests that have a non-None
     ``templates_dir`` and returns a list of those paths.
     """
-    from .registry import get_registry
+    from ._registry_accessor import get_registry
 
     registry = get_registry()
     dirs: list[Path] = []

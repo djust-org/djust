@@ -204,9 +204,13 @@ class TestIdAssignment:
             == '<!--dj-if id="if-0"--><div><!--dj-if id="if-1"--><span>x</span><!--/dj-if--></div><!--/dj-if-->'
         )
 
-    def test_for_if_iteration_uses_same_id(self):
+    def test_for_if_iteration_uses_unique_id_1832(self):
         # The {% if %} inside the {% for %} body has marker_id assigned
-        # ONCE at parse time — every loop iteration emits the same id.
+        # ONCE at parse time. BEFORE #1832 every loop iteration emitted that
+        # SAME id, duplicating it N times and producing unpairable
+        # MoveSubtree patches on re-render (a P0 data-loss bug). After #1832
+        # each iteration appends the loop path (`-<index>`) so the ids are
+        # UNIQUE across iterations yet STABLE across re-renders.
         result = render_raw(
             "{% for i in items %}{% if i.show %}<div>{{ i.name }}</div>{% endif %}{% endfor %}",
             {
@@ -216,10 +220,13 @@ class TestIdAssignment:
                 ]
             },
         )
-        # Both iterations use the same id (the parser only saw ONE
-        # Node::If). After prefix fix that's `if-<prefix>-0`, twice.
+        # Path-suffix-aware match: looped ids are `if-<hash>-N-<index>`.
+        open_ids = re.findall(r'<!--dj-if id="(if-[0-9a-f]{8}-[0-9-]+)"-->', result)
+        assert len(open_ids) == 2, f"expected 2 open markers, got {open_ids}"
+        assert len(set(open_ids)) == 2, f"marker ids must be unique, got {open_ids}"
+        # No bare-form duplication remains.
         stripped = strip_prefix(result)
-        assert stripped.count('id="if-0"') == 2
+        assert stripped.count('id="if-0"') == 0
         assert "<div>a</div>" in result
         assert "<div>b</div>" in result
 

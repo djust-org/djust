@@ -18,8 +18,20 @@ Usage:
         def handle_event(self, event, params):
             if event == 'save':
                 for entry in self.consume_uploaded_entries('avatar'):
-                    path = default_storage.save(f'avatars/{entry.client_name}', entry.file)
+                    # Use safe_client_name for the storage key (basename-only,
+                    # path-traversal-neutralised). entry.client_name is the RAW
+                    # attacker-controlled filename — never put it in a path.
+                    path = default_storage.save(
+                        f'avatars/{entry.safe_client_name}', entry.file)
                     self.avatar_url = path
+
+Security:
+    ``entry.client_name`` is the RAW, attacker-controlled original filename.
+    Never use it directly in a storage path/key (``default_storage.save``,
+    ``os.path.join``, an object-store key) — that is a path/object-key
+    injection sink (CWE-22 / CWE-73). Use ``entry.safe_client_name`` for
+    paths. For *display*, ``client_name`` is fine through HTML auto-escaping
+    (or ``escape()``) — never render it with ``|safe`` (see system check S007).
 """
 
 import io
@@ -28,6 +40,7 @@ import os
 import struct
 import tempfile
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,9 +86,140 @@ EXT_TO_MIME: Dict[str, str] = {
 }
 
 
+# ============================================================================
+# Active-content (browser-executable) denylist — Finding #20
+# ============================================================================
+#
+# Formats a browser will *execute* when served inline (script-capable, even
+# when their bytes look like a benign "image"). SVG is the canonical trap:
+# ``<svg onload=...><script>...</script></svg>`` matches the ``<svg`` /
+# ``<?xml`` magic-byte signature so ``validate_magic_bytes`` "validates" it
+# as a legitimate image — yet served inline with ``Content-Type:
+# image/svg+xml`` it runs script in the app's origin (stored XSS, CWE-79 /
+# CWE-434).
+#
+# These uploads are REJECTED by default, INDEPENDENT of the ``accept`` /
+# ``image/*`` wildcard (so the "image/* implicitly includes svg" hole is
+# closed), unless the developer opts in via
+# ``allow_upload(..., allow_active_content=True)``. When they opt in, THEY
+# own the risk: the framework does NOT sanitize SVG/HTML — they must
+# sanitize the content, and/or serve it with a hardened Content-Security-
+# Policy + ``X-Content-Type-Options: nosniff`` +
+# ``Content-Disposition: attachment`` (ideally from a separate origin).
+_ACTIVE_CONTENT_MIMES: Set[str] = {
+    "image/svg+xml",
+    "text/html",
+    "application/xhtml+xml",
+    "application/javascript",
+    "text/javascript",
+}
+
+_ACTIVE_CONTENT_EXTENSIONS: Set[str] = {
+    ".svg",
+    ".svgz",  # gzip-compressed SVG — still served + executed as image/svg+xml
+    ".html",
+    ".htm",
+    ".xhtml",
+    ".js",
+}
+
+
+def _safe_basename(name: str) -> str:
+    """Canonical, path-safe basename for a client-supplied filename.
+
+    This is the SINGLE source of truth for turning a raw, attacker-controlled
+    upload filename into the basename the storage layer will actually use.
+    Both :func:`is_active_content` (the active-content gate) and
+    :attr:`UploadEntry.safe_client_name` (the storage-key accessor) call it,
+    so the gate inspects EXACTLY the name that will be persisted — no drift
+    between "what the gate checked" and "what got stored" (parallel-path
+    discipline, #1646). Historically these were two separate code paths and a
+    trailing-space filename (``"evil.svg "``) made the gate's
+    ``Path(...).suffix`` see ``".svg "`` (miss) while the storage normaliser
+    collapsed it back to ``evil.svg`` (a real ``.svg`` on disk) — a
+    self-inconsistent bypass.
+
+    Steps (in order):
+
+    1. NFKC-normalise so Unicode compatibility lookalikes (fullwidth solidus
+       U+FF0F, division slash U+2215, fullwidth full stop U+FF0E, …) collapse
+       to their canonical ASCII separators/dots BEFORE the basename/dot passes
+       — otherwise a downstream NFKC layer could re-expand them into real
+       ``../../`` traversal.
+    2. Drop every Unicode control/format/surrogate/private/unassigned char
+       (category starts with "C"): NUL + C0/C1 controls, DEL, zero-width
+       chars, bidirectional overrides (U+202E — Trojan-source spoofing).
+    3. Map backslashes to "/" (``Path(...).name`` does not split on "\\").
+    4. Take the basename (strips every directory component).
+    5. ``lstrip(".")`` so the result can't be ``""``, ``"."``, ``".."`` or a
+       dotfile.
+    6. ``rstrip(". ")`` so trailing dots/spaces (which Windows strips at the
+       FS layer, and which would otherwise let ``"evil.svg "`` masquerade as a
+       non-svg) are removed.
+    7. Collapse a now-empty / whitespace-only result to ``"upload"``.
+    """
+    raw = name or ""
+    raw = unicodedata.normalize("NFKC", raw)
+    raw = "".join(ch for ch in raw if unicodedata.category(ch)[0] != "C")
+    raw = raw.replace("\\", "/")
+    base = Path(raw).name
+    base = base.lstrip(".")
+    base = base.rstrip(". ")
+    if not base.strip():
+        return "upload"
+    return base
+
+
+def is_active_content(client_name: str, client_type: str) -> bool:
+    """Return True if the upload is a browser-executable (active-content)
+    file by declared MIME type OR by filename extension.
+
+    A match on EITHER axis is enough — an attacker controls both the MIME
+    string and the filename, so the gate must catch a benign-looking MIME
+    with a ``.svg`` name AND a benign-looking name with a ``text/html``
+    MIME. The check is metadata-only (no byte inspection), so it works
+    identically on the register path and the finalize path and on every
+    writer/disk-buffer variant.
+
+    Two normalisation steps close end-to-end bypasses an attacker would
+    otherwise drive through the metadata:
+
+    - **MIME parameters are stripped** before the membership check. Browsers
+      ignore the ``; charset=...`` / ``; boundary=...`` parameter when
+      choosing the renderer, so ``"image/svg+xml; charset=utf-8"`` (and
+      ``"image/svg+xml;"``) must be treated as ``image/svg+xml``.
+    - **The filename is canonicalised via** :func:`_safe_basename` — the SAME
+      transform :attr:`UploadEntry.safe_client_name` uses to derive the
+      storage key — before its suffix is taken. This makes the gate inspect
+      exactly the name that will be persisted, so a trailing-space/dot name
+      (``"evil.svg "`` → stored as ``evil.svg``) can't slip past the suffix
+      check while still landing on disk as an active-content file.
+    """
+    mime = (client_type or "").split(";", 1)[0].strip().lower()
+    if mime in _ACTIVE_CONTENT_MIMES:
+        return True
+    # Canonicalise the filename the SAME way the storage layer will (so the
+    # gate and safe_client_name can never disagree), then take the suffix.
+    ext = Path(_safe_basename(client_name or "")).suffix.strip().lower()
+    if ext in _ACTIVE_CONTENT_EXTENSIONS:
+        return True
+    return False
+
+
 def validate_magic_bytes(data: bytes, expected_mime: str) -> bool:
     """
     Validate file content by checking magic bytes against expected MIME type.
+
+    This is **best-effort format validation only** — it confirms the bytes
+    look like the declared type when we have a signature for it, and is
+    intentionally permissive for MIME types we have no signature for
+    (``text/plain``, ``text/csv``, ``application/json``, etc.), so it never
+    breaks legitimate non-image uploads. It is NOT a security boundary
+    against dangerous file *types*: a script-laden SVG matches the
+    ``image/svg+xml`` signature and would "validate" here. Active-content
+    (browser-executable) uploads are gated separately and fail-closed by
+    default via :func:`is_active_content` / ``allow_active_content`` — see
+    the ``_ACTIVE_CONTENT_MIMES`` denylist above.
 
     Returns True if magic bytes match, or if we don't have magic byte info
     for the MIME type (permissive for unknown types).
@@ -231,7 +375,7 @@ class UploadWriter:
         resources (e.g. start an S3 multipart upload)."""
         return None
 
-    def write_chunk(self, chunk: bytes) -> None:
+    def write_chunk(self, chunk: bytes, chunk_index: int = 0) -> None:
         """Called once per WebSocket binary frame. Must be overridden."""
         raise NotImplementedError("UploadWriter subclasses must implement write_chunk()")
 
@@ -439,6 +583,16 @@ class UploadConfig:
     # persisted into an external state store, surviving WS disconnects.
     # See docs/adr/010-resumable-uploads.md.
     resumable: bool = False
+    # Finding #20 — opt-in to accept browser-executable "active content"
+    # (SVG, HTML, XHTML, JS). REJECTED by default because such files run
+    # script in the app's origin when served inline (stored XSS). When
+    # True, the developer takes ownership: djust does NOT sanitize the
+    # content — sanitize it yourself and/or serve with a hardened CSP +
+    # ``X-Content-Type-Options: nosniff`` + ``Content-Disposition:
+    # attachment`` (ideally from a separate origin). The gate is
+    # independent of ``accept`` — an ``image/*`` slot still rejects SVG
+    # unless this is True.
+    allow_active_content: bool = False
 
     def __post_init__(self):
         if self.accept:
@@ -514,6 +668,36 @@ class UploadEntry:
     def file(self) -> io.BytesIO:
         """Get the file as a file-like object (BytesIO)."""
         return io.BytesIO(self.data)
+
+    @property
+    def safe_client_name(self) -> str:
+        """Path-safe basename derived from the client-supplied filename.
+
+        SECURITY: ``client_name`` is the RAW, attacker-controlled original
+        filename. Never interpolate it into a storage destination key/path
+        (e.g. ``default_storage.save(f'avatars/{entry.client_name}', ...)``):
+        a value like ``../../../etc/x`` raises ``SuspiciousFileOperation`` on
+        ``FileSystemStorage`` (DoS) and is a *valid* key on object stores
+        (S3/GCS/Azure), letting the attacker overwrite or mis-place objects
+        (CWE-22 path traversal / CWE-73 external control of file name/path).
+
+        Use ``safe_client_name`` for any path/key. It returns a basename only,
+        with directory components, control bytes, and ``..``/dotfile tricks
+        neutralised — mirroring the intent of Django's ``Storage.get_valid_name``
+        and werkzeug's ``secure_filename``, while keeping ordinary names
+        readable (``my report (1).png`` is preserved). Falls back to
+        ``"upload"`` if nothing safe remains.
+
+        For *display* (Content-Disposition, UI), ``client_name`` is fine as
+        long as it goes through HTML auto-escaping (or ``escape()``); never
+        render it with ``|safe`` (see system check S007).
+
+        The canonicalisation lives in the module-level :func:`_safe_basename`
+        helper so the active-content gate (:func:`is_active_content`) inspects
+        EXACTLY the basename this property yields — one transform, no drift
+        between "what the gate checked" and "what got stored" (#1646).
+        """
+        return _safe_basename(self.client_name or "")
 
     @property
     def progress(self) -> int:
@@ -611,6 +795,7 @@ class UploadManager:
         auto_upload: bool = True,
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
+        allow_active_content: bool = False,
     ) -> UploadConfig:
         """Configure an upload slot."""
         config = UploadConfig(
@@ -622,6 +807,7 @@ class UploadManager:
             auto_upload=auto_upload,
             writer=writer,
             resumable=resumable,
+            allow_active_content=allow_active_content,
         )
         self._configs[name] = config
         if name not in self._name_to_refs:
@@ -825,6 +1011,24 @@ class UploadManager:
             logger.warning("MIME type not accepted: %s", client_type)
             return None
 
+        # Finding #20 — reject browser-executable active content (SVG, HTML,
+        # XHTML, JS) by default. This gate is INDEPENDENT of the accept /
+        # image/* wildcard above, so an `accept="image/*"` slot still rejects
+        # a script-laden `evil.svg` even though it passes validate_mime
+        # (image/svg+xml matches image/*) and would later pass the
+        # `<svg`/`<?xml` magic-byte check. Opt out per-slot via
+        # allow_upload(..., allow_active_content=True), taking ownership of
+        # sanitization / serving hygiene.
+        if not config.allow_active_content and is_active_content(client_name, client_type):
+            logger.warning(
+                "Active-content upload rejected (name=%s, type=%s) — set "
+                "allow_active_content=True on the upload slot to permit "
+                "browser-executable files (you must then sanitize/serve them safely)",
+                client_name,
+                client_type,
+            )
+            return None
+
         entry = UploadEntry(
             ref=ref,
             upload_name=upload_name,
@@ -898,6 +1102,29 @@ class UploadManager:
             return None
 
         config = self._configs.get(entry.upload_name)
+
+        # Finding #20 — defense-in-depth: re-check the active-content gate at
+        # finalize. register_entry() is the primary gate and runs first in
+        # the normal flow (upload_register precedes the binary complete
+        # frame), but a chunked upload that reached complete by any path that
+        # skipped register must NOT be able to bypass the denylist
+        # (parallel-path discipline). Gate is metadata-only so it applies to
+        # both the writer and disk-buffered finalize paths.
+        allow_active = config.allow_active_content if config is not None else False
+        if not allow_active and is_active_content(entry.client_name, entry.client_type):
+            entry._error = "Active-content upload rejected"
+            logger.warning(
+                "Active-content upload rejected at finalize (ref=%s, name=%s, type=%s)",
+                ref,
+                entry.client_name,
+                entry.client_type,
+            )
+            if config is not None and config.writer is not None:
+                self._safe_abort_writer(
+                    entry, ValueError("active-content upload rejected at finalize")
+                )
+            return None
+
         if config is not None and config.writer is not None:
             if self._finalize_writer(entry):
                 return entry
@@ -1066,6 +1293,7 @@ class UploadMixin:
         auto_upload: bool = True,
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
+        allow_active_content: bool = False,
     ) -> UploadConfig:
         """
         Configure a named upload slot.
@@ -1077,6 +1305,18 @@ class UploadMixin:
             max_file_size: Maximum file size in bytes (default 10MB)
             chunk_size: Chunk size for transfer (default 64KB)
             auto_upload: Start upload immediately on selection
+            allow_active_content: Permit browser-executable "active content"
+                (SVG, HTML, XHTML, JS). **Defaults to False** — such files
+                are rejected because, served inline, they execute script in
+                the app's origin (stored XSS / CWE-79). This gate is
+                independent of ``accept``: an ``accept="image/*"`` slot still
+                rejects ``.svg`` / ``image/svg+xml`` unless this is True.
+                Setting True transfers the risk to you: djust does NOT
+                sanitize the content. Sanitize SVG/HTML yourself and/or serve
+                it with a hardened Content-Security-Policy,
+                ``X-Content-Type-Options: nosniff`` and
+                ``Content-Disposition: attachment`` (ideally from a separate
+                origin) so a malicious upload can't run in the app's origin.
             writer: Optional ``UploadWriter`` subclass. When set, chunks
                 bypass disk buffering and are piped directly through the
                 writer's ``write_chunk()`` (e.g. straight to S3). See
@@ -1103,6 +1343,7 @@ class UploadMixin:
             auto_upload=auto_upload,
             writer=writer,
             resumable=resumable,
+            allow_active_content=allow_active_content,
         )
         # Issue #889: track the call args in a JSON-serializable list
         # so the WS consumer's state-restoration path can replay them.
@@ -1119,6 +1360,7 @@ class UploadMixin:
                 "chunk_size": chunk_size,
                 "auto_upload": auto_upload,
                 "resumable": resumable,
+                "allow_active_content": allow_active_content,
                 # writer deliberately omitted — see docstring caveat.
                 "_had_writer": writer is not None,
                 # Issue #892: tag each saved dict with the schema
@@ -1272,6 +1514,7 @@ __all__ = [
     "UploadManager",
     "UploadMixin",
     "validate_magic_bytes",
+    "is_active_content",
     "mime_from_extension",
     "parse_upload_frame",
     "build_progress_message",

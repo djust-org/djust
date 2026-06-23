@@ -301,19 +301,38 @@ class TestStateSnapshotMountIntegration:
         return consumer
 
     def test_state_snapshot_restored_when_enabled(self):
-        """Snapshot with matching view_slug restores count, skipping mount()."""
+        """Signed snapshot with matching view_slug restores count, skipping
+        mount(). Finding #4: the snapshot must carry a valid server signature
+        (the FakeConsumer has no session key → sign with session_key=None)."""
+        from djust.security import sign_snapshot
+
+        view_slug = "tests.unit.test_sw_advanced._SnapshotCounter"
+        signed = sign_snapshot(json.dumps({"count": 7, "label": "from-snapshot"}), view_slug, None)
+        snapshot = {
+            "view_slug": view_slug,
+            "state_json": signed,
+            "ts": 0,
+        }
+        consumer = self._run(view_slug, state_snapshot=snapshot)
+        # mount() sets count=0; signed snapshot overwrites to 7.
+        assert consumer.view_instance.count == 7
+        assert consumer.view_instance.label == "from-snapshot"
+
+    def test_forged_unsigned_snapshot_rejected_falls_back_to_mount(self):
+        """Finding #4 (CWE-345 → CWE-915): a forged UNSIGNED snapshot is
+        rejected at the signature gate → mount() runs → count stays 0."""
         snapshot = {
             "view_slug": "tests.unit.test_sw_advanced._SnapshotCounter",
-            "state_json": json.dumps({"count": 7, "label": "from-snapshot"}),
+            # Plain unsigned JSON — the attacker's forgery.
+            "state_json": json.dumps({"count": 7, "label": "forged"}),
             "ts": 0,
         }
         consumer = self._run(
             "tests.unit.test_sw_advanced._SnapshotCounter",
             state_snapshot=snapshot,
         )
-        # mount() sets count=0; snapshot overwrites to 7.
-        assert consumer.view_instance.count == 7
-        assert consumer.view_instance.label == "from-snapshot"
+        assert consumer.view_instance.count == 0, "forged snapshot was applied!"
+        assert getattr(consumer.view_instance, "label", None) != "forged"
 
     def test_state_snapshot_ignored_when_class_attr_false(self):
         """enable_state_snapshot=False (default) ignores snapshot."""
@@ -345,17 +364,24 @@ class TestStateSnapshotMountIntegration:
         assert consumer.view_instance.count == 0
         assert consumer.view_instance.mount_was_called is True
 
-    def test_state_snapshot_malformed_json_falls_back_to_mount(self):
-        """Malformed state_json is logged and fresh mount proceeds."""
+    def test_state_snapshot_malformed_inner_json_falls_back_to_mount(self):
+        """A SIGNED snapshot whose INNER payload is malformed JSON passes the
+        signature gate but fails the json.loads inside the restore block →
+        fresh mount proceeds. Finding #4: the malformed string is signed so
+        this still exercises the json-parse fallback path (not just the
+        signature gate)."""
+        from djust.security import sign_snapshot
+
+        view_slug = "tests.unit.test_sw_advanced._SnapshotCounter"
+        # Sign a malformed inner string so it survives unsign() but trips
+        # the json.loads(raw_state) fallback.
+        signed = sign_snapshot("{not-valid-json", view_slug, None)
         snapshot = {
-            "view_slug": "tests.unit.test_sw_advanced._SnapshotCounter",
-            "state_json": "{not-valid-json",
+            "view_slug": view_slug,
+            "state_json": signed,
             "ts": 0,
         }
-        consumer = self._run(
-            "tests.unit.test_sw_advanced._SnapshotCounter",
-            state_snapshot=snapshot,
-        )
+        consumer = self._run(view_slug, state_snapshot=snapshot)
         # Fallback fresh mount — count is 0 (not NaN/raise).
         assert consumer.view_instance.count == 0
 
@@ -652,10 +678,16 @@ class TestConfigAliases:
 
 
 @pytest.mark.usefixtures("_allow_test_module")
-class TestMountFramePublicStateWiring:
-    """Fix #1 — server emits public_state on mount frame when opt-in."""
+class TestMountFrameSignedSnapshotWiring:
+    """Fix #1 / Finding #4 — server emits a SIGNED snapshot blob
+    (``state_snapshot_signed``) on the mount frame when opt-in. The legacy
+    unsigned ``public_state`` dict is NO LONGER sent (it was the forgery
+    vector — CWE-345/CWE-915)."""
 
-    def test_mount_frame_carries_public_state_for_opt_in_view(self):
+    def test_mount_frame_carries_signed_snapshot_for_opt_in_view(self):
+        from djust.security import unsign_snapshot
+        import json as _json
+
         consumer = _make_fake_consumer()
         data = {
             "view": "tests.unit.test_sw_advanced._SnapshotCounter",
@@ -667,11 +699,18 @@ class TestMountFramePublicStateWiring:
         mount_frames = [f for f in consumer.sent_frames if f.get("type") == "mount"]
         assert len(mount_frames) == 1
         frame = mount_frames[0]
-        # Opt-in class → public_state must be present and include count.
-        assert "public_state" in frame
-        assert frame["public_state"].get("count") == 0
+        # Opt-in class → opaque signed blob present; legacy field absent.
+        assert "state_snapshot_signed" in frame
+        assert "public_state" not in frame, "legacy unsigned field must not be sent"
+        signed = frame["state_snapshot_signed"]
+        assert isinstance(signed, str) and signed
+        # The blob must verify (slug binding) and decode to the captured state.
+        view_slug = "tests.unit.test_sw_advanced._SnapshotCounter"
+        inner = unsign_snapshot(signed, view_slug, None)
+        assert inner is not None, "server-emitted blob must verify"
+        assert _json.loads(inner).get("count") == 0
 
-    def test_mount_frame_omits_public_state_for_non_opt_in(self):
+    def test_mount_frame_omits_signed_snapshot_for_non_opt_in(self):
         consumer = _make_fake_consumer()
         data = {
             "view": "tests.unit.test_sw_advanced._NonSnapshot",
@@ -682,10 +721,11 @@ class TestMountFramePublicStateWiring:
         asyncio.run(consumer.handle_mount(data))
         mount_frames = [f for f in consumer.sent_frames if f.get("type") == "mount"]
         assert len(mount_frames) == 1
-        # Non-opt-in → no public_state key emitted.
+        # Non-opt-in → no snapshot key emitted (signed or legacy).
+        assert "state_snapshot_signed" not in mount_frames[0]
         assert "public_state" not in mount_frames[0]
 
-    def test_mount_frame_omits_public_state_when_master_switch_off(self, settings):
+    def test_mount_frame_omits_signed_snapshot_when_master_switch_off(self, settings):
         settings.DJUST_STATE_SNAPSHOT_ENABLED = False
         consumer = _make_fake_consumer()
         data = {
@@ -698,17 +738,35 @@ class TestMountFramePublicStateWiring:
         mount_frames = [f for f in consumer.sent_frames if f.get("type") == "mount"]
         assert len(mount_frames) == 1
         # Master switch disabled → opt-in view still suppresses emission.
+        assert "state_snapshot_signed" not in mount_frames[0]
         assert "public_state" not in mount_frames[0]
 
 
 @pytest.mark.usefixtures("_allow_test_module")
 class TestStateSnapshotGuards:
-    """Fixes #6/#7/#8/#11 — server-side state_snapshot input guards."""
+    """Fixes #6/#7/#8/#11 — server-side state_snapshot input guards.
+
+    Finding #4: these defense-in-depth caps run AFTER signature verification,
+    so each guard test SIGNS its (oversized / big-keyset / non-dict) inner
+    payload — otherwise the signature gate would reject it first and the cap
+    under test would never run (a tautology). The blob is signed with
+    session_key=None to match the FakeConsumer's anonymous session."""
+
+    _VIEW_SLUG = "tests.unit.test_sw_advanced._SnapshotCounter"
+
+    def _signed_snapshot(self, inner_json: str):
+        from djust.security import sign_snapshot
+
+        return {
+            "view_slug": self._VIEW_SLUG,
+            "state_json": sign_snapshot(inner_json, self._VIEW_SLUG, None),
+            "ts": 0,
+        }
 
     def _run_with_snapshot(self, snapshot):
         consumer = _make_fake_consumer()
         data = {
-            "view": "tests.unit.test_sw_advanced._SnapshotCounter",
+            "view": self._VIEW_SLUG,
             "params": {},
             "url": "/",
             "has_prerendered": False,
@@ -717,14 +775,9 @@ class TestStateSnapshotGuards:
         return consumer
 
     def test_state_json_over_64kb_rejected(self):
-        """Fix #6 — state_json > 64 KB → fall back to mount()."""
+        """Fix #6 — verified inner state_json > 64 KB → fall back to mount()."""
         big = "x" * (65 * 1024)
-        # Wrap in a valid JSON string so only the size check triggers.
-        snapshot = {
-            "view_slug": "tests.unit.test_sw_advanced._SnapshotCounter",
-            "state_json": '{"payload":"%s"}' % big,
-            "ts": 0,
-        }
+        snapshot = self._signed_snapshot('{"payload":"%s"}' % big)
         consumer = self._run_with_snapshot(snapshot)
         # Fresh mount → count == 0 (mount overwrote via self.count = 0).
         assert consumer.view_instance.count == 0
@@ -732,11 +785,7 @@ class TestStateSnapshotGuards:
     def test_state_json_keyset_over_256_rejected(self):
         """Fix #7 — >256 keys rejected regardless of total byte size."""
         big_dict = {"k_%d" % i: i for i in range(300)}
-        snapshot = {
-            "view_slug": "tests.unit.test_sw_advanced._SnapshotCounter",
-            "state_json": json.dumps(big_dict),
-            "ts": 0,
-        }
+        snapshot = self._signed_snapshot(json.dumps(big_dict))
         consumer = self._run_with_snapshot(snapshot)
         # No key from the big dict made it onto the view.
         for i in range(300):
@@ -744,11 +793,7 @@ class TestStateSnapshotGuards:
 
     def test_state_json_array_not_dict_rejected(self):
         """Fix #8 — non-dict JSON (array / number / string) is ignored."""
-        snapshot = {
-            "view_slug": "tests.unit.test_sw_advanced._SnapshotCounter",
-            "state_json": "[1, 2, 3]",
-            "ts": 0,
-        }
+        snapshot = self._signed_snapshot("[1, 2, 3]")
         consumer = self._run_with_snapshot(snapshot)
         # Fresh mount — count stays at 0, no state error raised.
         assert consumer.view_instance.count == 0
@@ -756,11 +801,7 @@ class TestStateSnapshotGuards:
     def test_master_switch_disables_snapshot_restoration(self, settings):
         """Fix #11 — DJUST_STATE_SNAPSHOT_ENABLED=False halts restoration."""
         settings.DJUST_STATE_SNAPSHOT_ENABLED = False
-        snapshot = {
-            "view_slug": "tests.unit.test_sw_advanced._SnapshotCounter",
-            "state_json": json.dumps({"count": 99}),
-            "ts": 0,
-        }
+        snapshot = self._signed_snapshot(json.dumps({"count": 99}))
         consumer = self._run_with_snapshot(snapshot)
         # Master switch off → fresh mount, count == 0, not 99.
         assert consumer.view_instance.count == 0

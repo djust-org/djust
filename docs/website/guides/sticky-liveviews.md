@@ -72,6 +72,34 @@ The tag validates at render time that ``AudioPlayerView.sticky == True``
 </div>
 ```
 
+> **Do not add `dj-view` to a sticky child's own template.** The
+> `{% live_render ... sticky=True %}` wrapper above already provides the
+> `dj-view` binding. If the child template *also* declares its own `dj-view`
+> on its root, the rendered page ends up with a **nested, duplicate
+> `dj-view`** inside the wrapper — the child's client-side mount breaks and
+> its `dj-click` / `dj-input` events silently don't bind. This is a subtle
+> footgun because a normal *page* view *does* require `dj-view="<path>"` on
+> its root to be mountable. The rule for sticky children is the opposite:
+>
+> | View kind | Root `dj-view`? |
+> |---|---|
+> | Normal page view (routed via a URL) | **Required** — `<div dj-view="myapp.views.MyView">` |
+> | Sticky child (`{% live_render ... sticky=True %}`) | **Must NOT declare it** — the wrapper provides it |
+>
+> So `AudioPlayerView`'s template (`myapp/audio_player.html`) should look like
+> this — a plain root, no `dj-view`:
+>
+> ```django
+> {# myapp/templates/myapp/audio_player.html — NO dj-view here #}
+> <div class="audio-player">
+>     <p>Now playing: <strong>{{ track_title }}</strong></p>
+>     <button dj-click="toggle_play">{% if is_playing %}Pause{% else %}Play{% endif %}</button>
+> </div>
+> ```
+>
+> The [`djust.V012` system check](#v012-system-check) flags this footgun at
+> `manage.py check` time so you catch it before it ships.
+
 ### 3. Declare the slot in other layouts
 
 ```django
@@ -152,6 +180,38 @@ Any `kwargs` after `sticky=True` pass through to the child's `mount()`.
 If `DJUST_LIVE_RENDER_ALLOWED_MODULES` is set (a list or tuple of
 module prefixes) and the dotted path doesn't match any prefix, the
 tag raises `TemplateSyntaxError` — same as non-sticky `live_render`.
+
+## V012 system check
+
+<a id="v012-system-check"></a>
+
+djust ships a `manage.py check` warning, **`djust.V012`**, that catches the
+most common sticky-child footgun: a sticky-child view (`sticky = True`) whose
+own template root declares its own `dj-view` attribute.
+
+The wrapper that `{% live_render ... sticky=True %}` emits already carries
+`dj-view`. A sticky child that *also* puts `dj-view` on its root produces a
+nested, duplicate `dj-view` inside the wrapper — the child's client-side mount
+breaks and its events silently don't bind. (Normal page views, by contrast,
+*require* `dj-view` on their root — which is exactly why this mistake is so
+easy to make.)
+
+```
+$ python manage.py check
+?: (djust.V012) myapp.views.AudioPlayerView: sticky child template declares
+   its own 'dj-view' on its root — this nests a duplicate dj-view inside the
+   sticky wrapper and breaks the child's client-side mount (its events won't
+   bind).
+   HINT: ... Remove the dj-view attribute from this sticky child's root element.
+```
+
+**Fix:** remove `dj-view` from the sticky child's root element — the
+`{% live_render ... sticky=True %}` wrapper provides it.
+
+The check only inspects views with `sticky = True`, so it never false-positives
+on normal page views. A `dj-view` that appears only inside a `{% comment %}`
+block (e.g. documenting the wrapper) is ignored. To opt out entirely, add
+`DJUST_CONFIG = {'suppress_checks': ['V012']}` to your settings.
 
 ## `[dj-sticky-slot]` markers
 

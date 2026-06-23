@@ -230,11 +230,11 @@ pub fn apply_custom_filter(
         let registry = FILTER_REGISTRY.read().ok()?;
         let entry = registry.get(name)?;
         // clone_ref under the GIL; meta is plain Copy-ish.
-        let callable = Python::with_gil(|py| entry.callable.clone_ref(py));
+        let callable = Python::attach(|py| entry.callable.clone_ref(py));
         (callable, entry.meta.clone())
     };
 
-    let result = Python::with_gil(|py| -> Result<(Value, bool), String> {
+    let result = Python::attach(|py| -> Result<(Value, bool), String> {
         use pyo3::IntoPyObject;
 
         let py_value = value

@@ -2355,13 +2355,13 @@
                     if (UNSAFE_KEYS.has(key)) continue; // skip prototype-polluting keys
                     const safeKey = String(key);
                     try {
-                        Object.defineProperty(clone, safeKey, {
+                        Object.defineProperty(clone, safeKey, { // codeql[js/remote-property-injection] -- safeKey is String-coerced and filtered through UNSAFE_KEYS; clone has null prototype
                             // eslint-disable-next-line security/detect-object-injection
                             value: JSON.parse(JSON.stringify(state[key])),
                             writable: true, enumerable: true, configurable: true
                         });
                     } catch {
-                        Object.defineProperty(clone, safeKey, {
+                        Object.defineProperty(clone, safeKey, { // codeql[js/remote-property-injection] -- safeKey is String-coerced and filtered through UNSAFE_KEYS; clone has null prototype
                             // eslint-disable-next-line security/detect-object-injection
                             value: String(state[key]),
                             writable: true, enumerable: true, configurable: true

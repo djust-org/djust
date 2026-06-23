@@ -39,4 +39,13 @@ def sanitize_for_log(value: Any) -> str:
     cleaned = "".join(cleaned_chars)
     if len(cleaned) > _MAX_LOG_FIELD_CHARS:
         cleaned = cleaned[: _MAX_LOG_FIELD_CHARS - 3] + "..."
-    return cleaned
+    # Explicit CR/LF removal as the RETURNED value. The ``isprintable()`` loop
+    # above already maps line breaks (CR, LF, and the unicode LINE/PARAGRAPH
+    # SEPARATORS) to "?", so at runtime this is a no-op — but it is the form
+    # CodeQL `py/log-injection` recognizes as a sanitizer barrier, and applying
+    # it to the function's return value lets
+    # CodeQL clear every ``sanitize_for_log(<remote source>)`` call site (the
+    # ``isprintable`` comprehension alone is not a modeled barrier). Do NOT remove
+    # this line: it is load-bearing for static analysis, pinned by
+    # test_log_sanitizer_barrier_pin in python/djust/tests/test_log_sanitization.py.
+    return cleaned.replace("\r", "").replace("\n", "")

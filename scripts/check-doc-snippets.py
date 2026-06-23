@@ -23,9 +23,21 @@ Part (a) — Fenced Python snippet AST/import smoke check
     Honest scope: AST + import-resolution does NOT execute snippets, so it
     cannot catch a phantom *method call* (e.g. `View.as_live_view()`).
 
+    Guides (#1707): every ```python fenced block in `docs/website/guides/*.md`
+    is run through part (a) ONLY (AST-parse + import/symbol resolution). This
+    is the guard that would have caught #1559/#1699's ~10 hallucinated
+    `djust.tenants` symbols. Guides are NOT subject to parts (b) (the
+    Django/JS-size claim assertions are README/QUICKSTART-specific) or (c)
+    (the security/style lint would false-positive on the legitimate demo
+    `print()` calls that pepper the guides — out of #1707 scope). Disable
+    with `--no-guides`; point elsewhere with `--guides-dir`.
+
     Escape hatch: a `<!-- doc-snippet-check: skip -->` HTML comment on the
     line immediately before a ```python fence skips that block from ALL
-    checks (parts a + b + c).
+    checks (parts a + b + c). Use it for intentionally-illustrative guide
+    blocks — partial fragments indented under a markdown list item (which
+    fail `ast.parse` on the leading whitespace), bare API-doc signatures,
+    or imports of external libs / placeholder app names.
 
 Part (c) — Doc-example security/style lint (#1509)
     An AST walker re-encodes djust's auto-reject Security Rules and applies
@@ -223,7 +235,16 @@ def _resolve_imports(imports: list[tuple[str, list[str]]]) -> list[str]:
             )
             continue
         for sym in symbols:
-            if not hasattr(mod, sym):
+            if hasattr(mod, sym):
+                continue
+            # `from X import Y` resolves Y as an attribute OR a submodule.
+            # A genuine submodule (e.g. `from django.db import migrations`)
+            # is not an attribute of the parent package until imported, so
+            # `hasattr` alone yields a false positive — try importing the
+            # dotted submodule before declaring the symbol missing.
+            try:
+                importlib.import_module(f"{module_name}.{sym}")
+            except Exception:  # noqa: BLE001 — not a submodule either → real miss
                 errors.append(
                     f"`{module_name}` has no attribute `{sym}` "
                     f"(renamed or removed public symbol?)"
@@ -247,13 +268,15 @@ def _setup_django() -> None:
         pass
 
 
-def check_snippets(readme: Path, quickstart: Path) -> list[str]:
-    """Part (a): AST/import smoke-check every ```python block.
+def check_snippets(*docs: Path) -> list[str]:
+    """Part (a): AST/import smoke-check every ```python block in `docs`.
 
     Returns a list of error strings (empty if all snippets are clean).
+    Accepts any number of doc paths so the same logic covers
+    README/QUICKSTART and the `docs/website/guides/*.md` set (#1707).
     """
     errors: list[str] = []
-    for doc in (readme, quickstart):
+    for doc in docs:
         for start_line, code, _marker in extract_python_blocks(doc):
             loc = f"{doc.name}:{start_line}"
             try:
@@ -266,6 +289,17 @@ def check_snippets(readme: Path, quickstart: Path) -> list[str]:
                 for err in _resolve_imports(imports):
                     errors.append(f"{loc} — {err}")
     return errors
+
+
+def collect_guides(guides_dir: Path) -> list[Path]:
+    """Return the sorted list of `*.md` guide files under `guides_dir`.
+
+    A missing directory yields an empty list (the guide sub-check then
+    no-ops) — callers decide whether that is an error.
+    """
+    if not guides_dir.is_dir():
+        return []
+    return sorted(guides_dir.glob("*.md"))
 
 
 def _joinedstr_interpolates(node: ast.AST) -> bool:
@@ -375,18 +409,20 @@ def _walk_security_style(code: str) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
-def check_security_style(
-    readme: Path, quickstart: Path
-) -> tuple[list[str], list[str]]:
+def check_security_style(*docs: Path) -> tuple[list[str], list[str]]:
     """Part (c) — #1509: AST-walk every ```python block for djust's
     auto-reject security/style triggers.
 
     Blocks marked `<!-- doc-snippet-check: anti-pattern -->` are skipped
     (deliberately-wrong examples). Returns (errors, warnings).
+
+    Applied to README/QUICKSTART only — NOT the guides (#1707): guides
+    legitimately use `print()` in demo / management-command examples, so
+    the style verdict would false-positive there. Guides get part (a) only.
     """
     errors: list[str] = []
     warnings: list[str] = []
-    for doc in (readme, quickstart):
+    for doc in docs:
         for start_line, code, marker in extract_python_blocks(doc):
             if marker == "anti-pattern":
                 continue  # opted out of the style verdict (still parsed by part a)
@@ -479,22 +515,30 @@ def check_js_size(bundle: Path, readme: Path) -> tuple[list[str], list[str]]:
 
 
 def run(
-    readme: Path, quickstart: Path, pyproject: Path, bundle: Path
+    readme: Path,
+    quickstart: Path,
+    pyproject: Path,
+    bundle: Path,
+    guides: list[Path] | None = None,
 ) -> tuple[int, str]:
     """Core logic exposed for testing.
 
-    Runs part (a) + part (b) against the given paths. Returns
-    (exit_code, message).
+    Runs part (a) + part (b) + part (c) against README/QUICKSTART and
+    part (a) ONLY against `guides` (the `docs/website/guides/*.md` set —
+    #1707). Returns (exit_code, message).
     """
     _setup_django()
 
     all_errors: list[str] = []
     all_warnings: list[str] = []
 
-    all_errors.extend(check_snippets(readme, quickstart))
+    # Part (a): README + QUICKSTART + every guide.
+    all_errors.extend(check_snippets(readme, quickstart, *(guides or [])))
+    # Part (c): README + QUICKSTART only (style lint — see check_security_style).
     style_errors, style_warnings = check_security_style(readme, quickstart)
     all_errors.extend(style_errors)
     all_warnings.extend(style_warnings)
+    # Part (b): README + QUICKSTART only (claim assertions).
     all_errors.extend(check_django_floor(pyproject, readme, quickstart))
     size_errors, size_warnings = check_js_size(bundle, readme)
     all_errors.extend(size_errors)
@@ -545,6 +589,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--guides-dir",
+        default=None,
+        help=(
+            "Directory of guide markdown files to part-(a) check "
+            "(default: <repo>/docs/website/guides)"
+        ),
+    )
+    p.add_argument(
+        "--no-guides",
+        action="store_true",
+        help="Skip the docs/website/guides/*.md part-(a) scan (#1707)",
+    )
+    p.add_argument(
         "--verbose",
         action="store_true",
         help="Currently a no-op; reserved for parity with other linters",
@@ -567,6 +624,11 @@ def main(argv=None):
         if args.bundle
         else (ROOT / "python/djust/static/djust/client.min.js.gz")
     )
+    guides_dir = (
+        Path(args.guides_dir)
+        if args.guides_dir
+        else (ROOT / "docs/website/guides")
+    )
 
     # An explicitly-passed input file that does not exist is a usage error.
     # The bundle is intentionally exempt — its absence is a graceful skip.
@@ -584,7 +646,18 @@ def main(argv=None):
             print(f"ERROR: {label} file not found: {path}")
             sys.exit(2)
 
-    exit_code, msg = run(readme, quickstart, pyproject, bundle)
+    # An explicitly-passed --guides-dir that does not exist is a usage error;
+    # the default dir is allowed to be absent (graceful no-op for a partial
+    # checkout). --no-guides disables the scan entirely.
+    if args.no_guides:
+        guides: list[Path] = []
+    else:
+        if args.guides_dir is not None and not guides_dir.is_dir():
+            print(f"ERROR: guides dir not found: {guides_dir}")
+            sys.exit(2)
+        guides = collect_guides(guides_dir)
+
+    exit_code, msg = run(readme, quickstart, pyproject, bundle, guides)
     print(msg)
     sys.exit(exit_code)
 

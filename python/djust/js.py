@@ -306,13 +306,29 @@ class JSChain:
     def __html__(self) -> str:
         """Return the JSON payload as a Django SafeString.
 
-        ``{{ cmd }}`` in a template invokes ``__html__`` under Django's
-        ``conditional_escape``, so the JSON comes through with its
-        quotes intact and can be dropped directly into an attribute
-        value. JSON already escapes ``<``, ``>``, ``"``, etc. so the
-        output is safe for HTML attribute context.
+        NOTE on when this runs: the standard ``{{ cmd }}`` template path does
+        NOT call ``__html__`` — ``JSChain`` is not a ``str`` subclass, so both
+        Django's ``render_value_in_context`` and djust's Rust template engine
+        ``str()``-coerce it (via ``__str__`` → raw ``to_json()``) and then
+        auto-escape the result (the ``__html__``-must-be-a-str safety rule,
+        #1660). ``__html__`` is reached only when a ``JSChain`` is passed
+        *directly* to ``conditional_escape`` / ``format_html``.
+
+        For that direct path this returns script-safe JSON:
+        ``json.dumps`` does NOT escape ``<``, ``>``, or ``&`` — so a command
+        argument carrying user data containing ``</script>`` would break out of
+        an inline ``<script>`` block (finding #8, CWE-79). The payload is run
+        through :func:`djust.security.escape_json_for_script`, which neutralizes
+        those characters, making the output safe inside a ``<script>`` block.
+
+        It is NOT safe to drop raw into an HTML attribute: the JSON still
+        contains unescaped ``"`` (``json.dumps`` does not escape the double
+        quote), which would close a ``"``-delimited attribute. Use the normal
+        auto-escaped ``{{ cmd }}`` path for attribute contexts.
         """
-        return mark_safe(self.to_json())
+        from .security import escape_json_for_script
+
+        return mark_safe(escape_json_for_script(self.to_json()))
 
 
 class _JSFactory:

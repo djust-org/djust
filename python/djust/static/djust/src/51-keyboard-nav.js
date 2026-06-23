@@ -57,14 +57,22 @@
     }
 
     // Dispatch a server event by reading the event name off an element's
-    // `dj-click` attribute. handleEvent is defined globally by
-    // 11-event-handler.js (same usage as 35-dj-dialog.js).
+    // `dj-click` attribute.
+    //
+    // #1706: read the published alias `globalThis.djust.handleEvent`, NOT the
+    // bare `handleEvent` symbol. `handleEvent` is declared in
+    // 11-event-handler.js inside the double-load-guard `else {}` block
+    // (block-scoped); this module runs at bundle top level, OUTSIDE that
+    // block, so the bare reference is out of scope even unminified and throws
+    // ReferenceError under terser-minified bundles. Same class as #1676 /
+    // #1688.
     function _dispatchFrom(el) {
         if (!el) return false;
         const name = el.getAttribute('dj-click');
         if (!name) return false;
-        if (typeof handleEvent === 'function') {
-            handleEvent(name, { _targetElement: el });
+        const _handleEvent = globalThis.djust && globalThis.djust.handleEvent;
+        if (typeof _handleEvent === 'function') {
+            _handleEvent(name, { _targetElement: el });
             return true;
         }
         return false;

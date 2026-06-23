@@ -1422,3 +1422,444 @@ class TestCreateTarball:
         assert "keep.py" in names
         assert "dist" in names
         assert "logs" in names
+
+
+class TestCreateTarballGitignore:
+    """`_create_tarball` honors ``.gitignore`` when the source dir is a git repo.
+
+    The hardcoded EXCLUDE_* list only knows a fixed set of dir/file names, so
+    project-specific bloat with non-standard names (a ``.venv-dev`` virtualenv,
+    a ``scratch/`` dir, locally-built wheels) sailed straight into the tarball
+    even though the user had already gitignored it — producing a 152 MB upload
+    that the server's 50 MB ingress cap 413'd. When the source is a git work
+    tree, the file set is taken from ``git ls-files --cached --others
+    --exclude-standard`` (the working tree minus ignored paths), so the user's
+    existing ``.gitignore`` is the source of truth. The EXCLUDE_* rules still
+    apply as a security net so credentials / live DBs never ship even if the
+    user forgot to ignore them.
+    """
+
+    def _git_repo(self, tmp_path, layout, gitignore=""):
+        """Create a git repo (no commit needed) with files + a .gitignore.
+
+        ``git ls-files --others --exclude-standard`` reports untracked,
+        non-ignored files without any commit, so the repo stays uncommitted.
+        """
+        import subprocess
+
+        src = tmp_path / "repo"
+        src.mkdir()
+        if gitignore:
+            (src / ".gitignore").write_text(gitignore)
+        for rel in layout:
+            target = src / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x")
+        subprocess.run(["git", "init", "-q"], cwd=src, check=True)
+        return src
+
+    def test_gitignored_paths_excluded(self, tmp_path):
+        """Paths matched by .gitignore are dropped; app code is kept. This is
+        the max-companion case: ``.venv-dev`` and ``scratch`` are gitignored but
+        NOT in EXCLUDE_DIR_NAMES, so only .gitignore-respect drops them."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = self._git_repo(
+            tmp_path,
+            layout=[
+                "app.py",
+                "pkg/mod.py",
+                ".venv-dev/lib/python3.12/site-packages/playwright/node",
+                "scratch/shot.png",
+                "mobile-app/wheels/djust.whl",
+            ],
+            gitignore=".venv-dev/\nscratch/\nmobile-app/wheels/\n",
+        )
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "app.py" in names
+        assert "pkg/mod.py" in names
+        assert ".venv-dev/lib/python3.12/site-packages/playwright/node" not in names
+        assert "scratch/shot.png" not in names
+        assert "mobile-app/wheels/djust.whl" not in names
+
+    def test_credentials_excluded_even_when_not_gitignored(self, tmp_path):
+        """SECURITY net: even in git mode, the EXCLUDE_* rules still drop a
+        ``.env`` variant / live SQLite DB / ``.pyc`` that the user forgot to
+        gitignore, so secrets never ship just because git would list them."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = self._git_repo(
+            tmp_path,
+            layout=["app.py", ".env.production", "db.sqlite3", "m.pyc"],
+            gitignore="",  # nothing ignored — rely entirely on the security net
+        )
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "app.py" in names
+        assert ".env.production" not in names
+        assert "db.sqlite3" not in names
+        assert "m.pyc" not in names
+
+    def test_non_git_source_uses_walker_fallback(self, tmp_path):
+        """A directory that is NOT a git repo keeps the os.walk behavior: a
+        stray ``.gitignore`` is inert (no git to interpret it), so a listed-but-
+        not-EXCLUDE_* path is still included. Guards against the git path
+        leaking into non-git deploys (`djust deploy-dir` on a plain folder)."""
+        import tarfile
+
+        from djust.deploy_cli import _create_tarball
+
+        src = tmp_path / "plain"
+        src.mkdir()
+        (src / ".gitignore").write_text("keepme/\n")
+        (src / "app.py").write_text("x")
+        (src / "keepme").mkdir()
+        (src / "keepme" / "data.txt").write_text("x")
+
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        with tarfile.open(out, "r:gz") as tar:
+            names = set(tar.getnames())
+
+        assert "app.py" in names
+        # No .git → .gitignore is not consulted → keepme/ is still shipped.
+        assert "keepme/data.txt" in names
+
+
+class TestTarballSizeWarning:
+    """`_tarball_size_warning` flags oversized tarballs before upload so a 413
+    becomes an actionable message instead of a raw nginx error page."""
+
+    def _tarball(self, tmp_path, files):
+        """Build a real .tar.gz from ``{relpath: byte_length}``."""
+        from djust.deploy_cli import _create_tarball
+
+        src = tmp_path / "src"
+        src.mkdir()
+        for rel, length in files.items():
+            target = src / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"x" * length)
+        out = tmp_path / "out.tar.gz"
+        _create_tarball(src, out)
+        return out
+
+    def test_no_warning_under_threshold(self, tmp_path):
+        from djust.deploy_cli import _tarball_size_warning
+
+        out = self._tarball(tmp_path, {"app.py": 100})
+        assert _tarball_size_warning(out, threshold=10_000_000) is None
+
+    def test_warning_lists_largest_members(self, tmp_path):
+        from djust.deploy_cli import _tarball_size_warning
+
+        out = self._tarball(
+            tmp_path,
+            {"small.py": 10, "big.bin": 4096, "mid.txt": 512},
+        )
+        msg = _tarball_size_warning(out, threshold=0)
+        assert msg is not None
+        # Mentions the size, the offending file, and a gitignore hint.
+        assert "big.bin" in msg
+        assert "MB" in msg
+        assert ".gitignore" in msg
+        # Largest member is listed before the smaller ones.
+        assert msg.index("big.bin") < msg.index("mid.txt")
+
+    def test_warning_uses_module_default_threshold(self, tmp_path):
+        """With no explicit threshold the module constant TARBALL_WARN_BYTES is
+        used; a tiny tarball is well under it and stays silent."""
+        from djust.deploy_cli import TARBALL_WARN_BYTES, _tarball_size_warning
+
+        assert TARBALL_WARN_BYTES >= 10 * 1024 * 1024
+        out = self._tarball(tmp_path, {"app.py": 100})
+        assert _tarball_size_warning(out) is None
+
+
+# ---------------------------------------------------------------------------
+# #1761 — serving_current → "rolling out" vs "active"
+# ---------------------------------------------------------------------------
+
+
+class TestPollDisplay:
+    """`_poll_display` maps a deployment-status poll response to
+    (message, done, url). During blue/green the deployment row is
+    active/deploying but `serving_current` is False (the old placement still
+    serves) — the CLI shows "rolling out" and keeps polling until it flips True.
+    `serving_current` is additive (djustlive #517): older servers omit it, so a
+    missing field is treated as True (no behavior change)."""
+
+    def test_active_serving_current_true_is_done_with_url(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display(
+            {
+                "status": "active",
+                "serving_current": True,
+                "container_url": "https://x.djustlive.com",
+            }
+        )
+        assert msg == "active"
+        assert done is True
+        assert url == "https://x.djustlive.com"
+
+    def test_active_serving_current_false_is_rolling_out_not_done(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display(
+            {
+                "status": "active",
+                "serving_current": False,
+                "container_url": "https://x.djustlive.com",
+            }
+        )
+        assert "rolling out" in msg
+        assert done is False
+        # No URL surfaced while still serving stale code.
+        assert url is None
+
+    def test_missing_serving_current_is_back_compat_active(self):
+        """Older servers omit the field → fail-safe True → today's behavior."""
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display(
+            {"status": "active", "container_url": "https://x.djustlive.com"}
+        )
+        assert msg == "active"
+        assert done is True
+        assert url == "https://x.djustlive.com"
+
+    def test_deploying_serving_current_false_keeps_polling(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "deploying", "serving_current": False})
+        assert "rolling out" in msg
+        assert done is False
+        assert url is None
+
+    def test_failed_is_terminal_without_url(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "failed"})
+        assert msg == "failed"
+        assert done is True
+        assert url is None
+
+    def test_cancelled_and_superseded_are_terminal(self):
+        from djust.deploy_cli import _poll_display
+
+        for st in ("cancelled", "superseded"):
+            msg, done, url = _poll_display({"status": st})
+            assert msg == st
+            assert done is True
+            assert url is None
+
+    def test_active_without_container_url_is_done_no_url(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "active", "serving_current": True})
+        assert msg == "active"
+        assert done is True
+        assert url is None
+
+    def test_pending_is_not_terminal(self):
+        from djust.deploy_cli import _poll_display
+
+        msg, done, url = _poll_display({"status": "pending"})
+        assert msg == "pending"
+        assert done is False
+        assert url is None
+
+
+# ---------------------------------------------------------------------------
+# #1760 — deploy doctor preflight
+# ---------------------------------------------------------------------------
+
+
+class TestDeployDoctor:
+    """`_deploy_doctor_warnings(settings_text)` statically inspects a Django
+    settings module and WARNS (never errors) when it hardcodes values the
+    platform injects via env. Each check has a positive (warns) and negative
+    (silent) case."""
+
+    def test_clean_env_driven_settings_produce_no_warnings(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import os\n"
+            "import dj_database_url\n"
+            "SECRET_KEY = os.environ['SECRET_KEY']\n"
+            "ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')\n"
+            "DATABASES = {'default': dj_database_url.config()}\n"
+        )
+        assert _deploy_doctor_warnings(text) == []
+
+    def test_hardcoded_secret_key_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "SECRET_KEY = 'django-insecure-abc123'\n"
+        warns = _deploy_doctor_warnings(text)
+        assert any("SECRET_KEY" in w for w in warns)
+
+    def test_secret_key_from_env_does_not_warn(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "SECRET_KEY = os.environ['SECRET_KEY']\n"
+        assert not any("SECRET_KEY" in w for w in _deploy_doctor_warnings(text))
+
+    def test_literal_allowed_hosts_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "ALLOWED_HOSTS = ['example.com', 'www.example.com']\n"
+        assert any("ALLOWED_HOSTS" in w for w in _deploy_doctor_warnings(text))
+
+    def test_allowed_hosts_from_env_does_not_warn(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')\n"
+        assert not any("ALLOWED_HOSTS" in w for w in _deploy_doctor_warnings(text))
+
+    def test_databases_without_database_url_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.postgresql',\n"
+            "        'NAME': 'mydb', 'USER': 'me', 'HOST': 'localhost',\n"
+            "    }\n"
+            "}\n"
+        )
+        assert any("DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text))
+
+    def test_databases_reading_database_url_does_not_warn(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import dj_database_url\n"
+            "DATABASES = {'default': dj_database_url.config(default=os.environ['DATABASE_URL'])}\n"
+        )
+        assert not any(
+            "DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text)
+        )
+
+    def test_databases_from_individual_env_vars_does_not_warn(self):
+        """#1768: a DATABASES dict built from individual os.environ['DB_*'] vars
+        (not DATABASE_URL) IS environment-derived and must NOT warn."""
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import os\n"
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.postgresql',\n"
+            "        'NAME': os.environ['DB_NAME'],\n"
+            "        'USER': os.environ['DB_USER'],\n"
+            "        'HOST': os.environ.get('DB_HOST', 'localhost'),\n"
+            "    }\n"
+            "}\n"
+        )
+        assert not any(
+            "DATABASE_URL" in w or "DATABASES" in w for w in _deploy_doctor_warnings(text)
+        )
+
+    def test_databases_hardcoded_still_warns_despite_env_secret_key(self):
+        """#1768 region-scoping guard: a SECRET_KEY read from env elsewhere must
+        NOT mask a genuinely hardcoded DATABASES block — the env-read check is
+        scoped to the DATABASES region."""
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "import os\n"
+            "SECRET_KEY = os.environ['SECRET_KEY']\n"
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.postgresql',\n"
+            "        'NAME': 'mydb', 'USER': 'me', 'HOST': 'localhost',\n"
+            "    }\n"
+            "}\n"
+        )
+        assert any("DATABASES" in w for w in _deploy_doctor_warnings(text))
+
+    def test_sqlite_under_project_dir_warns(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = (
+            "DATABASES = {\n"
+            "    'default': {\n"
+            "        'ENGINE': 'django.db.backends.sqlite3',\n"
+            "        'NAME': BASE_DIR / 'db.sqlite3',\n"
+            "    }\n"
+            "}\n"
+        )
+        warns = _deploy_doctor_warnings(text)
+        assert any("sqlite" in w.lower() or "read-only" in w.lower() for w in warns)
+
+    def test_warnings_carry_env_pointer(self):
+        from djust.deploy_cli import _deploy_doctor_warnings
+
+        text = "SECRET_KEY = 'literal'\n"
+        warns = _deploy_doctor_warnings(text)
+        assert warns
+        # Every warning points the user at the env-injection contract.
+        assert all("env" in w.lower() for w in warns)
+
+    def test_find_settings_files_resolves_manage_py_default(self, tmp_path):
+        from djust.deploy_cli import _find_settings_files
+
+        (tmp_path / "manage.py").write_text(
+            "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproj.settings')\n"
+        )
+        pkg = tmp_path / "myproj"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        settings = pkg / "settings.py"
+        settings.write_text("SECRET_KEY = 'x'\n")
+        found = _find_settings_files(tmp_path)
+        assert settings in found
+
+    def test_find_settings_files_glob_fallback(self, tmp_path):
+        from djust.deploy_cli import _find_settings_files
+
+        pkg = tmp_path / "app"
+        pkg.mkdir()
+        settings = pkg / "settings.py"
+        settings.write_text("SECRET_KEY = 'x'\n")
+        found = _find_settings_files(tmp_path)
+        assert settings in found
+
+    def test_find_settings_files_missing_returns_empty(self, tmp_path):
+        from djust.deploy_cli import _find_settings_files
+
+        assert _find_settings_files(tmp_path) == []
+
+    def test_run_deploy_doctor_prints_warnings_to_stderr(self, tmp_path, capsys):
+        from djust.deploy_cli import _run_deploy_doctor
+
+        (tmp_path / "manage.py").write_text(
+            "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'p.settings')\n"
+        )
+        pkg = tmp_path / "p"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "settings.py").write_text("SECRET_KEY = 'django-insecure-literal'\n")
+        _run_deploy_doctor(tmp_path)
+        err = capsys.readouterr().err
+        assert "SECRET_KEY" in err
+
+    def test_run_deploy_doctor_silent_when_no_settings(self, tmp_path, capsys):
+        from djust.deploy_cli import _run_deploy_doctor
+
+        _run_deploy_doctor(tmp_path)
+        assert capsys.readouterr().err == ""

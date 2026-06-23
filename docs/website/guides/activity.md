@@ -214,6 +214,7 @@ Auth runs in **two phases** and it's important to keep them distinct:
 - **If a handler must refuse to run when a panel is hidden for a
   business reason**, add an explicit guard in the handler body:
 
+  <!-- doc-snippet-check: skip -->
   ```python
   @event_handler()
   def purchase(self, **kwargs):

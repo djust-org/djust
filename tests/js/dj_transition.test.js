@@ -13,7 +13,7 @@ import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
-function createDom(bodyHtml = '') {
+function createDom(bodyHtml = '', opts = {}) {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><head></head><body>
             <div dj-view="test.V" dj-root>${bodyHtml}</div>
@@ -27,6 +27,27 @@ function createDom(bodyHtml = '') {
     }
     dom.window.WebSocket = MockWebSocket;
     dom.window.DJUST_USE_WEBSOCKET = false;
+    if (opts.controlledRaf) {
+        // Replace jsdom's timer-backed requestAnimationFrame with a queue we
+        // drive explicitly via `dom.flushFrame()`. dj-transition captures
+        // `globalThis.requestAnimationFrame` at _runTransition time, so a frame
+        // never fires on a real timer — phase transitions advance only when the
+        // test drives them, making the active/end-on-next-frame ordering
+        // deterministic instead of racing the 16 ms rAF fallback (#1830, #1795
+        // family: assert an ordering invariant, never real-frame timing).
+        const rafCbs = [];
+        dom.window.requestAnimationFrame = function (cb) {
+            rafCbs.push(cb);
+            return rafCbs.length;
+        };
+        dom.flushFrame = function () {
+            // Drain the callbacks queued so far (snapshot first so a callback
+            // that schedules another frame doesn't run in the same flush).
+            const due = rafCbs.splice(0);
+            due.forEach((cb) => cb(0));
+            return due.length;
+        };
+    }
     dom.window.eval(clientCode);
     dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
     return dom;
@@ -103,19 +124,26 @@ describe('dj-transition', () => {
         expect(dom.window.djust.djTransition._parseSpec('a, b, c')).toBeNull();
     });
 
-    it('applies start class synchronously, active/end on next frame', async () => {
-        dom = createDom('<div id="t" dj-transition="start-cls active-cls end-cls"></div>');
+    it('applies start class synchronously, active/end on next frame', () => {
+        // Controlled rAF: the phase-2/3 frame fires only when we drive it, so
+        // the ordering (start now, active/end next frame) is deterministic and
+        // never races the 16 ms rAF fallback under load (#1830). Fully
+        // synchronous — no awaits, no timers.
+        dom = createDom('<div id="t" dj-transition="start-cls active-cls end-cls"></div>', {
+            controlledRaf: true,
+        });
         const el = dom.window.document.getElementById('t');
-        // The module runs on DOMContentLoaded — phase-1 is applied
-        // SYNCHRONOUSLY at module eval time. Assert BEFORE the 16 ms
-        // rAF fallback fires (which would kick us into phase 2/3) —
-        // flush the microtask queue only.
-        await new Promise((r) => setTimeout(r, 0));
-        expect(el.classList.contains('start-cls')).toBe(true);
 
-        // After the next "frame" (fallback setTimeout 16 ms), phase-2
-        // and phase-3 land and phase-1 is removed.
-        await nextFrame(dom);
+        // Phase 1 is applied SYNCHRONOUSLY by the DOMContentLoaded init sweep
+        // (_installDjTransitionObserver → querySelectorAll → _runTransition →
+        // classList.add(start)). The phase-2/3 transition is queued on our
+        // controllable rAF and has NOT run yet — the ordering invariant.
+        expect(el.classList.contains('start-cls')).toBe(true);
+        expect(el.classList.contains('active-cls')).toBe(false);
+        expect(el.classList.contains('end-cls')).toBe(false);
+
+        // Drive exactly one frame: phase-2 + phase-3 land, phase-1 is removed.
+        expect(dom.flushFrame()).toBeGreaterThan(0); // a frame was actually queued
         expect(el.classList.contains('start-cls')).toBe(false);
         expect(el.classList.contains('active-cls')).toBe(true);
         expect(el.classList.contains('end-cls')).toBe(true);

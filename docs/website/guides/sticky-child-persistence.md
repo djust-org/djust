@@ -59,6 +59,21 @@ With sticky-child persistence:
   v1.0.0rc4 via the parent's own snapshot; they are unaffected by this
   feature.
 
+> **In-connection continuity vs cross-reconnect persistence.** This
+> guide's both-opt-in contract is about the *cross-reconnect* axis — a
+> page refresh, network blip, or server restart, where the child's
+> Python instance is gone and must be reconstructed. That still requires
+> ``enable_state_snapshot = True`` on both the child and parent.
+>
+> Within a *single live WebSocket connection*, a sticky child's state is
+> preserved automatically — no opt-in needed — across parent re-renders
+> and ``html_recovery`` (the on-demand full-HTML recovery the client
+> requests when a VDOM patch fails to apply). The parent reuses the
+> already-registered live child instance instead of mounting a fresh one,
+> so a parent event or a recovery never resets the sticky child to its
+> ``mount()`` defaults (fixed in #1813). The opt-in contract below only
+> matters once the connection itself is lost.
+
 ## The both-opt-in contract
 
 A sticky child is persisted only when **both** of these are true:

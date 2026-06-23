@@ -237,6 +237,21 @@ Snapshots are JSON only (no `pickle`), capped at 256 KB by the SW and
 64 KB by the client clamp, and `safe_setattr` blocks dunder /
 private attributes during restoration.
 
+Snapshots are **HMAC-signed by the server** (Django `TimestampSigner`,
+keyed on `SECRET_KEY`) before they cross the wire. The client stores
+the opaque signed blob and echoes it back verbatim; on restore the
+server verifies the signature, a TTL
+(`DJUST_STATE_SNAPSHOT_MAX_AGE`, default 3600 s), and that the
+snapshot was issued for the same view and session. An unsigned,
+forged, tampered, expired, or cross-view/cross-session snapshot is
+rejected and the view falls back to `mount()`. This means a client
+**cannot** fabricate a snapshot to inject arbitrary public state — but
+you should still re-validate any IDs in `_restore_snapshot` against the
+database, since the signed state is whatever the server itself last
+captured. If you override `_capture_snapshot_state` /
+`_restore_snapshot` or ship a custom client, the signed blob must
+round-trip untouched.
+
 System check `djust.C304` warns if a snapshot-opt-in view declares
 attributes whose names match PII patterns (`password`, `token`,
 `secret`, `api_key`, `pii`) — a guardrail against accidentally

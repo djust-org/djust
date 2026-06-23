@@ -107,6 +107,7 @@ __all__ = [
     "TenantMiddleware",
     "get_current_tenant",
     "set_current_tenant",
+    "tenant_context",
     # Managers
     "TenantManager",
     "TenantQuerySet",
@@ -139,6 +140,7 @@ _LAZY_IMPORTS = {
     "TenantMiddleware": ".middleware",
     "get_current_tenant": ".middleware",
     "set_current_tenant": ".middleware",
+    "tenant_context": ".middleware",
     "TenantManager": ".managers",
     "TenantQuerySet": ".managers",
     "AuditEvent": ".audit",
@@ -170,6 +172,7 @@ if TYPE_CHECKING:
         TenantMiddleware,
         get_current_tenant,
         set_current_tenant,
+        tenant_context,
     )
     from .managers import TenantManager, TenantQuerySet  # noqa: F401
     from .audit import (  # noqa: F401

@@ -144,7 +144,10 @@ describe('dj-dialog', () => {
             '<dialog id="d" dj-dialog="open" dj-dialog-close-event="close_settings">hi</dialog>'
         );
         const el = dom.window.document.getElementById('d');
-        // Spy on handleEvent (the global function 11-event-handler.js exports).
+        // Spy on handleEvent. #1706: 35-dj-dialog.js reads the published alias
+        // `globalThis.djust.handleEvent`, NOT the bare global (block-scoped in
+        // the double-load guard, out of scope at module 35's bundle top
+        // level). Stub the alias so the spy is on production's invoke path.
         const calls = [];
         dom.window.eval(`
             window._origHandleEvent = window.handleEvent;
@@ -153,6 +156,8 @@ describe('dj-dialog', () => {
                 window._handleEventCalls.push({ name: name, params: params });
                 return Promise.resolve();
             };
+            window.djust = window.djust || {};
+            window.djust.handleEvent = window.handleEvent;
         `);
 
         // Fire native close event (simulates ESC / backdrop click /
@@ -175,6 +180,8 @@ describe('dj-dialog', () => {
                 window._handleEventCalls.push({ name: name });
                 return Promise.resolve();
             };
+            window.djust = window.djust || {};
+            window.djust.handleEvent = window.handleEvent;
         `);
 
         el.dispatchEvent(new dom.window.Event('close', { bubbles: false }));
@@ -195,6 +202,8 @@ describe('dj-dialog', () => {
                 window._handleEventCalls.push({ name: name });
                 return Promise.resolve();
             };
+            window.djust = window.djust || {};
+            window.djust.handleEvent = window.handleEvent;
         `);
 
         // Trigger multiple sync passes — re-syncing must not stack listeners.
@@ -221,6 +230,8 @@ describe('dj-dialog', () => {
                 window._handleEventCalls.push({ name: name });
                 return Promise.resolve();
             };
+            window.djust = window.djust || {};
+            window.djust.handleEvent = window.handleEvent;
         `);
 
         // Server morph swaps the close-event name post-mount.

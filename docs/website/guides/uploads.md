@@ -232,6 +232,7 @@ Guarantees:
 
 ### S3 multipart upload (full example)
 
+<!-- doc-snippet-check: skip -->
 ```python
 import boto3
 from pathlib import Path
@@ -426,7 +427,7 @@ The store is instantiated lazily on first use. djust reads `DJUST['upload_state_
 Implement the store protocol:
 
 ```python
-from djust.uploads.stores import UploadStateStore
+from djust.uploads.storage import UploadStateStore
 
 class MyUploadStateStore(UploadStateStore):
     async def get_offset(self, upload_id: str) -> int | None:
@@ -448,6 +449,7 @@ Stores are sync or async — djust handles both transparently.
 
 For large files that also use a custom destination (S3, GCS, Azure Blob), combine `ResumableUploadWriter` with the state store:
 
+<!-- doc-snippet-check: skip -->
 ```python
 from djust.uploads import ResumableUploadWriter, BufferedUploadWriter
 import boto3

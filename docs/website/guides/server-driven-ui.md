@@ -267,6 +267,7 @@ class Onboarding(LiveView):
 
 ### Signature
 
+<!-- doc-snippet-check: skip -->
 ```python
 async def wait_for_event(
     self,

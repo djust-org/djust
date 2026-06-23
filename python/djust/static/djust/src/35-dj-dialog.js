@@ -40,11 +40,19 @@ function _installCloseListenerOnce(el) {
         // Read at fire time so morph attribute updates take effect.
         const eventName = el.getAttribute('dj-dialog-close-event');
         if (!eventName) return;
-        // handleEvent is defined globally by 11-event-handler.js. Pass
-        // the dialog element as the trigger for loading-state and
-        // activity-gate machinery.
-        if (typeof handleEvent === 'function') {
-            handleEvent(eventName, { _targetElement: el });
+        // #1706: read the published alias, NOT the bare `handleEvent` symbol.
+        // `handleEvent` is declared in 11-event-handler.js, inside the
+        // double-load-guard `else {}` block (block-scoped); this module runs
+        // at bundle top level, OUTSIDE that block, so the bare reference is
+        // out of scope even unminified (the `typeof` guard silently returns
+        // "undefined" and the close-event never fires) and throws
+        // ReferenceError under terser-minified bundles. Reading
+        // `globalThis.djust.handleEvent` is minification-independent. Same
+        // class as #1676 / #1688. Pass the dialog element as the trigger for
+        // loading-state and activity-gate machinery.
+        const _handleEvent = globalThis.djust && globalThis.djust.handleEvent;
+        if (typeof _handleEvent === 'function') {
+            _handleEvent(eventName, { _targetElement: el });
         }
     });
 }

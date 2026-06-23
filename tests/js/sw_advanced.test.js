@@ -451,7 +451,13 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
         return { window };
     }
 
-    it('case mount stashes public_state into djust._clientState[view]', async () => {
+    // Finding #4 (CWE-345 → CWE-915): the server now emits an OPAQUE signed
+    // blob (``state_snapshot_signed``); the client stores it verbatim and
+    // echoes it back unchanged. It must NOT re-serialize (that would strip
+    // the signature → server rejects).
+    const SIGNED_BLOB = 'eyJzbHVnIjoiYXBwLnZpZXdzLk9yZGVycyIsInNpZCI6IiIsInN0YXRlIjoie30ifQ:1abc:def456';
+
+    it('case mount stashes state_snapshot_signed verbatim into djust._clientState[view]', async () => {
         const { window } = createEnv();
         const LiveViewWebSocket = window.LiveViewWebSocket;
         expect(LiveViewWebSocket).toBeTruthy();
@@ -461,21 +467,34 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
             session_id: 's-1',
             view: 'app.views.Orders',
             version: 1,
-            public_state: { query: 'open', page: 3 },
+            state_snapshot_signed: SIGNED_BLOB,
             // No html → skip innerHTML path, just state stash.
         });
         expect(window.djust._clientState).toBeTruthy();
-        expect(window.djust._clientState['app.views.Orders']).toEqual({
-            query: 'open',
-            page: 3,
-        });
+        // Stored as the OPAQUE string, NOT a parsed object.
+        expect(window.djust._clientState['app.views.Orders']).toBe(SIGNED_BLOB);
     });
 
-    it('serializer reads event.detail.fromUrl for source-URL keyed capture', () => {
+    it('case mount ignores legacy public_state (no longer trusted)', async () => {
         const { window } = createEnv();
-        // Seed state + route map.
+        const handler = new window.LiveViewWebSocket();
+        await handler.handleMessage({
+            type: 'mount',
+            session_id: 's-1',
+            view: 'app.views.Orders',
+            version: 1,
+            public_state: { query: 'open' },  // legacy field — must be ignored
+        });
+        // No signed blob → nothing cached for the view.
+        const cached = (window.djust._clientState || {})['app.views.Orders'];
+        expect(cached).toBeUndefined();
+    });
+
+    it('serializer echoes the signed blob VERBATIM (no re-serialize)', () => {
+        const { window } = createEnv();
+        // Seed the signed blob (string) + route map.
         window.djust._clientState = {
-            'app.views.Orders': { query: 'open' },
+            'app.views.Orders': SIGNED_BLOB,
         };
         window.djust._routeMap = { '/orders': 'app.views.Orders' };
         // Capture the captureState calls on the SW bridge.
@@ -493,8 +512,20 @@ describe('client: state snapshot capture wiring (Fix #1, Fix #9)', () => {
         expect(calls.length).toBe(1);
         expect(calls[0].url).toBe('/orders');
         expect(calls[0].slug).toBe('app.views.Orders');
-        const parsed = JSON.parse(calls[0].json);
-        expect(parsed.query).toBe('open');
+        // The captured payload is the signed blob BYTE-FOR-BYTE — not a
+        // re-serialized object. This is the load-bearing security property.
+        expect(calls[0].json).toBe(SIGNED_BLOB);
+    });
+
+    it('serializer returns null when the cached value is not a string', () => {
+        const { window } = createEnv();
+        // A non-string (e.g. a legacy object) must NOT be sent.
+        window.djust._clientState = {
+            'app.views.Orders': { query: 'open' },
+        };
+        window.djust._routeMap = { '/orders': 'app.views.Orders' };
+        const result = window.djust._stateSnapshot._serialize('app.views.Orders');
+        expect(result).toBeNull();
     });
 });
 

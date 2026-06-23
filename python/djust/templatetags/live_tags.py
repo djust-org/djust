@@ -17,14 +17,17 @@ Usage:
     {% live_input "text" handler="set_subject" value=subject %}
 """
 
+import contextlib
 import logging
 import re
+import threading
 from typing import Any, Dict, Optional
 
 from django import template
 from django.conf import settings
+from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 
 from .._html import build_tag
@@ -33,6 +36,47 @@ from ..utils import get_csp_nonce
 
 register = template.Library()
 logger = logging.getLogger(__name__)
+
+
+def _record_child_dj_model_allowlist(child) -> None:
+    """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
+    from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
+
+    Single shared helper for all three live_render render sites (eager,
+    lazy, sticky) so the same invariant can't drift across them
+    (parallel-path cure, #1646). The child renders through Django's template
+    engine (bypassing ``render_with_diff``), so its allowlist must be derived
+    here. Source is preferred via ``child.get_template()`` (fully resolves
+    ``{% extends %}``); falls back to the inline ``template`` / raw
+    ``template_name`` source. Derivation is from the Rust template AST
+    (Text-node literals only), immune to rendered-output poisoning.
+    """
+    if not hasattr(child, "_record_dj_model_fields_from_source"):
+        return
+    try:
+        from ..utils import get_template_dirs
+
+        source = None
+        get_tmpl = getattr(child, "get_template", None)
+        if callable(get_tmpl):
+            source = get_tmpl()
+        else:
+            inline = getattr(child, "template", None)
+            if inline:
+                source = inline
+            else:
+                template_name = getattr(child, "template_name", None)
+                if template_name:
+                    from django.template import loader as _loader
+
+                    source = _loader.get_template(template_name).template.source
+        child._record_dj_model_fields_from_source(source, get_template_dirs())
+    except Exception:  # noqa: BLE001 — never let allowlist collection break a render
+        # Fail closed: the child's _record_dj_model_fields_from_source already
+        # resets to an empty frozenset on its own error path; guard the
+        # source-resolution above too.
+        logger.warning("[dj-model] child auto-allowlist collection failed; failing closed")
+
 
 # Matches </script> with any letter casing. Used by the `{% colocated_hook %}`
 # body-escape defense to prevent a template-author typo from prematurely
@@ -131,21 +175,85 @@ def _resolve_sse_prefix() -> str:
     return ""
 
 
-@register.simple_tag
-def djust_client_config() -> Any:
-    """Emit client bootstrap configuration as ``<meta>`` tags.
+def _client_config_html(request: Any = None) -> Any:
+    """Build the ``{% djust_client_config %}`` output (shared across engines).
 
-    Currently emits two tags::
+    Emits the API/SSE prefix ``<meta>`` tags and, when the URLconf has any
+    ``LiveView`` routes, appends the route-map ``<script>`` that populates
+    ``window.djust._routeMap`` for zero-wiring ``dj-navigate`` (#1733,
+    ADR-021 Stage 1).
+
+    Both the Django-engine ``@register.simple_tag`` below and the Rust-engine
+    ``ClientConfigTagHandler`` call this helper so their output stays
+    byte-identical (the dual-registration invariant from PR #993).
+
+    Security: the resolved prefixes are HTML-escaped via
+    :func:`django.utils.html.escape`; the route map is emitted via
+    :func:`djust.routing.get_route_map_script`, which ``json.dumps``-escapes
+    the developer-defined route data and ``format_html``-escapes the CSP
+    nonce. No user-input-to-HTML surface is introduced (#1078).
+    """
+    api_prefix = _resolve_api_prefix()
+    sse_prefix = _resolve_sse_prefix()
+    # escape() handles all HTML-special chars including the double-quote
+    # (rendered as &quot;) so the value is safe to interpolate inside
+    # content="..." — even if a developer accidentally puts
+    # <script> in FORCE_SCRIPT_NAME.
+    api_escaped = escape(api_prefix)
+    sse_escaped = escape(sse_prefix)
+    # String concatenation (not f-string) to comply with the repo rule
+    # against f-string mark_safe interpolation.
+    html = (
+        '<meta name="djust-api-prefix" content="' + api_escaped + '">'
+        '\n<meta name="djust-sse-prefix" content="' + sse_escaped + '">'
+    )
+    # auto_navigate (#1734, ADR-021 Stage 2): emit an opt-in flag the client
+    # reads to install its delegated link-interception listener. Reads
+    # LIVEVIEW_CONFIG['auto_navigate'] via the config singleton (the canonical
+    # accessor; already imported above). Default OFF → no meta, no client
+    # behavior change. Static content ("1"), so no escaping surface; CSP-clean
+    # (a <meta>, not an inline <script>).
+    if config.get("auto_navigate"):
+        html = html + '\n<meta name="djust-auto-navigate" content="1">'
+    # Auto-emit the route map (#1733). get_route_map_script returns "" when
+    # the app has no LiveView routes (empty-safe — no stray <script>), and a
+    # nonce-bearing <script> when request.csp_nonce is available.
+    from ..routing import get_route_map_script
+
+    route_script = get_route_map_script(request)
+    if route_script:
+        # route_script is already a SafeString (format_html). Concatenating a
+        # SafeString to a plain str via mark_safe(...) below is safe because
+        # both the meta markup (static + escape()d) and the route script
+        # (format_html + json.dumps) are individually escaped.
+        html = html + "\n" + str(route_script)
+    return mark_safe(html)
+
+
+@register.simple_tag(takes_context=True)
+def djust_client_config(context) -> Any:
+    """Emit client bootstrap configuration as ``<meta>`` tags + route map.
+
+    Emits::
 
         <meta name="djust-api-prefix" content="<resolved API prefix>">
         <meta name="djust-sse-prefix" content="<resolved SSE prefix>">
+        <script>window.djust._routeMap={...};</script>   (when LiveViews exist)
 
     The resolved prefix is computed via Django's ``reverse()`` so it
     honors ``FORCE_SCRIPT_NAME`` and any custom ``api_patterns(prefix=...)``
-    mount. When the djust API is not mounted at all, the tag is still
+    mount. When the djust API is not mounted at all, the meta tag is still
     emitted with ``content=""`` (for easier debugging — an inspector
     looking at the rendered HTML can immediately see resolution failed),
     and the client falls back to its compile-time default ``/djust/api/``.
+
+    The route-map ``<script>`` is auto-derived from the Django URLconf
+    (every route whose callback resolves to a ``LiveView`` subclass) so
+    ``dj-navigate`` works with **zero wiring** — no ``live_session()``
+    required (#1733, ADR-021 Stage 1). It is **empty-safe**: when the app
+    has no LiveView routes, no ``<script>`` is appended. The tag now takes
+    the template context so it can read ``request.csp_nonce`` for the
+    route-map script's nonce attribute.
 
     Usage::
 
@@ -168,21 +276,8 @@ def djust_client_config() -> Any:
     ``FORCE_SCRIPT_NAME`` value cannot break out of the ``content="..."``
     attribute. See ``test_tag_output_is_escaped``.
     """
-    api_prefix = _resolve_api_prefix()
-    sse_prefix = _resolve_sse_prefix()
-    # escape() handles all HTML-special chars including the double-quote
-    # (rendered as &quot;) so the value is safe to interpolate inside
-    # content="..." — even if a developer accidentally puts
-    # <script> in FORCE_SCRIPT_NAME.
-    api_escaped = escape(api_prefix)
-    sse_escaped = escape(sse_prefix)
-    # String concatenation (not f-string) to comply with the repo rule
-    # against f-string mark_safe interpolation.
-    html = (
-        '<meta name="djust-api-prefix" content="' + api_escaped + '">'
-        '\n<meta name="djust-sse-prefix" content="' + sse_escaped + '">'
-    )
-    return mark_safe(html)
+    request = context.get("request") if context is not None else None
+    return _client_config_html(request)
 
 
 @register.simple_tag
@@ -205,7 +300,7 @@ def live_form(view, **kwargs):
 
     Example:
         {% load live_tags %}
-        <form @submit="submit_form">
+        <form dj-submit="submit_form">
             {% live_form view %}
             <button type="submit">Submit</button>
         </form>
@@ -637,10 +732,16 @@ def live_input(field_type: str = "text", **kwargs) -> Any:
         "checkbox",
         "radio",
     ):
-        return mark_safe(
-            f"<!-- ERROR: {{% live_input %}} unknown field_type "
-            f"{field_type!r} — supported: text, textarea, select, password, "
-            f"email, number, url, tel, search, hidden, checkbox, radio -->"
+        # Defense-in-depth (#1646 / finding #18): field_type is a template-author
+        # literal (not attacker input), but mark_safe(f"... {field_type!r} ...")
+        # interpolates a variable into an HTML comment without escaping ``-->``.
+        # format_html escapes the interpolated value, so the comment can't be
+        # broken out of regardless of source.
+        return format_html(
+            "<!-- ERROR: {{% live_input %}} unknown field_type "
+            "{} — supported: text, textarea, select, password, "
+            "email, number, url, tel, search, hidden, checkbox, radio -->",
+            repr(field_type),
         )
 
     if not handler and field_type != "hidden":
@@ -1256,10 +1357,131 @@ def _stamp_view_id(html: str, view_id: str) -> str:
     return _MASK_PLACEHOLDER_RE.sub(_unmask, stamped)
 
 
+def _render_sticky_child_html(
+    child: Any,
+    view_id: str,
+    sticky_id_value: str,
+    request: Any,
+    view_path: str,
+) -> Any:
+    """Render an ALREADY-mounted/registered sticky child to its wrapped HTML.
+
+    Shared by the fresh-mount eager path (steps 6-9 of :func:`live_render`)
+    and the #1813 (b1) live-instance-reuse hatch, so both paths produce
+    byte-identical wrapper markup (parallel-path-drift guard, #1646). The
+    caller is responsible for instance lifecycle: this helper does NOT mount
+    or register — it only renders the child's CURRENT ``get_context_data()``,
+    stamps ``view_id`` on event-bearing elements, and wraps in the sticky
+    ``[dj-view][dj-sticky-view][dj-sticky-root]`` container.
+    """
+    from django.template.loader import get_template
+
+    child_context: Dict[str, Any] = {}
+    get_ctx = getattr(child, "get_context_data", None)
+    if callable(get_ctx):
+        try:
+            child_context = dict(get_ctx())
+        except Exception:  # noqa: BLE001 — fall back to empty context on error
+            logger.exception(
+                "live_render: child %s.get_context_data raised; rendering with empty context",
+                type(child).__name__,
+            )
+            child_context = {}
+    child_context.setdefault("request", request)
+    child_context.setdefault("view", child)
+
+    inline = getattr(child, "template", None)
+    if inline:
+        rendered_inner = Template(inline).render(Context(child_context))
+    else:
+        template_name = getattr(child, "template_name", None)
+        if not template_name:
+            raise TemplateSyntaxError(
+                "{%% live_render %%} child %r has neither ``template`` nor "
+                "``template_name`` set" % view_path
+            )
+        rendered_inner = get_template(template_name).render(child_context, request)
+
+    # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
+    # so child update_model events (gated on the child's _dj_model_fields)
+    # accept its dj-model inputs — this render bypasses render_with_diff
+    # (#3 Stage-11 review, #1646 parallel-path).
+    _record_child_dj_model_allowlist(child)
+    rendered_stamped = _stamp_view_id(rendered_inner, view_id)
+    escaped_id = escape(view_id)
+    escaped_sticky_id = escape(sticky_id_value)
+    return mark_safe(
+        '<div dj-view dj-sticky-view="'
+        + escaped_sticky_id
+        + '" dj-sticky-root data-djust-embedded="'
+        + escaped_id
+        + '">'
+        + rendered_stamped
+        + "</div>"
+    )
+
+
 # Context-render-local scratch key for tracking sticky_ids already
 # registered in the current parent render pass. Used to raise
 # TemplateSyntaxError on ``{% live_render 'X' sticky=True %}`` collisions.
 _STICKY_IDS_SEEN_KEY = "_djust_sticky_ids_seen"
+
+
+# ---------------------------------------------------------------------------
+# Active-parent-view thread-local (#1784)
+# ---------------------------------------------------------------------------
+#
+# The initial HTTP GET renders the page shell — including any embedded
+# ``{% live_render %}`` tag — through the Rust renderer with a
+# JSON-serialized context (see ``RequestMixin.get`` →
+# ``TemplateMixin.render_full_template``). A JSON context structurally cannot
+# carry the live parent ``LiveView`` object that ``live_render`` needs, so the
+# tag historically raised ``TemplateSyntaxError: ... no parent view in the
+# current render context`` and the request 500'd — which blocked
+# server-rendering of sticky / app-shell pages entirely.
+#
+# Fix: ``render_full_template`` AND ``render_with_diff`` register the active
+# parent view in this thread-local for the duration of their Rust render (via
+# the :func:`active_parent_view` context manager, which save/restores so nested
+# child renders don't blank the parent and the value is always restored even on
+# error — never leaking across requests/threads). The ``live_render`` tag falls
+# back to this thread-local only when the render context has no ``view``/``self``
+# key — the WS path and the Django-engine path still carry a real ``view`` in
+# context and are unaffected (the fallback is inert for them).
+#
+# Both render paths must set it: ``RequestMixin.get`` calls
+# ``render_full_template`` AND then ``render_with_diff`` to establish the VDOM
+# baseline, and both re-run the ``live_render`` tag through the Rust engine
+# (parallel-path-drift class, per CLAUDE.md — fixing only one leaves the twin).
+_active_parent_view = threading.local()
+
+
+def get_active_parent_view() -> Any:
+    """Return the active parent view registered for the current thread, or
+    ``None`` when none is set (the common case for the WS / Django-engine
+    render paths)."""
+    return getattr(_active_parent_view, "view", None)
+
+
+@contextlib.contextmanager
+def active_parent_view(view: Any):
+    """Context manager that registers ``view`` as the active parent
+    :class:`~djust.live_view.LiveView` for the current thread so an embedded
+    ``{% live_render %}`` tag can find it during a Rust render that carries
+    only a JSON-serialized context (#1784).
+
+    The PREVIOUS value is saved on entry and restored on exit (not merely
+    cleared) so nested renders — a parent render that triggers a child's
+    ``render_with_diff`` — restore the parent as the active view rather than
+    blanking it. Restoration runs even on error, so the thread-local never
+    leaks across requests/threads.
+    """
+    previous = getattr(_active_parent_view, "view", None)
+    _active_parent_view.view = view
+    try:
+        yield
+    finally:
+        _active_parent_view.view = previous
 
 
 @register.simple_tag(takes_context=True)
@@ -1373,7 +1595,16 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         )
 
     # 3. Locate the parent view in the render context.
+    #
+    # On the initial HTTP GET the page shell is rendered through the Rust
+    # engine with a JSON-serialized context that cannot carry the live
+    # ``LiveView`` object, so ``view``/``self`` are absent. Fall back to the
+    # thread-local registered by ``render_full_template`` (#1784). The WS path
+    # and the Django-engine path put a real ``view`` in the context, so the
+    # fallback is inert for them.
     parent = context.get("view") or context.get("self")
+    if parent is None or not isinstance(parent, LiveView):
+        parent = get_active_parent_view()
     if parent is None or not isinstance(parent, LiveView):
         raise TemplateSyntaxError(
             "{% live_render %} must be called inside a LiveView template; "
@@ -1381,7 +1612,18 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         )
 
     # 4. Instantiate + mount the child.
+    #
+    # On the initial HTTP GET shell render (#1784) the context flows through
+    # the Rust engine as a JSON-serialized dict, so ``request`` is a stringified
+    # placeholder (``normalize_django_value`` turns the WSGIRequest into a str).
+    # The child needs the real request object for ``mount(request, ...)`` and
+    # ``check_view_auth``, so fall back to the parent view's live
+    # ``request`` attribute when the context value isn't an ``HttpRequest``.
+    from django.http import HttpRequest
+
     request = context.get("request")
+    if not isinstance(request, HttpRequest):
+        request = getattr(parent, "request", None)
     preferred_view_id = kwargs.pop("view_id", None)
     # Phase B: sticky kwarg — if the caller asks for sticky preservation,
     # the child class must opt in (``sticky = True`` + non-empty
@@ -1574,6 +1816,15 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 mount_fn = getattr(child, "mount", None)
                 if callable(mount_fn):
                     mount_fn(request, **captured_kwargs)
+                # Object-permission check (ADR-017) for the lazy embedded child
+                # — same as the eager path (finding #12). No-op unless the child
+                # overrides get_object; fail-closed otherwise.
+                from ..auth.core import enforce_object_permission
+
+                try:
+                    enforce_object_permission(child, request)
+                except PermissionDenied:
+                    raise PermissionError("child %r denied access (object permission)" % view_path)
                 # Don't re-register the child by view_id — _assign_view_id
                 # already incremented the counter; calling _register_child
                 # here is what locks the slot. The lazy-fill DOM ends up
@@ -1605,6 +1856,12 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                             "``template_name`` set" % view_path
                         )
                     rendered_inner = get_template(template_name).render(child_context, request)
+                # Record the child's dj-model auto-allowlist from its own
+                # TEMPLATE SOURCE so child update_model events (gated on the
+                # child's _dj_model_fields) accept its dj-model inputs — this
+                # render bypasses render_with_diff (#3 Stage-11 review, #1646
+                # parallel-path).
+                _record_child_dj_model_allowlist(child)
                 rendered_stamped = _stamp_view_id(rendered_inner, view_id)
                 # Wrap in a [dj-view] container so events route via
                 # data-djust-embedded just like the eager path.
@@ -1708,6 +1965,72 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             + "</dj-lazy-slot>"
         )
 
+    # 4-pre. (#1813 (b1)) Live-instance-reuse hatch — the STRUCTURAL CURE for
+    #     sticky-child state loss on parent re-render.
+    #
+    #     ``render_with_diff()`` (and ``render_full_template`` on the GET path)
+    #     re-execute this tag on EVERY parent render with ``parent`` set to the
+    #     LIVE parent view (via ``active_parent_view(self)``). The parent's
+    #     :class:`StickyChildRegistry` (``_child_views``, keyed by ``sticky_id``
+    #     since ``preferred_view_id = sticky_id`` above) therefore still holds
+    #     the child instance that was mounted on a PRIOR render — carrying any
+    #     state the user mutated via embedded-child events.
+    #
+    #     Without this hatch the tag always builds a FRESH ``child_cls()`` +
+    #     ``mount()``, so every parent re-render (and every ``_recovery_html``
+    #     snapshot taken during a parent event) renders the child at mount
+    #     defaults. When the client later falls back to ``request_html``
+    #     recovery, the sticky child is reset and the user's interactions are
+    #     discarded — the #1813 data-loss bug.
+    #
+    #     The two pre-existing escape hatches do NOT cover this:
+    #       * ``_sticky_preserved`` auto-reattach (above) only fires on a
+    #         live_redirect/navigation (the #1471 reconnect path);
+    #       * ``restore_sticky_child_state`` (below) is gated behind
+    #         ``enable_state_snapshot=True`` on BOTH parent + child and reads
+    #         from the session — inert in the default config.
+    #
+    #     This hatch is INDEPENDENT of those: it reuses the in-memory live
+    #     instance the parent already holds. It composes with — does not bypass
+    #     — the others, because it only fires when the registry already has a
+    #     live child for this ``sticky_id`` (i.e. on the SECOND and later
+    #     renders of a long-lived WS parent). On the first render the registry
+    #     is empty, so we fall through to the existing fresh-mount / restore
+    #     path. It is keyed by ``sticky_id`` (== ``preferred_view_id`` for a
+    #     sticky child) so it only applies to sticky children — non-sticky
+    #     ``{% live_render %}`` re-creates per render exactly as before.
+    if sticky_kwarg and preferred_view_id is not None:
+        existing_child = None
+        get_child = getattr(parent, "_get_child_view", None)
+        if callable(get_child):
+            try:
+                existing_child = get_child(preferred_view_id)
+            except Exception:  # noqa: BLE001 — never break the parent render
+                logger.exception(
+                    "live_render: live-instance lookup for sticky %r failed; mounting fresh",
+                    preferred_view_id,
+                )
+                existing_child = None
+        # Only reuse a genuine sticky instance of the EXPECTED class. A class
+        # mismatch (two embeds sharing a sticky_id across different child
+        # classes — already rejected for one render pass by the uniqueness
+        # check, but defensive across renders) falls through to fresh mount.
+        if (
+            isinstance(existing_child, child_cls)
+            and getattr(existing_child, "sticky_id", None) == sticky_id_value
+        ):
+            # Refresh the live request so handlers/middleware-populated attrs
+            # (auth, session) read from the CURRENT parent render's request —
+            # mirrors the ``_sticky_preserved`` auto-reattach path above.
+            existing_child.request = request
+            return _render_sticky_child_html(
+                existing_child,
+                preferred_view_id,
+                sticky_id_value,
+                request,
+                view_path,
+            )
+
     child = child_cls()
     child.request = request
 
@@ -1770,14 +2093,44 @@ def live_render(context, view_path: str, **kwargs) -> Any:
         if callable(mount):
             mount(request, **kwargs)
 
+    # 4c. Object-permission check (ADR-017) for the embedded child. The child's
+    #     view-level auth ran above (check_view_auth); the object-level step
+    #     must run too, or an embedded object-scoped child renders a denied
+    #     object (finding #12). No-op for children that don't override
+    #     get_object. Fail-closed: deny the embed rather than leak.
+    from ..auth.core import enforce_object_permission
+
+    try:
+        enforce_object_permission(child, request)
+    except PermissionDenied:
+        raise TemplateSyntaxError(
+            "{%% live_render %%} target %r denied access: object-level permission "
+            "check failed for the requested object." % view_path
+        )
+
     # 5. Assign the view_id and register on the parent. _register_child
     #    wires parent/view_id back-references on the child.
     view_id = parent._assign_view_id(preferred_view_id)
     parent._register_child(view_id, child)
 
-    # 6. Build the child's render context and render its template.
-    #    The child gets its own context, independent of the parent's —
-    #    each embedded view manages its own state.
+    # 6-9. Sticky branch: render via the shared helper so the fresh-mount path
+    #      and the #1813 (b1) live-instance-reuse hatch emit byte-identical
+    #      wrapper markup (parallel-path-drift guard, #1646). The helper builds
+    #      the child's context, renders its template, stamps the view_id, and
+    #      wraps in the ``[dj-view][dj-sticky-view][dj-sticky-root]`` container.
+    #
+    #      The sticky wrapper carries ``dj-sticky-view`` + ``dj-sticky-root``:
+    #      the client's ``45-child-view.js`` walks ``[dj-sticky-view]`` before a
+    #      live_redirect, detaches the subtree into an in-memory stash, and
+    #      re-attaches each at ``[dj-sticky-slot="<id>"]`` via ``replaceWith()``
+    #      after the new mount arrives (the #1471 reconnect path).
+    if sticky_kwarg:
+        return _render_sticky_child_html(child, view_id, sticky_id_value, request, view_path)
+
+    # Non-sticky branch (the Phase A contract) — unchanged. Build the child's
+    # context, render its template, stamp the view_id, and wrap in a plain
+    # ``[dj-view]`` container carrying ``data-djust-embedded`` (the client's DOM
+    # walker reads ``dataset.djustEmbedded`` to surface ``view_id`` on events).
     child_context: Dict[str, Any] = {}
     get_ctx = getattr(child, "get_context_data", None)
     if callable(get_ctx):
@@ -1792,9 +2145,6 @@ def live_render(context, view_path: str, **kwargs) -> Any:
     child_context.setdefault("request", request)
     child_context.setdefault("view", child)
 
-    # 7. Resolve + render the child's template. Prefer the inline
-    #    ``template`` attribute when set (used pervasively in tests);
-    #    otherwise fall through to Django's ``template_name`` resolver.
     inline = getattr(child, "template", None)
     if inline:
         rendered_inner = Template(inline).render(Context(child_context))
@@ -1807,37 +2157,13 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             )
         rendered_inner = get_template(template_name).render(child_context, request)
 
-    # 8. Stamp view_id on every event-attribute-bearing element in the
-    #    rendered HTML so inbound events route to this child.
+    # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
+    # so child update_model events (gated on the child's _dj_model_fields)
+    # accept its dj-model inputs — this render bypasses render_with_diff
+    # (#3 Stage-11 review, #1646 parallel-path).
+    _record_child_dj_model_allowlist(child)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
-
-    # 9. Wrap in a [dj-view] container carrying ``data-djust-embedded`` —
-    #    the client's DOM walker (``getEmbeddedViewId`` in
-    #    01-dom-helpers-turbo.js) reads ``dataset.djustEmbedded`` to
-    #    surface the id on outbound events as ``view_id``.
-    #
-    #    Phase B sticky branch: also carries ``dj-sticky-view="<id>"`` +
-    #    ``dj-sticky-root`` attributes. The client's
-    #    ``45-child-view.js`` module walks ``[dj-sticky-view]`` before a
-    #    live_redirect is sent and detaches the subtree into an
-    #    in-memory stash; after the new mount arrives, the server sends
-    #    a ``sticky_hold`` frame listing surviving ids and the client
-    #    re-attaches each stashed subtree at ``[dj-sticky-slot="<id>"]``
-    #    in the new DOM via ``replaceWith()``.
-    #
-    #    Non-sticky branch behavior is unchanged (the Phase A contract).
     escaped_id = escape(view_id)
-    if sticky_kwarg:
-        escaped_sticky_id = escape(sticky_id_value)
-        return mark_safe(
-            '<div dj-view dj-sticky-view="'
-            + escaped_sticky_id
-            + '" dj-sticky-root data-djust-embedded="'
-            + escaped_id
-            + '">'
-            + rendered_stamped
-            + "</div>"
-        )
     return mark_safe(
         '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
     )

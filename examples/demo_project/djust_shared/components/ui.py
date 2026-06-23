@@ -304,7 +304,7 @@ class Button(Component):
             '''
 
         return f'''
-            <button @click="{self.event}" class="{css_class}" {self.extra_attrs}>
+            <button dj-click="{self.event}" class="{css_class}" {self.extra_attrs}>
                 {icon_html}
                 <span>{self.text}</span>
             </button>

@@ -10,6 +10,17 @@ YELLOW := \033[0;33m
 RED := \033[0;31m
 NC := \033[0m # No Color
 
+# Project Python interpreter, resolved robustly so `make` targets work from
+# any git worktree (a worktree has no `.venv` of its own; the resolver finds
+# the main checkout's venv, falling back to `uv run python` / `python3`). See
+# scripts/run-with-venv-python.sh and issue #1796.
+#
+# `:=` evaluates the resolver once at parse time (not on every `$(PYTHON)`
+# expansion). Override on the command line with `make PYTHON=/path/to/python`.
+ifndef PYTHON
+PYTHON := $(shell bash scripts/run-with-venv-python.sh --print)
+endif
+
 .DEFAULT_GOAL := help
 
 ##@ Help
@@ -125,27 +136,27 @@ dev-build: ## Build Rust extensions in development mode
 
 .PHONY: roadmap-lint
 roadmap-lint: ## Mechanical ROADMAP-vs-codebase drift check (use pipeline-roadmap-audit skill for semantic audit)
-	@.venv/bin/python scripts/roadmap-lint.py $(if $(VERBOSE),--verbose,)
+	@$(PYTHON) scripts/roadmap-lint.py $(if $(VERBOSE),--verbose,)
 
 .PHONY: check-handler-contracts
 check-handler-contracts: ## Cross-reference tag-emit _event defaults against handler methods (closes #1290)
-	@.venv/bin/python scripts/check-handler-contracts.py
+	@$(PYTHON) scripts/check-handler-contracts.py
 
 .PHONY: docs-lint
 docs-lint: ## Sweep docs/**/*.md for stale .md cross-references (closes #1075)
-	@.venv/bin/python scripts/docs-lint.py $(if $(VERBOSE),--verbose,)
+	@$(PYTHON) scripts/docs-lint.py $(if $(VERBOSE),--verbose,)
 
 .PHONY: check-adr-status
 check-adr-status: ## Validate ADR Status/version-line consistency (closes #1501)
-	@.venv/bin/python scripts/check-adr-status.py $(if $(VERBOSE),--verbose,)
+	@$(PYTHON) scripts/check-adr-status.py $(if $(VERBOSE),--verbose,)
 
 .PHONY: check-doc-snippets
 check-doc-snippets: ## Smoke-check fenced Python doc snippets + Django/JS-size claims (closes #1500)
-	@.venv/bin/python scripts/check-doc-snippets.py $(if $(VERBOSE),--verbose,)
+	@$(PYTHON) scripts/check-doc-snippets.py $(if $(VERBOSE),--verbose,)
 
 .PHONY: check-lockfile-versions
 check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries match manifests (closes #1498)
-	@.venv/bin/python scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)
+	@$(PYTHON) scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)
 
 .PHONY: check-bundle-init-order
 check-bundle-init-order: ## Static check: declared-late/used-early let/const across bundle concat (closes #1372)
@@ -155,8 +166,8 @@ check-bundle-init-order: ## Static check: declared-late/used-early let/const acr
 test: ## Run all tests (Python + JavaScript + Rust) in parallel
 	@echo "$(GREEN)Running all tests in parallel...$(NC)"
 	@PY_EXIT=0; RS_EXIT=0; JS_EXIT=0; \
-	PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
-	PYO3_PYTHON=$$(pwd)/.venv/bin/python sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
+	PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ -n auto -q > /tmp/djust-test-py.log 2>&1 & PY_PID=$$!; \
+	PYO3_PYTHON=$(PYTHON) sh -c "cargo test --workspace --exclude djust_live -q && cargo test -p djust_live --no-default-features -q" > /tmp/djust-test-rs.log 2>&1 & RS_PID=$$!; \
 	npm test > /tmp/djust-test-js.log 2>&1 & JS_PID=$$!; \
 	wait $$PY_PID || PY_EXIT=$$?; \
 	wait $$RS_PID || RS_EXIT=$$?; \
@@ -182,19 +193,19 @@ test-sequential: test-python test-js test-rust ## Run all tests sequentially (fa
 test-rust: ## Run Rust tests
 	@echo "$(GREEN)Running Rust tests...$(NC)"
 	@echo "$(YELLOW)Phase 1: workspace excluding djust_live (cdylib link constraint)$(NC)"
-	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test --workspace --exclude djust_live
+	@PYO3_PYTHON=$(PYTHON) cargo test --workspace --exclude djust_live
 	@echo "$(YELLOW)Phase 2: djust_live with --no-default-features (libpython static link, #1543)$(NC)"
-	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo test -p djust_live --no-default-features
+	@PYO3_PYTHON=$(PYTHON) cargo test -p djust_live --no-default-features
 
 .PHONY: test-python
 test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/
 
 .PHONY: test-python-parallel
 test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -n auto
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto
 
 .PHONY: test-js
 test-js: ## Run JavaScript tests
@@ -204,31 +215,31 @@ test-js: ## Run JavaScript tests
 .PHONY: test-vdom
 test-vdom: ## Run VDOM patching tests
 	@echo "$(GREEN)Running VDOM patching tests...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest python/tests/test_vdom_patching_wrapper.py -v
+	@PYTHONPATH=. $(PYTHON) -m pytest python/tests/test_vdom_patching_wrapper.py -v
 
 .PHONY: test-liveview
 test-liveview: ## Run LiveView core tests
 	@echo "$(GREEN)Running LiveView tests...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/unit/test_live_view.py -v
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/unit/test_live_view.py -v
 
 .PHONY: test-playwright
 test-playwright: ## Run Playwright browser automation tests (manual, requires server running)
 	@echo "$(YELLOW)Running Playwright tests (requires 'make start' in another terminal)...$(NC)"
 	@echo "$(YELLOW)Note: These are manual tests not included in CI$(NC)"
-	@.venv/bin/python tests/playwright/test_loading_attribute.py
-	@.venv/bin/python tests/playwright/test_cache_decorator.py
-	@.venv/bin/python tests/playwright/test_draft_mode.py
+	@$(PYTHON) tests/playwright/test_loading_attribute.py
+	@$(PYTHON) tests/playwright/test_cache_decorator.py
+	@$(PYTHON) tests/playwright/test_draft_mode.py
 	@echo "$(GREEN)Playwright tests completed$(NC)"
 
 .PHONY: check-test-coverage
 check-test-coverage: ## Verify all test directories are collected by CI
-	@PYTHONPATH=. .venv/bin/python scripts/check-test-coverage.py
+	@PYTHONPATH=. $(PYTHON) scripts/check-test-coverage.py
 
 .PHONY: lint
 lint: ## Run linters
 	@echo "$(GREEN)Running linters...$(NC)"
 	@uv run ruff check python/
-	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo clippy -- -W clippy::all -D clippy::correctness -D clippy::suspicious
+	@PYO3_PYTHON=$(PYTHON) cargo clippy -- -W clippy::all -D clippy::correctness -D clippy::suspicious
 
 .PHONY: lint-ci
 lint-ci: ## Run linters in CI mode (warnings as errors)
@@ -265,19 +276,19 @@ check: lint check-bundle-init-order test ## Run linters and tests
 
 .PHONY: check-changelog
 check-changelog: ## Validate CHANGELOG test-count claims against actual tests (closes #908)
-	@.venv/bin/python scripts/check-changelog-test-counts.py
+	@$(PYTHON) scripts/check-changelog-test-counts.py
 
 .PHONY: ci-mirror
 ci-mirror: ## Mirror exact CI pytest invocations locally — catches coverage/xdist surprises pre-push (closes #960)
 	@echo "$(GREEN)ci-mirror: running the exact CI pytest commands from .github/workflows/test.yml$(NC)"
 	@echo "$(YELLOW)Ensuring xdist + pytest-cov (CI installs these just-in-time in step 1/2 and step 2/2)$(NC)"
-	@.venv/bin/python -c "import xdist, pytest_cov" 2>/dev/null || uv pip install pytest-xdist pytest-cov
+	@$(PYTHON) -c "import xdist, pytest_cov" 2>/dev/null || uv pip install pytest-xdist pytest-cov
 	@echo ""
 	@echo "$(YELLOW)Step 1/2: full parallel Python suite (pytest-xdist)$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto
 	@echo ""
 	@echo "$(YELLOW)Step 2/2: security-tests with coverage (--cov-fail-under=75)$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest \
+	@PYTHONPATH=. $(PYTHON) -m pytest \
 		tests/unit/test_security_*.py \
 		tests/unit/test_upload_writer.py \
 		python/tests/test_security*.py \
@@ -300,25 +311,25 @@ benchmark: benchmark-rust benchmark-python ## Run all benchmarks
 benchmark-rust: ## Run Rust benchmarks (Criterion)
 	@echo "$(GREEN)Running Rust benchmarks...$(NC)"
 	@echo "$(YELLOW)Note: This may take several minutes$(NC)"
-	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench --workspace --exclude djust_live 2>&1 | tee benchmark-rust.log
-	@PYO3_PYTHON=$$(pwd)/.venv/bin/python cargo bench -p djust_live --no-default-features 2>&1 | tee -a benchmark-rust.log
+	@PYO3_PYTHON=$(PYTHON) cargo bench --workspace --exclude djust_live 2>&1 | tee benchmark-rust.log
+	@PYO3_PYTHON=$(PYTHON) cargo bench -p djust_live --no-default-features 2>&1 | tee -a benchmark-rust.log
 	@echo "$(GREEN)Rust benchmark results saved to benchmark-rust.log$(NC)"
 	@echo "$(YELLOW)HTML reports available in target/criterion/$(NC)"
 
 .PHONY: benchmark-python
 benchmark-python: ## Run Python benchmarks (pytest-benchmark)
 	@echo "$(GREEN)Running Python benchmarks...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-only --benchmark-autosave
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/ -v --benchmark-only --benchmark-autosave
 
 .PHONY: benchmark-python-compare
 benchmark-python-compare: ## Compare Python benchmarks against saved baseline
 	@echo "$(GREEN)Comparing Python benchmarks against baseline...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-compare
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/ -v --benchmark-compare
 
 .PHONY: benchmark-quick
 benchmark-quick: ## Run quick benchmarks (minimal iterations)
 	@echo "$(GREEN)Running quick Python benchmarks...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/ -v --benchmark-only \
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/ -v --benchmark-only \
 		--benchmark-min-rounds=3 \
 		--benchmark-warmup=off \
 		--benchmark-disable-gc
@@ -326,7 +337,7 @@ benchmark-quick: ## Run quick benchmarks (minimal iterations)
 .PHONY: benchmark-e2e
 benchmark-e2e: ## Run end-to-end LiveView benchmarks
 	@echo "$(GREEN)Running end-to-end benchmarks...$(NC)"
-	@PYTHONPATH=. .venv/bin/python -m pytest tests/benchmarks/test_e2e.py -v --benchmark-only \
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/benchmarks/test_e2e.py -v --benchmark-only \
 		--benchmark-min-rounds=5
 
 ##@ Database
@@ -414,7 +425,7 @@ health: ## Run health checks on djust backends
 profile: ## Run the v0.6.0 request-path profiling harness (artifacts/profile-<ts>.txt)
 	@echo "$(GREEN)Running request-path profile...$(NC)"
 	@mkdir -p artifacts
-	@.venv/bin/python scripts/profile-request-path.py
+	@$(PYTHON) scripts/profile-request-path.py
 
 .PHONY: profile-stats
 profile-stats: ## Show runtime profiling statistics (legacy)
@@ -543,7 +554,7 @@ endif
 		exit 1; \
 	fi
 	@# Verify lockfile self-entries are in sync (closes #1498)
-	@.venv/bin/python scripts/check-lockfile-versions.py || \
+	@$(PYTHON) scripts/check-lockfile-versions.py || \
 		{ echo "$(RED)ERROR: lockfile self-entries stale — run 'make version VERSION=$(VERSION)'$(NC)"; exit 1; }
 	@# Create and push tag
 	@git tag -a v$(VERSION) -m "Release v$(VERSION)"

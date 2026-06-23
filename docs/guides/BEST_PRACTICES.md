@@ -19,6 +19,7 @@ A practical guide to building reactive LiveView applications with djust.
 - [Testing](#testing)
 - [Debugging](#debugging)
 - [Navigation](#navigation)
+- [Deployment](#deployment)
 - [Common Pitfalls](#common-pitfalls)
 
 ---
@@ -573,6 +574,29 @@ class AdminView(PermissionRequiredMixin, LiveView):
     permission_required = "myapp.change_settings"
 ```
 
+### WebSocket authentication
+
+Auth runs at mount on both the HTTP and WebSocket paths. A `login_required` /
+`PermissionRequiredMixin` view that fails the check is rejected and the
+WebSocket is closed, so event handlers are never reached on a view that failed
+auth. Practices to follow:
+
+- **Test WebSocket auth with a raw client** (`WebsocketCommunicator` or the
+  `websockets` library), not just a browser — a browser follows the redirect and
+  can mask a gap in your auth setup.
+- Auth is **mount-time** by default. To also reject events after a *mid-session*
+  logout or permission change, enable a per-event re-check:
+  `LIVEVIEW_CONFIG['reauth_on_event'] = True` (default OFF — it costs one session
+  read per event).
+- Set **`LIVEVIEW_ALLOWED_MODULES`** to restrict which view classes a client may
+  mount over the WebSocket; per-view `check_view_auth` remains the real gate.
+- **Non-LiveView endpoints** — a plain `django.views.View` (e.g. an OAuth
+  callback) is NOT covered by `login_required` / `check_view_auth`; gate it with
+  Django's own `LoginRequiredMixin`.
+- Don't let the **login page extend a base** whose `dj-view` root mounts a
+  `login_required` view, or it redirect-loops — give the login view a standalone
+  template.
+
 ### Authorization in event handlers
 
 Always re-verify permissions in event handlers — the initial `mount()` check isn't enough for stateful views:
@@ -612,6 +636,24 @@ def select_service(self, service_id="", **kwargs):
 - Use `format_html()` for server-generated HTML with interpolated values
 - Use `json.dumps()` for values injected into JavaScript contexts
 - Always include `{% csrf_token %}` in forms
+
+### Auth and CSRF UI in `dj-view` templates
+
+`{{ user }}`, `{% csrf_token %}`, and context-processor variables render
+correctly on WebSocket updates, so auth UI — a logout form, a username chip, a
+CSRF'd inline form — can live directly inside the `dj-view` root and stays
+intact across live updates:
+
+```html
+<div dj-view="myapp.views.DashboardView">
+  ...nav, content...
+  {% if user.is_authenticated %}
+  <form method="post" action="{% url 'logout' %}">{% csrf_token %}
+    <button>log out {{ user.username }}</button>
+  </form>
+  {% endif %}
+</div>
+```
 
 ---
 
@@ -695,7 +737,7 @@ class MyView(LiveView):
 Then handle URL changes in `handle_params()`:
 
 ```python
-class MyView(NavigationMixin, LiveView):
+class MyView(LiveView):  # NavigationMixin is built into LiveView — don't inherit it (MRO error)
     def handle_params(self, params, uri):
         tab = params.get("tab", "overview")
         if tab in ("overview", "settings", "logs"):
@@ -893,6 +935,51 @@ For in-view navigation (tabs, filters, pagination), use `dj-patch` instead of `d
 | `dj-navigate` | Full page navigation to a different LiveView |
 
 System check `djust.T010` detects `dj-click` used for navigation and suggests `dj-patch`. For a complete walkthrough with examples, see the [Navigation & URL State](../website/guides/navigation.md) guide.
+
+---
+
+## Deployment
+
+When you deploy with `djust deploy` (to the djustlive platform), your app runs on a managed host that **injects configuration through environment variables** and serves the app from a **read-only root filesystem**. Settings that hardcode values the platform provides — or that write to local files — work in development but fail at runtime in production, often *after* a deploy that reports success.
+
+### Read platform config from the environment
+
+The platform injects `SECRET_KEY`, `ALLOWED_HOSTS`, and the database connection. Read them from the environment; never hardcode them:
+
+```python
+# ❌ Don't do this — works in dev, breaks in prod
+SECRET_KEY = "django-insecure-local-dev-key"        # a dev key served on a public host
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]           # → DisallowedHost (400) on the platform host
+DATABASES = {                                        # read-only rootfs → 500 on first write
+    "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}
+}
+
+# ✅ Do this instead
+import os
+import dj_database_url
+
+SECRET_KEY = os.environ["SECRET_KEY"]
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
+DATABASES = {"default": dj_database_url.config(default=os.environ["DATABASE_URL"])}
+# (Assembling DATABASES from individual injected vars — os.environ["DB_NAME"],
+#  os.environ["DB_HOST"], … — is equally fine; the point is to read from the env.)
+```
+
+Why each matters on the platform:
+
+- **`SECRET_KEY`** — a hardcoded dev key on a public host is a security risk.
+- **`ALLOWED_HOSTS`** — if it doesn't include the platform host (read from the env), Django raises `DisallowedHost` (HTTP 400).
+- **`DATABASES`** — the app rootfs is read-only, so a sqlite `NAME` under the project directory 500s on the first write (`OperationalError: attempt to write a readonly database`). Use the injected `DATABASE_URL` / a managed Postgres.
+
+### `djust deploy` runs a preflight "deploy doctor"
+
+`djust deploy` statically inspects your resolved settings module and prints **warnings** (it does not block the deploy) when it finds any of the above — a hardcoded `SECRET_KEY`, an `ALLOWED_HOSTS` literal not read from the env, a `DATABASES` block that reads no configuration from the environment, or a sqlite engine. Treat those warnings as deploy-blocking yourself: an app that trips them typically 500s at runtime even though the deploy "succeeds". (The doctor reads the settings *source text* and never imports your settings, so it is safe to run against any project.)
+
+### "rolling out" vs "active"
+
+During a blue/green rollout the deployment can briefly report `active` while the **old** version is still serving the URL (the new root filesystem is still cutting over). `djust deploy` prints `Status: rolling out …` and keeps polling until the new version is actually serving, then shows the URL. Wait for that — re-testing the URL while it still says "rolling out" exercises the *old* code.
+
+See `DEPLOYMENT.md` for the full production checklist (ASGI setup, static files, `ALLOWED_HOSTS` / CSWSH hardening).
 
 ---
 
@@ -1296,3 +1383,6 @@ When building a djust LiveView:
 - [ ] Configure WebSocket routing in `asgi.py` with `ProtocolTypeRouter`
 - [ ] Use `djust.asgi.get_application()` for static file serving with ASGI servers
 - [ ] Run `python manage.py check --tag djust` to catch common issues
+- [ ] Read `SECRET_KEY`, `ALLOWED_HOSTS`, and `DATABASES` from the environment for platform deploys (never hardcode; no sqlite on the read-only rootfs)
+- [ ] Address every `djust deploy` "deploy doctor" warning before shipping — they predict runtime 500s on the platform
+- [ ] Wait for `djust deploy` to report the live URL (not "rolling out") before re-testing a deploy

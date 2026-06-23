@@ -32,6 +32,21 @@ _DJ_ROOT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Match ``<div ... dj-view ...>`` as a standalone attribute name. Used as a
+# FALLBACK to ``_DJ_ROOT_RE`` in ``render_full_template``: when a template
+# declares only ``dj-view`` (the auto-inferred-dj-root case, see PR #297) and
+# no literal ``dj-root`` attribute, the dj-root replacement step must still
+# find the root div in the page shell — otherwise it falls through to
+# returning the un-normalized ``_full_template`` render, leaving HTML comments
+# and as-authored whitespace in the initial-GET dj-root that the WS
+# (``render_with_diff``) frame has already stripped. That structural mismatch
+# is what triggers the first-hydration ``morphChildren`` re-render / flash
+# (#1737). Same standalone-attribute lookahead semantics as ``_DJ_ROOT_RE``.
+_DJ_VIEW_RE = re.compile(
+    r"<div\b[^>]*?(?<![A-Za-z0-9_-])dj-view(?=[\s=>/])[^>]*>",
+    re.IGNORECASE,
+)
+
 # Match ``</body>`` tolerating trailing whitespace inside the tag (``</body >``).
 _BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
 
@@ -69,38 +84,22 @@ class TemplateMixin:
         elif self.template_name:
             # Load the raw template source
             from django.template import loader
-            from django.conf import settings
 
             template = loader.get_template(self.template_name)
             template_source = template.template.source
 
             # Check if template uses {% extends %} - if so, resolve inheritance in Rust
             if "{% extends" in template_source or "{%extends" in template_source:
-                # Get template directories from Django settings in the EXACT same order Django searches
-                template_dirs = []
-
-                # Step 1: Add DIRS from all TEMPLATES configs
-                for template_config in settings.TEMPLATES:
-                    if "DIRS" in template_config:
-                        template_dirs.extend(template_config["DIRS"])
-
-                # Step 2: Add app template directories (only for DjangoTemplates with APP_DIRS=True)
-                for template_config in settings.TEMPLATES:
-                    if (
-                        template_config["BACKEND"]
-                        == "django.template.backends.django.DjangoTemplates"
-                    ):
-                        if template_config.get("APP_DIRS", False):
-                            from django.apps import apps
-                            from pathlib import Path
-
-                            for app_config in apps.get_app_configs():
-                                templates_dir = Path(app_config.path) / "templates"
-                                if templates_dir.exists():
-                                    template_dirs.append(str(templates_dir))
-
-                # Convert to strings
-                template_dirs_str = [str(d) for d in template_dirs]
+                # Template directories in the EXACT same order Django searches.
+                # Shared with ``render_full_template`` step 2 via the single
+                # ``get_template_dirs()`` helper so the two paths can never drift
+                # apart on which backends honor APP_DIRS (#1646 parallel-path
+                # cure). Re-implementing this inline here ONLY recognized the
+                # stock Django backend, so under djust's own backend (the
+                # ``djust new`` scaffold) the app-template dirs were dropped and
+                # ``resolve_template_inheritance`` raised "Template not found"
+                # → swallowed → fragment-only on the initial GET (#1801).
+                template_dirs_str = get_template_dirs()
 
                 # Get the actual path Django resolved for verification
                 django_resolved_path = (
@@ -109,64 +108,33 @@ class TemplateMixin:
                     else None
                 )
 
-                # Use Rust template inheritance resolution
+                # --- Resolve template inheritance in Rust ---
+                # This is the ONLY step that legitimately needs the raw-template
+                # fallback (a template that genuinely can't be resolved as a
+                # standalone inheritance document). It is scoped to a tight
+                # try/except that LOGS at WARNING so a resolution error can never
+                # again silently degrade an ``{% extends %}`` page to
+                # fragment-only without a trace (#1801). Post-resolution work
+                # (VDOM extraction / whitespace strip) is OUTSIDE this try — if
+                # that raises it is an unexpected framework bug that must surface,
+                # not be swallowed.
                 try:
                     from djust._rust import resolve_template_inheritance
 
                     resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
-
-                    # Verify Rust found the same template as Django
-                    if django_resolved_path:
-                        rust_would_find = None
-                        for template_dir in template_dirs_str:
-                            candidate = os.path.join(template_dir, self.template_name)
-                            if os.path.exists(candidate):
-                                rust_would_find = os.path.abspath(candidate)
-                                break
-
-                        if (
-                            rust_would_find
-                            and os.path.abspath(django_resolved_path) != rust_would_find
-                        ):
-                            logger.warning(
-                                "Template resolution mismatch! Django found: %s, "
-                                "Rust found: %s, Template dirs order: %s...",
-                                django_resolved_path,
-                                rust_would_find,
-                                template_dirs_str[:3],
-                            )
-
-                    # Store full template for initial GET rendering
-                    self._full_template = resolved
-
-                    # For VDOM tracking, prefer the child template source — it contains
-                    # the dj-root block directly without base template surrounding HTML,
-                    # making extraction simpler and immune to Issue #365 miscount.
-                    # Fall back to resolved if dj-root is only in the base template.
-                    vdom_source = (
-                        template_source
-                        if ("dj-root" in template_source or "dj-view" in template_source)
-                        else resolved
-                    )
-                    vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
-
-                    # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
-                    vdom_template = self._strip_comments_and_whitespace(vdom_template)
-
-                    logger.debug(
-                        "[LiveView] Template inheritance resolved (%d chars), "
-                        "extracted liveview-root for VDOM (%d chars)",
-                        len(resolved),
-                        len(vdom_template),
-                    )
-                    return vdom_template
-
                 except Exception as e:
-                    # Fallback to raw template if Rust resolution fails
-                    logger.debug("[LiveView] Template inheritance resolution failed: %s", e)
-                    logger.debug("[LiveView] Falling back to raw template source")
-                    # Set to None so render_full_template won't try to render a template
-                    # that contains {% extends %} tags as a standalone document.
+                    logger.warning(
+                        "[LiveView] Template inheritance resolution failed for %s "
+                        "(searched %d dirs); falling back to raw template source — "
+                        "the initial HTTP GET will render the dj-root fragment "
+                        "WITHOUT the base template <head> (#1801). Error: %s",
+                        self.template_name,
+                        len(template_dirs_str),
+                        e,
+                    )
+                    # Set to None so render_full_template won't try to render a
+                    # template that contains {% extends %} tags as a standalone
+                    # document.
                     self._full_template = None
                     extracted = self._extract_liveview_root_with_wrapper(template_source)
                     extracted = self._strip_comments_and_whitespace(extracted)
@@ -177,6 +145,60 @@ class TemplateMixin:
                         len(template_source),
                     )
                     return extracted
+
+                # Verify Rust found the same template as Django
+                if django_resolved_path:
+                    rust_would_find = None
+                    for template_dir in template_dirs_str:
+                        candidate = os.path.join(template_dir, self.template_name)
+                        if os.path.exists(candidate):
+                            rust_would_find = os.path.abspath(candidate)
+                            break
+
+                    if rust_would_find and os.path.abspath(django_resolved_path) != rust_would_find:
+                        logger.warning(
+                            "Template resolution mismatch! Django found: %s, "
+                            "Rust found: %s, Template dirs order: %s...",
+                            django_resolved_path,
+                            rust_would_find,
+                            template_dirs_str[:3],
+                        )
+
+                # Store full template for initial GET rendering
+                self._full_template = resolved
+
+                # For VDOM tracking, prefer the child template source — it contains
+                # the dj-root block directly without base template surrounding HTML,
+                # making extraction simpler and immune to Issue #365 miscount.
+                # Fall back to resolved if dj-root is only in the base template.
+                #
+                # Use the anchored-attribute regexes (NOT a naive substring): a
+                # naive ``"dj-root" in template_source`` matches the token ANYWHERE
+                # — including documentation/example code that merely *displays*
+                # ``dj-root``/``dj-view`` as text, or another word containing it as
+                # a substring (``adj-view``). When the real ``<div dj-root>`` lives
+                # in the BASE template and the child only mentions the tokens in
+                # text, the substring check wrongly picks the child as the VDOM
+                # source → extraction finds no real dj-root → render_full_template
+                # nests the whole page (two <!DOCTYPE>/two <footer>). The regexes
+                # require a REAL ``<div ... dj-root/dj-view ...>`` tag (#1746).
+                vdom_source = (
+                    template_source
+                    if (_DJ_ROOT_RE.search(template_source) or _DJ_VIEW_RE.search(template_source))
+                    else resolved
+                )
+                vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
+
+                # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
+                vdom_template = self._strip_comments_and_whitespace(vdom_template)
+
+                logger.debug(
+                    "[LiveView] Template inheritance resolved (%d chars), "
+                    "extracted liveview-root for VDOM (%d chars)",
+                    len(resolved),
+                    len(vdom_template),
+                )
+                return vdom_template
 
             # No template inheritance - store full template and extract liveview-root for VDOM
             self._full_template = template_source
@@ -211,6 +233,12 @@ class TemplateMixin:
         self._initialize_rust_view(request)
         self._sync_state_to_rust()
         html = self._rust_view.render()
+
+        # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
+        # mass-assignment guard). Derived from the Rust template engine's parsed
+        # AST (Text-node literals only) — immune to rendered-output poisoning;
+        # see ModelBindingMixin._record_dj_model_fields_from_rust.
+        self._record_dj_model_fields_from_rust(self._rust_view)
 
         # Post-process to hydrate React components
         html = self._hydrate_react_components(html)
@@ -317,6 +345,36 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Normalize whitespace
         html = re.sub(r"\s+", " ", html)
         html = re.sub(r">\s+<", "><", html)
+
+        # #1737: collapse whitespace between a tag boundary and a preserved
+        # (<pre>/<code>/<textarea>) block too, so this Python normalizer
+        # matches the Rust ``render_with_diff()`` whitespace pass exactly.
+        # Rust's parser drops every whitespace-only text node that is a direct
+        # child of a non-whitespace-preserving element (parser.rs:520-531), so
+        # the inter-element whitespace around — and BETWEEN — preserved blocks
+        # is removed: ``</div> <pre>`` → ``</div><pre>``,
+        # ``</textarea> </div>`` → ``</textarea></div>``, AND
+        # ``</textarea> <pre>`` → ``</textarea><pre>`` (preserved↔preserved).
+        # The placeholder-substitution above hides those boundaries from the
+        # ``>\s+<`` rule (the placeholder doesn't start with ``<``), so collapse
+        # them explicitly. Without this the initial-GET dj-root keeps
+        # whitespace-only text nodes around preserved blocks that the first WS
+        # frame lacks, re-opening the first-hydration whitespace mismatch
+        # (#1724 / #1737). Whitespace INSIDE a preserved block is untouched
+        # (it's hidden behind the placeholder and restored verbatim below), and
+        # whitespace adjacent to actual TEXT (e.g. ``before <pre>``) is left as
+        # a single space — Rust keeps it because that text node is not
+        # whitespace-only.
+        #
+        # (1) literal-tag → preserved   and   (2) preserved → literal-tag:
+        html = re.sub(r">\s+(__PRESERVED_BLOCK_\d+__)", r">\1", html)
+        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+<", r"\1<", html)
+        # (3) preserved → preserved: collapse whitespace between two adjacent
+        # preserved blocks. The lookahead (not a consuming group) lets a run of
+        # 3+ adjacent blocks collapse every gap in a single pass — a consuming
+        # ``\1...\2`` form would swallow the middle block and miss its trailing
+        # gap.
+        html = re.sub(r"(__PRESERVED_BLOCK_\d+__)\s+(?=__PRESERVED_BLOCK_\d+__)", r"\1", html)
 
         # Restore preserved blocks
         for i, block in enumerate(preserved_blocks):
@@ -742,7 +800,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         while depth > 0 and pos < len(template):
             open_match = re.search(r"<div\b", template[pos:], re.IGNORECASE)
-            close_match = re.search(r"</div>", template[pos:], re.IGNORECASE)
+            # Tolerate whitespace before '>' (``</div >`` / ``</div\n>``). A
+            # plain ``</div>`` missed those, over-counting depth so the close
+            # was never found — the close-side twin of the #1749 open-side
+            # under-count. ``close_match.end()`` consumes the full tag incl.
+            # trailing whitespace, so splice points stay correct. (#1751)
+            close_match = re.search(r"</div\s*>", template[pos:], re.IGNORECASE)
 
             if close_match is None:
                 break
@@ -818,6 +881,24 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Returns the complete HTML document (DOCTYPE, html, head, body, etc.)
         """
+        # #1784: register self as the active parent view for the duration of
+        # this render so an embedded ``{% live_render ... %}`` tag can find its
+        # parent during the Rust shell/dj-root render. The Rust engine renders
+        # from a JSON-serialized context that structurally cannot carry the
+        # live ``LiveView`` object, so without this thread-local the tag raised
+        # ``TemplateSyntaxError`` ("no parent view in the current render
+        # context") and the initial HTTP GET 500'd. The context manager
+        # save/restores so it never leaks across requests/threads, even on
+        # error.
+        from ..templatetags.live_tags import active_parent_view
+
+        with active_parent_view(self):
+            return self._render_full_template_inner(request, serialized_context)
+
+    def _render_full_template_inner(self, request=None, serialized_context=None) -> str:
+        """Body of :meth:`render_full_template`. Split out so the
+        active-parent-view thread-local (#1784) wraps the entire render in a
+        ``with`` block without indenting the whole method."""
         if hasattr(self, "_full_template") and self._full_template:
             # --- Step 1: Render the dj-root content via self._rust_view ---
             # This is the SAME instance the WS path will use for diffing,
@@ -830,7 +911,27 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             self._initialize_rust_view(request)
             self._sync_state_to_rust()
             liveview_html = self._rust_view.render()
+            # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
+            # mass-assignment guard). Derived from the Rust template AST
+            # (Text-node literals) — reflects exactly the developer-exposed
+            # static bindings; immune to rendered-output poisoning.
+            self._record_dj_model_fields_from_rust(self._rust_view)
             liveview_html = self._hydrate_react_components(liveview_html)
+
+            # #1737: normalize the rendered dj-root so the initial-GET output
+            # is structurally identical to the first WS frame. The WS path
+            # (``render_with_diff`` → Rust ``render_with_diff()``) applies an
+            # additional whitespace pass that plain Rust ``render()`` does NOT
+            # — e.g. the single spaces a normalized template keeps around
+            # ``{% if %}`` tags survive ``render()`` as ``> <!--dj-if--> <``
+            # but are collapsed to ``><!--dj-if-->`` by ``render_with_diff()``.
+            # Applying the SAME ``_strip_comments_and_whitespace()`` the
+            # template path uses (get_template():154/172/184) converges the
+            # two: ``dj-if`` boundary markers are preserved (negative
+            # lookahead in the normalizer), ``<pre>``/``<code>``/``<textarea>``
+            # whitespace is preserved, and the only residual difference is the
+            # dj-id attrs the client stamps onto the prerender DOM (#1610).
+            liveview_html = self._strip_comments_and_whitespace(liveview_html)
 
             # --- Step 2: Render the page shell from _full_template ---
             from djust._rust import RustLiveView
@@ -881,28 +982,42 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # wrapper (since get_template() returns the dj-root template).
             # Replace the shell's <div dj-root>...</div> ENTIRELY (opening
             # tag through closing tag) with liveview_html.
-            dj_root_match = _DJ_ROOT_RE.search(shell_html)
+            #
+            # #1737: fall back to ``dj-view`` when no literal ``dj-root``
+            # attribute is present (the auto-inferred-dj-root case). Without
+            # this fallback the replacement misses the root entirely and we
+            # return the un-normalized ``_full_template`` shell — leaving
+            # comment nodes + as-authored whitespace in the initial-GET
+            # dj-root that the WS frame (``render_with_diff`` →
+            # ``_strip_comments_and_whitespace`` at get_template()) has
+            # already stripped. The structural mismatch is what makes the
+            # client's first-hydration ``morphChildren`` rebuild the subtree
+            # (visible flash). ``liveview_html`` is rendered from the SAME
+            # normalized ``self._rust_view`` the WS path uses, so the
+            # replaced dj-root is structurally identical to the first WS
+            # frame (modulo the dj-id attrs the client stamps on, per #1610).
+            dj_root_match = _DJ_ROOT_RE.search(shell_html) or _DJ_VIEW_RE.search(shell_html)
             if dj_root_match:
                 # Start of the <div dj-root...> opening tag
                 tag_start = dj_root_match.start()
                 # End of the opening tag (past the >)
                 after_open = dj_root_match.end()
-                # Find the matching </div> by counting depth
-                depth = 1
-                i = after_open
-                while i < len(shell_html) and depth > 0:
-                    if shell_html[i : i + 5] == "<div " or shell_html[i : i + 5] == "<div>":
-                        depth += 1
-                    elif shell_html[i : i + 6] == "</div>":
-                        depth -= 1
-                        if depth == 0:
-                            # i points to the '<' of '</div>'
-                            # Replace from tag_start through '</div>' (6 chars)
-                            close_end = i + 6
-                            result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
-                            result = self._inject_handler_metadata(result, request=request)
-                            return result
-                    i += 1
+                # Find the matching </div> via the shared scanner instead of a
+                # duplicate hand-rolled depth loop. _find_closing_div_pos is
+                # multi-line-safe on the open side (``<div\b`` — subsumes the
+                # #1750 open-tag fix) and whitespace-tolerant on the close side
+                # (``</div\s*>`` — #1751). The rendered shell carries no
+                # ``{% %}`` tags, so the helper's if/else branch handling is
+                # inert here; this is purely the balanced-div scan. Removing the
+                # second scanner closes the parallel-path-drift gap (#1646) that
+                # let the open-side bug exist in one copy and not the other.
+                _close_start, close_end = TemplateMixin._find_closing_div_pos(
+                    shell_html, after_open
+                )
+                if close_end is not None:
+                    result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
+                    result = self._inject_handler_metadata(result, request=request)
+                    return result
 
             # Fallback: dj-root not found in shell (shouldn't happen)
             shell_html = self._inject_handler_metadata(shell_html, request=request)
@@ -961,13 +1076,36 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # identical to the pre-LVN behavior.
         from ..renderers import HtmlRenderer
 
+        # #1784: register self as the active parent view for the duration of
+        # the diff render. ``RequestMixin.get`` calls this AFTER
+        # ``render_full_template`` to establish the VDOM baseline, and the Rust
+        # ``render_with_diff()`` re-runs any embedded ``{% live_render %}`` tag
+        # against a JSON-serialized context that cannot carry the live parent
+        # view — same gap ``render_full_template`` guards (parallel-path-drift,
+        # per CLAUDE.md). The context manager save/restores so the WS path
+        # (which already carries a real ``view``) is unaffected and the
+        # thread-local never leaks. The guard wraps the renderer-abstraction
+        # call (ADR-019) so it applies to HtmlRenderer and any future renderer.
+        from ..templatetags.live_tags import active_parent_view
+
         renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
-        result = renderer.render_with_diff(
-            request=None,
-            extract_liveview_root=False,
-            preloaded_context=None,
-        )
+        with active_parent_view(self):
+            result = renderer.render_with_diff(
+                request=None,
+                extract_liveview_root=False,
+                preloaded_context=None,
+            )
         html, patches_json, version = result
+
+        # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
+        # mass-assignment guard). This is the dominant render path — HTTP-GET
+        # baseline, every WS mount, and every WS event re-render all funnel
+        # through here — so the allowlist tracks the currently-exposed static
+        # bindings on every render. Derived from the Rust template AST
+        # (Text-node literals only via ``dj_model_fields()``), which reflects any
+        # ``update_template`` done above for dynamic templates; immune to
+        # rendered-output poisoning (text nodes, interpolated attrs, ``|safe``).
+        self._record_dj_model_fields_from_rust(self._rust_view)
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
         self._rust_render_timing = self._rust_view.get_render_timing()

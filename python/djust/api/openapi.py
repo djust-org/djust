@@ -8,14 +8,19 @@ handler's type hints via the existing ``get_handler_signature_info`` output.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
+from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views import View
 
+from djust._log_utils import sanitize_for_log
 from djust.api.registry import iter_exposed_handlers
 from djust.validation import get_handler_signature_info
+
+logger = logging.getLogger(__name__)
 
 PYTHON_TO_OPENAPI: Dict[str, Dict[str, Any]] = {
     "int": {"type": "integer"},
@@ -182,11 +187,58 @@ def build_schema(title: str = "djust API", version: Optional[str] = None) -> Dic
     }
 
 
+def _openapi_gate(request: HttpRequest) -> Optional[HttpResponse]:
+    """Access gate for the OpenAPI schema endpoint (security finding #29).
+
+    The schema enumerates the entire ``expose_api`` attack surface — endpoint
+    URLs, internal view-class + handler names, every parameter name/type, and
+    handler docstrings — so it is secure-by-default: served only to a request
+    that satisfies one of the precedence rules below, and a **non-disclosing
+    404** (not 403) returned otherwise. The 404 mirrors the observability gate
+    (``observability/views.py:_gate``) so a gated client cannot even confirm
+    the endpoint exists.
+
+    Precedence (first match wins):
+
+    1. ``settings.DEBUG`` is True → serve (dev convenience).
+    2. ``settings.DJUST_API_OPENAPI_PUBLIC`` is True → serve (operator has
+       explicitly opted into a public spec).
+    3. The request is authenticated (``request.user.is_authenticated``) → serve
+       (the spec describes the API; authenticated devs/integrators may read it).
+    4. Otherwise → return a 404 ``HttpResponse``.
+
+    The authentication check is fail-closed: a missing ``request.user``
+    (no ``AuthenticationMiddleware``) or an anonymous user is treated as
+    not-authenticated and falls through to the 404. Returns the 404 response
+    when the request must be refused, else ``None``.
+    """
+    if getattr(settings, "DEBUG", False):
+        return None
+    if getattr(settings, "DJUST_API_OPENAPI_PUBLIC", False):
+        return None
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        return None
+    logger.warning(
+        "Rejected unauthenticated OpenAPI schema request (gated): path=%s",
+        sanitize_for_log(request.path),
+    )
+    return HttpResponse(status=404)
+
+
 class OpenAPISchemaView(View):
-    """Serve the OpenAPI JSON document at ``/djust/api/openapi.json``."""
+    """Serve the OpenAPI JSON document at ``/djust/api/openapi.json``.
+
+    Gated by :func:`_openapi_gate` (security finding #29): served when
+    ``DEBUG`` is on, when ``DJUST_API_OPENAPI_PUBLIC=True``, or to an
+    authenticated request; otherwise a non-disclosing 404 is returned.
+    """
 
     http_method_names = ["get", "options"]
 
-    def get(self, request: HttpRequest) -> JsonResponse:
+    def get(self, request: HttpRequest) -> HttpResponse:
+        gate_resp = _openapi_gate(request)
+        if gate_resp is not None:
+            return gate_resp
         schema = build_schema()
         return JsonResponse(schema, encoder=DjangoJSONEncoder, json_dumps_params={"indent": 2})

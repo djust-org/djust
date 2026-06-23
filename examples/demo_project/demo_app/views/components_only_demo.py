@@ -403,7 +403,7 @@ def mount(self, request):
         self.modal_message = """
             <div class="mb-3">
                 <label class="form-label">User Status</label>
-                <select class="form-select" @change="change_status">
+                <select class="form-select" dj-change="change_status">
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                 </select>
@@ -434,4 +434,3 @@ def mount(self, request):
         """Switch active tab"""
         if tab:
             self.content_tabs.activate_tab(tab)
-

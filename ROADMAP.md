@@ -74,6 +74,15 @@ keeps the 1.0 docs/canon honest.
 
 | Priority | Issue | Summary |
 |---|---|---|
+| **P1** | #1802 | fix: embedded sticky-child (`{% live_render sticky=True %}`) events return `noop` — handler runs but no patch is sent, so sticky widgets are render-only/non-interactive |
+| **P2** | #1803 | DX/check: a sticky-child template with its OWN `dj-view` creates a nested/duplicate view binding (events silently don't bind) — add a system check, only warned in an example comment today |
+| **P2** | #1805 | tech-debt: `get_template_dirs` uses `.exists()` while `DjustTemplateBackend._get_template_dirs` uses `.is_dir()` for the app templates dir |
+| **P1** | #1801 | fix: `{% extends %}` pages render WITHOUT the base `<head>` on initial HTTP GET — served as dj-root fragment only (silent-catch sets `_full_template=None`) |
+| **P1** | #1785 | fix(websocket): WS recovery forces full page reload — DJE-053 `html_update` path omits `_arm_recovery` (VERIFIED; breaks djust.org /insights/ on 1.0.4) |
+| **P1** | #1784 | fix: embedded `{% live_render %}` 500s on initial HTTP render — sticky-view pages cannot be served |
+| **P1** | #1787 | fix: `djust new` scaffold does not boot (asgi misuses `live_session`; scaffold trips its own system checks) |
+| **P2** | #1786 | fix(serialization): context-processor outputs + request leak into persisted LiveView state |
+| **P2** | #1788 | fix(websocket): consumer-owned monotonic VDOM send-version (follow-up to #1785) |
 | **P2** | #1493 | docs(adr): update stale `Target version` lines in the 10 reconciled ADRs |
 | **P2** | #1495 | Fix 2 low-severity CodeQL note alerts (`TARBALL_EXCLUDES` unused, `py/empty-except`) |
 | **P2** | #1496 | Accessibility long-tail — P2/P3 component ARIA, keyboard JS, Y003+ checks |
@@ -465,14 +474,42 @@ through their own PRs and merged:
 Zero open tracked issues remain. Next: `/pipeline-retro --milestone v1.0.0rc6`
 and `/djust-release 1.0.0rc6`.
 
-## Next: v1.1.0 — Launch-soak interim (cleanup + pre-reqs)
+## Next: v1.1.0 — Code-quality / single-path convergence (HEADLINE) + launch-soak cleanup (parallel)
 
-> Scoped 2026-05-19 by `/pipeline-strategy --deep` (see
+> **HEADLINE re-scoped 2026-06-23 by `/pipeline-strategy --deep`** (see
+> [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md)
+> + **[ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md)**, Proposed).
+> The launch soak (v1.0.0 → v1.0.8) is complete; its data named the headline the
+> 2026-05-19 session deferred: **#1646 parallel-path-drift** was the #1 recurring
+> failure of the whole v1.0.x arc (21× in RETRO). v1.1's headline is a
+> **code-quality / DRY / single-path convergence** arc, executed **quality-first
+> (Path B)** — nets + DRY + hygiene + pattern-canon first (low-risk, build the
+> safety net), THEN the ViewRuntime dispatch convergence that retires #1646
+> structurally. Directional change vs the prior Path-E "defer"; ADR-022 records it.
+>
+> **Path-B sub-milestones (drained in order):**
+> - **v1.1.0-1 — Quality groundwork**: parity-net expansion to all controls; JS DRY
+>   (#1360 dedupe `_parseTimeMs`/`_computeTransitionTiming`, #1279 single
+>   `isSignificantChild`); sync-async + log-sanitization parity (#1648, #1368);
+>   state-backend/serialization footguns (#1356); test/CI hygiene (#1875, #1869,
+>   #1152, #1153, #1356).
+> - **v1.1.0-2 — Pattern canon + binding inventory**: #1307 (opt-in pattern canon),
+>   #1308 (Audit C ph2 bidirectional-binding inventory).
+> - **v1.1.0-3 — ViewRuntime convergence (headline)**: migrate WS `handle_mount` +
+>   `_handle_event_inner` + SSE onto one `ViewRuntime.dispatch` spine (split-foundation
+>   iterations per #1122; mount first, then event); module-organization refactor
+>   (`websocket.py`/`live_tags.py`) rides alongside. Gated behind the v1.1.0-1 nets.
+>
+> **Parallel tracks (unchanged):** the launch-soak cleanup/pre-reqs below (H5 docs
+> versioning, etc.) and the LiveView Native track (ADR-019) continue — LVN Iter-I's
+> renderer/`ViewRuntime` plumbing *aligns with* the convergence spine.
+
+> _Superseded (direction only)_: Scoped 2026-05-19 by `/pipeline-strategy --deep` (see
 > [`docs/strategy-sessions/2026-05-19-v1.1-readiness.md`](docs/strategy-sessions/2026-05-19-v1.1-readiness.md)).
-> The strategy session presented 5 paths and recommended **Path E — Defer to
-> launch soak**: refuse to commit a headline 1.1 direction (AI / DX / Platform
-> / Debug) before the 1.0.0 GA launch produces real adoption data. User
-> confirmed; no directional change vs active ADRs.
+> That session recommended **Path E — Defer to launch soak**: refuse to commit a
+> headline 1.1 direction (AI / DX / Platform / Debug) before the 1.0.0 GA launch
+> produced real adoption data. The soak is now complete and ADR-022 commits the
+> headline; the cleanup/pre-req items it scoped remain valid as the parallel track.
 
 *Goal:* Cut 1.0.0 GA. Run pre-reqs + cleanup PRs in parallel during a ~1-2
 week launch soak. Gather launch feedback (r/django + r/python comment
@@ -3476,6 +3513,608 @@ to a single RC. P0 first.
 
 ---
 
+### Milestone: v1.0.1 — first post-1.0 patch (13 issues, two drain waves)
+
+*Goal:* The single 1.0.1 patch release. All work below ships together as 1.0.1
+(one version bump, one tag). Design-gated features (#1562, #1561, #1557) stay in
+v1.1.0. Drained 2026-06-04/05 via two `/pipeline-drain` passes — wave 1
+(production bug + small fixes) and wave 2 (the durable-cure + review follow-ups
+wave 1 surfaced). The wave split is process history only; it is **one release**.
+
+**STATUS: COMPLETE (13/13 merged 2026-06-05).**
+Wave 1 — PRs #1690 (#1688), #1691 (#1672), #1693 (#1683), #1694 (#1662),
+#1695 (#1687), #1697 (#1602), #1698 (#1559).
+Wave 2 — PRs #1709 (#1692), #1710 (#1699), #1711 (#1696), #1712 (#1708),
+#1714 (#1707), #1715 (#1706).
+New P0 surfaced + closed as dup of #1688: #1689. Follow-ups deferred to a later
+milestone: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE guard).
+
+**Priority Matrix — wave 1 (production bug + small fixes)**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P0** | `client.min.js` `ReferenceError: applyPatches is not defined` (#1688) | Recurrence of #1676 class (terser mangle × IIFE wrap): sticky/embedded module references bare `applyPatches` cross-IIFE; throws only in minified prod bundle. Non-fatal but alarms every prod console + aborts `emitChildMountedEvents` tail. | Fix: reference `globalThis.djust.applyPatches` alias, not the bare symbol, in the sticky/embedded module. See `12-vdom-patch.js:2299` expose site. |
+| **P2** | SafeString over-escaped in `{% firstof %}`/`{% cycle %}` (#1672) | Runtime-`SafeString` from a custom filter is double-escaped through the `get_value` pipe path in firstof/cycle tags. | Bug; preserve SafeString through the tag value path. |
+| **P2** | Demo templates use dead `@click` (#1683) | Example/demo templates use deprecated, non-functional `@click` → dead buttons; migrate to `dj-click`. | Docs/demo fix; good first issue. |
+| **P2** | theming registry↔packs/manifest import SCC (#1662) | Latent CodeQL cyclic-import in `djust.theming` (registry↔theme_packs / registry↔manifest). | Tech-debt; break the import cycle. |
+| **P2** | Dedicated LISTEN DSN for `db.notifications` (#1687) | Allow a dedicated LISTEN DSN separate from `DATABASES['default']`. | Enhancement. |
+| **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. *(moved from v1.1.0)* | Small enhancement. |
+| **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. *(moved from v1.1.0)* | Docs writing. |
+
+**Priority Matrix — wave 2 (durable cures + review follow-ups from wave 1)**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (#1692) | `get_value_safe` doesn't honor the name-based safe-filter whitelist (e.g. `x\|safe`) the Variable arm uses. Closes the #1672/#1660 lineage. | Bugfix; Rust template engine. |
+| **P2** | `multi-tenant.md` cites non-existent `self.tenant_queryset()` (#1699) | Pre-existing doc inaccuracy (real: `get_tenant_queryset`); also `DJUST_TENANT_RESOLVER`/`mixins` plural. | Docs fix. |
+| **P2** | `DJUST_NOTIFY_DATABASE_URL` drops query params (#1696) | Pass through known-safe libpq query items (sslmode, unix-socket host) for the direct-to-Postgres LISTEN use case. | Enhancement. |
+| **P2** | CI dogfood `djust_check` against the demo project (#1708) | Run `djust_check`/`djust_audit` over `examples/demo_project` in CI; would have caught #1683's dead buttons + the new T015. | Tech-debt / CI. |
+| **P2** | Extend `check-doc-snippets.py` to `docs/website/guides/*.md` (#1707) | Symbol/import-resolvability guard on guide prose; gate-off should fail on #1699's bug pre-fix. | Tech-debt / CI. |
+| **P2** | Whole-class guard against the #1676 cross-IIFE class (#1706) | Static lint for bare cross-IIFE refs; the class recurred 3× (#1676→#1688→#1689) and the guard found 2 more live instances (dialog, keyboard). | Tech-debt / build. |
+
+---
+
+### Milestone: v1.0.2-3 — nav-arc retro follow-ups (test-pollution + demo dogfood) (drain bucket → ships in 1.0.2)
+
+**STATUS: COMPLETE (2/2 merged 2026-06-06) — PR #1743 (#1741), PR #1744 (#1742).** Accumulates into the 1.0.2 release.
+
+*Goal:* Close the loop on the two tech-debt items the v1.0.2 navigation-arc retro
+surfaced (Action Tracker #289/#290) before cutting 1.0.2 stable. Drain bucket:
+accumulates into the **1.0.2** release. Drained 2026-06-06 via `/pipeline-drain`.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | Fix 2 `test_checks.py` pollution failures + audit module-level caches (#1741) | `TestC003DaphneOrdering::test_c003_daphne_missing_info` (test_checks.py:286) + `TestSuppressChecks::test_no_suppress_by_default` (:4279) fail only under cross-test ordering (polluted check-registry/global state). Same class as #1733's `_route_map_cache` (routing.py:27). Find the polluting test, add an autouse reset, and audit module-level caches/registries for test-reset fixtures so the class stops recurring. | Tech-debt; pollution-class fix → 3-clean-runs gate. From Retro v1.0.2 nav arc (Action #289). |
+| **P2** | Dogfood `dj-navigate` + a client-hook in the demo (#1742) | Add a `dj-navigate` cross-view flow + a `dj-hook` third-party-lib widget to `examples/demo_project`, with a playwright/demo-checks assertion, so nav-foundation (#1733) / hydration-flash (#1737) / hooks (#1738) regressions red-bar CI in-house instead of surfacing downstream. | Tech-debt / demo + CI. From Retro v1.0.2 nav arc (Action #290). |
+
+---
+
+### Milestone: v1.0.2-2 — hydration-flash parity + client-hooks docs (drain bucket → ships in 1.0.2)
+
+**STATUS: COMPLETE (2/2 merged 2026-06-06) — PR #1739 (#1737), PR #1740 (#1738).** Accumulates into the 1.0.2 release (re-cut 1.0.2rc3).
+
+*Goal:* Finish the first-hydration flash story #1724 started, at the source, and
+document the client-hook pattern for third-party JS libs. Both surfaced from the
+same downstream integration (rent app, 1.0.2rc2). Drain bucket: accumulates into
+the **1.0.2** release (re-cut 1.0.2rc3). Drained 2026-06-06 via `/pipeline-drain`.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | SSR render normalization parity (#1737) | `render_with_diff()` normalizes via `_strip_comments_and_whitespace()` (template.py:154) but the initial render path (`render()` / `render_full_template`, :196/:832) does NOT — so SSR HTML and the first WS frame differ structurally (comments preserved + whitespace as-authored vs stripped/normalized), triggering a wholesale `morphChildren` re-render ("flash") on connect even with #1724. Fix at the source: apply the same normalization to the initial dj-root render so SSR is byte-equivalent to the first `render_with_diff()` output → first-hydration morph is a no-op. | Bug; completes #1724 (client-side whitespace-skip) with a source-side normalization. Must preserve `<pre>`/`<code>`/`<textarea>` + dj-if markers (same isSignificantChild concerns). |
+| **P2** | Client-hooks docs for third-party libs (#1738) | Extend `docs/website/guides/hooks.md`: document the `DjustHooks`/`dj-hook` pattern (register once in the persistent shell; `mounted`/`updated`/`destroyed`) for initializing Chart.js/Leaflet/editors so they survive `dj-navigate` SPA nav — and warn about the inline-`<script>`-in-reactive-root trap ("works on reload, silently blank on dj-navigate"). | Docs; the DX trap that cost the downstream app hours. |
+
+---
+
+### Milestone: v1.0.2-1 — navigation foundation (drain bucket → ships in 1.0.2)
+
+**STATUS: COMPLETE (1/1 merged 2026-06-05) — PR #1736 (#1733).** Accumulates into the 1.0.2 release (re-cut 1.0.2rc2 on top of the 7 PRs in 1.0.2rc1).
+
+*Goal:* Make `dj-navigate` work with **zero wiring** — the foundation cluster of
+the auto-navigation strategy (`/pipeline-strategy` 2026-06-05, Path 2; ADR-021).
+`dj-navigate` is documented as SPA-over-WebSocket but silently full-reloads
+without a manually-wired route map; this bucket auto-derives + auto-emits the
+map so the documented behavior is real. Drain bucket: accumulates into the
+**1.0.2** release (re-cut as 1.0.2rc2 on top of the 7 PRs already in 1.0.2rc1).
+The opt-in `auto_navigate` capability (#1734) + nav-story reconciliation (#1735)
+ride on top in v1.1.0 after this soaks.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | Auto-wire `dj-navigate` route map (#1733) | Auto-derive the URL→view route map from the URLconf (no `live_session` required) and auto-emit it via `{% djust_client_config %}`; fix the `get_route_map_script` docstring (phantom `{% djust_route_map %}` tag) + navigation.md; add a system check; fold in #1361 route-map access tightening. | Foundation (ADR-021 Stage 1). Prereq for #1734. Bugfix-ish: makes documented behavior real. |
+
+---
+
+### Milestone: v1.0.2 — second post-1.0 patch (7 issues: theming/hydration bugs + v1.0.1 review follow-ups + perf follow-up)
+
+*Goal:* The single 1.0.2 patch release. Three production bugs surfaced
+integrating djust 1.0.1rc1 into a real app (SSR→hydration child replacement
+destroying client widgets; theming context-processor vars missing in includes;
+the documented `{% theme_panel %}` tag rejected by the Rust engine), plus the
+three tech-debt follow-ups the v1.0.1 drain explicitly deferred (#1713, #1716)
+or filed (#1719), plus the perf follow-up (#1727) the #1722 fix surfaced — all
+ship together as 1.0.2 (one version bump, one tag; not yet released). Design-gated
+features (#1562, #1561, #1557) stay in v1.1.0. Drained 2026-06-05 via
+`/pipeline-drain`.
+
+**STATUS: COMPLETE (7/7 merged 2026-06-05).**
+PRs #1725 (#1724), #1726 (#1722), #1728 (#1721), #1729 (#1716),
+#1730 (#1713), #1731 (#1719), #1732 (#1727).
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | SSR→hydration replaces dj-view top-level children wholesale (#1724) | First WS hydration removes+re-adds the `dj-view` root's direct children instead of morphing in place — full-page re-render on every navigation (~150-250ms "double load") and destroys client-side widget state (Chart.js `<canvas>` goes blank). SSR HTML carries zero `dj-id`s; server sends hydrated HTML for ID-based patching but client replaces rather than morphs. | Bug; core hydration/VDOM path. Highest impact — destroys client widget state. |
+| **P1** | Context-processor theme vars empty in nested `{% include %}` (#1722) | `theme_context` vars (`{{ theme_panel }}`/`{{ theme_head }}`) render at the top level of a LiveView template but are empty inside a nested `{% include %}` partial. View-instance attrs DO reach the includes; only context-processor vars don't. Incomplete #233. | Bug; template engine context propagation into includes. |
+| **P1** | Rust engine rejects `{% theme_panel %}` tag the docs recommend (#1721) | The theming guide documents `{% theme_panel %}` (with `{% load theme_tags %}`) but the Rust template engine raises `RuntimeError: Unsupported template tag '{% theme_panel %}'`. Docs ↔ engine disagree (cf. #1452). Either support the tag in the Rust engine or update the docs to the `{{ theme_panel }}` context-string form. | Bug/docs; resolve docs↔engine disagreement. |
+| **P2** | Generalize cross-IIFE guard to top-level modules (#1716) | `check-cross-iife-refs.mjs` only flags `decl.inGuard && !refInGuard`; a bare cross-IIFE ref between two top-level modules (22-51) is NOT flagged. 10/58 published fns are gap-exposed to the same ReferenceError-under-minify class. *(deferred follow-up from v1.0.1 #1706)* | Tech-debt; generalize the scope test, re-verify against the 68-FP set. |
+| **P2** | Promote demo `djust_check` dogfood to blocking gate (#1713) | #1708's dogfood step is `continue-on-error: true`; it has now shipped green on the runner. Flip to enforcing — extract a dedicated `demo-checks` job (decoupled from playwright flakiness) without `continue-on-error`. Add a unit test feeding the wrapper a synthetic error-severity payload so both gate arms are covered. *(deferred follow-up from v1.0.1 #1708)* | Tech-debt / CI. |
+| **P2** | Ratchet down 33 tolerated eslint warnings (#1719) | #1717 changed eslint policy to gate on errors, tolerate warnings — leaving ~33 project-wide warnings with no ceiling. Drive the count down (`catch (error)`→`catch (_error)` or `catch {}`; `no-var`→`const`/`let`; targeted `eslint-disable-next-line` for genuine FPs) then re-add `--max-warnings <N>` as a ratchet. *(filed from v1.0.1 #1718 review)* | Tech-debt / JS hygiene. |
+| **P2** | Request-scope memoize `theme_context` (#1727) | The #1722 fix applies context processors in `_sync_state_to_rust`, which runs on every WS event; `theme_context`'s four `_safe_render` tag bodies (`theme_head`/`theme_panel`/`theme_mode_toggle`/`theme_preset_selector`) are uncached. Add request-scoped memoization keyed on resolved theme state so the per-event re-run is cheap when theme state is unchanged but still reflects a switch when it changes. Must NOT first-sync-gate (breaks dynamic theme switching). | Tech-debt / perf. *(filed from v1.0.2 #1726 review, 🟡 PERF-1)* |
+
+---
+
+### Milestone: v1.0.3 — dj-root boundary + nav-guard hardening (post-1.0.2 patch)
+
+*Goal:* The 1.0.3 patch. A production-bug family surfaced integrating djust into
+djust.org's marketing site: `render_full_template` mis-locating the `dj-root`
+region boundary so page content rendered OUTSIDE `[dj-root]` and leaked across
+`dj-navigate`. Plus CI hardening of the v1.0.2 nav/hooks guard. Drained
+2026-06-07 via `/pipeline-drain`. Design-gated features (#1734, #1735, #1562,
+#1561, #1557) stay in v1.1.0.
+
+**STATUS: IN PROGRESS.**
+Merged toward 1.0.3: #1747 (#1746 substring mis-detect, shipped in 1.0.3rc1),
+#1750 (#1749 multi-line `<div>` open under-count), #1748 (nav/hooks guard
+hardening, #1745), #1753 (#1752 item 1 — maturin build in nav-hooks-guard).
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P1** | Close-side `</div>` tolerance + consolidate dj-root scanners (#1751) | `render_full_template`'s hand-rolled div-depth loop (open side fixed in #1750) and `_find_closing_div_pos` both hardcode the close tag as `</div>`, missing `</div >`/`</div\n>`. Add `</div\s*>` tolerance in `_find_closing_div_pos` (benefits all 6 call sites) and replace the duplicate hand-rolled loop with a `_find_closing_div_pos` call (multi-line-safe open + if/else handling). | Tech-debt; completes the #1749/#1750 fix class (parallel-path-drift). *(filed from #1750 Stage-7 review)* |
+| **P2** | Harden nav-hooks-guard: blocking-soak + CI dedup (#1752 items 2–3) | Item 1 (maturin build) shipped in #1753. Remaining: (2) decide blocking-vs-`continue-on-error` soak for the Playwright guard; (3) extract a reusable workflow to de-duplicate the ~80% shared server harness between `nav-hooks-guard` and `playwright-tests`. | Tech-debt / CI. Item 3 is a deliberate refactor. |
+
+---
+
+### Milestone: v1.0.4-1 — deploy DX drain (doctor preflight + rollout status) (drain bucket → ships in 1.0.4)
+
+*Goal:* Two small, drain-mechanical `djust deploy` CLI improvements in the same
+deploy-DX theme as the just-shipped #1759 (`.gitignore`-respecting tarball + size
+warning). Both consume signals/contracts the platform side already provides;
+client-side changes only. Drained 2026-06-13 via `/pipeline-drain`.
+
+**STATUS: ✅ COMPLETE.** Both #1760 + #1761 shipped in grouped PR #1767 (merged
+`d1b42385`). Stage-11 deferred a 🟡 (doctor DATABASES env-read heuristic too
+narrow) → follow-up #1768.
+
+**Priority Matrix**
+
+| Priority | Issue | Summary | Notes |
+|---|---|---|---|
+| **P2** | ~~`djust deploy` preflight "doctor" warning for platform-env-contract violations (#1760)~~ ✅ PR #1767 | Static preflight in `djust deploy` that **warns** (not hard-errors) when the resolved settings module hardcodes `SECRET_KEY`, doesn't read `ALLOWED_HOSTS` from env, doesn't consult `DATABASE_URL`, or resolves a sqlite `NAME` under the (read-only) project dir. Grep-level static checks + one-line "the platform injects these — read them from env" pointer. | Feature; complements #1759. Prevents the silent "successful deploy, 500s at runtime" chain that cost a multi-hour `max-companion` prod debug (2026-06-11). |
+| **P2** | ~~Consume djustlive `serving_current` → print "rolling out" vs "active" (#1761)~~ ✅ PR #1767 | The deploy poll should read the additive `serving_current` boolean (server signal shipped in djustlive #517) and print "rolling out" instead of "active"/the URL until it's `True`, so users stop re-testing against stale rootfs during blue/green. Thin client-side change in `python/djust/deploy_cli.py`. | Feature; authoritative server signal already shipped. |
+
+**#1760 — `djust deploy` preflight "doctor"** — `djust deploy` ships an app whose
+Django settings can't work on the platform with no warning; a foreign (non-scaffold)
+app silently violates the env-injection contract and only fails at runtime in prod.
+Add a static preflight that warns on hardcoded `SECRET_KEY`, literal `ALLOWED_HOSTS`,
+`DATABASES` not reading `DATABASE_URL`, and sqlite `NAME` on a read-only path.
+
+**#1761 — consume `serving_current`** — djustlive's `deployment_status` now returns
+an additive `serving_current` boolean (False while a new rootfs is built+current but
+the old placement still serves during blue/green). `djust deploy` should print
+"rolling out" until it's `True` so users stop re-testing stale rootfs.
+
+---
+
+### Milestone: v1.0.8-2 — post-prevention open-issue drain (render-path bugs + check/test hygiene) (drain bucket → ships in 1.0.8)
+
+*Goal:* Drain the five actionable open issues left after the v1.0.8-1 prevention
+program — two render-path correctness regressions (both 1.0.7) plus three
+check/test/serialization hygiene follow-ups surfaced by the prevention work. Two
+of the five are **#1646 parallel-path twins** (the recurring class), so each fix
+must converge the shared invariant, not patch one site. Public, post-disclosure.
+
+**WU1 — `url_change`/`dj-patch` wire-version drift (P1, bug) [#1858].** `mount`
+and `event` frames stamp the consumer-owned `_next_version()` counter (#1788), but
+`url_change` (dj-patch clicks + popstate) is delegated to `ViewRuntime`
+(`handle_url_change` → `dispatch_url_change` `runtime.py:679`; `_emit_event_render`
+`runtime.py:885`), which stamps the **Rust render counter** instead — so the first
+`url_change` version disagrees with the mount baseline, the
+`clientVdomVersion === version - 1` check fails, and the client force-reloads.
+`dj-click` works, `dj-patch` doesn't — the fingerprint. **#1788 parallel-path twin**
+(#1646): #1788 wired the consumer counter into `handle_event` but not the runtime
+delegate paths. Fix: route the runtime render-send paths through one shared
+monotonic version source (give `Transport`/`ViewRuntime` a `next_version()` the
+WS + SSE paths share, or have `WSConsumerTransport.send` rewrite `version` for
+client-checked frame types). Carry the `_next_version_armed` recovery-arming
+discipline (#1817). Reproduce-first with a real `WebsocketCommunicator` capturing
+mount + url_change versions. Touches `runtime.py`, `websocket.py`.
+
+**WU2 — inline `<script>` in dj-root not executed after the #1610 mount morph
+(P1, bug) [#1848].** morphdom does not execute `<script>` it re-creates, so an
+inline script inside dj-root (the morphdom-managed region) silently never runs on
+mount — page handlers never register, no console error. 1.0.7 regression. djust
+already re-executes classic `<script>` on the `live_redirect`/navigation morph
+(#1635/#1650) — **parallel-path twin** (#1646): apply the same re-execution to the
+initial mount morph (#1610) so mount and navigation behave consistently. Reproduce
+with two real `<script>` elements through the mount-morph path (NOT `eval`×2 — see
+the #1650 reproduction-fidelity rule). Optionally also a system-check warning.
+Touches the client morph path (`static/djust/src/`). Downstream workaround already
+applied (djust.org moved JS outside dj-root, v0.9.32).
+
+**WU3 — allowlist re-exposes the serialization floor (P1, security/DX) [#1868].**
+`serialization.py:362 _field_is_serializable` checks the per-model `allowed`
+allowlist BEFORE the `_ALWAYS_EXCLUDED_FIELDS` floor, so
+`djust_serializable_fields=['password']` re-exposes a floor field
+(`password`/`is_superuser`/`is_staff`). Surfaced writing `docs/SECURE_DEFAULTS.md`.
+Decide + implement the secure-by-default shape: make the floor unconditional
+(allowlist can only narrow, never re-expose floor fields) with a documented opt-out
+for the genuine edge case, OR keep current behavior + a loud system-check warning.
+Plan stage resolves the design question; reproduce-first + gate-off. Touches
+`serialization.py`, `docs/SECURE_DEFAULTS.md`.
+
+**WU4 — test-ordering pollution in `test_demo_views` (P2, tech-debt) [#1862].**
+`tests/unit/test_demo_views.py::TestDemoRegistration` — 4 urlconf-resolution
+failures under full `-n auto`; passes in isolation. Find the polluter (urlconf
+state leak). **Pollution-class fix → the 3-clean-runs verification gate applies**
+(#1174). Touches the offending test setup/teardown.
+
+**WU5 — `_get_project_app_dirs()` blind from inside the repo tree (P2, tech-debt)
+[#1865].** Returns 0 dirs when `manage.py check` runs from inside the djust repo
+tree (the `/djust/` path filter), blinding S009/S011 dogfooding from the repo
+itself (the demo project was used instead). Fix the path filter so in-repo
+dogfooding sees app dirs. Touches the check-discovery helper.
+
+*Sequencing:* All five are largely file-disjoint → parallel-safe (one
+worktree-isolated implementer per issue, #180). WU1/WU2 (render-path bugs) are the
+highest value; WU3 is security-sensitive (planning resolves the design question);
+WU4 needs the 3-clean-runs gate; WU5 is small. Bugs ship as individual PRs (never
+grouped). Each closes with reproduce-first + gate-off (#1468) + the #1646
+parallel-path audit where applicable.
+
+---
+
+### Milestone: v1.0.8-1 — Security-drift prevention (post-F1–F29 audit) (drain bucket → ships in 1.0.8)
+
+*Goal:* Stop recurrence of the two root-cause classes the F1–F29 audit found —
+**parallel-path drift** (a control on one transport, missing on a parallel one) and
+**secure-by-default failures** — by **(Tier 1)** converging the residual duplicated
+dispatch so drift is structurally impossible, **(Tier 2)** extending the WU1
+anti-drift nets + system checks + CI to detect it pre-merge, and **(Tier 3)**
+codifying the secure-default patterns. The event path is ALREADY converged on
+`_validate_event_security` (do NOT re-plumb it); the residual drift is the duplicated
+mount orchestration + the custom WS frame router. Public, post-disclosure — normal
+hardening work. Full leverage analysis in the approved prevention plan.
+
+*Sequencing:* T2-B + T2-A first (the nets de-risk Tier 1) → T1-B → T1-A (now
+protected) → T1-C → T2-C / T2-D → T3.
+
+**T2-B — Pin the mount-orchestration AST net (P1) [#1850]. LAND BEFORE T1-A.** Extend
+`tests/test_mount_chokepoint_structural.py` to assert WS `handle_mount` carries no
+mount orchestration beyond delegating to `runtime.dispatch_mount`. Effort M.
+
+**T2-A — Extend the transport parity net (P1) [#1851].** Add auth / object-perm /
+rate-limit / origin parity axes to `tests/test_transport_parity_security.py`
+(identical verdict across `{ws, runtime, sse}`). Effort M.
+
+**T1-B — Route WS `receive()` through `ViewRuntime.dispatch_message` (P1) [#1852].**
+Replace the bespoke ~15-way switch for runtime-owned verbs (mount/event/url_change);
+keep genuinely WS-only frames as an explicit documented extension set. Effort M.
+
+**T1-A — Migrate `handle_mount` to a thin shim over `dispatch_mount` (P1) [#1853].**
+Highest leverage — removes the duplicated mount orchestration (the drift root cause).
+Gated behind T2-B. Effort L, high blast radius (sticky / actors / signed snapshot).
+
+**T1-C — Object-permission on the HTTP-API path (P2) [#1857].** Verify whether any
+`@expose_api` / `@server_function` handler is object-scoped → add
+`enforce_object_permission` or document by-design N/A. Effort S.
+
+**T2-C — System checks S009 (event-handler-needs-auth) + S011 (CSP/inline-script) (P2) [#1854].**
+S010 rate-limit-presence advisory/opt-in only. Reuse the S001–S008 AST scaffold. Effort M.
+
+**T2-D — Make bandit blocking + a tiny browser-smoke (P2) [#1855] (closes #1849).**
+Block on new high-severity bandit findings; add a 2–3 page Playwright canary for the
+runtime-break class (#1848/#1849) the pytest suite can't see. Effort S–M.
+
+**T3 — Codify secure defaults (P3) [#1856].** `docs/SECURE_DEFAULTS.md` (denylist /
+signed-snapshot / fail-closed-gate / safe_setattr catalog), PR-checklist "Secure
+defaults" subsection, lightweight quarterly audit cadence. Effort S. *(Related: the
+#1848 morph inline-`<script>` regression fix — re-execute classic scripts on the
+mount morph like the `live_redirect` path — rides T1-B or lands standalone.)*
+
+---
+
+### Milestone: v1.0.7-4 — transport/API hardening drain (drain bucket → ships in 1.0.7)
+
+> ⚠️ **SECURITY — COORDINATE DISCLOSURE BEFORE PUSHING PUBLIC.** Same posture as
+> v1.0.7-3: detailed specs live in the PRIVATE `scratch/sec-audit/FINDING-*.md`
+> docs + will be filed as private GHSAs. Non-disclosing; do NOT enrich with
+> exploit detail in this public-tracked file ahead of a coordinated fix/release.
+> Finding tags (`[F26]`…`[F29]`) map to the private docs.
+
+*Goal:* Close the four open transport/API-layer findings surfaced after the
+v1.0.7-3 wave. Same root family as v1.0.7-3 (the live transports diverging from
+the request/auth model the HTTP path assumes), plus an API-exposure default.
+
+**WU1 — Reconstructed-request Host propagation (P1) [F26].** The WS `handle_mount`
+and runtime `_build_request` rebuild a synthetic `RequestFactory` request with no
+`HTTP_HOST` (defaults to `testserver`), so host/subdomain `TenantResolver`s
+misresolve the tenant on the live path (cross-tenant exposure under
+`STRICT_MODE=False`, broken tenancy under the default). Fix: extract the client
+Host from the WS scope, validate against `ALLOWED_HOSTS` (reuse the CSWSH
+`_is_allowed_origin`/`validate_host` logic), and pass it (plus scheme/secure) into
+the reconstructed request so resolution matches the HTTP path. Parity test
+HTTP==WS tenant. Touches `websocket.py`, `runtime.py`.
+
+**WU2 — Per-caller shared rate-limit bucket (P1) [F27][F28] (the ADR-008 refactor).**
+The per-handler `@rate_limit` is enforced via the per-CONNECTION
+`ConnectionRateLimiter` (N connections → N× allowance), and the HTTP-API limiter
+keys on raw `REMOTE_ADDR` (shared/mis-keyed behind a proxy; spoofable if
+`REMOTE_ADDR` is XFF-derived). Fix: move the per-handler `@rate_limit` to a SHARED
+process-level bucket keyed by `(caller, handler)` where `caller` = `user:<pk>`
+else `ip:<resolve_client_ip(...)>` (the #5/#28 helper honoring
+`DJUST_TRUSTED_PROXY_COUNT`), used by WS + SSE + the HTTP API so the budget is
+per-caller and uniform across transports and connections. Keep the per-connection
+`ConnectionRateLimiter` ONLY for the global per-message abuse-disconnect (#17).
+Touches `rate_limit.py`, `websocket_utils.py`, `api/dispatch.py`, `sse.py`.
+
+**WU3 — Gate the OpenAPI schema endpoint (P2) [F29].** `OpenAPISchemaView`
+(`/djust/api/openapi.json`) is served unauthenticated, enumerating every
+`expose_api` handler's URL, view-class/handler names, params, and docstrings.
+Fix: gate it (require auth, or DEBUG-only, or opt-in `DJUST_API_OPENAPI_PUBLIC`
+default off) with a non-disclosing 404 when gated — mirroring the #9 observability
+gate. Touches `api/openapi.py`, `api/urls.py`.
+
+*Sequencing:* WU1/WU2/WU3 are largely file-disjoint → run in parallel; WU2 is the
+larger refactor. Each closes with an HTTP↔WS (or anonymous-vs-authed) parity test
+extending the WU1 enforcement harness from v1.0.7-3. (Code-hygiene rider, NOT a
+security finding: a boundary-less `startswith` in the dev-only `seed_fixtures` MCP
+tool — fold into a #22 `startswith`-sweep, no GHSA.)
+
+---
+
+### Milestone: v1.0.7-3 — transport-path consolidation + secure-by-default hardening (drain bucket → ships in 1.0.7)
+
+> ⚠️ **SECURITY — COORDINATE DISCLOSURE BEFORE PUSHING PUBLIC.** The detailed
+> specs, reproductions, and CWE classifications for the items below live in the
+> **private** `scratch/sec-audit/FINDING-*.md` docs (gitignored) and will be
+> filed as **private GitHub Security Advisories**. This milestone entry is
+> deliberately written at the *remediation/architecture* level and must **not**
+> be enriched with exploit detail in this public-tracked file (origin =
+> `djust-org/djust`) ahead of a coordinated fix/release. Land the fixes on the
+> private staging remote, publish the GHSAs, then push to public origin + cut the
+> patch release together. Finding tags below (`[F16]`…`[F25]`) map to the private
+> docs and are opaque to outside readers — implementers/pipeline read the spec
+> from `scratch/sec-audit/`.
+
+*Goal:* Close a cluster of audit findings whose **root cause is parallel-path
+drift** (Action #1646): the framework grew its security controls on the
+WebSocket transport one pentest at a time (#653 CSWSH, #1819 mount-URL traversal,
+#107 rate-limit, the WS-mount auth fixes), then added the SSE/runtime transport
+as a *second* dispatch path that re-implemented the happy path but **did not
+inherit the accumulated hardening**. `ViewRuntime` (`runtime.py`) already exists
+as the transport-agnostic chokepoint and is ~30% adopted (WS `handle_url_change`
+and the SSE message endpoint route through it; WS mount/event and the SSE
+GET/event endpoints do NOT). This milestone **finishes that migration** so every
+security-relevant operation happens exactly once, inside `ViewRuntime`, with a
+**transport-parity test that makes future drift mechanically detectable** — then
+fixes the handful of findings that are genuinely single-path secure-by-default
+gaps (which consolidation alone would NOT fix).
+
+*Architectural principle to enforce:* a transport may only `send` and expose
+`session_id` / `client_ip` / **authenticated principal**; it may NOT mount,
+dispatch, validate, or apply state. Transports become structurally incapable of
+skipping a control, so a future transport (or a refactor) cannot re-open the
+class. (See the design analysis captured in this session.)
+
+*Finding → work-unit map (specifics PRIVATE):*
+
+| Finding (private) | Class | Closed by |
+|---|---|---|
+| [F19] | secure-by-default (single path) | WU6 |
+| [F24] | transport control missing on SSE | WU5 |
+| [F22] | duplicated gate + insecure default | WU2 |
+| [F23] | parallel-path drift (validator) | WU2/WU4 |
+| [F25] | transport control missing on SSE | WU5 |
+| [F21] | divergence from `safe_setattr` discipline | WU2 |
+| [F20] | secure-by-default (single path) | WU7 |
+| [F18] | divergence from central error path | WU8 |
+| [F17] | single gate skipped on one path | WU5 |
+| [F16] | parallel-path drift (client nav) | WU9 |
+
+**WU1 — Transport-parity enforcement net (P0, test-infra; build FIRST).** Before
+refactoring, add the guard that makes drift detectable (the second half of
+#1646). (a) A parity suite that drives identical payloads through **both** WS
+(`WebsocketCommunicator`) and SSE (async HTTP client) and asserts identical
+security *outcomes* (mount-URL traversal neutralised, cross-origin/`javascript:`
+redirect rejected, view-resolution allowlist enforced + fail-closed, auth
+required at mount, cross-principal event rejected, abuse rate-limit fires). (b) A
+single-chokepoint **structural test** (mirrors the count-test pattern #1125):
+assert no `__import__(client_input)` / raw `setattr(view, client_key)` /
+`factory.get(client_url)` exists outside `runtime.py` + `security/`. (c)
+Stage-4/Stage-11 checklist rule: "new transport or message handler MUST route
+through `ViewRuntime`; new security control MUST live in the runtime/`security/`,
+never a transport" — operationalizes #1646 as a gate.
+
+**WU2 — Finish the `ViewRuntime` chokepoint (P0, foundation; split-foundation
+#1122 — ship + soak before WU3/WU4 stack on it).** Move the controls that today
+live only in `websocket.py`'s inline handlers down into
+`ViewRuntime.dispatch_mount`/`dispatch_event`, extracting shared validators into a
+`security/` module both transports import: mount-URL validation (one shared
+`_validate_mount_url`); **registry-based view resolution** (build a registry of
+mountable `LiveView`s at startup; look up `view_path` — never `__import__` a
+client string) with a single **fail-closed-when-unset, module-boundary-matched**
+allowlist; a shared `safe_setattr`-based state-apply helper. [F21][F22][F23]
+
+**WU3 — Migrate WS handlers to thin runtime shims (P1, large; incremental).**
+Rewrite `handle_mount` → `handle_event` → `handle_mount_batch` →
+`handle_live_redirect_mount` as shims over `runtime.dispatch_*`, exactly like
+`handle_url_change` already is (the #1237 pattern). WS-only concerns (channel
+groups, presence, actors, time-travel, pre-render optimisation) stay in the
+consumer but wrap the runtime call. Do **mount first** (smaller), then **event**
+(`handle_event` is ~1000 LOC — the riskiest; WU1's parity suite + existing WS
+tests are the safety net). `server_push` (channel-layer) routes its state-apply
+through the WU2 shared helper. [F21]
+
+**WU4 — Migrate SSE direct paths to the runtime (P1, smaller, high-value).**
+Replace `_sse_mount_view` → `session.runtime.dispatch_mount` and
+`_sse_handle_event` → `session.runtime.dispatch_event` (SSE already holds a
+`ViewRuntime` and its message endpoint already uses it — mostly deletion).
+Auto-aligns SSE mount/event with the hardened chokepoint. [F23]
+
+**WU5 — SSE/transport-edge security controls (P0/P1).** The controls WS gets
+implicitly that SSE lacks: (a) **principal-binding** — add an
+`authenticated_principal` to the transport abstraction; the runtime verifies it
+on every dispatch; WS fills it from Channels `scope["user"]`, SSE binds the
+owner at mount + **server-issues** the session token (no client-chosen id);
+(b) per-IP/global **session caps + creation rate-limit + register-after-mount**
+for SSE, mirroring the WS connection rate-limiter/abuse-disconnect; (c) route WS
+**binary frames through rate accounting** (separate upload bucket) so the gate
+isn't bypassed. [F24][F25][F17]
+
+**WU6 — Serializer secure-by-default field exposure (P0, single-path,
+INDEPENDENT — can ship first as the highest-severity quick win).** Add a
+sensitive-field denylist (always-exclude `password` + configurable
+`DJUST_SENSITIVE_FIELDS`) and a per-model allowlist opt-in to the model
+serializer; make the JIT serializer's no-template-path fallback emit only the
+safe identity subset (`pk`/`__str__`/`__model__`), not every field. (Consolidation
+does NOT fix this — the single path is itself the gap.) [F19]
+
+**WU7 — Upload content-validation fail-closed + active-content handling (P1,
+single-path).** Flip the magic-byte validator's unknown-type default to
+fail-closed (or an explicit `allow_unsignatured` opt-in); stop treating SVG as a
+default-benign image (explicit opt-in + sanitise on the active-content path);
+document upload serving hygiene. [F20]
+
+**WU8 — Central-path error rendering for embedded children (P1).** Route the
+embedded-child render-error path through the existing
+`handle_exception`/`create_safe_error_response` (generic in prod) + `escape()`,
+instead of its own raw error string. [F18]
+
+**WU9 — Shared client navigation-target validation (P1, client JS).** One
+`safeNavigationTarget()` helper (allow same-origin path + http(s) absolute;
+reject `javascript:`/`data:`/protocol-relative/opaque-origin) applied at every
+`location.href` navigation sink on both transports; refactor the existing WS
+inline guard to use it so the two can't drift again. [F16]
+
+*Sequencing:* WU1 (enforcement net) first — everything after is verified against
+it. **WU6 in parallel/immediately** (worst finding, single-path, no dependency).
+Then WU2 (foundation, soaks) → WU3 → WU4 (consolidation auto-aligns the drift
+cluster) → WU5 (transport-edge controls) → WU7/WU8/WU9 (independent secure-default
++ client fixes). Do NOT bundle the consolidation into one PR (split-foundation
+#1122). Net: ~7 of 10 findings close as a side-effect of finishing a migration
+that's already 30% done, and can't recur (parity suite + structural gate +
+"transports do I/O only" boundary).
+
+---
+
+### Milestone: v1.0.7-2 — retro follow-up drain (DX check + actor-path arming) ✅ DRAINED (drain bucket → ships in 1.0.7)
+
+*Goal:* Drain the two tracked tech-debt follow-ups the v1.0.7-1 retro filed (#1837, #1840). The two `priority:low` bug-capture feature epics (#1561, #1562) remain held for v1.1.0.
+
+*Outcome:* #1837 ✅ PR #1841 (new system check T017 — warns on `dj-view`/`dj-root` on a table-section element; empirical-canary validated). #1840 ✅ closed-investigation (arming the actor path with its already-extracted `result['html']` would double-strip on recovery → worse than the LOW drift; proper fix deferred until `use_actors` graduates; bare site pinned).
+
+**#1837 — system check: warn when `dj-view`/`dj-root` is on a table-section element (Action #307, P2, tech-debt)** — ✅ SHIPPED (PR #1841, T017). A LiveView whose root element is `<tbody>`/`<thead>`/`<tfoot>`/`<tr>`/`<td>`/`<th>`/`<caption>`/`<col>`/`<colgroup>` renders to silent garbage: html5ever foster-parents the table elements at render time, so `<tbody dj-view>{% for %}<tr>…` renders as `<html><body>text</body></html>` (all rows dropped) with no error. Surfaced closing #1827. Add a new T-series template-scan check (WARNING) flagging `dj-view`/`dj-root` on a table-section tag, fix-hint "put the attribute on a wrapping element (the `<table>` or a surrounding `<div>`)". Lives in `python/djust/checks/templates.py` (next free `djust.T0xx` after T016). Honor `_is_check_suppressed`. Empirical canary (#1459): a `<tbody dj-view>` template fires it; a `<div dj-view><table>…` does not.
+
+**#1840 — arm recovery on the actor event path (`use_actors=True`) once its html shape is verified (Action #308, P2/low, tech-debt — investigate first)** — PR #1838 routed every render-send path through `_next_version_armed(html)` EXCEPT the actor event path (`websocket.py:3100`, bare `_next_version()`), because its `result['html']` (Rust actor output) shape isn't guaranteed to be the pre-strip render the recovery path expects. **Investigate first:** verify the actor `result['html']` shape. If it is (or can be normalized to) the pre-strip full render → route through `_next_version_armed(html)` + add a `use_actors=True` `WebsocketCommunicator` recovery-version test (mirror `test_time_travel_jump_recovery_version_is_current`). If it's already-extracted content that the recovery path can't strip → document why it must stay bare (and adjust the recovery path or leave as accepted-LOW). Severity low (experimental opt-in path; extra round-trip, not data loss).
+
+### Milestone: v1.0.7-1 — post-1.0.6 open-issue drain (tech-debt + VDOM follow-up) ✅ DRAINED (drain bucket → ships in 1.0.7)
+
+*Outcome:* #1817 ✅ PR #1838 (structural `_next_version_armed` helper — recovery armed on all render-send paths); #1830 ✅ PR #1839 (deterministic rAF-controlled dj-transition test); #1827 ✅ closed-without-code (no prod repro; DX follow-up #1837 filed). #1561/#1562 held for v1.1.0.
+
+*Goal:* Drain the three tractable open issues remaining after 1.0.6 shipped — two tech-debt items + one VDOM `diff_html` follow-up. The two `priority:low` bug-capture feature epics (#1561 iter C, #1562 iter B) are held for v1.1.0 (multi-component features with security surface — replay XSS / Redis auth / PII scrub — that need design, not a mechanical drain).
+
+**#1830 — flaky `dj_transition` 'active/end on next frame' test under full `make test` (P2, tech-debt)** — ✅ SHIPPED (PR #1839). `tests/js/dj_transition.test.js` intermittently fails under the parallel JS run (`expected false to be true`) but passes 3/3 in isolation. It's a `requestAnimationFrame`-timing assertion sensitive to event-loop scheduling under load — the same outlier-sensitivity class as #1795 (and the rc1 perf-benchmark mean→median fix). Fix: drive the rAF stub deterministically (resolve a microtask / fake-timer the frame) and assert the class transition by **event ordering**, not by real-frame timing. Pair with a gate-off sibling so the assertion still distinguishes the real transition (#1200/#1468).
+
+**#1817 — `_recovery_version` can go stale vs `_last_sent_version` across non-arming send paths (P2, tech-debt)** — ✅ SHIPPED (PR #1838). After #1816 (#1788), every client-checked frame stamps `_last_sent_version` and `_arm_recovery` captures `_recovery_version = _last_sent_version` at arm time, but some send paths advance the counter WITHOUT arming: the deferred-activity render (`websocket.py:1358/1382`) and the time-travel paths (jump/component_jump/forward_replay). If one interleaves between an arming frame and a later `request_html`, `_recovery_version` is older than the client's `clientVdomVersion` → the `html_recovery` resets to a stale version → another `data.version - 1` mismatch → an extra recovery round-trip. Severity low (an extra round-trip, not data loss, post-#1785). Fix: arm/refresh recovery on those paths too — the structural cure is to funnel version-advancing sends through one helper that keeps `_recovery_version` consistent (parallel-path-drift #1646). Reproduce-first against a real `WebsocketCommunicator`.
+
+**#1827 — `diff_html` bare table-fragment rows foster-parented to `#text` (#1826 Defect-1 remainder) (P2, bugfix)** — ~~CLOSED without code (investigation outcome)~~: the synthetic repro reproduces, but **no real djust render path produces a bare table-section fragment** — a `<tbody dj-view>` template is foster-parented at *render* time (renders as `<html><body>a<!--dj-if…--></body></html>`), so `diff_html` never receives the problematic input from a real view. The actionable finding (table-section-rooted views render to silent garbage) is filed as **#1837** (system check to warn on `dj-view`/`dj-root` on a table-section element).
+
+### Milestone: v1.0.6-5 — VDOM dj-if duplicate marker id in `{% for %}` loops (#1832) ✅ SHIPPED (PR #1834) (P0, drops rows; drain bucket → ships in 1.0.6)
+
+*Goal:* Fix `{% if %}` inside `{% for %}` reusing ONE compile-time-ordinal `dj-if` marker id across all iterations → duplicate ids → unpairable `MoveSubtree` (`close marker not found`) → most patches fail → recovery morph drops a row per toggle. Distinct from #1826/#1828 (relative-vs-absolute move decision); this is duplicate *marker ids within a loop*.
+
+**#1832 — dj-if marker ids must be unique per rendered loop iteration (P0, bugfix)** — Root cause: `crates/djust_templates/src/renderer.rs:556` emits `<!--dj-if id="if-<hash>-N"-->` where `N` is the parser's compile-time ordinal; the `For` node (renderer.rs:564) renders the same `If` node once per iteration, duplicating the id. Fix: thread a loop-index path through the render `Context` (mirroring the existing `__djust_cycle_counter` save/restore in the For loop) and append it to the marker id at emission so it is unique per iteration AND stable across re-renders that don't change the loop (diff still pairs when only sibling state toggles). Close marker has no id; strip-regex + VDOM differ treat ids as opaque. Reproduced server-side via `render_with_diff()` (the issue's repro: 16 rows → `if-<hash>-0/-1` each ×16, toggling table class → 15 unpairable MoveSubtree).
+
+### Milestone: v1.0.6-4 — `checks.py` modularization (#1822) ✅ SHIPPED (PR #1833) (drain bucket → ships in 1.0.6)
+
+*Goal:* Split the 4,268-LOC `python/djust/checks.py` monolith into a `checks/` package (submodules per check family) for navigability/contributor-experience. Pure refactor — preserve every check ID (S001–S007, C/V/T/A/Q/Y/D series) and Django `AppConfig.checks` discovery. Now unblocked: #1821 (S007) has landed.
+
+*Outcome (PR #1833):* Split into 8 family submodules (utils/configuration/integrations/components/security/templates/accessibility/quality); `__init__.py` fires every `@register` + re-exports all public+private symbols. Zero behavior change (deterministic invariant snapshot vs git monolith: 13 checks / 112 symbols / 8 messages identical), full suite 5765 passed with **zero test edits** — the 6 monkeypatched-by-path helpers are referenced via `_root` so `patch("djust.checks.X")` still works. Three split-specific traps surfaced + handled: (1) monkeypatch audit must grep all 3 idioms (`patch("mod.X")` / `patch.object(alias,"X")` / `monkeypatch.setattr(alias,"X")`) — found 6 helpers, not 2; (2) in-body `from .X` resolves one level deeper in a submodule (rewrite to absolute); (3) a behavior-invariant snapshot of order-dependent checks must fix the run order. Adversarial review PASS; 35-case regression guard added.
+
+**#1822 — Modularize `checks.py` (4,268 LOC) into submodules (LOW, refactor)** — Convert `checks.py` → a `checks/` package via single-script transformation (#1312). **Load-bearing constraint surfaced at plan time:** the issue's premise "`__init__.py` re-exports maintain compatibility" is *incomplete* — re-exports preserve `from djust.checks import X` but NOT the ~50 `patch("djust.checks._get_project_app_dirs")` / `_has_multiple_permission_groups` monkeypatch-by-path sites (a moved check resolves bare names in its own module globals, not the patched `djust.checks` namespace). Zero-test-change design: keep the two monkeypatched helpers defined in `checks/__init__.py` and have moved checks reference them through the root module (`import djust.checks as _root; _root._get_project_app_dirs()`) so the patch still takes effect at call time; re-export every public+private symbol the tests import (`_strip_verbatim_blocks`, `_DJ_ACTIVITY_NAME_RE`, `_CLIENT_NAME_SAFE_RE`, `_PII_NAME_PATTERN`, `_parse_psycopg_version`, `_routed_liveview_classes`, the three `_check_*`/`_build_*` mount helpers, `_DOC_DJUST_EVENT_RE`, `_DOC_DISPATCHED_DJUST_EVENTS`, exceptions). Invariant gate: registered-check-ID set + `manage.py check` output identical before/after; full `test_checks*` suite green untouched.
+
+### Milestone: v1.0.6-3 — VDOM dj-if MoveSubtree latent bug (P0, drops rows; since v1.0.0) (drain bucket → ships in 1.0.6)
+
+*Goal:* Fix the P0 VDOM-engine regression #1826 — `diff_html` emits unpairable `MoveSubtree` + flattens inserted elements to `#text` for `{% if %}`-wrapped rows in a loop, dropping a table row per toggle. Warrants 1.0.6rc2.
+
+**#1826 — `diff_html` MoveSubtree of dj-if boundary fails on client + element flattened to `#text` (P0, bug, latent since v1.0.0 — introduced with the MoveSubtree feature #1666, commit 912e630c; NOT new in 1.0.6rc1, just reported on it)** — A server-rendered `{% if show %}` wrapping a sibling `<tr>` inside a `{% for %}` loop drops a row per toggle. Root cause in `crates/djust_vdom/src/diff.rs` (MoveSubtree emission ~304-310): for dj-if boundaries matched in both old/new, it emits `MoveSubtree` when `old_open_abs != new_open_abs` — but absolute offsets shift when an *earlier* empty dj-if fills, so later boundaries (`if-b-0`, `if-c-0`) get spurious moves the client can't pair (`close marker not found`) → 15/22 patches fail → `html_recovery` morph drops a row. Separately, the `<tr>` inserted into the newly-non-empty dj-if body is emitted as a flattened `#text` node (tag/attrs dropped). Reporter handed a dependency-light `diff_html` reproducer (drops in as a Rust/`djust._rust` test): 1 failing (the bug) + 1 passing control (the class-toggle workaround). Reproduce-FIRST with it; the MoveSubtree fix must compare *relative* significant position (not raw absolute offset) and the body-insert must preserve the element. Same family as #1666/#559/#1678 (nested-conditional VDOM-patch boundaries). Workaround documented: toggle a CSS class, not structural add/remove (matches the existing dj-if-conditional canon).
+
+### Milestone: v1.0.6-2 — security + DX drain (drain bucket → ships in 1.0.6)
+
+*Goal:* Drain two security hardening items + a lint, all from `SECURITY_AUDIT.md`. The `checks.py` modularization (#1822) is tracked here but handled as a SEPARATE PR after #1821 (it interacts with S007 placement; LOW pri, 4,221-LOC pure refactor — not bundled with the security work).
+
+**#1819 — Validate URL parameter in `handle_mount()` to prevent path traversal / CRLF injection (P0, security)** — `handle_mount` uses `data.get("url", "/")` in `RequestFactory.get()` without validation (TWO sites: `websocket.py:1955` AND `:4691` — parallel-path #1646). A crafted WS mount `url` with `../../admin/` or `\r\n` could set request context to an admin path (auth-bypass risk if a view inspects `request.path`), inject CRLF, or pollute logs. Fix: validate the url (must start with `/`, no `\r`/`\n`, reject absolute URLs) at BOTH sites — prefer a shared helper. Reproduce-first: verify what `RequestFactory.get()` actually does with each malicious input (the issue says "needs verification") before asserting the fix is load-bearing. Regression tests per the issue (`../../admin/`, CRLF, absolute URL).
+
+**#1820 — Audit type-coercion edge cases in `validate_handler_params()` (P0, security)** — handler params coerce by default (`coerce=True`). Audit all coercion paths (str→int/float/bool) for malformed inputs (`"999 OR 1=1"`, `"true; DROP TABLE"`, `"1e308"`, `"0x41"`). Likely already safe (Python `int("999 OR 1=1")` RAISES, not truncates) — but VERIFY empirically, document the behavior, add security regression tests proving malformed inputs raise (not silently coerce), and consider a `@strict_types` option. May be investigation + test-hardening rather than a behavior change — let the audit determine.
+
+**#1821 — Add S007 static check for `upload_entry.client_name|safe` patterns (P2, lint)** — client-supplied upload filenames are auto-escaped by default, but `{{ upload_entry.client_name|safe }}` bypasses escaping → stored XSS. Add check `S007` (WARNING) flagging `client_name|safe` in templates. Empirical canary (#1459): construct a synthetic `client_name|safe` template + confirm S007 fires; confirm a non-`|safe` use does not. Honor `_is_check_suppressed("djust.S007")`. New IDs after the existing S001–S005.
+
+**#1822 — Modularize `checks.py` (4,221 LOC) into submodules (LOW, refactor — SEPARATE PR)** — pure refactor; preserve all check IDs + Django `AppConfig.checks` discovery via `__init__.py` re-exports. Single-script transformation (#1312). Handle AFTER #1821 lands (so S007 modularizes with the rest). Not part of the security drain wave.
+
+### Milestone: v1.0.6-1 — consumer-owned VDOM send-version (drain bucket → ships in 1.0.6)
+
+*Goal:* Land the deferred #1788 (Action Tracker #299) — the wire-version optimization that removes the recovery round-trip on `html_update` baseline-loss. Ships in the next patch (1.0.6).
+
+**#1788 — Consumer-owned monotonic VDOM send-version so `html_update` fallback is accepted without a recovery round-trip (P2, optimization, drift-risk)** — The wire `version` is currently the Rust view's `self.version` (`crates/djust_live/src/lib.rs:582`), coupled to the Rust-view object lifetime, not the connection. On a baseline loss `render_with_diff` returns `patches=None` + a `version` that fails the client's `clientVdomVersion === data.version - 1` check (`static/djust/src/02-response-handler.js:58`) → `request_html` → recovery round-trip (harmless since #1785, but avoidable). Fix (Option 2): track `self._last_sent_version` on the consumer and stamp every outbound frame with `_last_sent_version + 1`, the single source of truth across ALL ~7 send paths (`handle_event`, `server_push`, `_run_async_work`, `handle_request_html`, hvr). **Drift caveat (the load-bearing risk, why this was deferred #299):** the client checks `data.version - 1` on EVERY frame, so the counter must stay consistent across every send path or the NEXT successful diff is rejected → recovery storm. Mirror the existing `_hvr_version` consumer-owned-counter precedent (`websocket.py:4239`). Reproduce-first against a real `WebsocketCommunicator`: baseline-loss → assert `html_update` accepted directly (no `request_html`) AND the next successful diff's version is still accepted (drift guard).
+
+### Milestone: v1.0.5-5 — sticky-child recovery state-loss (P0 data loss) (drain bucket → ships in 1.0.5)
+
+*Goal:* Fix the P0 data-loss bug #1813 — an `html_recovery` on a live connection wipes an embedded sticky child's user-interacted state back to `mount()` defaults. Ships in 1.0.5 (warrants a 1.0.5rc5).
+
+**#1813 — Prerender + embedded sticky child: first parent patch misses `dj-id` → `html_recovery` → sticky-child state reset (P0, bug, DATA LOSS)** — On an HTTP-prerendered page embedding `{% live_render "Child" sticky=True %}`, the first parent patch carries a `SetAttr data-djust-embedded` on the child wrapper addressed by **path** (the prerender `skipMountHtml` morph, #1610, never stamps a `dj-id` on that wrapper — fix (a), same class as #1678). If the child's subtree drifted (user interacted), the path no longer resolves → patch fails → `html_recovery`. The recovery re-renders the parent, re-running `{% live_render sticky=True %}` → the child re-mounts to `mount()` defaults → **the user's interactions are silently discarded** (fix (b), the fundamental fix — *any* recovery cause wipes sticky state; #1471 covered WS-reconnect but not live-connection recovery). Reproduce-first against a real WebsocketCommunicator (drift child → trigger recovery → assert child state preserved, not mount defaults). Prefer fix (b) (data-loss cure for all recovery causes); add (a) if it cleanly removes the avoidable trigger.
+
+### Milestone: v1.0.5-4 — system-check DX + worktree tooling drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Drain two post-rc4 DX/tech-debt issues: a misleading + unsuppressible T004 system check, and the worktree pre-push gap left after #1798. Ships in 1.0.5.
+
+**#1809 — T004 false positive for document-dispatched `djust:` events + ignores `suppress_checks` (P1, bug)** — T004 (`_DOC_DJUST_EVENT_RE`, `python/djust/checks.py`) flags `document.addEventListener('djust:navigate-end' | 'hvr-*' | 'layout-changed' | …)` as "should be window", but djust itself dispatches that family on `document` (`client.js`: `document.dispatchEvent(new CustomEvent('djust:navigate-end'))`), so the `fix_hint` would break correct listeners. Separately, the T004 emission site (`checks.py:3237`) doesn't call `_is_check_suppressed("djust.T004")` (contrast the V004 gate), so `DJUST_CONFIG["suppress_checks"]=["T004"]` is a no-op. Fix BOTH: scope T004 to the window-dispatched event family (allowlist; exclude navigate-*/hvr-*/layout-changed/ws-reconnected/time-travel-*) AND add the suppress guard. Scope to T004 only — the broader ~30-site sweep is #1607; file a follow-up if more sites are found (#1079).
+
+**#1810 — worktree pre-push tests the MAIN source tree, not the linked worktree (P2, tech-debt)** — #1798 fixed interpreter resolution from any worktree, but editable `djust` still imports from the main checkout, so a worktree pre-push runs the suite against the wrong tree → subagents still `--no-verify`. Evaluate PYTHONPATH-shadowing the worktree `python/` in the hook vs accept-and-document. Low priority (CI authoritative).
+
+### Milestone: v1.0.5-3 — sticky-child interactivity + DX drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Drain the post-rc3 sticky-child findings from the LLM eval harness (siblings of #1784/#1801) + a code-review nit. Ships in 1.0.5.
+
+**#1802 — embedded sticky-child events return `noop` (P1, bug)** — a `{% live_render "Child" sticky=True %}` widget's `dj-click` routes to the child handler and the handler runs, but the consumer returns a bare `noop` (no patch produced/sent), so the DOM never updates — sticky widgets are render-only/non-interactive. Adjacent to the #1467 sticky-child event-routing investigation (events route via `view_id` at `websocket.py:2689`). Reproduce-first: a sticky child with a state-mutating `@event_handler`, click → assert a patch is sent.
+
+**#1803 — sticky-child with its own `dj-view` → nested view binding (P2, DX/check)** — the sticky wrapper already emits `<div dj-view dj-sticky-view=…>` (`static/djust/src/45-child-view.js:24-26`); if the child template ALSO puts `dj-view` on its root, the output nests a duplicate `dj-view` and the child's client mount breaks (events silently don't bind). Only warned in an example-template comment today. Add a system check (and document on the `dj-sticky-view` reference).
+
+**#1805 — `.exists()` vs `.is_dir()` collector nit (P2, tech-debt)** — from #1804 review: `utils._get_template_dirs_cached` guards the app `templates/` dir with `.exists()` while `DjustTemplateBackend._get_template_dirs` (`template/backend.py:69`) uses `.is_dir()`; the two parallel collectors should agree. Switch the cached helper to `is_dir()`.
+
+### Milestone: v1.0.5-2 — render-path + cleanup drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Post-rc2 follow-ups. Cleanups #1791/#1794/#1795/#1796 already merged (in 1.0.5rc3); this entry tracks the render-path bug #1801. Ships in 1.0.5.
+
+**#1801 — `{% extends %}` pages render without the base `<head>` on initial HTTP GET (P1, bug)** — every template-inheritance page (incl. the scaffold) renders unstyled on first paint: the served GET is the dj-root fragment only, no `<!doctype>`/`<head>`. Root cause (triaged symptom-up): `get_template`'s broad `except` (`python/djust/mixins/template.py:193`) swallows a post-resolution error → `_full_template = None` → `_render_full_template_inner`'s `else` (`:1022`) returns `self.render()` (fragment only). Fix: surface + fix the swallowed error so `_full_template` = the resolved full doc, AND narrow/log the `except` so a render-path error can never again silently degrade to fragment-only. Reproduce-first to capture what is swallowed.
+
+### Milestone: v1.0.5-1 — WS recovery + render-path hardening drain (drain bucket → ships in 1.0.5)
+
+*Goal:* Drain post-1.0.4 open bugs surfaced by the djust.org `/insights/` production
+incident (WS recovery/version handshake) plus two render-path bugs and two
+state/serialization tech-debt items. Ships as 1.0.5.
+
+**#1785 — WS `request_html` recovery forces full page reload (P1, VERIFIED)** — On the
+DJE-053 `html_update` fallback, `handle_event` (`python/djust/websocket.py:3740-3816`) sends
+full HTML but never calls `_arm_recovery`, so a follow-up `request_html` returns "Recovery
+HTML unavailable" → page reload. Reproduced locally with a gate-off self-test. Fix: arm
+recovery on the `html_update` branch (mirror `:3726`). Breaks djust.org `/insights/` on 1.0.4.
+
+**#1784 — embedded `{% live_render %}` 500s on initial HTTP render** — sticky-view pages
+cannot be served on the first GET. Render-path bug.
+
+**#1787 — `djust new` scaffold does not boot** — the generated asgi misuses `live_session`
+and the scaffold trips its own system checks. New-user first-run blocker.
+
+**#1786 — context/request leak into persisted LiveView state** — context-processor outputs
+(`PermWrapper`, `FallbackStorage`, the request) get serialized into the Redis state backend,
+producing a per-render warning flood + state bloat + `_prev_context_refs` fingerprint overflow.
+
+**#1788 — consumer-owned monotonic VDOM send-version (follow-up to #1785)** — the VDOM version
+is coupled to the Rust-view lifetime; a baseline loss resets it and the client rejects the
+`html_update` (extra recovery round-trip). Track a connection-owned send-version across all
+outbound frame paths.
+
+---
+
 ### Milestone: v1.1.0 — post-1.0 backlog
 
 *Goal:* Designed/deferred work that needs more than a drain-mechanical fix.
@@ -3484,11 +4123,15 @@ to a single RC. P0 first.
 
 | Priority | Issue | Summary | Notes |
 |---|---|---|---|
-| **P2** | System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602) | DX: detect pre-1.0 attribute names during upgrade. | Small enhancement; drain-able when prioritized. |
-| **P2** | Multi-tenant migration guide (#1559) | Docs: django-tenants → djust.tenants. | Docs writing. |
+| **P2** | ~~System check for legacy `data-djust-root`/`data-djust-view` attrs (#1602)~~ → moved to v1.0.1 | DX: detect pre-1.0 attribute names during upgrade. | Moved into the v1.0.1 drain. |
+| **P2** | ~~Multi-tenant migration guide (#1559)~~ → moved to v1.0.1 | Docs: django-tenants → djust.tenants. | Moved into the v1.0.1 drain. |
 | **P2** | bug-capture iter B — replay viewer (#1562) | `/__djust__/replay/<blob>` read-only viewer. | Feature; needs design. |
 | **P2** | bug-capture iter C — Redis store + CLI + PII scrub (#1561) | Persistent capture store + `djust replay` CLI. | Feature; multi-day. |
 | **P2** | Cache tenant per WS session (#1557) | Multi-tenant ASGI hot-path perf. | Feature; security-review label. |
+| **P1** | `auto_navigate` — Turbo-Drive `<a>` interception, opt-in (#1734) | Delegated click listener: SPA-navigate plain `<a href>` when the path resolves in the route map (opt-outs: modifier/middle-click, target/download, external, hash, `data-no-navigate`); same-view query-only → `live_patch`, else `live_redirect`. Config flag `auto_navigate`, **default OFF**. | Directional (ADR-021 Stage 2). Depends on #1733. Default-on deferred to a future major. |
+| **P2** | Reconcile native dj-navigate vs external TurboNav (#1735) | Position native `dj-navigate` as canonical; reframe `turbonav-integration.md` as interop (per-nav WS reconnect tradeoff). Docs/stance only. | Pairs with ADR-021; ships with #1734. |
+| **P3** | Route map & dj-navigation — reconsider client exposure (#1758) | Investigation: what the route map exposes to the client; whether route-resolution logic should move into template render. No proposed design yet. | Design-gated; pairs with the `auto_navigate` / route-map work (#1734). Tracked here, not drain-mechanical. |
+| **P3** | Deploy doctor: widen DATABASES env-read heuristic (#1768) | The `_deploy_doctor_warnings` DATABASES check false-positives when the DB is built from individual `os.environ["DB_*"]` vars (not `DATABASE_URL`). Advisory-only today; widen before the doctor graduates beyond advisory. | Tech-debt; #1760 follow-up from PR #1767 Stage-11. |
 | **P3** | VDOM compounding-reorder residual tail (#1669, **closed not-planned** — recorded here so the analysis isn't lost if revisited) | ~6 / 6000 adversarial-corpus re-renders mis-patch when several keyed reorders + a `dj-if` boundary move compound in one parent; ~0 production incidence. Accepted after #1666 (`MoveSubtree`) / #1667 (`InsertChild.ref_d=None`) / #1668 drove the client-faithful-harness residual from ~40 → ~6. | **Accept + document.** A robust fix needs a reconciliation/apply redesign in `crates/djust_vdom/src/diff.rs` with real regression risk against 268 Rust + 1636 JS tests for negligible benefit. If ever revisited, two candidate directions: **(a) frame-consistent move-target resolution** — resolve `MoveChild`/`MoveSubtree` indices against a single post-removal frame so compounding ops don't shift each other's targets; **(b) unified id-keying across all node types** (incl. `dj-if` boundary spans, which today are id-less `#comment` markers) so reconciliation never falls back to positional matching. |
 
 ---

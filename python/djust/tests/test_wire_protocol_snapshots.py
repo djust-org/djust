@@ -134,8 +134,9 @@ def test_patch_envelope_with_html_fallback():
 
 def test_mount_envelope_minimal():
     """Pins the mount frame's key ORDER: type, session_id, view, version.
-    Public state (when present) is appended via `response["public_state"] = ...`
-    AFTER the initial dict literal, so order is critical."""
+    The signed snapshot (when present) is appended via
+    `response["state_snapshot_signed"] = ...` AFTER the initial dict literal,
+    so order is critical."""
     response = {
         "type": "mount",
         "session_id": "sess-abc",
@@ -148,19 +149,23 @@ def test_mount_envelope_minimal():
     assert _emit(response) == expected
 
 
-def test_mount_envelope_with_public_state():
-    """When the view opts into state-snapshot (`enable_state_snapshot=True`),
-    `public_state` is appended after `version`. Pin that order."""
+def test_mount_envelope_with_signed_snapshot():
+    """Finding #4: when the view opts into state-snapshot
+    (`enable_state_snapshot=True`), the server emits an OPAQUE
+    `state_snapshot_signed` string (a TimestampSigner blob) after `version`.
+    The legacy unsigned `public_state` dict is no longer sent — the client
+    must echo the signed blob back verbatim. Pin the field name + order."""
     response = {
         "type": "mount",
         "session_id": "sess-abc",
         "view": "myapp.views.MyView",
         "version": 0,
     }
-    response["public_state"] = {"count": 5}
+    # The real value is an opaque TimestampSigner blob; pin shape with a stub.
+    response["state_snapshot_signed"] = "eyJzdGF0ZSI6ICJ7fSJ9:1abc:def456"
     expected = (
         '{"type": "mount", "session_id": "sess-abc", "view": "myapp.views.MyView", '
-        '"version": 0, "public_state": {"count": 5}}'
+        '"version": 0, "state_snapshot_signed": "eyJzdGF0ZSI6ICJ7fSJ9:1abc:def456"}'
     )
     assert _emit(response) == expected
 

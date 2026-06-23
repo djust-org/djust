@@ -221,6 +221,11 @@ navigation:
         file: guides/multi-tenant.md
         order: 10
         level: advanced
+      - title: Migrating from django-tenants
+        slug: migrating-from-django-tenants
+        file: guides/migrating-from-django-tenants.md
+        order: 10.5
+        level: advanced
       - title: External Services
         slug: services
         file: guides/services.md

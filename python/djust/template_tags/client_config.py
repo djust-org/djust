@@ -32,46 +32,37 @@ logger = logging.getLogger(__name__)
 class ClientConfigTagHandler(TagHandler):
     """Handler for ``{% djust_client_config %}`` (Rust template engine).
 
-    Returns a ``<meta>`` tag with the djust API prefix resolved via
-    Django's ``reverse()`` (honors ``FORCE_SCRIPT_NAME`` and custom
-    ``api_patterns(prefix=...)`` mounts). Mirrors the Django-side
-    ``@register.simple_tag`` in ``live_tags.py`` — both invoke the shared
-    ``_resolve_api_prefix()`` helper to guarantee identical output across
-    engines.
+    Returns the API/SSE prefix ``<meta>`` tags (resolved via Django's
+    ``reverse()`` — honors ``FORCE_SCRIPT_NAME`` and custom
+    ``api_patterns(prefix=...)`` mounts) plus the auto-derived route-map
+    ``<script>`` (#1733). Mirrors the Django-side
+    ``@register.simple_tag(takes_context=True)`` in ``live_tags.py`` — both
+    invoke the shared ``_client_config_html()`` helper to guarantee
+    byte-identical output across engines.
 
-    Security: the resolved prefix is HTML-escaped via
-    :func:`django.utils.html.format_html` so a mis-configured
-    ``FORCE_SCRIPT_NAME`` value cannot break out of the ``content="..."``
-    attribute.
+    Security: the resolved prefixes are HTML-escaped via
+    :func:`django.utils.html.escape` and the route map is ``json.dumps`` /
+    ``format_html``-escaped, so a mis-configured ``FORCE_SCRIPT_NAME`` value
+    cannot break out of the ``content="..."`` attribute and the route data
+    cannot break out of the ``<script>``.
     """
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:  # noqa: ARG002
-        # ``args`` and ``context`` are unused by this tag (it takes no
-        # arguments and its output depends only on Django settings +
-        # URLconf state), but they are kept in the signature to match
-        # the ``TagHandler.render()`` interface contract — see
-        # ``template_tags/__init__.py``. The noqa silences the
-        # unused-argument lint for the same reason.
+        # ``args`` is unused (this tag takes no positional arguments). The
+        # ``context`` dict is read for ``request`` so the auto-emitted
+        # route-map <script> (#1733) can pick up ``request.csp_nonce`` —
+        # the same nonce the Django-engine tag uses. Both engines delegate
+        # to the shared ``_client_config_html`` helper to guarantee
+        # byte-identical output (the dual-registration invariant, PR #993).
         #
         # Import here to avoid a circular import with live_tags at module
         # load time. live_tags imports from djust.config which pulls in
         # Django settings — safe to defer to render time.
-        from django.utils.html import format_html
+        from djust.templatetags.live_tags import _client_config_html
 
-        from djust.templatetags.live_tags import (
-            _resolve_api_prefix,
-            _resolve_sse_prefix,
-        )
-
-        api_prefix = _resolve_api_prefix()
-        sse_prefix = _resolve_sse_prefix()
-        # format_html escapes the interpolated value and returns a
-        # SafeString. The Rust CustomTag output path does NOT re-escape the
-        # returned string (matches the djust_markdown pattern), so using
-        # format_html here produces safe, non-double-escaped HTML.
-        return format_html(
-            '<meta name="djust-api-prefix" content="{}">'
-            '\n<meta name="djust-sse-prefix" content="{}">',
-            api_prefix,
-            sse_prefix,
-        )
+        request = context.get("request") if context else None
+        # _client_config_html returns a SafeString (mark_safe). The Rust
+        # CustomTag output path does NOT re-escape the returned string
+        # (matches the djust_markdown pattern), so the individually-escaped
+        # meta + route-map markup is emitted safely and not double-escaped.
+        return _client_config_html(request)

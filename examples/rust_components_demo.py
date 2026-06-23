@@ -124,7 +124,7 @@ def demo_interactive():
     print(f"\nHTML output:")
     print(f"  {btn.render()}")
 
-    print("\nNote: The @click='handleSubmit' attribute integrates with")
+    print("\nNote: The dj-click='handleSubmit' attribute integrates with")
     print("      djust's LiveView event system for reactive updates.")
 
 

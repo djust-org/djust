@@ -269,8 +269,14 @@ class StreamingMixin:
         from asgiref.sync import sync_to_async
         import json
 
-        # Re-render the full view
-        html, patches, version = await sync_to_async(self.render_with_diff)()
+        # Re-render the full view. The Rust ``version`` is DISCARDED for the
+        # wire — this path bypasses ``_send_update`` and sends frames directly,
+        # but it is a client-CHECKED send path (the client writes
+        # ``clientVdomVersion = data.version`` at 02-response-handler.js:77), so
+        # both frames MUST stamp the consumer-owned monotonic counter
+        # (#1788, HIDDEN #2). Stamping the Rust version here would desync the
+        # client against every other send path.
+        html, patches, _version = await sync_to_async(self.render_with_diff)()
 
         if patches is not None:
             patch_list = json.loads(patches) if patches else []
@@ -278,7 +284,7 @@ class StreamingMixin:
                 {
                     "type": "patch",
                     "patches": patch_list,
-                    "version": version,
+                    "version": self._ws_consumer._next_version(),
                 }
             )
         else:
@@ -288,7 +294,7 @@ class StreamingMixin:
                 {
                     "type": "html_update",
                     "html": html,
-                    "version": version,
+                    "version": self._ws_consumer._next_version(),
                 }
             )
         await self._ws_consumer._flush_push_events()

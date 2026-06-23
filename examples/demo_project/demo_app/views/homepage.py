@@ -18,13 +18,13 @@ class HomeCounterDemo(LiveView):
     <div class="text-center">
         <div class="display-1 fw-bold mb-3" style="color: #667eea;">{{ count }}</div>
         <div class="d-flex gap-2 justify-content-center">
-            <button @click="decrement" class="btn btn-outline-primary btn-lg">
+            <button dj-click="decrement" class="btn btn-outline-primary btn-lg">
                 <span style="font-size: 1.5rem;">−</span>
             </button>
-            <button @click="increment" class="btn btn-primary btn-lg">
+            <button dj-click="increment" class="btn btn-primary btn-lg">
                 <span style="font-size: 1.5rem;">+</span>
             </button>
-            <button @click="reset" class="btn btn-outline-secondary btn-lg">
+            <button dj-click="reset" class="btn btn-outline-secondary btn-lg">
                 Reset
             </button>
         </div>
@@ -54,7 +54,7 @@ class HomeSearchDemo(LiveView):
     template = """
     <div>
         <input
-            @input="filter_items"
+            dj-input="filter_items"
             type="text"
             class="form-control form-control-lg mb-3"
             placeholder="🔍 Type to filter frameworks..."
@@ -110,7 +110,7 @@ class HomeLiveDataDemo(LiveView):
     <div>
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5 class="mb-0">Live Performance Metrics</h5>
-            <button @click="refresh_data" class="btn btn-sm btn-primary">
+            <button dj-click="refresh_data" class="btn btn-sm btn-primary">
                 🔄 Refresh
             </button>
         </div>
@@ -195,7 +195,7 @@ class HomeTodoDemo(LiveView):
     """
     template = """
     <div>
-        <form @submit="add_todo" class="mb-3">
+        <form dj-submit="add_todo" class="mb-3">
             <div class="input-group input-group-lg">
                 <input
                     type="text"
@@ -218,7 +218,7 @@ class HomeTodoDemo(LiveView):
                         class="form-check-input"
                         type="checkbox"
                         {% if todo.done %}checked{% endif %}
-                        @change="toggle_todo"
+                        dj-change="toggle_todo"
                         data-id="{{ todo.id }}"
                     />
                     <label class="form-check-label {% if todo.done %}text-decoration-line-through text-muted{% endif %}">
@@ -226,7 +226,7 @@ class HomeTodoDemo(LiveView):
                     </label>
                 </div>
                 <button
-                    @click="delete_todo"
+                    dj-click="delete_todo"
                     data-id="{{ todo.id }}"
                     class="btn btn-sm btn-outline-danger"
                 >
@@ -244,7 +244,7 @@ class HomeTodoDemo(LiveView):
         <div class="mt-3 text-center">
             <small class="text-muted">
                 {{ active_count }} active, {{ done_count }} completed
-                <button @click="clear_completed" class="btn btn-sm btn-link">
+                <button dj-click="clear_completed" class="btn btn-sm btn-link">
                     Clear completed
                 </button>
             </small>

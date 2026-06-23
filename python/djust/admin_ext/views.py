@@ -68,7 +68,11 @@ def admin_login_required(view_func):
 
     @wraps(view_func)
     def wrapped_view(request, *args, **kwargs):
-        if not request.user.is_authenticated or not request.user.is_staff:
+        if (
+            not request.user.is_authenticated
+            or not request.user.is_active
+            or not request.user.is_staff
+        ):
             admin_site_name = kwargs.get("admin_site_name", "djust_admin")
             login_url = reverse(f"{admin_site_name}:login")
             # Construct query string separately so the redirect target is
@@ -88,6 +92,20 @@ class AdminBaseMixin:
     # View ID for registry lookup - set via as_view()
     # Prefixed with underscore so LiveView's get_context_data() skips it
     _view_registry_id = None
+
+    # Declare djust-honored auth so the WebSocket/SSE mount path gates admin
+    # views too. The ``admin_login_required`` wrapper below only protects the
+    # HTTP ``as_view`` callable; the live path authorizes via
+    # ``check_view_auth``, which honors ``login_required`` (auth) and the
+    # ``check_permissions`` hook (staff). Without these, admin views were
+    # staff-gated on the initial HTTP GET but open over WebSocket (finding #13).
+    login_required = True
+
+    def check_permissions(self, request):
+        """Staff gate honored on every transport (HTTP, WebSocket, SSE)."""
+        user = getattr(request, "user", None)
+        if not (user is not None and user.is_authenticated and user.is_active and user.is_staff):
+            raise PermissionDenied("Admin access requires an active staff account.")
 
     @classmethod
     def as_view(cls, **initkwargs):

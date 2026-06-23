@@ -41,6 +41,13 @@ class LiveViewConfig:
             "max_warnings": 3,
             "max_connections_per_ip": 10,
             "reconnect_cooldown": 5,
+            # Dedicated higher-ceiling bucket for binary upload frames (#F17).
+            # Legitimate uploads are high-volume (a 10 MB file is ~157 64 KB
+            # chunks); this is sized to let a full single-file upload land as a
+            # burst, while a sustained flood still depletes the bucket and trips
+            # the abuse-disconnect.
+            "upload_rate": 200,
+            "upload_burst": 400,
         },
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
@@ -76,6 +83,25 @@ class LiveViewConfig:
         # This is also readable from settings.DJUST_CONFIG["hook_namespacing"]
         # via the template tag (kept here for discoverability / system-check tooling).
         "hook_namespacing": "lax",
+        # Automatic SPA navigation (#1734, ADR-021 Stage 2). When True,
+        # {% djust_client_config %} emits a <meta name="djust-auto-navigate">
+        # flag and the client installs ONE delegated click listener that
+        # SPA-navigates plain <a href> links whose path resolves in the
+        # (auth-filtered, #1758) route map — Turbo-Drive-style, no djust
+        # attributes needed. Default OFF: opt in only after reading the
+        # opt-out matrix (modifier/middle-click, target/download, external,
+        # hash-only, data-no-navigate). Non-LiveView links full-reload as usual.
+        "auto_navigate": False,
+        # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
+        # Auth normally runs only at mount; with this OFF (default) an
+        # authenticated user who logs out / loses a permission mid-session keeps
+        # dispatching events on the open socket until they reconnect (the
+        # connect-time scope user is cached). When True, handle_event re-resolves
+        # the user from the session (channels.auth.get_user) and re-runs the
+        # view's login_required/permission_required check, closing 4403 on
+        # failure. Default OFF: it costs one session read per event — opt in for
+        # high-security apps that want mid-session deauth enforced on the live path.
+        "reauth_on_event": False,
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
@@ -283,6 +309,8 @@ class LiveViewConfig:
                 "max_warnings",
                 "max_connections_per_ip",
                 "reconnect_cooldown",
+                "upload_rate",
+                "upload_burst",
             ):
                 val = rl.get(key)
                 if val is not None and (not isinstance(val, (int, float)) or val <= 0):

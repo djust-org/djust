@@ -67,8 +67,12 @@ class TestMountSecurityValidation:
 
         response = await communicator.receive_json_from(timeout=2)
         assert response.get("type") == "error"
-        # _safe_error() sanitizes to "Invalid view class"
-        assert "invalid" in response.get("error", "").lower()
+        # F22 consolidation: `builtins` is not an installed-app prefix, so the
+        # mount is rejected at the allowlist gate (BEFORE the subclass check) —
+        # even more conservative than the old "Invalid view class" path, which
+        # required importing/reaching the class. In production _safe_error()
+        # sanitizes both to a generic message; either rejection is acceptable.
+        assert response.get("error")  # rejected (non-empty error envelope)
 
         await communicator.disconnect()
 
@@ -107,8 +111,10 @@ class TestMountSecurityValidation:
 
         response = await communicator.receive_json_from(timeout=2)
         assert response.get("type") == "error"
-        # _safe_error() sanitizes to "Invalid view class"
-        assert "invalid" in response.get("error", "").lower()
+        # F22 consolidation: `pathlib` is not an installed-app prefix, so the
+        # mount is rejected at the allowlist gate (BEFORE the subclass check).
+        # Either rejection path is acceptable — the class is never mounted.
+        assert response.get("error")  # rejected (non-empty error envelope)
 
         await communicator.disconnect()
 

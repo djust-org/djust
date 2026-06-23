@@ -67,6 +67,30 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(path):
+    \"\"\"Load ``KEY=VALUE`` pairs from a ``.env`` file into ``os.environ``.
+
+    Dependency-free (no python-dotenv): values already present in the
+    environment win, so real deployments that export real env vars are
+    never overridden by a committed ``.env``. Blank lines and ``#``
+    comments are skipped.
+    \"\"\"
+    if not path.exists():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+# Load a ``.env`` next to BASE_DIR (if present) so local development picks up
+# ``DEBUG=True`` + a real ``SECRET_KEY`` without exporting them by hand. An
+# unconfigured deploy (no ``.env``) still fails safe to ``DEBUG=False``.
+_load_dotenv(BASE_DIR / ".env")
+
 SECRET_KEY = os.environ.get(
     "SECRET_KEY",
     "django-insecure-%(secret_key)s",
@@ -84,9 +108,8 @@ ALLOWED_HOSTS = [
 ]
 
 INSTALLED_APPS = [
-    "daphne",
-    "django.contrib.admin",
-    "django.contrib.auth",
+    "channels",
+%(admin_app)s    "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -121,7 +144,7 @@ TEMPLATES = [
             ],
         },
     },
-]
+%(admin_template_backend)s]
 
 ASGI_APPLICATION = "%(app_name)s.asgi.application"
 
@@ -154,21 +177,93 @@ LIVEVIEW_ALLOWED_MODULES = [
 %(extra_settings)s"""
 
 # ---------------------------------------------------------------------------
+# Admin opt-in fragments (only emitted when the project ships models)
+# ---------------------------------------------------------------------------
+#
+# The default in-memory scaffold does NOT install ``django.contrib.admin``:
+# the admin has no built-in brute-force protection (djust.A030) and a starter
+# LiveView app doesn't need it. When the project actually defines models
+# (``--with-db`` / ``--from-schema``), admin is genuinely useful, so these
+# fragments are spliced into INSTALLED_APPS / TEMPLATES / urls.py. With admin
+# present, A030 fires by design — it's correct guidance to add django-axes
+# before exposing /admin/ in production.
+
+# INSTALLED_APPS entry (with trailing newline so it slots cleanly).
+ADMIN_APP_ENTRY = '    "django.contrib.admin",\n'
+
+# Second TEMPLATES backend — django.contrib.admin requires a DjangoTemplates
+# backend (admin.E403). APP_DIRS=False so it doesn't shadow app templates
+# rendered by djust.
+ADMIN_TEMPLATE_BACKEND = """\
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": False,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+            "loaders": [
+                "django.template.loaders.app_directories.Loader",
+            ],
+        },
+    },
+"""
+
+# urls.py import line + urlpattern entry (each with trailing newline).
+ADMIN_URL_IMPORT = "from django.contrib import admin\n"
+ADMIN_URL_ENTRY = '    path("admin/", admin.site.urls),\n'
+
+# ---------------------------------------------------------------------------
 # asgi.py
 # ---------------------------------------------------------------------------
 
 ASGI_PY = """\
-\"\"\"ASGI config for %(app_name)s project.\"\"\"
+\"\"\"
+ASGI config for %(app_name)s project.
+
+Wraps the HTTP handler with ``ASGIStaticFilesHandler`` so static files
+(client.js, CSS, etc.) are served correctly under an ASGI server like
+uvicorn without needing a separate static file server or extra deps.
+\"\"\"
 
 import os
-import django
+
+from django.core.asgi import get_asgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "%(app_name)s.settings")
-django.setup()
 
-from djust.routing import live_session  # noqa: E402
+# Initialize Django's app registry BEFORE importing anything that touches
+# models / consumers (channels, djust.websocket). ``get_asgi_application()``
+# calls ``django.setup()`` internally, so the imports below are safe.
+django_asgi_app = get_asgi_application()
 
-application = live_session()
+from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler  # noqa: E402
+from django.urls import path  # noqa: E402
+from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
+from channels.auth import AuthMiddlewareStack  # noqa: E402
+from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E402
+from djust.websocket import LiveViewConsumer  # noqa: E402
+
+# CSWSH defense: ``AllowedHostsOriginValidator`` rejects WebSocket
+# handshakes whose Origin header is not in ``settings.ALLOWED_HOSTS``.
+application = ProtocolTypeRouter(
+    {
+        "http": ASGIStaticFilesHandler(django_asgi_app),
+        "websocket": AllowedHostsOriginValidator(
+            AuthMiddlewareStack(
+                URLRouter(
+                    [
+                        path("ws/live/", LiveViewConsumer.as_asgi()),
+                    ]
+                )
+            )
+        ),
+    }
+)
 """
 
 # ---------------------------------------------------------------------------
@@ -194,14 +289,12 @@ application = get_wsgi_application()
 URLS_PY = """\
 \"\"\"URL configuration for %(app_name)s project.\"\"\"
 
-from django.contrib import admin
-from django.urls import path
+%(admin_url_import)sfrom django.urls import path
 
 from .views import %(view_class)s
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("", %(view_class)s.as_view(), name="index"),
+%(admin_url)s    path("", %(view_class)s.as_view(), name="index"),
 ]
 %(extra_urls)s"""
 
@@ -219,6 +312,12 @@ from djust.decorators import event_handler
 %(extra_data)s
 class %(view_class)s(%(view_bases)s):
     template_name = "%(app_name)s/index.html"
+
+    # This starter demo is an in-memory to-do list with no per-user data, so
+    # it is intentionally public. ``login_required = False`` acknowledges that
+    # explicitly (silences djust.S005). When you add real, user-scoped state,
+    # set ``login_required = True`` (or add ``permission_required``) instead.
+    login_required = False
 
     def mount(self, request, **kwargs):
         self.items = [
@@ -289,11 +388,18 @@ class %(view_class)s(%(view_bases)s):
 # ---------------------------------------------------------------------------
 
 BASE_HTML = """\
+{%% load live_tags %%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    {# djust client bootstrap: emits the API/SSE prefix <meta> tags and the   #}
+    {# dj-navigate route map. The djust client.js <script> itself is injected #}
+    {# automatically by the LiveView post-processing pipeline, so do NOT add  #}
+    {# a manual <script src=".../client.js"> tag (avoids double-load races,   #}
+    {# djust.C012). Place this inside <head> BEFORE the client script loads.  #}
+    {%% djust_client_config %%}
     <title>{%% block title %%}%(display_name)s{%% endblock %%}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -323,7 +429,7 @@ BASE_HTML = """\
     <main class="max-w-7xl mx-auto px-4 py-8">
         {%% block content %%}{%% endblock %%}
     </main>
-    <script src="{%% static 'djust/client.js' %%}" defer></script>
+    {# djust injects the client.js <script> automatically (see <head> note). #}
 </body>
 </html>
 """
@@ -352,11 +458,13 @@ INDEX_HTML = """\
                name="value"
                value="{{ search_query }}"
                placeholder="Search items..."
+               aria-label="Search items"
                class="flex-1 px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500">
         <form dj-submit="add_item" class="flex gap-2">
             <input type="text"
                    name="name"
                    placeholder="New item..."
+                   aria-label="New item name"
                    class="px-4 py-2 rounded-lg bg-surface-800 border border-white/10 text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500">
             <button type="submit"
                     class="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition"
@@ -374,6 +482,7 @@ INDEX_HTML = """\
             <div class="flex items-center gap-3">
                 <button dj-click="toggle_item"
                         data-item_id:int="{{ item.id }}"
+                        aria-label="Toggle done"
                         class="w-5 h-5 rounded border {%% if item.done %%}bg-emerald-500 border-emerald-500{%% else %%}border-gray-500{%% endif %%} flex items-center justify-center transition">
                     {%% if item.done %%}
                     <svg class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -388,6 +497,7 @@ INDEX_HTML = """\
             <button dj-click="delete_item"
                     data-item_id:int="{{ item.id }}"
                     dj-confirm="Delete this item?"
+                    aria-label="Delete item"
                     class="text-red-400 opacity-0 group-hover:opacity-100 hover:text-red-300 transition">
                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -418,7 +528,7 @@ MAKEFILE = """\
 .PHONY: dev test migrate check install
 
 dev:
-\tdaphne -b 127.0.0.1 -p 8000 %(app_name)s.asgi:application
+\tuvicorn %(app_name)s.asgi:application --host 127.0.0.1 --port 8000 --reload
 
 test:
 \tpython manage.py test
@@ -444,7 +554,7 @@ REQUIREMENTS_TXT = """\
 django>=5.1
 djust>=0.3.0
 channels>=4.0
-daphne>=4.0
+uvicorn[standard]>=0.30
 """
 
 # ---------------------------------------------------------------------------

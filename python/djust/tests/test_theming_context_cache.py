@@ -378,6 +378,38 @@ class TestThemeContextCache:
         assert ctx1["theme_head"] == ctx2["theme_head"]
         assert ctx1["theme_switcher"] == ctx2["theme_switcher"]
 
+    def test_uncacheable_request_logs_debug_and_still_returns(self, caplog):
+        """A request object that can't hold attributes (e.g. a `__slots__`
+        object) makes the cache write raise; theme_context must LOG a debug
+        (not silently `pass`) and still return the full rendered context
+        (#2380 — empty-except → logged, correctness over caching)."""
+        import logging
+
+        from djust.theming.context_processors import theme_context
+
+        class SlotsRequest:
+            __slots__ = ()  # cannot hold `_djust_theme_ctx_cache`
+
+        mgr = _make_manager()
+        with (
+            patch("djust.theming.context_processors.get_theme_manager", return_value=mgr),
+            patch(
+                "djust.theming.context_processors.generate_css_for_state",
+                return_value=":root{}",
+            ),
+            caplog.at_level(logging.DEBUG, logger="djust.theming.context_processors"),
+        ):
+            ctx = theme_context(SlotsRequest())
+        # Still returns the rendered context — the uncacheable request must
+        # not break the response.
+        assert "theme_head" in ctx
+        assert "theme_switcher" in ctx
+        # The swallowed cache-write is now observable via a debug log.
+        assert any(
+            rec.levelno == logging.DEBUG and "cache" in rec.getMessage().lower()
+            for rec in caplog.records
+        ), "expected a debug log when the theme-context cache write is skipped"
+
 
 def _render_mixin_theme_head():
     """Drive ThemeMixin._setup_theme_context() and return self.theme_head.

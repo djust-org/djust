@@ -40,6 +40,9 @@
             warning: { bg: '#f59e0b', icon: '⚠' },
             error: { bg: '#ef4444', icon: '✕' }
         };
+        // Safe: `colors` is a fixed local literal with 3 known keys and a
+        // colors.success fallback; `type` is an internal toast-type string.
+        // eslint-disable-next-line security/detect-object-injection
         const color = colors[type] || colors.success;
 
         toast.style.cssText = `
@@ -307,6 +310,9 @@
                             ['name', 'type', 'value', '@click', '@input', '@change', '@submit'].forEach(attr => {
                                 const value = elem.getAttribute(attr);
                                 if (value) {
+                                    // Safe: `attr` is from a hardcoded literal
+                                    // allowlist array; write to a fresh local {}.
+                                    // eslint-disable-next-line security/detect-object-injection
                                     elementInfo.attributes[attr] = value;
                                 }
                             });

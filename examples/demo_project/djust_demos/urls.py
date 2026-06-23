@@ -18,6 +18,13 @@ urlpatterns = [
     path("shadcn/", DemosIndexShadcnView.as_view(), name="shadcn"),
     # Basic Demos
     path("counter/", CounterView.as_view(), name="counter"),
+    # Nav Demo (#1742) — dj-navigate cross-view SPA flow dogfood.
+    # Two plain LiveViews linked by dj-navigate; the route map auto-derives
+    # from these URLconf entries (no live_session wiring needed — #1733).
+    path("nav-a/", NavDemoPageAView.as_view(), name="nav-a"),
+    path("nav-b/", NavDemoPageBView.as_view(), name="nav-b"),
+    # Browser-smoke canary (#1849 / #1848) — mount + inline-in-dj-root script.
+    path("browser-smoke/", BrowserSmokeView.as_view(), name="browser-smoke"),
     path("todo/", TodoView.as_view(), name="todo"),
     path("chat/", ChatView.as_view(), name="chat"),
     path("react/", ReactDemoView.as_view(), name="react"),

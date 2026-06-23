@@ -264,7 +264,7 @@ issue or be explicitly closed with a reason.
 | 222 | Stage 4 plan template — verify cited cause against fresh evidence for retro-filed issues | Retro v0.9.3-5 / meta-finding from PRs #1341 + #1344 | #1345 | Closed | Resolved in v0.9.5-2 PR #1399 — Stage 4 mandatory checklist item added to `.pipeline-templates/bugfix-state.json`. |
 | 223 | `InMemoryStateBackend.get_and_update()` returns shared reference (dead code, but a footgun) | PR #1355 Stage 13 Re-Review | #1356 | Open | PR #1355 fixed `get()` to clone via msgpack round-trip (closes #1353), but `get_and_update()` was overlooked. Currently zero callers. If a future caller is added without auditing, the #1353 race class returns. Suggested fix: delete (cleanest), or apply the same clone, or document the shared-ref contract. |
 | 224 | Deduplicate `_parseTimeMs` / `_computeTransitionTiming` between dj-transition and dj-remove modules | PR #1359 Stage 11 Review (CodeQL) | #1360 | Open | PR #1357 introduced both helpers in `41-dj-transition.js` AND `42-dj-remove.js`. The bundle (concatenation of source modules) has duplicate top-level function declarations. CodeQL flagged it once PR #1359 rebuilt the bundle. JS allows duplicate fn decls in non-strict mode (second wins) — bundle works because both copies are functionally identical, but the duplication is fragile. Fix: move helpers to a shared earlier-loaded module. |
-| 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Open | `pathname` is user-controllable; current safety relies on downstream server validation rejecting invalid routes. Defensive tightening recommended: own-property guard or `Map` (prototype-pollution-immune by design). PR #1359 added eslint-disable-next-line with rationale; this issue tracks tightening the actual access. |
+| 225 | Tighten `routeMap[pathname]` access with `Object.prototype.hasOwnProperty.call` (or `Map`) in 18-navigation.js | PR #1359 Stage 11 Review (informational) | #1361 | Closed | **Resolved in v1.0.2-1 (PR #1736, #1733).** `resolveViewPath` already iterated via `Object.entries` (own-prop-safe); #1736 hardened the do-not-reintroduce comment and added a regression test that pollutes `Object.prototype['/evil/']` and asserts no leak. GitHub #1361 closed. |
 | 226 | Stage 11 Code Review's reproducer-driven verdict is more reliable than diff-only review | Retro v0.9.4-1 / PR #1365 | — | Closed | **Resolved as canon: reviewers should write a local reproducer test for any algorithm finding before classifying severity.** Stage 11 reviewer for PR #1365 wrote a test that FAILED LOCALLY on the original `ea6c4c4a`, providing empirical proof of the elif-cascade algorithm bug. Stage 13 reviewer wrote 9 independent reproducer tests, 4 of which fail on `ea6c4c4a` and pass on the fix `278d6f2a` — converting "this looks wrong" into "this IS wrong." Pattern: when a Stage 11 reviewer suspects an algorithmic flaw, they should attempt a reproducer; the reproducer either confirms a 🔴 finding or shows the suspicion was unfounded (downgrade to 🟡 or 🟢). Future Stage 11 reviews on algorithm-class PRs should follow this discipline. |
 | 227 | dj-if + dj-key boundary-reorder limitation in keyed VDOM diff | PR #1365 Stage 13 (deferred) | #1366 | Open | When non-boundary siblings carry `dj-key` AND reorder within their relative slot, position-based pairing of non-boundary children can produce suboptimal patches. Production templates don't typically reorder elements across `{% if %}` boundaries. Defer to v0.10 polish. Suggested fix: extend the pre-pass to delegate to `diff_keyed_children` when any non-boundary children have `dj-key`. |
 | 228 | HTTP path log-injection asymmetry: cache_key not sanitize_for_log'd in rust_bridge.py | PR #1367 Stage 11 (deferred per Action #1079) | #1368 | Open | Pre-existing — `rust_bridge.py:372` (HTTP path) doesn't use `sanitize_for_log` for cache_key while sibling at line 343 (WS path) does. Out of scope for #1362's literal text; one-line fix proposed in the issue. |
@@ -319,6 +319,848 @@ issue or be explicitly closed with a reason.
 | 277 | Per-event `check_handler_permission` called bare-sync from async `_validate_event_security` (sibling of #1638) | PR #1646 (#1638 review) | #1648 | Open | Same `SynchronousOnlyOperation` class as #1638, for `@permission_required` handlers with a DB-backed perm backend; needs its own reproducer (N-sites-N-tests). |
 | 278 | Empirical-canary fixture for `assert_http_ws_djid_parity` (Action #1468 spirit) | PR #1653 (#1642 retro) | #1654 | Open | Harness passes for every shape today, so catch-power rests on the path-differential argument; add a synthetic divergence fixture so it can't go green-but-toothless. |
 | 279 | Strengthen drain guards: scaffold deploy-path integration test + `_arm_recovery` caller-count test + single `isSignificantChild` predicate | Retro v1.0.0rc14 (PRs #1651/#1652/#1649) | #1655 | Open | Three non-blocking test/code-hardening deferrals consolidated. |
+| 280 | Structural whole-class guard against the #1676 class (bare cross-IIFE refs surviving terser) | Retro v1.0.1 (finding #1) | #1706 | Closed | **Resolved in v1.0.1 wave 2 (PR #1715)** — `scripts/check-cross-iife-refs.mjs` static guard + pre-commit/CI wiring; found + fixed 2 more live instances (`handleEvent` in dj-dialog + keyboard-nav). Residual top-level-module gap tracked in #1716 (row 287). |
+| 281 | Extend `check-doc-snippets.py` to scan `docs/website/guides/*.md` for symbol/import resolvability | Retro v1.0.1 (finding #2) | #1707 | Closed | **Resolved in v1.0.1 wave 2 (PR #1714)** — guide scanner added; found + fixed 3 more wrong-import bugs (components/state-primitives/uploads). |
+| 282 | CI dogfood `djust_check`/`djust_audit` against `examples/demo_project` | Retro v1.0.1 (finding #3) | #1708 | Closed | **Resolved in v1.0.1 wave 2 (PR #1712)** — wrapper `scripts/ci_djust_check_demo.py` (djust_check exits 0 always) gates errors + T001/T014/T015. Promotion-to-blocking tracked in #1713 (row 286). |
+| 283 | `{% firstof %}`/`{% cycle %}` ignore name-based `safe_output_filters` (e.g. `x\|safe`) | PR #1691 (#1672 review) | #1692 | Closed | **Resolved in v1.0.1 wave 2 (PR #1709)** — `get_value_safe` honors the name-based whitelist; hoisted the duplicated list to one shared const. |
+| 284 | `DJUST_NOTIFY_DATABASE_URL` drops URL query params (sslmode, unix-socket host) | PR #1695 (#1687 review) | #1696 | Closed | **Resolved in v1.0.1 wave 2 (PR #1711)** — allowlist passthrough; credentials cannot be overridden via query. |
+| 285 | `multi-tenant.md` Quick Start cites non-existent `self.tenant_queryset()` (+ `DJUST_TENANT_RESOLVER` / `mixins` plural) | PR #1698 (#1559 review) | #1699 | Closed | **Resolved in v1.0.1 wave 2 (PR #1710)** — corrected ~10 hallucinated `djust.tenants` symbols to the real API. |
+| 286 | Promote the demo `djust_check` dogfood from `continue-on-error` to a blocking gate | PR #1712 (#1708 review) | #1713 | Closed | **Resolved in v1.0.2 (PR #1730)** — dedicated blocking `demo-checks` job (no `continue-on-error`), wired into the `test-summary` AND-condition; synthetic-error unit test covers both gate arms (error-severity + T001/T014/T015). |
+| 287 | Generalize the cross-IIFE guard to top-level-module (22-51) bare refs | PR #1715 (#1706 review) | #1716 | Closed | **Resolved in v1.0.2 (PR #1729)** — barrier-span scope model covers guard-block AND top-level-module declarations; the program-scope `maybeDeferRemoval` FP control is what required scope-aware (not module-aware) analysis. Two-sided empirical canary (#252): synthetic trigger exit 1 on branch / exit 0 on main; real tree clean. |
+| 288 | Request-scope memoize `theme_context` — now runs per WS event after #1722 | PR #1726 (#1722 review) | #1727 | Closed | **Resolved in v1.0.2 (PR #1732)** — request-scoped cache on the request object keyed by the 7-tuple theme-state key (same shape as `_render_theme_outputs` lru); four `_safe_render` tag bodies memoized per connection, recomputed on a theme switch. No nonce/per-request data embedded (verified), so no cross-request leak. NOT first-sync-gated. |
+| 289 | Fix 2 pre-existing `test_checks.py` pollution failures + audit module-level caches for test-reset fixtures | Retro v1.0.2 nav arc (PRs #1736, #1739 reviews) | #1741 | Closed | **Resolved in v1.0.2-3 (PR #1743).** Polluter proven: `block_watchdog` fixture re-imported `djust.checks` restoring only `sys.modules`, not the parent-package attr → module-object desync → monkeypatch hit the wrong copy. Fixed by restoring both. 3-clean-runs gate green. |
+| 290 | Dogfood `dj-navigate` cross-view flow + a client-hook (3rd-party lib) in the demo so demo-checks catches nav/hydration/hook regressions | Retro v1.0.2 nav arc (PRs #1736, #1739, #1740) | #1742 | Closed | **Resolved in v1.0.2-3 (PR #1744).** Added 2 dj-navigate demo views + a DjustHooks widget + playwright guard (3 non-tautological assertions: no-reload sentinel, no-flash churn=0, hook-survives-nav); confirmed #1733 needs zero wiring. Guard-hardening → #1745. |
+| 291 | Canonicalize: a transport-level `close()` / state mutation is unsafe on a **multiplexed / collector** path — gate it on batch context | Retro v1.1.0 / PR #1780 review | — | Closed | **Resolved this retro** (CLAUDE.md "Multiplexed-path transport rule"). Case study: PR #1780's auth fix called `self.close(4403)` inside `handle_mount`; `handle_mount_batch._mount_one` swaps `send_json` to a collector but NOT `close()`, so the close fired mid-loop on the shared socket and killed sibling mounts. Fixed by gating the close on a `_mounting_in_batch` flag (clear `view_instance` always; close only when not batching). |
+| 292 | Canonicalize: pre-commit stash/restore can silently DROP unstaged working-tree files across a commit cycle; recover from `~/.cache/pre-commit/patch*` | Retro v1.1.0 | — | Closed | **Resolved this retro** (CLAUDE.md "Pre-commit can drop unstaged files"). Case study: the user's uncommitted `BEST_PRACTICES*.md` drafts vanished after a pipeline commit (pre-commit stashes UNSTAGED files, runs hooks on staged, restores — a failed restore leaves them only in the patch cache). Recovered by `git apply ~/.cache/pre-commit/patch<newest>`. |
+| 293 | Reproduce a production incident locally before infra/theory changes | Retro v1.0.5-1 / PR #1789 | — | Closed | **Resolved this retro** (CLAUDE.md "Reproduce a production incident LOCALLY before changing infra or theorizing"). #1785 /insights/ reload: OOM (mem bump) + multi-pod (scale-to-1) + template theories all wasted; bug was single-process-reproducible via WebsocketCommunicator the whole time. |
+| 294 | Worktree-subagent drain pattern with symptom-up briefs | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | — | Closed | **Resolved this retro** (CLAUDE.md "Worktree-subagent drain pattern"). Each subagent caught a brief error: real scaffolder + two ERRORs (#1787); parallel-path twin (#1784, #1646); exact leak path (#1786). |
+| 295 | pre-push hook hardcodes `.venv/bin/python` — fails in git worktrees (forces `--no-verify`) | Retro v1.0.5-1 / PRs #1790,#1792,#1793 | #1796 | Closed | **Resolved in v1.0.5-2** (PR #1798 — `scripts/run-with-venv-python.sh` resolves the venv from any worktree root; fixed the hook + ~31 Makefile targets, exit 127 → 0). GitHub #1796 closed. Remaining editable-install gap → row #301 (#1810). |
+| 296 | Scaffold warning-cleanliness (C012/S005/A030/Y001/Y003) + deprecated `cli.py` startproject twin | PR #1790 (#1787) | #1791 | Closed | **Resolved in v1.0.5-2** (PR #1799 — default scaffold reports "no issues"; C012/S005/A030/Y001/Y003 cleared; `cli.py` startproject deprecated + delegated to `generate_project()`, a #1646 twin). GitHub #1791 closed. |
+| 297 | Serial-pytest order pollutes `test_checks` S005 + `auto_navigate_meta` (leaked `settings.DATABASES`) | Retro v1.0.5-1 (recurred across drain) | #1794 | Closed | **Resolved in v1.0.5-2** (PR #1800 — TWO polluters, NOT the hypothesized `settings.DATABASES` leak: module-level `_PublicView` subclass leak → S005, + `importlib.reload(djust.config)` singleton rebind → auto_navigate. 3-clean-runs gate #1174 verified 7692×3). GitHub #1794 closed. |
+| 298 | Flaky `test_total_wall_clock_is_max_not_sum` (absolute 100ms threshold false-fails under load) | Retro v1.0.5-1 (release `make test`) | #1795 | Closed | **Resolved in v1.0.5-2** (PR #1797 — relative speedup assertion parallel < serial/2, load-stable; gate-off non-tautological). GitHub #1795 closed. |
+| 299 | Consumer-owned monotonic VDOM send-version (removes recovery round-trip on `html_update`) | PR #1789 (#1785) follow-up | #1788 | Open | Deferred — optimization not bug post-#1785; carries drift risk. |
+| 300 | Read-only review subagent must never mutate the main checkout / `core.bare` (use `isolation: worktree` or read-only `gh pr diff`) | Retro v1.0.5-2 / PR #1804 | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-2 retro arc"). Self-applied one PR later in #1806's read-only review. Verify `git config core.bare` after any subagent. |
+| 301 | Worktree pre-push tests the MAIN source tree (editable install), not the linked worktree — still forces `--no-verify` | Retro v1.0.5-2 / PR #1804 (follow-up to #1796) | #1810 | Closed | **Resolved in v1.0.5-4** (PR #1812 — `run-with-venv-python.sh --worktree-pythonpath` prepends the worktree's `python/` (beats the plain `djust.pth`) + symlinks the main `.so`, so a worktree pre-push tests the worktree's source). GitHub #1810 closed. |
+| 302 | Concurrency tests assert a logical ordering invariant (interval overlap), never a wall-clock duration/ratio | Retro v1.0.5-5 / PR #1815 (#1795) | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc"). #1795 rewritten to `max(start)<min(end)` + a serial gate-off sibling; ends a two-release flaky recurrence. |
+| 303 | `_recovery_version` can go stale vs `_last_sent_version` across non-arming send paths | Retro v1.0.6-1 / PR #1816 review | #1817 | Closed | **Resolved in v1.0.7-1** (PR #1838): structural `_next_version_armed(html)` helper now fronts every render-send path; `_arm_recovery` has one call site, pinned by `test_arm_recovery_is_the_only_arming_mechanism`. Actor path (`use_actors=True`) deferred → Action #308 / #1840. |
+| 304 | Modularize `checks.py` (4,221 LOC) into submodules | Issue #1822 (post-S007) | #1822 | Closed | **Resolved in v1.0.6-4** (PR #1833): split into 8 family submodules; 13 checks + 72 IDs + full import surface preserved, zero test edits (the 6 monkeypatched helpers referenced via `_root`). |
+| 305 | Security validation review must empirically probe ENCODING-bypass variants (consumer decodes after validation) | Retro v1.0.6-2 / PR #1825 | — | Closed | **Resolved this retro** (CLAUDE.md "Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc"). #1819 `%2e%2e` bypass caught by the adversarial review's encoded end-to-end probe; fixed in the #1825 fix-pass (`unquote` before the `..` check). |
+| 306 | Latency-SLA benchmark asserts MEDIAN, not outlier-sensitive mean | Retro v1.0.6-2 / commit 49893831 | — | Closed | **Resolved this retro** (CLAUDE.md same arc section; fixed in `49893831`). #1795 outlier-sensitivity family; mean dragged past SLA by GC spikes on a loaded machine while median was well under. |
+| 307 | System check to warn when `dj-view`/`dj-root` is on a table-section element (`<tbody>`/`<tr>`/…) — silently foster-parented to garbage at render time | Retro v1.0.7-1 / #1827 investigation | #1837 | Open | Surfaced closing #1827: a `<tbody dj-view>` template renders as `<html><body>text</body></html>` (all rows dropped), no error. The actionable DX fix the #1827 diff_html flattening pointed at. |
+| 308 | Arm recovery on the actor event path (`use_actors=True`, `websocket.py:3100`) once its `result['html']` shape is verified | Retro v1.0.7-1 / PR #1838 (#1817 punt) | #1840 | Closed | **Investigated in v1.0.7-2, deferred (no code change)**: traced that `result['html']` is the already-extracted/client-ready shape, so arming `_recovery_html` with it would make `handle_request_html` double-strip → corrupt recovery (worse than the LOW drift). Proper fix needs the experimental actor to expose its raw pre-strip render; deferred until `use_actors` graduates. Bare site pinned by `test_every_client_checked_send_path_uses_next_version`. #1840 closed. |
+| 309 | Browser-smoke coverage for downstream interactive paths — runtime breaks (mount-path allowlist; inline-script-under-morph) are invisible to the pytest suite + HTTP smoke; only browser testing of the deployed app catches them | Retro v1.0.7-3+4 / demo dj-view break + #1848 | #1849 | Closed | Browser-smoke harness delivered in v1.0.8-1 PR #1866 (`tests/playwright/test_browser_smoke.py` — hard mount canary + #1848-shape inline-script xfail reproducing the open regression live); shipped non-gating per #1534, promotion to a hard merge gate tracked in #1869. Two real 1.0.7-upgrade breaks (demo `views_old` dj-view; djust.org examples tab/copy) passed the 8237-green suite + HTTP-200 smoke; caught only by driving the live page in a browser. |
+| 310 | Inline `<script>` inside dj-root not executed after the #1610 WS-mount morph — page JS handlers silently never register (1.0.7 regression) | Retro v1.0.7-3+4 / djust.org examples page | #1848 | Closed | Fix: re-execute classic `<script>` on the mount morph like the `live_redirect` path (#1635/#1650) already does, OR a system-check warning. Downstream workaround (move JS to a block outside dj-root) applied on djust.org `v0.9.32`. Documented in CLAUDE.md (v1.0.7-3+4 retro arc) + [[project_djust_inline_script_in_djroot]]. **Closed** — framework fix landed in v1.0.8-2 PR #1871 (`window.djust._runInsertedScripts` re-executes classic `<script>` after both mount branches); v1.0.8-1's browser-smoke xfail flips to a hard guard. |
+| 311 | Test-ordering pollution: `tests/unit/test_demo_views.py::TestDemoRegistration` — 4 urlconf-resolution failures under full `-n auto` | PR #1861 / v1.0.8-1 retro | #1862 | Open | Pre-existing; surfaced during T1-A. Passes in isolation; needs the polluter found (urlconf state leak). |
+| 312 | `_get_project_app_dirs()` returns 0 dirs when `manage.py check` runs from inside the djust repo tree (the `/djust/` path filter) — blinds S009/S011 dogfooding | PR #1864 / v1.0.8-1 retro | #1865 | Open | Pre-existing; makes in-repo dogfood of the new checks see 0 app dirs. Dogfood worked via the demo project instead. |
+| 313 | Per-model `djust_serializable_fields` allowlist can re-expose the sensitive-field floor (`password`/`is_superuser`/`is_staff`) — allowlist wins over `_ALWAYS_EXCLUDED_FIELDS` | PR #1867 / v1.0.8-1 retro | #1868 | Open | Surfaced by writing SECURE_DEFAULTS.md (`serialization.py:362`). Doc now states accurate precedence + WARNING; code-hardening question (make floor unconditional?) tracked here. |
+| 314 | Promote the Playwright browser-smoke to a hard merge gate once runner-green (#1534) — flip `continue-on-error` + add to the `test-summary` AND-condition (#1713); flip the #1848 xfail to a hard assertion when the framework fix lands | PR #1866 / v1.0.8-1 retro | #1869 | Open | Shipped non-gating per #1534 (new gate needs a runner-green pass before it blocks). |
+| 315 | `test_mount_batch_with_login_view_does_not_close_shared_socket` is order-fragile under `-n auto` (passes in isolation + 2/3 full runs) | PR #1874 / v1.0.8-2 retro | #1875 | Open | Unrelated pre-existing flaky async test surfaced by WU4's 3-clean-runs gate; kept out of #1862's scope (#1079). Guards the #291 multiplexed-path rule (guard is correct; harness ordering is the flake). |
+
+## v1.0.8-2 — Post-prevention open-issue drain (PRs #1870, #1871, #1872, #1873, #1874)
+
+**Date**: 2026-06-22
+**Scope**: Drained the five actionable open issues left after the v1.0.8-1 prevention program — two render-path correctness regressions (both 1.0.7) and three check/test/serialization hygiene follow-ups surfaced by the prevention work. Run as five parallel worktree-isolated implementers (one per issue, file-disjoint, #180), each with a prescriptive symptom-up brief (root cause + reference pattern + reproduce-first + gate-off + two-commit). All five merged. Excluded #1869 (blocked on a runner-green pass), #1561/#1562 (priority:low feature work).
+**Tests at close**: 8337 pytest (`-n auto`) + 1743 JS (vitest) + the non-gating Playwright smoke.
+
+### What We Learned
+
+**1. A parallel-worktree drain's one guaranteed conflict is the CHANGELOG `[Unreleased]` block — and merging shifts it, so later PRs re-conflict.**
+All five PRs were code-disjoint but every one edited `CHANGELOG.md [Unreleased]`. After the first merge moved that block, the rest went CONFLICTING; #1871 re-conflicted twice as #1870/#1873 landed ahead of it. The mechanical fix at merge time is a *union* resolve (merge current main into the branch, keep ALL entries — dropping an already-merged bullet would silently regress it). The structural fix is a `merge=union` driver so the resolve is automatic.
+
+**Action taken**: Added `.gitattributes` with `CHANGELOG.md merge=union` (+ `RETRO.md`) — a `diff` committed in this retro. Reinforces #180/#1173 (the two-commit shape isolates CHANGELOG to its own commit but does not prevent the `[Unreleased]` collision; union-merge does).
+
+**2. The 3-clean-runs gate (#1174) both fixed the cited pollution AND surfaced an unrelated flaky test.**
+WU4 (#1862) was a pollution-class fix, so the gate ran the full suite 3× under `-n auto`. The #1862 target was green all 3 runs, but RUN 1 exposed a *separate* pre-existing order-fragile async test (`test_ws_auth_close_socket`) — untouched by the PR. Kept out of scope (#1079) and filed.
+
+**Action taken**: Open — tracked in Action Tracker #315 (GitHub #1875).
+
+### Insights
+
+- **Prescriptive symptom-up briefs produced clean first-pass PRs.** All 5 were APPROVE on first review with **zero fix-passes** — a sharp contrast to v1.0.8-1 (3 of 7 needed a fix-pass). The difference: each brief named the root cause, the reference pattern to lift, and mandated reproduce-first + gate-off, so the implementer couldn't ship a plausible-but-wrong or tautological change. Worktree isolation let all 5 run concurrently.
+- **Symptom-up beat the issue's cited fix path twice.** #1848's premise ("#1635/#1650 already re-executes classic scripts") was wrong — that was the framework bundle's IIFE wrap, not user page scripts; no helper existed. #1858 was correctly confirmed as the #1788 parallel-path twin. Both came from the implementer tracing the symptom, not trusting the citation (the Bug-report-triage canon, applied).
+- **#1646 parallel-path twins fixed structurally, not patched.** #1858 routed all runtime render-send frames through one `Transport.next_client_version` hook (not a second copy of the counter logic); #1848 ran the script-re-execution after *both* mount branches; #1862 converged settings mutation onto one restoration mechanism; #1868's single `_field_is_serializable` chokepoint already gated all three callers. The recurring class keeps getting retired at the seam, per the Stage-4 reflex.
+- **Adversarial review stayed read-only (`gh pr diff` / `git show`)** — the #1804 `core.bare` discipline held across all 5; main checkout `core.bare=false` verified throughout.
+
+### Review Stats
+
+| Metric | #1870 | #1871 | #1872 | #1873 | #1874 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Quality | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | — |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 0 | 0 | 0 | 0 | 0 |
+| Review fix-passes | 0 | 0 | 0 | 0 | 0 | 0 |
+| CHANGELOG re-resolves | 0 | 2 | 0 | 1 | 1 | 4 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**`.gitattributes`**: New — `CHANGELOG.md merge=union` + `RETRO.md merge=union` (eliminates the parallel-drain `[Unreleased]` conflict).
+**CLAUDE.md**: No new rules — this drain reinforced existing canon (#180 parallel-worktree, #1646 parallel-path, #1174 3-clean-runs, #1079 scope discipline, Bug-report-triage symptom-up, #1804 review discipline) rather than adding any.
+
+### Open Items
+
+- [ ] Flaky `test_ws_auth_close_socket` under `-n auto` — Action Tracker #315 (GitHub #1875)
+- [ ] Promote browser-smoke to a hard gate once runner-green — Action Tracker #314 (GitHub #1869), carried from v1.0.8-1
+
+**Forward-link →** v1.1 planning: `/pipeline-strategy --deep` (2026-06-23) used this arc's data (#1646 = #1 recurring class, 21×) to commit the **v1.1 code-quality / single-path convergence** headline — **Path B (quality-first → ViewRuntime convergence)**. See [`docs/strategy-sessions/2026-06-23-v1.1-code-quality.md`](docs/strategy-sessions/2026-06-23-v1.1-code-quality.md) + [ADR-022](docs/adr/022-v1.1-code-quality-single-path-convergence.md). Several of this arc's open items (#1875 flaky test, #1869 gate, plus #1360/#1279/#1648/#1368/#1356) feed the v1.1.0-1 quality-groundwork sub-milestone.
+
+## v1.0.8-1 — Security-drift prevention program (PRs #1859, #1860, #1861, #1863, #1864, #1866, #1867)
+
+**Date**: 2026-06-22
+**Scope**: Post-disclosure prevention program built on the security-audit root-cause analysis (F1–F29 → 1.0.7 + 13 GHSAs). Three tiers: **Tier 1 — convergence** (make the parallel-path-drift class structurally impossible where cheap), **Tier 2 — mechanical detection** (extend the anti-drift nets + add author-side system checks + make the right CI legs blocking), **Tier 3 — codify defaults** (a secure-by-default pattern catalog + PR-checklist + audit cadence). 8 milestone issues closed (#1850–#1857); developed and merged on the PUBLIC repo (disclosure already complete, no secrecy needed). Plan: `~/.claude/plans/buzzing-sleeping-koala.md`.
+**Tests at close**: ~8303 pytest (8237 at the 1.0.7 close + structural/parity/check/object-perm regression tests) + a new non-gating Playwright browser-smoke leg.
+
+### What We Learned
+
+**1. An anti-drift test or pin is decorative unless it is load-bearing.**
+The *prevention* milestone itself twice shipped anti-drift artifacts that protected nothing, each caught only by the adversarial gate-off (#1468), never by the green suite: PR #1859's three `test_all_transports_agree_*` methods compared a single already-converged chokepoint's output to itself (`distinct=1` adapters — no seam, can never go red); PR #1860's `RUNTIME_OWNED_VERBS` set was a coincidental test-pin that `receive()` never consulted. The real protection is the call-site pin (Concern 4) + gate-off-proven deny/allow rows, and a pinned constant must be membership-checked in the production path. The sharpest form of the tautology class (#1200/#1468) — applied to test/pin *design*.
+
+**Action taken**: Updated `CLAUDE.md` — new section "Process canonicalizations from v1.0.8-1 retro arc" (rule 1: load-bearing-pin / distinct-seam). In-PR fixes removed the 3 tautological tests (#1859) and made `RUNTIME_OWNED_VERBS` load-bearing (#1860, `websocket.py:1933`).
+
+**2. A convergence plan's "these two paths are the same" is a hypothesis the implementer must falsify before merging — converge the shared SEQUENCE, not the whole handler.**
+The plan asserted the WS mount path was a thin shim from `ViewRuntime.dispatch_mount`; the Stage-4 Explore confirmed the leaf chokepoints, but the implementer's symptom-up trace found `runtime.dispatch_*` is NOT a superset of the WS handlers (~16 WS-only behaviors). T1-B narrowed to routing only `url_change`; T1-A re-scoped to extracting the shared pre-mount auth+tenant sequence into one `run_pre_mount_auth` helper (`auth/core.py:396`) all three paths call — the #1646 cure without merging the fat bodies.
+
+**Action taken**: Updated `CLAUDE.md` — same section (rule 2: falsify the "same path" premise at Stage 5; converge the sequence, not the handler).
+
+**3. Documenting a secure default falsification-tests it; the act surfaces real code weaknesses.**
+Writing `docs/SECURE_DEFAULTS.md` Pattern-1 ("the serialization floor is unconditional") forced a read of `serialization.py:362` and revealed the claim is FALSE — the per-model allowlist wins over the floor, so `djust_serializable_fields=['password']` re-exposes a floor field. The #1197 review caught it (all 23 *other* citations were exact; only the *claim* was wrong), and the act of documenting surfaced a genuine secure-by-default question.
+
+**Action taken**: Open — tracked in Action Tracker #313 (GitHub #1868). Also updated `CLAUDE.md` — same section (rule 3: extend #1516 active-falsification to prose invariants).
+
+**4. Convergence (#1646) applied 3× closed two latent security gaps the point-fix would have missed.**
+T1-A's `run_pre_mount_auth` extraction closed a runtime/SSE auth **fail-OPEN** (a non-`PermissionDenied` auth error was previously logged-and-proceeded; now fail-closed, matching WS). T1-C, re-scoped per the T1-A reviewer's finding, closed an **IDOR** on the HTTP-API + SSE-legacy object-permission twins — and the implementer caught the `dispatch_server_function` twin too (3 call sites, all no-op for non-object-scoped views).
+
+**Action taken**: Closed — fail-open fixed in PR #1861 (#1853); IDOR fixed in PR #1863 (#1857). Both regression-tested (denial tests fail pre-fix / pass post-fix) and mechanically pinned via Concern 4.
+
+**5. Tooling/CI gates need dual validation + runner-green-before-blocking.**
+S011 (#1864) reached 0 false-positives only because the dogfood pass (#1060) against the demo flagged 8 correctly-placed scripts and drove the dj-root-subtree balancing fix; the empirical canary (#1459) confirmed it catches the real #1848 shape. bandit was made blocking only after verifying a 0-HIGH baseline; the browser-smoke ships non-gating per #1534 until runner-green; the #1236 governance gate fired correctly on the release-workflow change. The dogfood also surfaced a check-discovery blind spot.
+
+**Action taken**: Open — tracked in Action Tracker #312 (GitHub #1865, dogfood blind spot) and #314 (GitHub #1869, promote browser-smoke to a hard gate once runner-green).
+
+### Insights
+
+- **The adversarial review earned its keep every single group.** 7/7 PRs went through worktree-isolated implementer → independent gate-off / empirical-canary / citation-discipline review. It caught a real defect in 3 of 7 (2× 🟡 non-load-bearing artifacts, 1× 🔴 false doc invariant) — every one invisible to the 8300-green suite. A prevention milestone with no adversarial layer would have shipped decorative protection and a misleading secure-defaults doc.
+- **A prevention program's own artifacts are subject to the failure classes it's preventing.** An anti-drift milestone shipped non-load-bearing pins; a secure-defaults doc mis-stated a default. Self-application (gate-off your own gate, falsify your own invariant) is non-optional.
+- **The #1646 parallel-path cure recurred 3× this milestone** (run_pre_mount_auth, the API/SSE/server-function object-perm twins, Concern-4 pinning the new sites) — consistent with it recurring 4× the prior release cycle. "Grep every parallel implementation of the invariant" is now reflexively the Stage-4 default for any control-touching change.
+- **The worktree-restore reflex (#36/#1804) held every time** — multiple `git checkout <path>` gate-off incidents and a core.bare scare across the drain, all recovered; main checkout `core.bare=false` verified after each. The discipline is load-bearing under heavy parallel worktree use.
+
+### Review Stats
+
+| Metric | #1859 | #1860 | #1861 | #1863 | #1864 | #1866 | #1867 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|-------|
+| Quality | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 4/5 | — |
+| 🔴 Findings | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 |
+| 🟡 Findings | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
+| Findings fixed | 1 | 1 | 0 | 0 | 0 | 0 | 1 | 3 |
+| Latent bugs closed | 0 | 0 | 1 | 1 | 0 | 0 | 0 | 2 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0* | 0 | 0 |
+
+\* PR #1866's #1236 governance gate (release-workflow change needs the `release-workflow-reviewed` label) showed red until the adversarial review served as the risk review and the label was added → green. Working as designed, not a CI failure.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: New section "Process canonicalizations from v1.0.8-1 retro arc" — 3 rules (load-bearing-pin / distinct-seam; falsify the convergence premise + converge the sequence; falsification-test prose invariants).
+**docs/SECURE_DEFAULTS.md**: New (PR #1867) — 4-pattern secure-by-default catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + the snapshot private-attr signing boundary.
+**docs/PULL_REQUEST_CHECKLIST.md**: New "Secure defaults" subsection (PR #1867).
+**System checks**: S009 (event-handler-needs-auth) + S011 (inline-script/CSP) added to `checks/security.py` (PR #1864).
+**Anti-drift nets**: `test_transport_parity_security.py` extended with 4 control axes; `test_mount_chokepoint_structural.py` Concern 4 (mount-orchestration pin) added (PR #1859), extended to the new object-perm sites (PR #1863).
+**CI**: bandit promoted to blocking on new high-severity (PR #1866); Playwright browser-smoke added (non-gating per #1534).
+
+### Open Items
+
+- [ ] Test-ordering pollution in `test_demo_views.py::TestDemoRegistration` — Action Tracker #311 (GitHub #1862)
+- [ ] `_get_project_app_dirs()` blind from inside the repo tree — Action Tracker #312 (GitHub #1865)
+- [ ] Allowlist can re-expose the serialization floor — Action Tracker #313 (GitHub #1868)
+- [ ] Promote browser-smoke to a hard gate once runner-green; flip #1848 xfail when the framework fix lands — Action Tracker #314 (GitHub #1869)
+- [x] Framework fix for #1848 (re-execute classic `<script>` on the mount morph) — Action Tracker #310 (GitHub #1848) — resolved in v1.0.8-2 (PR #1871)
+
+## v1.0.7-3 + v1.0.7-4 — Security audit drain + coordinated disclosure (private PRs #165–#177 → djust 1.0.7 + 13 GHSAs)
+
+**Date**: 2026-06-22
+**Scope**: Drained the standing djust security audit (findings F1–F29; #30 withdrawn) to closure. v1.0.7-3 fixed F16–F25 and consolidated the mount/transport surface (private PRs #165–#172); v1.0.7-4 fixed the transport/API tail F26–F29 (#174–#176) + a demo fix (#177). Developed on the PRIVATE repo (johnrtipton/djust) pre-disclosure, then shipped as the coordinated public release: djust **1.0.7** to PyPI (16 wheels) + public `djust-org/main`, with **13 GHSAs published** (1 critical / 9 high / 3 medium) firing Dependabot. djust.org + djustlive bumped/deployed to 1.0.7.
+**Tests at close**: 8237 python passing + the WU1 parity/anti-drift net.
+
+### What We Learned
+
+**1. The entire audit was parallel-path drift; the cure is a shared chokepoint + a mechanical anti-drift net.** Nearly every finding was "control enforced on path A, missing on parallel path B": F22/F23 (3 mount paths), F6/F26 (WS vs HTTP tenant/host), F27/F28 (WS/SSE/API rate-limit), F7/F24 (SSE missing WS controls), F21 (channel-layer vs other restore sinks), F16 (WS-guarded nav vs unguarded live_patch/SSE). Each was cured by ONE shared chokepoint (`security/mount.py`, `_validate_event_security`, `_host_in_allowed_hosts`, `handler_rate_check`, `safeNavigationTarget`, `safe_setattr`, `_request_owns_session`) — not N copies. The meta-cure is WU1 (PR #172): a structural AST test that makes future WS↔SSE/runtime drift MECHANICALLY DETECTABLE (empirical-canary-verified to catch injected `import_module(view_path)` / non-literal `setattr` / unvalidated `factory.get(client_url)`), plus a parity suite parametrizing the same payloads across all three mount entry points.
+**Action taken**: Closed — WU1 enforcement net shipped in PR #172 (`tests/test_transport_parity_security.py` + `tests/test_mount_chokepoint_structural.py`); reinforces the #1646 canon in CLAUDE.md.
+
+**2. Adversarial empirical-probe review caught real bypasses inspection would have rubber-stamped.** Every fix-pass came from a review that PARSED outputs / fed encoded end-to-end variants, never from reading the diff: PR #167 found two stored-XSS bypasses (MIME `; charset=utf-8` param evading exact-match; trailing-space `evil.svg ` evading the suffix check while `safe_client_name` normalized it back); PR #168 found a `/\evil.com` open-redirect (browser normalizes `\`→`/`, defeating a raw `charAt(1)` check — also latent in the OLD WS guard); PR #166's review parsed every output with a real HTMLParser (0 live elements across 6 payload classes × {DEBUG,prod}).
+**Action taken**: Closed — reinforces the #1459 empirical-canary + #1825 encoding-bypass-probe canon (CLAUDE.md); all security PRs used reproduce-first + gate-off (#1468).
+
+**3. Runtime breaks were INVISIBLE to the 8237-green suite — TWICE — and only browser testing caught them.** After deploying 1.0.7, two real downstream breaks surfaced that the full pytest suite + HTTP-200 smoke both PASSED over: (a) the demo's `dj-view="demo_app.views_old.IndexView"` — a stale ref that rode the boundary-less `startswith` the F22 fix tightened, now refused at WS mount; (b) djust.org's examples-page tab/copy handler — an inline `<script>` inside the dj-root that the 1.0.7 WS-mount morph (#1610) re-creates without executing, so the listener never registered (silent; the click bubbled fully through `document` yet the handler never ran). Both are runtime/wiring breaks the unit suite cannot see; both were found only by driving the live page in a browser.
+**Action taken**: diff + tracker_row — canonicalized in CLAUDE.md ("Process canonicalizations from v1.0.7-3 + v1.0.7-4 retro arc": browser-test-downstream-on-upgrade + page-JS-outside-dj-root). Concrete test-gap tracked in Action Tracker #309 (GitHub #1849); the #1610 regression at Action Tracker #310 (GitHub #1848).
+
+**4. GHSA publish needs a version-range pre-flight — bad ranges silently break Dependabot.** Three pre-existing drafts (F2/F3/arbitrary-import) carried `vulnerable: <= 1.0.7rc1` with `patched_versions: None`; publishing as-is would have given Dependabot NO upgrade target (no alert fires). A read-only pre-flight before `state=published` caught + normalized all three to `< 1.0.7` / `1.0.7`.
+**Action taken**: diff — "GHSA publish pre-flight" rule added to CLAUDE.md retro section + the runbook (`scratch/sec-audit/GHSA-TRACKING.md`).
+
+**5. Coordinated disclosure held; CI-dark local-validation merges held.** The sequence — private staging → release to public + PyPI → publish GHSAs together, gated on PyPI-1.0.7-live BEFORE any GHSA publish — produced no bad disclosure window. With Actions exhausted for most of the drain, PRs merged on local validation (full suite + worktree-isolated adversarial review + gate-off + two-commit), later confirmed by the green release CI. One process slip: the public-main push landed via admin-BYPASS of the branch-protection PR rule (a "diagnostic" push completed the disclosure) — outcome authorized, path untidy.
+**Action taken**: Closed — runbook in `scratch/sec-audit/GHSA-TRACKING.md`; admin-bypass slip noted in the CLAUDE.md retro section.
+
+### Insights
+- A structural cure (shared chokepoint) beats N correct copies — and the WU1 anti-drift net is what stops the class from silently returning.
+- Reproduce-first + gate-off + adversarial empirical probe was the reliable pattern; every fix-pass came from the empirical probe, never inspection.
+- The unit suite is blind to runtime wiring (mount-path allowlist, inline-script execution under morph). Browser/interactive testing of the DEPLOYED downstream is the only net that caught these — make it a standing gate on every framework upgrade.
+- #1848 (inline `<script>` inside dj-root dropped by the #1610 mount morph) is a genuine 1.0.7 regression surfaced only by the downstream upgrade.
+
+### Review Stats (private PRs #165–#177)
+| Metric | v1.0.7-3 (#165–172) | v1.0.7-4 (#174–177) | Total |
+|--------|--------|--------|-------|
+| PRs | 8 | 4 | 12 |
+| Fix-passes (real bypasses caught) | 2 (#167, #168) | 1 (#175 🟡) | 3 |
+| GHSAs published | — | — | 13 (1 crit / 9 high / 3 med) |
+| Suite at close | — | — | 8237 |
+
+### Process Improvements Applied
+**CLAUDE.md**: new section "Process canonicalizations from v1.0.7-3 + v1.0.7-4 retro arc" (browser-test-downstream-on-upgrade; page-JS-outside-dj-root; GHSA publish pre-flight + disclosure sequencing + admin-bypass note).
+**GHSA runbook**: pre-flight step in `scratch/sec-audit/GHSA-TRACKING.md`.
+**Issues filed**: #1848 (inline-script-in-dj-root regression); #1849 (browser-smoke coverage for downstream interactive paths). #177 Stage-14 retro backfilled (was a gate violation).
+
+### Open Items
+- [x] Browser-smoke coverage for downstream interactive paths — Action Tracker #309 (GitHub #1849) — resolved in v1.0.8-1 (PR #1866; harness shipped non-gating per #1534, promotion tracked in #1869)
+- [x] #1848 framework fix (re-execute classic scripts on the mount morph, or system-check warning) — Action Tracker #310 (GitHub #1848) — resolved in v1.0.8-2 (PR #1871)
+
+## v1.0.7-1 — Post-1.0.6 open-issue drain (PRs #1838, #1839)
+
+**Date**: 2026-06-18
+**Scope**: Drained the 3 tractable open issues after 1.0.6 shipped — #1817 (recovery-version staleness, PR #1838), #1830 (flaky dj-transition rAF test, PR #1839), #1827 (diff_html table-fragment flattening, closed-without-code). Held #1561/#1562 (priority:low bug-capture feature epics) for v1.1.0.
+**Tests at close**: full suite green (Python + Rust + JS); 14/14 CI checks on both PRs.
+
+### What We Learned
+
+**1. Reproduce against the REAL code path, not a convenient synthetic harness, before committing to a fix OR a close.**
+#1827 reproduced perfectly when `diff_html` was hand-fed a bare `<tbody>` fragment (table rows flattened to `#text` via html5ever foster-parenting) — it looked like a real P2 VDOM bug. But driving it through the actual render path proved it unreachable: a `<tbody dj-view>` template is foster-parented at *render* time (it renders as `<html><body>text</body></html>`, all rows already gone), so `diff_html` never receives the problematic input from any real view. Investigation-first turned a "fix the differ" task into a close-without-code AND surfaced the genuinely-actionable gap (a view silently rendering to garbage with no error). Extends the Bug-report-triage canon's mechanism axis (#1650/#1638): distrust the reproduction *harness* until it exercises the same path production does.
+**Action taken**: Closed — #1827 closed as investigation-outcome (no production repro); the actionable DX remainder tracked as Action Tracker #307 (GitHub #1837, a system check warning on table-section-rooted views).
+
+**2. A PR that "recommends a follow-up" has not filed one — the recommendation is not the action; the retro gate is the backstop.**
+PR #1838 deliberately left the actor event path (`use_actors=True`, `websocket.py:3100`) on bare `_next_version()` (arming with possibly-already-extracted actor HTML would be worse than the LOW-severity drift) and its body said "Recommend a follow-up issue" — but no issue was filed. Stage 2 of this retro caught the untracked action. The same failure mode the retro classification gate exists for, on the implementer side.
+**Action taken**: Open — filed GitHub #1840, tracked in Action Tracker #308.
+
+**3. The flaky-timing canon extends to real-frame `requestAnimationFrame`; the remedy is a controllable async-primitive stub driven explicitly + an ordering-invariant assertion.**
+#1830 (PR #1839) was the Nth instance of the #302/#306 family ("never assert a pass/fail gate on real timing"). The dj-transition test raced a `setTimeout(0)` microtask flush against the 16 ms rAF fallback; under parallel load the rAF fired first and the start-class assertion saw the already-advanced state. The fix replaced jsdom's timer-backed rAF with an opt-in queue driven by `dom.flushFrame()`, making the test fully synchronous and asserting the ordering invariant (start now; active/end only after a driven frame). Naming `requestAnimationFrame` + the controllable-stub remedy in the canon helps the next author grep for it.
+**Action taken**: Extended the CLAUDE.md flaky-test canon (section "v1.0.6-1 + v1.0.6-2 retro arc", the median-not-mean bullet) with the rAF / controllable-async-primitive-stub case in this retro's commit.
+
+### Insights
+
+- **Structural cure pinned by a single-source-of-truth invariant test.** #1817's `_next_version_armed(html)` helper consolidated arming to one call site, and `test_arm_recovery_is_the_only_arming_mechanism` asserts `_recovery_html` is assigned *only* inside it — so future drift is mechanically impossible, not just currently-absent. A stronger variant of the #1125 count-test pattern; keep reaching for "assert X is the ONLY mechanism" when consolidating parallel paths.
+- **Worktree subagents are unreliable when the change needs the editable install / node_modules** (Python, Rust-with-build, or JS-with-bundle): the `.pth` points at the main checkout, so a worktree's pytest tests the wrong tree (and vitest needs node_modules). This drain processed all three issues serially in the main checkout (one-checkout-one-agent, #180) — #1817 via a focused subagent, #1830 + #1827 inline. (Tracked separately as #1810 for the pre-push angle.)
+- Both code-fix PRs landed 5/5, gate-off-verified, single-pass green. The drain's biggest time-saver was reproduce/investigate-first: #1827's investigation (~20 min) avoided a speculative Rust differ change to the hottest VDOM path.
+
+### Review Stats
+
+| Metric | PR #1838 (#1817) | PR #1839 (#1830) | #1827 | Total |
+|--------|------------------|------------------|-------|-------|
+| Tests added | 5 (1 WS e2e + 4 unit/pin) | 1 rewrite (+ controlledRaf helper) | 0 (investigation) | 6 |
+| 🔴 Findings | 0 | 0 | — | 0 |
+| 🟡 Findings | 0 | 0 | — | 0 |
+| Gate-off verified | yes | yes | n/a | 2/2 |
+| CI failures | 0 | 0 | — | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: extended the flaky-test canon to name `requestAnimationFrame` + the controllable-async-primitive-stub remedy (this commit).
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] #1837 — system check for table-section-rooted views — Action Tracker #307 (GitHub #1837)
+- [ ] #1840 — arm recovery on the actor event path — Action Tracker #308 (GitHub #1840)
+- [ ] #1561 / #1562 — bug-capture iter B/C feature epics — held for v1.1.0 (not yet tracked rows; revisit when scoped)
+
+## v1.0.6-2 — Security + DX drain (PRs #1823, #1824, #1825)
+
+**Date**: 2026-06-17
+**Scope**: Two security-hardening items + a lint, all from `SECURITY_AUDIT.md`: #1819 (mount-URL path-traversal/CRLF), #1820 (type-coercion audit), #1821 (S007 stored-XSS lint). Shipped in 1.0.6rc1. (#1822 `checks.py` modularization deferred to a separate PR.)
+**Tests at close**: ~7741 (combined `make test`)
+
+### What We Learned
+
+**1. The adversarial review caught a real path-traversal bypass IN the security fix (#1819).**
+PR #1825's first pass checked for a literal `..` segment against the raw percent-encoded `urlparse(url).path`, but `RequestFactory.get()` percent-DECODES the path AFTER validation — so `/%2e%2e/admin/` (and `/foo%2f..%2fadmin`, `/..%5cadmin`, …) reached `request.path` as `/../admin/`, defeating the fix's own CHANGELOG/SECURITY_AUDIT guarantee. The worktree-isolated review caught it ONLY because the brief told it to feed ENCODED variants end-to-end through the downstream sink (`RequestFactory`) and check the *final* `request.path` — an inspection-only review would have rubber-stamped the literal-`..` check. Fix-pass: `unquote` once before the segment check + reject backslash/control bytes; +14 regression cases (encoded reject + e2e), gate-off-verified.
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc" (security validation review must empirically probe encoding-bypass variants — decode-after-validation). Tracker #305 Closed.
+
+**2. The coercion audit found all paths already safe → test-hardening, no new API.**
+#1820 empirically verified (not inspection): `int("999 OR 1=1")` raises (not truncated → handler not called), bool uses an allowlist (`"false"`/`"0"` → False — no truthiness bypass), typed-lists are not partially coerced. No production change; 11 characterization tests pin the safe behavior, with a mutate-to-unsafe gate-off (5 fail) proving non-tautology. `@strict_types` correctly NOT added — `@event_handler(coerce_types=False)` already provides the strict posture (#1079, no new API for zero capability).
+**Action taken**: Closed — shipped in PR #1824 (test-hardening; SECURITY_AUDIT TODO closed).
+
+**3. A fragile mean-based perf benchmark false-failed the rc1 pre-push.**
+At the 1.0.6rc1 cut, two VDOM-diff benchmarks (median 3.8ms, well under the 5ms SLA) tripped `_assert_benchmark_under`'s **mean** threshold (5.9ms, outlier-dragged by ~34ms GC spikes) in the serial pre-push on a marathon-session-loaded machine. The VDOM path was untouched since 1.0.5 (non-regression), and the threshold is skipped under `-n auto` (so CI never enforced it — it only bites the local serial pre-push). The user's "don't bypass `--no-verify`" rule forced the investigation that surfaced the fragility rather than routing around it.
+**Action taken**: CLAUDE.md — added the median-not-mean perf-SLA rule (same arc section); fixed in commit `49893831`. Tracker #306 Closed.
+
+### Insights
+
+- S007 (#1821) shipped with the mandatory empirical canary (#1459) + a gate-off; 0 false positives dogfooding the demo (#1060).
+- #1822 (`checks.py` modularization) was deliberately held out of the security wave — it interacts with S007 placement and is a 4,221-LOC pure refactor deserving its own focused PR (#1079 scope discipline). Tracked at #304.
+- The `core.bare` review discipline (#300) held across all worktree-isolated reviews; the main checkout was never mutated, verified after each subagent.
+- "Don't bypass `--no-verify`" earned its keep: the pre-push failure was the *only* signal of the fragile benchmark (CI doesn't run the threshold), and forcing the investigation produced a real fix instead of a silent bypass.
+
+### Review Stats
+
+| Metric | #1823 | #1824 | #1825 | Total |
+|--------|-------|-------|-------|-------|
+| Issue | #1821 | #1820 | #1819 | 3 |
+| 🔴 at review | 0 | 0 | 1 (bypass, fixed) | 1 |
+| Gate-off confirmed | yes | yes (mutate-to-unsafe) | yes | 3/3 |
+| Required CI | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc" (security encoding-bypass review probe; perf-SLA median-not-mean).
+**Releases**: shipped in 1.0.6rc1 (two security fixes + S007 + #1788).
+
+### Open Items
+
+- [x] `checks.py` modularization — Action Tracker #304 (GitHub #1822) — resolved in v1.0.6-4 (PR #1833)
+
+## v1.0.6-1 — Consumer-owned VDOM send-version (PR #1816)
+
+**Date**: 2026-06-17
+**Scope**: Landed the deferred #1788 (Action #299) — a consumer-owned monotonic wire-version that removes the recovery round-trip on an `html_update` baseline-loss. Shipped in 1.0.6rc1.
+**Tests at close**: ~7741 (combined `make test`)
+
+### What We Learned
+
+**1. Drift-safe wire-protocol change via a single helper — and the worktree implementer caught 3 send sites the DESIGN missed.**
+The deep investigation mapped the full version handshake and flagged the drift risk as WORSE than the issue stated (the hotreload patch frame + `streaming.py push_state` are hidden client-checked participants). The fix is a single `_next_version()` helper across all client-checked send paths (the structural cure, #1646); the implementer additionally migrated 3 time-travel send paths the design's enumeration missed, reasoning from the drift caveat (#294 — the worktree-subagent catching brief gaps). Empirical gate-off (`[1,2,1,4]` version discontinuity when reverted) + an INDEPENDENT regression confirmation (the reviewer ran the combined suite on both branches: +7 tests, identical failure sets) validated it.
+**Action taken**: Closed — shipped in PR #1816; reinforces #1646 (single helper) + #294 (brief-gap catch). Rust `lib.rs` untouched (counter stays internal).
+
+**2. Recovery-version staleness across non-arming send paths (pre-existing 🟡).**
+The review surfaced that `_recovery_version` can go stale vs `_last_sent_version` when a non-arming send (deferred-activity / tick / time-travel) advances the counter between an arming frame and a `request_html` — structurally identical pre-#1788, low severity (extra round-trip, not data loss), not CI-enforced.
+**Action taken**: Open — tracked in Action Tracker #303 (GitHub #1817).
+
+### Insights
+
+- #1788 was deferred (Action #299) for drift risk; pulling it in with #1813-level rigor (deep investigation → worktree impl → adversarial worktree review with empirical gate-off + independent regression confirmation) landed it cleanly. The rigor was the price of the drift risk the user opted into by pulling it off the deferred list.
+- The existing `_hvr_version` consumer-owned counter was the precedent the helper mirrored — the Stage-4 first-principles grep (#168) found it and avoided a NIH design.
+
+### Review Stats
+
+| Metric | #1816 |
+|--------|-------|
+| Issue | #1788 |
+| 🔴 at review | 0 |
+| 🟡 at review | 1 (#1817, deferred) |
+| Gate-off confirmed | yes (+ independent regression confirm) |
+| Required CI | green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (shared v1.0.6-1/-2 arc section — see v1.0.6-2).
+**Releases**: shipped in 1.0.6rc1.
+
+### Open Items
+
+- [x] Recovery-version staleness — Action Tracker #303 (GitHub #1817) — resolved in v1.0.7-1 (PR #1838)
+
+## v1.0.5-5 — Sticky-child recovery P0 + flaky-test hardening (PRs #1814, #1815)
+
+**Date**: 2026-06-15
+**Scope**: Fixed the P0 data-loss bug #1813 (`html_recovery` wiped embedded sticky-child state) + hardened the recurring flaky test #1795 (PR #1815). Shipped in 1.0.5rc5 (#1813) and stable 1.0.5 (#1795).
+**Tests at close**: ~7800 (parallel `make test`)
+
+### What We Learned
+
+**1. Structural cure over a point fix for the P0 (#1813).**
+Investigation found a sharper root cause than the report: the `is_embedded_child` branch never armed recovery AND `{% live_render sticky=True %}` fresh-mounted the child on every parent render (ADR-018 persistence is gated behind `enable_state_snapshot`, default off). The fix is a live-instance-reuse hatch making EVERY parent render faithful to the live child's current state — curing the data loss for ALL recovery causes, not just the cited prerender-morph trigger. (b2) re-render-at-recovery was chosen empirically (correct only BECAUSE b1 makes the render faithful — else parallel-path drift). A worktree-isolated Code Review empirically gate-off-verified all three fixes (revert b1 → 2 data-loss tests fail; revert b2 → recovery `TimeoutError`; revert a → 2 JS tests fail) — no tautologies.
+**Action taken**: Closed — shipped in PR #1814. Reinforces #1646 (structural cure over N point fixes), #1467 (sticky-child `view_id` routing), #1471 (sticky persistence).
+
+**2. A concurrency test asserts an ORDERING invariant, not a timing ratio (#1795 / PR #1815).**
+The flaky `test_total_wall_clock_is_max_not_sum` was "fixed" once (PR #1797: absolute→relative ratio) and STILL false-failed two releases later under `make test -n auto` saturation (parallel=88.1ms vs serial/2=85.8ms; passed 3/3 in isolation). The durable fix replaces the timing threshold with deterministic interval **overlap** (`max(start) < min(end)` — every thunk starts before any finishes), immune to saturation jitter, plus an in-suite gate-off sibling proving a serial loop does NOT overlap (non-tautological by construction).
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc" (concurrency tests assert ordering, never duration/ratio). Tracker #302 Closed.
+
+### Insights
+
+- The P0 reproduced server-side WITHOUT the client trigger — the load-bearing test forced `handle_request_html` directly. Reproduction fidelity (the harness exercised the real recovery path) is why the root cause came out sharper than the report.
+- The worktree-isolated reviewer ran the full empirical gate-off (the gold standard for a P0) without touching the main checkout — the #300 `core.bare` discipline held; `core.bare=false` was verified after every subagent.
+- The single 🟡 from the #1814 review (error-message `view_path` drift in the extracted helper) was fixed before merge (`2a9099da`), not deferred.
+
+### Review Stats
+
+| Metric | #1814 | #1815 | Total |
+|--------|-------|-------|-------|
+| Issue | #1813 | #1795 | 2 |
+| 🔴 at review | 0 | 0 | 0 |
+| 🟡 at review | 1 (fixed) | 0 | 1 |
+| Gate-off confirmed | yes (3 fixes) | yes (+ serial sibling) | yes |
+| Required CI | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc" (concurrency-test ordering-invariant rule).
+**Releases**: #1813 shipped in 1.0.5rc5; #1795 in stable 1.0.5.
+
+### Open Items
+
+- (none)
+
+## v1.0.5-4 — System-check DX + worktree tooling drain (PRs #1811, #1812)
+
+**Date**: 2026-06-15
+**Scope**: Drained two post-rc4 DX/tech-debt issues — #1809 (T004 false-positive for document-dispatched `djust:` events + unsuppressible) and #1810 (worktree pre-push tested the main source tree). Shipped in 1.0.5rc5 → stable 1.0.5.
+**Tests at close**: ~7800 (parallel `make test`)
+
+### What We Learned
+
+**1. Derive the check's data set from SOURCE, not the brief (#1809).**
+T004 flagged `document.addEventListener('djust:...')` as "should be window", but djust dispatches a whole family (navigate-*/hvr-*/layout-changed/ws-reconnected/time-travel-*) on `document`. The implementer derived the 7 document-dispatched event names by grepping `document.dispatchEvent(new CustomEvent('djust:` in `client.js` (NOT from the brief's list), built `_DOC_DISPATCHED_DJUST_EVENTS` from that, and fixed both defects (allowlist exclusion + the missing `_is_check_suppressed("djust.T004")` guard) with gate-off on both halves.
+**Action taken**: Closed — shipped in PR #1811. Reinforces reproduction-fidelity / derive-from-source; scope held to T004 (the ~30-site suppress sweep stays with #1607, per #1079).
+
+**2. Empirically bisect a tooling mechanism before architecting (#1810).**
+The worktree pre-push fix hinged on whether `PYTHONPATH` beats the editable install. Rather than assume, the implementer proved it: the editable install is a plain `djust.pth` (appends to `sys.path`), NOT an `__editable__` meta-path finder, so `PYTHONPATH` (prepended) wins — verified with a sentinel in the worktree's `__init__.py` (invisible without the prepend, visible with it). The gitignored-`.so`-missing wrinkle was handled with a symlink. CASE A was confirmed empirically, not assumed.
+**Action taken**: Closed — shipped in PR #1812 (closes Action Tracker #301 / GitHub #1810). Reinforces #1529 (empirically bisect before architecting) + #1516 (verify environment premises via active falsification).
+
+### Insights
+
+- Both PRs landed via worktree-isolated subagents, reviewed read-only via `gh pr diff` — the #300 `core.bare` discipline (from v1.0.5-2) held; the orchestrator verified `core.bare=false` after each subagent.
+- The CHANGELOG keep-both conflict between the two drain PRs was resolved IN the agent's worktree (not the main checkout), keeping the main checkout + the user's BEST_PRACTICES drafts untouched.
+
+### Review Stats
+
+| Metric | #1811 | #1812 | Total |
+|--------|-------|-------|-------|
+| Issue | #1809 | #1810 | 2 |
+| 🔴 at review | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | 2/2 |
+| Required CI | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (shared v1.0.5-4/-5 arc section — see v1.0.5-5).
+**Releases**: shipped in 1.0.5rc5 → stable 1.0.5.
+
+### Open Items
+
+- (none — both closed; Action Tracker #301 closed by PR #1812)
+
+## v1.0.5-3 — Sticky-child interactivity + DX drain (PRs #1806, #1807, #1808)
+
+**Date**: 2026-06-15
+**Scope**: Drained sticky-child interactivity (#1802 — embedded `{% live_render sticky=True %}` events returned a bare `noop`) + two DX issues (#1803 V012 footgun check, #1805 `is_dir` collector parity). Shipped in 1.0.5rc4.
+**Tests at close**: 4594 Python / 1686 JS (parallel `make test`)
+
+### What We Learned
+
+**1. Skip-render change-detection snapshotted the parent, not the routed child (#1802).**
+`handle_event`'s auto-skip-render block snapshotted public assigns on `self.view_instance` (the parent), but embedded sticky-child events route `target_view` to the CHILD via `view_id`. The child's mutation left the parent's assigns unchanged → `skip_render=True` → `_send_noop` fired before the `embedded_update` branch — so sticky widgets were render-only. Fix binds one `change_target = target_view` and routes every snapshot/flag through it.
+**Action taken**: Closed — shipped in PR #1808; third instance of the #1467 (LiveComponent `component_id` vs sticky-child `view_id` routing) / #1722 (change-detection on the wrong target) class, reinforcing that canon.
+
+**2. parallel-path-drift recurred again (#1805).**
+`utils._get_template_dirs_cached` guarded app-template dirs with `.exists()` while `DjustTemplateBackend._get_template_dirs` used `.is_dir()`; a file literally named `templates` would be wrongly collected by one path. 1-line `is_dir()` parity fix.
+**Action taken**: Closed — shipped in PR #1806; #1646 canon (the 4th recurrence this release cycle — see v1.0.5-2 Insights).
+
+**3. The V012 footgun check converts a silent sticky-child misconfig into a `manage.py check` warning (#1803).**
+A sticky child declaring its own root `dj-view` produces a nested duplicate binding that silently breaks the child's mount/events. V012 walks `sticky=True` views, strips comments, scans for a root `dj-view`, with false-positive guards (sticky-only, anchored regex, comment-stripping) + an empirical canary (#1459) and gate-off self-test (#1468).
+**Action taken**: Closed — shipped in PR #1807.
+
+### Insights
+
+- All three PRs were clean closes (0 🔴, gate-off confirmed each) — a high-quality small drain. The worktree-subagent pattern (#294) held up; each subagent traced symptom-up and the orchestrator reviewed read-only via `gh pr diff` (no main-checkout mutation, post-#1804).
+- #1802 is the third "change-detection/render-decision keyed on the wrong view object" bug (#1467, #1722, #1802). Durable cure: bind the routed `target_view` once and read all state through it in `handle_event`-adjacent code.
+
+### Review Stats
+
+| Metric | #1806 | #1807 | #1808 | Total |
+|--------|-------|-------|-------|-------|
+| Issue | #1805 | #1803 | #1802 | 3 |
+| 🔴 at review | 0 | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | yes | 3/3 |
+| Required CI | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: core.bare review-agent rule (shared v1.0.5-2 arc) applied here read-only.
+**Releases**: shipped in 1.0.5rc4.
+
+### Open Items
+
+- (none — all three closed clean)
+
+## v1.0.5-2 — Render-path + cleanup drain (PRs #1797, #1798, #1799, #1800, #1804)
+
+**Date**: 2026-06-15
+**Scope**: Drained the render-path regression #1801 (`{% extends %}` pages lose the base `<head>` on initial GET — every template-inheritance page incl. the scaffold) + four cleanup issues surfaced by the v1.0.5-1 drain (#1795 flaky perf test, #1796 worktree pre-push, #1791 scaffold warnings + `cli.py` twin, #1794 serial-order pollution). Shipped in 1.0.5rc4.
+**Tests at close**: ~7704 (parallel `make test`)
+
+### What We Learned
+
+**1. The #1801 first-paint regression was a silent-catch + parallel-path double-bug.**
+A broad `except Exception` in `get_template()` swallowed a real `resolve_template_inheritance` "Template not found" (logged only at DEBUG → `_full_template=None` → `dj-root`-fragment render with no `<head>`); the underlying error came from the dir-collection hardcoding `BACKEND == DjangoTemplates`, dropping app-template dirs for the scaffold's `DjustTemplateBackend` + `APP_DIRS=True`. Symptom-up triage overrode the issue's cited path. The fix de-silenced the catch (WARNING, scoping only the resolution call) AND unified all THREE parallel dir-collection paths via one `get_template_dirs()` + `_APP_DIRS_TEMPLATE_BACKENDS` set.
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.5-2 retro arc" (the silent-catch + #1646 double-bug rule). Fix shipped in PR #1804; parallel-path-drift is canon (#1646).
+
+**2. A read-only Code Review subagent left `core.bare=true` on the main checkout.**
+PR #1804's reviewer set `git config core.bare true` to repoint PyO3 at a built artifact, breaking the parent session's working tree (`git checkout`/`status` failed "must be run in a work tree") until recovered with `core.bare false`. The verdict was sound; the side effect was a repo-corruption incident the orchestrator cleaned up mid-drain.
+**Action taken**: CLAUDE.md — added "Process canonicalizations from v1.0.5-2 retro arc" (read-only review subagent must never mutate the main checkout / `core.bare`; use `isolation: worktree` or `gh pr diff`; verify `core.bare` after any subagent). Tracker #300 Closed.
+
+**3. Two non-obvious serial-order polluters, neither the hypothesized leak (#1794).**
+Module-level `_PublicView` LiveView subclass (permanent in `__subclasses__()` → S005) + `importlib.reload(djust.config)` rebinding the config singleton while `live_tags` held the old ref (auto_navigate meta dropped). The 3-clean-runs gate (#1174) verified the fix (7692×3).
+**Action taken**: Closed — shipped in PR #1800; 3-clean-runs gate is canon (#1174). GitHub #1794 closed.
+
+**4. The worktree pre-push fix is interpreter-resolution only; it still tests the main tree.**
+#1798's `run-with-venv-python.sh` resolves the venv from any worktree (fixing exit-127), but editable `djust` still imports from the main checkout, so a worktree pre-push runs the suite against the wrong tree → subagents still `--no-verify`.
+**Action taken**: Open — tracked in Action Tracker #301 (GitHub #1810).
+
+### Insights
+
+- #1795's lesson — replace absolute timing thresholds with relative assertions (parallel < serial/2) — is the durable fix for load-fragile perf tests; the gate-off (a simulated sequential render exceeds serial/2) keeps it from going tautological.
+- #1791 corrected the issue's own hypothesis (A030 is not `DEBUG`-gated); the scaffold's two project-generation paths (`cli.py` startproject vs `generate_project()`) were a #1646 twin — deprecated + delegated to one template set.
+- **#1646 parallel-path-drift recurred 4× this release cycle** (#1784 render twin, #1801 three collectors, #1791 `cli.py` twin, #1805 `is_dir` parity). It is the single most-recurring class; "grep every parallel implementation of the invariant" is now the Stage-4 reflex for render-path changes.
+- The #1804 `core.bare` incident was self-corrected one PR later: #1806's reviewer used read-only `gh pr diff` explicitly "to avoid the #1804 core.bare incident" — the canon was being applied before it was written.
+
+### Review Stats
+
+| Metric | #1797 | #1798 | #1799 | #1800 | #1804 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Issue | #1795 | #1796 | #1791 | #1794 | #1801 | 5 |
+| 🔴 at review | 0 | 0 | 0 | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | yes | yes | yes | 5/5 |
+| Required CI | green | green | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.5-2 retro arc" (core.bare review-agent rule; silent-catch + #1646 double-bug).
+**Releases**: shipped in 1.0.5rc4 (with #1801, #1802, #1803, #1805).
+
+### Open Items
+
+- [ ] Worktree pre-push editable-install gap — Action Tracker #301 (GitHub #1810)
+
+## v1.0.5-1 — Production-incident drain: WS recovery + render-path + scaffold (PRs #1789, #1790, #1792, #1793)
+
+**Date**: 2026-06-14
+**Scope**: Drained the djust.org `/insights/` production incident (#1785) + four follow-on open bugs (#1787 scaffold boot, #1784 embedded `live_render` 500, #1786 state pollution; #1788 deferred). Shipped in **1.0.5rc1** (#1785) and **1.0.5rc2** (#1787/#1784/#1786).
+**Tests at close**: ~7688 (parallel `make test`)
+
+### What We Learned
+
+**1. Reproduce a production incident locally before changing infra or theorizing.**
+The `/insights/` reload (#1785) burned three wrong theories — OOM (bumped pod memory 512Mi→1Gi), multi-pod state loss (scaled to 1 replica), and the template's variable-length DOM — before a local `WebsocketCommunicator` repro nailed it frame-by-frame: the DJE-053 `html_update` fallback never armed recovery, so a client version-mismatch → `request_html` → "Recovery HTML unavailable" → reload. It was single-process-reproducible the whole time; the memory bump and scale-to-1 both failed (user confirmed "still failing") — the signal that the cause was framework, not infra.
+**Action taken**: Added CLAUDE.md canon (#293, Closed) — "Reproduce a production incident LOCALLY before changing infra or theorizing."
+
+**2. Worktree-subagent drain pattern with symptom-up briefs catches brief errors.**
+#1787/#1784/#1786 each landed via a worktree-isolated `general-purpose` subagent given a lift-the-reference brief + "verify the cited path symptom-up" + gate-off. Each caught a real error the brief got wrong: #1787 — the live scaffolder is `scaffolding/templates.py` (not the cited deprecated `cli.py`) and there were TWO blocking ERRORs (A014 + admin.E403); #1784 — the parallel-path twin (`render_full_template` AND `render_with_diff`, #1646); #1786 — the exact leak path (`_sync_state_to_rust` → `_apply_context_processors`).
+**Action taken**: Added CLAUDE.md canon (#294, Closed) — "Worktree-subagent drain pattern with symptom-up briefs."
+
+**3. The pre-push hook is not worktree-portable.**
+It hardcodes `.venv/bin/python`; inside a git worktree (no `.venv`) it fails, so all three subagents pushed `--no-verify` after running the gates manually against the main `.venv` (CI is the authoritative gate).
+**Action taken**: Open — tracked in Action Tracker #295 (GitHub #1796).
+
+### Insights
+
+- The CHANGELOG conflict between the two parallel drain PRs (#1784 + #1786, both adding to `[Unreleased]` `### Fixed`) was a trivial markers-only "keep both" resolution — the two-commit shape (#181) keeps impl off the CHANGELOG, so only the docs commit conflicts.
+- The `_arm_recovery` call-site count-guard (#1645/#1125) did double duty in #1785: it forced a conscious count bump for the new arming site AND caught a false count from a `self._arm_recovery(` literal inside a docstring (naive `src.count`) — reworded the comment so the guard stays accurate.
+- `gh issue create --label <nonexistent>` fails ("label not found") and a piped `| grep -oE '[0-9]+$'` then yields empty — it *looks* filed but isn't (the S005 issue had to be refiled as #1794). Verify the parsed issue number is non-empty.
+- Every PR carried its per-PR retro comment on merge, so this retro hit **zero** `RETRO_GATE_VIOLATION`s.
+
+### Review Stats
+
+| Metric | #1789 | #1790 | #1792 | #1793 | Total |
+|--------|-------|-------|-------|-------|-------|
+| Issue | #1785 | #1787 | #1784 | #1786 | 4 |
+| 🔴 at review | 0 | 0 | 0 | 0 | 0 |
+| Gate-off confirmed | yes | yes | yes | yes | 4/4 |
+| Required CI | green | green | green | green | all green |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: + "Process canonicalizations from v1.0.5-1 retro arc" (reproduce-prod-incident-locally; worktree-subagent drain).
+**Releases**: 1.0.5rc1 (#1785) + 1.0.5rc2 (#1787/#1784/#1786); djust.org deployed onto rc1 (insights verified by the user) + pinned to `==1.0.5rc2`.
+
+### Open Items
+
+- [x] pre-push worktree portability — Action Tracker #295 (GitHub #1796) — resolved in v1.0.5-2 (PR #1798); editable-install gap → #301 (#1810)
+- [x] scaffold warning-cleanliness + `cli.py` twin — Action Tracker #296 (GitHub #1791) — resolved in v1.0.5-2 (PR #1799)
+- [x] `test_checks` S005 / `auto_navigate` pollution — Action Tracker #297 (GitHub #1794) — resolved in v1.0.5-2 (PR #1800)
+- [x] flaky wall-clock perf test — Action Tracker #298 (GitHub #1795) — resolved in v1.0.5-2 (PR #1797)
+- [ ] consumer-owned VDOM send-version (deferred) — Action Tracker #299 (GitHub #1788)
+
+## v1.0.4 — Security hardening & navigation arc (rc1; PRs #1775, #1776, #1780, #1781, #1782, #1783)
+
+**Date**: 2026-06-13
+**Released as**: v1.0.4rc1 (the new `auto_navigate` feature is opt-in / default-OFF,
+so this ships as a patch rc, not a minor — see the version-choice note below).
+**Scope**: ADR-021 Stage 2 (auto_navigate) + a complete WebSocket auth/transport
+threat model (`docs/audits/websocket-auth-2026-06.md`, 9 threats) and its fixes:
+the route-map information leak (#1758), the WS auth bypass (T1/T2), opt-in
+per-event re-auth (T3), allowlist-hardening docs (T4), and a regression test
+confirming T9 was already fixed. Ships in the same 1.0.4 release as the earlier
+v1.0.4-1 deploy-DX drain bucket + pyo3 0.29 security bump (separate per-PR retros;
+not re-synthesized here).
+**Tests at close**: full suite green (the security PRs added ~27 cases: route-map
+auth-filter, WS-auth reproducer, batch regression, reauth, csrf/user-survive-WS).
+
+### What We Learned
+
+**1. The user's security instinct beat my first-pass triage — twice.**
+I initially classified the `dj-navigate` route-map exposure as "by design, URLs
+are public, not sensitive." The user pushed ("should we worry about leaking
+data?"); re-tracing from the code showed a real recon-grade disclosure (anonymous
+clients received the full route table — incl. login/admin routes — plus each
+view's `module.QualName`). Separately, the user's own draft note flagged a WS
+`login_required` auth bypass that, when traced, was a real bypass. Both instincts
+were right; my initial dismissal of the first cost a round-trip.
+**Action taken**: Closed — fixed in #1775 (route-map auth-filter) and #1780 (WS
+auth bypass); the working-style lesson is saved to project memory
+(`feedback_security_instinct`).
+
+**2. Threat-model-first (user's explicit request) caught parallel vulnerabilities a one-instance patch would have missed.**
+Before patching the confirmed bypass, modeling the whole WS auth/transport surface
+(`docs/audits/websocket-auth-2026-06.md`) surfaced T2 (the parallel `on_mount`-hook
+redirect branch, same no-close shape), T3 (the event path never re-checks auth),
+and T4 (`LIVEVIEW_ALLOWED_MODULES` is default-open). Each became a tracked,
+addressed item instead of a future rediscovery.
+**Action taken**: Closed — T1/T2 fixed in #1780; T3 in #1781 (#1777); T4 documented
+in #1782 (#1778); T9 verified-fixed + pinned in #1783 (#1779). All threat-model
+threats triaged in the audit doc.
+
+**3. Reproducer-first empirically proved the auth bypass (not just argued it).**
+The RED `WebsocketCommunicator` reproducer didn't merely fail an assertion — it
+crashed *inside* the `@event_handler` body, proving an anonymous client's event
+reached the handler. RED→GREEN was the gate-off.
+**Action taken**: Closed — reproducer shipped with #1780 (`test_ws_auth_close_socket.py`).
+
+**4. A transport-level `close()` is unsafe on a multiplexed path — review caught a fix-induced regression.**
+My T1/T2 fix called `self.close(4403)` inside `handle_mount`; because
+`handle_mount_batch` reuses `handle_mount` (swapping only `send_json` to a
+collector), the close fired mid-batch on the shared socket and killed sibling
+mounts + the collected `navigate[]`. The existing batch test couldn't catch it
+(its fake consumer's `close()` is a no-op); the reviewer reproduced it with a real
+communicator.
+**Action taken**: Open — tracked in Action Tracker #291 (canonicalized in
+CLAUDE.md this retro; fixed in #1780 via the `_mounting_in_batch` gate).
+
+**5. Verify-before-documenting: T9 was already fixed; don't ship docs for a non-bug.**
+The draft (and the threat model's first pass) framed T9 (`{% csrf_token %}` /
+`{{ user }}` deleted on WS patches) as a live bug. Reading `rust_bridge.py` showed
+it was already handled (#1722 runs context processors on every WS update; #696
+injects csrf). Rather than write "here's a problem" docs, I pinned the fix with a
+gate-off-verified regression test.
+**Action taken**: Closed — #1783 adds the regression test; #1779 closed as
+already-mitigated. Generalizes "grep for existing fixes before classifying a
+threat as a GAP."
+
+**6. Pre-commit stash/restore can silently drop UNSTAGED working-tree files.**
+The user kept uncommitted `BEST_PRACTICES*.md` drafts in the tree; after a pipeline
+commit cycle they vanished (pre-commit stashes unstaged files, runs hooks on
+staged, restores — a missed restore leaves them only in `~/.cache/pre-commit/`).
+Caught on a final status check and recovered via `git apply` of the newest patch.
+**Action taken**: Open — tracked in Action Tracker #292 (canonicalized in CLAUDE.md
+this retro).
+
+### Insights
+
+- **Security features ship default-OFF.** `auto_navigate`, `reauth_on_event`, and
+  the route-map's behavior all default to the safe/zero-cost state; opt-in is the
+  contract. This kept every change zero-behavior-change for existing apps.
+- **Composition is a security property.** `auto_navigate` consults the
+  *auth-filtered* route map (#1758), so it can't SPA-probe gated routes — which is
+  why the leak fix landed before the feature. Designing the arc as a unit (ADR-021
+  Stage 2) made that ordering obvious.
+- **A threat model is a durable artifact, not ceremony.** The 9-threat doc became
+  the backbone for 5 PRs + 3 follow-up issues and tracks the 2 accepted/low items
+  (T6 CSWSH, T7 tenant) so they aren't re-litigated.
+- The user catches things the code-read misses (leak instinct, draft note, the
+  lost drafts). Trust the observation over the first conclusion.
+
+### Review Stats
+
+| Metric | #1775 | #1776 | #1780 | #1781 | #1783 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Tests added | 5 | 15 | 3 | 2 | 2 | 27 |
+| Review verdict | APPROVE | APPROVE | COMMENT→fixed | APPROVE | (test-only) | — |
+| 🟡 findings (fixed/deferred) | 1 (mixin gap, fixed) | 1 (req.user note, doc'd) | 1 (batch regression, fixed) | 1 (req.user note, doc'd) | 0 | 4 |
+| Gate-off verified | ✓ | ✓ | ✓ | ✓ | ✓ | 5/5 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: Added two canon rules this retro — the multiplexed-path
+`close()`/state-mutation hazard (#291) and the pre-commit-drops-unstaged-files
+hazard + recovery (#292).
+**Docs**: New threat-model class under `docs/audits/` (`websocket-auth-2026-06.md`).
+**Memory**: `feedback_security_instinct` (trace flagged concerns from the data;
+threat-model-first; preserve uncommitted working-tree drafts).
+
+### Open Items
+
+- [ ] Bug-capture iter B/C (#1562/#1561) — deferred (multi-day, security-gated; a
+  dedicated session each). Not part of this milestone.
+
+## v1.0.2 navigation arc — zero-wiring dj-navigate + hydration-flash parity + hooks docs (v1.0.2-1 + v1.0.2-2; PRs #1736, #1739, #1740)
+
+**Date**: 2026-06-06
+**Scope**: The post-rc1 navigation/hydration work, all driven by one downstream consumer (rent app) integrating djust 1.0.2rc1/rc2, and governed by ADR-021 (chosen via `/pipeline-strategy`, Path 2). v1.0.2-1: #1733 zero-wiring route map (PR #1736). v1.0.2-2: #1737 SSR render-normalization parity / first-hydration flash (PR #1739), #1738 client-hooks-for-third-party-libs docs (PR #1740). All accumulate into the 1.0.2 release.
+**Tests at close**: python/djust/tests 3092; all CI green (py3.12, py3.14t, rust, demo-checks, playwright).
+
+### What We Learned
+
+**1. A parity/coverage test can pass while the invariant it protects has an untested variant — "parity holds" ≠ "parity is tested across every variant".**
+Caught twice in one arc. PR #1736's dual-engine `djust_client_config` parity test used no-LiveView URLconfs + an empty Rust-handler context, so it never compared the route-map `<script>` or the CSP nonce — the exact variant it existed to protect. PR #1739's "byte-equivalence modulo dj-id" claim was literally false for adjacent preserved blocks (`</textarea> <pre>`), benign (the #1724 client whitespace-skip prunes it) but untested. In both cases the Stage-11 reviewer built its OWN reproduction and found the hole; the fix in each case was not just the code but adding the missing-variant test (parity-with-nonce-and-routemap in #1736; adjacent-preserved-blocks byte-equality in #1739). This is exactly v1.0.0rc4 retro finding #1 ("a coverage suite must enumerate EVERY variant of the surface it covers"), re-confirmed.
+**Action taken**: Closed — variant-completeness tests added in PR #1736 (`test_django_and_rust_engines_emit_identical_route_map_with_nonce`) and PR #1739 (`test_adjacent_preserved_blocks_byte_equivalent`); canon already exists (v1.0.0rc4 finding #1).
+
+**2. A foundation PR's own new module-level cache introduced a latent test-isolation regression that only surfaced in a sibling PR's CI shard.**
+#1733 (PR #1736) added `_route_map_cache` (routing.py:27) and made `get_route_map_script` merge the URLconf-derived map. That broke `test_no_routes_returns_empty` deterministically (the URLconf always has LiveView routes now), but it was masked in #1736's own CI by test ordering and only surfaced in #1739's py3.12 shard — where the implementer first mis-diagnosed it as an "xdist flake" before the reviewer proved it deterministic. Two further pre-existing `test_checks.py` pollution failures (Daphne-ordering, suppress) ride the same class. Module-level caches without an autouse test-reset are a recurring pollution source.
+**Action taken**: Open — tracked in Action Tracker #289 (GitHub #1741).
+
+**3. The entire arc was downstream-driven, not caught in-house, because the demo doesn't exercise dj-navigate/hydration/hooks end-to-end.**
+Every issue here (#1733, #1737, #1738) came from a real consumer integrating the framework, not from internal testing — and the new blocking `demo-checks` job couldn't catch them because the demo's nav coverage is thin (T016 stays silent in the checked scope) and there's no client-hook/third-party-lib example at all. A demo that dogfooded a `dj-navigate` cross-view flow + a `dj-hook` widget would have surfaced the flash and the inline-`<script>` trap internally.
+**Action taken**: Open — tracked in Action Tracker #290 (GitHub #1742).
+
+### Insights
+
+- **Adversarial Stage-11 with independent reproduction is load-bearing, not ceremony.** Across the three PRs the reviewer overturned implementer claims four times (parity-test hole; byte-equivalence-modulo-dj-id false for adjacent blocks; "flake" was a deterministic regression; doc-runtime was a different file than briefed) — every time by building its own repro rather than trusting the report. Keep spawning a fresh-context reviewer that reproduces, not just reads.
+- **Split-foundation (ADR-021 / Action #1122) is executing cleanly.** The zero-wiring route-map foundation (#1733) shipped and is soaking; the directional `auto_navigate` capability (#1734/#1735) stays deferred to v1.1.0. The strategy session's Path 2 is playing out as designed — foundation in a patch, directional opt-in in a minor.
+- **Doc-claim ledger discipline (#1046/#1197) keeps paying.** #1733 removed a phantom `{% djust_route_map %}` docstring tag; #1740 produced a grep-verified symbol→file:line ledger and discovered the real hooks runtime (`19-hooks.js`) was a different file than the brief assumed — documenting what actually fires, not what was guessed.
+- **Drain-bucket-into-release consolidation worked.** Per user direction, nav work folded into the unreleased 1.0.2 line as `v1.0.2-1`/`v1.0.2-2` buckets (re-cut rc2, rc3 pending) rather than spinning new patch versions — keeping one coherent 1.0.2 release.
+
+### Review Stats
+
+| Metric | PR #1736 | PR #1739 | PR #1740 | Total |
+|--------|----------|----------|----------|-------|
+| 🔴 Findings | 0 | 0 | 0 | 0 |
+| 🟡 Findings | 2 | 2 | 0 | 4 |
+| Fix-passes | 1 | 1 | 0 | 2 |
+| Tracker rows filed | 0 | 0 | 0 | 2 (milestone) |
+| CI failures (resolved) | 0 | 1 (pre-existing #1733 regr.) | 0 | 1 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (from the parent v1.0.2 arc) the Reproduction-fidelity VDOM/innerHTML bullet + the v1.0.2 process-canon section (CI-gate AND-condition, per-event memoization) — both already landed; this arc re-confirmed them rather than adding new canon.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] #289 — fix 2 test_checks.py pollution failures + audit module-level caches (GitHub #1741)
+- [ ] #290 — dogfood dj-navigate + a client-hook in the demo (GitHub #1742)
+- [ ] v1.1.0 (ADR-021 Stage 2): #1734 `auto_navigate` opt-in + #1735 nav-story reconcile
+- [ ] **Release**: re-cut 1.0.2rc3 (rc2 + #1737 + #1738) or go to 1.0.2 stable.
+
+## v1.0.2 — Second post-1.0 patch: theming/hydration bugs + v1.0.1 follow-ups (PRs #1725–#1732, 7 merged)
+
+**Date**: 2026-06-05
+**Scope**: Three production bugs surfaced integrating djust 1.0.1rc1 into a real app (SSR→hydration child teardown destroying client widgets; theming context-processor vars missing inside `{% include %}`; the documented `{% theme_panel %}` tag rejected by the Rust engine) + the three tech-debt follow-ups the v1.0.1 drain deferred (#1713, #1716) or filed (#1719).
+**Tests at close**: JS 1665 (vitest); Python 7506+ (full suite); Rust 304 (djust_templates) — all green. demo-checks now a blocking CI job.
+
+### What We Learned
+
+**1. VDOM/morph reproducers must construct the existing DOM the way the browser does — parse from an HTML string, not DOM-builder APIs.**
+PR #1725 (#1724) shipped a first fix (a new `morphChildren` "Strategy 2b" keyed on the standard `.id`) that was **dead code against real input** — the Rust renderer emits `dj-id`, which never populates `.id`. The Stage-11 reviewer's faithful reproduction — `existing` built via `container.innerHTML = "<div>…\n  <div>…"` (WITH inter-element whitespace) and `desired` carrying `dj-id` — proved both pre-fix AND the first fix tore down the Chart.js canvas (`canvas preserved: false`). The real root cause was **whitespace text-node misalignment**: SSR `innerHTML` produces whitespace text nodes between element children, so the positional existing node is a text node when an element is processed → all element strategies skip (they require `ELEMENT_NODE`) → clone+insert+remove. The original test passed only because it used `appendChild` (no whitespace) + standard `id`. This is the "Reproduction fidelity" failure class (#1650/#1638/#1637) with a new, specific axis for client-side VDOM tests: the DOM-construction *method* itself (innerHTML vs appendChild) changes whether the bug reproduces.
+**Action taken**: Added a bullet to the CLAUDE.md "Reproduction fidelity" section (Bug-report triage) canonicalizing the innerHTML-with-whitespace rule for VDOM/morph reproducers.
+
+**2. Per-event work that feeds change-detection cannot be first-sync-gated — it must be memoized.**
+PR #1726 (#1722) fixed context-processor vars being empty inside `{% include %}` by applying `_apply_context_processors` in `_sync_state_to_rust` — which runs on EVERY WebSocket event, not just the initial GET. The obvious "optimization" (apply processors only on first sync to save the per-event cost) is **wrong**: djust's change-detection only forwards *changed* vars, so the processors must re-run each sync to detect a theme switch. The correct cure is request-scoped memoization inside `theme_context`, not gating. The reviewer also confirmed the load-bearing fact that made the fix effective at all: the WS-path `request` is non-None (a long-lived instance attr set in `handle_connect`), so the fix works on every navigation, not just GET.
+**Action taken**: Open — tracked in Action Tracker #288 (GitHub #1727).
+
+**3. Promoting a "soft" CI check to blocking requires verifying it's in the aggregate gate's AND-condition — not merely in `needs`/echoed.**
+PR #1730 (#1713) moved the demo `djust_check` dogfood out of the `continue-on-error` playwright job into a dedicated blocking `demo-checks` job. The check that matters is not "is it a job?" but "does a failure actually fail the merge?" — the reviewer explicitly traced: failure → `needs.demo-checks.result == "failure"` → the `test-summary` AND-condition fails → else-branch `exit 1`, with no `continue-on-error` anywhere. A check can be `needs`-listed and printed in the summary yet still not gate the merge. (The dogfood also followed the rc4 "ship green on the runner before making it blocking" cycle — it passed first runner run.)
+**Action taken**: Added a bullet to the CLAUDE.md PR-process canon (CI-gate promotion) requiring the aggregate-AND-condition trace when promoting a soft check to blocking.
+
+### Insights
+
+- **Symptom-up triage disproved the orchestrator's cited hypothesis twice in one milestone.** #1722's implementer wrote 4 Rust tests proving the cited `renderer.rs` `context.clone()` was NOT the bug (it faithfully carries values into includes) before tracing the real cause upstream in `_sync_state_to_rust`; #1724's real cause was whitespace, not the hypothesized `id`/`dj-id` strategy gap. The CLAUDE.md rule "trust the symptom, not the cited path" held on both — and the orchestrator's hypotheses were the "cited path" that was wrong. Reproducer-first is what caught it both times.
+- **When an engine error names an extension API, registering through it is usually the least-surprise fix.** #1721's 500 literally said "Register a handler via djust._rust.register_tag_handler()". Option A (register the theme tags as Rust handlers) made existing user templates + the documented tag form work without editing the external docs.djust.org repo — better than a docs-only workaround that asks users to rewrite templates. Design-decision-first (#1056), decided before implementation.
+- **Tooling/lint PRs are highest-confidence when the empirical canary is two-sided.** #1729 (cross-IIFE guard) proved the synthetic trigger flips exit 1 on the branch / exit 0 on main AND the real tree stays clean; #1731 (eslint ratchet) proved the `--max-warnings 0` valve with a dummy-warning inject→exit-1→revert. Both confirm the existing #252/#1459 canon rather than needing new rules.
+- **Two reviewer catches prevented shipping incorrect/incomplete fixes** (#1724 dead-code first fix; #1726 the per-event perf nit + the WS-request-non-None confirmation that the fix was actually complete). The adversarial Stage-11 with an independent reproduction is doing real work, not rubber-stamping.
+
+### Review Stats
+
+| Metric | #1725 | #1726 | #1728 | #1729 | #1730 | #1731 | Total |
+|--------|-------|-------|-------|-------|-------|-------|-------|
+| 🔴 Findings | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| 🟡 Findings | 0 | 1 | 1 | 2 | 0 | 0 | 4 |
+| Fix-passes | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| Follow-ups filed | 0 | 1 | 0 | 0 | 0 | 0 | 1 |
+| CI failures | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: (1) Reproduction-fidelity bullet — VDOM/morph reproducers must build the existing DOM via `innerHTML` (with whitespace), not `appendChild` (finding 1). (2) CI-gate-promotion bullet — verify a promoted check is in the aggregate gate's AND-condition, not just `needs`/echo (finding 3).
+**Pipeline template**: none.
+**Checklist**: none this milestone (the CI-gate-promotion rule lives in CLAUDE.md).
+**Skills**: none.
+
+### Open Items
+
+- [x] #288 — request-scope memoize `theme_context` (GitHub #1727) — resolved in v1.0.2 (PR #1732)
+- [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
+- [ ] **Release**: cut `1.0.2` (one version bump + tag) covering all 7 PRs — 3 production bug fixes + 3 tech-debt follow-ups + 1 perf follow-up (#1727).
+
+**Forward-link**: `/pipeline-strategy` 2026-06-05 (auto-navigation) → `docs/strategy-sessions/2026-06-05-auto-navigation.md`. Chose Path 2 (Foundation + opt-in `auto_navigate`); drafted **ADR-021**; filed #1733 (foundation — shipped v1.0.2-1, PR #1736), #1734 + #1735 (v1.1.0). Surfaced from a downstream consumer hitting `dj-navigate` silent full-reload (undocumented route-map prerequisite + phantom `{% djust_route_map %}` tag in `get_route_map_script`'s docstring). **Retro for the resulting nav arc (v1.0.2-1 + v1.0.2-2): see the "v1.0.2 navigation arc" entry above.**
+
+## v1.0.1 — First post-1.0 patch: two drain waves (PRs #1690–#1715, 13 merged)
+
+**Date**: 2026-06-05
+**Scope**: The single 1.0.1 patch release (one version bump / tag — the two waves below are process history, not separate releases). **Wave 1** (7 PRs: #1690, #1691, #1693, #1694, #1695, #1697, #1698) drained one P0 production bug + small fixes + a docs guide. **Wave 2** (6 PRs: #1709, #1710, #1711, #1712, #1714, #1715) drained the durable-cure issues + review follow-ups that wave 1 surfaced — so 1.0.1 both *found* and *resolved* its own follow-ups. Three design-gated features (#1562/#1561/#1557) deliberately stay in v1.1.0. A newly-filed P0 (#1689) was closed as a duplicate of #1688.
+**Tests at close**: JS 1654 passing; Rust `djust_templates` 300+; theming sweep 1853; full pre-push suite green on each of the 13 PRs.
+
+### What We Learned
+
+**1. The #1676 "minified cross-IIFE crash" class recurred a third time — per-symbol fixes don't retire it.**
+#1688 (PR #1690) fixed a bare `applyPatches` reference in `45-child-view.js`; while the drain ran, #1689 was filed independently describing the *same two source sites* with a different terser mechanism (`--compress` stripping the `typeof` guards). #1689 was already structurally fixed by #1690 (the `typeof applyPatches` construct is gone from source) and was closed as a duplicate — but the recurrence (#1676 → #1688 → #1689) shows the class keeps coming back because every fix, and every regression test (`min_bundle_applypatches_1676/1688`), guards a *single symbol*. The durable cure is a whole-class guard (static lint for bare cross-IIFE refs and/or a real-browser minified-bundle init smoke test).
+
+**Action taken**: Resolved in v1.0.1 wave 2 (PR #1715, Action Tracker #280) — whole-class static guard `scripts/check-cross-iife-refs.mjs`, which on first run found + fixed 2 more live instances of the class. Residual top-level-module gap → #1716 (row 287).
+
+**2. doc-claim-verbatim caught the issue's OWN suggested API being wrong — and the same error pre-existing in shipped docs.**
+#1559 (PR #1698) asked for a migration guide and suggested `tenant_queryset`; verification against `python/djust/tenants/` showed that symbol does not exist (real: `TenantScopedMixin.get_tenant_queryset`), and that the existing `multi-tenant.md` Quick Start already ships the same non-existent call (plus `DJUST_TENANT_RESOLVER` / `djust.tenants.mixins` plural). The new guide avoided all three only because the implementer + Stage-11 reviewer ran the imports. Guide prose has no CI guard today (`check-doc-snippets.py` covers only README/QUICKSTART).
+
+**Action taken**: Resolved in v1.0.1 wave 2 — CI guard PR #1714 (Action Tracker #281; found + fixed 3 more wrong-import bugs on first run) + multi-tenant.md fix PR #1710 (Action Tracker #285; corrected ~10 hallucinated symbols).
+
+**3. A working system check (T001) didn't prevent dead demos reaching GA because it wasn't dogfooded in CI.**
+#1683 (PR #1693) migrated 117 dead `@click` bindings in the demos — controls the shipped client never binds. T001 already flagged `@click` as deprecated, but the demos were never run through `djust_check` in CI, so the dead buttons shipped at 1.0 GA (a first-impression surface). CLAUDE.md #1060 ("dogfood new CLI tools against the demo") is canon but unenforced.
+
+**Action taken**: Resolved in v1.0.1 wave 2 (PR #1712, Action Tracker #282) — `ci_djust_check_demo.py` wrapper gating errors + T001/T014/T015. Promotion-to-blocking → #1713 (row 286).
+
+**4. Deferred-finding discipline held — and the follow-ups were drained WITHIN the same release.**
+Each wave-1 PR's Stage-11 review surfaced a non-blocking adjacent gap, filed immediately rather than scope-crept (#1079): #1692 (firstof/cycle name-based safe filters), #1696 (LISTEN DSN query params), #1699 (multi-tenant.md inaccuracy). All three were then drained in wave 2 (PRs #1709/#1711/#1710) — the "file-it-promptly" loop closed end-to-end inside 1.0.1, not deferred to a later milestone.
+
+**Action taken**: Resolved in v1.0.1 wave 2 — PRs #1709 (#1692, row 283), #1711 (#1696, row 284), #1710 (#1699, row 285).
+
+**5. (wave 2) A whole-class guard is worth more than per-symbol fixes — it found live bugs nobody had reported.**
+The #1706 cross-IIFE static guard (PR #1715), built to retire the recurring #1676 class, flagged 2 *additional* live instances the moment it ran: bare `handleEvent` in `35-dj-dialog.js` (dialog-close silently no-opped under minification) and `51-keyboard-nav.js` (keyboard `dj-click` activation no-opped). Both were the exact #1688 shape, unreported. It also corrected an imprecise root-cause belief (the discriminator is the double-load-guard scope boundary, not per-module inner IIFEs). Stage-11 then found the guard's own coverage gap (top-level-module refs).
+
+**Action taken**: Resolved in v1.0.1 wave 2 (PR #1715); residual generalization → #1716 (Action Tracker #287).
+
+**6. (wave 2) A new lint can red-bar its own PR — local-green ≠ merge-green.**
+PR #1714's guide doc-snippet checker passed locally but turned its OWN `python-tests (py3.12)` red: `uploads.md`'s S3 blocks `import boto3`, absent from CI dev deps — the implementer's local env had boto3, masking it (the rc4-finding-#3 cross-environment trap, verbatim). Stage 11's mandatory `gh pr checks` (review the PR's *actual* runner CI, not just local) caught it; fixed with the existing skip-directive.
+
+**Action taken**: Fixed in PR #1714 before merge. Reinforces the existing Stage-11 "confirm the PR's runner CI is green" discipline; no new tracker row (already canon).
+
+### Insights
+
+- **Reproducer/canary-first + gate-off paid for itself at both Stage 5 and Stage 11.** Every PR shipped a failing-first reproducer (jsdom for #1688, empirical canary for #1697, gate-off for #1672/#1662). On #1672 and #1697 the implementer AND the reviewer independently ran the gate-off — non-tautology was confirmed twice, by different agents.
+- **Parallel-path-drift (#1646) was the recurring *shape* of the bugs**, not just the fixes: #1672 (firstof/cycle parallel to #1660's Variable arm), #1662 (registry↔packs/manifest cycle), #1688 (cross-IIFE). The canon already names this class; the drain is more evidence it's the dominant post-1.0 defect family.
+- **Cross-drain synergy:** #1683's demo migration (drain task 3) made #1697's djust_check dogfood (task 6) come back clean — sequencing related tasks in one drain compounds.
+- **Leaf-module extraction (#1661 pattern) reused verbatim for #1662** — established the djust idiom for import-cycle fixes (leaf accessor + discovery hook + whole-package acyclic gate test).
+- **Scope discipline as a feature:** the up-front strategy call to drain 7 and defer 3 design-gated features kept every PR drain-sized and reviewable; no PR ballooned.
+
+### Review Stats
+
+| Metric | Wave 1 (7 PRs) | Wave 2 (6 PRs) | 1.0.1 total |
+|--------|----------------|----------------|-------------|
+| PRs merged | 7 | 6 | 13 |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings (deferred) | 5 | 2 | 7 |
+| Stage-11 verdict | 7× APPROVE | 5× APPROVE, 1× REQUEST_CHANGES→fixed (#1714 boto3) | 13 merged |
+| Latent bugs found by the new guards | — | 2 (cross-IIFE) + 3 (doc imports) | 5 |
+| CI green at merge | 7/7 | 6/6 | 13/13 |
+
+Wave-2 deferred 🟡: #1713 (promote dogfood to blocking), #1716 (generalize cross-IIFE guard). Both filed, both Open.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: none codified this release — the dominant findings became net-new tooling guards (the cross-IIFE static lint #1706, the guide doc-snippet checker #1707, the demo djust_check dogfood #1708), all shipped within 1.0.1 wave 2 rather than written as prose rules.
+**Pipeline template / Checklist / Skills**: none.
+**New CI/build guards shipped (1.0.1):** `scripts/check-cross-iife-refs.mjs` (pre-commit + CI), guide-scanning in `check-doc-snippets.py` (pre-commit + CI), `scripts/ci_djust_check_demo.py` (CI).
+
+### Open Items
+
+- [x] #286 — promote demo djust_check dogfood to a blocking gate (GitHub #1713) — resolved in v1.0.2 (PR #1730)
+- [x] #287 — generalize the cross-IIFE guard to top-level modules (GitHub #1716) — resolved in v1.0.2 (PR #1729)
+- [ ] Deferred to v1.1.0 (by design): #1562, #1561 (bug-capture iters B/C), #1557 (tenant-per-WS cache)
+- [x] Wave-1 durable cures + review follow-ups (#280–#285) — all resolved in wave 2, within 1.0.1
+- [ ] **Release**: cut `1.0.1` (one version bump + tag) covering all 13 PRs. `[Unreleased]` holds the full set incl. the #1688 P0 production fix and the two wave-2 cross-IIFE prod fixes (dialog + keyboard).
 
 ## v1.0.0rc14 — Open-issue drain: parallel-path drift (PRs #1646, #1649, #1650, #1651, #1652, #1653)
 

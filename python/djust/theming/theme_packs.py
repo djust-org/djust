@@ -824,7 +824,7 @@ DESIGN_SYSTEMS: Dict[str, DesignSystem] = {
 def get_design_system(name: str) -> Optional[DesignSystem]:
     """Get a design system by name (includes user-registered systems)."""
     _ensure_theme_imports()
-    from .registry import get_registry
+    from ._registry_accessor import get_registry
 
     reg = get_registry()
     return reg.get_theme(name) or DESIGN_SYSTEMS.get(name)
@@ -833,7 +833,7 @@ def get_design_system(name: str) -> Optional[DesignSystem]:
 def get_all_design_systems() -> Dict[str, DesignSystem]:
     """Get all available design systems (built-in + user-registered)."""
     _ensure_theme_imports()
-    from .registry import get_registry
+    from ._registry_accessor import get_registry
 
     reg = get_registry()
     result = DESIGN_SYSTEMS.copy()
@@ -1216,7 +1216,7 @@ def _ensure_theme_imports() -> None:
 def get_theme_pack(name: str) -> Optional[ThemePack]:
     """Get a theme pack by name (includes user-registered packs)."""
     _ensure_theme_imports()
-    from .registry import get_registry
+    from ._registry_accessor import get_registry
 
     reg = get_registry()
     return reg.get_pack(name) or THEME_PACKS.get(name)
@@ -1225,7 +1225,7 @@ def get_theme_pack(name: str) -> Optional[ThemePack]:
 def get_all_theme_packs() -> Dict[str, ThemePack]:
     """Get all available theme packs (built-in + user-registered)."""
     _ensure_theme_imports()
-    from .registry import get_registry
+    from ._registry_accessor import get_registry
 
     reg = get_registry()
     result = THEME_PACKS.copy()

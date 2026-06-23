@@ -216,12 +216,13 @@ describe('45-child-view.js — sticky preservation (Phase B)', () => {
         const dom = createDomWithSticky();
         await nextFrame(dom);
 
-        // Spy on applyPatches to confirm rootEl is the sticky subtree
-        // (not document root, not parent view).
+        // Spy on the published alias to confirm rootEl is the sticky subtree
+        // (not document root, not parent view). #1688: the scoped applier reads
+        // globalThis.djust.applyPatches, not a bare cross-IIFE symbol.
         const win = dom.window;
         const calls = [];
-        const originalApply = win.applyPatches;
-        win.applyPatches = function (patches, rootEl) {
+        const originalApply = win.djust.applyPatches;
+        win.djust.applyPatches = function (patches, rootEl) {
             calls.push({ patches, rootEl });
             return true;
         };
@@ -234,7 +235,7 @@ describe('45-child-view.js — sticky preservation (Phase B)', () => {
                 version: 3,
             });
         } finally {
-            win.applyPatches = originalApply;
+            win.djust.applyPatches = originalApply;
         }
 
         expect(calls.length).toBe(1);
@@ -393,12 +394,13 @@ describe('45-child-view.js — sticky preservation (Phase B)', () => {
         const beforeHTML = doc.body.innerHTML;
         const stashSizeBefore = api._stash.size;
 
-        // Spy on applyPatches so we can assert it was NOT called —
+        // Spy on the published alias so we can assert it was NOT called —
         // an unknown view_id must bail early, before the patch pass.
+        // #1688: the scoped applier reads globalThis.djust.applyPatches.
         const win = dom.window;
         let applyCalls = 0;
-        const originalApply = win.applyPatches;
-        win.applyPatches = function () { applyCalls++; return true; };
+        const originalApply = win.djust.applyPatches;
+        win.djust.applyPatches = function () { applyCalls++; return true; };
 
         try {
             // Dispatching with a truly unknown view_id must not throw.
@@ -411,7 +413,7 @@ describe('45-child-view.js — sticky preservation (Phase B)', () => {
                 });
             }).not.toThrow();
         } finally {
-            win.applyPatches = originalApply;
+            win.djust.applyPatches = originalApply;
         }
 
         // applyPatches MUST NOT have been invoked.

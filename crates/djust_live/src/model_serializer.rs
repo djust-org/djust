@@ -44,7 +44,7 @@ pub fn serialize_models_fast(py: Python<'_>, models_data: &Bound<'_, PyList>) ->
 
     for item in models_data.iter() {
         // Each item should be a dict of field data
-        if let Ok(dict) = item.downcast::<PyDict>() {
+        if let Ok(dict) = item.cast::<PyDict>() {
             let serialized = python_dict_to_json(py, dict)?;
             results.push(serialized);
         } else {
@@ -113,12 +113,12 @@ fn python_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<JsonValue>
     }
 
     // Handle dict (nested object)
-    if let Ok(dict) = obj.downcast::<PyDict>() {
+    if let Ok(dict) = obj.cast::<PyDict>() {
         return python_dict_to_json(py, dict);
     }
 
     // Handle list
-    if let Ok(list) = obj.downcast::<PyList>() {
+    if let Ok(list) = obj.cast::<PyList>() {
         let items: Vec<JsonValue> = list
             .iter()
             .map(|item| python_to_json(py, &item))
@@ -127,7 +127,7 @@ fn python_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<JsonValue>
     }
 
     // Handle tuple (same as list)
-    if let Ok(tuple) = obj.downcast::<PyTuple>() {
+    if let Ok(tuple) = obj.cast::<PyTuple>() {
         let items: Vec<JsonValue> = tuple
             .iter()
             .map(|item| python_to_json(py, &item))
@@ -160,7 +160,7 @@ pub fn serialize_models_to_list(
 
     for item in models_data.iter() {
         // Pass through dicts after normalization
-        if let Ok(dict) = item.downcast::<PyDict>() {
+        if let Ok(dict) = item.cast::<PyDict>() {
             let normalized = normalize_dict(py, dict)?;
             result_list.append(normalized)?;
         }
@@ -183,7 +183,7 @@ fn normalize_dict(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<Py<PyDic
 }
 
 /// Normalize a Python value to JSON-compatible form
-fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     // Fast path: common primitives pass through as-is
     if value.is_none() {
         return Ok(py.None());
@@ -199,12 +199,12 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<PyObjec
     }
 
     // Handle nested dict
-    if let Ok(dict) = value.downcast::<PyDict>() {
+    if let Ok(dict) = value.cast::<PyDict>() {
         return normalize_dict(py, dict).map(|d| d.into_any());
     }
 
     // Handle list
-    if let Ok(list) = value.downcast::<PyList>() {
+    if let Ok(list) = value.cast::<PyList>() {
         let result_list = PyList::empty(py);
         for item in list.try_iter()? {
             let normalized = normalize_value(py, &item?)?;
@@ -214,7 +214,7 @@ fn normalize_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<PyObjec
     }
 
     // Handle tuple (convert to list for JSON compatibility)
-    if let Ok(tuple) = value.downcast::<PyTuple>() {
+    if let Ok(tuple) = value.cast::<PyTuple>() {
         let result_list = PyList::empty(py);
         for item in tuple.iter() {
             let normalized = normalize_value(py, &item)?;

@@ -536,6 +536,42 @@ class PublicCounterView(LiveView):
 
 ---
 
+### S007: Unsafe rendering of a client-supplied filename
+
+**Severity**: Warning
+
+**What causes it**: A template renders an upload entry's `client_name` with the
+`|safe` filter, e.g. `{{ upload_entry.client_name|safe }}`. The `client_name` is
+the attacker-controlled original filename of an upload, stored without
+sanitisation; `|safe` disables Django's auto-escaping, so a filename containing
+`<script>...</script>` renders as live HTML — a **stored XSS** vector.
+
+**Fix**: Remove the `|safe` filter so auto-escaping (the safe default) applies:
+
+```html
+<!-- Unsafe: filename is attacker-controlled -->
+{{ upload_entry.client_name|safe }}
+
+<!-- Safe: auto-escaping neutralises HTML in the filename -->
+{{ upload_entry.client_name }}
+```
+
+If the value is genuinely pre-sanitised server-side, escape it explicitly with
+`django.utils.html.escape()` before rendering, or suppress the check:
+
+```python
+# settings.py — only if client_name is pre-sanitised
+DJUST_CONFIG = {"suppress_checks": ["S007"]}  # or "djust.S007"
+```
+
+**Detection**: matches `{{ <expr>.client_name|safe }}` (whitespace around `|`
+tolerated); word-boundary guards mean `notclient_name` and `client_name_foo` do
+not trigger it.
+
+**Related**: [#1821](https://github.com/djust-org/djust/issues/1821), S001 (`mark_safe()` with f-string)
+
+---
+
 ## Template Errors (T0xx)
 
 ### T001: Deprecated @event syntax
@@ -590,14 +626,16 @@ class PublicCounterView(LiveView):
 
 **Severity**: Warning
 
-**What causes it**: A template uses `document.addEventListener('djust:...')` for djust custom events. All `djust:*` events are dispatched on `window`, not `document`.
+**What causes it**: A template uses `document.addEventListener('djust:...')` for a djust custom event that is dispatched on `window` (e.g. `djust:push_event`, `djust:before-navigate`, `djust:error`, `djust:shell-swapped`, `djust:vdom-cache-applied`, `djust:upload:*`).
 
 **What you see**: The event listener never fires. No error in the console -- completely silent failure.
+
+> **Exempt (#1809)**: djust dispatches a second family of events on `document` (not `window`): `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`, `djust:time-travel-state`, `djust:time-travel-event`. Listening for those on `document` is **correct** and is no longer flagged by T004.
 
 **Fix**:
 
 ```html
-<!-- WRONG -- event never fires -->
+<!-- WRONG -- window-dispatched event, never fires on document -->
 <script>
 document.addEventListener('djust:push_event', (e) => { ... });
 </script>
@@ -606,7 +644,14 @@ document.addEventListener('djust:push_event', (e) => { ... });
 <script>
 window.addEventListener('djust:push_event', (e) => { ... });
 </script>
+
+<!-- ALSO CORRECT -- navigate-end is dispatched on document, not window -->
+<script>
+document.addEventListener('djust:navigate-end', (e) => { ... });
+</script>
 ```
+
+**Suppress globally**: `DJUST_CONFIG = {"suppress_checks": ["T004"]}` (works as of #1809) or `SILENCED_SYSTEM_CHECKS = ["djust.T004"]`.
 
 ---
 

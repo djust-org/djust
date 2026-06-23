@@ -1038,5 +1038,234 @@ class TestPositionalArgsMapping:
         assert result["coerced_params"]["confirm"] is True
 
 
+class TestCoercionSecurityEdgeCases:
+    """Security regression tests for type-coercion edge cases (issue #1820).
+
+    These PIN the audited-safe behavior of ``validate_handler_params`` against
+    malformed / adversarial inputs. The coercion contract is:
+
+      - ``str -> int``  : ``int()`` (base-10). Malformed strings RAISE in
+        ``int()``; coercion keeps the original string, type validation then
+        rejects the event (``valid is False``) — the handler is NOT invoked
+        (see ``websocket.py`` ~1275 / 2943 / 3080 / 3192). It does NOT
+        silently truncate ``"999 OR 1=1"`` to ``999``.
+      - ``str -> bool`` : ALLOWLIST — ``value.lower() in
+        ("true", "1", "yes", "on")``. This is NOT ``bool(non_empty_string)``,
+        so adversarial strings such as ``"true; DROP TABLE"`` and the
+        falsy-but-non-empty ``"false"`` / ``"0"`` coerce to ``False``. There
+        is no truthiness logic-bypass.
+      - ``str -> float``: ``float()``. Malformed strings are rejected (as for
+        ``int``). Note: ``"inf"`` / ``"-inf"`` / ``"nan"`` ARE accepted because
+        they are valid Python floats — this is an intentional, documented
+        contract (see ``test_coerce_float_special_values`` and
+        ``test_float_inf_nan_pass_as_valid_floats_known_contract`` below).
+
+    NOTE: these are CHARACTERIZATION tests — they pin the *current, audited*
+    behavior. No behavior change ships with #1820; the audit concluded the
+    coercion paths are already safe (malformed input is rejected, bool uses an
+    allowlist), so these tests are not "gate-off-able" against a code change.
+    They guard against future regressions that would weaken the contract.
+    """
+
+    # --- str -> int (issue #1820 case 1 + 4) -------------------------------
+
+    def test_sql_injection_string_to_int_is_rejected_not_truncated(self):
+        """``page="999 OR 1=1"`` (page: int) must be REJECTED, not truncated.
+
+        Confirms djust mirrors Python ``int()`` semantics: ``int("999 OR 1=1")``
+        raises ``ValueError``, so the event is rejected rather than silently
+        coerced to ``999`` (which would bypass an integer-comparison guard).
+        """
+
+        def handler(self, page: int = 0, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {"page": "999 OR 1=1"}, "paginate")
+        assert result["valid"] is False
+        # Original string preserved (NOT truncated to int 999).
+        assert result["coerced_params"]["page"] == "999 OR 1=1"
+        assert not isinstance(result["coerced_params"]["page"], int)
+        # Type error names the offending param.
+        assert any(e["param"] == "page" for e in result["type_errors"])
+
+    def test_hex_string_to_int_is_rejected(self):
+        """``id="0x41"`` / ``id="0x41414141"`` (id: int) must be REJECTED.
+
+        ``int()`` is base-10 only, so hex literals raise and are rejected
+        rather than coerced (Python's ``int("0x41")`` raises ValueError).
+        """
+
+        def handler(self, id: int = 0, **kwargs):
+            pass
+
+        for hexstr in ("0x41", "0x41414141"):
+            result = validate_handler_params(handler, {"id": hexstr}, "load")
+            assert result["valid"] is False, f"{hexstr!r} should be rejected"
+            assert result["coerced_params"]["id"] == hexstr  # not coerced
+
+    def test_well_formed_int_still_coerces(self):
+        """Guard the happy path: a legitimate numeric string still coerces."""
+
+        def handler(self, page: int = 0, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {"page": "42"}, "paginate")
+        assert result["valid"] is True
+        assert result["coerced_params"]["page"] == 42
+
+    # --- str -> bool (issue #1820 case 2 — the designated dangerous one) ---
+
+    def test_bool_coercion_uses_allowlist_not_truthiness(self):
+        """``active="true; DROP TABLE"`` (active: bool) must coerce to False.
+
+        The dangerous failure mode would be ``bool(non_empty_string)``, under
+        which ANY non-empty string (including ``"false"`` and ``"0"``) is
+        ``True`` — a real logic bypass. djust uses an ALLOWLIST instead, so an
+        adversarial non-allowlisted string is ``False``.
+        """
+
+        def handler(self, active: bool = False, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {"active": "true; DROP TABLE"}, "toggle")
+        # bool coercion never raises -> always a valid bool -> valid is True.
+        assert result["valid"] is True
+        assert result["coerced_params"]["active"] is False
+
+    def test_bool_falsy_strings_are_false_not_true(self):
+        """The crux: ``"false"`` / ``"0"`` / ``"no"`` / ``"off"`` -> False.
+
+        If bool coercion were ``bool(non_empty_string)`` these would all be
+        ``True`` (a logic bypass). The allowlist makes them ``False``.
+        """
+
+        def handler(self, active: bool = False, **kwargs):
+            pass
+
+        for falsy in ("false", "False", "FALSE", "0", "no", "off", "anything", "2"):
+            result = validate_handler_params(handler, {"active": falsy}, "toggle")
+            assert result["valid"] is True
+            assert result["coerced_params"]["active"] is False, (
+                f"{falsy!r} must coerce to False (allowlist), not True"
+            )
+
+    def test_bool_truthy_allowlist_values_are_true(self):
+        """Only the documented allowlist values coerce to True."""
+
+        def handler(self, active: bool = False, **kwargs):
+            pass
+
+        for truthy in ("true", "True", "TRUE", "1", "yes", "YES", "on", "ON"):
+            result = validate_handler_params(handler, {"active": truthy}, "toggle")
+            assert result["valid"] is True
+            assert result["coerced_params"]["active"] is True, f"{truthy!r} must coerce to True"
+
+    # --- str -> float (issue #1820 case 3) ---------------------------------
+
+    def test_malformed_float_string_is_rejected(self):
+        """``amount="3.14 OR 1=1"`` (amount: float) must be REJECTED."""
+
+        def handler(self, amount: float = 0.0, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {"amount": "3.14 OR 1=1"}, "pay")
+        assert result["valid"] is False
+        assert result["coerced_params"]["amount"] == "3.14 OR 1=1"  # not coerced
+
+    def test_float_overflow_to_inf_known_contract(self):
+        """``amount="1e309"`` overflows to ``inf`` and is accepted.
+
+        CHARACTERIZATION: ``float("1e309")`` is ``inf``, a valid float, so it
+        passes type validation. This is an intentional contract — handlers
+        that perform bound checks or arithmetic on a coerced ``float`` should
+        guard against non-finite values themselves (``math.isfinite``).
+        """
+        import math
+
+        def handler(self, amount: float = 0.0, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {"amount": "1e309"}, "pay")
+        assert result["valid"] is True
+        assert math.isinf(result["coerced_params"]["amount"])
+
+    def test_float_inf_nan_pass_as_valid_floats_known_contract(self):
+        """``amount="inf"`` / ``"nan"`` (amount: float) are accepted.
+
+        CHARACTERIZATION of the documented contract (mirrors
+        ``test_coerce_float_special_values``): ``inf`` / ``-inf`` / ``nan`` are
+        valid Python floats and so pass validation. Documented here at the
+        handler-validation layer (not just the raw-coerce layer) so the
+        security implication — non-finite floats reach handlers and downstream
+        comparisons (``nan > x`` is always False) must be guarded by the
+        application — is pinned and discoverable.
+        """
+        import math
+
+        def handler(self, amount: float = 0.0, **kwargs):
+            pass
+
+        r_inf = validate_handler_params(handler, {"amount": "inf"}, "pay")
+        assert r_inf["valid"] is True
+        assert math.isinf(r_inf["coerced_params"]["amount"])
+
+        r_nan = validate_handler_params(handler, {"amount": "nan"}, "pay")
+        assert r_nan["valid"] is True
+        assert math.isnan(r_nan["coerced_params"]["amount"])
+
+    # --- list / typed-list adversarial inputs ------------------------------
+
+    def test_typed_list_with_malformed_element_is_not_partially_coerced(self):
+        """``ids="1,2,OR 1=1"`` (ids: List[int]): NO partial coercion.
+
+        EMPIRICALLY VERIFIED CONTRACT (issue #1820 audit): a malformed element
+        makes the *whole* typed-list coercion raise inside ``_coerce_value``
+        (``int("OR 1=1")`` -> ValueError), which ``coerce_parameter_types``
+        catches and recovers from by KEEPING THE ORIGINAL STRING. Crucially:
+
+          - The handler does NOT receive a partially-coerced ``[1, 2]`` (no
+            silent truncation of the malformed tail).
+          - The injected text never becomes a list element.
+
+        ``validate_parameter_types`` intentionally SKIPS subscripted generics
+        like ``List[int]`` (its guard is ``isinstance(expected_type, type)``),
+        so the raw string reaches the handler rather than being flagged as a
+        type error. A handler typed ``ids: List[int]`` must therefore treat its
+        input defensively — but the value it gets is the unmodified original
+        string, never adversarial list contents. This test pins that contract;
+        if a future change starts partially coercing, it fails.
+        """
+
+        def handler(self, ids: List[int] = None, **kwargs):
+            pass
+
+        result = validate_handler_params(handler, {"ids": "1,2,OR 1=1"}, "bulk")
+        coerced = result["coerced_params"]["ids"]
+        # Original string preserved verbatim — NOT a list, NOT partially coerced.
+        assert coerced == "1,2,OR 1=1"
+        assert not isinstance(coerced, list)
+        # Sanity: a well-formed typed list DOES coerce fully.
+        ok = validate_handler_params(handler, {"ids": "1,2,3"}, "bulk")
+        assert ok["coerced_params"]["ids"] == [1, 2, 3]
+
+    # --- coercion-disabled posture is at least as strict ------------------
+
+    def test_strict_posture_via_coerce_false_rejects_all_strings(self):
+        """``coerce=False`` is the strictest posture: every str fails int/bool.
+
+        This is the existing knob that approximates the issue's suggested
+        ``@strict_types`` for callers that want zero coercion — a string
+        ``"42"`` for an ``int`` param is rejected outright.
+        """
+
+        def handler(self, page: int = 0, active: bool = False, **kwargs):
+            pass
+
+        result = validate_handler_params(
+            handler, {"page": "42", "active": "true"}, "evt", coerce=False
+        )
+        assert result["valid"] is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

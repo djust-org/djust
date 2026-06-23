@@ -12,6 +12,25 @@ use std::collections::HashSet;
 /// Regex for {% spaceless %}: matches whitespace between > and <
 static SPACELESS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r">\s+<").unwrap());
 
+/// Built-in filters whose output is already HTML-safe (escaped or
+/// HTML-producing) and so must NOT be auto-escaped again when they are the
+/// last filter in a chain. Single source of truth shared by the
+/// `Node::Variable`, `Node::InlineIf`, and `get_value_safe` (`{% firstof %}` /
+/// `{% cycle %}`) render paths — hoisted from three inline copies to prevent
+/// parallel-path drift (CLAUDE.md #1646, issue #1692). Mirrors Django's
+/// `is_safe`/`needs_autoescape` semantics. NAME-based check is additive: it
+/// only ever marks MORE values safe, and only for these established names —
+/// never under-escapes a plain/unknown filter's output.
+const SAFE_OUTPUT_FILTERS: [&str; 7] = [
+    "safe",
+    "safeseq",
+    "force_escape",
+    "json_script",
+    "urlize",
+    "urlizetrunc",
+    "unordered_list",
+];
+
 /// Returns ``true`` if the (parser-preserved) filter argument string is a
 /// quoted literal — i.e. starts and ends with matching single or double
 /// quotes. Used to drive the custom-filter fallback's arg-resolution
@@ -369,7 +388,7 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
         Node::Variable(var_name, filter_specs, in_attr) => {
             // `resolve` tries the normal value-stack path first, then
-            // falls back to `getattr` on any PyObject sidecar attached
+            // falls back to `getattr` on any Py<PyAny> sidecar attached
             // to the context (e.g. Django model instances).
             let mut value = context.resolve(var_name).unwrap_or(Value::Null);
 
@@ -413,17 +432,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             //    ``mark_safe()``d its result at runtime without the static
             //    ``is_safe=True`` flag (#1660). Additive: only ever marks MORE
             //    values safe, and only when the LAST filter's output is safe.
-            let safe_output_filters = [
-                "safe",
-                "safeseq",
-                "force_escape",
-                "json_script",
-                "urlize",
-                "urlizetrunc",
-                "unordered_list",
-            ];
             let is_safe = filter_specs.iter().any(|(name, _)| {
-                safe_output_filters.contains(&name.as_str())
+                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
             }) || context.is_safe(var_name)
                 || runtime_safe;
@@ -475,17 +485,8 @@ pub fn render_node_with_loader<L: TemplateLoader>(
             }
 
             let text = value.to_string();
-            let safe_output_filters = [
-                "safe",
-                "safeseq",
-                "force_escape",
-                "json_script",
-                "urlize",
-                "urlizetrunc",
-                "unordered_list",
-            ];
             let is_safe = filters.iter().any(|(name, _)| {
-                safe_output_filters.contains(&name.as_str())
+                SAFE_OUTPUT_FILTERS.contains(&name.as_str())
                     || crate::filter_registry::is_custom_filter_safe(name)
             }) || context.is_safe(expr)
                 || runtime_safe;
@@ -553,7 +554,26 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 && (nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes))
             {
                 if let Some(id) = marker_id {
-                    return Ok(format!("<!--dj-if id=\"{id}\"-->{body}<!--/dj-if-->"));
+                    // Append the per-iteration loop path (#1832) so an
+                    // `{% if %}` rendered inside a `{% for %}` gets a UNIQUE
+                    // id per iteration (the parser-assigned `if-<hash>-N` is
+                    // the SAME compile-time ordinal for every iteration, so
+                    // without this suffix the id is duplicated N times,
+                    // producing unpairable MoveSubtree patches on re-render).
+                    // Outside any loop the path is absent/empty, so the id is
+                    // unchanged `if-<hash>-N` (backward compatible). Inside a
+                    // loop iteration the open marker becomes
+                    // `if-<hash>-N-<path>` (e.g. `if-<hash>-0-0`); the close
+                    // marker stays `<!--/dj-if-->` (it carries no id). The id
+                    // is treated as an opaque string by the Rust differ and
+                    // the JS client — neither parses the `-N` structure.
+                    let loop_path = match context.get("__djust_if_loop_path") {
+                        Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+                        _ => "",
+                    };
+                    return Ok(format!(
+                        "<!--dj-if id=\"{id}{loop_path}\"-->{body}<!--/dj-if-->"
+                    ));
                 }
             }
 
@@ -599,11 +619,36 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // Save outer cycle counter for nested loop support
                     let saved_cycle_counter = ctx.get("__djust_cycle_counter").cloned();
 
+                    // Save outer dj-if loop path for nested-loop composition
+                    // and per-iteration uniqueness of `{% if %}` marker ids
+                    // (#1832). The parent path (empty outside any loop) is
+                    // read once; each iteration appends `-<index>` so a
+                    // `{% if %}` rendered inside this loop gets a UNIQUE id
+                    // per iteration that is also STABLE across re-renders
+                    // that don't change loop structure. Uses the ORIGINAL
+                    // item index (not the enumerate counter) so ids stay
+                    // stable under `{% for ... reversed %}`. Mirrors the
+                    // cycle-counter save/restore pattern above/below.
+                    let parent_if_loop_path = match ctx.get("__djust_if_loop_path") {
+                        Some(Value::String(s)) => s.clone(),
+                        _ => String::new(),
+                    };
+                    let saved_if_loop_path = ctx.get("__djust_if_loop_path").cloned();
+
                     for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
                         // Set __djust_cycle_counter for {% cycle %} tag support
                         ctx.set(
                             "__djust_cycle_counter".to_string(),
                             Value::Integer(counter as i64),
+                        );
+
+                        // Set the per-iteration dj-if loop path (#1832).
+                        // Composes for nested loops: an inner For reads this
+                        // (non-empty) path and appends its own `-<index>`,
+                        // yielding e.g. `-3-2`.
+                        ctx.set(
+                            "__djust_if_loop_path".to_string(),
+                            Value::String(format!("{parent_if_loop_path}-{index}")),
                         );
 
                         // Handle tuple unpacking: {% for a, b in items %}
@@ -642,6 +687,19 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                     // Restore outer cycle counter (for nested loops)
                     if let Some(saved) = saved_cycle_counter {
                         ctx.set("__djust_cycle_counter".to_string(), saved);
+                    }
+
+                    // Restore outer dj-if loop path (#1832). There is no
+                    // public Context::remove for an arbitrary key, so when
+                    // there was no parent path we reset to the empty string,
+                    // which Node::If treats as "no path" (it appends only a
+                    // non-empty path). Otherwise restore the saved value.
+                    match saved_if_loop_path {
+                        Some(saved) => ctx.set("__djust_if_loop_path".to_string(), saved),
+                        None => ctx.set(
+                            "__djust_if_loop_path".to_string(),
+                            Value::String(String::new()),
+                        ),
                     }
 
                     // Clear loop mappings after the loop
@@ -850,11 +908,21 @@ pub fn render_node_with_loader<L: TemplateLoader>(
 
         Node::FirstOf { args } => {
             // {% firstof var1 var2 ... "fallback" %} → first truthy value
-            // Uses get_value for dotted path support (e.g., user.name)
+            // Uses get_value_safe for dotted path support (e.g., user.name)
+            // AND to thread the runtime-safe flag (#1672, parallel-path per
+            // CLAUDE.md #1646): a custom filter that `mark_safe()`s at runtime
+            // (e.g. `{% firstof a|md %}`) must NOT be re-escaped, matching the
+            // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
+            // the LAST filter produced a genuine SafeString → fail-safe.
             for arg in args {
-                let val = get_value(arg.trim(), context)?;
+                let (val, runtime_safe) = get_value_safe(arg.trim(), context)?;
                 if val.is_truthy() {
-                    return Ok(filters::html_escape(&val.to_string()));
+                    let text = val.to_string();
+                    return Ok(if runtime_safe {
+                        text
+                    } else {
+                        filters::html_escape(&text)
+                    });
                 }
             }
             Ok(String::new())
@@ -904,11 +972,18 @@ pub fn render_node_with_loader<L: TemplateLoader>(
                 .unwrap_or(0);
             let idx = counter % values.len();
             let val = &values[idx];
-            // Resolve via get_value for dotted path and literal support
-            let resolved = get_value(val.trim(), context)?;
+            // Resolve via get_value_safe for dotted path and literal support
+            // AND to thread the runtime-safe flag (#1672, parallel-path per
+            // CLAUDE.md #1646): a custom filter that `mark_safe()`s at runtime
+            // (e.g. `{% cycle a|md ... %}`) must NOT be re-escaped, matching the
+            // Variable/InlineIf arms (#1660). `runtime_safe` is true ONLY when
+            // the LAST filter produced a genuine SafeString → fail-safe.
+            let (resolved, runtime_safe) = get_value_safe(val.trim(), context)?;
             let output = if matches!(resolved, Value::Null) {
                 // Unresolved variable — output the raw name (Django behavior)
                 filters::html_escape(val.trim())
+            } else if runtime_safe {
+                resolved.to_string()
             } else {
                 filters::html_escape(&resolved.to_string())
             };
@@ -1763,6 +1838,32 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
 }
 
 fn get_value(expr: &str, context: &Context) -> Result<Value> {
+    // Thin wrapper that discards the runtime-safe flag. Most callers
+    // (condition operators, progress-bar math, etc.) only need the `Value`
+    // and never reach the auto-escape decision, so they stay on this
+    // signature. The `{% firstof %}` / `{% cycle %}` emit path uses
+    // `get_value_safe` directly to honour runtime SafeStrings (#1672).
+    // Mirrors the `apply_filter_full` / `apply_filter_full_safe` shape in
+    // `filters.rs` — single pipe-loop source of truth, no parallel drift.
+    get_value_safe(expr, context).map(|(value, _)| value)
+}
+
+/// Like [`get_value`] but also reports whether the produced value is a runtime
+/// ``SafeString`` (a custom filter that ``mark_safe()``d its output at runtime).
+///
+/// `runtime_safe` tracks the LAST filter's runtime safeness: a later
+/// plain-returning filter re-taints (resets to false), matching Django's
+/// final-value escape semantics and the Variable/InlineIf render arms (#1660).
+///
+/// NOTE (#1672, parallel-path threading per CLAUDE.md #1646): the
+/// `{% firstof %}` / `{% cycle %}` emit path consumes this bool to skip
+/// auto-escaping for a runtime-SafeString value — closing the parity gap
+/// where the old `get_value` dropped the flag (over-escape, fail-SAFE / no
+/// XSS) while the Variable/InlineIf arms honoured it. The bool originates ONLY
+/// from `apply_filter_full_safe`, which returns `true` solely for a genuine
+/// `str`-subclass with `__html__` (the #1660 XSS-hardened check), so this can
+/// only ever mark MORE values safe — never under-escape a plain value.
+fn get_value_safe(expr: &str, context: &Context) -> Result<(Value, bool)> {
     // Handle pipe filters in expressions (e.g., "project.id|stringformat:\"s\"")
     if expr.contains('|') {
         let parts: Vec<&str> = expr.splitn(2, '|').collect();
@@ -1771,6 +1872,10 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
 
         // Resolve the base variable
         let mut value = get_value(var_name, context)?;
+
+        // Track the LAST filter's runtime safeness, mirroring the Variable arm
+        // (#1660). A plain-returning filter after a runtime-safe one re-taints.
+        let mut runtime_safe = false;
 
         // Parse and apply filters (handles chained filters too)
         for filter_part in filter_expr.split('|') {
@@ -1790,58 +1895,64 @@ fn get_value(expr: &str, context: &Context) -> Result<Value> {
                 (filter_part, None, false)
             };
 
-            // NOTE (#1672, parallel-path decision per CLAUDE.md #1646): this
-            // `get_value` pipe helper returns a bare `Value` and is used by the
-            // `{% firstof %}` / `{% cycle %}` emit path. It intentionally uses
-            // the plain `apply_filter_full` (not `apply_filter_full_safe`), so a
-            // custom filter that `mark_safe()`s at runtime is *over-escaped*
-            // here — fail-SAFE (no XSS), unlike the Variable/InlineIf arms which
-            // honour runtime safeness (#1660). Threading `(Value, bool)` out of
-            // `get_value` touches its many callers; deferred to #1672.
-            value = filters::apply_filter_full(
+            // Thread the (Value, bool) shape out so callers in the firstof/cycle
+            // emit path can honour runtime SafeStrings (#1672, follow-up to
+            // #1660). Built-ins always report `produced_safe = false`.
+            let (new_value, produced_safe) = filters::apply_filter_full_safe(
                 filter_name,
                 &value,
                 arg.as_deref(),
                 Some(context),
                 arg_was_quoted,
             )?;
+            value = new_value;
+            // Mark safe when EITHER the filter produced a runtime SafeString
+            // (#1672) OR its NAME is in the name-based safe_output_filters
+            // whitelist / a custom is_safe=True filter — mirroring the
+            // Variable/InlineIf arms exactly (#1692). LAST-filter semantics:
+            // assigned each iteration, so a later plain filter re-taints to
+            // false. Fail-safe: only ever ADDS safeness for established names;
+            // a plain/unknown filter (e.g. `upper`) stays escaped.
+            runtime_safe = produced_safe
+                || SAFE_OUTPUT_FILTERS.contains(&filter_name)
+                || crate::filter_registry::is_custom_filter_safe(filter_name);
         }
 
-        return Ok(value);
+        return Ok((value, runtime_safe));
     }
 
     // Try to get from context
     if let Some(value) = context.get(expr) {
-        return Ok(value.clone());
+        return Ok((value.clone(), false));
     }
 
     // Try to parse as literal
     if expr == "True" || expr == "true" {
-        return Ok(Value::Bool(true));
+        return Ok((Value::Bool(true), false));
     }
     if expr == "False" || expr == "false" {
-        return Ok(Value::Bool(false));
+        return Ok((Value::Bool(false), false));
     }
     if expr == "None" || expr == "none" {
-        return Ok(Value::Null);
+        return Ok((Value::Null, false));
     }
 
     if let Ok(i) = expr.parse::<i64>() {
-        return Ok(Value::Integer(i));
+        return Ok((Value::Integer(i), false));
     }
 
     if let Ok(f) = expr.parse::<f64>() {
-        return Ok(Value::Float(f));
+        return Ok((Value::Float(f), false));
     }
 
     // String literal (remove quotes)
     if (expr.starts_with('"') && expr.ends_with('"'))
         || (expr.starts_with('\'') && expr.ends_with('\''))
     {
-        return Ok(Value::String(expr[1..expr.len() - 1].to_string()));
+        return Ok((Value::String(expr[1..expr.len() - 1].to_string()), false));
     }
 
-    Ok(Value::Null)
+    Ok((Value::Null, false))
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
@@ -2806,6 +2917,69 @@ mod tests {
         assert_eq!(result, "Alice");
     }
 
+    // ---- #1692: firstof/cycle must honor the NAME-BASED safe_output_filters
+    // whitelist (safe/urlize/...), completing #1660→#1672. ----
+
+    #[test]
+    fn test_firstof_safe_filter_not_double_escaped() {
+        // {% firstof x|safe %} must NOT be re-escaped — `safe` is a name-based
+        // safe_output_filter (matches the Variable arm).
+        let tokens = tokenize("{% firstof x|safe %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "<b>hi</b>");
+    }
+
+    #[test]
+    fn test_cycle_urlize_filter_not_double_escaped() {
+        // {% cycle x|urlize %} — urlize produces its own <a href=...> HTML; it
+        // must not be re-escaped (urlize is a name-based safe_output_filter).
+        let tokens = tokenize("{% cycle x|urlize %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "x".to_string(),
+            Value::String("Visit https://example.com".to_string()),
+        );
+        let result = render_nodes(&nodes, &context).unwrap();
+        // urlize's <a href="..."> must survive verbatim, not become &lt;a ...
+        assert!(
+            result.contains("<a href=\"https://example.com\""),
+            "urlize output was re-escaped: {result}"
+        );
+        assert!(
+            !result.contains("&lt;a"),
+            "urlize output was double-escaped: {result}"
+        );
+    }
+
+    #[test]
+    fn test_firstof_nonsafe_filter_still_escaped() {
+        // {% firstof x|upper %} — `upper` is NOT a safe_output_filter, so HTML
+        // in its output must STILL be escaped (fail-safe: only whitelisted
+        // names skip escaping).
+        let tokens = tokenize("{% firstof x|upper %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "&lt;B&gt;HI&lt;/B&gt;");
+    }
+
+    #[test]
+    fn test_firstof_safe_then_plain_filter_re_taints() {
+        // LAST-filter semantics: `{% firstof x|safe|upper %}` — `upper` is the
+        // last filter and is NOT safe, so the value is re-tainted and escaped.
+        let tokens = tokenize("{% firstof x|safe|upper %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
+        let result = render_nodes(&nodes, &context).unwrap();
+        assert_eq!(result, "&lt;B&gt;HI&lt;/B&gt;");
+    }
+
     #[test]
     fn test_now_basic_format() {
         // Test that {% now %} produces non-empty output with basic format
@@ -3218,5 +3392,111 @@ mod tests {
             vec![("analysis", Value::Bool(true))],
         );
         assert_eq!(result, "has-analysis");
+    }
+
+    // ---- #1722: context-processor vars must propagate into {% include %} ----
+    //
+    // Reporter symptom: a SafeString context-processor var ({{ theme_panel }})
+    // renders correctly at the TOP LEVEL of a template but renders EMPTY inside
+    // a nested {% include %} partial. A plain (non-safe) view-attr var
+    // ({{ nav_items }}) DOES reach the same include — so the divergence is
+    // specific to SafeString-marked values, not to includes in general.
+
+    /// A tiny in-memory template loader for include tests.
+    struct MapLoader {
+        templates: std::collections::HashMap<String, Vec<Node>>,
+    }
+
+    impl MapLoader {
+        fn new(entries: &[(&str, &str)]) -> Self {
+            let mut templates = std::collections::HashMap::new();
+            for (name, source) in entries {
+                let tokens = tokenize(source).unwrap();
+                let nodes = parse(&tokens).unwrap();
+                templates.insert((*name).to_string(), nodes);
+            }
+            Self { templates }
+        }
+    }
+
+    impl crate::inheritance::TemplateLoader for MapLoader {
+        fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+            self.templates.get(name).cloned().ok_or_else(|| {
+                DjangoRustError::TemplateError(format!("template not found: {name}"))
+            })
+        }
+    }
+
+    #[test]
+    fn test_1722_safe_var_renders_at_top_level() {
+        // Baseline: a SafeString-marked HTML var renders unescaped at top level.
+        let tokens = tokenize("{{ theme_panel }}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "theme_panel".to_string(),
+            Value::String("<div class=\"panel\">x</div>".to_string()),
+        );
+        context.mark_safe("theme_panel".to_string());
+        let loader = MapLoader::new(&[]);
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(result, "<div class=\"panel\">x</div>");
+    }
+
+    #[test]
+    fn test_1722_safe_var_propagates_into_include() {
+        // THE BUG: the same SafeString var, used inside an {% include %}, must
+        // render non-empty (and unescaped) just like at top level.
+        let loader = MapLoader::new(&[("_partial.html", "[{{ theme_panel }}]")]);
+        let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "theme_panel".to_string(),
+            Value::String("<div class=\"panel\">x</div>".to_string()),
+        );
+        context.mark_safe("theme_panel".to_string());
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(
+            result, "[<div class=\"panel\">x</div>]",
+            "SafeString context-processor var must propagate into {{% include %}} unescaped (#1722)"
+        );
+    }
+
+    #[test]
+    fn test_1722_discriminator_plain_var_reaches_include() {
+        // Discriminator from the report: a plain (non-safe) var DOES reach the
+        // include. This guards against a regression that would "fix" #1722 by
+        // breaking the working plain-var path.
+        let loader = MapLoader::new(&[("_partial.html", "[{{ nav_items }}]")]);
+        let tokens = tokenize("{% include \"_partial.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "nav_items".to_string(),
+            Value::String("home,about".to_string()),
+        );
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(result, "[home,about]");
+    }
+
+    #[test]
+    fn test_1722_safe_var_propagates_into_nested_include() {
+        // Reporter's real shape: base -> include _start -> include _sidebar,
+        // with the SafeString var used in the deepest partial.
+        let loader = MapLoader::new(&[
+            ("_start.html", "{% include \"_sidebar.html\" %}"),
+            ("_sidebar.html", "<aside>{{ theme_panel }}</aside>"),
+        ]);
+        let tokens = tokenize("{% include \"_start.html\" %}").unwrap();
+        let nodes = parse(&tokens).unwrap();
+        let mut context = Context::new();
+        context.set(
+            "theme_panel".to_string(),
+            Value::String("<b>P</b>".to_string()),
+        );
+        context.mark_safe("theme_panel".to_string());
+        let result = render_nodes_with_loader(&nodes, &context, Some(&loader)).unwrap();
+        assert_eq!(result, "<aside><b>P</b></aside>");
     }
 }

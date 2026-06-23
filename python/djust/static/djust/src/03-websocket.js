@@ -3,6 +3,117 @@
 // WebSocket LiveView Client
 // ============================================================================
 
+/**
+ * #1813 (a): id-keyed reconciliation pass run AFTER the #1610 prerender
+ * `skipMountHtml` morph. Embedded-view wrappers
+ * (`<div dj-view [dj-sticky-view dj-sticky-root] data-djust-embedded="<id>">`)
+ * carry NO `id`, so morphChildren can only align them positionally
+ * (Strategy 2). When a preceding sibling count diverges, the wrapper never
+ * aligns → morphElement never runs on it → the server's `dj-id` is never
+ * copied onto the live wrapper. The very next parent patch that targets the
+ * wrapper by `dj-id` then misses and falls back to a positional path that
+ * breaks once the child subtree drifts, triggering html_recovery.
+ *
+ * This pass matches each server-side wrapper to the LIVE wrapper by its
+ * STABLE `data-djust-embedded` value (the same selector 45-child-view.js
+ * uses) — independent of sibling position — and copies the server `dj-id`
+ * onto it. Safe and idempotent: it only sets `dj-id` when the server side
+ * has one and only when the live value differs.
+ *
+ * @param {Element} liveContainer  - the morphed live DOM container
+ * @param {Element} serverTemplate - the <div> holding the parsed server HTML
+ */
+function _stampEmbeddedWrapperDjIds(liveContainer, serverTemplate) {
+    if (!liveContainer || !serverTemplate) return;
+    const _esc = (globalThis.CSS && typeof CSS.escape === 'function')
+        ? (v) => CSS.escape(v)
+        : (v) => String(v).replace(/([^A-Za-z0-9_-])/g, '\\$1');
+    let serverWrappers;
+    try {
+        serverWrappers = serverTemplate.querySelectorAll('[data-djust-embedded], [dj-sticky-view]');
+    } catch (_err) {
+        return;
+    }
+    for (const serverWrapper of serverWrappers) {
+        const embeddedId = serverWrapper.getAttribute('data-djust-embedded');
+        if (!embeddedId) continue;
+        const serverDjId = serverWrapper.getAttribute('dj-id');
+        if (!serverDjId) continue;
+        let liveWrapper;
+        try {
+            liveWrapper = liveContainer.querySelector(
+                '[dj-view][data-djust-embedded="' + _esc(embeddedId) + '"]'
+            );
+        } catch (_err) {
+            continue;
+        }
+        if (liveWrapper && liveWrapper.getAttribute('dj-id') !== serverDjId) {
+            liveWrapper.setAttribute('dj-id', serverDjId);
+        }
+    }
+}
+
+/**
+ * #1848: re-execute classic <script> tags inside a freshly-mounted/morphed
+ * container so inline page JS inside the dj-root actually runs.
+ *
+ * Both mount paths in the `case 'mount':` handler put server HTML into the
+ * DOM in a way the browser treats as NON-executing for <script>: the
+ * pre-rendered path morphs via morphChildren (clone+insert of inert nodes),
+ * and the non-prerendered path assigns `container.innerHTML = data.html`.
+ * Per HTML spec, a <script> inserted by either mechanism is parsed but NOT
+ * evaluated — its `addEventListener` never fires, silently (#1848, a 1.0.7
+ * regression introduced when #1610 started morphing the prerender DOM).
+ *
+ * The only DOM operation that makes the browser run an already-in-tree inert
+ * <script> is to create a fresh <script> element, copy its attributes +
+ * textContent, and replace the inert node. Mirrors how the navigation/
+ * bfcache classic-script path keeps page JS alive (#1635/#1650 IIFE wrap).
+ *
+ * Scope discipline:
+ *  - Only CLASSIC scripts run: no `type`, or a recognized JS MIME type.
+ *    `type="djust/hook"` (colocated hook definitions) and other custom
+ *    types (e.g. `application/json`, `importmap`) are left untouched —
+ *    the hook system extracts djust/hook definitions separately.
+ *  - Idempotent: each re-created element is marked `data-djust-script-ran`
+ *    so a WS reconnect / re-mount on the same DOM does not double-execute.
+ *
+ * @param {Element} container - the mounted/morphed container to scan.
+ */
+function _runInsertedScripts(container) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    let scripts;
+    try {
+        scripts = container.querySelectorAll('script');
+    } catch (_err) {
+        return;
+    }
+    for (const old of scripts) {
+        // Skip already-executed scripts (idempotent on reconnect/re-mount)
+        // and any djust-managed marker scripts.
+        if (old.hasAttribute('data-djust-script-ran')) continue;
+        const type = (old.getAttribute('type') || '').trim().toLowerCase();
+        // Classic scripts only: empty type or a JS MIME type. Anything else
+        // (djust/hook, application/json, importmap, module-worker shims, …)
+        // is left untouched.
+        const isClassic = type === ''
+            || type === 'text/javascript'
+            || type === 'application/javascript'
+            || type === 'application/ecmascript'
+            || type === 'text/ecmascript';
+        if (!isClassic) continue;
+        const fresh = document.createElement('script');
+        for (const attr of old.attributes) {
+            fresh.setAttribute(attr.name, attr.value);
+        }
+        fresh.setAttribute('data-djust-script-ran', '');
+        // textContent (not innerHTML) — inline body is plain JS text.
+        fresh.textContent = old.textContent;
+        // replaceWith inserts the fresh node, which the browser DOES execute.
+        old.replaceWith(fresh);
+    }
+}
+
 class LiveViewWebSocket {
     constructor() {
         this.ws = null;
@@ -310,15 +421,19 @@ class LiveViewWebSocket {
                 this.viewMounted = true;
                 if (globalThis.djustDebug) console.log('[LiveView] View mounted: %s', String(data.view));
 
-                // Fix #1 — stash server-emitted public view state so the
-                // state-snapshot capture on next before-navigate has
-                // something to serialize. The server includes
-                // ``public_state`` only when ``enable_state_snapshot``
-                // is True on the view class; non-opt-in views never
-                // have state cached by the SW.
-                if (data.public_state && typeof data.public_state === 'object' && data.view) {
+                // Fix #1 / Finding #4 — stash the server-emitted SIGNED
+                // state-snapshot blob so the state-snapshot capture on the
+                // next before-navigate can echo it back verbatim. The server
+                // includes ``state_snapshot_signed`` (an opaque
+                // TimestampSigner blob) only when ``enable_state_snapshot``
+                // is True on the view class; non-opt-in views never have
+                // state cached. The blob is OPAQUE — we store it as-is and
+                // never re-serialize it, so the server signature stays valid
+                // on the round-trip. Re-serializing would strip the signature
+                // and the server would (correctly) reject the snapshot.
+                if (typeof data.state_snapshot_signed === 'string' && data.state_snapshot_signed && data.view) {
                     if (!window.djust._clientState) window.djust._clientState = {};
-                    window.djust._clientState[data.view] = data.public_state;
+                    window.djust._clientState[data.view] = data.state_snapshot_signed; // codeql[js/remote-property-injection] -- data.view is a server-sent view name, not arbitrary user input
                 }
 
                 // Remove dj-cloak from all elements (FOUC prevention)
@@ -370,6 +485,27 @@ class LiveViewWebSocket {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             _morphTemp.innerHTML = data.html;
                             morphChildren(_morphContainer, _morphTemp);
+                            // #1813 (a): embedded-view wrappers
+                            // (<div dj-view dj-sticky-view dj-sticky-root
+                            //  data-djust-embedded=...>) carry NO `id`, so
+                            // morphChildren can only align them positionally
+                            // (Strategy 2). If sibling counts diverge before a
+                            // wrapper, it never aligns → morphElement never runs
+                            // → the server's dj-id is never copied onto the live
+                            // wrapper. The first parent patch then targets the
+                            // wrapper by dj-id, finds nothing, falls back to a
+                            // positional path, and breaks once the child subtree
+                            // drifts → triggers html_recovery (the trigger half
+                            // of the sticky-child data-loss bug). Reconcile by
+                            // the STABLE `data-djust-embedded` value (the same
+                            // selector 45-child-view.js uses) and copy the
+                            // server's dj-id onto the live wrapper.
+                            _stampEmbeddedWrapperDjIds(_morphContainer, _morphTemp);
+                            // #1848: morphChildren re-creates inline <script>
+                            // nodes inert (clone+insert never executes them).
+                            // Re-run classic page scripts inside the dj-root so
+                            // their addEventListener / init runs on mount.
+                            _runInsertedScripts(_morphContainer);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found
@@ -461,6 +597,10 @@ class LiveViewWebSocket {
                     if (container) {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                         container.innerHTML = data.html;
+                        // #1848: innerHTML never executes inserted <script>.
+                        // Re-run classic page scripts inside the dj-root so
+                        // inline page JS behaves the same as on the morph path.
+                        _runInsertedScripts(container);
                         // Post-mount sticky reattach (Phase B). No-op
                         // when stickyStash is empty.
                         if (window.djust.stickyPreserve && window.djust.stickyPreserve.reattachStickyAfterMount) {
@@ -540,27 +680,24 @@ class LiveViewWebSocket {
                     } else if (typeof window !== 'undefined' && window.location) {
                         // Fallback — hard navigation if the dispatcher
                         // isn't wired (non-LiveView pages).
-                        // Same-origin guard: server-controlled `nav.to`
-                        // is generally trusted but defense-in-depth
-                        // prevents an attacker who breaches the wire
-                        // protocol from pivoting to open-redirect /
-                        // javascript: scheme XSS. Only allow same-origin
-                        // absolute paths; reject protocol-relative
-                        // (`//evil.com`), absolute URLs to other origins,
-                        // and `javascript:` / `data:` schemes.
+                        // Scheme/origin guard via the SHARED helper so the WS
+                        // and SSE `navigate` paths route through one
+                        // implementation and can't drift (#1646, finding #16).
+                        // server-controlled `nav.to` is generally trusted but
+                        // defense-in-depth prevents an attacker who breaches the
+                        // wire protocol from pivoting to open-redirect /
+                        // javascript: scheme XSS. Allows same-origin absolute
+                        // paths and absolute http(s) URLs (#1599); rejects
+                        // protocol-relative (`//evil.com`) and `javascript:` /
+                        // `data:` schemes.
                         // Closes CodeQL js/client-side-unvalidated-url-redirection.
-                        const target = nav.to;
-                        const isSameOriginPath = (
-                            target.length > 0 &&
-                            target.charAt(0) === '/' &&
-                            target.charAt(1) !== '/'  // reject protocol-relative
-                        );
-                        if (isSameOriginPath) {
-                            window.location.href = target;
+                        const navTarget = window.djust.safeNavigationTarget(nav.to);
+                        if (navTarget) {
+                            window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
                         } else if (globalThis.djustDebug) {
                             console.warn(
-                                '[djust] live_redirect rejected non-same-origin target:',
-                                target,
+                                '[djust] live_redirect rejected unsafe target:',
+                                nav.to,
                             );
                         }
                     }
@@ -1250,6 +1387,9 @@ class LiveViewWebSocket {
 
 // Expose LiveViewWebSocket to window for client-dev.js to wrap
 window.djust.LiveViewWebSocket = LiveViewWebSocket;
+// #1848: exposed so the mount handler (and tests) can re-execute classic
+// inline <script> inside the morphed/innerHTML'd dj-root.
+window.djust._runInsertedScripts = _runInsertedScripts;
 // Backward compatibility
 window.LiveViewWebSocket = LiveViewWebSocket;
 

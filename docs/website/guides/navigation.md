@@ -20,14 +20,18 @@ djust provides `live_patch()` and `live_redirect()` for managing URL state witho
 
 ## Quick Start
 
-### 1. Add NavigationMixin to Your View
+### 1. Subclass LiveView (navigation is built in)
+
+`NavigationMixin` is already included in `LiveView`, so its navigation helpers are always
+available — just subclass `LiveView`. Do **not** also inherit `NavigationMixin`
+(`class ProductListView(NavigationMixin, LiveView)`): it is already in `LiveView`'s bases, so
+that raises `TypeError: Cannot create a consistent method resolution`.
 
 ```python
 from djust import LiveView
-from djust.mixins.navigation import NavigationMixin
 from djust.decorators import event_handler
 
-class ProductListView(NavigationMixin, LiveView):
+class ProductListView(LiveView):
     template_name = 'products/list.html'
 
     def mount(self, request, **kwargs):
@@ -112,17 +116,110 @@ Patching to the root path `/` is supported and correctly updates the browser URL
 
 ### `dj-navigate`
 
-Declarative `live_redirect`. Navigates to a different view over the WebSocket.
+Declarative `live_redirect`. SPA-navigates to a **different LiveView over the existing WebSocket** — no socket teardown, no full page reload. (A full reload happens only as a fallback when the target path isn't in the route map.)
 
 ```html
 <a dj-navigate="/dashboard/">Go to Dashboard</a>
 <a dj-navigate="/items/{{ item.id }}/">View Item</a>
 ```
 
+#### Zero wiring required
+
+`dj-navigate` works **out of the box** — no `live_session()` needed. The client
+route map (URL path → LiveView) is **auto-derived from your Django URLconf**
+(every route whose view subclasses `djust.LiveView`) and **auto-emitted by
+`{% djust_client_config %}`**, the tag that's already in every scaffolded base
+`<head>`. As long as your base template loads `{% djust_client_config %}` and
+your LiveViews are wired into `urlpatterns`, SPA navigation just works.
+
+```html
+{% load live_tags %}
+<head>
+    {% djust_client_config %}  {# emits the API/SSE prefixes + the route map #}
+</head>
+```
+
+If `dj-navigate` is used but no LiveView routes are found in the URLconf (so the
+route map is empty), djust's system check **`djust.T016`** warns you — otherwise
+`dj-navigate` would silently fall back to a full page reload.
+
+`live_session()` is still supported for grouping views that share a WebSocket
+connection, and its registrations are merged into the auto-derived map. It is no
+longer required just to make `dj-navigate` resolve routes.
+
+#### Active-link highlighting
+
+A persistent nav usually lives **outside** `[dj-root]`, so `dj-navigate`'s
+`dj-root`-only swap won't update a server-rendered "active page" class on
+navigation. djust handles this for you: after every navigation (click, WS mount,
+and browser back/forward) it sets `aria-current="page"` on the `[dj-navigate]`
+link whose path matches the current URL and removes it from the others. Style the
+active link off that attribute — no per-app JavaScript needed:
+
+```html
+<a dj-navigate="/">Home</a>
+<a dj-navigate="/docs/">Docs</a>
+
+<style>
+  a[dj-navigate][aria-current="page"] { font-weight: 700; color: #fff; }
+</style>
+```
+
+Cross-origin `dj-navigate` targets (e.g. a link to a sister site) are never
+marked current, and an `aria-current` you set yourself to a different value
+(`step`, `true`, …) is left untouched. Matching is exact-path; for
+section/ancestor highlighting (e.g. `/docs/` active on `/docs/guides/x`), add
+your own rule on top.
+
+> **Chart.js / map blank after `dj-navigate`?** Scripts in SPA-patched content
+> don't execute, so an inline `<script>` that inits a library renders on a hard
+> reload but stays blank after navigation. Initialize third-party libraries from
+> a [client hook](hooks#integrating-third-party-libraries-chartjs-maps-editors)
+> registered once in your base template, not an inline `<script>`.
+
+### `auto_navigate` — automatic link interception (opt-in)
+
+With `dj-navigate` you annotate each link. **`auto_navigate`** goes one step
+further: a single delegated click listener SPA-navigates **plain `<a href>`
+links** — no djust attribute needed — whenever the link's path resolves in the
+route map. It is **off by default**; enable it in settings:
+
+```python
+LIVEVIEW_CONFIG = {"auto_navigate": True}
+```
+
+When enabled, `{% djust_client_config %}` emits a small opt-in flag and the
+client intercepts in-app navigations automatically. It is deliberately
+conservative — a link **falls through to a normal browser navigation** (no
+interception) whenever any of these hold:
+
+- a modifier/middle click (⌘/Ctrl/Shift/Alt, or a non-left button) — i.e. new tab/window
+- a `target` other than `_self`, a `download` attribute, or `rel="external"`
+- the link or any ancestor has `data-no-navigate`
+- the href is external (different origin) or a non-http(s) scheme (`mailto:`, `tel:`)
+- a same-page hash-only jump (`#section`) — the browser scrolls instead
+- **the path isn't a LiveView route in the route map** — admin pages, plain
+  Django views, and routes the current user can't access just reload normally
+
+Same-view query-only changes use `live_patch` (state-preserving); cross-view uses
+`live_redirect`. Because the route map is auth-filtered, `auto_navigate` never
+intercepts a route the current user isn't authorized for — it full-reloads and
+the server enforces access.
+
+Opt a single link out with `data-no-navigate`:
+
+```html
+<a href="/reports/" data-no-navigate>Force a full reload</a>
+```
+
+`auto_navigate` is opt-in and should soak in your app before you rely on it; it
+changes the behavior of *every* in-app link, so the opt-out matrix above is the
+contract. `dj-navigate` remains the explicit, always-on way to mark a single SPA link.
+
 ## Example: Search with URL State
 
 ```python
-class SearchView(NavigationMixin, LiveView):
+class SearchView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'search.html'
 
     def mount(self, request, **kwargs):
@@ -250,7 +347,7 @@ def switch_view(self, view="", **kwargs):
 ```
 
 ```python
-class DashboardView(NavigationMixin, LiveView):
+class DashboardView(LiveView):  # navigation is built in — no NavigationMixin needed
     template_name = 'dashboard.html'
     VALID_TABS = {"overview", "settings", "logs"}
 
@@ -278,7 +375,7 @@ class DashboardView(NavigationMixin, LiveView):
 |---|---|
 | `dj-click` | Actions that modify state (increment counter, delete item, toggle) |
 | `dj-patch` | Navigation that should update the URL (tabs, filters, pagination) |
-| `dj-navigate` | Full page navigation to a different LiveView |
+| `dj-navigate` | SPA navigation to a different LiveView over the WebSocket (full reload only as a fallback when the route isn't in the map) |
 
 ### URL Design Best Practices
 

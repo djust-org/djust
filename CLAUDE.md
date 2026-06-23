@@ -54,7 +54,7 @@ djust/
 │   ├── uploads.py          # File uploads (binary WebSocket frames)
 │   ├── routing.py          # live_session() URL routing helper
 │   ├── testing.py          # LiveViewTestClient, SnapshotTestMixin, LiveViewSmokeTest
-│   ├── checks.py           # Django system checks (C/V/S/T/Q categories)
+│   ├── checks/             # Django system checks (C/V/S/T/Q/A/Y categories), split by family (#1822): utils, configuration, integrations, components, security, templates, accessibility, quality
 │   ├── management/commands/ # djust_audit (security audit), djust_check (system checks)
 │   ├── mixins/             # LiveView mixins (navigation, model binding, etc.)
 │   ├── templatetags/       # Django template tags
@@ -1080,11 +1080,277 @@ Two rules from the #1635–1645 open-issue drain (PRs #1646, #1649, #1650, #1651
   - **Classic-script re-execution** (bfcache / `live_redirect` morph re-attaching `<script>`): reproduce by injecting two `<script>` elements, NOT `window.eval(code)` twice. `eval`'s top-level `const`/`let` scope to the eval call, not the global lexical environment, so `eval`×2 does NOT collide while two `<script>`s DO (#1650 — the eval repro passed; the `<script>` repro threw).
   - **Sync-ORM / auth-in-async bugs**: the view's `get_object()` (or any predicate) must do a REAL `Model.objects.get(...)`, not return an in-memory stub. Every pre-#1638 object-permission test used a `_StubDocument` and so never hit the `SynchronousOnlyOperation` path the bug lives on.
   - **Dev-vs-deploy bugs**: exercise the DEPLOY path. #1637's scaffold only ever ran `migrate --run-syncdb` (dev), which masked the missing migrations; the deploy `migrate` (no flag) was a different program and the only one that failed.
+  - **Client-side VDOM / `morphChildren` bugs**: build the existing DOM the way the browser does — `container.innerHTML = "<div>…\n  <div>…"` WITH the inter-element whitespace a real SSR page carries — NOT via `appendChild`/`createElement` (which omit insignificant whitespace text nodes). #1724's SSR-hydration teardown reproduced ONLY with whitespace text nodes between the element children: the positional existing node was a whitespace text node when an element was processed, so every element-matching strategy skipped (they require `ELEMENT_NODE`) → clone+insert+remove (wholesale teardown, destroying a mounted Chart.js `<canvas>`). The first fix was dead code because the test used `appendChild` (no whitespace) + a standard `id` the renderer never emits (`dj-id`); the reviewer's `innerHTML`-with-whitespace + `dj-id` repro found the real whitespace-misalignment cause. The DOM-construction *method* itself is part of reproduction fidelity for morph/patch tests.
 
   Generalizes the existing "trust the symptom, not the cited path" triage rule with a mechanism axis: also distrust the *reproduction harness* until it exercises the same code path production does.
 
+## Process canonicalizations from v1.0.2 retro arc
+
+Two rules from the v1.0.2 drain (PRs #1725–#1731). The reproduction-fidelity
+addition for client-side VDOM tests is folded into the "Reproduction fidelity"
+bullet above (#1724); the rules below are the new standalone ones.
+
+- **Promoting a "soft" CI check to blocking requires verifying it's in the aggregate gate's AND-condition — not merely in `needs`/echoed (#1713 / PR #1730).** When flipping a `continue-on-error` check (or a check that only prints its result) into an enforcing gate, the load-bearing question is not "is it a job?" but "does a failure actually fail the merge?" Trace it explicitly: a failing check → `needs.<job>.result == "failure"` → the aggregate gate's success `if`-condition (the `&&` chain in `test-summary`) evaluates false → the else-branch runs `exit 1`, AND there is no `continue-on-error` on the job, any of its steps, or the aggregate job itself. A check can be in the `needs:` list and echoed in the summary yet still NOT gate the merge (informational checks like playwright/security-scan are deliberately excluded from the AND). Pair this with the rc4 rule (#1534): a new CI job exercising an environment the dev machine can't fully mirror ships `continue-on-error: true` until it has been green on the runner at least once, THEN gets promoted. PR #1730's `demo-checks` followed both: green on first runner run, then added to the `test-summary` AND-condition with no `continue-on-error`.
+
+- **Per-event work that feeds change-detection must be memoized, not first-sync-gated (#1722 / PR #1726, follow-up #1727).** When a fix applies request/per-render work (context processors, derived state) on a path that runs on EVERY WebSocket event (e.g. `_sync_state_to_rust`), do not "optimize" by running it only on the first sync — djust's change-detection only forwards *changed* vars, so the work must re-run each event to detect a change (e.g. a live theme switch). The correct cost reduction is request-scoped memoization of the expensive sub-renders, not gating the application. Also verify the per-event path actually has the inputs it needs: the WS-path `request` is a long-lived instance attr set in `handle_connect` (non-None), which is what makes such a fix effective on every navigation rather than only the initial GET.
+
+## Process canonicalizations from v1.1.0 retro arc (security & navigation)
+
+Two rules from the v1.1.0 security/nav arc (WS auth threat model + fixes,
+`docs/audits/websocket-auth-2026-06.md`; PRs #1775, #1776, #1780, #1781, #1782,
+#1783). Both are Action-Tracker rows #291/#292.
+
+- **Multiplexed-path transport rule (#291 / PR #1780 review).** A
+  transport-terminating side effect — `self.close()`, a connection drop, a
+  socket-level write — placed inside a handler that is ALSO reused under a
+  multiplexer/collector will fire on the *shared* transport mid-batch and kill
+  the sibling operations. Canonical case: PR #1780's auth fix added
+  `await self.close(code=4403)` inside `LiveViewConsumer.handle_mount`;
+  `handle_mount_batch._mount_one` reuses `handle_mount` but swaps only
+  `self.send_json` for a collector — NOT `close()` — so a single
+  login-redirecting view in a `mount_batch` closed the whole shared socket,
+  dropping the survivor mounts + the collected `navigate[]` and reconnect-storming
+  the client. The existing batch test could not catch it (its fake consumer's
+  `close()` is a no-op). **Rule:** before adding a transport-level side effect to
+  a handler, grep for collector/batch reuse of that handler (a swapped
+  `send_json`, a `_mounting_in_batch`-style flag, a `_collect` wrapper); gate the
+  transport side effect on "not in batch," but apply the *state* change that
+  closes the security/correctness gap (e.g. clearing `view_instance`)
+  unconditionally. Same family as the parallel-path-drift rule (#1646) but for the
+  multiplex axis. A real-`WebsocketCommunicator` batch test is required — a fake
+  consumer with a no-op `close()` hides the bug.
+
+- **Pre-commit can silently drop UNSTAGED working-tree files; recover from the
+  patch cache (#292).** The `pre-commit` framework stashes UNSTAGED working-tree
+  files to `~/.cache/pre-commit/patch<ts>-<pid>`, runs hooks against the staged
+  snapshot, then restores. A failed/skipped restore (the stash-pop-conflict class
+  — same root as the swallowed-commit failure mode in "MANDATORY Post-Commit
+  Verification") leaves that unstaged work ONLY in the patch cache, silently
+  absent from the working tree. Canonical case: the user kept in-progress
+  `BEST_PRACTICES*.md` drafts uncommitted; after a pipeline commit cycle they
+  vanished and were recovered with `git apply` of the newest patch. **Rule:** when
+  uncommitted *unstaged* work coexists with pipeline commits (a collaborator's
+  drafts, scratch edits you promised to preserve), do NOT assume `git checkout -B`
+  / commit kept them — verify with `git status` after the commit. If they're gone,
+  they are almost certainly in `~/.cache/pre-commit/`: `grep -rl '<distinctive
+  text>' ~/.cache/pre-commit/` to find the newest patch, then
+  `git apply ~/.cache/pre-commit/patch<newest>` to restore. Prefer staging or
+  stashing such work yourself before a commit so it never enters this window.
+
+## Process canonicalizations from v1.0.5-1 retro arc (production-incident drain)
+
+Two rules from the v1.0.5-1 drain (PRs #1789/#1790/#1792/#1793), which started
+from a live djust.org `/insights/` production incident and drained four open
+bugs.
+
+- **Reproduce a production incident LOCALLY before changing infra or theorizing
+  (#1789 / #1785).** The `/insights/`-reload incident burned three wrong
+  theories — OOM (bumped the pod memory limit), multi-pod state loss (scaled to
+  1 replica), and the template's variable-length DOM — before a local
+  WebSocket reproduction settled it frame-by-frame (mount `v1` → `set_period`
+  `html_update` `v1` → client version-mismatch → `request_html` → `_recovery_html`
+  None → reload). The bug was reproducible on a **single local process the whole
+  time**; every infra experiment was wasted motion because the trigger was
+  framework code, not deployment. **Rule:** for a production incident, stand up
+  the smallest faithful local reproduction (for WS/VDOM bugs, a
+  `WebsocketCommunicator` capturing the actual frames + versions) BEFORE editing
+  k8s resources, replica counts, or proposing an architecture theory. Each
+  "maybe it's X" that costs an infra change or a deploy must first survive "does
+  the local repro show X?" This is the deploy-axis companion to the existing
+  Bug-report triage + Reproduction-fidelity rules: distrust not just the cited
+  path but the cited *environment cause* until the local repro reproduces it.
+  Empirically: the memory-bump and scale-to-1 experiments both failed to fix it
+  (the user confirmed "still failing"), which is exactly the signal that the
+  cause is single-process/framework, not infra.
+
+- **Worktree-subagent drain pattern with symptom-up briefs (#1790/#1792/#1793).**
+  The three follow-on drain bugs were each implemented by a `general-purpose`
+  subagent in its own `git worktree` (isolation: `worktree`), given a
+  prescriptive brief (root cause + the exact reference pattern to lift +
+  reproduce-first + gate-off + two-commit shape + verification steps). Every one
+  caught a real error the brief got wrong, precisely because the brief told them
+  to trace symptom-up rather than trust it: #1787 found the real scaffolder is
+  `scaffolding/templates.py` (not the cited deprecated `cli.py`) and that there
+  were TWO blocking errors (A014 **and** admin.E403); #1784 found the
+  parallel-path twin (`render_full_template` AND `render_with_diff` both re-run
+  the tag on GET — #1646); #1786 pinned the exact leak path
+  (`_sync_state_to_rust` → `_apply_context_processors`, not the
+  `get_state`/`_snapshot_assigns` paths). **Rule:** for a multi-issue drain,
+  one worktree-isolated subagent per issue (parallel-safe per #180), each brief
+  carrying (a) the reference impl to lift verbatim (#1077), (b) an explicit
+  "verify the cited path/environment symptom-up" instruction, and (c) the
+  gate-off self-test (#1468). Review every resulting PR (CI + diff) before
+  merge — do not rubber-stamp. Caveat surfaced: the native pre-push hook
+  hardcodes `.venv/bin/python` and fails inside a worktree, so subagents push
+  `--no-verify` after running gates manually; CI is the authoritative gate.
+  Tracked at #1796.
+
+## Process canonicalizations from v1.0.5-2 retro arc (render-path + cleanup drain)
+
+Two rules from the v1.0.5-2 drain (PRs #1797, #1798, #1799, #1800, #1804 —
+the render-path + cleanup bucket that, with v1.0.5-1, shipped in 1.0.5rc1–rc4).
+
+- **A read-only review subagent must NEVER mutate the main checkout —
+  especially `git config core.bare` (#1804 retro).** A Code Review subagent
+  that needs to *run* code (exercise the compiled PyO3 Rust extension,
+  reproduce a fix, gate-off-verify) must do so in its own `git worktree`
+  (`isolation: worktree`) or not at all — a pure-inspection review uses
+  `gh pr diff` and touches nothing. PR #1804's reviewer set
+  `git config core.bare true` on the **main** checkout to repoint PyO3 at a
+  built artifact; that broke the parent session's working tree —
+  `git checkout` / `git status` failed with *"this operation must be run in a
+  work tree"* — until recovered with `git config core.bare false`. The review
+  verdict itself was sound (APPROVE, gate-off empirically validated), but the
+  side effect was a repo-corruption incident the orchestrator had to clean up
+  mid-drain. This generalizes the **Worktree-restore reflex (#36)** from
+  *working-tree dirtiness* (reverted/staged files) to *git-config mutation*
+  (`core.bare`, `core.worktree`, `core.hooksPath`). **Rules:**
+  1. Give a review subagent `isolation: worktree` whenever it must build/run;
+     never let it `git config`/`git checkout` the main checkout.
+  2. Default reviews to read-only `gh pr diff` (the #1806 reviewer did exactly
+     this — *"read-only review via `gh pr diff` … avoiding the #1804 core.bare
+     incident"* — so the canon was already self-applied one PR later).
+  3. After ANY subagent that could touch git config, verify
+     `git config core.bare` returns `false`/empty as a reflex (the orchestrator
+     ran this check at the top of every subsequent merge in the drain).
+
+- **`{% extends %}` first-paint regressions are a silent-catch + parallel-path
+  double-bug — de-silence AND unify (#1801 / PR #1804).** The
+  template-inheritance head-loss (#1801) was two known classes stacked: a broad
+  `except Exception` in `get_template()` swallowed a real
+  `resolve_template_inheritance` *"Template not found"* (logged only at DEBUG,
+  set `_full_template=None`, fell through to a `dj-root`-fragment render with no
+  `<head>`), and the underlying *"Template not found"* came from the dir-collection
+  hardcoding `BACKEND == django.template.backends.django.DjangoTemplates` —
+  dropping app-template dirs for projects on djust's own `DjustTemplateBackend`
+  + `APP_DIRS=True` (the `djust new` scaffold's config). The fix de-silenced the
+  catch (now WARNING, scoping only the resolution call) AND unified all **three**
+  parallel dir-collection paths through one `get_template_dirs()` +
+  `_APP_DIRS_TEMPLATE_BACKENDS` set (parallel-path-drift, #1646). Reinforces both
+  the existing **Reproduction fidelity / "are we sure it isn't a silent catch?"**
+  triage instinct and **#1646** — and #1646 recurred *four* times this release
+  cycle (#1784 render twin, #1801 three collectors, #1791 `cli.py` startproject
+  twin, #1805 `is_dir` parity), so treat "grep every parallel implementation of
+  the invariant" as the default Stage-4 reflex for any render-path change.
+
+## Process canonicalizations from v1.0.5-4 + v1.0.5-5 retro arc (DX drain + sticky-recovery P0)
+
+One rule from the final 1.0.5 drains (v1.0.5-4: PRs #1811/#1812; v1.0.5-5:
+PRs #1814/#1815). The other findings reinforced existing canon (the #1813
+structural cure reinforced #1646; the #1810 empirical mechanism-bisection
+reinforced #1529/#1516; the #300 `core.bare` review discipline held across
+all four PRs) — see RETRO.md Insights. The new rule:
+
+- **A concurrency test asserts a logical ORDERING invariant, never a
+  wall-clock duration/ratio (#1795 / PR #1815, a two-release flaky
+  recurrence).** A test that proves concurrency by asserting on wall-clock
+  durations or ratios — `elapsed < 100ms`, `parallel < serial/2` — is
+  fundamentally flaky under CPU saturation: when the concurrent work can't
+  get dedicated cores (full `make test -n auto`), the speedup degrades and
+  the ratio drifts past any fixed threshold. `test_total_wall_clock_is_max_not_sum`
+  was "fixed" once (PR #1797: absolute→relative ratio) and STILL false-failed
+  TWO releases later (parallel=88.1ms vs serial/2=85.8ms at the 1.0.5rc5 cut;
+  passed 3/3 in isolation). The durable fix replaces the timing threshold with
+  a deterministic logical property — **interval overlap / event ordering**:
+  each unit records its `[start, end]`; a concurrent run satisfies
+  `max(start) < min(end)` (every unit starts before any finishes), which a
+  serial loop can NEVER satisfy. Event ordering is immune to saturation jitter
+  (scheduling N coroutines is microseconds, far under the work duration), so
+  the assertion is load-independent. Pair it with an in-suite **gate-off
+  sibling** that runs the same units SERIALLY and asserts they do NOT overlap
+  — proving the assertion distinguishes parallel from serial (non-tautological
+  by construction, per #1200/#1468). **Rule:** never assert a duration/ratio to
+  prove concurrency; assert an ordering invariant. Canonical case:
+  `tests/integration/test_chunks_overlap.py::TestParallelRender` (PR #1815).
+  Generalizes the v1.0.5-2 lesson that the prior #1795 fix treated the symptom
+  (absolute→relative) rather than the class (timing assertions are flaky under
+  saturation).
+
+## Process canonicalizations from v1.0.6-1 + v1.0.6-2 retro arc (wire-version + security drain)
+
+Two rules from the first 1.0.6 drains (v1.0.6-1: PR #1816 / #1788; v1.0.6-2:
+PRs #1823/#1824/#1825 + the rc1-cut benchmark fix). Other findings reinforced
+existing canon (the #1788 single-`_next_version()` helper + the implementer
+catching 3 send sites the design missed reinforced #1646/#294; the #1820 audit
+declining to add `@strict_types` reinforced #1079) — see RETRO.md Insights.
+
+- **A security validation/sanitization fix MUST have its review empirically
+  probe encoding-bypass variants — the downstream consumer often DECODES after
+  validation (#1819 / PR #1825 review).** PR #1825's first pass validated the
+  mount URL by checking for a literal `..` segment in `urlparse(url).path` —
+  but `RequestFactory.get()` percent-DECODES the path *after* validation, so
+  `/%2e%2e/admin/` sailed past the check and landed in `request.path` as
+  `/../admin/`. The fix's own CHANGELOG/SECURITY_AUDIT claimed traversal was
+  blocked; it was false for any `%2e%2e`/`%2f`/`%5c` payload. The adversarial
+  Code Review caught it ONLY because the brief explicitly told it to feed
+  encoded variants through the helper AND the downstream sink (`RequestFactory`)
+  and check the *final* `request.path` — an inspection-only review would have
+  rubber-stamped the literal-`..` check. **Rule:** when reviewing any input-
+  validation / sanitization / escaping fix, the review's empirical probe must
+  include the ENCODED and ALTERNATE-REPRESENTATION forms of the attack
+  (percent-encoding `%2e`/`%2f`/`%5c`, double-encoding, alternate separators,
+  case variants, unicode look-alikes) fed end-to-end through the real downstream
+  consumer — because validation that runs *before* a decode/normalize step is
+  defeated by the encoded form. Fix shape: decode/normalize to the same
+  canonical form the sink uses (here, `unquote` once) BEFORE the check. Same
+  family as the empirical-canary rule (#1459) but for the security-validation
+  subclass: the canary must be the encoded bypass, not just the literal attack.
+
+- **A latency-SLA benchmark asserts on MEDIAN, not the outlier-sensitive mean
+  (#1795 family, v1.0.6rc1 cut).** `tests/benchmarks/conftest.py`'s
+  `_assert_benchmark_under` asserted `benchmark.stats["mean"] < target`. The
+  mean is dragged past the SLA by a handful of GC / scheduling-pause outliers
+  (a single ~34ms spike among thousands of ~4ms rounds), so the serial pre-push
+  false-failed two VDOM-diff benchmarks on a loaded machine while median/min
+  (~3.8ms) were comfortably under the 5ms target — and the VDOM path was
+  untouched since the last green release, confirming non-regression. Fixed to
+  assert the **median** (`tests/benchmarks/conftest.py`, commit `49893831`):
+  the median reflects the actual per-call cost and is immune to those outliers,
+  the right statistic for a latency SLA. This is the same outlier-sensitivity
+  class as the v1.0.5-4/-5 concurrency-test rule above — generalize both as:
+  **never assert a pass/fail gate on an outlier-sensitive statistic (mean,
+  raw wall-clock) when a robust one (median, event-ordering) measures the same
+  property.** Caveat surfaced: the threshold is *skipped under `-n auto`* (xdist
+  disables `benchmark.stats`), so `make test` and CI never enforce it — it only
+  bites the local serial pre-push, which is why a fragile mean-threshold could
+  pass one release by luck and fail the next.
+
+## Process canonicalizations from v1.0.7-1 retro arc (post-1.0.6 drain)
+
+One rule from the v1.0.7-1 open-issue drain (PRs #1838, #1839; #1827 closed-no-code). The other findings reinforced existing canon — #1817's structural `_next_version_armed` helper + the `test_arm_recovery_is_the_only_arming_mechanism` single-source-of-truth pin reinforced #1646/#1125; #1827's reproduce-against-the-real-render-path close reinforced the Bug-report-triage mechanism axis (#1650/#1638); the actor-path "recommend a follow-up" that wasn't filed (caught by the retro gate) reinforced the retro classification gate itself. See RETRO.md v1.0.7-1.
+
+- **The flaky-timing rule covers real-frame `requestAnimationFrame`; the remedy is a controllable async-primitive stub driven explicitly, asserting an ordering invariant (#1830 / PR #1839).** The "never assert a pass/fail gate on an outlier-sensitive statistic (mean, raw wall-clock)" rule above generalizes to *any* assertion that races a real timer/scheduler — including a test that relies on a `setTimeout(0)` microtask flush winning against a real rAF (jsdom backs `requestAnimationFrame` with a ~16 ms timer). `tests/js/dj_transition.test.js`'s "active/end on next frame" case flaked under parallel load because the real rAF fired before the start-class assertion. **Remedy:** replace the real async primitive with a **controllable stub the test drives explicitly** — for rAF, an opt-in queue flushed via a `flushFrame()` handle (see the `controlledRaf` option in that test's `createDom`), so phase transitions advance only when the test drives them. The test then asserts the **ordering invariant** (state-before-frame ≠ state-after-driven-frame), is fully synchronous, and no scheduler jitter can flake it. Pair with a gate-off (neuter the drive → the post-frame assertions must fail) to keep it non-tautological (#1468). Same family as the "Async-callback test stubs MUST yield a microtask" rule (PR #1113) — both say: own the async primitive in the test; never depend on the real one's wall-clock timing.
+
+## Process canonicalizations from v1.0.7-3 + v1.0.7-4 retro arc (security audit drain + coordinated disclosure)
+
+Three rules from the security-audit drain (private PRs #165–#177 → djust 1.0.7 GA on PyPI + 13 published GHSAs, 2026-06-22). The dominant finding — *the whole audit was parallel-path drift cured by shared chokepoints + the WU1 anti-drift net (PR #172)* — reinforces #1646/#1459 and is already canon; the new rules are the gaps that drift surfaced AFTER the unit suite went green.
+
+- **Framework-upgrade validation MUST browser-test downstream interactive paths, not just run their pytest suites (#1849).** Two real runtime breaks shipped in the 1.0.7 upgrade that the 8237-passing suite + HTTP-200 smoke both PASSED over, caught only by driving the live page in a browser: (1) the demo's `dj-view="demo_app.views_old.IndexView"` — a stale ref that rode the boundary-less `startswith` the F22 fix tightened, now refused at WS mount; (2) djust.org's examples-page tab/copy handler — an inline `<script>` inside the dj-root that the #1610 WS-mount morph re-creates without executing, so the delegated listener never registered (silent, no console error; see #1848). Both are runtime/wiring breaks (mount-path allowlist; inline-script execution under morph) that unit tests structurally cannot see. **Rule:** on any framework version bump in a downstream app, after the unit suite passes, BROWSER-test the key interactive paths against the running app — assert the LiveView mounts (no mount-refusal), click the primary controls (tabs/copy/nav), assert the expected DOM change + no console error. **Diagnosis recipe for "click does nothing, no error":** add a capture-phase AND a late bubble-phase `document` click listener, dispatch a real click — if BOTH fire but the page handler didn't act, the page's own listener was never registered (e.g. its `<script>` is inside a morph-managed region). Tracked: #1849.
+
+- **Page JS belongs OUTSIDE the dj-root — morphdom does not execute inserted `<script>` (#1848).** base.html-style layouts wrap page content in `<div dj-root>`; on the #1610 mount morph, morphdom re-creates that subtree and never executes inline `<script>` it inserts, so handlers defined inside the content block silently never register. Put page JS in a base-template block rendered AFTER the dj-root `</div>` (djust.org uses `{% block extra_scripts %}`); a delegated `document` listener still catches clicks on the morph-managed elements. Likely a 1.0.7 framework regression vs the `live_redirect` path which already re-executes classic scripts (#1635/#1650) — tracked at #1848 (re-execute classic `<script>` on the mount morph, or a system-check warning). Until fixed: keep page JS out of dj-root.
+
+- **GHSA publish needs a version-range pre-flight; coordinated disclosure gates GHSA-publish on PyPI-live; CI-dark merges ride local validation.** Three pre-existing GHSA drafts carried `vulnerable: <= 1.0.7rc1` / `patched_versions: None` — publishing as-is gives Dependabot NO upgrade target (no alert fires). **Rule:** before any `state=published`, read-only-verify every draft's `vulnerable_version_range`/`patched_versions` are correct + present (normalize to `< X` / `X`). The disclosure sequence that produced no bad window: private staging → release to public + PyPI → **confirm PyPI X is live BEFORE publishing any GHSA** → publish all together (Dependabot then points at a real installable fix). With Actions exhausted for most of the drain, PRs merged on local validation (full suite + worktree-isolated adversarial review + gate-off + two-commit), later confirmed by the green release CI. Process slip to avoid: a push to a branch-protected `main` can land via admin-BYPASS of the PR rule — don't discover that via a "diagnostic" push; use a PR or explicitly intend the bypass. Runbook: `scratch/sec-audit/GHSA-TRACKING.md`.
+
+## Process canonicalizations from v1.0.8-1 retro arc (security-drift prevention program)
+
+Three rules from the v1.0.8-1 drain (PRs #1859, #1860, #1861, #1863, #1864, #1866, #1867 — the post-disclosure prevention program built on the security-audit findings: Tier-1 convergence, Tier-2 detection nets/gates, Tier-3 codified defaults). The ironic through-line: an *anti-drift* milestone twice shipped non-load-bearing anti-drift artifacts, and a *secure-defaults* doc mis-stated the default — each caught only by adversarial gate-off / citation-discipline review, never by the green suite.
+
+- **An anti-drift test or pin is decorative unless it is load-bearing — distinct seams, or wired into the production control path it claims to pin (#1859 / #1860).** The prevention milestone itself shipped two artifacts that *looked* like protection but protected nothing, both caught only by the adversarial gate-off (#1468):
+  1. PR #1859's three `test_all_transports_agree_*` methods compared a *single already-converged chokepoint's* output to itself — the auth / object-perm / rate-limit controls had already converged onto one function, so the per-transport adapters were `distinct=1` (no seam to differentiate). A self-comparison can never go red. Removed in the fix-pass. The real protection on those axes is the **call-site pin** (Concern 4 at `python/djust/tests/test_mount_chokepoint_structural.py:431`) plus the gate-off-proven deny/allow rows — NOT the `agree` test. A transport-parity `agree` test is meaningful ONLY when the adapters point at genuinely distinct seams (in `python/djust/tests/test_transport_parity_security.py`: origin = `distinct=3`, mount-traversal = `distinct=2`).
+  2. PR #1860's `RUNTIME_OWNED_VERBS` set was a coincidental test-pin that `receive()` never consulted — if routing drifted from the set, no test would have noticed. Made load-bearing by routing on membership (`python/djust/websocket.py:1933` — `if msg_type in self.RUNTIME_OWNED_VERBS`), so the contract test now couples the set ↔ the actual routing.
+
+  **Rule (generalizes #1468 to the test/pin-DESIGN axis):** before shipping any parity test, pin, or count-canary, ask "would this go red if the thing it pins actually drifted?" If the adapters are `distinct=1`, or the pinned constant isn't membership-checked in the production path, the answer is no — it is decorative. A "pin" in an anti-drift PR that isn't mechanical is the sharpest version of the tautology class (#1200/#1468).
+
+- **A convergence plan's "these two paths are the same" is a hypothesis the implementer must falsify before merging — converge the shared SEQUENCE, not the whole handler (#1860 / #1861).** The prevention plan asserted the event path was "fully converged" and the WS mount path was a thin shim away from `ViewRuntime.dispatch_mount`. Stage-4 Explore confirmed the *leaf* chokepoints — but the implementer's symptom-up trace found `runtime.dispatch_*` is NOT a superset of the WS handlers (~16 WS-only behaviors: binary upload, presence, cursor, time-travel, sticky-child preservation, signed-snapshot restore, actor channel-layer). T1-B (#1860) correctly narrowed to routing only `url_change` (a genuine runtime-owned verb). T1-A (#1861) re-scoped from "make `handle_mount` a thin shim" to "extract the genuinely-shared pre-mount auth+tenant SEQUENCE into one `run_pre_mount_auth` helper (`python/djust/auth/core.py:396`) that all three live mount paths call" — convergence (the #1646 cure: retire the class, not 2-of-3) WITHOUT merging the fat WS-only bodies. Both re-scopes were right and each closed a latent bug the point-fix would have missed (#1861 a runtime/SSE auth fail-OPEN; #1863 an IDOR on the HTTP-API + SSE-legacy object-perm twins). **Rule:** a refactor/convergence plan must, at Stage 5, list what is genuinely UNIQUE to each path before merging; if the unique set is non-trivial, converge the shared sequence into a helper every path calls, never collapse the handlers. An Explore-confirmed premise about leaf controls does NOT license a premise about orchestration shape.
+
+- **Documenting a secure default falsification-tests it — a canon/doc "X always holds" claim must be run against the code, not just have its citation verified (#1867).** Writing `docs/SECURE_DEFAULTS.md` Pattern-1 ("the `_ALWAYS_EXCLUDED_FIELDS` serialization floor is unconditional") forced a read of `python/djust/serialization.py:362` (`_field_is_serializable`) and revealed the claim is FALSE: the per-model `allowed` allowlist is checked BEFORE the floor denylist, so `djust_serializable_fields=['password']` re-exposes a floor field. The #1197 citation-discipline review caught it — and notably, all 23 *other* citations in the doc were exact; only the *claim about what the cited code does* was wrong. The fix reworded to the accurate precedence (identity → allowlist-wins → floor-only-when-no-allowlist) + a WARNING, and the act of documenting surfaced a genuine secure-by-default question (#1868: should the floor be unconditional regardless of allowlist?). **Rule (extends #1516 active-falsification + #1197 citation-discipline to PROSE INVARIANTS):** any canon/doc statement of the form "this always / never happens" must be falsification-tested by constructing the case that would disprove it and running it — verifying the file:line citation is necessary but NOT sufficient, because the citation can be exact while the invariant it asserts is false.
+
+The remaining v1.0.8-1 findings reinforced existing canon rather than adding new rules — the tooling-PR dual validation (empirical canary #1459 + broad dogfood #1060 drove S011 to 0 false-positives in PR #1864), new-CI-gate discipline (bandit blocks only after a verified 0-HIGH baseline; the browser-smoke ships non-gating per #1534 until runner-green, promotion tracked in #1869; the #1236 governance gate fired correctly on the release-workflow change), and the #1646 parallel-path cure applied 3× — see RETRO.md v1.0.8-1 Insights.
+
 ## Additional Documentation
 
+- `docs/SECURE_DEFAULTS.md` — secure-by-default pattern catalog (denylist serialization, HMAC signed snapshots, fail-closed precedence gate, `safe_setattr`) + how to make a new feature secure-by-default
+- `docs/SECURITY_GUIDELINES.md` — `djust.security` utilities, banned patterns, contributor security checklist
 - `docs/PULL_REQUEST_CHECKLIST.md` — PR review checklist
 - `CONTRIBUTING.md` — contribution guidelines
 - `QUICKSTART.md` — quick setup guide

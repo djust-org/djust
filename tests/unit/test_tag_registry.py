@@ -46,6 +46,12 @@ def _isolate_tag_registries():
             register_tag_handler,
         )
         from djust.template_tags import _registered_handlers
+        from djust.theming.rust_handlers import (
+            register_with_rust_engine as _register_theme_tags,
+        )
+        from djust.components.rust_handlers import (
+            register_with_rust_engine as _register_component_tags,
+        )
     except ImportError:
         pytest.skip("Rust extension not available")
         return
@@ -56,6 +62,15 @@ def _isolate_tag_registries():
         clear_assign_tag_handlers()
         for name, handler in _registered_handlers.items():
             register_tag_handler(name, handler)
+        # #1771: theme + component tag handlers register at AppConfig.ready()
+        # (DjustThemingConfig / DjustComponentsConfig), NOT via
+        # _registered_handlers. Without re-registering them here, the
+        # clear_tag_handlers() above wipes them for the REST of a serial test
+        # session — later theme/component tag tests then fail with
+        # "Unsupported template tag". Both registrars are idempotent and no-op
+        # when the Rust extension is unavailable.
+        _register_theme_tags()
+        _register_component_tags()
 
     _reset()
     yield
@@ -608,3 +623,33 @@ class TestTemplatetagHandler:
         handler = TemplatetagHandler()
         assert handler.render(["'openblock'"], {}) == "{%"
         assert handler.render(['"closeblock"'], {}) == "%}"
+
+
+class TestAppHandlerIsolationRestore:
+    """#1771: the module-scoped ``_isolate_tag_registries`` autouse fixture
+    clears the global Rust tag registry and must restore the *app-registered*
+    handlers (theme + component, registered at ``AppConfig.ready()``), not only
+    the ``djust.template_tags`` built-ins.
+
+    Before the fix, ``_reset()`` re-registered built-ins only, so once this
+    module ran ``clear_tag_handlers()`` the theme/component handlers were gone
+    for the rest of a serial session and later tag tests failed with
+    ``Unsupported template tag``. These assertions run AFTER the autouse
+    fixture's setup ``_reset()`` — they fail with the old fixture and pass once
+    ``_reset()`` re-calls the theming + components registrars.
+    """
+
+    def test_theme_tag_handler_survives_isolation_fixture(self):
+        from djust._rust import has_tag_handler
+
+        assert has_tag_handler("theme_panel"), (
+            "theme tag handler missing after _isolate_tag_registries — "
+            "clear_tag_handlers() wiped the ready()-time registration (#1771)"
+        )
+
+    def test_component_tag_handler_survives_isolation_fixture(self):
+        from djust._rust import has_tag_handler
+
+        assert has_tag_handler("render_slot"), (
+            "component tag handler missing after _isolate_tag_registries (#1771)"
+        )

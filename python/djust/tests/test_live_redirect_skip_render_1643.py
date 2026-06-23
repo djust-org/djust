@@ -162,7 +162,9 @@ def test_turn_end_paths_use_single_flush_helper():
     import djust.websocket as ws_mod
 
     for name in (
-        "handle_event",
+        # Finding #6: handle_event is a thin tenant-context wrapper; the flush
+        # logic lives in _handle_event_inner now.
+        "_handle_event_inner",
         "_dispatch_single_event",
         "server_push",
         "db_notify",

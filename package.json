@@ -8,18 +8,18 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint python/djust/static/djust/",
+    "lint": "eslint python/djust/static/djust/ --max-warnings 0",
     "lint:fix": "eslint python/djust/static/djust/ --fix"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.7",
-    "@vitest/ui": "^4.1.4",
-    "eslint": "^10.4.0",
-    "eslint-plugin-security": "^4.0.0",
-    "happy-dom": "^20.9.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/ui": "^4.1.9",
+    "eslint": "^10.5.0",
+    "eslint-plugin-security": "^4.0.1",
+    "happy-dom": "^20.10.6",
     "jsdom": "^29.1.1",
     "terser": "^5.48.0",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.9"
   },
   "overrides": {
     "flatted": ">=3.4.2"

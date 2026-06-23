@@ -6,8 +6,6 @@
  */
 
 (function() {
-    'use strict';
-
     // Debug logging helper - uses djust debug system when available,
     // otherwise silently drops messages in production
     function _log(level, msg) {
@@ -70,7 +68,7 @@
 
                 await this.offlineStorage.init();
                 _log('info', 'Storage initialized: ' + this.config.offlineStorage);
-            } catch (error) {
+            } catch {
                 _log('error', 'Storage initialization failed');
                 // Fall back to in-memory storage
                 this.offlineStorage = new MemoryStorage();
@@ -95,7 +93,7 @@
 
                         _log('info', 'Service worker connected');
                     }
-                } catch (error) {
+                } catch {
                     _log('error', 'Service worker setup failed');
                 }
             }
@@ -266,7 +264,7 @@
                         type: action.type
                     });
                 }
-            } catch (error) {
+            } catch {
                 _log('error', 'Failed to queue offline action');
             }
         }
@@ -410,7 +408,7 @@
                 this.eventListeners.get(event).forEach(callback => {
                     try {
                         callback(data);
-                    } catch (error) {
+                    } catch {
                         _log('error', 'Event listener error for ' + event);
                     }
                 });
@@ -580,7 +578,7 @@
             try {
                 const data = localStorage.getItem(this.storageKey);
                 return data ? JSON.parse(data) : [];
-            } catch (error) {
+            } catch {
                 _log('error', 'LocalStorage parse error');
                 return [];
             }
@@ -632,7 +630,7 @@
             if (configElement) {
                 try {
                     config = JSON.parse(configElement.dataset.djustPwaConfig);
-                } catch (error) {
+                } catch {
                     _log('error', 'Invalid config JSON');
                 }
             }

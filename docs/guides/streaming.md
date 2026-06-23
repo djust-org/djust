@@ -13,14 +13,18 @@ djust's streaming system enables token-by-token updates for LLM chat responses, 
 
 ## Quick Start
 
-### 1. Add StreamingMixin to your view
+### 1. Subclass LiveView (streaming is built in)
+
+`StreamingMixin` is already included in `LiveView`, so the `stream_*` methods are always
+available — just subclass `LiveView`. Do **not** also inherit `StreamingMixin`
+(`class ChatView(StreamingMixin, LiveView)`): it is already in `LiveView`'s bases, so that
+raises `TypeError: Cannot create a consistent method resolution`.
 
 ```python
 from djust import LiveView
-from djust.streaming import StreamingMixin
 from djust.decorators import event_handler
 
-class ChatView(StreamingMixin, LiveView):
+class ChatView(LiveView):
     template_name = 'chat.html'
 
     async def mount(self, request, **kwargs):
@@ -200,7 +204,7 @@ document.querySelector('[dj-stream="output"]')
 ### LLM Chat with Error Handling
 
 ```python
-class AIChat(StreamingMixin, LiveView):
+class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
     template_name = 'ai_chat.html'
 
     async def mount(self, request, **kwargs):
@@ -250,7 +254,7 @@ class AIChat(StreamingMixin, LiveView):
 ### Live Log Viewer
 
 ```python
-class LogViewer(StreamingMixin, LiveView):
+class LogViewer(LiveView):  # streaming is built in — no StreamingMixin needed
     template_name = 'logs.html'
 
     async def mount(self, request, **kwargs):

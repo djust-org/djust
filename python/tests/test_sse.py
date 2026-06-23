@@ -58,10 +58,24 @@ from djust.sse import (
 # ------------------------------------------------------------------ #
 
 
+# Owner pk that make_session() binds (Finding #24 owner-binding). POST requests
+# in these tests stamp request.user with this pk via _attach_owner() so they
+# pass the owner-binding check; the cross-user/anonymous boundary itself is
+# exercised in python/djust/tests/test_sse_session_binding_f24_f25.py.
+_OWNER_PK = 7
+
+
+def _attach_owner(request, pk=_OWNER_PK):
+    """Stamp request.user so the request owns a make_session()."""
+    request.user = MagicMock(is_authenticated=True, pk=pk)
+    return request
+
+
 def make_session(session_id=None) -> SSESession:
-    """Create an SSESession and register it."""
+    """Create an SSESession and register it (owner-bound to _OWNER_PK)."""
     sid = session_id or str(uuid.uuid4())
     session = SSESession(sid)
+    session._owner_user_pk = _OWNER_PK
     _sse_sessions[sid] = session
     return session
 
@@ -172,10 +186,10 @@ class TestDjustSSEStreamViewGet:
         request = self.factory.get(f"/djust/sse/{sid}/", {"view": "nonexistent.View"})
 
         view = DjustSSEStreamView()
-        # _sse_mount_view will push an error because the view doesn't exist,
-        # but the SSE response itself should still be created.
+        # A successful mount registers the session (register-after-mount,
+        # Finding #25). The SSE streaming response is created either way.
         with patch("djust.sse._sse_mount_view", new_callable=AsyncMock) as mock_mount:
-            mock_mount.return_value = None
+            mock_mount.return_value = True
             response = await view.get(request, session_id=sid)
 
         assert isinstance(response, StreamingHttpResponse)
@@ -219,6 +233,7 @@ class TestDjustSSEEventViewPost:
             data=json.dumps({"event": "increment", "params": {}}),
             content_type="application/json",
         )
+        _attach_owner(request)
         view = DjustSSEEventView()
         response = await view.post(request, session_id=session.session_id)
         assert response.status_code == 503
@@ -232,6 +247,7 @@ class TestDjustSSEEventViewPost:
             data="not json",
             content_type="application/json",
         )
+        _attach_owner(request)
         view = DjustSSEEventView()
         response = await view.post(request, session_id=session.session_id)
         assert response.status_code == 400
@@ -245,6 +261,7 @@ class TestDjustSSEEventViewPost:
             data=json.dumps({"params": {}}),
             content_type="application/json",
         )
+        _attach_owner(request)
         view = DjustSSEEventView()
         response = await view.post(request, session_id=session.session_id)
         assert response.status_code == 400
@@ -259,6 +276,7 @@ class TestDjustSSEEventViewPost:
             data=json.dumps({"event": "increment", "params": {}}),
             content_type="application/json",
         )
+        _attach_owner(request)
         view = DjustSSEEventView()
 
         with patch("djust.sse._sse_handle_event", new_callable=AsyncMock) as mock_dispatch:
@@ -591,6 +609,7 @@ class TestSSEMessageEndpoint:
             data=json.dumps({"type": "totally_unknown"}),
             content_type="application/json",
         )
+        _attach_owner(request)
 
         view = DjustSSEMessageView()
         response = await view.post(request, session_id=session.session_id)
@@ -612,6 +631,7 @@ class TestSSEMessageEndpoint:
             data=json.dumps({"event": "increment", "params": {}}),
             content_type="application/json",
         )
+        _attach_owner(request)
 
         view = DjustSSEEventView()
         # Legacy view delegates to either _sse_handle_event or runtime —

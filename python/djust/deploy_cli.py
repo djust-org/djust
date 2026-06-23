@@ -10,6 +10,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import tarfile
@@ -92,6 +93,13 @@ EXCLUDE_FILENAMES = frozenset({".DS_Store", "Thumbs.db"})
 # ``.`` / ``-`` discriminator prevents the #1505 over-match: a file named
 # ``.environment`` is NOT a stem variant of ``.env`` and stays included.
 EXCLUDE_FILENAME_STEMS = frozenset({".env", "db.sqlite3"})
+
+# Above this packed size, ``deploy_dir`` warns before uploading and points at
+# the largest included files. A clean djust app tarball is a few MB; anything
+# this large is almost always build artifacts or local data that belongs in
+# .gitignore — and the djustlive ingress 413s uploads past its body-size cap,
+# so surfacing it here turns a raw nginx error into an actionable message.
+TARBALL_WARN_BYTES = 50 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -1032,47 +1040,121 @@ def status(ctx: click.Context, project: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_excluded_dirname(name: str) -> bool:
+    """A directory basename is excluded iff it exactly equals an
+    EXCLUDE_DIR_NAMES entry or ends with an EXCLUDE_DIR_SUFFIXES entry."""
+    return name in EXCLUDE_DIR_NAMES or name.endswith(EXCLUDE_DIR_SUFFIXES)
+
+
+def _is_excluded_filename(name: str) -> bool:
+    """A file basename is excluded iff it equals an EXCLUDE_FILENAMES entry,
+    ends with an EXCLUDE_FILE_SUFFIXES entry, or is a stem-variant of an
+    EXCLUDE_FILENAME_STEMS entry (``stem``, ``stem + "."*`` or ``stem + "-"*``
+    — e.g. ``.env.production``, ``db.sqlite3-wal``). The ``.`` / ``-``
+    discriminator keeps ``.environment`` in (not a ``.env`` variant; #1505)."""
+    if name in EXCLUDE_FILENAMES or name.endswith(EXCLUDE_FILE_SUFFIXES):
+        return True
+    return any(
+        name == stem or name.startswith(stem + ".") or name.startswith(stem + "-")
+        for stem in EXCLUDE_FILENAME_STEMS
+    )
+
+
+def _is_excluded_relpath(relative: str) -> bool:
+    """Apply the EXCLUDE_* rules to a POSIX relative path (as emitted by
+    ``git ls-files``): excluded iff any directory segment is an excluded
+    dirname OR the final segment is an excluded filename. This is the security
+    net that keeps credentials / live DBs / bytecode out of the tarball even
+    when the user has not gitignored them."""
+    segments = relative.split("/")
+    *dir_parts, base = segments
+    if any(_is_excluded_dirname(d) for d in dir_parts):
+        return True
+    return _is_excluded_filename(base)
+
+
+def _git_tracked_files(source_dir: Path) -> Optional[list]:
+    """Return the working-tree files of ``source_dir`` minus gitignored paths,
+    as POSIX relative paths, or ``None`` if ``source_dir`` is not a usable git
+    work tree.
+
+    ``git ls-files --cached --others --exclude-standard`` is exactly "tracked
+    files ∪ untracked files, minus everything matched by .gitignore / global
+    excludes" — i.e. the working tree as the user sees it, minus the junk they
+    already told git to ignore. No commit is required (``--others`` reports
+    untracked files directly), so a freshly-``git init``'d project works too.
+
+    The presence of ``.git`` (a directory in a normal clone, a file in a
+    worktree) gates this: a plain non-git directory returns ``None`` so the
+    caller falls back to the os.walk path. Any git failure (git absent, bad
+    repo) also falls back rather than aborting the deploy.
+    """
+    if not (source_dir / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=str(source_dir),
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [
+        chunk.decode("utf-8", "surrogateescape") for chunk in result.stdout.split(b"\0") if chunk
+    ]
+
+
 def _create_tarball(source_dir: Path, output_path: Path) -> None:
     """
     Create a tarball of source_dir excluding unwanted patterns.
 
-    Exclusion is path-segment / basename anchored (NOT substring-matched):
-    a directory is excluded iff its basename equals an entry in
-    EXCLUDE_DIR_NAMES or ends with an EXCLUDE_DIR_SUFFIXES entry; a file is
-    excluded iff its name equals an EXCLUDE_FILENAMES entry, ends with an
-    EXCLUDE_FILE_SUFFIXES entry, or is a stem-variant of an
-    EXCLUDE_FILENAME_STEMS entry (``stem``, ``stem + "."*`` or
-    ``stem + "-"*`` — e.g. ``.env.production``, ``db.sqlite3-wal``). This
-    prevents over-exclusion such as a ``venv`` token wrongly dropping
-    ``venvironment.py`` (#1505), while still excluding suffixed credential /
-    live-database files such as ``.env.production`` and ``db.sqlite3-wal``.
+    When ``source_dir`` is a git work tree, the file set comes from
+    ``git ls-files`` (see :func:`_git_tracked_files`), so the user's existing
+    ``.gitignore`` is the source of truth — a ``.venv-dev`` virtualenv, a
+    ``scratch/`` build dir, or locally-built wheels they already ignore stay
+    out of the tarball even though their names are not in EXCLUDE_DIR_NAMES.
+    Otherwise (a non-git directory, or git unavailable) it falls back to an
+    ``os.walk`` of the tree.
+
+    In BOTH paths the EXCLUDE_* rules are applied as a security net via
+    :func:`_is_excluded_dirname` / :func:`_is_excluded_filename`: exclusion is
+    path-segment / basename anchored (NOT substring-matched), so credential /
+    live-database files such as ``.env.production`` and ``db.sqlite3-wal`` are
+    dropped even if the user forgot to gitignore them, while lookalikes such as
+    ``venvironment.py`` and ``.environment`` are kept (#1505).
 
     Args:
         source_dir: Directory to tar
         output_path: Where to write the tarball
     """
+    git_files = _git_tracked_files(source_dir)
+
     with tarfile.open(output_path, "w:gz") as tar:
+        if git_files is not None:
+            for relative in git_files:
+                # Security net: EXCLUDE_* still applies to git-listed paths.
+                if _is_excluded_relpath(relative):
+                    continue
+                file_path = source_dir / relative
+                # Skip gitlinks (submodules), broken symlinks, and anything
+                # git lists that is not a regular file on disk.
+                if not file_path.is_file():
+                    continue
+                try:
+                    tar.add(file_path, arcname=relative)
+                except Exception as e:
+                    logger.debug("Failed to add %s to tarball: %s", file_path, e)
+            return
+
         for root, dirs, files in os.walk(source_dir):
             # Prune excluded directories in-place so os.walk does not descend
             # into them. Matched by exact basename or basename suffix.
-            dirs[:] = [
-                d
-                for d in dirs
-                if d not in EXCLUDE_DIR_NAMES and not d.endswith(EXCLUDE_DIR_SUFFIXES)
-            ]
+            dirs[:] = [d for d in dirs if not _is_excluded_dirname(d)]
 
             for file in files:
-                # Skip excluded files — exact basename or basename suffix.
-                if file in EXCLUDE_FILENAMES or file.endswith(EXCLUDE_FILE_SUFFIXES):
-                    continue
-                # Skip stem-variants of sensitive filenames: the file equals
-                # the stem, or starts with ``stem + "."`` / ``stem + "-"``.
-                # The ``.`` / ``-`` discriminator keeps ``.environment`` in
-                # (it is not a ``.env`` variant) — see #1505.
-                if any(
-                    file == stem or file.startswith(stem + ".") or file.startswith(stem + "-")
-                    for stem in EXCLUDE_FILENAME_STEMS
-                ):
+                if _is_excluded_filename(file):
                     continue
 
                 file_path = Path(root) / file
@@ -1082,6 +1164,240 @@ def _create_tarball(source_dir: Path, output_path: Path) -> None:
                     tar.add(file_path, arcname=str(relative))
                 except Exception as e:
                     logger.debug("Failed to add %s to tarball: %s", file_path, e)
+
+
+def _tarball_size_warning(tarball_path: Path, threshold: Optional[int] = None) -> Optional[str]:
+    """Return a human-readable warning if ``tarball_path`` is suspiciously
+    large, else ``None``.
+
+    "Large" means larger than ``threshold`` bytes (default
+    :data:`TARBALL_WARN_BYTES`). The message reports the packed size and the
+    largest included files (by uncompressed size) so the user can see exactly
+    what to add to ``.gitignore``. Surfaced before upload so an oversized
+    tarball produces an actionable hint instead of a raw nginx 413 page.
+    """
+    if threshold is None:
+        threshold = TARBALL_WARN_BYTES
+    size = tarball_path.stat().st_size
+    if size <= threshold:
+        return None
+
+    try:
+        with tarfile.open(tarball_path, "r:gz") as tar:
+            largest = sorted(
+                ((m.size, m.name) for m in tar.getmembers() if m.isfile()),
+                reverse=True,
+            )[:5]
+    except (OSError, tarfile.TarError):
+        largest = []
+
+    lines = [
+        f"Warning: deploy tarball is {size / 1_048_576:.1f} MB — unusually large "
+        "and may exceed the server's upload limit.",
+    ]
+    if largest:
+        lines.append("Largest files included:")
+        lines.extend(f"  {sz / 1_048_576:6.1f} MB  {name}" for sz, name in largest)
+    lines.append(
+        "If any are build artifacts or local data, add them to .gitignore "
+        "(the deploy honors it) and re-run."
+    )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# deploy status display (#1761) + deploy doctor preflight (#1760)
+# ---------------------------------------------------------------------------
+
+
+def _poll_display(data: dict) -> tuple:
+    """Map a deployment-status poll response to ``(message, done, url)``.
+
+    ``done`` is ``True`` when polling should stop. During a blue/green rollout
+    the deployment row is ``active``/``deploying`` but ``serving_current`` is
+    ``False`` — the OLD placement is still serving the env URL while the new
+    rootfs cuts over (djustlive #517). In that window we surface "rolling out"
+    and keep polling instead of reporting "active" / printing the URL, so users
+    stop re-testing against stale code.
+
+    ``serving_current`` is an additive field: older servers omit it, so a
+    missing value is treated as ``True`` (fail-safe — today's behavior).
+    """
+    status = data.get("status")
+    serving_current = data.get("serving_current", True)
+    if status in ("active", "deploying") and not serving_current:
+        return (
+            "rolling out (new version built; old version still serving — waiting for cutover)",
+            False,
+            None,
+        )
+    url = data.get("container_url") if status in ("active", "deploying") else None
+    done = status in ("active", "deploying", "failed", "cancelled", "superseded")
+    return (status, done, url)
+
+
+# Appended to every deploy-doctor warning so the user always learns the fix.
+_DOCTOR_ENV_POINTER = (
+    "the platform injects these at runtime — read them from the environment "
+    "(e.g. os.environ['DATABASE_URL'], os.environ['SECRET_KEY'], "
+    "os.environ['ALLOWED_HOSTS'])."
+)
+
+
+def _databases_region(settings_text: str) -> str:
+    """Return the source text of the ``DATABASES = ...`` assignment's value.
+
+    For a dict literal (`DATABASES = { ... }`) this brace-balances to the
+    matching `}`; for a call form (`DATABASES = dj_database_url.config(...)`)
+    it returns the rest of that logical line. Returns `""` when there is no
+    `DATABASES` assignment. Scoping the env-read check to this region (rather
+    than the whole file) keeps a `SECRET_KEY = os.environ[...]` elsewhere from
+    masking a genuinely hardcoded `DATABASES` block (#1768).
+    """
+    m = re.search(r"^\s*DATABASES\s*=\s*", settings_text, re.MULTILINE)
+    if not m:
+        return ""
+    start = m.end()
+    if start < len(settings_text) and settings_text[start] == "{":
+        depth = 0
+        for i in range(start, len(settings_text)):
+            ch = settings_text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return settings_text[start : i + 1]
+        return settings_text[start:]  # unbalanced — fall back to the tail
+    nl = settings_text.find("\n", start)
+    return settings_text[start : nl if nl != -1 else len(settings_text)]
+
+
+# Env-read signals: any of these inside the DATABASES region (or the
+# DB-specific DATABASE_URL/dj_database_url tokens anywhere) mean the DB config
+# is environment-derived, so the platform's injected values are honored.
+_DB_ENV_READ_RE = re.compile(
+    r"os\.environ|os\.getenv|\bgetenv\(|\benviron\[|\benviron\.get\(|\benv\(|\bconfig\(|decouple"
+)
+
+
+def _deploy_doctor_warnings(settings_text: str) -> list:
+    """Statically inspect a Django settings module's source text and return
+    human-readable WARNINGS (never errors) for settings that violate the
+    platform's env-injection contract (#1760).
+
+    These are grep-level heuristics over the source text, not an import of the
+    settings module — the point is to catch the common "foreign app" footguns
+    (hardcoded SECRET_KEY / ALLOWED_HOSTS, a DATABASES block that ignores
+    DATABASE_URL, sqlite on the read-only rootfs) that otherwise deploy fine and
+    only 500 at runtime in production.
+    """
+    warnings = []
+
+    # SECRET_KEY assigned a string literal (not derived from os.environ/env()).
+    m = re.search(r"^\s*SECRET_KEY\s*=\s*(.+)$", settings_text, re.MULTILINE)
+    if m and m.group(1).strip()[:1] in ("'", '"'):
+        warnings.append(
+            "SECRET_KEY is a hardcoded literal; serving a dev key on a public host "
+            "is a security risk — " + _DOCTOR_ENV_POINTER
+        )
+
+    # ALLOWED_HOSTS as a literal host list (not read from env).
+    m = re.search(r"^\s*ALLOWED_HOSTS\s*=\s*(.+)$", settings_text, re.MULTILINE)
+    if m:
+        rhs = m.group(1).strip()
+        if rhs.startswith("[") and ("'" in rhs or '"' in rhs):
+            warnings.append(
+                "ALLOWED_HOSTS is a hardcoded list not read from the environment; "
+                "the platform host will raise DisallowedHost (400) — " + _DOCTOR_ENV_POINTER
+            )
+
+    # DATABASES that read no configuration from the environment. The canonical
+    # DATABASE_URL / dj_database_url tokens count anywhere; other env reads
+    # (individual os.environ['DB_*'] vars, python-decouple, etc.) count only
+    # within the DATABASES region so an unrelated SECRET_KEY=os.environ[...]
+    # elsewhere can't mask a hardcoded DB block (#1768).
+    if re.search(r"^\s*DATABASES\s*=", settings_text, re.MULTILINE):
+        reads_env = (
+            "DATABASE_URL" in settings_text
+            or "dj_database_url" in settings_text
+            or _DB_ENV_READ_RE.search(_databases_region(settings_text)) is not None
+        )
+        if not reads_env:
+            warnings.append(
+                "DATABASES reads no configuration from the environment (neither "
+                "DATABASE_URL nor os.environ); on a read-only app rootfs the first "
+                "write 500s (OperationalError: readonly database) — " + _DOCTOR_ENV_POINTER
+            )
+
+    # sqlite DB, which lands under the (read-only) project dir on the platform.
+    if re.search(r"ENGINE.*sqlite3", settings_text):
+        warnings.append(
+            "DATABASES uses sqlite3; the platform app rootfs is read-only, so a sqlite "
+            "NAME under the project dir 500s on first write (use the injected DATABASE_URL "
+            "/ a managed Postgres instead) — " + _DOCTOR_ENV_POINTER
+        )
+
+    return warnings
+
+
+# Directories never worth scanning for a settings module.
+_DOCTOR_SKIP_DIRS = frozenset(
+    {".venv", "venv", "env", "site-packages", "node_modules", ".git", "__pycache__"}
+)
+
+
+def _find_settings_files(source_dir) -> list:
+    """Locate the project's primary Django settings file(s) under ``source_dir``.
+
+    Prefers the module named by ``manage.py``'s ``DJANGO_SETTINGS_MODULE``
+    default (the module the platform will actually load); falls back to globbing
+    for ``settings.py`` (shallowest first). Returns ``[]`` when nothing is found.
+    """
+    source_dir = Path(source_dir)
+    manage = source_dir / "manage.py"
+    if manage.is_file():
+        try:
+            m = re.search(
+                r"DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([\w.]+)['\"]",
+                manage.read_text(encoding="utf-8", errors="replace"),
+            )
+        except OSError:
+            m = None
+        if m:
+            rel = m.group(1).replace(".", "/")
+            for cand in (source_dir / (rel + ".py"), source_dir / rel / "__init__.py"):
+                if cand.is_file():
+                    return [cand]
+
+    return sorted(
+        (
+            p
+            for p in source_dir.rglob("settings.py")
+            if not any(part in _DOCTOR_SKIP_DIRS for part in p.parts)
+        ),
+        key=lambda p: len(p.parts),
+    )
+
+
+def _run_deploy_doctor(source_dir) -> None:
+    """Run the deploy doctor (#1760) over ``source_dir`` and print any warnings
+    to stderr. Always non-blocking — a doctor failure must never stop a deploy.
+    """
+    try:
+        for settings_file in _find_settings_files(source_dir):
+            try:
+                text = settings_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for warning in _deploy_doctor_warnings(text):
+                click.echo(f"⚠ deploy doctor: {warning}", err=True)
+            # Inspect only the primary settings module — checking dev-only
+            # settings files would produce false positives.
+            break
+    except Exception:
+        # The doctor is advisory; never let it block a deploy.
+        logger.debug("deploy doctor failed; skipping", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1446,10 @@ def deploy(
         no_create=no_create,
         yes=yes,
     )
+
+    # Preflight doctor (#1760): warn (never block) on settings that violate the
+    # platform env contract before we ship them.
+    _run_deploy_doctor(Path.cwd())
 
     url = f"{server}/api/v1/projects/{project_slug}/environments/production/deploy/"
 
@@ -1199,6 +1519,10 @@ def deploy_dir(
         yes=yes,
     )
 
+    # Preflight doctor (#1760): warn (never block) on settings that violate the
+    # platform env contract before we ship them.
+    _run_deploy_doctor(Path(source_dir))
+
     click.echo(f"Creating tarball from {source_dir}...")
 
     # Create tarball in temp location
@@ -1210,6 +1534,10 @@ def deploy_dir(
     try:
         _create_tarball(Path(source_dir), tarball_path)
         click.echo(f"Tarball created: {tarball_path.stat().st_size} bytes")
+
+        size_warning = _tarball_size_warning(tarball_path)
+        if size_warning:
+            click.echo(size_warning, err=True)
 
         url = f"{server}/api/v1/projects/{project_slug}/deploy/directory/"
 
@@ -1246,18 +1574,18 @@ def deploy_dir(
                 )
                 if status_resp.status_code == 200:
                     data = status_resp.json()
-                    status = data.get("status")
-                    click.echo(f"Status: {status}")
-
-                    # `deploying` means the k8s resources have been created
-                    # and the readiness probe passed; the deployment row
-                    # may still flip to `active` later, but the app is
-                    # already serving so we can return.
-                    if status in ("active", "deploying", "failed", "cancelled", "superseded"):
-                        if status in ("active", "deploying"):
-                            container_url = data.get("container_url")
-                            if container_url:
-                                click.echo(f"Application available at: {container_url}")
+                    # `deploying` means the k8s resources have been created and
+                    # the readiness probe passed; the row may still flip to
+                    # `active` later, but the app is already serving so we can
+                    # return — UNLESS serving_current is False (#1761), meaning a
+                    # blue/green rollout is still serving the OLD rootfs, in
+                    # which case _poll_display reports "rolling out" + done=False
+                    # so we keep polling until the new placement takes over.
+                    message, done, container_url = _poll_display(data)
+                    click.echo(f"Status: {message}")
+                    if done:
+                        if container_url:
+                            click.echo(f"Application available at: {container_url}")
                         return
             except requests.RequestException:
                 # Transient network error during status poll; the loop's

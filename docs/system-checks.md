@@ -26,11 +26,15 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V006 | LiveView | Warning | Service instance assigned in mount() — high-confidence subset of V008 |
 | V007 | LiveView | Warning | Event handler missing **kwargs |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
+| V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
 | S004 | Security | Warning | DEBUG=True with non-localhost ALLOWED_HOSTS |
 | S005 | Security | Warning | LiveView exposes state without authentication |
+| S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
+| S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
+| S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -41,6 +45,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T012 | Templates | Warning | Template with dj-* directives but no dj-view |
 | T013 | Templates | Warning | dj-view with empty or dynamic value |
 | T014 | Templates | Warning | Deprecated data-dj-id attribute |
+| T015 | Templates | Warning | Legacy data-djust-root / data-djust-view root attributes |
+| T017 | Templates | Warning | dj-view / dj-root on a table-section element (foster-parented to silent garbage) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -249,6 +255,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `# noqa: V008` inline on the assignment
 - **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
 
+### V012 — Sticky child declares its own `dj-view`
+- **Severity**: Warning
+- **Method**: Runtime (walks `LiveView` subclasses with `sticky = True`, scans each one's template root)
+- **What it detects**: A sticky-child view (`sticky = True`, embedded via `{% live_render ... sticky=True %}`) whose own template root carries a `dj-view` attribute. The `live_render` wrapper already emits `<div dj-view dj-sticky-view="<id>" ...>`, so the child's own `dj-view` nests a **duplicate** binding inside the wrapper — the child's client-side mount breaks and its events silently don't bind.
+- **Why it's subtle**: normal page views *require* `dj-view="<path>"` on their root to be mountable, so authors (and code-generating agents) reasonably add it everywhere — including sticky children, where it's wrong.
+- **Fix**: remove `dj-view` from the sticky child's root element; the wrapper provides it. See the [sticky LiveViews guide](website/guides/sticky-liveviews.md#v012-system-check).
+- **False positives**: none on normal page views — only `sticky = True` views are inspected. A `dj-view` appearing only inside a `{% comment %}` block (e.g. documenting the wrapper) is ignored (comments are stripped before scanning).
+- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V012']}`
+- Added in v1.0.5-3 (#1803)
+
 ---
 
 ## Security Checks (S)
@@ -288,6 +304,71 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.S005"]`
 - **False positives**: Intentionally public views (anonymous landing pages, public dashboards)
 
+### S007 — `client_name|safe` renders an unsanitised upload filename
+- **Severity**: Warning
+- **Method**: Template scan (regex over template files)
+- **What it detects**: `{{ <expr>.client_name|safe }}` (whitespace around `|` is
+  tolerated). An upload entry's `client_name` is the attacker-controlled
+  original filename, stored without sanitisation. `|safe` disables Django's
+  auto-escaping, so a `<script>`-bearing filename renders as live HTML —
+  a stored-XSS vector.
+- **Fix**: Remove `|safe` (auto-escaping is the safe default), or sanitise the
+  value first with `django.utils.html.escape()`.
+- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['S007']}` (or
+  `'djust.S007'`) — only when the rendered value is pre-sanitised.
+- **False positives**: A `client_name` value that has already been sanitised
+  server-side before reaching the template.
+
+### S009 — Event handler needs per-handler authorization
+- **Severity**: Warning
+- **Method**: AST (LiveView class + decorator walk)
+- **What it detects**: A LiveView that declares **view-level** authorization
+  (a truthy `login_required` / `permission_required` class attribute, a
+  `check_permissions()` override, a Django/djust `AccessMixin`-family base such
+  as `LoginRequiredMixin` / `PermissionRequiredMixin`, or an auth-gated
+  `dispatch`) **and** exposes a **public** `@event_handler` / `@action` method
+  with **no per-handler gate** (`@permission_required`) and no class-level
+  `check_handler_permission()` override. View-level auth only runs at mount; a
+  user who passes it can call any public handler. If a sensitive handler needs
+  finer authorization, the mount gate alone is not enough.
+- **Fix**: Add `@permission_required("app.perm")` above `@event_handler` on the
+  sensitive handler, add a `check_handler_permission()` override that inspects
+  the event, or rename the method with a leading `_` if it is not a
+  client-callable handler.
+- **Suppression**: `# noqa: S009` on the handler (its `def` or its decorator
+  line), or `DJUST_CONFIG = {'suppress_checks': ['S009']}` when the view-level
+  auth is sufficient for every handler.
+- **False positives**: Conservative by design — private (`_`-prefixed) handlers
+  and read-only-looking handlers (`load_` / `get_` / `list_` / `search_` / …)
+  are exempt, and a falsy `login_required = False` does not count as view auth.
+
+### S011 — Inline `<script>` inside a `dj-root` without a CSP
+- **Severity**: Warning
+- **Method**: Template scan (regex + dj-root subtree balancing)
+- **What it detects**: An inline executable `<script>` placed **inside a real
+  `dj-root` / `dj-view` subtree** when no Content-Security-Policy is configured
+  (no django-csp middleware, no `CONTENT_SECURITY_POLICY` / `CSP_*` /
+  `SECURE_CSP*` setting). This is the #1848 class: morphdom does **not**
+  re-execute `<script>` tags it inserts/re-creates, so an inline script inside
+  the dj-root silently never runs after the WS-mount morph — and a strict CSP
+  would block it regardless.
+- **Fix**: Move page JS into a static module (served from `static/`, registered
+  on `DOMContentLoaded` + a `MutationObserver` for morph-managed regions), or
+  into a base-template block rendered **after** the dj-root `</div>` (e.g.
+  `{% block extra_scripts %}`). If the inline script is intentional, add a CSP
+  nonce (`nonce="{{ request.csp_nonce }}"` with django-csp) or place it outside
+  the dj-root.
+- **Suppression**: `{# noqa: S011 #}` on the script line, or
+  `DJUST_CONFIG = {'suppress_checks': ['S011']}`.
+- **False positives**: Low by construction — external `<script src>`,
+  nonce-bearing scripts, and data blocks (`type="application/json"` /
+  `"text/template"` / …) are skipped, `<pre>`/`<code>` example markup is
+  ignored, and a script **after** the dj-root closes (the recommended pattern)
+  is not flagged.
+
+> **Note**: `S010` (rate-limit-presence) is intentionally not shipped as a
+> default-on check — it is advisory/opt-in only (high false-positive risk).
+
 ---
 
 ## Template Checks (T)
@@ -316,9 +397,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### T004 — document.addEventListener for djust events (use window)
 - **Severity**: Warning
 - **Method**: Regex (template/JS scan)
-- **What it detects**: `document.addEventListener("djust:..."` — djust events are dispatched on `window`, not `document`
-- **Suppression**: `# noqa: T004` or `SILENCED_SYSTEM_CHECKS = ["djust.T004"]`
-- **False positives**: None; djust events always bubble to `window`
+- **What it detects**: `document.addEventListener("djust:..."` for a djust event that is dispatched on `window` (e.g. `djust:push_event`, `djust:before-navigate`, `djust:error`, `djust:shell-swapped`, `djust:vdom-cache-applied`, `djust:upload:*`) — those listeners belong on `window`, not `document`
+- **Exempt (#1809)**: The djust events that the client dispatches on `document` are **not** flagged — `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`, `djust:time-travel-state`, `djust:time-travel-event`. Listening for these on `document` is correct.
+- **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T004"]` or `DJUST_CONFIG = {"suppress_checks": ["T004"]}` (the `suppress_checks` form was a no-op before #1809)
+- **False positives**: None for the window-dispatched events; the document-dispatched family above is exempt as of #1809
 
 ### T005 — dj-view and dj-root on different elements
 - **Severity**: Warning
@@ -363,6 +445,49 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: Old `data-dj-id` attribute syntax, replaced by `dj-id`
 - **Suppression**: Fix the templates; or `SILENCED_SYSTEM_CHECKS = ["djust.T014"]`
 - **False positives**: None; the old attribute name is deprecated
+
+### T015 — Legacy data-djust-root / data-djust-view root attributes
+- **Severity**: Warning
+- **Method**: Regex (template scan)
+- **What it detects**: The pre-1.0 root attributes `data-djust-root` and
+  `data-djust-view`, renamed in djust 1.0 to `dj-root` / `dj-view` (the
+  `data-` prefix is no longer required). The generic T012 ("dj-* directives
+  but no dj-view") doesn't recognise that a view IS declared when it uses the
+  deprecated spelling, so the path from symptom (the LiveView never connects
+  over WebSocket) to fix is non-obvious — T015 names the rename explicitly.
+- **Suppression**: Fix the templates (`data-djust-view` → `dj-view`,
+  `data-djust-root` → `dj-root`); or
+  `DJUST_CONFIG = {"suppress_checks": ["T015"]}`
+- **False positives**: None; the match is scoped to exactly `data-djust-root`
+  / `data-djust-view`, so other `data-djust-*` attributes
+  (`data-djust-embedded`, `data-djust-activity`, `data-djust-view-model`, …)
+  are never flagged.
+- **Scope**: Static check only — djust 1.0's runtime does not accept the
+  legacy attributes; the template must be migrated to the `dj-` spelling.
+
+### T017 — dj-view / dj-root on a table-section element
+- **Severity**: Warning
+- **Method**: Regex (template scan)
+- **What it detects**: A `dj-view` or `dj-root` attribute placed on an HTML
+  table-section element (`<tbody>`, `<thead>`, `<tfoot>`, `<tr>`, `<td>`,
+  `<th>`, `<caption>`, `<col>`, `<colgroup>`). Such a view renders to **silent
+  garbage**: html5ever foster-parents the table elements out of the tree at
+  render time, so `<tbody dj-view="…">{% for %}<tr>…{% endfor %}</tbody>`
+  renders as `<html><head></head><body>text</body></html>` (all rows dropped)
+  with **no error** (#1837).
+- **Fix**: Put `dj-view` / `dj-root` on a wrapping element (the `<table>` or a
+  surrounding `<div>`); a table-section element is foster-parented at render
+  time and cannot be a standalone parse root.
+- **Suppression**: Fix the templates; or
+  `DJUST_CONFIG = {"suppress_checks": ["T017"]}`
+- **False positives**: None expected; the match is scoped to the same tag
+  (`[^>]*?` stops at the table-section tag's own `>`), so a `<div dj-view>`
+  wrapping a `<table><tbody>` is never flagged, and a word-boundary on the tag
+  name rejects `<trx` / `<tablefoo`. `<table dj-view>` (the recommended wrap
+  target) is intentionally not flagged.
+- **Scope**: Static check only — it does not change html5ever's HTML5-spec
+  foster-parenting; it warns at startup so the silent failure is caught before
+  a request hits.
 
 ---
 

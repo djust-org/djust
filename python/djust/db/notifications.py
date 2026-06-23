@@ -71,12 +71,138 @@ def _import_psycopg():
     return psycopg, _sql
 
 
+# libpq connection parameters that are safe to forward from the
+# DJUST_NOTIFY_DATABASE_URL query string. This is an explicit ALLOWLIST —
+# anything not listed (e.g. a second ``dbname``/``user``/``password``, or an
+# arbitrary param) is silently dropped so a query string cannot override the
+# URL-derived credentials or smuggle an unexpected connection target. ``host``
+# is allowed but special-cased below: it REPLACES the URL netloc host (the
+# unix-socket use case, ``?host=/var/run/postgresql``).
+_DSN_QUERY_ALLOWLIST = frozenset(
+    {
+        "sslmode",
+        "sslrootcert",
+        "sslcert",
+        "sslkey",
+        "host",
+        "application_name",
+        "connect_timeout",
+    }
+)
+
+
+def _dsn_from_url(url: str) -> str:
+    """Parse a ``DATABASE_URL``-style string into a libpq DSN string.
+
+    Accepts the standard ``postgres://user:pass@host:port/dbname`` form
+    (and the ``postgresql://`` alias, plus driver-qualified schemes like
+    ``postgresql+psycopg://``). Returns the same space-separated
+    ``key=value`` DSN shape that :func:`_build_dsn` produces from
+    ``DATABASES['default']`` so the override path and the fallback path
+    are byte-compatible.
+
+    The engine check still applies: a non-postgresql URL scheme raises
+    :class:`~djust.db.exceptions.DatabaseNotificationNotSupported`.
+
+    **Query-string passthrough (issue #1696).** A known-safe allowlist of
+    libpq connection parameters in the URL query string is appended to the
+    DSN: ``sslmode``, ``sslrootcert``, ``sslcert``, ``sslkey``, ``host``,
+    ``application_name``, ``connect_timeout``. This supports the common
+    direct-to-Postgres LISTEN needs ``?sslmode=require`` and the unix-socket
+    form ``?host=/var/run/postgresql``. Query values are percent-decoded
+    consistently with the userinfo fields. Unknown query keys are silently
+    ignored — a query string can never override the URL-derived
+    credentials (``user``/``password``/``dbname`` are not in the allowlist).
+
+    **``host`` precedence.** When ``?host=`` is present it REPLACES the URL
+    netloc host (so the output has exactly one ``host`` key). This is the
+    deterministic unix-socket behavior: ``postgres://u:p@placeholder/db?
+    host=/var/run/postgresql`` routes to the socket and the netloc host is
+    treated as an ignored placeholder.
+
+    Credential safety: the URL may embed a password. This function never
+    logs the URL or the resulting DSN — the value flows only into
+    ``psycopg.AsyncConnection.connect``.
+    """
+    from urllib.parse import parse_qsl, unquote, urlparse
+
+    parsed = urlparse(url)
+    # Normalize driver-qualified schemes (``postgresql+psycopg`` etc.) to
+    # the bare backend name before the engine check.
+    scheme = parsed.scheme.split("+", 1)[0].lower()
+    if scheme not in ("postgres", "postgresql"):
+        raise DatabaseNotificationNotSupported(
+            "djust.db notifications require a postgresql backend "
+            f"(got DJUST_NOTIFY_DATABASE_URL scheme {scheme!r})."
+        )
+    # Filter the query string to the known-safe allowlist, percent-decoding
+    # values the same way the userinfo fields are decoded. ``parse_qsl`` does
+    # not unquote by default (keep_blank_values is irrelevant here).
+    query_items = {}
+    for key, val in parse_qsl(parsed.query, keep_blank_values=False):
+        if key in _DSN_QUERY_ALLOWLIST:
+            query_items[key] = unquote(val)
+    # A ``host`` query item overrides the URL netloc host (unix-socket case)
+    # so the output carries exactly one ``host`` key.
+    host_val = query_items.pop("host", None) or parsed.hostname
+    # ``path`` is ``/dbname`` — strip the leading slash. userinfo and host
+    # are percent-decoded so passwords containing ``@`` / ``:`` round-trip.
+    parts = []
+    for dsn_key, val in (
+        ("host", host_val),
+        ("port", parsed.port),
+        ("dbname", parsed.path.lstrip("/")),
+        ("user", unquote(parsed.username) if parsed.username else None),
+        ("password", unquote(parsed.password) if parsed.password else None),
+    ):
+        if val:
+            parts.append(f"{dsn_key}={val}")
+    # Append the remaining allowlisted query params after the core fields,
+    # in a stable (sorted) order so the DSN is deterministic. libpq DSN values
+    # containing whitespace or a quote must be single-quoted with backslash
+    # escaping (application_name="djust listener" is the realistic case).
+    for key in sorted(query_items):
+        parts.append(f"{key}={_dsn_quote(query_items[key])}")
+    return " ".join(parts)
+
+
+def _dsn_quote(value: str) -> str:
+    """Quote a libpq DSN value if it contains whitespace or a quote.
+
+    libpq keyword/value DSN syntax: a value with no special characters is
+    written bare; a value containing whitespace, ``'`` or ``\\`` is wrapped in
+    single quotes with ``\\`` and ``'`` backslash-escaped. Bare values stay
+    byte-identical so the common ``sslmode=require`` case is unchanged.
+    """
+    if value and not any(c.isspace() or c in "'\\" for c in value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
 def _build_dsn() -> str:
-    """Derive a psycopg DSN from Django's default DB settings.
+    """Derive a psycopg DSN for the dedicated LISTEN connection.
 
     We avoid inheriting Django's connection (which may be inside a
     connection pool) by creating a dedicated ``AsyncConnection``.
+
+    Source precedence:
+
+    1. ``settings.DJUST_NOTIFY_DATABASE_URL`` (or the environment variable
+       of the same name) — an explicit ``DATABASE_URL``-style override.
+       This lets operators point the long-lived LISTEN connection at a
+       direct (non-pgbouncer / session-pool) endpoint so it cannot
+       saturate the request-path connection pool (issue #1687,
+       djustlive #380). The engine check still applies to the override.
+    2. Otherwise, fall back to ``settings.DATABASES['default']`` — the
+       original behavior. When the override is unset this returns a DSN
+       byte-identical to prior releases.
     """
+    override = getattr(settings, "DJUST_NOTIFY_DATABASE_URL", "") or os.environ.get(
+        "DJUST_NOTIFY_DATABASE_URL", ""
+    )
+    if override:
+        return _dsn_from_url(override)
     db = settings.DATABASES.get("default", {})
     engine = db.get("ENGINE", "")
     if "postgresql" not in engine:
