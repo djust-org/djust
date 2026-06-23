@@ -484,6 +484,37 @@ class TestRuntimeOwnedVerbsContract:
                 f"error envelope."
             )
 
+    def test_event_spine_grown_but_event_not_yet_ws_owned(self):
+        """ADR-022 Iter 2 Phase 2.0 contract: the runtime event SPINE is grown to
+        parity (``dispatch_message`` routes ``event`` → ``dispatch_event``, the
+        SSE event path), but ``event`` is DELIBERATELY still NOT in
+        ``RUNTIME_OWNED_VERBS`` — the WS event flip is Phase 2.3.
+
+        This pins the Phase-2.0 ↔ 2.3 boundary: a premature addition of ``event``
+        to ``RUNTIME_OWNED_VERBS`` (flipping WS events onto the runtime before the
+        actor / render-lock / observability hooks land) trips this test, forcing
+        the flip to be a deliberate Phase-2.3 change.
+        """
+        from djust.runtime import ViewRuntime
+        from djust.websocket import LiveViewConsumer
+
+        # The spine exists + is routable: dispatch_message has an event arm.
+        dispatch_src = inspect.getsource(ViewRuntime.dispatch_message)
+        assert '== "event"' in dispatch_src, (
+            "the runtime event spine must be routable via dispatch_message "
+            "(Phase 2.0 grew it); dispatch_message lost its event arm"
+        )
+        assert hasattr(ViewRuntime, "dispatch_event") and hasattr(
+            ViewRuntime, "_dispatch_event_inner"
+        ), "the runtime event spine methods must exist (Phase 2.0)"
+
+        # But the WS verb flip has NOT happened — event stays on _handle_event_inner.
+        assert "event" not in LiveViewConsumer.RUNTIME_OWNED_VERBS, (
+            "'event' must NOT be in RUNTIME_OWNED_VERBS until the Phase-2.3 WS flip "
+            "(actor / render-lock / observability hooks must land first, ADR-022). "
+            "Adding it here flips ALL WS events onto the runtime prematurely."
+        )
+
     # -- Behavioral contract: the SET DRIVES routing (load-bearing) -------- #
 
     @staticmethod

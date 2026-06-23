@@ -70,6 +70,16 @@ class _CounterSSEView(LiveView):
         self.loading = True
         self.start_async(self._do_work)
 
+    @event_handler()
+    def noop_event(self, **kwargs):
+        """A handler that changes NO public state — exercises the noop branch."""
+        pass
+
+    @event_handler()
+    def ping(self, **kwargs):
+        """Push-only handler (#700 identity-skip) — emits a push, no state change."""
+        self.push_event("pong", {"hello": "world"})
+
     def _do_work(self):
         self.count = 99
         self.loading = False
@@ -154,6 +164,34 @@ async def _post_event(session, sid, event, params=None):
     )
     request.user = MagicMock(is_authenticated=True, pk=7)
     view = DjustSSEEventView()
+    return await view.post(request, session_id=sid)
+
+
+async def _post_message(session, sid, body):
+    """Drive the REAL /message/ endpoint (DjustSSEMessageView) against an
+    owner-bound session, forwarding the FULL JSON envelope verbatim.
+
+    Unlike the /event/ alias (which rebuilds {type,event,params} and drops any
+    extra keys), /message/ → runtime.dispatch_message(body) passes the body
+    THROUGH unchanged, so a client-supplied ``ref`` reaches dispatch_event. This
+    is the real SSE transport that exercises the Phase-2.0 ``ref`` echo
+    end-to-end without touching websocket.py / sse.py (#1889, ADR-022).
+    """
+    from unittest.mock import MagicMock
+
+    from djust.sse import DjustSSEMessageView
+
+    session._owner_user_pk = 7
+    session._owner_session_key = None
+    rf = RequestFactory()
+    request = rf.post(
+        f"/djust/sse/{sid}/message/",
+        data=json.dumps(body),
+        content_type="application/json",
+        HTTP_ORIGIN=ALLOWED_ORIGIN,
+    )
+    request.user = MagicMock(is_authenticated=True, pk=7)
+    view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
 
@@ -327,3 +365,89 @@ class TestSSEAsyncWorkViaRuntime:
         assert session.runtime.view_instance.count != 99, (
             "with the async dispatcher gated off, the background task must NOT have run"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Event-spine parity grows over the REAL SSE transport (ADR-022 Iter 2 Phase
+# 2.0, #1889). Drives the /message/ endpoint (which forwards the full envelope,
+# unlike the /event/ alias) so a client-supplied ``ref`` reaches dispatch_event
+# end-to-end and the Phase-2.0 grows (#560 ref echo + source/event_name; #700
+# identity push-only skip) are exercised on the actual SSE wire.
+# --------------------------------------------------------------------------- #
+class TestSSEEventSpineParity:
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    @pytest.mark.asyncio
+    async def test_update_frame_echoes_ref_source_event_name(self):
+        """A state-changing event over the REAL SSE /message/ transport echoes the
+        client ``ref`` + ``source="event"`` + ``event_name`` on the update frame
+        (#560).
+
+        Gate-off (#1468): the unit-level sibling in
+        test_transport_behavioral_parity.py gates each line off; here the
+        end-to-end witness is that the field reaches the SSE wire at all (the
+        /message/ → dispatch_message → dispatch_event path forwards ``ref``)."""
+        path = _register(_CounterSSEView)
+        with _allowlist():
+            _resp, session, sid = await _mount_stream(path)
+        _drain(session)
+
+        resp = await _post_message(
+            session, sid, {"type": "event", "event": "increment", "params": {}, "ref": 77}
+        )
+        assert resp.status_code == 200
+        msgs = _drain(session)
+        render = [m for m in msgs if m.get("type") in ("patch", "html_update")]
+        assert render, f"increment must stream an update frame, got {msgs!r}"
+        f = render[0]
+        assert f.get("ref") == 77, f"SSE update frame must echo the client ref (#560); got {f!r}"
+        assert f.get("source") == "event", f"SSE update frame must carry source=event; got {f!r}"
+        assert f.get("event_name") == "increment", (
+            f"SSE update frame must carry event_name; got {f!r}"
+        )
+
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    @pytest.mark.asyncio
+    async def test_noop_frame_echoes_ref_source_event_name(self):
+        """A no-change event over the REAL SSE transport echoes ``ref`` +
+        ``source="event"`` + ``event_name`` on the noop frame (#560 sequencing)."""
+        path = _register(_CounterSSEView)
+        with _allowlist():
+            _resp, session, sid = await _mount_stream(path)
+        _drain(session)
+
+        resp = await _post_message(
+            session, sid, {"type": "event", "event": "noop_event", "params": {}, "ref": 88}
+        )
+        assert resp.status_code == 200
+        msgs = _drain(session)
+        noops = [m for m in msgs if m.get("type") == "noop"]
+        assert noops, f"no-change event must stream a noop frame, got {msgs!r}"
+        n = noops[0]
+        assert n.get("ref") == 88, f"SSE noop must echo the client ref (#560); got {n!r}"
+        assert n.get("source") == "event", f"SSE noop must carry source=event; got {n!r}"
+        assert n.get("event_name") == "noop_event", f"SSE noop must carry event_name; got {n!r}"
+
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    @pytest.mark.asyncio
+    async def test_push_only_event_skips_render_over_sse(self):
+        """A push-only handler over the REAL SSE transport emits a noop (#700
+        identity-skip) plus the push frame — not a render frame."""
+        path = _register(_CounterSSEView)
+        with _allowlist():
+            _resp, session, sid = await _mount_stream(path)
+        _drain(session)
+
+        resp = await _post_message(
+            session, sid, {"type": "event", "event": "ping", "params": {}, "ref": 5}
+        )
+        assert resp.status_code == 200
+        # The push send is fire-and-forget; let the scheduled frame land.
+        await asyncio.sleep(0)
+        msgs = _drain(session)
+        renders = [m for m in msgs if m.get("type") in ("patch", "html_update")]
+        noops = [m for m in msgs if m.get("type") == "noop"]
+        pushes = [m for m in msgs if m.get("type") == "push_event"]
+        assert not renders, f"push-only handler must NOT render over SSE; got {msgs!r}"
+        assert noops, f"push-only handler must emit a noop over SSE; got {msgs!r}"
+        assert noops[0].get("ref") == 5, "the noop must still echo the ref"
+        assert pushes, f"the push_event side-effect must reach the SSE client; got {msgs!r}"
