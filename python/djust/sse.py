@@ -137,6 +137,13 @@ class SSESession:
         self._owner_user_pk: Optional[Any] = None
         self._owner_session_key: Optional[str] = None
 
+        # The live event-POST request, stamped by the /event/ + /message/ endpoints
+        # just before dispatch so the per-event auth re-check
+        # (SSESessionTransport.recheck_event_auth, #1777) validates against the
+        # CURRENT POSTer's request.user — not the stale mount request. None until
+        # the first event POST (the re-check falls back to ``_request`` defensively).
+        self._event_request: Optional[Any] = None
+
         # Lazy: avoid circular import at module load. The runtime is the
         # transport-agnostic dispatcher (#1237) and is shared with the WS
         # consumer's ``handle_url_change`` shim.
@@ -605,6 +612,13 @@ class DjustSSEEventView(View):
         # event security + param validation, renders, and (this PR) dispatches
         # start_async / @background work + the full 8-queue flush. Data-dict
         # shape matches the existing dispatch_message 'event' frame.
+        #
+        # Stamp the LIVE event-POST request on the session so the per-event auth
+        # re-check (SSESessionTransport.recheck_event_auth, #1777 / ADR-022 Iter 2
+        # Phase 2.3a) re-validates against the CURRENT POSTer's request.user — not
+        # the stale mount request. Owner-binding (Finding #24) already ran above,
+        # so this request is the session owner's.
+        session._event_request = request
         await session.runtime.dispatch_event(
             {"type": "event", "event": event_name, "params": params}
         )
@@ -679,6 +693,13 @@ class DjustSSEMessageView(View):
         # Route through the shared runtime. Validation of frame-specific
         # shape (e.g., mount needs 'view') is handled by the runtime,
         # which pushes structured error envelopes onto the SSE queue.
+        #
+        # Stamp the LIVE POST request so an ``event`` frame routed through
+        # dispatch_message → dispatch_event re-validates per-event auth against the
+        # current POSTer (SSESessionTransport.recheck_event_auth, #1777). Same
+        # rationale as the /event/ alias; the /message/ endpoint carries the same
+        # owner-bound request.
+        session._event_request = request
         await session.runtime.dispatch_message(body)
         return JsonResponse({"ok": True})
 
