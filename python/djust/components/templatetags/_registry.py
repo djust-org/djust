@@ -8,6 +8,7 @@ All templatetag sub-modules import ``register``, ``_resolve``, and
 
 import re
 import uuid  # noqa: F401 — re-exported for sub-modules
+from typing import Any, Dict, List, Union
 from urllib.parse import urlsplit
 
 from django import template
@@ -43,7 +44,7 @@ _SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps"})
 _CTRL_WS_RE = re.compile(r"[\x00-\x20]+")
 
 
-def safe_url(value):
+def safe_url(value: Any) -> str:
     """Escape a URL for an HTML attribute AND neutralize dangerous schemes.
 
     HTML-escaping (``conditional_escape``) prevents attribute breakout but does
@@ -75,10 +76,11 @@ def safe_url(value):
     # an empty/odd urlsplit scheme but a browser would still see a bad scheme.
     if probe.startswith(("javascript:", "vbscript:", "data:")):
         return "#"
-    return conditional_escape(s)
+    escaped: str = conditional_escape(s)
+    return escaped
 
 
-def _resolve(value, context):
+def _resolve(value: Any, context: Dict[str, Any]) -> Any:
     """Resolve a template variable or return the literal value."""
     if isinstance(value, template.Variable):
         try:
@@ -88,9 +90,9 @@ def _resolve(value, context):
     return value
 
 
-def _parse_kv_args(bits, parser):
+def _parse_kv_args(bits: List[str], parser: Any) -> Dict[str, Union[str, template.Variable]]:
     """Parse key=value arguments from template tag tokens."""
-    kwargs = {}
+    kwargs: Dict[str, Union[str, template.Variable]] = {}
     for bit in bits:
         if "=" in bit:
             key, val = bit.split("=", 1)

@@ -86,7 +86,8 @@ def _render_fallback(fallback: str, context: dict[str, Any]) -> str:
         logger.debug("dj_suspense: Django not available, falling back to default spinner")
         return _DEFAULT_FALLBACK_HTML
     try:
-        return render_to_string(fallback, context)
+        rendered: str = render_to_string(fallback, context)
+        return rendered
     except Exception as exc:  # noqa: BLE001 — fallback gracefully on template errors
         logger.warning(
             "dj_suspense: failed to render fallback template %s: %s",

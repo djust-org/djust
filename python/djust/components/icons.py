@@ -30,6 +30,7 @@ Custom icon sets::
 
 import html as _html
 import logging
+from typing import Any, Dict, List, Optional, Union
 
 from django.utils.safestring import mark_safe
 
@@ -127,10 +128,10 @@ _BUILTIN_ICON_SETS = {
 }
 
 # Cache for merged (builtin + user) icon sets
-_icon_sets_cache = None
+_icon_sets_cache: Optional[Dict[str, Dict[str, str]]] = None
 
 
-def _get_icon_sets():
+def _get_icon_sets() -> Dict[str, Dict[str, str]]:
     """Return the merged icon sets dict (builtin + user-defined).
 
     User sets are loaded from ``settings.DJUST_COMPONENTS_ICON_SETS`` on first
@@ -155,7 +156,7 @@ def _get_icon_sets():
     return merged
 
 
-def clear_icon_sets_cache():
+def clear_icon_sets_cache() -> None:
     """Clear the icon sets cache (useful for testing)."""
     global _icon_sets_cache
     _icon_sets_cache = None
@@ -166,7 +167,13 @@ def clear_icon_sets_cache():
 # ---------------------------------------------------------------------------
 
 
-def render_icon(name, size="md", icon_set="heroicons", custom_class="", **attrs):
+def render_icon(
+    name: str,
+    size: Union[str, int] = "md",
+    icon_set: str = "heroicons",
+    custom_class: str = "",
+    **attrs: Any,
+) -> str:
     """Render an SVG icon as a safe HTML string.
 
     This is the shared Python helper used by template tags, Rust handlers,
@@ -212,7 +219,7 @@ def render_icon(name, size="md", icon_set="heroicons", custom_class="", **attrs)
         attr_val = _html.escape(str(val))
         extra += f' {attr_name}="{attr_val}"'
 
-    return mark_safe(
+    svg: str = mark_safe(
         f'<svg class="{class_str}" xmlns="http://www.w3.org/2000/svg" '
         f'width="{px}" height="{px}" viewBox="0 0 24 24" '
         f'fill="none" stroke="currentColor" stroke-width="1.5" '
@@ -220,14 +227,15 @@ def render_icon(name, size="md", icon_set="heroicons", custom_class="", **attrs)
         f"{svg_inner}"
         f"</svg>"
     )
+    return svg
 
 
-def get_icon_names(icon_set="heroicons"):
+def get_icon_names(icon_set: str = "heroicons") -> List[str]:
     """Return a sorted list of available icon names in the given set."""
     sets = _get_icon_sets()
     return sorted(sets.get(icon_set, {}).keys())
 
 
-def get_icon_sets():
+def get_icon_sets() -> List[str]:
     """Return a list of available icon set names."""
     return sorted(_get_icon_sets().keys())

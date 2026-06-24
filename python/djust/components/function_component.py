@@ -77,12 +77,12 @@ def get_registered_components() -> dict[str, Union[Callable[..., str], type]]:
 
 
 def component(
-    fn=None,
+    fn: Optional[Callable[..., Any]] = None,
     *,
     name: Optional[str] = None,
     assigns: Optional[list[Assign]] = None,
     slots: Optional[list[Slot]] = None,
-):
+) -> Callable[..., Any]:
     """Register a function as a template-invokable component.
 
     Usage::
@@ -104,11 +104,14 @@ def component(
         The original function, unmodified aside from attached metadata.
     """
 
-    def _wrap(target):
+    def _wrap(target: Callable[..., Any]) -> Callable[..., Any]:
         component_name = name or target.__name__
-        target._djust_assigns = assigns or []
-        target._djust_slots = slots or []
-        target._djust_component_name = component_name
+        # Attach @component metadata onto the callable (the standard djust
+        # decorator-metadata pattern); mypy can't model dynamic attrs on a
+        # plain Callable.
+        target._djust_assigns = assigns or []  # type: ignore[attr-defined]
+        target._djust_slots = slots or []  # type: ignore[attr-defined]
+        target._djust_component_name = component_name  # type: ignore[attr-defined]
         _COMPONENT_REGISTRY[component_name] = target
         return target
 
@@ -333,9 +336,11 @@ class CallTagHandler:
                     f"decorated functions can be invoked via {{% call %}}."
                 )
             instance = target(**{k: v for k, v in kwargs.items() if not k.startswith("_")})
-            # Expose slots + children on the instance for template access.
-            instance._slots = slots
-            instance._children = default_content
+            # Expose slots + children on the instance for template access. These
+            # are dynamic per-invocation attributes (distinct from the class-level
+            # ``slots`` declaration list), attached only for the template render.
+            instance._slots = slots  # type: ignore[attr-defined]
+            instance._children = default_content  # type: ignore[attr-defined]
             html_out = instance.render()
             return html_out
 

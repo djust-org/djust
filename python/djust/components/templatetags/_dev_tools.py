@@ -8,10 +8,22 @@ All tags register on the shared ``register`` from ``_registry``.
 
 import json as _json
 import re as _re
+from typing import Any, Dict, List
 
 from django import template
 
 from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe
+
+
+def _safe(html: str) -> str:
+    """``mark_safe`` wrapper with a typed ``str`` return.
+
+    Django's ``mark_safe`` is untyped (returns ``Any``); this thin wrapper
+    keeps the strict-island return-type contract without an ``Any`` leak.
+    """
+    marked: str = mark_safe(html)
+    return marked
+
 
 # ---------------------------------------------------------------------------
 # Terminal
@@ -39,12 +51,12 @@ class TerminalNode(template.Node):
         "97": "#fff",
     }
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Dict[str, Any]) -> None:
         self.kwargs = kwargs
 
     @classmethod
-    def _ansi_to_html(cls, text):
-        result = []
+    def _ansi_to_html(cls, text: str) -> str:
+        result: List[str] = []
         open_spans = 0
         last_end = 0
         for m in cls.ANSI_RE.finditer(text):
@@ -67,7 +79,7 @@ class TerminalNode(template.Node):
         result.append("</span>" * open_spans)
         return "".join(result)
 
-    def render(self, context):
+    def render(self, context: Any) -> str:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         output = kw.get("output", [])
         title = kw.get("title", "")
@@ -117,7 +129,7 @@ class TerminalNode(template.Node):
             e_stream = conditional_escape(str(stream_event))
             stream_attr = f' data-stream-event="{e_stream}"'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="Terminal"{stream_attr}>'
             f"{title_html}"
             f'<div class="dj-terminal__body">{"".join(lines_html)}</div>'
@@ -126,7 +138,7 @@ class TerminalNode(template.Node):
 
 
 @register.tag("terminal")
-def do_terminal(parser, token):
+def do_terminal(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return TerminalNode(kwargs)
@@ -146,10 +158,10 @@ class MarkdownEditorNode(template.Node):
         ("heading", "H", "## ", ""),
     ]
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Dict[str, Any]) -> None:
         self.kwargs = kwargs
 
-    def render(self, context):
+    def render(self, context: Any) -> str:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         name = kw.get("name", "content")
         value = kw.get("value", "")
@@ -210,13 +222,13 @@ class MarkdownEditorNode(template.Node):
 
         panes = f'<div class="dj-md-editor__panes">{textarea_html}{preview_html}</div>'
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="MarkdownEditor">{toolbar_html}{panes}</div>'
         )
 
 
 @register.tag("markdown_editor")
-def do_markdown_editor(parser, token):
+def do_markdown_editor(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return MarkdownEditorNode(kwargs)
@@ -228,10 +240,10 @@ def do_markdown_editor(parser, token):
 
 
 class JsonViewerNode(template.Node):
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Dict[str, Any]) -> None:
         self.kwargs = kwargs
 
-    def _render_node(self, value, depth, collapsed_depth):
+    def _render_node(self, value: Any, depth: int, collapsed_depth: int) -> str:
         collapsed = depth >= collapsed_depth
 
         if isinstance(value, dict):
@@ -299,7 +311,7 @@ class JsonViewerNode(template.Node):
 
         return f'<span class="dj-json__value">{conditional_escape(str(value))}</span>'
 
-    def render(self, context):
+    def render(self, context: Any) -> str:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         data = kw.get("data", None)
         collapsed_depth = kw.get("collapsed_depth", 2)
@@ -334,7 +346,7 @@ class JsonViewerNode(template.Node):
 
         tree_html = self._render_node(data, 0, collapsed_depth)
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="JsonViewer" '
             f'data-collapsed-depth="{collapsed_depth}">'
             f'<div class="dj-json-viewer__header">'
@@ -348,7 +360,7 @@ class JsonViewerNode(template.Node):
 
 
 @register.tag("json_viewer")
-def do_json_viewer(parser, token):
+def do_json_viewer(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return JsonViewerNode(kwargs)
@@ -364,11 +376,11 @@ class LogViewerNode(template.Node):
         r"\b(INFO|WARN(?:ING)?|ERROR|DEBUG|TRACE|FATAL|CRITICAL)\b", _re.IGNORECASE
     )
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Dict[str, Any]) -> None:
         self.kwargs = kwargs
 
     @classmethod
-    def _detect_level(cls, line):
+    def _detect_level(cls, line: str) -> str:
         m = cls.LEVEL_RE.search(line)
         if m:
             level = m.group(1).upper()
@@ -381,7 +393,7 @@ class LogViewerNode(template.Node):
             return "info"
         return ""
 
-    def render(self, context):
+    def render(self, context: Any) -> str:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         lines = kw.get("lines", [])
         stream_event = kw.get("stream_event", "")
@@ -438,7 +450,7 @@ class LogViewerNode(template.Node):
 
         scroll_attr = ' data-auto-scroll="true"' if auto_scroll else ""
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="LogViewer"'
             f'{stream_attr}{scroll_attr} role="log" aria-live="polite">'
             f'<div class="dj-log-viewer__body">{"".join(lines_html)}</div>'
@@ -447,7 +459,7 @@ class LogViewerNode(template.Node):
 
 
 @register.tag("log_viewer")
-def do_log_viewer(parser, token):
+def do_log_viewer(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return LogViewerNode(kwargs)
@@ -463,10 +475,12 @@ class FileTreeNode(template.Node):
     FOLDER_OPEN_ICON = "&#x1F4C2;"
     DEFAULT_FILE_ICON = "&#x1F4C4;"
 
-    def __init__(self, kwargs):
+    def __init__(self, kwargs: Dict[str, Any]) -> None:
         self.kwargs = kwargs
 
-    def _render_tree_node(self, node, depth, event, show_icons, selected):
+    def _render_tree_node(
+        self, node: Any, depth: int, event: Any, show_icons: Any, selected: str
+    ) -> str:
         if not isinstance(node, dict):
             return ""
 
@@ -521,7 +535,7 @@ class FileTreeNode(template.Node):
             f'{icon_html}<span class="dj-file-tree__name">{e_name}</span></div>'
         )
 
-    def render(self, context):
+    def render(self, context: Any) -> str:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         nodes = kw.get("nodes", [])
         selected = kw.get("selected", "")
@@ -545,7 +559,7 @@ class FileTreeNode(template.Node):
         for node in nodes:
             nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))
 
-        return mark_safe(
+        return _safe(
             f'<div class="{class_str}" dj-hook="FileTree" '
             f'data-event="{e_event}" data-selected="{e_selected}" '
             f'role="tree">{"".join(nodes_html)}</div>'
@@ -553,7 +567,7 @@ class FileTreeNode(template.Node):
 
 
 @register.tag("file_tree")
-def do_file_tree(parser, token):
+def do_file_tree(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return FileTreeNode(kwargs)

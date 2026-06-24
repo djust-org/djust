@@ -138,12 +138,12 @@ class DependencyManager:
         {{ deps.render_js|safe }}
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize with no dependencies required."""
         self._required: Set[str] = set()
         self._config: Dict[str, Any] = {}
 
-    def require(self, *dep_names: str):
+    def require(self, *dep_names: str) -> None:
         """
         Mark dependencies as required for this page.
 
@@ -161,7 +161,7 @@ class DependencyManager:
                 )
             self._required.add(name)
 
-    def configure(self, **kwargs):
+    def configure(self, **kwargs: Any) -> None:
         """
         Set configuration options for dependencies.
 
@@ -170,7 +170,7 @@ class DependencyManager:
         """
         self._config.update(kwargs)
 
-    def collect_from_context(self, context: Dict[str, Any]):
+    def collect_from_context(self, context: Dict[str, Any]) -> None:
         """
         Auto-collect dependencies from Component instances in context.
 

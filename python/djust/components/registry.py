@@ -12,7 +12,7 @@ from .base import LiveComponent
 _component_registry: Dict[str, Type[LiveComponent]] = {}
 
 
-def register_component(name: str, component_class: Type[LiveComponent]):
+def register_component(name: str, component_class: Type[LiveComponent]) -> None:
     """
     Register a custom component.
 

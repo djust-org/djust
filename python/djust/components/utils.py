@@ -5,6 +5,8 @@ Centralises functions and constants that were previously duplicated across
 templatetags, rust_handlers, mixins, and component classes.
 """
 
+from typing import Any
+
 __all__ = [
     "CURRENCY_SYMBOLS",
     "format_cell",
@@ -17,7 +19,7 @@ __all__ = [
 # Currency symbols
 # ---------------------------------------------------------------------------
 
-CURRENCY_SYMBOLS = {
+CURRENCY_SYMBOLS: dict[str, str] = {
     "USD": "$",
     "EUR": "\u20ac",
     "GBP": "\u00a3",
@@ -38,7 +40,7 @@ CURRENCY_SYMBOLS = {
 # ---------------------------------------------------------------------------
 
 
-def format_cell(value, col):
+def format_cell(value: Any, col: Any) -> str:
     """Format a cell value based on column type declaration.
 
     Supported types: number, currency, date, percentage, boolean.
@@ -87,12 +89,12 @@ def format_cell(value, col):
         truthy = str(value).lower() in ("true", "1", "yes")
         true_label = col.get("true_label", "Yes")
         false_label = col.get("false_label", "No")
-        return true_label if truthy else false_label
+        return str(true_label if truthy else false_label)
     elif col_type == "date":
         fmt = col.get("date_format", "")
         if fmt and hasattr(value, "strftime"):
             try:
-                return value.strftime(fmt)
+                return str(value.strftime(fmt))
             except (ValueError, AttributeError):
                 return str(value)
         return str(value)
@@ -104,7 +106,7 @@ def format_cell(value, col):
 # ---------------------------------------------------------------------------
 
 
-def interpolate_color(c1, c2, t):
+def interpolate_color(c1: str, c2: str, t: float) -> str:
     """Linearly interpolate between two hex colors.
 
     Args:
@@ -116,7 +118,7 @@ def interpolate_color(c1, c2, t):
         Interpolated hex color string.
     """
 
-    def parse_hex(c):
+    def parse_hex(c: str) -> tuple[int, int, int]:
         c = c.lstrip("#")
         if len(c) == 3:
             c = c[0] * 2 + c[1] * 2 + c[2] * 2
@@ -130,7 +132,7 @@ def interpolate_color(c1, c2, t):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def interpolate_color_gradient(colors, ratio):
+def interpolate_color_gradient(colors: list[str], ratio: float) -> str:
     """Interpolate across a multi-stop color gradient.
 
     Args:

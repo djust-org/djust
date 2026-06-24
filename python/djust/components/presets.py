@@ -101,7 +101,7 @@ def clear_presets(tag_name: Optional[str] = None) -> None:
 # Built-in presets for dj_button
 # ---------------------------------------------------------------------------
 
-_BUTTON_PRESETS = {
+_BUTTON_PRESETS: Dict[str, Dict[str, Any]] = {
     "danger-confirm": {
         "variant": "danger",
         "icon": "⚠",

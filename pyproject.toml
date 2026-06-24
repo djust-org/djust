@@ -335,6 +335,39 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# components/ machinery (ADR-023 M4b, part 1) — the core component-system
+# plumbing (NOT the UI catalog, which is a later batch). Spans the registry,
+# assigns/dependencies/preset/icon registries, the @component function-component
+# decorator + {% call %} dispatch, the suspense + server-event-toast mixins, the
+# shared cell/color formatting utils, the AppConfig, the package __init__, the
+# per-component interactive mixin base (TypedState), and the dev-tools template
+# tags + their shared registry/safe-URL helper. The large Rust-bridge handler
+# registry (rust_handlers), the per-widget data_table mixin, and the big
+# templatetag modules (djust_components/_advanced/_forms/_charts) remain lenient
+# for a continuation batch.
+[[tool.mypy.overrides]]
+module = [
+    "djust.components.__init__",
+    "djust.components.apps",
+    "djust.components.registry",
+    "djust.components.assigns",
+    "djust.components.dependencies",
+    "djust.components.function_component",
+    "djust.components.helpers",
+    "djust.components.presets",
+    "djust.components.icons",
+    "djust.components.suspense",
+    "djust.components.server_event_toast",
+    "djust.components.utils",
+    "djust.components.mixins.base",
+    "djust.components.templatetags._registry",
+    "djust.components.templatetags._dev_tools",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)

@@ -7,7 +7,7 @@ class DjustComponentsConfig(AppConfig):
     verbose_name = "djust Components"
     default_auto_field = "django.db.models.BigAutoField"
 
-    def ready(self):
+    def ready(self) -> None:
         from .rust_handlers import register_with_rust_engine
 
         register_with_rust_engine()
