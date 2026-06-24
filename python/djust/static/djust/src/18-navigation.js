@@ -137,6 +137,73 @@
             return;
         }
 
+        // Clear the prefetch set so links on the new view are re-eligible for
+        // prefetching. Done here (same-origin, both the SPA-mount and the
+        // full-page-nav branch) — on a full nav the JS context is torn down
+        // anyway so this is harmless; on the SPA mount it frees the previous
+        // view's prefetched URLs. (Kept unconditional for same-origin to match
+        // the pre-#1934 contract; the strand fix below must not gate it.)
+        window.djust._prefetch?.clear();
+
+        // Resolve the LiveView for the target path FIRST, BEFORE touching
+        // history. (#1934) The route map (auth-filtered, derived from the
+        // Django URLconf) only contains LiveView routes — a plain Django view
+        // (TemplateView, etc.) is correctly excluded by
+        // `_walk_liveview_routes` (routing.py: `if not issubclass(view_cls,
+        // LiveView): continue`). So a route-map miss means "this target is NOT
+        // a LiveView" and must be a full-page navigation. If we pushState
+        // before this check, a non-LiveView target strands the page: the URL
+        // bar moves but no DOM swap happens and the previous LiveView stays
+        // mounted.
+        //
+        // CRITICAL (#1934, symptom-up): use the STRICT resolver
+        // (route map only) here, NOT resolveViewPath(). resolveViewPath() has a
+        // container fallback (returns the CURRENT [dj-view]'s view when the
+        // route map misses) that is documented "only works for live_patch, not
+        // cross-view navigation". For a cross-view live_redirect to a
+        // non-LiveView, that fallback returns the SOURCE view (truthy), so the
+        // SPA branch would re-mount the OLD view under the NEW URL — the exact
+        // strand the reporter saw (URL=/onboarding/, but the jira view mounts).
+        // The server's #1647 guard (_resolve_view_path_from_url) also returns
+        // None for a non-LiveView URL and keeps the stale client-supplied view,
+        // so the client must make the full-nav decision here.
+        const viewPath = isWSConnected() ? resolveLiveViewPath(newUrl.pathname) : null;
+
+        if (!viewPath) {
+            // Non-LiveView target (or no WS connection) → full-page
+            // navigation. The URL was NEVER changed (pushState is deferred
+            // into the SPA branch below), so the browser load is the single
+            // source of truth — no stranded "URL moved, DOM stale" state.
+            // newUrl is same-origin here (cross-origin returned above) but is
+            // still data.path-derived — validate via the shared guard, exactly
+            // as the cross-origin branch does (finding #16).
+            const safe = window.djust.safeNavigationTarget(newUrl.toString());
+            if (safe) {
+                if (globalThis.djustDebug) {
+                    console.log('[LiveView] live_redirect non-LiveView target → full-page nav: %s', safe);
+                }
+                // Stop the page-loading bar we started above; the full nav
+                // will trigger the browser's own progress indicator (matches
+                // the cross-origin branch's stop semantics).
+                if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+                    window.djust.pageLoading.stop?.();
+                }
+                window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else {
+                if (globalThis.djustDebug) {
+                    console.warn('[LiveView] live_redirect fallback rejected unsafe target: %s', newUrl.toString());
+                }
+                // Stop the page-loading bar — we are not navigating.
+                if (window.djust.pageLoading && window.djust.pageLoading.enabled) {
+                    window.djust.pageLoading.stop?.();
+                }
+            }
+            return;
+        }
+
+        // Target IS a LiveView and the WS is connected → SPA mount over the
+        // existing WebSocket. Now (and only now) it is safe to change history,
+        // since the DOM swap will follow via the mount frame.
         const method = data.replace ? 'replaceState' : 'pushState';
         // eslint-disable-next-line security/detect-object-injection
         window.history[method]({ djust: true, redirect: true }, '', newUrl.toString());
@@ -161,65 +228,43 @@
             window.scrollTo({ top: 0, behavior: 'instant' });
         }
 
-        // Clear the prefetch set so links on the new view are re-eligible for prefetching
-        window.djust._prefetch?.clear();
-
         if (globalThis.djustDebug) console.log(`[LiveView] live_redirect: ${method} → ${newUrl.toString()}`);
 
         // Send a mount request for the new view path over the existing WebSocket
-        // The server will unmount the old view and mount the new one
-        if (isWSConnected()) {
-            // Look up the view path for the new URL from the route map
-            const viewPath = resolveViewPath(newUrl.pathname);
-            if (viewPath) {
-                // Sticky LiveViews (Phase B): BEFORE the outbound
-                // live_redirect_mount message, detach any
-                // [dj-sticky-view] subtrees into the module-local
-                // stash so they survive the mount-frame innerHTML
-                // replacement. If stashing happens AFTER the mount
-                // frame arrives, the subtree has already been
-                // destroyed.
-                if (window.djust.stickyPreserve && window.djust.stickyPreserve.stashStickySubtrees) {
-                    window.djust.stickyPreserve.stashStickySubtrees();
-                }
-
-                // State-snapshot capture (v0.6.0) — fire the public event
-                // so 46-state-snapshot.js can post the current view's
-                // public state to the SW cache BEFORE this URL leaves.
-                try {
-                    window.dispatchEvent(new CustomEvent('djust:before-navigate', {
-                        detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
-                    }));
-                } catch (_e) { /* CustomEvent may fail in old environments */ }
-
-                const urlParams = Object.fromEntries(newUrl.searchParams);
-                const outgoing = {
-                    type: 'live_redirect_mount',
-                    view: viewPath,
-                    params: urlParams,
-                    url: newUrl.pathname,
-                };
-                // Attach pending state-snapshot (populated by popstate
-                // handler in 46-state-snapshot.js when the user hits back).
-                if (window.djust && window.djust._pendingStateSnapshot) {
-                    outgoing.state_snapshot = window.djust._pendingStateSnapshot;
-                    window.djust._pendingStateSnapshot = null;
-                }
-                liveViewWS.sendMessage(outgoing);
-            } else {
-                // Fallback: full page navigation if we can't resolve the view.
-                // newUrl is same-origin here (cross-origin returned above), but
-                // it's still data.path-derived — validate via the shared guard
-                // for consistency (finding #16).
-                console.warn('[LiveView] Cannot resolve view for', newUrl.pathname, '— doing full navigation');
-                const safe = window.djust.safeNavigationTarget(newUrl.toString());
-                if (safe) {
-                    window.location.href = safe; // codeql[js/xss] -- validated via safeNavigationTarget
-                } else if (globalThis.djustDebug) {
-                    console.warn('[LiveView] live_redirect fallback rejected unsafe target: %s', newUrl.toString());
-                }
-            }
+        // The server will unmount the old view and mount the new one.
+        //
+        // Sticky LiveViews (Phase B): BEFORE the outbound
+        // live_redirect_mount message, detach any [dj-sticky-view]
+        // subtrees into the module-local stash so they survive the
+        // mount-frame innerHTML replacement. If stashing happens AFTER
+        // the mount frame arrives, the subtree has already been destroyed.
+        if (window.djust.stickyPreserve && window.djust.stickyPreserve.stashStickySubtrees) {
+            window.djust.stickyPreserve.stashStickySubtrees();
         }
+
+        // State-snapshot capture (v0.6.0) — fire the public event
+        // so 46-state-snapshot.js can post the current view's
+        // public state to the SW cache BEFORE this URL leaves.
+        try {
+            window.dispatchEvent(new CustomEvent('djust:before-navigate', {
+                detail: { fromUrl: window.location.pathname, toUrl: newUrl.pathname },
+            }));
+        } catch (_e) { /* CustomEvent may fail in old environments */ }
+
+        const urlParams = Object.fromEntries(newUrl.searchParams);
+        const outgoing = {
+            type: 'live_redirect_mount',
+            view: viewPath,
+            params: urlParams,
+            url: newUrl.pathname,
+        };
+        // Attach pending state-snapshot (populated by popstate
+        // handler in 46-state-snapshot.js when the user hits back).
+        if (window.djust && window.djust._pendingStateSnapshot) {
+            outgoing.state_snapshot = window.djust._pendingStateSnapshot;
+            window.djust._pendingStateSnapshot = null;
+        }
+        liveViewWS.sendMessage(outgoing);
     }
 
     /**
@@ -228,10 +273,26 @@
      * The route map is populated by live_session() via a <script> tag
      * or by data attributes on the container.
      */
-    function resolveViewPath(pathname) {
-        // Check the route map. As of #1733 it is auto-derived from the
-        // Django URLconf and auto-emitted by {% djust_client_config %};
-        // live_session() entries are merged in as well.
+    /**
+     * STRICT resolution: look up ``pathname`` in the route map ONLY (exact
+     * match, then ``:param`` pattern match). Returns ``null`` on a miss —
+     * NO container fallback.
+     *
+     * The route map (auto-derived from the Django URLconf, #1733, and merged
+     * with ``live_session()`` entries) contains ONLY djust LiveView routes —
+     * ``_walk_liveview_routes`` (routing.py) excludes non-LiveViews. So a miss
+     * authoritatively means "not a LiveView".
+     *
+     * Use this for the CROSS-VIEW live_redirect decision (#1934): a non-LiveView
+     * target must fall through to a full-page navigation, never re-mount the
+     * current (source) view. ``resolveViewPath`` (below) adds a container
+     * fallback for the live_patch same-view case, which is WRONG for cross-view
+     * navigation.
+     */
+    function resolveLiveViewPath(pathname) {
+        // As of #1733 the route map is auto-derived from the Django URLconf and
+        // auto-emitted by {% djust_client_config %}; live_session() entries are
+        // merged in as well.
         const routeMap = window.djust._routeMap || {};
 
         // #1361 — `pathname` is user-controllable (URL path). With the route
@@ -265,8 +326,17 @@
             }
         }
 
+        return null;
+    }
+
+    function resolveViewPath(pathname) {
+        // Strict route-map resolution first.
+        const fromRouteMap = resolveLiveViewPath(pathname);
+        if (fromRouteMap) return fromRouteMap;
+
         // Fallback: check the current container's dj-view
-        // (only works for live_patch, not cross-view navigation)
+        // (only works for live_patch, not cross-view navigation — cross-view
+        // callers must use resolveLiveViewPath, #1934).
         const container = document.querySelector('[dj-view]');
         if (container) {
             return container.getAttribute('dj-view');
@@ -303,8 +373,13 @@
         const isRedirect = event.state && event.state.redirect;
 
         if (isRedirect) {
-            // Different view — need to remount
-            const viewPath = resolveViewPath(url.pathname);
+            // Different view — need to remount. STRICT resolution (#1934): the
+            // container fallback would return the CURRENT view on a route-map
+            // miss, re-mounting the source view under a non-LiveView URL (the
+            // back-nav twin of the live_redirect strand, #1646). On a miss we
+            // fall through to window.location.reload() below, which loads the
+            // (now-current) non-LiveView URL correctly.
+            const viewPath = resolveLiveViewPath(url.pathname);
             if (viewPath) {
                 // Sticky LiveViews (Phase B): detach sticky subtrees
                 // into the stash BEFORE the outbound
