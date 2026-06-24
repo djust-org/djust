@@ -40,7 +40,7 @@ def _safe_error(detailed_msg: str, generic_msg: str = "Event rejected") -> str:
     return generic_msg
 
 
-def _format_handler_not_found_error(owner_instance, event_name: str) -> str:
+def _format_handler_not_found_error(owner_instance: object, event_name: str) -> str:
     """Build an actionable error message when no handler is found for an event.
 
     In DEBUG mode, suggests typo corrections, checks for private-method
@@ -95,7 +95,7 @@ def _format_handler_not_found_error(owner_instance, event_name: str) -> str:
     return base_msg + "\n" + "\n".join(hints)
 
 
-def get_handler_coerce_setting(handler: Callable) -> bool:
+def get_handler_coerce_setting(handler: Callable[..., Any]) -> bool:
     """
     Get the coerce_types setting from a handler's @event_handler decorator.
 
@@ -106,11 +106,13 @@ def get_handler_coerce_setting(handler: Callable) -> bool:
         True if type coercion should be enabled (default), False if disabled
     """
     if hasattr(handler, "_djust_decorators"):
-        return handler._djust_decorators.get("event_handler", {}).get("coerce_types", True)
+        return bool(handler._djust_decorators.get("event_handler", {}).get("coerce_types", True))
     return True
 
 
-def _check_event_security(handler, owner_instance, event_name: str) -> Optional[str]:
+def _check_event_security(
+    handler: Callable[..., Any], owner_instance: object, event_name: str
+) -> Optional[str]:
     """
     Check the event_security policy for a handler.
 
@@ -144,7 +146,7 @@ def _check_event_security(handler, owner_instance, event_name: str) -> Optional[
 
 
 def _ensure_handler_rate_limit(
-    rate_limiter: "ConnectionRateLimiter", event_name: str, handler
+    rate_limiter: "ConnectionRateLimiter", event_name: str, handler: Callable[..., Any]
 ) -> None:
     """Register per-handler rate limit into the per-connection limiter.
 
@@ -165,11 +167,11 @@ def _ensure_handler_rate_limit(
 
 
 async def _validate_event_security(
-    ws,
+    ws: Any,
     event_name: str,
-    owner_instance,
+    owner_instance: object,
     rate_limiter: "ConnectionRateLimiter",
-) -> Optional[Callable]:
+) -> Optional[Callable[..., Any]]:
     """Validate event name, handler existence, decorator allowlist, and per-handler rate limit.
 
     Shared by actor, component, and view paths. Returns the handler if all
@@ -182,7 +184,7 @@ async def _validate_event_security(
         await ws.send_error(_safe_error(error_msg))
         return None
 
-    handler = getattr(owner_instance, event_name, None)
+    handler: Optional[Callable[..., Any]] = getattr(owner_instance, event_name, None)
     if not handler or not callable(handler):
         error_msg = _format_handler_not_found_error(owner_instance, event_name)
         logger.warning("Handler not found: %s", sanitize_for_log(event_name))
@@ -325,7 +327,9 @@ async def _validate_event_security(
     return handler
 
 
-async def _call_handler(handler: Callable, params: Optional[Dict[str, Any]] = None):
+async def _call_handler(
+    handler: Callable[..., Any], params: Optional[Dict[str, Any]] = None
+) -> Any:
     """
     Call an event handler, handling both sync and async handlers.
 

@@ -18,6 +18,11 @@ from .mixins.streams import StreamsMixin
 from .streaming import StreamingMixin
 from .session_utils import Stream
 
+# Module-level framework-internal attribute denylist used by change-detection
+# (consumed by djust.websocket._snapshot_assigns). Declared here so strict
+# islands importing it resolve against this stub.
+_FRAMEWORK_INTERNAL_ATTRS: frozenset[str]
+
 class LiveView(
     StreamsMixin,
     StreamingMixin,

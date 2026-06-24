@@ -47,10 +47,16 @@ import inspect
 import json
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
 
 from asgiref.sync import sync_to_async
-from django.http import HttpResponseForbidden, JsonResponse, StreamingHttpResponse
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseForbidden,
+    JsonResponse,
+    StreamingHttpResponse,
+)
 from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
@@ -144,6 +150,13 @@ class SSESession:
         # the first event POST (the re-check falls back to ``_request`` defensively).
         self._event_request: Optional[Any] = None
 
+        # The mount-time request (the original stream-GET's request), stamped by
+        # DjustSSEStreamView.get just before dispatch_mount. Read by
+        # SSESessionTransport.build_request (runtime.py:1515) so the runtime mount
+        # path sees the authenticated user/session/path. None until the stream-GET
+        # stamps it.
+        self._request: Optional[Any] = None
+
         # Lazy: avoid circular import at module load. The runtime is the
         # transport-agnostic dispatcher (#1237) and is shared with the WS
         # consumer's ``handle_url_change`` shim.
@@ -182,7 +195,7 @@ def _get_session(session_id: str) -> Optional["SSESession"]:
     return _sse_sessions.get(session_id)
 
 
-def _request_user_pk(request) -> Optional[Any]:
+def _request_user_pk(request: HttpRequest) -> Optional[Any]:
     """Authenticated user pk for *request*, or None for anonymous/no-auth."""
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
@@ -190,7 +203,7 @@ def _request_user_pk(request) -> Optional[Any]:
     return None
 
 
-def _request_session_key(request) -> Optional[str]:
+def _request_session_key(request: HttpRequest) -> Optional[str]:
     """Django session key for *request*, or None when there is no session."""
     session = getattr(request, "session", None)
     if session is None:
@@ -198,7 +211,7 @@ def _request_session_key(request) -> Optional[str]:
     return getattr(session, "session_key", None)
 
 
-def _request_owns_session(request, session: "SSESession") -> bool:
+def _request_owns_session(request: HttpRequest, session: "SSESession") -> bool:
     """Return True iff *request* is from the principal that created *session*.
 
     Owner-binding check shared by BOTH SSE POST endpoints (Finding #24 —
@@ -216,7 +229,7 @@ def _request_owns_session(request, session: "SSESession") -> bool:
     owner's auth/session cookie.
     """
     if session._owner_user_pk is not None:
-        return _request_user_pk(request) == session._owner_user_pk
+        return bool(_request_user_pk(request) == session._owner_user_pk)
     # Anonymous owner: bound by session key (forced non-None at GET).
     if session._owner_session_key is None:
         # Defensive: an unbound session can't be owned by anyone.
@@ -224,7 +237,7 @@ def _request_owns_session(request, session: "SSESession") -> bool:
     return _request_session_key(request) == session._owner_session_key
 
 
-def _client_cap_key(request) -> str:
+def _client_cap_key(request: HttpRequest) -> str:
     """Per-client key for the concurrency cap (Finding #25).
 
     Keyed by owner principal — authenticated user pk, else the anonymous
@@ -255,7 +268,7 @@ def _count_sessions_for_client(cap_key: str) -> int:
     return count
 
 
-def _client_ip_from_request(request) -> Optional[str]:
+def _client_ip_from_request(request: HttpRequest) -> Optional[str]:
     """Trustworthy client IP for the SSE transport.
 
     Defaults to ``REMOTE_ADDR``; ``X-Forwarded-For`` is honored only when
@@ -271,7 +284,7 @@ def _client_ip_from_request(request) -> Optional[str]:
     )
 
 
-async def _flush_deferred_to_sse(view_instance) -> None:
+async def _flush_deferred_to_sse(view_instance: Any) -> None:
     """Drain ``self.defer(...)`` callbacks from the view and execute them.
 
     Mirrors :meth:`LiveViewConsumer._flush_deferred` for the SSE transport.
@@ -314,7 +327,7 @@ async def _flush_deferred_to_sse(view_instance) -> None:
 # ------------------------------------------------------------------ #
 
 
-def _sse_origin_allowed(request) -> bool:
+def _sse_origin_allowed(request: HttpRequest) -> bool:
     """
     SSE CSRF defense: validate the request ``Origin`` against ALLOWED_HOSTS.
 
@@ -337,7 +350,7 @@ def _sse_origin_allowed(request) -> bool:
     return _is_allowed_origin((origin or "").encode("utf-8", "surrogatepass"))
 
 
-def _sse_content_type_is_json(request) -> bool:
+def _sse_content_type_is_json(request: HttpRequest) -> bool:
     """
     Defense-in-depth: require ``Content-Type: application/json`` on SSE POSTs.
 
@@ -370,7 +383,7 @@ class DjustSSEStreamView(View):
     timeouts.
     """
 
-    async def get(self, request, session_id: str):
+    async def get(self, request: HttpRequest, session_id: str) -> HttpResponse:
         # ---- SSE CSRF defense: reject cross-origin handshakes (Finding #7) ----
         # Must run BEFORE creating/mounting the session: an attacker page driving
         # GET ?view=... would otherwise mount a LiveView as the victim via cookies.
@@ -490,7 +503,7 @@ class DjustSSEStreamView(View):
             # closes promptly.
             session.shutdown()
 
-        async def event_stream():
+        async def event_stream() -> AsyncIterator[str]:
             # Send connection acknowledgment immediately
             yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
 
@@ -559,7 +572,7 @@ class DjustSSEEventView(View):
     send a custom content type without a CORS preflight it can't satisfy.
     """
 
-    async def post(self, request, session_id: str):
+    async def post(self, request: HttpRequest, session_id: str) -> HttpResponse:
         # ---- SSE CSRF defense (Finding #7): Origin allowlist + JSON content type ----
         if not _sse_origin_allowed(request):
             logger.warning(
@@ -662,7 +675,7 @@ class DjustSSEMessageView(View):
     See Finding #7 (CWE-352).
     """
 
-    async def post(self, request, session_id: str):
+    async def post(self, request: HttpRequest, session_id: str) -> HttpResponse:
         # ---- SSE CSRF defense (Finding #7): Origin allowlist + JSON content type ----
         if not _sse_origin_allowed(request):
             logger.warning(
