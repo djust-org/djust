@@ -378,6 +378,174 @@ class Transport(Protocol):
         """
         return True
 
+    # ------------------------------------------------------------------ #
+    # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT scaffolding, #1915)
+    #
+    # The 5 hooks below define the transport seam the Phase 3.3b WS-mount
+    # flip needs, mirroring how Phase 2.3a defined the event hooks
+    # (``event_context`` / ``on_event_recorded`` / ``dispatch_actor_event``)
+    # DORMANT before the event flip wired + routed them. They are NOT called
+    # by ``dispatch_mount`` yet — Phase 3.3a wires them in. Until then
+    # ``handle_mount`` keeps doing all of this inline (untouched), and the
+    # runtime/SSE mount path is unaffected because every Protocol default
+    # below is a behaviour-preserving no-op (or the existing refusal).
+    # ------------------------------------------------------------------ #
+
+    def on_view_instantiated(self, view: Any) -> None:
+        """Stamp transport back-references on a freshly-instantiated view.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding B — ``view_instance``
+        ownership INVERTS at mount: url_change/event mirror consumer→runtime,
+        but mount CREATES the view, so every WS-only consumer attr that the
+        bespoke ``handle_mount`` stamped right after instantiation must move
+        into a transport hook that writes onto the consumer during the runtime
+        mount). Called by ``dispatch_mount`` (Phase 3.3a) immediately after the
+        view is instantiated, BEFORE auth / mount / render.
+
+        - WS: sets ``view._ws_consumer`` (streaming support, websocket.py:2128),
+          wires ``view._push_events_flush_callback`` to ``consumer._flush_push_events``
+          (websocket.py:2134-2135), registers the view in the observability
+          registry (websocket.py:2161-2167), and stashes the validated
+          ``view._websocket_host`` / ``_websocket_secure`` (websocket.py:2268-2270).
+        - SSE: a no-op — SSE has no consumer to back-reference; its identity
+          stamp already lands in :meth:`on_view_mounted`.
+
+        DORMANT until Phase 3.3a: ``dispatch_mount`` does not call this yet, and
+        the WS bespoke ``handle_mount`` keeps stamping these attrs inline.
+        """
+
+    def uses_actors_for_mount(self, view: Any) -> bool:
+        """Return whether this MOUNT must be driven through the actor system.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding D — actor mount is actively
+        REFUSED by the runtime today (``dispatch_mount`` raises a structured
+        ``use_actors is not supported over SSE`` error, runtime.py:1175). Once
+        Phase 3.3b flips WS mounts onto the runtime, a ``use_actors`` WS view
+        must instead be mounted through the actor system, NOT refused. This hook
+        + :meth:`dispatch_actor_mount` close that gap; the runtime keeps
+        refusing on SSE.
+
+        - WS: ``getattr(view, "use_actors", False) and create_session_actor is
+          not None`` — the exact precondition of the bespoke actor block
+          (websocket.py:2213).
+        - SSE: ``False`` — SSE has no bidirectional actor channel; the mount-time
+          refusal stays.
+
+        DORMANT until Phase 3.3a: WS mounts still run on the bespoke handler and
+        the runtime/SSE path still hits the refusal at runtime.py:1175.
+        """
+        return False
+
+    async def dispatch_actor_mount(self, view: Any, data: Dict[str, Any]) -> Any:
+        """Mount a view through the actor system + return its ``{html, version}``.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding D). Called by ``dispatch_mount``
+        (Phase 3.3a) when :meth:`uses_actors_for_mount` is true, OUTSIDE the
+        normal Rust render path. Returns the mount render result (an object /
+        dict carrying at least ``html`` and ``version``) so the runtime can build
+        the mount frame from the actor's authoritative render.
+
+        - WS: creates the per-session actor via ``create_session_actor``
+          (websocket.py:2213-2217) and runs ``actor_handle.mount(view_path,
+          context_data, view)`` → ``{html, version}`` (websocket.py:2665-2706),
+          verbatim.
+        - SSE: never called (``uses_actors_for_mount`` is ``False``); raises
+          :class:`NotImplementedError` if invoked directly.
+        """
+        raise NotImplementedError("Actor mounts are WS-only; SSE refuses use_actors mounts.")
+
+    def next_mount_version(self, html: Optional[str]) -> int:
+        """Return the wire ``version`` to stamp on the MOUNT frame.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding C). Mount ESTABLISHES the client
+        VDOM baseline — it must NOT arm ``request_html`` recovery (a fresh mount
+        has no prior frame to recover to). This is distinct from
+        :meth:`next_client_version`, which arms recovery (``_next_version_armed``)
+        because it stamps render-SEND frames (patch / html_update). The mount
+        frame is client-checked too (the client sets ``clientVdomVersion =
+        data.version`` on mount, ``static/djust/src/03-websocket.js:382``), so the
+        version MUST come from the SAME monotonic per-connection source as
+        ``event`` — just WITHOUT the recovery arm.
+
+        - WS: returns ``consumer._next_version()`` — the no-arm counter the
+          bespoke ``handle_mount`` uses (websocket.py:2746). It does NOT call
+          ``_next_version_armed`` / ``_arm_recovery``, so ``_recovery_html`` stays
+          ``None`` after a mount.
+        - SSE: returns the raw Rust ``render_with_diff()`` version (the value the
+          runtime already stamps today, runtime.py:1554) — SSE has no consumer
+          counter; ``html`` is accepted for signature parity and ignored.
+
+        DORMANT until Phase 3.3a: ``dispatch_mount`` still stamps the raw Rust
+        version inline (runtime.py:1554); this hook is not called yet.
+        """
+        raise NotImplementedError("next_mount_version is transport-specific.")
+
+    async def on_mount_render_ready(self, view: Any, html: Optional[str]) -> Optional[str]:
+        """Post-render mount hook: sticky preservation + ``sticky_hold`` frame.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding B residual). Called by
+        ``dispatch_mount`` (Phase 3.3a) AFTER the initial render produced ``html``
+        but BEFORE the mount frame is sent, so a transport can adjust the
+        outgoing HTML and/or emit pre-mount frames. Returns the (possibly
+        adjusted) HTML the caller should use for the mount frame.
+
+        - WS: on the ``live_redirect`` path (when the consumer staged a
+          ``_sticky_preserved`` dict), scans the rendered HTML for surviving
+          ``[dj-sticky-slot]`` ids (``_find_sticky_slot_ids``), re-registers the
+          survivors onto the new parent (``view._register_child``), and emits the
+          ``sticky_hold`` frame BEFORE the mount frame so the client's
+          ``reattachStickyAfterMount`` reconciliation is authoritative
+          (websocket.py:2080-2082 reset + 2836-2903 emit). Returns ``html``
+          unchanged (sticky preservation adjusts registration + emits a frame,
+          not the mount HTML).
+        - SSE: returns ``html`` unchanged (no sticky / live_redirect surface).
+
+        DORMANT until Phase 3.3a: ``handle_mount`` keeps the sticky block inline.
+        """
+        return html
+
+    async def finalize_mount_auth(self, view: Any, verdict: Any) -> None:
+        """Apply the transport-level finalization of a BLOCKING mount-auth verdict.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding E — auth verdict→frame drift).
+        The runtime's ``_check_auth`` / ``run_on_mount_hooks`` paths already SEND
+        the verdict frame in the runtime's shape (``{type:error, error:...}`` for
+        a permission denial, ``{type:navigate, to:...}`` for a login/hook
+        redirect) and clear ``view_instance``. What the runtime path is MISSING
+        vs the WS bespoke ``handle_mount`` is the transport-level socket
+        ``close(4403)`` (websocket.py:2337-2401). This hook adds it.
+
+        ``verdict`` is a marker describing the kind of block. The two redirect
+        verdicts (login-redirect at websocket.py:2347-2370 and the
+        ``run_on_mount_hooks`` redirect at 2389-2400) MUST gate the close on
+        ``not consumer._mounting_in_batch`` — a batched login-required view
+        reports as ``navigate[]`` and closing would kill the shared socket's
+        sibling mounts (#291 / #1780; ``test_ws_auth_close_socket.py`` is the
+        net). A permission denial (websocket.py:2344-2346) closes unconditionally
+        in the WS bespoke path.
+
+        - WS: ``await consumer.close(code=4403)``, gated on
+          ``not consumer._mounting_in_batch`` for the redirect verdicts (the
+          ``_mounting_in_batch`` flag is exposed via :attr:`mounting_in_batch`).
+        - SSE: no socket close — SSE has no persistent socket to drop; the
+          verdict frame (error / navigate) the runtime already sent is the
+          SSE-side finalization. A no-op here.
+
+        DORMANT until Phase 3.3a: ``handle_mount`` keeps doing the
+        verdict→frame→close inline; ``dispatch_mount`` does not call this yet.
+        """
+
+    @property
+    def mounting_in_batch(self) -> bool:
+        """Whether this transport is mid-``mount_batch`` on a shared socket.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, #291 / #1780). Exposes the consumer's
+        ``_mounting_in_batch`` flag through the transport seam so
+        :meth:`finalize_mount_auth` can gate the ``close(4403)`` without reaching
+        into a WS-specific attr. Default ``False`` (single mount).
+        """
+        return False
+
 
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
@@ -821,6 +989,207 @@ class WSConsumerTransport:
             logger.debug("reauth_on_event re-check skipped (non-fatal, WS)", exc_info=True)
             return True
 
+    # ------------------------------------------------------------------ #
+    # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
+    # WS implementations. Each encapsulates the verbatim bespoke
+    # ``handle_mount`` logic for the cited site so Phase 3.3a can wire them
+    # into ``dispatch_mount`` with no behaviour change. NOT called yet.
+    # ------------------------------------------------------------------ #
+
+    def on_view_instantiated(self, view: Any) -> None:
+        """Stamp WS consumer back-references on the freshly-instantiated view.
+
+        Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation
+        stamps (#1915, Finding B):
+
+          * ``view._ws_consumer = consumer`` (streaming support, websocket.py:2128);
+          * ``view._push_events_flush_callback = consumer._flush_push_events`` so
+            ``@background`` handlers can flush push_commands mid-execution
+            (websocket.py:2134-2135) — only when the attr exists on the view;
+          * observability ``register_view(session_id, view)`` (weakref registry;
+            never break the connection, websocket.py:2161-2167);
+          * ``view._websocket_host`` / ``view._websocket_secure`` from the
+            validated handshake scope (websocket.py:2268-2270) so
+            runtime-rebuilt requests carry the same host (#1646).
+        """
+        consumer = self._consumer
+        view._ws_consumer = consumer
+        if hasattr(view, "_push_events_flush_callback"):
+            view._push_events_flush_callback = consumer._flush_push_events
+
+        # Observability registry (weakrefs — best-effort; must never break the
+        # connection, mirroring websocket.py:2161-2167).
+        try:
+            from djust.observability.registry import register_view
+
+            register_view(consumer.session_id, view)
+        except Exception as e:  # noqa: BLE001 — observability must never break a WS connection
+            logger.warning("Failed to register view in observability registry: %s", e)
+
+        # Validated handshake host/scheme stash (websocket.py:2243-2270). The
+        # bespoke path computes this from ``validated_host_from_scope(scope)`` and
+        # stamps it onto the view so runtime-rebuilt requests carry the same host
+        # (#1646). Compute from the SAME validator + scope here. ``(None, False)``
+        # for absent/invalid Hosts (non-browser clients) so the runtime falls back
+        # to RequestFactory's default — matching the bespoke ``if host:`` guard.
+        from .websocket import validated_host_from_scope
+
+        scope = getattr(consumer, "scope", None) or {}
+        host, is_secure = validated_host_from_scope(scope)
+        view._websocket_host = host
+        view._websocket_secure = is_secure
+
+    def uses_actors_for_mount(self, view: Any) -> bool:
+        """Whether this WS mount must run through the actor system (#1915, Finding D).
+
+        Exact precondition of the bespoke actor block (websocket.py:2213):
+        the view opts into ``use_actors`` AND the Rust ``create_session_actor``
+        factory is available in this build.
+        """
+        from .websocket import create_session_actor
+
+        return getattr(view, "use_actors", False) and create_session_actor is not None
+
+    async def dispatch_actor_mount(self, view: Any, data: Dict[str, Any]) -> Any:
+        """Create the session actor + mount through it → ``{html, version}`` (#1915, Finding D).
+
+        Verbatim fold of the WS bespoke actor-mount path:
+
+          * create the per-session actor via ``create_session_actor(session_id)``
+            and stash it on the consumer as ``actor_handle`` (websocket.py:2213-2217);
+          * call ``actor_handle.mount(view_path, context_data, view)`` →
+            ``{html, version}`` (websocket.py:2665-2706).
+
+        Returns the actor mount ``result`` dict so the runtime stamps the mount
+        frame from the actor's authoritative render. ``data`` carries the mount
+        frame (for ``view`` path); the actor render reads the view's
+        ``get_context_data()`` exactly as the bespoke path does.
+        """
+        from .websocket import create_session_actor
+
+        consumer = self._consumer
+        view_path = data.get("view")
+        consumer.use_actors = True
+        logger.info("Creating SessionActor for %s", view_path)
+        consumer.actor_handle = await create_session_actor(consumer.session_id)
+        logger.info("SessionActor created: %s", consumer.actor_handle.session_id)
+
+        context_data = await sync_to_async(view.get_context_data)()
+        result = await consumer.actor_handle.mount(view_path, context_data, view)
+        return result
+
+    def next_mount_version(self, html: Optional[str]) -> int:
+        """Stamp the consumer-owned NO-ARM wire version for the mount frame (#1915, Finding C).
+
+        Returns ``consumer._next_version()`` — the SAME monotonic per-connection
+        counter the bespoke ``handle_mount`` uses (websocket.py:2746). Crucially
+        this is NOT ``_next_version_armed`` / ``_arm_recovery``: a mount
+        ESTABLISHES the client VDOM baseline and has no prior frame to recover to,
+        so ``_recovery_html`` MUST stay unset after a mount (distinct from
+        :meth:`next_client_version`, which arms recovery for render-SEND frames).
+        ``html`` is accepted for signature parity with the Protocol but is unused
+        on WS (the no-arm counter takes no html).
+        """
+        return self._consumer._next_version()
+
+    async def on_mount_render_ready(self, view: Any, html: Optional[str]) -> Optional[str]:
+        """Sticky preservation + ``sticky_hold`` frame before the mount frame (#1915, Finding B residual).
+
+        Verbatim fold of the WS bespoke sticky block (websocket.py:2836-2903).
+        On the ``live_redirect`` path the consumer staged a ``_sticky_preserved``
+        dict; this scans the just-rendered ``html`` for surviving
+        ``[dj-sticky-slot]`` ids, re-registers survivors onto the new parent
+        (``view._register_child``), updates ``consumer._sticky_preserved`` to the
+        authoritative survivor set, and emits the ``sticky_hold`` frame BEFORE the
+        mount frame (ordering matters — the client's ``reattachStickyAfterMount``
+        must see the hold first). The ``_sticky_auto_reattached`` set (reset per
+        mount at websocket.py:2082) records survivors the template tag already
+        re-registered, so we don't double-register them.
+
+        Returns ``html`` unchanged: sticky preservation adjusts child
+        registration + emits a frame, it does not rewrite the mount HTML. No-op
+        (returns ``html``) when no stickys were staged.
+        """
+        from .websocket import _find_sticky_slot_ids
+
+        consumer = self._consumer
+        sticky_preserved = getattr(consumer, "_sticky_preserved", None)
+        if not sticky_preserved:
+            return html
+
+        try:
+            matched_ids = _find_sticky_slot_ids(html or "")
+            survivors_final: Dict[str, Any] = {}
+            auto_reattached = getattr(consumer, "_sticky_auto_reattached", set())
+            for sticky_id, child in list(sticky_preserved.items()):
+                if sticky_id in auto_reattached:
+                    # The tag already re-registered this survivor at render time;
+                    # don't call _register_child again (it would ValueError), but
+                    # keep it in survivors_final for an authoritative hold list.
+                    survivors_final[sticky_id] = child
+                elif sticky_id in matched_ids:
+                    if hasattr(view, "_register_child"):
+                        try:
+                            view._register_child(sticky_id, child)
+                            survivors_final[sticky_id] = child
+                        except ValueError:
+                            logger.warning(
+                                "sticky_id %s collided with new child on reattach",
+                                sticky_id,
+                            )
+                            hook = getattr(child, "_on_sticky_unmount", None)
+                            if callable(hook):
+                                try:
+                                    hook()
+                                except Exception:  # noqa: BLE001
+                                    logger.exception("sticky child _on_sticky_unmount raised")
+                else:
+                    hook = getattr(child, "_on_sticky_unmount", None)
+                    if callable(hook):
+                        try:
+                            hook()
+                        except Exception:  # noqa: BLE001
+                            logger.exception("sticky child _on_sticky_unmount raised")
+            consumer._sticky_preserved = survivors_final
+            await consumer.send_json(
+                {
+                    "type": "sticky_hold",
+                    "views": list(survivors_final.keys()),
+                }
+            )
+        except Exception:  # noqa: BLE001 — defensive: never break mount
+            logger.exception("failed to emit sticky_hold frame before mount")
+        return html
+
+    async def finalize_mount_auth(self, view: Any, verdict: Any) -> None:
+        """Close the socket (4403) after a blocking mount-auth verdict (#1915, Finding E).
+
+        The runtime path already SENT the verdict frame (error / navigate) and
+        cleared ``view_instance``; this adds the transport-level
+        ``close(code=4403)`` the WS bespoke ``handle_mount`` performed
+        (websocket.py:2344-2399).
+
+        ``verdict`` is a marker string describing the block kind:
+          * ``"permission_denied"`` → close UNCONDITIONALLY (websocket.py:2345),
+            matching the WS bespoke PermissionDenied branch;
+          * ``"redirect"`` / ``"hook_redirect"`` → close GATED on
+            ``not consumer._mounting_in_batch`` (websocket.py:2368 / 2398) so a
+            batched login-required view does NOT drop the shared socket's sibling
+            mounts (#291 / #1780).
+        """
+        consumer = self._consumer
+        if verdict == "permission_denied":
+            await consumer.close(code=4403)
+            return
+        # redirect / hook_redirect — gate on the batch flag (#291 / #1780).
+        if not self.mounting_in_batch:
+            await consumer.close(code=4403)
+
+    @property
+    def mounting_in_batch(self) -> bool:
+        """Expose the consumer's ``_mounting_in_batch`` flag (#1915, #291)."""
+        return bool(getattr(self._consumer, "_mounting_in_batch", False))
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -1023,6 +1392,69 @@ class SSESessionTransport:
         except Exception:  # noqa: BLE001 — re-auth is defense-in-depth; never break events
             logger.debug("reauth_on_event re-check skipped (non-fatal, SSE)", exc_info=True)
             return True
+
+    # ------------------------------------------------------------------ #
+    # Mount hooks (ADR-022 Iter 3 Phase 3.2 — DORMANT, #1915)
+    # SSE implementations: no-op / raw / refuse. SSE has no consumer to
+    # back-reference, no actor channel, no sticky/live_redirect surface, and
+    # no persistent socket to close — so these preserve SSE behaviour exactly.
+    # ------------------------------------------------------------------ #
+
+    def on_view_instantiated(self, view: Any) -> None:
+        """No-op for SSE (#1915, Finding B).
+
+        SSE has no WS consumer to back-reference; the SSE-transport identity
+        stamp (``_sse_session_id`` / ``_sse_session`` / query string) already
+        lands in :meth:`on_view_mounted`. Nothing to do here."""
+        return None
+
+    def uses_actors_for_mount(self, view: Any) -> bool:
+        """SSE never mounts through actors (#1915, Finding D).
+
+        SSE has no bidirectional actor channel and ``dispatch_mount`` refuses a
+        ``use_actors`` view over SSE outright (runtime.py:1175). Returning
+        ``False`` keeps that refusal as the only SSE behaviour for actor views."""
+        return False
+
+    async def dispatch_actor_mount(self, view: Any, data: Dict[str, Any]) -> Any:
+        """Never called on SSE (``uses_actors_for_mount`` is ``False``) — guard with a raise."""
+        raise NotImplementedError("Actor mounts are WS-only; SSE refuses use_actors mounts.")
+
+    def next_mount_version(self, html: Optional[str]) -> int:
+        """SSE stamps the raw Rust ``render_with_diff()`` version on its mount frame.
+
+        ADR-022 Iter 3 Phase 3.2 (#1915, Finding C). SSE has no consumer-owned
+        counter (the #1788 unification never reached SSE — see
+        :meth:`next_client_version`), so the mount frame keeps the raw Rust
+        version the runtime already stamps today (runtime.py:1554). This hook is
+        a placeholder for when ``dispatch_mount`` routes the mount version through
+        the transport in Phase 3.3a; until then the runtime stamps the raw
+        version inline and this is never called. ``html`` is unused.
+        """
+        raise NotImplementedError(
+            "SSE mount version stamping stays inline until Phase 3.3a wires next_mount_version."
+        )
+
+    async def on_mount_render_ready(self, view: Any, html: Optional[str]) -> Optional[str]:
+        """No-op for SSE (#1915, Finding B residual).
+
+        SSE has no sticky / ``live_redirect`` surface, so there is no survivor
+        set to reconcile and no ``sticky_hold`` frame to emit. Returns ``html``
+        unchanged."""
+        return html
+
+    async def finalize_mount_auth(self, view: Any, verdict: Any) -> None:
+        """No-op for SSE (#1915, Finding E).
+
+        SSE has no persistent socket to drop on a blocking mount-auth verdict —
+        the verdict frame (error / navigate) the runtime already sent IS the
+        SSE-side finalization. Nothing further to do."""
+        return None
+
+    @property
+    def mounting_in_batch(self) -> bool:
+        """SSE never mounts in a shared-socket batch (#1915, #291). Always ``False``."""
+        return False
 
 
 # ------------------------------------------------------------------ #

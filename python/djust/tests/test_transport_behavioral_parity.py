@@ -431,7 +431,20 @@ _WS_ONLY_MARKERS = {
     # ``marker not in rt_src`` assertion trips → update this pin deliberately AND
     # note the move in ADR-022. This keeps the mount-side WS↔runtime delta VISIBLE
     # as the mount convergence proceeds.
-    "create_session_actor": 1,  # actor mount (Finding D — WS verbatim / SSE refuses)
+    # ``create_session_actor``, ``_find_sticky_slot_ids``, and ``register_view``
+    # gained DORMANT ``WSConsumerTransport`` mount-hook impls in ADR-022 Iter 3
+    # Phase 3.2 (#1915): ``dispatch_actor_mount`` (Finding D),
+    # ``on_mount_render_ready`` (Finding B sticky preservation), and
+    # ``on_view_instantiated`` (Finding B back-refs) now reference these symbols in
+    # runtime.py. The hooks are DORMANT — ``dispatch_mount`` does NOT call them yet
+    # (3.3a wires them) and the WS bespoke ``handle_mount`` still does the work
+    # inline (untouched until 3.3b) — so these are no longer WS-ONLY symbols and are
+    # removed from this enumeration (mirrors the Phase-3.1 ``state_snapshot_signed``
+    # move). The DORMANT contract + the WS-impl behavior are pinned by
+    # test_transport_mount_hooks_1915.py (dispatch_mount-doesn't-call pins +
+    # handle_mount-still-inline pins + MockTransport / real-WebsocketCommunicator
+    # hook tests). The remaining WS-only mount mechanisms stay pinned below.
+    #
     # ``state_snapshot_signed`` MOVED to ViewRuntime.dispatch_mount in ADR-022
     # Iter 3 Phase 3.1 (#1913): the signed session-snapshot EMIT + restore are now
     # transport-agnostic (LIVE for the SSE mount path, gated on
@@ -440,9 +453,7 @@ _WS_ONLY_MARKERS = {
     # this enumeration. The signed-snapshot HMAC caps are pinned by
     # test_runtime_mount_state_restore_1913.py (runtime) +
     # test_state_snapshot_signing.py (WS).
-    "_find_sticky_slot_ids": 1,  # sticky_hold survivor scan (Finding B / live_redirect)
     "tick_interval": 1,  # periodic tick task started at mount (Channels timer loop)
-    "register_view": 1,  # observability registry (WS register/unregister_view)
     # NOTE: ``_run_tick`` is intentionally NOT a marker here — it already appears
     # in runtime.py DOCSTRINGS (lines ~271/~567 reference the WS-only tick loop the
     # event render-lock must serialize against), which would FALSE-POSITIVE the
