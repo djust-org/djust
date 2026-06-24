@@ -9,7 +9,7 @@ import asyncio
 import functools
 import logging
 import threading
-from typing import Callable, Any, TypeVar, Union, cast, List, Optional
+from typing import Callable, Any, TypeVar, Union, cast, List, Optional, overload
 
 from ._deprecation import warn_deprecated
 
@@ -62,13 +62,27 @@ def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     return decorator
 
 
+@overload
+def event_handler(params: F) -> F: ...
+
+
+@overload
 def event_handler(
-    params: Optional[List[str]] = None,
+    params: Optional[List[str]] = ...,
+    description: str = ...,
+    coerce_types: bool = ...,
+    expose_api: bool = ...,
+    serialize: Optional[Union[Callable[..., Any], str]] = ...,
+) -> Callable[[F], F]: ...
+
+
+def event_handler(
+    params: Optional[Union[List[str], Callable[..., Any]]] = None,
     description: str = "",
     coerce_types: bool = True,
     expose_api: bool = False,
     serialize: Optional[Union[Callable[..., Any], str]] = None,
-) -> Callable[[F], F]:
+) -> Any:
     """
     Mark method as event handler with automatic signature introspection.
 
@@ -475,7 +489,7 @@ def server_function(
     inner wrapper and the dispatcher cannot see it.
     """
 
-    def decorator(func):
+    def decorator(func: F) -> F:
         from djust.validation import get_handler_signature_info
 
         if getattr(func, "_djust_decorators", {}).get("event_handler"):
@@ -530,11 +544,15 @@ class _ReactiveProperty:
     method, rather than silently no-opping at runtime when it doesn't.
     """
 
-    def __init__(self, fget, fset=None):
+    def __init__(
+        self,
+        fget: Callable[[Any], Any],
+        fset: Optional[Callable[[Any, Any], None]] = None,
+    ) -> None:
         self.fget = fget
         self.fset = fset
 
-    def __set_name__(self, owner, name):
+    def __set_name__(self, owner: type, name: str) -> None:
         if not hasattr(owner, "update"):
             raise TypeError(
                 f"@reactive property '{name}' on {owner.__name__} requires "
@@ -542,12 +560,12 @@ class _ReactiveProperty:
                 f"inherited from LiveView)."
             )
 
-    def __get__(self, obj, objtype=None):
+    def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
         if obj is None:
             return self
         return self.fget(obj)
 
-    def __set__(self, obj, value):
+    def __set__(self, obj: Any, value: Any) -> None:
         if self.fset is None:
             raise AttributeError("can't set attribute")
         old_value = self.fget(obj)
@@ -555,11 +573,11 @@ class _ReactiveProperty:
         if old_value != value:
             obj.update()
 
-    def setter(self, fset):
+    def setter(self, fset: Callable[[Any, Any], None]) -> "_ReactiveProperty":
         return type(self)(self.fget, fset)
 
 
-def reactive(func: Callable):
+def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
     """
     Create a reactive property that triggers re-render on change.
 
@@ -580,10 +598,10 @@ def reactive(func: Callable):
     """
     internal_name = f"_{func.__name__}_reactive"
 
-    def _getter(self):
+    def _getter(self: Any) -> Any:
         return getattr(self, internal_name, None)
 
-    def _setter(self, value):
+    def _setter(self: Any, value: Any) -> None:
         setattr(self, internal_name, value)
 
     prop = _ReactiveProperty(_getter, _setter)
@@ -591,7 +609,7 @@ def reactive(func: Callable):
     return prop
 
 
-def state(default: Any = None):
+def state(default: Any = None) -> Any:
     """
     Decorator to mark a property as reactive state.
 
@@ -616,21 +634,25 @@ def state(default: Any = None):
     """
 
     class StateProperty:
-        def __init__(self):
+        def __init__(self) -> None:
             self.default = default
-            self.attr_name = None
-            self.public_name = None
+            self.attr_name: Optional[str] = None
+            self.public_name: Optional[str] = None
 
-        def __set_name__(self, owner, name):
+        def __set_name__(self, owner: type, name: str) -> None:
             self.attr_name = f"_state_{name}"
             self.public_name = name
 
-        def __get__(self, obj, objtype=None):
+        def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
             if obj is None:
                 return self
+            # __set_name__ guarantees attr_name is set before any access.
+            assert self.attr_name is not None
             return getattr(obj, self.attr_name, self.default)
 
-        def __set__(self, obj, value):
+        def __set__(self, obj: Any, value: Any) -> None:
+            # __set_name__ guarantees attr_name is set before any access.
+            assert self.attr_name is not None
             setattr(obj, self.attr_name, value)
             # Mark this as reactive state
             if not hasattr(obj, "_reactive_state"):
@@ -640,7 +662,7 @@ def state(default: Any = None):
     return StateProperty()
 
 
-def computed(*deps):
+def computed(*deps: Any) -> Any:
     """
     Decorator to mark a method as a computed property.
 
@@ -682,13 +704,13 @@ def computed(*deps):
         func = deps[0]
 
         @functools.wraps(func)
-        def _inner(self):
+        def _inner(self: Any) -> Any:
             return func(self)
 
         prop = _ComputedProperty(_inner)
         prop._is_computed = True
         prop._computed_name = func.__name__
-        return cast(F, prop)
+        return prop
 
     # Memoized form: keep a per-instance cache keyed on a fingerprint of the
     # dependency values. The fingerprint uses identity + shallow content info,
@@ -700,11 +722,11 @@ def computed(*deps):
                 f"@computed() dependency names must be strings, got {type(name).__name__}"
             )
 
-    def make_decorator(func):
+    def make_decorator(func: F) -> Any:
         attr_name = func.__name__
 
-        def _fingerprint(instance):
-            parts = []
+        def _fingerprint(instance: Any) -> tuple[Any, ...]:
+            parts: list[Any] = []
             for name in dep_names:
                 v = getattr(instance, name, _MISSING)
                 if v is _MISSING:
@@ -722,7 +744,7 @@ def computed(*deps):
             return tuple(parts)
 
         @functools.wraps(func)
-        def _inner(self):
+        def _inner(self: Any) -> Any:
             lock = self.__dict__.get("_djust_computed_lock")
             if lock is None:
                 lock = self.__dict__.setdefault("_djust_computed_lock", threading.Lock())
@@ -739,7 +761,7 @@ def computed(*deps):
         prop._is_computed = True
         prop._computed_name = attr_name
         prop._computed_deps = dep_names
-        return cast(F, prop)
+        return prop
 
     return make_decorator
 
@@ -760,7 +782,9 @@ class _ComputedProperty(property):
     # Explicit __slots__-free class so arbitrary attributes are permitted via
     # the usual ``__dict__``; ``property`` defines ``__dict__`` on the
     # descriptor, so assignment works here.
-    pass
+    _is_computed: bool
+    _computed_name: str
+    _computed_deps: tuple[str, ...]
 
 
 def debounce(wait: float = 0.3, max_wait: Optional[float] = None) -> Callable[[F], F]:
@@ -854,7 +878,7 @@ def optimistic(func: F) -> F:
     """
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)
 
     # Add standardized metadata using helper
@@ -1051,8 +1075,8 @@ def background(func: F) -> F:
         # Async handler: closure is itself async so _run_async_work can
         # detect it via iscoroutinefunction and await it directly.
         @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
-            async def _async_callback():
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> None:
+            async def _async_callback() -> Any:
                 return await func(self, *args, **kwargs)
 
             task_name = func.__name__
@@ -1061,8 +1085,8 @@ def background(func: F) -> F:
     else:
         # Sync handler: plain closure, run in thread via sync_to_async.
         @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
-            def _async_callback():
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> None:
+            def _async_callback() -> Any:
                 return func(self, *args, **kwargs)
 
             task_name = func.__name__

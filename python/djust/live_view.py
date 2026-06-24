@@ -7,7 +7,7 @@ import json
 import logging
 import socket
 import threading
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Union, cast
 
 from django.utils.decorators import classonlymethod
 from django.views import View
@@ -58,9 +58,13 @@ try:
         extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
     )
 except ImportError:
-    RustLiveView = None
-    SessionActorHandle = None
-    extract_template_variables = None  # noqa: F401 — fallback for re-export
+    # Optional PyO3 fallback: when the Rust extension is absent these names
+    # become None at runtime. mypy follows the try-branch (the classes), so
+    # ``Optional[RustLiveView]`` stays a valid annotation; the None rebinds
+    # below are masked from static typing via a narrow ignore.
+    RustLiveView = None  # type: ignore[assignment,misc]
+    SessionActorHandle = None  # type: ignore[assignment,misc]
+    extract_template_variables = None  # type: ignore[assignment]  # noqa: F401 — fallback re-export
 
 __all__ = [
     "LiveView",
@@ -147,7 +151,7 @@ _COMPONENT_INTERNAL_ATTRS: frozenset = frozenset(
 )
 
 
-class LiveView(
+class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
     ContextProviderMixin,
     StreamsMixin,
     StreamingMixin,
@@ -406,7 +410,7 @@ class LiveView(
     # ============================================================================
 
     @classonlymethod
-    def as_view(cls, **initkwargs):
+    def as_view(cls, **initkwargs: Any) -> Callable[..., Any]:
         """Override Django's ``View.as_view`` to route GET to :meth:`aget`
         when ``streaming_render = True`` AND we're running on ASGI.
 
@@ -427,11 +431,11 @@ class LiveView(
         Django dispatch with zero overhead and no behavior change.
         """
         if not getattr(cls, "streaming_render", False):
-            return super().as_view(**initkwargs)
+            return cast(Callable[..., Any], super().as_view(**initkwargs))
 
         from asgiref.sync import markcoroutinefunction, sync_to_async
 
-        async def view(request, *args, **kwargs):
+        async def view(request: Any, *args: Any, **kwargs: Any) -> Any:
             self = cls(**initkwargs)
             self.setup(request, *args, **kwargs)
             if not hasattr(self, "request"):
@@ -458,13 +462,15 @@ class LiveView(
     # INITIALIZATION & SETUP
     # ============================================================================
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._rust_view: Optional[RustLiveView] = None
         self._actor_handle: Optional[SessionActorHandle] = None
         self._session_id: Optional[str] = None
         self._cache_key: Optional[str] = None
-        self._handler_metadata: Optional[dict] = None  # Cache for decorator metadata
+        self._handler_metadata: Optional[Dict[str, Dict[str, Any]]] = (
+            None  # Cache for decorator metadata
+        )
         self._components: Dict[str, Any] = {}  # Registry of child components by ID
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
@@ -490,7 +496,7 @@ class LiveView(
 
         # Track user-defined _private attr names (populated by
         # _snapshot_user_private_attrs after mount, or _restore_private_state).
-        self._user_private_keys: set = set()
+        self._user_private_keys: Set[str] = set()
 
         # Time-travel debugging (v0.6.1) — lazy per-instance ring buffer.
         # Allocated only when the subclass opts in via the class attr so
@@ -703,11 +709,11 @@ class LiveView(
         Later render-cycle attrs won't be included because they haven't been
         set yet.
         """
-        framework = getattr(self, "_framework_attrs", frozenset())
+        framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         # Exclude the tracking attrs themselves — they are infrastructure, not
         # user state, and must never leak into the persisted private state.
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
-        self._user_private_keys: set = {
+        self._user_private_keys = {
             k
             for k in self.__dict__
             if k.startswith("_") and k not in framework and k not in meta_attrs
@@ -726,7 +732,7 @@ class LiveView(
         Non-serializable values (locks, file handles, etc.) are silently skipped.
         """
         result: Dict[str, Any] = {}
-        user_keys = getattr(self, "_user_private_keys", set())
+        user_keys: Set[str] = getattr(self, "_user_private_keys", set())
         for key in user_keys:
             if key not in self.__dict__:
                 continue
@@ -750,7 +756,7 @@ class LiveView(
 
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
         """Restore previously-saved private attributes onto this instance."""
-        framework = getattr(self, "_framework_attrs", frozenset())
+        framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():
             if key.startswith("_") and key not in framework and key not in meta_attrs:
@@ -895,7 +901,7 @@ class LiveView(
         for key, value in state.items():
             safe_setattr(self, key, value, allow_private=False)
 
-    def _should_restore_snapshot(self, request) -> bool:
+    def _should_restore_snapshot(self, request: Any) -> bool:
         """Return True to allow snapshot restoration for this request.
 
         Default implementation returns True — the class-level
@@ -910,7 +916,7 @@ class LiveView(
         """
         return True
 
-    def handle_tick(self):
+    def handle_tick(self) -> None:
         """Override for periodic server-side updates. Called every tick_interval ms."""
         pass
 
@@ -949,7 +955,7 @@ class LiveView(
             pass  # Django ORM not available; skip model/queryset check
 
         # Non-serializable types: file handles, threads, locks, sockets
-        _non_serializable = (io.IOBase, threading.Thread, socket.socket)
+        _non_serializable: tuple[type, ...] = (io.IOBase, threading.Thread, socket.socket)
         try:
             # threading.Lock() returns _thread.lock which isn't directly a type
             import _thread
@@ -1114,7 +1120,7 @@ class LiveView(
         """
         return None
 
-    def has_object_permission(self, request, obj) -> bool:
+    def has_object_permission(self, request: Any, obj: Any) -> bool:
         """Return True if the request user may access `obj`.
 
         Override alongside `get_object()` to express object-level auth.
@@ -1147,7 +1153,9 @@ class LiveView(
         self._object = None
 
 
-def live_view(template_name: Optional[str] = None, template: Optional[str] = None):
+def live_view(
+    template_name: Optional[str] = None, template: Optional[str] = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to convert a function-based view into a LiveView.
 
@@ -1174,8 +1182,8 @@ def live_view(template_name: Optional[str] = None, template: Optional[str] = Non
         View function
     """
 
-    def decorator(func: Callable) -> Callable:
-        def wrapper(request, *args, **kwargs):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapper(request: Any, *args: Any, **kwargs: Any) -> Any:
             # Create a dynamic LiveView class
             class DynamicLiveView(LiveView):
                 pass

@@ -6,7 +6,7 @@ reusable, reactive components with automatic performance optimization.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Type
+from typing import Callable, Dict, Any, List, Optional, Type, cast
 from abc import ABC
 from django.utils.safestring import mark_safe
 
@@ -61,7 +61,7 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
 
         template = Template(template_str)
         django_context = Context(context)
-        return template.render(django_context)
+        return cast(str, template.render(django_context))
 
 
 class Component(ABC):
@@ -143,7 +143,7 @@ class Component(ABC):
     # Class-level counter for auto-generating component keys
     _component_counter = 0
 
-    def _create_rust_instance(self, **props) -> None:
+    def _create_rust_instance(self, **props: Any) -> None:
         """
         Create a Rust instance with fallback for missing framework parameter.
 
@@ -170,7 +170,9 @@ class Component(ABC):
             # Fall back to Python/hybrid implementation
             self._rust_instance = None
 
-    def __init__(self, _component_key: Optional[str] = None, id: Optional[str] = None, **kwargs):
+    def __init__(
+        self, _component_key: Optional[str] = None, id: Optional[str] = None, **kwargs: Any
+    ) -> None:
         """
         Initialize component.
 
@@ -203,7 +205,7 @@ class Component(ABC):
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
-    def update(self, **kwargs) -> "Component":
+    def update(self, **kwargs: Any) -> "Component":
         """
         Update component properties after initialization.
 
@@ -307,16 +309,16 @@ class Component(ABC):
         """
         # 1. Try pure Rust implementation (fastest)
         if self._rust_instance is not None:
-            return mark_safe(self._rust_instance.render())
+            return cast(str, mark_safe(self._rust_instance.render()))
 
         # 2. Try hybrid: template with Rust rendering (fast, with Django fallback)
         if self.template is not None:
             context = self.get_context_data()
             context["_component_key"] = self._component_key
-            return mark_safe(_render_template_with_fallback(self.template, context))
+            return cast(str, mark_safe(_render_template_with_fallback(self.template, context)))
 
         # 3. Fall back to custom Python rendering (flexible)
-        return mark_safe(self._render_custom())
+        return cast(str, mark_safe(self._render_custom()))
 
     def get_context_data(self) -> Dict[str, Any]:
         """
@@ -366,7 +368,7 @@ class Component(ABC):
             f"  - _render_custom() method (for custom Python)"
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Allow {{ component }} in templates to render automatically"""
         return self.render()
 
@@ -467,6 +469,15 @@ class LiveComponent(ContextProviderMixin):
     assigns: List[Assign] = []
     slots: List[Slot] = []
 
+    # Coerced component inputs after declarative-assign validation; populated by
+    # _validate_component_inputs() (legacy path) and the __init__ descriptor path.
+    _validated_assigns: Dict[str, Any] = {}
+
+    # Parent-LiveView wiring; set None at init and populated via set_parent /
+    # _set_parent_callback once the component is mounted under a view.
+    _parent: Optional[Any] = None
+    _parent_callback: Optional[Callable[..., Any]] = None
+
     # ── Descriptor support ──
 
     def _validate_component_inputs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -500,7 +511,7 @@ class LiveComponent(ContextProviderMixin):
         self._validated_assigns = coerced
         return coerced
 
-    def __init__(self, component_id: Optional[str] = None, **kwargs):
+    def __init__(self, component_id: Optional[str] = None, **kwargs: Any) -> None:
         """
         Initialize component.
 
@@ -515,9 +526,9 @@ class LiveComponent(ContextProviderMixin):
         # Check if this is being used as a descriptor (no owner yet)
         # vs direct instantiation (legacy pattern)
         self._descriptor_defaults = kwargs
-        self._descriptor_attr_name = None
-        self._descriptor_storage_key = None
-        self._validated_assigns: Dict[str, Any] = {}
+        self._descriptor_attr_name: Optional[str] = None
+        self._descriptor_storage_key: Optional[str] = None
+        self._validated_assigns = {}
 
         # Determine if this is the new descriptor pattern (has State inner class)
         # or the legacy direct-instantiation pattern (no State class).
@@ -541,7 +552,7 @@ class LiveComponent(ContextProviderMixin):
             self._parent = None
             self._parent_callback = None
 
-    def __set_name__(self, owner, name):
+    def __set_name__(self, owner: type, name: str) -> None:
         """Called when this component is assigned as a class attribute.
 
         Registers the component in the owner's ``_component_descriptors`` dict
@@ -550,13 +561,16 @@ class LiveComponent(ContextProviderMixin):
         self._descriptor_attr_name = name
         self._descriptor_storage_key = f"_component_{name}"
 
-        # Build class-level registry
+        # Build class-level registry. ``_component_descriptors`` is a dynamic
+        # class attribute set by this descriptor protocol, so access it via
+        # getattr/setattr (the static type of ``owner`` is just ``type``).
         if not hasattr(owner, "_component_descriptors"):
-            owner._component_descriptors = {}
+            setattr(owner, "_component_descriptors", {})
         # Copy to avoid sharing across subclasses
         elif "_component_descriptors" not in owner.__dict__:
-            owner._component_descriptors = dict(owner._component_descriptors)
-        owner._component_descriptors[name] = self
+            setattr(owner, "_component_descriptors", dict(getattr(owner, "_component_descriptors")))
+        registry: Dict[str, "LiveComponent"] = getattr(owner, "_component_descriptors")
+        registry[name] = self
 
         # Auto-register event handler on the owner class
         meta = getattr(self.__class__, "Meta", None)
@@ -564,7 +578,7 @@ class LiveComponent(ContextProviderMixin):
         if event_name and not hasattr(owner, event_name):
             setattr(owner, event_name, self._make_event_handler(event_name))
 
-    def __get__(self, obj, objtype=None):
+    def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
         """Return the component's State for this view instance.
 
         On first access, creates the State with defaults. On subsequent access,
@@ -592,7 +606,7 @@ class LiveComponent(ContextProviderMixin):
             obj.__dict__[self._descriptor_storage_key] = state
         return state
 
-    def __set__(self, obj, value):
+    def __set__(self, obj: Any, value: Any) -> None:
         """Accept a plain dict and convert to the component's State class."""
         state_cls = getattr(self.__class__, "State", None)
         if state_cls is not None and isinstance(value, dict) and not isinstance(value, state_cls):
@@ -605,11 +619,11 @@ class LiveComponent(ContextProviderMixin):
             # Legacy path — direct attribute set
             obj.__dict__[self._descriptor_attr_name or "component"] = value
 
-    def _make_event_handler(self, event_name):
+    def _make_event_handler(self, event_name: str) -> Callable[..., Any]:
         """Create an event handler that routes to the correct component instance."""
         component_type = type(self)
 
-        def handler(view_self, value="", component_id="", **kwargs):
+        def handler(view_self: Any, value: Any = "", component_id: str = "", **kwargs: Any) -> None:
             # Auto-resolve if only one instance of this component type
             if not component_id:
                 descriptors = getattr(type(view_self), "_component_descriptors", {})
@@ -645,7 +659,7 @@ class LiveComponent(ContextProviderMixin):
 
         return handler
 
-    def _handle_event(self, state, **kwargs):
+    def _handle_event(self, state: Any, **kwargs: Any) -> None:
         """Override in subclasses to handle events.
 
         Args:
@@ -660,7 +674,7 @@ class LiveComponent(ContextProviderMixin):
 
         return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
 
-    def mount(self, **kwargs):
+    def mount(self, **kwargs: Any) -> None:
         """
         Initialize component state.
 
@@ -707,21 +721,24 @@ class LiveComponent(ContextProviderMixin):
 
             html = _render_template_with_fallback(self.template, context)
             # Wrap with component ID for LiveComponent tracking (html is already safe from template engine)
-            return format_html(
-                '<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)
+            return cast(
+                str,
+                format_html(
+                    '<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)
+                ),
             )
 
         # Fall back to template_name (file-based template)
         if self.template_name:
             from django.template.loader import render_to_string
 
-            return mark_safe(render_to_string(self.template_name, context))
+            return cast(str, mark_safe(render_to_string(self.template_name, context)))
 
         raise ValueError(
             f"{self.__class__.__name__} must define 'template' attribute or set 'template_name'"
         )
 
-    def set_parent(self, parent):
+    def set_parent(self, parent: Any) -> None:
         """
         Set the parent LiveView for this component.
 
@@ -734,7 +751,7 @@ class LiveComponent(ContextProviderMixin):
         # provider. See :meth:`LiveView.provide_context`.
         self._djust_context_parent = parent
 
-    def trigger_update(self):
+    def trigger_update(self) -> None:
         """
         Trigger a re-render of the parent LiveView.
 
@@ -744,7 +761,7 @@ class LiveComponent(ContextProviderMixin):
         if self._parent and hasattr(self._parent, "_trigger_update"):
             self._parent._trigger_update()
 
-    def _set_parent_callback(self, callback):
+    def _set_parent_callback(self, callback: Callable[..., Any]) -> None:
         """
         Set the callback function for communicating with parent LiveView.
 
@@ -753,7 +770,7 @@ class LiveComponent(ContextProviderMixin):
         """
         self._parent_callback = callback
 
-    def send_parent(self, event: str, data: Optional[Dict[str, Any]] = None):
+    def send_parent(self, event: str, data: Optional[Dict[str, Any]] = None) -> None:
         """
         Send an event to the parent LiveView.
 
@@ -770,7 +787,7 @@ class LiveComponent(ContextProviderMixin):
                 }
             )
 
-    def unmount(self):
+    def unmount(self) -> None:
         """
         Clean up component when it's being removed.
 
@@ -779,6 +796,6 @@ class LiveComponent(ContextProviderMixin):
         self._mounted = False
         self._parent_callback = None
 
-    def __str__(self):
+    def __str__(self) -> str:
         """Allow {{ component }} in templates and JSON serialization"""
         return self.render()

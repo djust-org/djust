@@ -276,6 +276,21 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_return_any = true
 
+# Public-API quartet (ADR-023 M2) — the developer-facing surface that py.typed
+# exposes to downstream consumers. Strict-typing these protects every consumer's
+# type-check against signature drift in our public API.
+[[tool.mypy.overrides]]
+module = [
+    "djust.live_view",
+    "djust.components.base",
+    "djust.decorators",
+    "djust.forms",
+]
+ignore_errors = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+
 [tool.bandit]
 # Skip mark_safe warnings in components - this is a templating framework
 # where mark_safe is expected and safe (content comes from trusted templates)
